@@ -28,6 +28,7 @@
             <q-checkbox v-model="showDates" size="36px" label="Показывать даты поступления" />
             <q-checkbox v-model="showDeleted" size="36px" label="Показывать удаленные" />
             <q-checkbox v-model="abCacheEnabled" size="36px" label="Кешировать запросы" />
+            <q-checkbox v-model="darkTheme" size="36px" label="Ночная тема" />
         </div>
 
         <template #footer>
@@ -89,6 +90,9 @@ const componentOptions = {
         showNewReleaseAvailable(newValue) {
             this.commit('setSettings', {'showNewReleaseAvailable': newValue});
         },
+        darkTheme(newValue) {
+            this.commit('setSettings', {'darkTheme': newValue});
+        },
     }
 };
 class SettingsDialog {
@@ -110,6 +114,7 @@ class SettingsDialog {
     showDeleted = false;
     abCacheEnabled = true;
     showNewReleaseAvailable = true;
+    darkTheme = false;
 
     limitOptions = [
         {label: '10', value: 10},
@@ -152,6 +157,7 @@ class SettingsDialog {
         this.showDeleted = settings.showDeleted;
         this.abCacheEnabled = settings.abCacheEnabled;
         this.showNewReleaseAvailable = settings.showNewReleaseAvailable;
+        this.darkTheme = settings.darkTheme;
     }
 
     okClick() {

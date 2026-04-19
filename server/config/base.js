@@ -83,6 +83,7 @@ module.exports = {
         langDefault: '',
         showJson: false,
         showNewReleaseAvailable: true,
+        darkTheme: false,
     },
 };
 

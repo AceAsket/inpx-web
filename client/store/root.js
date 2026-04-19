@@ -22,6 +22,7 @@ const state = {
         langDefault: '',
         showJson: false,
         showNewReleaseAvailable: true,
+        darkTheme: false,
     },    
 };
 

@@ -32,6 +32,9 @@ const componentOptions = {
         Search,
     },
     watch: {
+        darkTheme(newValue) {
+            this.applyTheme(newValue);
+        },
     },
 
 };
@@ -91,6 +94,7 @@ class App {
         this.$root.notify = this.$refs.notify;
         this.$root.stdDialog = this.$refs.stdDialog;
 
+        this.applyTheme(this.darkTheme);
         this.setAppTitle();
     }
 
@@ -100,6 +104,18 @@ class App {
 
     get rootRoute() {
         return this.$root.getRootRoute();
+    }
+
+    get settings() {
+        return this.$store.state.settings;
+    }
+
+    get darkTheme() {
+        return !!this.settings.darkTheme;
+    }
+
+    applyTheme(value) {
+        this.$q.dark.set(!!value);
     }
 
     setAppTitle(title) {
@@ -123,6 +139,65 @@ body, html, #app {
     width: 100%;
     height: 100%;
     font: normal 13px Web Default;
+}
+
+body.body--dark {
+    background: #12171c;
+    color: #e6edf3;
+}
+
+body.body--dark .root {
+    background: #12171c;
+    color: #e6edf3;
+}
+
+body.body--dark .bg-white,
+body.body--dark .bg-cyan-2,
+body.body--dark .bg-yellow-1 {
+    background: #1d242b !important;
+    color: #e6edf3 !important;
+}
+
+body.body--dark .bg-green-4 {
+    background: #2f6b45 !important;
+    color: #f2fff7 !important;
+}
+
+body.body--dark .text-black,
+body.body--dark .text-grey-8,
+body.body--dark .text-grey-6,
+body.body--dark .text-grey-5 {
+    color: #d8dee4 !important;
+}
+
+body.body--dark .clickable,
+body.body--dark a {
+    color: #7ab7ff;
+}
+
+body.body--dark .tool-panel {
+    border-bottom-color: #3a4652;
+}
+
+body.body--dark .separator {
+    border-bottom-color: #3a4652;
+}
+
+body.body--dark .odd-item {
+    background-color: #1a2027 !important;
+}
+
+body.body--dark [style*="color: #555"],
+body.body--dark [style*="color: blue"] {
+    color: #9ecbff !important;
+}
+
+body.body--dark .q-field--outlined .q-field__control::before {
+    border-color: #52616f;
+}
+
+body.body--dark .q-field--outlined .q-field__control:hover::before {
+    border-color: #8aa4bd;
 }
 
 .dborder {
