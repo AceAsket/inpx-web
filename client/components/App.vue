@@ -145,14 +145,14 @@ body, html, #app {
 body {
     --app-bg: #f4f7fb;
     --app-surface: #ffffff;
-    --app-surface-2: #eef6f8;
+    --app-surface-2: #fff7e8;
     --app-surface-3: #f7fafc;
     --app-text: #17202a;
     --app-muted: #64748b;
     --app-border: #d6e0ea;
     --app-link: #1f6fbf;
     --app-primary: #2477c7;
-    --app-secondary: #21818a;
+    --app-secondary: #8b5d13;
     --app-accent: #c98500;
     --app-danger: #cc3c3c;
     --app-shadow: 0 12px 34px rgba(23, 32, 42, 0.10);
@@ -239,13 +239,13 @@ body {
 }
 
 .bg-green-4 {
-    background: #2f9a66 !important;
+    background: #a26616 !important;
     color: #ffffff !important;
 }
 
 .text-green,
 .text-green-10 {
-    color: #16845a !important;
+    color: #8b5d13 !important;
 }
 
 .text-blue-10,
@@ -283,25 +283,29 @@ a {
     padding-left: 10px;
 }
 
+body.body--dark .book-row {
+    border-left-color: rgba(255, 207, 122, 0.20);
+}
+
 .q-tooltip {
     border-radius: 8px;
 }
 
 body.body--dark {
-    --q-primary: #4f9fe8;
-    --q-secondary: #2f7f87;
-    --q-accent: #f0c768;
-    --app-bg: #101418;
-    --app-surface: #1c242c;
-    --app-surface-2: #182a32;
-    --app-surface-3: #182028;
-    --app-text: #e9eef3;
-    --app-muted: #9aaabd;
-    --app-border: #40505e;
-    --app-link: #8cc8ff;
-    --app-primary: #3d8fd8;
-    --app-secondary: #2f7f87;
-    --app-accent: #f0c768;
+    --q-primary: #7db7ff;
+    --q-secondary: #d89b35;
+    --q-accent: #ffcf7a;
+    --app-bg: #14110f;
+    --app-surface: #211d1a;
+    --app-surface-2: #2a221b;
+    --app-surface-3: #1b1816;
+    --app-text: #f2ece4;
+    --app-muted: #b8aa99;
+    --app-border: #524437;
+    --app-link: #9dccff;
+    --app-primary: #7db7ff;
+    --app-secondary: #d89b35;
+    --app-accent: #ffcf7a;
     --app-danger: #ff8a8a;
     --app-shadow: 0 14px 42px rgba(0, 0, 0, 0.55);
     background: var(--app-bg);
@@ -315,26 +319,27 @@ body.body--dark .root {
 
 body.body--dark .bg-white,
 body.body--dark .bg-yellow-1 {
-    background: #1c242c !important;
-    color: #e9eef3 !important;
+    background: var(--app-surface) !important;
+    color: var(--app-text) !important;
 }
 
 body.body--dark .bg-cyan-2 {
-    background: #182a32 !important;
-    color: #e9eef3 !important;
+    background: var(--app-surface-2) !important;
+    color: var(--app-text) !important;
 }
 
 body.body--dark .bg-green-4 {
-    background: #2e7352 !important;
-    color: #f2fff7 !important;
+    background: #7d4f16 !important;
+    color: #fff3d7 !important;
 }
 
 body.body--dark .bg-primary {
-    background: #3d8fd8 !important;
+    background: var(--app-primary) !important;
 }
 
 body.body--dark .bg-secondary {
-    background: #2f7f87 !important;
+    background: var(--app-secondary) !important;
+    color: #211407 !important;
 }
 
 body.body--dark .text-black,
@@ -347,12 +352,12 @@ body.body--dark .text-grey-5 {
 body.body--dark .text-green,
 body.body--dark .text-green-10,
 body.body--dark .text-positive {
-    color: #7ee2b8 !important;
+    color: #ffcf7a !important;
 }
 
 body.body--dark .text-blue-10,
 body.body--dark .text-primary {
-    color: #8cc8ff !important;
+    color: var(--app-link) !important;
 }
 
 body.body--dark .text-red,
@@ -361,31 +366,33 @@ body.body--dark .text-negative {
 }
 
 body.body--dark .text-warning {
-    color: #f0c768 !important;
+    color: var(--app-accent) !important;
 }
 
 body.body--dark .clickable,
 body.body--dark a {
-    color: #8cc8ff;
+    color: var(--app-link);
 }
 
 body.body--dark .tool-panel {
-    background: linear-gradient(180deg, #1b333b 0%, #17242c 100%) !important;
-    border-bottom-color: #40606b;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    background:
+        linear-gradient(180deg, rgba(216, 155, 53, 0.13) 0%, rgba(125, 183, 255, 0.08) 100%),
+        var(--app-surface) !important;
+    border-bottom-color: var(--app-border);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
 }
 
 body.body--dark .separator {
-    border-bottom-color: #40505e;
+    border-bottom-color: var(--app-border);
 }
 
 body.body--dark .odd-item {
-    background-color: #182028 !important;
+    background-color: var(--app-surface-3) !important;
 }
 
 body.body--dark [style*="color: #555"],
 body.body--dark [style*="color: blue"] {
-    color: #9ecbff !important;
+    color: var(--app-link) !important;
 }
 
 body.body--dark .button {
@@ -398,28 +405,28 @@ body.body--dark .button:hover {
 }
 
 body.body--dark .q-btn-toggle {
-    box-shadow: 0 0 0 1px rgba(140, 200, 255, 0.22);
+    box-shadow: 0 0 0 1px rgba(255, 207, 122, 0.22);
 }
 
 body.body--dark .q-btn-toggle .q-btn {
-    background: #1d2933;
-    color: #d7e4ef;
+    background: #241d17;
+    color: var(--app-text);
 }
 
 body.body--dark .q-btn-toggle .q-btn.bg-primary {
-    background: #3d8fd8 !important;
-    color: #ffffff !important;
+    background: var(--app-primary) !important;
+    color: #0e1824 !important;
 }
 
 body.body--dark .q-dialog__inner > div {
-    background: #1c242c !important;
-    color: #e9eef3 !important;
+    background: var(--app-surface) !important;
+    color: var(--app-text) !important;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
 }
 
 body.body--dark .q-menu {
-    background: #1c242c;
-    color: #e9eef3;
+    background: var(--app-surface);
+    color: var(--app-text);
 }
 
 body.body--dark .q-item.q-router-link--active,
@@ -430,27 +437,27 @@ body.body--dark .q-item--active {
 body.body--dark .q-field__control,
 body.body--dark .q-field__native,
 body.body--dark .q-field__label {
-    color: #e9eef3;
+    color: var(--app-text);
 }
 
 body.body--dark .q-field--outlined .q-field__control {
-    background: #172029;
+    background: #181411;
 }
 
 body.body--dark .q-field--outlined .q-field__control::before {
-    border-color: #526a7c;
+    border-color: var(--app-border);
 }
 
 body.body--dark .q-field--outlined .q-field__control:hover::before {
-    border-color: #8cc8ff;
+    border-color: var(--app-accent);
 }
 
 body.body--dark .q-field--focused .q-field__control::after {
-    border-color: #8cc8ff;
+    border-color: var(--app-primary);
 }
 
 body.body--dark pre {
-    color: #d7e4ef;
+    color: var(--app-text);
 }
 
 .dborder {
