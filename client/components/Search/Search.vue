@@ -280,6 +280,21 @@
                             </template>
                         </DivBtn>
 
+                        <q-btn
+                            class="modern-ui-toggle q-mt-sm"
+                            :color="newInterface ? 'primary' : 'secondary'"
+                            :outline="!newInterface"
+                            icon="la la-th-large"
+                            label="Новый вид"
+                            dense
+                            no-caps
+                            @click.stop.prevent="toggleNewInterface"
+                        >
+                            <q-tooltip :delay="900" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
+                                Карточный каталог с превью обложек для раздела "Книги"
+                            </q-tooltip>
+                        </q-btn>
+
                         <DivBtn v-if="!config.freeAccess" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-sign-out-alt" round @click.stop.prevent="logout">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
@@ -1086,6 +1101,10 @@ class Search {
         this.commit('setSettings', {[name]: _.cloneDeep(newValue)});
     }
 
+    toggleNewInterface() {
+        this.setSetting('newInterface', !this.newInterface);
+    }
+
     highlightPageScroller(query) {
         const q = _.cloneDeep(query);
         delete q.limit;
@@ -1342,6 +1361,11 @@ export default vueComponent(Search);
 .result-bar {
     min-height: 40px;
     color: var(--app-muted);
+}
+
+.modern-ui-toggle {
+    min-width: 112px;
+    border-radius: 8px;
 }
 
 .project-pill {
