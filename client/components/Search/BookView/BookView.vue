@@ -168,7 +168,7 @@ class BookView {
     get rateColor() {
         const rate = (this.book.librate > 5 ? 5 : this.book.librate);
         if (rate > 2)
-            return 'amber-7';
+            return 'teal-6';
         else
             return `red-${10 - rate*2}`;
     }

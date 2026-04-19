@@ -24,6 +24,9 @@
         <div v-if="tableData.length" class="catalog-grid">
             <div v-for="item in tableData" :key="item.key" class="catalog-card">
                 <div class="cover-box" @click.stop.prevent="bookEvent({action: 'bookInfo', book: item.book})">
+                    <div v-if="itemRating(item)" class="cover-rating">
+                        ★ {{ itemRating(item) }}
+                    </div>
                     <img
                         v-if="coverByKey[item.key]"
                         :src="coverByKey[item.key]"
@@ -329,48 +332,79 @@ export default vueComponent(ModernTitleList);
 
 <style scoped>
 .modern-title-list {
-    padding: 14px 18px 24px;
+    padding: 18px 22px 28px;
 }
 
 .modern-filter-row {
     gap: 10px;
-    margin-bottom: 14px;
+    margin-bottom: 18px;
+    padding: 10px 12px;
+    background: color-mix(in srgb, var(--app-surface) 86%, var(--app-primary));
+    border: 1px solid color-mix(in srgb, var(--app-border) 75%, var(--app-primary));
+    border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(23, 32, 38, 0.07);
 }
 
 .modern-filter-label {
-    color: var(--app-muted);
+    color: var(--app-text);
     font-size: 13px;
     font-weight: 800;
 }
 
 .catalog-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 18px;
+    grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+    gap: 22px;
 }
 
 .catalog-card {
-    background: var(--app-surface);
-    border: 1px solid var(--app-border);
+    position: relative;
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--app-surface) 96%, var(--app-primary)) 0%, var(--app-surface) 100%);
+    border: 1px solid color-mix(in srgb, var(--app-border) 82%, var(--app-primary));
     border-radius: 8px;
-    box-shadow: 0 14px 34px rgba(23, 32, 42, 0.10);
+    box-shadow: 0 18px 44px rgba(23, 32, 38, 0.10);
     overflow: hidden;
-    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
 }
 
 .catalog-card:hover {
-    transform: translateY(-3px);
+    transform: translateY(-4px);
     border-color: var(--app-primary);
-    box-shadow: 0 20px 48px rgba(23, 32, 42, 0.16);
+    box-shadow: 0 24px 58px rgba(23, 32, 38, 0.17);
 }
 
 .cover-box {
+    position: relative;
     aspect-ratio: 2 / 3;
     background:
-        linear-gradient(135deg, rgba(36, 119, 199, 0.20), rgba(201, 133, 0, 0.24)),
+        linear-gradient(145deg, rgba(15, 159, 143, 0.18), rgba(232, 93, 117, 0.14)),
         var(--app-surface-2);
     cursor: pointer;
     overflow: hidden;
+}
+
+.cover-box::after {
+    content: '';
+    position: absolute;
+    inset: auto 0 0;
+    height: 42%;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(10, 20, 24, 0.28));
+    pointer-events: none;
+}
+
+.cover-rating {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 1;
+    padding: 4px 8px;
+    border-radius: 8px;
+    background: rgba(15, 23, 26, 0.72);
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 850;
+    backdrop-filter: blur(8px);
 }
 
 .cover-img {
@@ -387,6 +421,9 @@ export default vueComponent(ModernTitleList);
     align-items: center;
     justify-content: center;
     color: var(--app-muted);
+    background:
+        radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.52), transparent 32%),
+        linear-gradient(145deg, rgba(15, 159, 143, 0.20), rgba(232, 93, 117, 0.16));
 }
 
 .cover-letter {
@@ -396,10 +433,11 @@ export default vueComponent(ModernTitleList);
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(255, 255, 255, 0.52);
-    color: var(--app-accent);
+    background: rgba(255, 255, 255, 0.68);
+    color: var(--app-primary);
     font-size: 42px;
     font-weight: 800;
+    box-shadow: 0 12px 26px rgba(23, 32, 38, 0.12);
 }
 
 .cover-ext {
@@ -411,11 +449,11 @@ export default vueComponent(ModernTitleList);
 }
 
 .card-body {
-    padding: 12px 14px 14px;
+    padding: 14px 15px 15px;
 }
 
 .card-author {
-    color: var(--app-accent);
+    color: var(--app-primary);
     font-size: 12px;
     font-weight: 750;
     white-space: nowrap;
@@ -424,12 +462,16 @@ export default vueComponent(ModernTitleList);
 }
 
 .card-title {
-    margin-top: 4px;
+    margin-top: 5px;
     color: var(--app-text);
-    font-size: 16px;
+    font-size: 17px;
     font-weight: 800;
-    line-height: 1.2;
-    min-height: 38px;
+    line-height: 1.24;
+    min-height: 42px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
 .card-series {
@@ -449,12 +491,13 @@ export default vueComponent(ModernTitleList);
 }
 
 .card-meta span {
-    border: 1px solid var(--app-border);
+    border: 1px solid color-mix(in srgb, var(--app-border) 82%, var(--app-primary));
     border-radius: 8px;
     padding: 2px 7px;
-    color: var(--app-muted);
+    color: color-mix(in srgb, var(--app-muted) 82%, var(--app-primary));
     font-size: 11px;
     font-weight: 700;
+    background: color-mix(in srgb, var(--app-surface) 88%, var(--app-primary));
 }
 
 .card-genre {
@@ -462,7 +505,11 @@ export default vueComponent(ModernTitleList);
     color: var(--app-muted);
     font-size: 12px;
     line-height: 1.3;
-    min-height: 16px;
+    min-height: 31px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
 .card-actions {
@@ -473,9 +520,14 @@ export default vueComponent(ModernTitleList);
     flex-wrap: wrap;
 }
 
+.card-actions .q-btn {
+    box-shadow: none;
+}
+
 .card-variants {
     margin-top: 8px;
-    color: var(--app-muted);
+    color: var(--app-accent);
     font-size: 12px;
+    font-weight: 750;
 }
 </style>
