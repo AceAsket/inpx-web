@@ -6,3 +6,4 @@ library
 node_modules
 npm-debug.log*
 server/.inpx-web
+server/config/application_env

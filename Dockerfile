@@ -30,7 +30,8 @@ COPY server ./server
 COPY --from=build /app/dist/public.json ./dist/public.json
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN rm -f server/config/application_env \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 12380
 VOLUME ["/usr/local/bin/.inpx-web", "/library"]
