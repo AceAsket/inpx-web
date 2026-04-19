@@ -54,12 +54,12 @@ class DivBtn {
         }
 
         if (this.round)
-            style.borderRadius = `${this.size}px`;
+            style.borderRadius = '8px';
         else
-            style.borderRadius = `${this.size/10}px`;
+            style.borderRadius = `${Math.min(8, Math.max(4, this.size/10))}px`;
 
         if (!this.noShadow)
-            style.boxShadow = '0.5px 1px 3px #333333';
+            style.boxShadow = '0 6px 16px rgba(23, 32, 42, 0.16)';
     }
 
     async clickEffect(event) {
@@ -81,11 +81,12 @@ export default vueComponent(DivBtn);
 <style scoped>
 .button {
     position: relative;
+    border: 1px solid rgba(100, 116, 139, 0.18);
 }
 
 .button:hover {
-    opacity: 0.8;
-    transition: opacity 0.2s linear;
+    opacity: 1;
+    filter: brightness(1.05);
 }
 
 .button-pressed {

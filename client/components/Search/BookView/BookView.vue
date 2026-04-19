@@ -1,5 +1,5 @@
 <template>
-    <div class="row items-center q-my-sm no-wrap">
+    <div class="book-view row items-center q-my-sm no-wrap">
         <div class="row items-center">
             <div v-if="showRates || showDeleted">
                 <div v-if="showRates && !book.del">
@@ -204,12 +204,20 @@ export default vueComponent(BookView);
 
 <style scoped>
 .clickable {
-    color: blue;
+    color: var(--app-link);
     cursor: pointer;
 }
 
 .clickable2 {
     cursor: pointer;
+}
+
+.book-view {
+    line-height: 1.35;
+}
+
+.book-view:hover {
+    filter: saturate(1.08);
 }
 
 </style>

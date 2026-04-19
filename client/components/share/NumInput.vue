@@ -235,26 +235,26 @@ export default vueComponent(NumInput);
 
 .button {
     font-size: 130%;
-    border-radius: 15px;
+    border-radius: 8px;
     width: 30px;
     height: 30px;
-    color: #bbb;
+    color: var(--app-muted);
     cursor: pointer;
 }
 
 .button:hover {
-    color: #616161;
-    background-color: #efebe9;
+    color: var(--app-link);
+    background-color: rgba(31, 111, 191, 0.10);
 }
 
 .error {
     background-color: #ffabab;
-    border-radius: 3px;
+    border-radius: 8px;
 }
 
 .disable, .disable:hover {
     cursor: not-allowed;
-    color: #bbb;
-    background-color: white;
+    color: #b8c2cc;
+    background-color: transparent;
 }
 </style>

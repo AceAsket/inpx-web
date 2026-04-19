@@ -138,20 +138,179 @@ body, html, #app {
     padding: 0;
     width: 100%;
     height: 100%;
-    font: normal 13px Web Default;
+    font: normal 14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    letter-spacing: 0;
+}
+
+body {
+    --app-bg: #f4f7fb;
+    --app-surface: #ffffff;
+    --app-surface-2: #eef6f8;
+    --app-surface-3: #f7fafc;
+    --app-text: #17202a;
+    --app-muted: #64748b;
+    --app-border: #d6e0ea;
+    --app-link: #1f6fbf;
+    --app-primary: #2477c7;
+    --app-secondary: #21818a;
+    --app-accent: #c98500;
+    --app-danger: #cc3c3c;
+    --app-shadow: 0 12px 34px rgba(23, 32, 42, 0.10);
+    background: var(--app-bg);
+    color: var(--app-text);
+}
+
+.root {
+    background: var(--app-bg);
+    color: var(--app-text);
+}
+
+.q-field--outlined .q-field__control {
+    border-radius: 8px;
+    background: var(--app-surface);
+    min-height: 42px;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+
+.q-field--outlined .q-field__control::before {
+    border-color: var(--app-border);
+}
+
+.q-field--outlined .q-field__control:hover::before {
+    border-color: #9ab0c4;
+}
+
+.q-field--focused .q-field__control {
+    box-shadow: 0 0 0 3px rgba(36, 119, 199, 0.14);
+}
+
+.q-field--focused .q-field__control::after {
+    border-color: var(--app-primary);
+}
+
+.q-field__label,
+.q-field__native {
+    color: var(--app-text);
+}
+
+.q-btn {
+    border-radius: 8px;
+    font-weight: 650;
+    letter-spacing: 0;
+}
+
+.q-btn.bg-primary {
+    background: var(--app-primary) !important;
+}
+
+.q-btn.bg-secondary {
+    background: var(--app-secondary) !important;
+}
+
+.q-btn-toggle {
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(31, 111, 191, 0.16);
+}
+
+.q-btn-toggle .q-btn {
+    min-height: 34px;
+}
+
+.q-menu,
+.q-dialog__inner > div {
+    border-radius: 8px;
+    box-shadow: var(--app-shadow);
+}
+
+.bg-white {
+    background: var(--app-surface) !important;
+    color: var(--app-text) !important;
+}
+
+.bg-cyan-2 {
+    background: var(--app-surface-2) !important;
+    color: var(--app-text) !important;
+}
+
+.bg-yellow-1 {
+    background: #fff4d6 !important;
+    color: #614700 !important;
+}
+
+.bg-green-4 {
+    background: #2f9a66 !important;
+    color: #ffffff !important;
+}
+
+.text-green,
+.text-green-10 {
+    color: #16845a !important;
+}
+
+.text-blue-10,
+.text-primary {
+    color: var(--app-link) !important;
+}
+
+.clickable,
+a {
+    color: var(--app-link);
+}
+
+.clickable,
+.clickable2,
+.button,
+.q-btn {
+    transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease, filter 0.18s ease;
+}
+
+.odd-item {
+    background-color: var(--app-surface-3) !important;
+}
+
+.odd-item,
+.book-view {
+    border-radius: 8px;
+}
+
+.separator {
+    border-bottom-color: var(--app-border) !important;
+}
+
+.book-row {
+    border-left: 2px solid rgba(36, 119, 199, 0.14);
+    padding-left: 10px;
+}
+
+.q-tooltip {
+    border-radius: 8px;
 }
 
 body.body--dark {
     --q-primary: #4f9fe8;
     --q-secondary: #2f7f87;
     --q-accent: #f0c768;
-    background: #101418;
-    color: #e9eef3;
+    --app-bg: #101418;
+    --app-surface: #1c242c;
+    --app-surface-2: #182a32;
+    --app-surface-3: #182028;
+    --app-text: #e9eef3;
+    --app-muted: #9aaabd;
+    --app-border: #40505e;
+    --app-link: #8cc8ff;
+    --app-primary: #3d8fd8;
+    --app-secondary: #2f7f87;
+    --app-accent: #f0c768;
+    --app-danger: #ff8a8a;
+    --app-shadow: 0 14px 42px rgba(0, 0, 0, 0.55);
+    background: var(--app-bg);
+    color: var(--app-text);
 }
 
 body.body--dark .root {
-    background: #101418;
-    color: #e9eef3;
+    background: var(--app-bg);
+    color: var(--app-text);
 }
 
 body.body--dark .bg-white,
@@ -272,6 +431,10 @@ body.body--dark .q-field__control,
 body.body--dark .q-field__native,
 body.body--dark .q-field__label {
     color: #e9eef3;
+}
+
+body.body--dark .q-field--outlined .q-field__control {
+    background: #172029;
 }
 
 body.body--dark .q-field--outlined .q-field__control::before {

@@ -1,6 +1,6 @@
 <template>
     <div class="root column fit" style="position: relative">
-        <div ref="scroller" class="col fit column no-wrap" style="overflow: auto; position: relative" @scroll="onScroll">
+        <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
             <div ref="toolPanel" class="tool-panel column bg-cyan-2" style="position: sticky; top: 0; z-index: 10;">
                 <!-- Обновление -->
@@ -17,12 +17,12 @@
                 </div>
 
                 <!-- 1 -->
-                <div class="row">
+                <div class="search-toolbar row">
                     <!-- 1-1 -->
                     <div class="column col">
                         <div class="header q-mb-xs q-ml-sm q-mt-sm row items-center">
                             <div class="row no-wrap items-center">
-                                <a :href="newSearchLink" style="height: 33px; width: 34px">
+                                <a class="logo-link" :href="newSearchLink" style="height: 33px; width: 34px">
                                     <img src="./assets/logo.png" />
                                     <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                         Новый поиск
@@ -40,8 +40,8 @@
                                 />
                             </div>
 
-                            <div class="row items-center q-ml-sm" style="font-size: 150%;">
-                                <div class="q-mr-xs">
+                            <div class="collection-title row items-center q-ml-sm" style="font-size: 150%;">
+                                <div class="collection-label q-mr-xs">
                                     Коллекция
                                 </div>
                                 <div class="clickable" @click.stop.prevent="showCollectionInfo">
@@ -57,7 +57,7 @@
                                 </DivBtn>
                             </div>
                         </div>
-                        <div v-show="!isExtendedSearch" class="row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="!isExtendedSearch" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 ref="authorInput" v-model="search.author" :maxlength="5000" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor('author')" style="min-width: 140px" label="Автор" stack-label outlined dense clearable
@@ -111,7 +111,7 @@
                                 </template>
                             </DivBtn>
                         </div>
-                        <div v-show="!isExtendedSearch && extendedParams" class="row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="!isExtendedSearch && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 v-model="genreNames" :maxlength="inputMaxLength" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor()" input-style="cursor: pointer" style="min-width: 140px;" label="Жанр" stack-label outlined dense clearable readonly
@@ -191,7 +191,7 @@
                             +{{ extendedParamsMessage }}
                         </div>
 
-                        <div v-show="isExtendedSearch" class="row q-mx-md q-mb-xs items-center">
+                        <div v-show="isExtendedSearch" class="search-fields row q-mx-md q-mb-xs items-center">
                             <q-input
                                 v-model="extSearchNames"
                                 class="col q-mt-xs" :bg-color="inputBgColor('extended')" input-style="cursor: pointer"
@@ -308,7 +308,7 @@
             </div>
             <!-- Tool Panel end -->
 
-            <div class="row items-center q-ml-lg q-mt-sm">
+            <div class="result-bar row items-center q-ml-lg q-mt-sm">
                 <div style="width: 400px;">
                     <PageScroller v-show="pageCount > 1" ref="pageScroller1" v-model="search.page" :page-count="pageCount" />
                 </div>
@@ -335,7 +335,7 @@
             </div>
 
             <div class="row justify-center">
-                <div class="q-mb-lg q-px-sm q-py-xs bg-cyan-2 clickable2" style="border: 1px solid #aaaaaa; border-radius: 6px; white-space: nowrap;" @click.stop.prevent="openReleasePage">
+                <div class="project-pill q-mb-lg q-px-sm q-py-xs bg-cyan-2 clickable2" style="border: 1px solid #aaaaaa; border-radius: 6px; white-space: nowrap;" @click.stop.prevent="openReleasePage">
                     {{ projectName }}
                 </div>
             </div>
@@ -1276,16 +1276,70 @@ export default vueComponent(Search);
 .root {
 }
 
+.search-scroll {
+    scrollbar-color: rgba(100, 116, 139, 0.42) transparent;
+    scrollbar-width: thin;
+}
+
 .tool-panel {
-    border-bottom: 1px solid #bbb;
+    border-bottom: 1px solid var(--app-border);
+    box-shadow: 0 8px 28px rgba(23, 32, 42, 0.08);
+}
+
+.search-toolbar {
+    padding: 2px 4px 4px;
 }
 
 .header {
-    min-height: 30px;
+    min-height: 42px;
+}
+
+.logo-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    transition: background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.logo-link:hover {
+    background: rgba(31, 111, 191, 0.10);
+    box-shadow: 0 0 0 1px rgba(31, 111, 191, 0.14);
+}
+
+.logo-link img {
+    width: 32px;
+    height: 32px;
+}
+
+.collection-title {
+    color: var(--app-text);
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.collection-label {
+    color: var(--app-muted);
+    font-weight: 600;
+}
+
+.search-fields {
+    gap: 2px;
+}
+
+.result-bar {
+    min-height: 40px;
+    color: var(--app-muted);
+}
+
+.project-pill {
+    color: var(--app-muted);
+    border-color: var(--app-border) !important;
+    box-shadow: 0 2px 8px rgba(23, 32, 42, 0.06);
 }
 
 .clickable {
-    color: blue;
+    color: var(--app-link);
     cursor: pointer;
 }
 
@@ -1294,7 +1348,7 @@ export default vueComponent(Search);
 }
 
 .separator {
-    border-bottom: 2px solid #ddd;
-    margin: 5px 0 5px 0;
+    border-bottom: 1px solid var(--app-border);
+    margin: 8px 0;
 }
 </style>
