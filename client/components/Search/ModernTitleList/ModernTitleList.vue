@@ -9,10 +9,10 @@
             <div v-for="item in tableData" :key="item.key" class="catalog-card">
                 <div class="cover-box" @click.stop.prevent="bookEvent({action: 'bookInfo', book: item.book})">
                     <img
-                        v-if="coverByUid[item.book._uid]"
-                        :src="coverByUid[item.book._uid]"
+                        v-if="coverByKey[item.key]"
+                        :src="coverByKey[item.key]"
                         class="cover-img"
-                        @error="clearCover(item.book._uid)"
+                        @error="clearCover(item.key)"
                     />
                     <div v-else class="cover-placeholder">
                         <div class="cover-letter">
@@ -83,7 +83,7 @@ import _ from 'lodash';
 const coverPreloadLimit = 24;
 
 class ModernTitleList extends BaseList {
-    coverByUid = {};
+    coverByKey = {};
     coverLoadToken = 0;
 
     get foundCountMessage() {
@@ -137,23 +137,39 @@ class ModernTitleList extends BaseList {
             if (token !== this.coverLoadToken)
                 return;
 
-            const uid = item.book._uid;
-            if (!uid || this.coverByUid[uid] !== undefined)
+            if (this.coverByKey[item.key] !== undefined)
                 continue;
 
-            this.coverByUid = Object.assign({}, this.coverByUid, {[uid]: ''});
+            this.coverByKey = Object.assign({}, this.coverByKey, {[item.key]: ''});
 
-            try {
-                const response = await this.api.getBookInfo(uid);
+            for (const book of this.coverCandidates(item)) {
                 if (token !== this.coverLoadToken)
                     return;
 
-                const cover = response.bookInfo && response.bookInfo.cover ? response.bookInfo.cover : '';
-                this.coverByUid = Object.assign({}, this.coverByUid, {[uid]: cover});
-            } catch(e) {
-                this.coverByUid = Object.assign({}, this.coverByUid, {[uid]: ''});
+                try {
+                    const response = await this.api.getBookInfo(book._uid);
+                    if (token !== this.coverLoadToken)
+                        return;
+
+                    const cover = response.bookInfo && response.bookInfo.cover ? response.bookInfo.cover : '';
+                    if (cover) {
+                        this.coverByKey = Object.assign({}, this.coverByKey, {[item.key]: cover});
+                        break;
+                    }
+                } catch(e) {
+                    // Some variants may be missing or may not contain FB2 metadata.
+                }
             }
         }
+    }
+
+    coverCandidates(item) {
+        const books = [item.book, ...item.books].filter(book => book && book._uid);
+        return books.sort((a, b) => {
+            const afb2 = (a.ext || '').toLowerCase() === 'fb2' ? 0 : 1;
+            const bfb2 = (b.ext || '').toLowerCase() === 'fb2' ? 0 : 1;
+            return afb2 - bfb2;
+        }).slice(0, 4);
     }
 
     async refresh() {
@@ -249,11 +265,11 @@ class ModernTitleList extends BaseList {
         return result.slice(0, 3).join(' / ');
     }
 
-    clearCover(uid) {
-        if (!uid)
+    clearCover(key) {
+        if (!key)
             return;
 
-        this.coverByUid = Object.assign({}, this.coverByUid, {[uid]: ''});
+        this.coverByKey = Object.assign({}, this.coverByKey, {[key]: ''});
     }
 }
 
