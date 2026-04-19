@@ -2,6 +2,7 @@
 .inpx-web
 client/.cache
 dist
+library
 node_modules
 npm-debug.log*
 server/.inpx-web

@@ -28,9 +28,11 @@ RUN npm ci --omit=dev --ignore-scripts \
 
 COPY server ./server
 COPY --from=build /app/dist/public.json ./dist/public.json
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 12380
-VOLUME ["/data", "/library"]
+VOLUME ["/usr/local/bin/.inpx-web", "/library"]
 
-ENTRYPOINT ["tini", "--"]
-CMD ["node", "server", "--host=0.0.0.0", "--port=12380", "--data-dir=/data", "--lib-dir=/library"]
+ENTRYPOINT ["tini", "--", "/usr/local/bin/docker-entrypoint.sh"]

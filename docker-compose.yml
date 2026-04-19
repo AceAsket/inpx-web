@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     ports:
       - "12380:12380"
+    environment:
+      INPX: /library/fb2.flibusta.lib.rus.ec.7z.inpx
+      LIBDIR: /library
+      CACHE_DIR: /usr/local/bin/.inpx-web/cache
     volumes:
       - ./library:/library:ro
-      - ./data:/data
+      - ./data:/usr/local/bin/.inpx-web

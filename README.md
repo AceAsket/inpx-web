@@ -66,6 +66,29 @@ docker compose up -d --build
 
 По умолчанию `docker-compose.yml` подключает библиотеку из `./library` в `/library` только для чтения, а рабочие данные приложения хранит в `./data`. В образ уже установлен `p7zip-full`, поэтому книги из `.7z` архивов открываются внутри контейнера без дополнительной настройки.
 
+Переменные окружения для контейнера:
+- `INPX` - путь к `.inpx` внутри контейнера
+- `LIBDIR` - путь к каталогу библиотеки внутри контейнера
+- `CACHE_DIR` - совместимость со старым запуском; приложение использует родительский каталог как рабочую директорию
+- `DATA_DIR` или `APP_DIR` - явная рабочая директория, если не нужно вычислять ее из `CACHE_DIR`
+- `HOST` и `PORT` - адрес и порт веб-сервера внутри контейнера
+
+Пример запуска через `docker run`:
+```sh
+docker rm -f inpx-web 2>/dev/null || true
+
+docker run -d \
+  --name=inpx-web \
+  --restart unless-stopped \
+  -p 12380:12380 \
+  -e INPX=/library/fb2.flibusta.lib.rus.ec.7z.inpx \
+  -e LIBDIR=/library \
+  -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
+  -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
+  -v /mnt/user/Torrents/fb2.flibusta.lib.rus.ec.7z:/library:ro \
+  inpx-web-7z:latest
+```
+
 <a id="cli" />
 
 ### Параметры командной строки
