@@ -23,6 +23,7 @@ const state = {
         showJson: false,
         showNewReleaseAvailable: true,
         darkTheme: false,
+        newInterface: false,
     },    
 };
 
