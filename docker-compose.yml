@@ -1,0 +1,10 @@
+services:
+  inpx-web:
+    build: .
+    container_name: inpx-web
+    restart: unless-stopped
+    ports:
+      - "12380:12380"
+    volumes:
+      - ./library:/library:ro
+      - ./data:/data

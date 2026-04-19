@@ -1,0 +1,7 @@
+.git
+.inpx-web
+client/.cache
+dist
+node_modules
+npm-debug.log*
+server/.inpx-web

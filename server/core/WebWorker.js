@@ -397,8 +397,23 @@ class WebWorker {
 
         libFolder = libFolder.replace(/\\/g, '/').replace(/\/\//g, '/');
 
-        const folder = `${this.config.libDir}/${libFolder}`;
         const file = libFile;
+        const resolveFolder = async() => {
+            const folder = `${this.config.libDir}/${libFolder}`;
+
+            if (await fs.pathExists(folder))
+                return folder;
+
+            if (path.extname(folder).toLowerCase() === '.zip') {
+                const sevenZipFolder = `${folder.substring(0, folder.length - 4)}.7z`;
+                if (await fs.pathExists(sevenZipFolder))
+                    return sevenZipFolder;
+            }
+
+            return folder;
+        };
+
+        const folder = await resolveFolder();
         
         const fullPath = `${folder}/${file}`;
 
@@ -408,14 +423,26 @@ class WebWorker {
             return outFile;
         } else {// файл в zip-архиве
             const zipReader = new ZipReader();
-            await zipReader.open(folder);
+            await zipReader.open(folder, false);
 
             try {
-                await zipReader.extractToFile(file, outFile);
+                const extract = async(entryFilePath) => {
+                    try {
+                        await fs.remove(outFile);
+                        await zipReader.extractToFile(entryFilePath, outFile);
+                    } catch(e) {
+                        await fs.remove(outFile);
+                    }
+                };
+
+                await extract(file);
 
                 if (!await fs.pathExists(outFile)) {//не удалось найти в архиве, попробуем имя файла в кодировке cp866
-                    await zipReader.extractToFile(iconv.encode(file, 'cp866').toString(), outFile);                    
+                    await extract(iconv.encode(file, 'cp866').toString());
                 }
+
+                if (!await fs.pathExists(outFile))
+                    throw new Error(`file not found in archive: ${file}`);
 
                 return outFile;
             } finally {
