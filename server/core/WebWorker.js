@@ -12,6 +12,7 @@ const DbSearcher = require('./DbSearcher');
 const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
 const FileDownloader = require('./FileDownloader');
+const imageUtils = require('./ImageUtils');
 
 const asyncExit = new (require('./AsyncExit'))();
 const log = new (require('./AppLogger'))().log;//singleton
@@ -32,6 +33,7 @@ const stateToText = {
 
 const cleanDirInterval = 60*60*1000;//каждый час
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
+const bookAssetVersion = 'fblibrary-assets-v1';
 
 //singleton
 let instance = null;
@@ -451,6 +453,131 @@ class WebWorker {
         }
     }
 
+    async getFblibraryArchive(subDir, libid) {
+        if (!this.fblibraryArchives)
+            this.fblibraryArchives = {};
+
+        if (!this.fblibraryArchives[subDir]) {
+            const result = [];
+            const dir = `${this.config.libDir}/${subDir}`;
+
+            if (await fs.pathExists(dir)) {
+                const files = await fs.readdir(dir);
+                for (const file of files) {
+                    const match = file.match(/(\d+)-(\d+)\.zip$/i);
+                    if (!match)
+                        continue;
+
+                    result.push({
+                        file: `${dir}/${file}`,
+                        from: parseInt(match[1], 10),
+                        to: parseInt(match[2], 10),
+                    });
+                }
+            }
+
+            result.sort((a, b) => a.from - b.from);
+            this.fblibraryArchives[subDir] = result;
+        }
+
+        return this.fblibraryArchives[subDir].find(item => libid >= item.from && libid <= item.to);
+    }
+
+    async getFblibraryImages(libid) {
+        const archive = await this.getFblibraryArchive('images', libid);
+        if (!archive)
+            return [];
+
+        const zipReader = new ZipReader();
+        await zipReader.open(archive.file);
+
+        try {
+            const prefix = `${libid}/`;
+            const entryNames = Object.values(zipReader.entries)
+                .filter(entry => !entry.isDirectory && entry.name.startsWith(prefix))
+                .map(entry => entry.name)
+                .sort((a, b) => {
+                    const ai = parseInt(a.substring(prefix.length), 10);
+                    const bi = parseInt(b.substring(prefix.length), 10);
+                    return ai - bi;
+                });
+
+            const result = [];
+            for (const entryName of entryNames) {
+                const id = entryName.substring(prefix.length);
+                if (!id)
+                    continue;
+
+                try {
+                    const data = await zipReader.extractToBuf(entryName);
+                    result.push(Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir)));
+                } catch(e) {
+                    log(LM_ERR, `image ${entryName}: ${e.message}`);
+                }
+            }
+
+            return result;
+        } finally {
+            await zipReader.close();
+        }
+    }
+
+    async getFblibraryCover(libid) {
+        const archive = await this.getFblibraryArchive('covers', libid);
+        if (!archive)
+            return null;
+
+        const zipReader = new ZipReader();
+        await zipReader.open(archive.file, false);
+
+        try {
+            try {
+                const data = await zipReader.extractToBuf(String(libid));
+                return Object.assign({id: '0'}, await imageUtils.normalizeForFb2(data, this.config.tempDir));
+            } catch(e) {
+                return null;
+            }
+        } finally {
+            await zipReader.close();
+        }
+    }
+
+    async injectFblibraryImages(bookFile, libid) {
+        const images = await this.getFblibraryImages(libid);
+        const cover = await this.getFblibraryCover(libid);
+        if (!images.length && !cover)
+            return false;
+
+        let data = await fs.readFile(bookFile);
+        data = this.fb2Helper.checkEncoding(data);
+        let text = data.toString();
+
+        if (!/<FictionBook[\s>]/i.test(text) || !/<\/FictionBook>\s*$/i.test(text))
+            return false;
+
+        const existingBinaryIds = new Set();
+        for (const match of text.matchAll(/<binary\b[^>]*\bid=(['"])(.*?)\1/gi))
+            existingBinaryIds.add(match[2]);
+
+        const binaries = [];
+        const assets = (cover && !images.some(image => image.id === cover.id) ? [cover, ...images] : images);
+        for (const image of assets) {
+            if (existingBinaryIds.has(image.id))
+                continue;
+
+            const base64 = image.data.toString('base64');
+            binaries.push(`<binary id="${image.id}" content-type="${image.contentType}">${base64}</binary>`);
+        }
+
+        if (!binaries.length)
+            return false;
+
+        text = text.replace(/<\/FictionBook>\s*$/i, `\n${binaries.join('\n')}\n</FictionBook>`);
+        await fs.writeFile(bookFile, text);
+
+        return true;
+    }
+
     async restoreBook(bookUid, libFolder, libFile, downFileName) {
         const db = this.db;
 
@@ -459,6 +586,11 @@ class WebWorker {
 
         if (!this.remoteLib) {
             extractedFile = await this.extractBook(libFolder, libFile);
+            if (path.extname(libFile).toLowerCase() === '.fb2') {
+                const libid = parseInt(path.basename(libFile, path.extname(libFile)), 10);
+                if (libid)
+                    await this.injectFblibraryImages(extractedFile, libid);
+            }
             hash = await utils.getFileHash(extractedFile, 'sha256', 'hex');
         } else {
             hash = await this.remoteLib.downloadBook(bookUid);
@@ -477,8 +609,6 @@ class WebWorker {
             } else {
                 await utils.touchFile(bookFile);
             }
-
-            await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, downFileName}));
         } else {
             if (extractedFile)
                 await fs.remove(extractedFile);
@@ -486,6 +616,8 @@ class WebWorker {
             await utils.touchFile(bookFile);
             await utils.touchFile(bookFileDesc);
         }
+
+        await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, downFileName, assetVersion: bookAssetVersion}));
 
         await db.insert({
             table: 'file_hash',
@@ -543,7 +675,13 @@ class WebWorker {
                 const bookFileDesc = `${bookFile}.d.json`;
 
                 if (await fs.pathExists(bookFile) && await fs.pathExists(bookFileDesc)) {
-                    link = `${this.config.bookPathStatic}/${hash}`;
+                    try {
+                        const desc = JSON.parse(await fs.readFile(bookFileDesc, 'utf8'));
+                        if (desc.assetVersion === bookAssetVersion)
+                            link = `${this.config.bookPathStatic}/${hash}`;
+                    } catch(e) {
+                        link = '';
+                    }
                 }
             }
 

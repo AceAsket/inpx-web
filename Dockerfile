@@ -19,7 +19,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends p7zip-full tini \
+    && apt-get install -y --no-install-recommends p7zip-full libjxl-tools tini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./

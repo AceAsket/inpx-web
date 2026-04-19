@@ -31,7 +31,7 @@
                         v-if="coverByKey[item.key]"
                         :src="coverByKey[item.key]"
                         class="cover-img"
-                        @error="clearCover(item.key)"
+                        @error="coverError(item)"
                     />
                     <div v-else class="cover-placeholder">
                         <div class="cover-letter">
@@ -103,6 +103,8 @@ const coverPreloadLimit = 24;
 
 class ModernTitleList extends BaseList {
     coverByKey = {};
+    coverAttemptByKey = {};
+    embeddedCoverTriedByKey = {};
     coverLoadToken = 0;
     ratingOptions = [
         {label: 'Все', value: ''},
@@ -176,27 +178,70 @@ class ModernTitleList extends BaseList {
             if (this.coverByKey[item.key] !== undefined)
                 continue;
 
-            this.coverByKey = Object.assign({}, this.coverByKey, {[item.key]: ''});
-
-            for (const book of this.coverCandidates(item)) {
-                if (token !== this.coverLoadToken)
-                    return;
-
-                try {
-                    const response = await this.api.getBookInfo(book._uid);
-                    if (token !== this.coverLoadToken)
-                        return;
-
-                    const cover = response.bookInfo && response.bookInfo.cover ? response.bookInfo.cover : '';
-                    if (cover) {
-                        this.coverByKey = Object.assign({}, this.coverByKey, {[item.key]: cover});
-                        break;
-                    }
-                } catch(e) {
-                    // Some variants may be missing or may not contain FB2 metadata.
-                }
+            const cover = this.coverUrl(this.coverCandidates(item)[0]);
+            if (cover) {
+                this.coverAttemptByKey = Object.assign({}, this.coverAttemptByKey, {[item.key]: 0});
+                this.coverByKey = Object.assign({}, this.coverByKey, {[item.key]: cover});
+            } else {
+                this.coverByKey = Object.assign({}, this.coverByKey, {[item.key]: ''});
+                this.preloadEmbeddedCover(item);
             }
         }
+    }
+
+    coverUrl(book) {
+        if (!book || !book.libid)
+            return '';
+
+        const rootRoute = (this.$root.getRootRoute ? this.$root.getRootRoute() : '');
+        const prefix = (rootRoute && rootRoute !== '/' ? rootRoute : '');
+        return `${prefix}/cover/${encodeURIComponent(book.libid)}`;
+    }
+
+    async coverError(item) {
+        const candidates = this.coverCandidates(item);
+        let attempt = (this.coverAttemptByKey[item.key] || 0) + 1;
+
+        while (attempt < candidates.length) {
+            const cover = this.coverUrl(candidates[attempt]);
+            this.coverAttemptByKey = Object.assign({}, this.coverAttemptByKey, {[item.key]: attempt});
+            attempt++;
+
+            if (cover) {
+                this.coverByKey = Object.assign({}, this.coverByKey, {[item.key]: cover});
+                return;
+            }
+        }
+
+        if (this.embeddedCoverTriedByKey[item.key]) {
+            this.clearCover(item.key);
+            return;
+        }
+
+        this.clearCover(item.key);
+        this.preloadEmbeddedCover(item);
+    }
+
+    async preloadEmbeddedCover(item) {
+        if (this.embeddedCoverTriedByKey[item.key])
+            return;
+
+        this.embeddedCoverTriedByKey = Object.assign({}, this.embeddedCoverTriedByKey, {[item.key]: true});
+
+        for (const book of this.coverCandidates(item)) {
+            try {
+                const response = await this.api.getBookInfo(book._uid);
+                const cover = response.bookInfo && response.bookInfo.cover ? response.bookInfo.cover : '';
+                if (cover) {
+                    this.coverByKey = Object.assign({}, this.coverByKey, {[item.key]: cover});
+                    return;
+                }
+            } catch(e) {
+                // Some variants may be missing or may not contain FB2 metadata.
+            }
+        }
+
+        this.clearCover(item.key);
     }
 
     coverCandidates(item) {

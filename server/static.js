@@ -4,9 +4,12 @@ const yazl = require('yazl');
 
 const express = require('express');
 const utils = require('./core/utils');
+const ZipReader = require('./core/ZipReader');
+const imageUtils = require('./core/ImageUtils');
 const webAppDir = require('../build/appdir');
 
 const log = new (require('./core/AppLogger'))().log;//singleton
+let coverArchives = null;
 
 function generateZip(zipFile, dataFile, dataFileInZip) {
     return new Promise((resolve, reject) => {
@@ -23,11 +26,86 @@ function generateZip(zipFile, dataFile, dataFileInZip) {
     });
 }
 
+async function getCoverArchives(config) {
+    if (coverArchives)
+        return coverArchives;
+
+    coverArchives = [];
+    const coverDir = `${config.libDir}/covers`;
+    if (!await fs.pathExists(coverDir))
+        return coverArchives;
+
+    const files = await fs.readdir(coverDir);
+    for (const file of files) {
+        const match = file.match(/(\d+)-(\d+)\.zip$/i);
+        if (!match)
+            continue;
+
+        coverArchives.push({
+            file: `${coverDir}/${file}`,
+            from: parseInt(match[1], 10),
+            to: parseInt(match[2], 10),
+        });
+    }
+
+    coverArchives.sort((a, b) => a.from - b.from);
+    return coverArchives;
+}
+
 module.exports = (app, config) => {
     /*
     config.bookPathStatic = `${config.rootPathStatic}/book`;
     config.bookDir = `${config.publicFilesDir}/book`;
     */
+    app.get(`${config.rootPathStatic || ''}/cover/:libid`, async(req, res) => {
+        const libid = parseInt(req.params.libid, 10);
+        if (!libid) {
+            res.sendStatus(404);
+            return;
+        }
+
+        try {
+            const cacheDir = `${config.publicFilesDir}/cover`;
+            const cacheFile = `${cacheDir}/${libid}.png`;
+            if (await fs.pathExists(cacheFile)) {
+                res.set('Cache-Control', 'public, max-age=2592000, immutable');
+                res.type('image/png');
+                res.sendFile(cacheFile);
+                return;
+            }
+
+            const archives = await getCoverArchives(config);
+            const archive = archives.find(item => libid >= item.from && libid <= item.to);
+            if (!archive) {
+                res.sendStatus(404);
+                return;
+            }
+
+            const zipReader = new ZipReader();
+            await zipReader.open(archive.file, false);
+
+            try {
+                let cover = await zipReader.extractToBuf(String(libid));
+                let type = imageUtils.contentType(cover);
+                if (type === 'image/jxl') {
+                    cover = await imageUtils.jxlToPng(cover, config.tempDir);
+                    type = 'image/png';
+
+                    await fs.ensureDir(cacheDir);
+                    await fs.writeFile(cacheFile, cover);
+                }
+
+                res.set('Cache-Control', 'public, max-age=2592000, immutable');
+                res.type(type);
+                res.send(cover);
+            } finally {
+                await zipReader.close();
+            }
+        } catch(e) {
+            res.sendStatus(404);
+        }
+    });
+
     //загрузка или восстановление файлов в /public-files, при необходимости
     app.use([`${config.bookPathStatic}/:fileName/:fileType`, `${config.bookPathStatic}/:fileName`], async(req, res, next) => {
         if (req.method !== 'GET' && req.method !== 'HEAD') {
