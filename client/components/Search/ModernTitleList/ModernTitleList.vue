@@ -5,6 +5,22 @@
         <LoadingMessage :message="loadingMessage" z-index="2" />
         <LoadingMessage :message="loadingMessage2" z-index="1" />
 
+        <div class="modern-filter-row row items-center">
+            <div class="modern-filter-label">
+                Топы
+            </div>
+            <q-btn-toggle
+                :model-value="ratingPreset"
+                :options="ratingOptions"
+                toggle-color="primary"
+                color="secondary"
+                outline
+                dense
+                no-caps
+                @update:model-value="applyRatingPreset"
+            />
+        </div>
+
         <div v-if="tableData.length" class="catalog-grid">
             <div v-for="item in tableData" :key="item.key" class="catalog-card">
                 <div class="cover-box" @click.stop.prevent="bookEvent({action: 'bookInfo', book: item.book})">
@@ -85,6 +101,13 @@ const coverPreloadLimit = 24;
 class ModernTitleList extends BaseList {
     coverByKey = {};
     coverLoadToken = 0;
+    ratingOptions = [
+        {label: 'Все', value: ''},
+        {label: '5', value: '5'},
+        {label: '4+', value: '4,5'},
+        {label: '3+', value: '3,4,5'},
+        {label: 'С оценкой', value: '1,2,3,4,5'},
+    ];
 
     get foundCountMessage() {
         return `${this.list.totalFound} уникальн${utils.wordEnding(this.list.totalFound, 6)} назван${utils.wordEnding(this.list.totalFound, 3)}`;
@@ -110,6 +133,7 @@ class ModernTitleList extends BaseList {
 
             if (rec.books) {
                 const filtered = this.filterBooks(rec.books);
+                filtered.sort((a, b) => this.bookRating(b) - this.bookRating(a));
 
                 for (let i = 0; i < filtered.length; i++) {
                     if (i === 0)
@@ -123,6 +147,15 @@ class ModernTitleList extends BaseList {
                     result.push(item);
                 }
             }
+        }
+
+        if (this.search.librate) {
+            result.sort((a, b) => {
+                let cmp = this.itemRating(b) - this.itemRating(a);
+                if (cmp === 0)
+                    cmp = a.title.localeCompare(b.title);
+                return cmp;
+            });
         }
 
         this.tableData = result;
@@ -271,6 +304,23 @@ class ModernTitleList extends BaseList {
 
         this.coverByKey = Object.assign({}, this.coverByKey, {[key]: ''});
     }
+
+    bookRating(book) {
+        return parseInt(book && book.librate, 10) || 0;
+    }
+
+    itemRating(item) {
+        const books = [item.book, ...item.books];
+        return Math.max(...books.map(book => this.bookRating(book)));
+    }
+
+    get ratingPreset() {
+        return this.search.librate || '';
+    }
+
+    applyRatingPreset(value) {
+        this.search.librate = value || '';
+    }
 }
 
 export default vueComponent(ModernTitleList);
@@ -280,6 +330,17 @@ export default vueComponent(ModernTitleList);
 <style scoped>
 .modern-title-list {
     padding: 14px 18px 24px;
+}
+
+.modern-filter-row {
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.modern-filter-label {
+    color: var(--app-muted);
+    font-size: 13px;
+    font-weight: 800;
 }
 
 .catalog-grid {
