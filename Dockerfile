@@ -27,6 +27,7 @@ RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
 COPY server ./server
+COPY build/appdir.js ./build/appdir.js
 COPY --from=build /app/dist/public.json ./dist/public.json
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
