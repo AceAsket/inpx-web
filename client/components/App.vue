@@ -142,49 +142,86 @@ body, html, #app {
 }
 
 body.body--dark {
-    background: #12171c;
-    color: #e6edf3;
+    --q-primary: #4f9fe8;
+    --q-secondary: #2f7f87;
+    --q-accent: #f0c768;
+    background: #101418;
+    color: #e9eef3;
 }
 
 body.body--dark .root {
-    background: #12171c;
-    color: #e6edf3;
+    background: #101418;
+    color: #e9eef3;
 }
 
 body.body--dark .bg-white,
-body.body--dark .bg-cyan-2,
 body.body--dark .bg-yellow-1 {
-    background: #1d242b !important;
-    color: #e6edf3 !important;
+    background: #1c242c !important;
+    color: #e9eef3 !important;
+}
+
+body.body--dark .bg-cyan-2 {
+    background: #182a32 !important;
+    color: #e9eef3 !important;
 }
 
 body.body--dark .bg-green-4 {
-    background: #2f6b45 !important;
+    background: #2e7352 !important;
     color: #f2fff7 !important;
+}
+
+body.body--dark .bg-primary {
+    background: #3d8fd8 !important;
+}
+
+body.body--dark .bg-secondary {
+    background: #2f7f87 !important;
 }
 
 body.body--dark .text-black,
 body.body--dark .text-grey-8,
 body.body--dark .text-grey-6,
 body.body--dark .text-grey-5 {
-    color: #d8dee4 !important;
+    color: #d8e1ea !important;
+}
+
+body.body--dark .text-green,
+body.body--dark .text-green-10,
+body.body--dark .text-positive {
+    color: #7ee2b8 !important;
+}
+
+body.body--dark .text-blue-10,
+body.body--dark .text-primary {
+    color: #8cc8ff !important;
+}
+
+body.body--dark .text-red,
+body.body--dark .text-negative {
+    color: #ff8a8a !important;
+}
+
+body.body--dark .text-warning {
+    color: #f0c768 !important;
 }
 
 body.body--dark .clickable,
 body.body--dark a {
-    color: #7ab7ff;
+    color: #8cc8ff;
 }
 
 body.body--dark .tool-panel {
-    border-bottom-color: #3a4652;
+    background: linear-gradient(180deg, #1b333b 0%, #17242c 100%) !important;
+    border-bottom-color: #40606b;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
 body.body--dark .separator {
-    border-bottom-color: #3a4652;
+    border-bottom-color: #40505e;
 }
 
 body.body--dark .odd-item {
-    background-color: #1a2027 !important;
+    background-color: #182028 !important;
 }
 
 body.body--dark [style*="color: #555"],
@@ -192,12 +229,65 @@ body.body--dark [style*="color: blue"] {
     color: #9ecbff !important;
 }
 
+body.body--dark .button {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+body.body--dark .button:hover {
+    opacity: 1;
+    filter: brightness(1.12);
+}
+
+body.body--dark .q-btn-toggle {
+    box-shadow: 0 0 0 1px rgba(140, 200, 255, 0.22);
+}
+
+body.body--dark .q-btn-toggle .q-btn {
+    background: #1d2933;
+    color: #d7e4ef;
+}
+
+body.body--dark .q-btn-toggle .q-btn.bg-primary {
+    background: #3d8fd8 !important;
+    color: #ffffff !important;
+}
+
+body.body--dark .q-dialog__inner > div {
+    background: #1c242c !important;
+    color: #e9eef3 !important;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+body.body--dark .q-menu {
+    background: #1c242c;
+    color: #e9eef3;
+}
+
+body.body--dark .q-item.q-router-link--active,
+body.body--dark .q-item--active {
+    color: #8cc8ff;
+}
+
+body.body--dark .q-field__control,
+body.body--dark .q-field__native,
+body.body--dark .q-field__label {
+    color: #e9eef3;
+}
+
 body.body--dark .q-field--outlined .q-field__control::before {
-    border-color: #52616f;
+    border-color: #526a7c;
 }
 
 body.body--dark .q-field--outlined .q-field__control:hover::before {
-    border-color: #8aa4bd;
+    border-color: #8cc8ff;
+}
+
+body.body--dark .q-field--focused .q-field__control::after {
+    border-color: #8cc8ff;
+}
+
+body.body--dark pre {
+    color: #d7e4ef;
 }
 
 .dborder {
