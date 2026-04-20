@@ -50,8 +50,8 @@
                             class="bg-grey-4 text-grey-7"
                         >
                             <q-tab v-if="fb2.length" name="fb2" label="Fb2 info" />
-                            <q-tab v-if="contents.length" name="contents" label="Содержание" />
                             <q-tab name="inpx" label="Inpx info" />
+                            <q-tab v-if="contents.length" name="contents" label="Содержание" />
                             <q-tab v-if="hasAuthorTab" name="author" :label="authorTabLabel" />
                         </q-tabs>
                     </div>
