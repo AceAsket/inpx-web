@@ -35,7 +35,7 @@ const stateToText = {
 const cleanDirInterval = 60*60*1000;//каждый час
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const bookAssetVersion = 'fblibrary-assets-v1';
-const bookInfoVersion = 'fb2-binaries-v4';
+const bookInfoVersion = 'fb2-binaries-v5';
 
 function decodeHtmlBuffer(data) {
     let text = iconv.decode(data, 'utf8');
@@ -956,7 +956,7 @@ class WebWorker {
 
         const walk = (sections, level = 0) => {
             for (const section of sections) {
-                const titleNode = section.$$('title/');
+                const titleNode = section.$$('\/title/');
                 let title = '';
                 if (titleNode && titleNode.count)
                     title = getNodeText(titleNode);
@@ -964,14 +964,14 @@ class WebWorker {
                 if (title)
                     result.push({title, level});
 
-                const childSections = section.$$array('section');
+                const childSections = section.$$array('/section');
                 if (childSections.length)
                     walk(childSections, level + 1);
             }
         };
 
         for (const body of parser.$$array('/body'))
-            walk(body.$$array('section'));
+            walk(body.$$array('/section'));
 
         return result.slice(0, 200);
     }
