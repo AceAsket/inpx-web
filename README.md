@@ -6,21 +6,21 @@ inpx-web
 > Original author: **bookpauk**.
 > This repository contains deployment and UI changes for the `inpx-web-7z` variant while preserving attribution to the upstream project.
 
-## What's New In This Fork
+## Что нового в этом форке
 
-This fork extends the original project for large `fLibrary` / `.7z`-based collections and a more visual reading experience.
+Этот форк развивает оригинальный проект для больших `fLibrary` / `.7z`-коллекций и более современного визуального интерфейса чтения.
 
-Key additions:
+Основные отличия:
 
-* refreshed card-based UI for books, series and authors
-* automatic cover loading with a decorative placeholder when no cover is available
-* clickable navigation from a book card and info dialog to author, series and genres
-* richer `fb2` info view with table of contents, illustrations and separate author tab
-* author photo and short biography support from `fLibrary`
-* on-demand download conversion to `epub`, `mobi` and `pdf`
-* improved support for `fLibrary` covers and embedded image enrichment for `fb2`
-* Docker-oriented deployment updates for `.7z` libraries and Calibre-based conversion
-* mobile-oriented layout improvements for search, cards and book info dialogs
+* обновлённый карточный интерфейс для книг, серий и авторов
+* автоматическая загрузка обложек и декоративная заглушка, если обложка отсутствует
+* кликабельная навигация из карточки книги и окна информации к автору, серии и жанрам
+* расширенный раздел `fb2 info` с содержанием, иллюстрациями и отдельной вкладкой автора
+* поддержка фото автора и краткой биографии из `fLibrary`
+* конвертация книг по запросу в `epub`, `mobi` и `pdf`
+* улучшенная работа с обложками `fLibrary` и внедрением картинок в `fb2`
+* Docker-ориентированные доработки для `.7z`-библиотек и конвертации через Calibre
+* улучшенная адаптация интерфейса для телефонов и небольших экранов
 
 Веб-сервер для поиска по .inpx-коллекции.
 
