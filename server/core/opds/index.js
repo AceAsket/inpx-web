@@ -8,6 +8,7 @@ const GenrePage = require('./GenrePage');
 const BookPage = require('./BookPage');
 const ReadingListsPage = require('./ReadingListsPage');
 const ReadingListPage = require('./ReadingListPage');
+const ReadingProfilesPage = require('./ReadingProfilesPage');
 
 const OpensearchPage = require('./OpensearchPage');
 const SearchPage = require('./SearchPage');
@@ -30,6 +31,7 @@ module.exports = function(app, config) {
     const book = new BookPage(config);
     const readingLists = new ReadingListsPage(config);
     const readingList = new ReadingListPage(config);
+    const readingProfiles = new ReadingProfilesPage(config);
 
     const opensearch = new OpensearchPage(config);
     const search = new SearchPage(config);
@@ -45,6 +47,7 @@ module.exports = function(app, config) {
         ['/book', book],
         ['/reading-lists', readingLists],
         ['/reading-lists/list', readingList],
+        ['/reading-profiles', readingProfiles],
 
         ['/opensearch', opensearch],
         ['/search', search],

@@ -10,10 +10,13 @@ class ReadingListPage extends BasePage {
 
     async body(req) {
         const listId = req.query.id || '';
+        const userId = this.getScopeUserId(req);
         if (!listId)
             throw new Error('listId is empty');
+        if (!userId)
+            throw new Error('user is empty');
 
-        const {list, books} = await this.webWorker.getReadingList(listId);
+        const {list, books} = await this.webWorker.getReadingList(userId, listId, {visibility: 'opds'});
         const result = {};
         const entry = [];
 
@@ -31,7 +34,7 @@ class ReadingListPage extends BasePage {
                 this.makeEntry({
                     id: book._uid,
                     title,
-                    link: this.acqLink({href: `/book?uid=${encodeURIComponent(book._uid)}`}),
+                    link: this.acqLink({href: `/book?uid=${encodeURIComponent(book._uid)}`, req}),
                     content: {
                         '*ATTRS': {type: 'text'},
                         '*TEXT': subtitle,
@@ -45,7 +48,7 @@ class ReadingListPage extends BasePage {
                 this.makeEntry({
                     id: 'empty',
                     title: '[Список пуст]',
-                    link: this.navLink({href: `/reading-lists`}),
+                    link: this.navLink({href: `/reading-lists`, req}),
                     content: {
                         '*ATTRS': {type: 'text'},
                         '*TEXT': 'Добавьте книги в этот список через веб-интерфейс',

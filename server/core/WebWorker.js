@@ -509,38 +509,67 @@ class WebWorker {
         });
     }
 
-    async getReadingLists(bookUid = '') {
+    async getUserProfiles(currentUserId = '') {
         this.checkMyState();
 
-        const lists = await this.readingListStore.getLists();
+        const {users, currentUser} = await this.readingListStore.getUsers(currentUserId);
+        return {
+            users: users
+                .map((item) => ({
+                    id: item.id,
+                    name: item.name,
+                    emailTo: item.emailTo || '',
+                    telegramChatId: item.telegramChatId || '',
+                    opdsEnabled: item.opdsEnabled !== false,
+                    createdAt: item.createdAt,
+                    updatedAt: item.updatedAt,
+                }))
+                .sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+            currentUserId: (currentUser ? currentUser.id : ''),
+        };
+    }
+
+    async createUserProfile(profile = {}) {
+        this.checkMyState();
+        return {user: await this.readingListStore.createUser(profile)};
+    }
+
+    async updateUserProfile(userId, patch = {}) {
+        this.checkMyState();
+        return {user: await this.readingListStore.updateUser(userId, patch)};
+    }
+
+    async deleteUserProfile(userId) {
+        this.checkMyState();
+        return await this.readingListStore.deleteUser(userId);
+    }
+
+    async getOpdsUsers() {
+        this.checkMyState();
+        return await this.readingListStore.getOpdsUsers();
+    }
+
+    async getReadingLists(userId = '', bookUid = '', options = {}) {
+        this.checkMyState();
+
+        const lists = await this.readingListStore.getLists(userId, options);
         return {
             lists: lists
-                .map((item) => {
-                    const currentEntry = (bookUid ? this.readingListStore.findEntry(item.books, bookUid) : null);
-                    return {
-                        id: item.id,
-                        name: item.name,
-                        createdAt: item.createdAt,
-                        updatedAt: item.updatedAt,
-                        bookCount: Array.isArray(item.books) ? item.books.length : 0,
-                        readCount: this.readingListStore.countRead(item.books),
-                        containsBook: !!currentEntry,
-                        readBook: !!(currentEntry && currentEntry.read),
-                    };
-                })
+                .map((item) => this.readingListStore.listStats(item, bookUid))
                 .sort((a, b) => a.name.localeCompare(b.name, 'ru')),
         };
     }
 
-    async getReadingList(listId) {
+    async getReadingList(userId = '', listId, options = {}) {
         this.checkMyState();
 
-        const item = await this.readingListStore.getList(listId);
+        const item = await this.readingListStore.getList(userId, listId, options);
         if (!item)
             throw new Error('Список не найден');
 
+        const listEntries = this.readingListStore.normalizeEntries(item.books);
         const books = [];
-        for (const entry of this.readingListStore.normalizeEntries(item.books)) {
+        for (const entry of listEntries) {
             const book = await this.getBookRecordByUid(entry.bookUid);
             if (book) {
                 book._readingListRead = !!entry.read;
@@ -548,12 +577,14 @@ class WebWorker {
             }
         }
 
-        this.sortReadingListBooks(books, this.readingListStore.normalizeEntries(item.books).map((entry) => entry.bookUid));
+        this.sortReadingListBooks(books, listEntries.map((entry) => entry.bookUid));
 
         return {
             list: {
                 id: item.id,
+                userId: item.userId,
                 name: item.name,
+                visibility: item.visibility,
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
                 bookCount: (item.books || []).length,
@@ -563,97 +594,74 @@ class WebWorker {
         };
     }
 
-    async createReadingList(name) {
+    async createReadingList(userId = '', name, visibility = 'private') {
         this.checkMyState();
 
-        const item = await this.readingListStore.createList(name);
+        const item = await this.readingListStore.createList(userId, name, visibility);
         return {
-            list: {
-                id: item.id,
-                name: item.name,
-                createdAt: item.createdAt,
-                updatedAt: item.updatedAt,
-                bookCount: 0,
-            },
+            list: this.readingListStore.listStats(item),
         };
     }
 
-    async renameReadingList(listId, name) {
+    async renameReadingList(userId = '', listId, name) {
         this.checkMyState();
 
-        const item = await this.readingListStore.renameList(listId, name);
-        return {
-            list: {
-                id: item.id,
-                name: item.name,
-                createdAt: item.createdAt,
-                updatedAt: item.updatedAt,
-                bookCount: (item.books || []).length,
-                readCount: this.readingListStore.countRead(item.books),
-            },
-        };
+        const item = await this.readingListStore.renameList(userId, listId, name);
+        return {list: this.readingListStore.listStats(item)};
     }
 
-    async deleteReadingList(listId) {
+    async setReadingListVisibility(userId = '', listId, visibility) {
         this.checkMyState();
-        return await this.readingListStore.deleteList(listId);
+        const item = await this.readingListStore.setListVisibility(userId, listId, visibility);
+        return {list: this.readingListStore.listStats(item)};
     }
 
-    async exportReadingLists() {
+    async deleteReadingList(userId = '', listId) {
         this.checkMyState();
-        return await this.readingListStore.exportData();
+        return await this.readingListStore.deleteList(userId, listId);
     }
 
-    async importReadingLists(data) {
+    async exportReadingLists(userId = '') {
         this.checkMyState();
-        return await this.readingListStore.importData(data);
+        return await this.readingListStore.exportData(userId);
     }
 
-    async updateReadingListBook(listId, bookUid, enabled) {
+    async importReadingLists(userId = '', data) {
+        this.checkMyState();
+        return await this.readingListStore.importData(userId, data);
+    }
+
+    async updateReadingListBook(userId = '', listId, bookUid, enabled) {
         this.checkMyState();
 
         const book = await this.getBookRecordByUid(bookUid);
         if (!book)
             throw new Error('404 Файл не найден');
 
-        const item = await this.readingListStore.setBookMembership(listId, bookUid, enabled);
+        const item = await this.readingListStore.setBookMembership(userId, listId, bookUid, enabled);
         return {
-            list: {
-                id: item.id,
-                name: item.name,
-                createdAt: item.createdAt,
-                updatedAt: item.updatedAt,
-                bookCount: (item.books || []).length,
-                readCount: this.readingListStore.countRead(item.books),
-            },
+            list: this.readingListStore.listStats(item),
             bookUid,
             enabled: !!enabled,
         };
     }
 
-    async setReadingListBookRead(listId, bookUid, read) {
+    async setReadingListBookRead(userId = '', listId, bookUid, read) {
         this.checkMyState();
 
         const book = await this.getBookRecordByUid(bookUid);
         if (!book)
             throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
 
-        const item = await this.readingListStore.setBookRead(listId, bookUid, read);
+        const item = await this.readingListStore.setBookRead(userId, listId, bookUid, read);
         return {
-            list: {
-                id: item.id,
-                name: item.name,
-                createdAt: item.createdAt,
-                updatedAt: item.updatedAt,
-                bookCount: (item.books || []).length,
-                readCount: this.readingListStore.countRead(item.books),
-            },
+            list: this.readingListStore.listStats(item),
             bookUid,
             read: !!read,
         };
     }
 
-    async addSeriesToReadingList(listId, series) {
+    async addSeriesToReadingList(userId = '', listId, series) {
         this.checkMyState();
 
         const seriesName = String(series || '').trim();
@@ -662,17 +670,10 @@ class WebWorker {
 
         const result = await this.dbSearcher.getSeriesBookList(seriesName);
         const bookUids = (result.books || []).map((book) => book._uid).filter(Boolean);
-        const added = await this.readingListStore.addBooks(listId, bookUids);
+        const added = await this.readingListStore.addBooks(userId, listId, bookUids);
 
         return {
-            list: {
-                id: added.item.id,
-                name: added.item.name,
-                createdAt: added.item.createdAt,
-                updatedAt: added.item.updatedAt,
-                bookCount: (added.item.books || []).length,
-                readCount: this.readingListStore.countRead(added.item.books),
-            },
+            list: this.readingListStore.listStats(added.item),
             series: seriesName,
             addedBooks: added.added,
         };
@@ -1222,15 +1223,17 @@ class WebWorker {
         };
     }
 
-    async sendBookToTelegram(bookUid, format = '') {
-        if (!this.config.telegramShareEnabled || !this.config.telegramBotToken || !this.config.telegramChatId)
+    async sendBookToTelegram(bookUid, format = '', userId = '') {
+        const {currentUser} = await this.readingListStore.getUsers(userId);
+        const chatId = String((currentUser && currentUser.telegramChatId) || this.config.telegramChatId || '').trim();
+        if (!this.config.telegramBotToken || !chatId)
             throw new Error('Отправка в Telegram не настроена');
 
         const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
         const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
         const form = new FormData();
 
-        form.append('chat_id', this.config.telegramChatId);
+        form.append('chat_id', chatId);
         form.append('caption', formatTemplate(this.config.telegramCaptionTemplate, book).trim());
         form.append('document', fs.createReadStream(rawFile), downFileName);
 
@@ -1247,8 +1250,10 @@ class WebWorker {
         return {success: true};
     }
 
-    async sendBookToEmail(bookUid, format = '') {
-        if (!this.config.emailShareEnabled || !this.config.smtpHost || !this.config.emailTo)
+    async sendBookToEmail(bookUid, format = '', userId = '') {
+        const {currentUser} = await this.readingListStore.getUsers(userId);
+        const emailTo = String((currentUser && currentUser.emailTo) || this.config.emailTo || '').trim();
+        if (!this.config.smtpHost || !emailTo)
             throw new Error('Отправка на email не настроена');
 
         const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
@@ -1265,7 +1270,7 @@ class WebWorker {
         const subject = [book.author, book.title].filter(Boolean).join(' - ') || downFileName;
         await transporter.sendMail({
             from: this.config.emailFrom || this.config.smtpUser || 'inpx-web@localhost',
-            to: this.config.emailTo,
+            to: emailTo,
             subject: `Книга: ${subject}`,
             text: `Во вложении книга "${book.title || downFileName}".`,
             attachments: [

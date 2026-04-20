@@ -38,6 +38,27 @@
                                     no-caps
                                     rounded
                                 />
+
+                                <q-select
+                                    :model-value="currentUserId"
+                                    class="q-ml-sm profile-select"
+                                    dense
+                                    outlined
+                                    emit-value
+                                    map-options
+                                    :options="userProfileOptions"
+                                    label="Профиль"
+                                    style="min-width: 180px"
+                                    @update:model-value="selectUserProfile"
+                                />
+
+                                <DivBtn class="q-ml-xs text-grey-5 bg-yellow-1" :size="28" :icon-size="22" icon="la la-users-cog" round @click.stop.prevent="userProfilesDialogVisible = true">
+                                    <template #tooltip>
+                                        <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
+                                            Профили пользователей
+                                        </q-tooltip>
+                                    </template>
+                                </DivBtn>
                             </div>
 
                             <div class="collection-title row items-center q-ml-sm" style="font-size: 150%;">
@@ -377,6 +398,7 @@
             @navigate="bookInfoNavigate"
         />
         <ReadingListsDialog v-model="readingListsDialogVisible" :book="readingListsDialogBook" />
+        <UserProfilesDialog v-model="userProfilesDialogVisible" />
         <SelectExtSearchDialog v-model="selectExtSearchDialogVisible" v-model:ext-search="extSearch" />        
     </div>
 </template>
@@ -401,6 +423,7 @@ import SelectExtDialog from './SelectExtDialog/SelectExtDialog.vue';
 import BookInfoDialog from './BookInfoDialog/BookInfoDialog.vue';
 import SelectExtSearchDialog from './SelectExtSearchDialog/SelectExtSearchDialog.vue';
 import ReadingListsDialog from './ReadingListsDialog/ReadingListsDialog.vue';
+import UserProfilesDialog from './UserProfilesDialog/UserProfilesDialog.vue';
 
 import authorBooksStorage from './authorBooksStorage';
 import DivBtn from '../share/DivBtn.vue';
@@ -437,6 +460,7 @@ const componentOptions = {
         SelectExtDialog,
         BookInfoDialog,
         ReadingListsDialog,
+        UserProfilesDialog,
         SelectExtSearchDialog,
         Dialog,
         DivBtn
@@ -552,6 +576,7 @@ class Search {
     bookInfoDialogVisible = false;
     bookInfoDialogTab = 'fb2';
     readingListsDialogVisible = false;
+    userProfilesDialogVisible = false;
     selectExtSearchDialogVisible = false;
 
     pageCount = 1;    
@@ -752,8 +777,20 @@ class Search {
                 }
             } else {
                 result.push({label: rec.label, value: route, icon: rec.icon});
-            }
+        }
         return result;
+    }
+
+    get currentUserId() {
+        return this.settings.currentUserId || this.config.currentUserId || '';
+    }
+
+    get userProfileOptions() {
+        const users = this.config.userProfiles || [];
+        return users.map((item) => ({
+            label: item.name,
+            value: item.id,
+        }));
     }
 
     getSelectedListComponent(route) {
@@ -1129,6 +1166,11 @@ class Search {
         this.readingListsDialogVisible = true;
     }
 
+    async selectUserProfile(userId) {
+        this.commit('setSettings', {currentUserId: userId || ''});
+        await this.api.updateConfig();
+    }
+
     bookInfoNavigate(event) {
         if (!event || !event.value)
             return;
@@ -1434,6 +1476,10 @@ export default vueComponent(Search);
     gap: 2px;
 }
 
+.profile-select {
+    max-width: 220px;
+}
+
 .result-bar {
     min-height: 40px;
     color: var(--app-muted);
@@ -1504,6 +1550,11 @@ export default vueComponent(Search);
     .search-fields :deep(.q-select),
     .search-fields :deep(.q-input) {
         max-width: none;
+    }
+
+    .profile-select {
+        max-width: none;
+        width: 100%;
     }
 }
 

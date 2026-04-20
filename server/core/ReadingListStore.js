@@ -13,10 +13,19 @@ class ReadingListStore {
 
         if (!await fs.pathExists(this.file)) {
             await this.save({
-                version: 2,
+                version: 3,
+                users: [this.makeDefaultUser()],
                 lists: [],
             });
         }
+    }
+
+    makeId() {
+        return crypto.randomBytes(8).toString('hex');
+    }
+
+    nowIso() {
+        return new Date().toISOString();
     }
 
     normalizeName(name) {
@@ -32,12 +41,34 @@ class ReadingListStore {
         return normalized;
     }
 
-    makeId() {
-        return crypto.randomBytes(8).toString('hex');
+    validateUserName(name) {
+        const normalized = this.normalizeName(name);
+        if (!normalized)
+            throw new Error('Имя пользователя не должно быть пустым');
+        if (normalized.length > 80)
+            throw new Error('Имя пользователя слишком длинное');
+        return normalized;
     }
 
     normalizeBookUid(bookUid) {
         return String(bookUid || '').trim();
+    }
+
+    normalizeVisibility(value) {
+        return (value === 'opds' ? 'opds' : 'private');
+    }
+
+    makeDefaultUser() {
+        const now = this.nowIso();
+        return {
+            id: 'default',
+            name: 'Основной',
+            emailTo: String(this.config.emailTo || '').trim(),
+            telegramChatId: String(this.config.telegramChatId || '').trim(),
+            opdsEnabled: true,
+            createdAt: now,
+            updatedAt: now,
+        };
     }
 
     normalizeEntries(entries) {
@@ -68,92 +99,311 @@ class ReadingListStore {
         return result;
     }
 
-    normalizeList(item) {
-        const now = new Date().toISOString();
+    normalizeUser(item, fallback = {}) {
+        const now = this.nowIso();
+        const normalized = Object.assign({}, fallback, item);
+        normalized.id = String(normalized.id || '').trim() || this.makeId();
+        normalized.name = this.validateUserName(normalized.name || fallback.name || 'Пользователь');
+        normalized.emailTo = String(normalized.emailTo || '').trim();
+        normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
+        normalized.opdsEnabled = (normalized.opdsEnabled !== false);
+        normalized.createdAt = normalized.createdAt || now;
+        normalized.updatedAt = normalized.updatedAt || now;
+        return normalized;
+    }
+
+    normalizeList(item, defaultUserId) {
+        const now = this.nowIso();
         const normalized = Object.assign({}, item);
-        normalized.id = normalized.id || this.makeId();
+        normalized.id = String(normalized.id || '').trim() || this.makeId();
+        normalized.userId = String(normalized.userId || defaultUserId || '').trim();
         normalized.name = this.validateName(normalized.name);
+        normalized.visibility = this.normalizeVisibility(normalized.visibility);
         normalized.createdAt = normalized.createdAt || now;
         normalized.updatedAt = normalized.updatedAt || now;
         normalized.books = this.normalizeEntries(normalized.books);
         return normalized;
     }
 
+    normalizeData(data) {
+        const defaultUser = this.makeDefaultUser();
+        const source = Object.assign({version: 3, users: [], lists: []}, data || {});
+        let users = [];
+
+        if (Array.isArray(source.users) && source.users.length) {
+            for (const item of source.users) {
+                try {
+                    users.push(this.normalizeUser(item, defaultUser));
+                } catch (e) {
+                    // ignore malformed user rows
+                }
+            }
+        }
+
+        if (!users.length) {
+            users = [defaultUser];
+        }
+
+        const seenUserIds = new Set();
+        users = users.filter((item) => {
+            if (!item.id || seenUserIds.has(item.id))
+                return false;
+            seenUserIds.add(item.id);
+            return true;
+        });
+
+        const defaultUserId = users[0].id;
+        const lists = [];
+        for (const item of (Array.isArray(source.lists) ? source.lists : [])) {
+            try {
+                const normalized = this.normalizeList(item, defaultUserId);
+                if (!seenUserIds.has(normalized.userId))
+                    normalized.userId = defaultUserId;
+                lists.push(normalized);
+            } catch (e) {
+                // ignore malformed lists
+            }
+        }
+
+        return {
+            version: 3,
+            users,
+            lists,
+        };
+    }
+
     async load() {
         await this.ensureData();
-
-        const data = JSON.parse(await fs.readFile(this.file, 'utf8'));
-        if (!Array.isArray(data.lists))
-            data.lists = [];
-
-        data.version = 2;
-        data.lists = data.lists.map((item) => this.normalizeList(item));
+        const raw = JSON.parse(await fs.readFile(this.file, 'utf8'));
+        const data = this.normalizeData(raw);
         return data;
     }
 
     async save(data) {
-        const out = {
-            version: 2,
-            lists: (Array.isArray(data.lists) ? data.lists : []).map((item) => this.normalizeList(item)),
-        };
+        const out = this.normalizeData(data);
         await fs.writeFile(this.file, JSON.stringify(out, null, 2));
     }
 
-    async getLists() {
+    async resolveUser(userId = '') {
         const data = await this.load();
-        return data.lists;
+        const normalizedUserId = String(userId || '').trim();
+        const user = data.users.find((item) => item.id === normalizedUserId) || data.users[0];
+        if (!user)
+            throw new Error('Пользователь не найден');
+
+        return {
+            data,
+            user,
+        };
     }
 
-    async getList(listId) {
+    ensureUniqueUserName(users, name, excludeId = '') {
+        const duplicate = users.find((item) => item.id !== excludeId && item.name.toLowerCase() === name.toLowerCase());
+        if (duplicate)
+            throw new Error('Пользователь с таким именем уже существует');
+    }
+
+    async getUsers(currentUserId = '') {
+        const {data, user} = await this.resolveUser(currentUserId);
+        return {
+            users: data.users,
+            currentUser: user,
+        };
+    }
+
+    async getOpdsUsers() {
         const data = await this.load();
-        return data.lists.find((item) => item.id === listId) || null;
+        const stats = new Map();
+
+        for (const item of data.lists) {
+            if (item.visibility !== 'opds')
+                continue;
+
+            const count = stats.get(item.userId) || 0;
+            stats.set(item.userId, count + 1);
+        }
+
+        return data.users
+            .filter((item) => item.opdsEnabled && stats.has(item.id))
+            .map((item) => ({
+                id: item.id,
+                name: item.name,
+                opdsListCount: stats.get(item.id) || 0,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    }
+
+    async createUser(profile = {}) {
+        const data = await this.load();
+        const normalizedName = this.validateUserName(profile.name);
+        this.ensureUniqueUserName(data.users, normalizedName);
+
+        const user = this.normalizeUser({
+            name: normalizedName,
+            emailTo: profile.emailTo,
+            telegramChatId: profile.telegramChatId,
+            opdsEnabled: profile.opdsEnabled,
+        });
+
+        data.users.push(user);
+        await this.save(data);
+        return user;
+    }
+
+    async updateUser(userId, patch = {}) {
+        const {data, user} = await this.resolveUser(userId);
+        const target = data.users.find((item) => item.id === user.id);
+        if (!target)
+            throw new Error('Пользователь не найден');
+
+        const nextName = this.validateUserName(utilsHasProp(patch, 'name') ? patch.name : target.name);
+        this.ensureUniqueUserName(data.users, nextName, target.id);
+
+        target.name = nextName;
+        if (utilsHasProp(patch, 'emailTo'))
+            target.emailTo = String(patch.emailTo || '').trim();
+        if (utilsHasProp(patch, 'telegramChatId'))
+            target.telegramChatId = String(patch.telegramChatId || '').trim();
+        if (utilsHasProp(patch, 'opdsEnabled'))
+            target.opdsEnabled = (patch.opdsEnabled !== false);
+        target.updatedAt = this.nowIso();
+
+        await this.save(data);
+        return target;
+    }
+
+    async deleteUser(userId) {
+        const data = await this.load();
+        if (data.users.length <= 1)
+            throw new Error('Нельзя удалить последнего пользователя');
+
+        const index = data.users.findIndex((item) => item.id === userId);
+        if (index < 0)
+            throw new Error('Пользователь не найден');
+
+        const [removed] = data.users.splice(index, 1);
+        data.lists = data.lists.filter((item) => item.userId !== removed.id);
+
+        await this.save(data);
+        return {
+            success: true,
+            nextUserId: data.users[0] ? data.users[0].id : '',
+        };
     }
 
     countRead(entries) {
         return this.normalizeEntries(entries).filter((item) => item.read).length;
     }
 
-    async createList(name) {
+    listStats(item, bookUid = '') {
+        const entries = this.normalizeEntries(item.books);
+        const currentEntry = (bookUid ? this.findEntry(entries, bookUid) : null);
+        return {
+            id: item.id,
+            userId: item.userId,
+            name: item.name,
+            visibility: this.normalizeVisibility(item.visibility),
+            createdAt: item.createdAt,
+            updatedAt: item.updatedAt,
+            bookCount: entries.length,
+            readCount: this.countRead(entries),
+            containsBook: !!currentEntry,
+            readBook: !!(currentEntry && currentEntry.read),
+        };
+    }
+
+    async getLists(userId = '', options = {}) {
+        const {data, user} = await this.resolveUser(userId);
+        const visibility = (options && options.visibility ? this.normalizeVisibility(options.visibility) : '');
+
+        return data.lists
+            .filter((item) => item.userId === user.id)
+            .filter((item) => (!visibility || item.visibility === visibility))
+            .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    }
+
+    async getList(userId = '', listId = '', options = {}) {
+        const allowForeign = !!(options && options.allowForeign);
+        const visibility = (options && options.visibility ? this.normalizeVisibility(options.visibility) : '');
+        const normalizedListId = String(listId || '').trim();
+        if (!normalizedListId)
+            return null;
+
         const data = await this.load();
-        const normalized = this.validateName(name);
-        const duplicate = data.lists.find((item) => item.name.toLowerCase() === normalized.toLowerCase());
+        let item = data.lists.find((row) => row.id === normalizedListId) || null;
+        if (!item)
+            return null;
+
+        if (!allowForeign) {
+            const {user} = await this.resolveUser(userId);
+            if (item.userId !== user.id)
+                return null;
+        }
+
+        if (visibility && item.visibility !== visibility)
+            return null;
+
+        return item;
+    }
+
+    ensureUniqueListName(lists, userId, name, excludeId = '') {
+        const duplicate = lists.find((item) => item.userId === userId && item.id !== excludeId && item.name.toLowerCase() === name.toLowerCase());
         if (duplicate)
             throw new Error('Список с таким названием уже существует');
+    }
 
-        const now = new Date().toISOString();
-        const item = {
+    async createList(userId = '', name, visibility = 'private') {
+        const {data, user} = await this.resolveUser(userId);
+        const normalized = this.validateName(name);
+        this.ensureUniqueListName(data.lists, user.id, normalized);
+
+        const now = this.nowIso();
+        const item = this.normalizeList({
             id: this.makeId(),
+            userId: user.id,
             name: normalized,
+            visibility,
             createdAt: now,
             updatedAt: now,
             books: [],
-        };
+        }, user.id);
 
         data.lists.push(item);
         await this.save(data);
         return item;
     }
 
-    async renameList(listId, name) {
-        const data = await this.load();
-        const item = data.lists.find((row) => row.id === listId);
+    async renameList(userId = '', listId, name) {
+        const {data, user} = await this.resolveUser(userId);
+        const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
 
         const normalized = this.validateName(name);
-        const duplicate = data.lists.find((row) => row.id !== listId && row.name.toLowerCase() === normalized.toLowerCase());
-        if (duplicate)
-            throw new Error('Список с таким названием уже существует');
-
+        this.ensureUniqueListName(data.lists, user.id, normalized, item.id);
         item.name = normalized;
-        item.updatedAt = new Date().toISOString();
+        item.updatedAt = this.nowIso();
+
         await this.save(data);
         return item;
     }
 
-    async deleteList(listId) {
-        const data = await this.load();
-        const index = data.lists.findIndex((row) => row.id === listId);
+    async setListVisibility(userId = '', listId, visibility) {
+        const {data, user} = await this.resolveUser(userId);
+        const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
+        if (!item)
+            throw new Error('Список не найден');
+
+        item.visibility = this.normalizeVisibility(visibility);
+        item.updatedAt = this.nowIso();
+
+        await this.save(data);
+        return item;
+    }
+
+    async deleteList(userId = '', listId) {
+        const {data, user} = await this.resolveUser(userId);
+        const index = data.lists.findIndex((row) => row.id === listId && row.userId === user.id);
         if (index < 0)
             throw new Error('Список не найден');
 
@@ -166,9 +416,9 @@ class ReadingListStore {
         return this.normalizeEntries(entries).find((item) => item.bookUid === bookUid) || null;
     }
 
-    async setBookMembership(listId, bookUid, enabled) {
-        const data = await this.load();
-        const item = data.lists.find((row) => row.id === listId);
+    async setBookMembership(userId = '', listId, bookUid, enabled) {
+        const {data, user} = await this.resolveUser(userId);
+        const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
 
@@ -186,14 +436,14 @@ class ReadingListStore {
             item.books = item.books.filter((row) => row.bookUid !== normalizedBookUid);
         }
 
-        item.updatedAt = new Date().toISOString();
+        item.updatedAt = this.nowIso();
         await this.save(data);
         return item;
     }
 
-    async setBookRead(listId, bookUid, read) {
-        const data = await this.load();
-        const item = data.lists.find((row) => row.id === listId);
+    async setBookRead(userId = '', listId, bookUid, read) {
+        const {data, user} = await this.resolveUser(userId);
+        const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
 
@@ -207,14 +457,14 @@ class ReadingListStore {
             throw new Error('Книга не найдена в списке');
 
         existing.read = !!read;
-        item.updatedAt = new Date().toISOString();
+        item.updatedAt = this.nowIso();
         await this.save(data);
         return item;
     }
 
-    async addBooks(listId, bookUids = []) {
-        const data = await this.load();
-        const item = data.lists.find((row) => row.id === listId);
+    async addBooks(userId = '', listId, bookUids = []) {
+        const {data, user} = await this.resolveUser(userId);
+        const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
 
@@ -232,36 +482,61 @@ class ReadingListStore {
             added++;
         }
 
-        item.updatedAt = new Date().toISOString();
+        item.updatedAt = this.nowIso();
         await this.save(data);
         return {item, added};
     }
 
-    async exportData() {
-        const data = await this.load();
+    async exportData(userId = '') {
+        const {user} = await this.resolveUser(userId);
+        const lists = await this.getLists(user.id);
+
         return {
-            version: 2,
-            exportedAt: new Date().toISOString(),
-            lists: data.lists || [],
+            version: 3,
+            exportedAt: this.nowIso(),
+            user: {
+                id: user.id,
+                name: user.name,
+                emailTo: user.emailTo,
+                telegramChatId: user.telegramChatId,
+                opdsEnabled: user.opdsEnabled,
+            },
+            lists: lists.map((item) => ({
+                name: item.name,
+                visibility: this.normalizeVisibility(item.visibility),
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
+                books: this.normalizeEntries(item.books),
+            })),
         };
     }
 
-    async importData(payload) {
+    async importData(userId = '', payload) {
         if (!payload || !Array.isArray(payload.lists))
             throw new Error('Некорректный файл импорта списков');
 
-        const data = await this.load();
+        const {data, user} = await this.resolveUser(userId);
         let importedLists = 0;
         let importedBooks = 0;
 
         for (const incoming of payload.lists) {
-            const normalizedIncoming = this.normalizeList(incoming);
-            let item = data.lists.find((row) => row.name.toLowerCase() === normalizedIncoming.name.toLowerCase());
+            const normalizedIncoming = this.normalizeList({
+                name: incoming.name,
+                visibility: incoming.visibility,
+                books: incoming.books,
+                createdAt: incoming.createdAt,
+                updatedAt: incoming.updatedAt,
+                userId: user.id,
+            }, user.id);
+
+            let item = data.lists.find((row) => row.userId === user.id && row.name.toLowerCase() === normalizedIncoming.name.toLowerCase());
 
             if (!item) {
                 item = {
                     id: this.makeId(),
+                    userId: user.id,
                     name: normalizedIncoming.name,
+                    visibility: normalizedIncoming.visibility,
                     createdAt: normalizedIncoming.createdAt,
                     updatedAt: normalizedIncoming.updatedAt,
                     books: [],
@@ -270,8 +545,10 @@ class ReadingListStore {
                 importedLists++;
             }
 
+            item.visibility = this.normalizeVisibility(item.visibility || normalizedIncoming.visibility);
             item.books = this.normalizeEntries(item.books);
             const existing = new Map(item.books.map((row) => [row.bookUid, row]));
+
             for (const entry of normalizedIncoming.books) {
                 if (!existing.has(entry.bookUid)) {
                     existing.set(entry.bookUid, {bookUid: entry.bookUid, read: !!entry.read});
@@ -282,12 +559,16 @@ class ReadingListStore {
             }
 
             item.books = Array.from(existing.values());
-            item.updatedAt = new Date().toISOString();
+            item.updatedAt = this.nowIso();
         }
 
         await this.save(data);
         return {importedLists, importedBooks};
     }
+}
+
+function utilsHasProp(obj, prop) {
+    return !!obj && Object.prototype.hasOwnProperty.call(obj, prop);
 }
 
 module.exports = ReadingListStore;

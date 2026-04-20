@@ -3,6 +3,7 @@ const state = {
     config: {},
     settings: {
         accessToken: '',
+        currentUserId: '',
         extendedParams: false,
         expandedAuthor: [],
         expandedSeries: [],

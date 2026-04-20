@@ -106,12 +106,22 @@ class WebSocketController {
                     await this.getBookInfo(req, ws); break;
                 case 'get-reading-lists':
                     await this.getReadingLists(req, ws); break;
+                case 'get-user-profiles':
+                    await this.getUserProfiles(req, ws); break;
+                case 'create-user-profile':
+                    await this.createUserProfile(req, ws); break;
+                case 'update-user-profile':
+                    await this.updateUserProfile(req, ws); break;
+                case 'delete-user-profile':
+                    await this.deleteUserProfile(req, ws); break;
                 case 'get-reading-list':
                     await this.getReadingList(req, ws); break;
                 case 'create-reading-list':
                     await this.createReadingList(req, ws); break;
                 case 'rename-reading-list':
                     await this.renameReadingList(req, ws); break;
+                case 'set-reading-list-visibility':
+                    await this.setReadingListVisibility(req, ws); break;
                 case 'delete-reading-list':
                     await this.deleteReadingList(req, ws); break;
                 case 'export-reading-lists':
@@ -172,6 +182,14 @@ class WebSocketController {
         const config = _.pick(this.config, this.config.webConfigParams);
         config.dbConfig = await this.webWorker.dbConfig();
         config.freeAccess = this.webAccess.freeAccess;
+        const profiles = await this.webWorker.getUserProfiles(req.userId);
+        config.userProfiles = profiles.users;
+        config.currentUserId = profiles.currentUserId;
+        config.opdsRoot = this.config.opdsRoot || ((this.config.opds && this.config.opds.root) ? this.config.opds.root : '/opds');
+
+        const currentUser = profiles.users.find((item) => item.id === config.currentUserId) || null;
+        config.telegramShareEnabled = !!(this.config.telegramBotToken && currentUser && currentUser.telegramChatId);
+        config.emailShareEnabled = !!(this.config.smtpHost && currentUser && currentUser.emailTo);
 
         this.send(config, req, ws);
     }
@@ -255,7 +273,33 @@ class WebSocketController {
     }
 
     async getReadingLists(req, ws) {
-        const result = await this.webWorker.getReadingLists(req.bookUid);
+        const result = await this.webWorker.getReadingLists(req.userId, req.bookUid, req.options || {});
+        this.send(result, req, ws);
+    }
+
+    async getUserProfiles(req, ws) {
+        const result = await this.webWorker.getUserProfiles(req.userId);
+        this.send(result, req, ws);
+    }
+
+    async createUserProfile(req, ws) {
+        const result = await this.webWorker.createUserProfile(req.profile || {});
+        this.send(result, req, ws);
+    }
+
+    async updateUserProfile(req, ws) {
+        if (!utils.hasProp(req, 'targetUserId'))
+            throw new Error('targetUserId is empty');
+
+        const result = await this.webWorker.updateUserProfile(req.targetUserId, req.profile || {});
+        this.send(result, req, ws);
+    }
+
+    async deleteUserProfile(req, ws) {
+        if (!utils.hasProp(req, 'targetUserId'))
+            throw new Error('targetUserId is empty');
+
+        const result = await this.webWorker.deleteUserProfile(req.targetUserId);
         this.send(result, req, ws);
     }
 
@@ -263,12 +307,12 @@ class WebSocketController {
         if (!utils.hasProp(req, 'listId'))
             throw new Error('listId is empty');
 
-        const result = await this.webWorker.getReadingList(req.listId);
+        const result = await this.webWorker.getReadingList(req.userId, req.listId, req.options || {});
         this.send(result, req, ws);
     }
 
     async createReadingList(req, ws) {
-        const result = await this.webWorker.createReadingList(req.name);
+        const result = await this.webWorker.createReadingList(req.userId, req.name, req.visibility);
         this.send(result, req, ws);
     }
 
@@ -276,7 +320,15 @@ class WebSocketController {
         if (!utils.hasProp(req, 'listId'))
             throw new Error('listId is empty');
 
-        const result = await this.webWorker.renameReadingList(req.listId, req.name);
+        const result = await this.webWorker.renameReadingList(req.userId, req.listId, req.name);
+        this.send(result, req, ws);
+    }
+
+    async setReadingListVisibility(req, ws) {
+        if (!utils.hasProp(req, 'listId'))
+            throw new Error('listId is empty');
+
+        const result = await this.webWorker.setReadingListVisibility(req.userId, req.listId, req.visibility);
         this.send(result, req, ws);
     }
 
@@ -284,17 +336,17 @@ class WebSocketController {
         if (!utils.hasProp(req, 'listId'))
             throw new Error('listId is empty');
 
-        const result = await this.webWorker.deleteReadingList(req.listId);
+        const result = await this.webWorker.deleteReadingList(req.userId, req.listId);
         this.send(result, req, ws);
     }
 
     async exportReadingLists(req, ws) {
-        const result = await this.webWorker.exportReadingLists();
+        const result = await this.webWorker.exportReadingLists(req.userId);
         this.send(result, req, ws);
     }
 
     async importReadingLists(req, ws) {
-        const result = await this.webWorker.importReadingLists(req.data);
+        const result = await this.webWorker.importReadingLists(req.userId, req.data);
         this.send(result, req, ws);
     }
 
@@ -304,7 +356,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error('bookUid is empty');
 
-        const result = await this.webWorker.updateReadingListBook(req.listId, req.bookUid, req.enabled);
+        const result = await this.webWorker.updateReadingListBook(req.userId, req.listId, req.bookUid, req.enabled);
         this.send(result, req, ws);
     }
 
@@ -314,7 +366,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error('bookUid is empty');
 
-        const result = await this.webWorker.setReadingListBookRead(req.listId, req.bookUid, req.read);
+        const result = await this.webWorker.setReadingListBookRead(req.userId, req.listId, req.bookUid, req.read);
         this.send(result, req, ws);
     }
 
@@ -324,7 +376,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'series'))
             throw new Error('series is empty');
 
-        const result = await this.webWorker.addSeriesToReadingList(req.listId, req.series);
+        const result = await this.webWorker.addSeriesToReadingList(req.userId, req.listId, req.series);
         this.send(result, req, ws);
     }
 
@@ -332,7 +384,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error(`bookUid is empty`);
 
-        const result = await this.webWorker.sendBookToTelegram(req.bookUid, req.format);
+        const result = await this.webWorker.sendBookToTelegram(req.bookUid, req.format, req.userId);
         this.send(result, req, ws);
     }
 
@@ -340,7 +392,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error(`bookUid is empty`);
 
-        const result = await this.webWorker.sendBookToEmail(req.bookUid, req.format);
+        const result = await this.webWorker.sendBookToEmail(req.bookUid, req.format, req.userId);
         this.send(result, req, ws);
     }
 

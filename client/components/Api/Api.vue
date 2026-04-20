@@ -81,6 +81,7 @@ class Api {
     //jsonMessage = '';
     progress = 0;
     accessToken = '';
+    currentUserId = '';
 
     created() {
         this.commit = this.$store.commit;
@@ -97,6 +98,7 @@ class Api {
         const settings = this.settings;
 
         this.accessToken = settings.accessToken;
+        this.currentUserId = settings.currentUserId;
     }
 
     async updateConfig() {
@@ -104,6 +106,8 @@ class Api {
             const config = await this.getConfig();
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
+            if (config.currentUserId && this.settings.currentUserId !== config.currentUserId)
+                this.commit('setSettings', {currentUserId: config.currentUserId});
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
@@ -161,6 +165,8 @@ class Api {
                 const params = {action: 'get-worker-state', workerId: 'server_state'};
                 if (this.accessToken)
                     params.accessToken = this.accessToken;
+                if (this.currentUserId)
+                    params.userId = this.currentUserId;
 
                 const server = await wsc.message(await wsc.send(params));
 
@@ -201,6 +207,8 @@ class Api {
             try {
                 if (this.accessToken)
                     params.accessToken = this.accessToken;
+                if (this.currentUserId)
+                    params.userId = this.currentUserId;
 
                 const response = await wsc.message(await wsc.send(params), timeoutSecs);
 
@@ -271,6 +279,22 @@ class Api {
         return await this.request({action: 'get-reading-lists', bookUid}, 120);
     }
 
+    async getUserProfiles() {
+        return await this.request({action: 'get-user-profiles'}, 120);
+    }
+
+    async createUserProfile(profile) {
+        return await this.request({action: 'create-user-profile', profile}, 120);
+    }
+
+    async updateUserProfile(targetUserId, profile) {
+        return await this.request({action: 'update-user-profile', targetUserId, profile}, 120);
+    }
+
+    async deleteUserProfile(targetUserId) {
+        return await this.request({action: 'delete-user-profile', targetUserId}, 120);
+    }
+
     async getReadingList(listId) {
         return await this.request({action: 'get-reading-list', listId}, 120);
     }
@@ -279,8 +303,16 @@ class Api {
         return await this.request({action: 'create-reading-list', name}, 120);
     }
 
+    async createReadingListWithVisibility(name, visibility = 'private') {
+        return await this.request({action: 'create-reading-list', name, visibility}, 120);
+    }
+
     async renameReadingList(listId, name) {
         return await this.request({action: 'rename-reading-list', listId, name}, 120);
+    }
+
+    async setReadingListVisibility(listId, visibility) {
+        return await this.request({action: 'set-reading-list-visibility', listId, visibility}, 120);
     }
 
     async deleteReadingList(listId) {

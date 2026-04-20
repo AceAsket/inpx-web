@@ -25,6 +25,10 @@
                 @change="onImportSelected"
             >
 
+            <div v-if="currentUserName" class="current-user-caption">
+                Профиль: <b>{{ currentUserName }}</b>
+            </div>
+
             <div class="create-row">
                 <q-input
                     v-model="newListName"
@@ -34,6 +38,16 @@
                     clearable
                     label="Новый список"
                     @keydown.enter.prevent="createList"
+                />
+                <q-select
+                    v-model="newListVisibility"
+                    outlined
+                    dense
+                    emit-value
+                    map-options
+                    :options="visibilityOptions"
+                    label="Видимость"
+                    style="min-width: 140px"
                 />
                 <q-btn color="primary" dense no-caps @click="createList">
                     Создать
@@ -71,6 +85,9 @@
                         <div class="list-meta">
                             <div class="list-name">
                                 {{ item.name }}
+                                <span class="list-visibility">
+                                    {{ visibilityLabel(item.visibility) }}
+                                </span>
                             </div>
                             <div class="list-subtitle">
                                 {{ item.readCount || 0 }} / {{ item.bookCount }} книг прочитано
@@ -79,6 +96,16 @@
                     </div>
 
                     <div class="list-actions">
+                        <q-select
+                            v-model="item.visibility"
+                            dense
+                            borderless
+                            emit-value
+                            map-options
+                            :options="visibilityOptions"
+                            style="min-width: 112px"
+                            @update:model-value="changeVisibility(item, $event)"
+                        />
                         <q-checkbox
                             v-if="book && item.containsBook"
                             :model-value="item.readBook"
@@ -137,6 +164,7 @@ class ReadingListsDialog {
     loading = false;
     lists = [];
     newListName = '';
+    newListVisibility = 'private';
 
     created() {
         this.api = this.$root.api;
@@ -146,6 +174,17 @@ class ReadingListsDialog {
         return (this.book ? 'Добавить в список чтения' : 'Списки чтения');
     }
 
+    get config() {
+        return this.$store.state.config;
+    }
+
+    get currentUserName() {
+        const users = this.config.userProfiles || [];
+        const currentUserId = this.$store.state.settings.currentUserId || this.config.currentUserId || '';
+        const user = users.find((item) => item.id === currentUserId) || users[0];
+        return (user ? user.name : '');
+    }
+
     get bookCaption() {
         if (!this.book)
             return '';
@@ -153,8 +192,20 @@ class ReadingListsDialog {
         return [this.book.author, this.book.title].filter(Boolean).join(' - ');
     }
 
+    get visibilityOptions() {
+        return [
+            {label: 'Личный', value: 'private'},
+            {label: 'OPDS', value: 'opds'},
+        ];
+    }
+
+    visibilityLabel(value) {
+        return (value === 'opds' ? 'OPDS' : 'Личный');
+    }
+
     async init() {
         this.newListName = '';
+        this.newListVisibility = 'private';
         await this.loadLists();
     }
 
@@ -176,16 +227,26 @@ class ReadingListsDialog {
             return;
 
         try {
-            const response = await this.api.createReadingList(name);
+            const response = await this.api.createReadingListWithVisibility(name, this.newListVisibility);
             const created = response.list;
 
             if (this.book)
                 await this.api.updateReadingListBook(created.id, this.book._uid, true);
 
             this.newListName = '';
+            this.newListVisibility = 'private';
             await this.loadLists();
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
+    }
+
+    async changeVisibility(item, visibility) {
+        try {
+            await this.api.setReadingListVisibility(item.id, visibility);
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, 'Ошибка');
+            await this.loadLists();
         }
     }
 
@@ -351,7 +412,7 @@ export default vueComponent(ReadingListsDialog);
 
 <style scoped>
 .dialog-box {
-    width: min(560px, 90vw);
+    width: min(640px, 92vw);
     max-height: min(72vh, 760px);
     padding: 8px 10px 10px;
     overflow: auto;
@@ -367,6 +428,13 @@ export default vueComponent(ReadingListsDialog);
     align-items: center;
     gap: 4px;
     flex-wrap: wrap;
+}
+
+.current-user-caption {
+    margin-bottom: 10px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    background: rgba(15, 159, 143, 0.08);
 }
 
 .create-row {
@@ -427,6 +495,16 @@ export default vueComponent(ReadingListsDialog);
     word-break: break-word;
 }
 
+.list-visibility {
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(15, 159, 143, 0.08);
+    color: var(--app-link);
+    font-size: 11px;
+    font-weight: 700;
+}
+
 .list-subtitle {
     font-size: 12px;
     color: var(--app-muted);
@@ -440,14 +518,21 @@ export default vueComponent(ReadingListsDialog);
     flex-wrap: wrap;
 }
 
-@media (max-width: 560px) {
+@media (max-width: 700px) {
     .create-row {
         flex-direction: column;
         align-items: stretch;
     }
+}
 
+@media (max-width: 560px) {
     .list-row {
         align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .list-actions {
+        width: 100%;
     }
 }
 </style>

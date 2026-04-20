@@ -12,14 +12,32 @@ class ReadingListsPage extends BasePage {
     async body(req) {
         const result = {};
         const entry = [];
+        const userId = this.getScopeUserId(req);
 
-        const response = await this.webWorker.getReadingLists();
+        if (!userId) {
+            entry.push(
+                this.makeEntry({
+                    id: 'no-user',
+                    title: '[Выберите профиль пользователя]',
+                    link: this.navLink({href: '/reading-profiles', req}),
+                    content: {
+                        '*ATTRS': {type: 'text'},
+                        '*TEXT': 'Для OPDS-подборок откройте профиль пользователя',
+                    },
+                }),
+            );
+
+            result.entry = entry;
+            return this.makeBody(result, req);
+        }
+
+        const response = await this.webWorker.getReadingLists(userId, '', {visibility: 'opds'});
         for (const item of response.lists) {
             entry.push(
                 this.makeEntry({
                     id: item.id,
                     title: item.name,
-                    link: this.navLink({href: `/${this.id}/list?id=${encodeURIComponent(item.id)}`}),
+                    link: this.navLink({href: `/${this.id}/list?id=${encodeURIComponent(item.id)}`, req}),
                     content: {
                         '*ATTRS': {type: 'text'},
                         '*TEXT': `${item.readCount || 0}/${item.bookCount} книг${utils.wordEnding(item.bookCount, 8)} прочитано`,
@@ -33,10 +51,10 @@ class ReadingListsPage extends BasePage {
                 this.makeEntry({
                     id: 'empty',
                     title: '[Списков пока нет]',
-                    link: this.navLink({href: `/${this.id}`}),
+                    link: this.navLink({href: `/${this.id}`, req}),
                     content: {
                         '*ATTRS': {type: 'text'},
-                        '*TEXT': 'Создайте список чтения в веб-интерфейсе, и он появится здесь',
+                        '*TEXT': 'Создайте список в веб-интерфейсе и переведите его в режим OPDS',
                     },
                 }),
             );
