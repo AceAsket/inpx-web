@@ -267,12 +267,12 @@ class Api {
         return await this.request({action: 'get-book-info', bookUid}, 120);
     }
 
-    async sendBookTelegram(bookUid) {
-        return await this.request({action: 'send-book-telegram', bookUid}, 300);
+    async sendBookTelegram(bookUid, format = '') {
+        return await this.request({action: 'send-book-telegram', bookUid, format}, 300);
     }
 
-    async sendBookEmail(bookUid) {
-        return await this.request({action: 'send-book-email', bookUid}, 300);
+    async sendBookEmail(bookUid, format = '') {
+        return await this.request({action: 'send-book-email', bookUid, format}, 300);
     }
 
     async getConfig() {

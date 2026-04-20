@@ -161,10 +161,10 @@ export default class BaseList {
             return 'Загрузка информации об авторе...';
 
         if (action == 'sendTelegram')
-            return 'Отправка книги в Telegram...';
+            return (format ? `Отправка ${format.toUpperCase()} в Telegram...` : 'Отправка книги в Telegram...');
 
         if (action == 'sendEmail')
-            return 'Отправка книги на email...';
+            return (format ? `Отправка ${format.toUpperCase()} на email...` : 'Отправка книги на email...');
 
         if (format)
             return `Подготовка ${format.toUpperCase()}...`;
@@ -252,14 +252,14 @@ export default class BaseList {
             }
 
             if (action == 'sendTelegram') {
-                await this.api.sendBookTelegram(book._uid);
-                this.$root.notify.success('Книга отправлена в Telegram');
+                await this.api.sendBookTelegram(book._uid, format);
+                this.$root.notify.success(`Книга отправлена в Telegram${format ? ` (${format.toUpperCase()})` : ''}`);
                 return;
             }
 
             if (action == 'sendEmail') {
-                await this.api.sendBookEmail(book._uid);
-                this.$root.notify.success('Книга отправлена на email');
+                await this.api.sendBookEmail(book._uid, format);
+                this.$root.notify.success(`Книга отправлена на email${format ? ` (${format.toUpperCase()})` : ''}`);
                 return;
             }
 

@@ -143,6 +143,29 @@
                         Telegram
                     </q-btn>
 
+                    <q-btn-dropdown
+                        v-if="telegramShareEnabled"
+                        flat
+                        dense
+                        dropdown-icon="la la-angle-down"
+                        auto-close
+                        @click.stop.prevent
+                    >
+                        <q-list dense style="min-width: 140px">
+                            <q-item
+                                v-for="format in telegramFormats"
+                                :key="format"
+                                clickable
+                                v-close-popup
+                                @click.stop.prevent="emit('sendTelegram', format)"
+                            >
+                                <q-item-section>
+                                    В Telegram: {{ format.toUpperCase() }}
+                                </q-item-section>
+                            </q-item>
+                        </q-list>
+                    </q-btn-dropdown>
+
                     <q-btn
                         v-if="emailShareEnabled"
                         flat
@@ -152,6 +175,29 @@
                     >
                         Email
                     </q-btn>
+
+                    <q-btn-dropdown
+                        v-if="emailShareEnabled"
+                        flat
+                        dense
+                        dropdown-icon="la la-angle-down"
+                        auto-close
+                        @click.stop.prevent
+                    >
+                        <q-list dense style="min-width: 140px">
+                            <q-item
+                                v-for="format in emailFormats"
+                                :key="format"
+                                clickable
+                                v-close-popup
+                                @click.stop.prevent="emit('sendEmail', format)"
+                            >
+                                <q-item-section>
+                                    На email: {{ format.toUpperCase() }}
+                                </q-item-section>
+                            </q-item>
+                        </q-list>
+                    </q-btn-dropdown>
 
                     <q-btn
                         flat
@@ -392,6 +438,27 @@ class BookView {
             return [];
 
         return ['epub', 'mobi', 'pdf'].filter(format => format !== currentExt);
+    }
+
+    get telegramFormats() {
+        const currentExt = (this.book.ext || '').toLowerCase();
+        const result = [];
+
+        if (currentExt)
+            result.push(currentExt);
+
+        if (this.conversionEnabled) {
+            for (const format of ['epub', 'mobi', 'pdf']) {
+                if (!result.includes(format))
+                    result.push(format);
+            }
+        }
+
+        return result;
+    }
+
+    get emailFormats() {
+        return this.telegramFormats;
     }
 
     get placeholderStyle() {

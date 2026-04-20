@@ -238,7 +238,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error(`bookUid is empty`);
 
-        const result = await this.webWorker.sendBookToTelegram(req.bookUid);
+        const result = await this.webWorker.sendBookToTelegram(req.bookUid, req.format);
         this.send(result, req, ws);
     }
 
@@ -246,7 +246,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error(`bookUid is empty`);
 
-        const result = await this.webWorker.sendBookToEmail(req.bookUid);
+        const result = await this.webWorker.sendBookToEmail(req.bookUid, req.format);
         this.send(result, req, ws);
     }
 

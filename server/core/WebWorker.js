@@ -17,6 +17,7 @@ const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
 const FileDownloader = require('./FileDownloader');
 const imageUtils = require('./ImageUtils');
+const bookConverter = require('./BookConverter');
 
 const asyncExit = new (require('./AsyncExit'))();
 const log = new (require('./AppLogger'))().log;//singleton
@@ -86,6 +87,12 @@ function formatTemplate(template, book = {}) {
         .replace(/\$\{TITLE\}/g, book.title || '')
         .replace(/\$\{SERIES\}/g, book.series || '')
         .replace(/\$\{EXT\}/g, book.ext || '');
+}
+
+function convertedFileName(downFileName, format) {
+    const ext = path.extname(downFileName);
+    const base = (ext ? downFileName.slice(0, -ext.length) : downFileName);
+    return `${base}.${format}`;
 }
 
 function buildAuthorVariants(author) {
@@ -963,7 +970,7 @@ class WebWorker {
         }
     }
 
-    async getPreparedBookFile(bookUid) {
+    async getPreparedBookFile(bookUid, format = '') {
         const {link, downFileName} = await this.getBookLink(bookUid);
         const hash = path.basename(link);
         const gzipFile = `${this.config.bookDir}/${hash}`;
@@ -979,18 +986,42 @@ class WebWorker {
         if (!rows.length)
             throw new Error('404 Файл не найден');
 
+        let preparedFile = rawFile;
+        let preparedFileName = downFileName;
+        const targetFormat = String(format || '').toLowerCase();
+
+        if (targetFormat) {
+            if (!bookConverter.canConvertTo(targetFormat))
+                throw new Error(`Неподдерживаемый формат отправки: ${targetFormat}`);
+
+            if (!this.config.conversionEnabled)
+                throw new Error('Конвертация книг отключена в текущем образе.');
+
+            preparedFile = `${gzipFile}.${targetFormat}`;
+            if (!await fs.pathExists(preparedFile)) {
+                await bookConverter.convert({
+                    inputFile: rawFile,
+                    outputFile: preparedFile,
+                    format: targetFormat,
+                    sourceFileName: downFileName,
+                });
+            }
+            preparedFileName = convertedFileName(downFileName, targetFormat);
+            await utils.touchFile(preparedFile);
+        }
+
         return {
             book: rows[0],
-            rawFile,
-            downFileName,
+            rawFile: preparedFile,
+            downFileName: preparedFileName,
         };
     }
 
-    async sendBookToTelegram(bookUid) {
+    async sendBookToTelegram(bookUid, format = '') {
         if (!this.config.telegramShareEnabled || !this.config.telegramBotToken || !this.config.telegramChatId)
             throw new Error('Отправка в Telegram не настроена');
 
-        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid);
+        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
         const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
         const form = new FormData();
 
@@ -1011,11 +1042,11 @@ class WebWorker {
         return {success: true};
     }
 
-    async sendBookToEmail(bookUid) {
+    async sendBookToEmail(bookUid, format = '') {
         if (!this.config.emailShareEnabled || !this.config.smtpHost || !this.config.emailTo)
             throw new Error('Отправка на email не настроена');
 
-        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid);
+        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
         const transporter = nodemailer.createTransport({
             host: this.config.smtpHost,
             port: this.config.smtpPort,
