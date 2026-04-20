@@ -160,6 +160,12 @@ export default class BaseList {
         if (action == 'authorInfo')
             return 'Загрузка информации об авторе...';
 
+        if (action == 'sendTelegram')
+            return 'Отправка книги в Telegram...';
+
+        if (action == 'sendEmail')
+            return 'Отправка книги на email...';
+
         if (format)
             return `Подготовка ${format.toUpperCase()}...`;
 
@@ -242,6 +248,18 @@ export default class BaseList {
                     data: response.bookInfo,
                     tab: (action == 'authorInfo' ? 'author' : 'fb2'),
                 });
+                return;
+            }
+
+            if (action == 'sendTelegram') {
+                await this.api.sendBookTelegram(book._uid);
+                this.$root.notify.success('Книга отправлена в Telegram');
+                return;
+            }
+
+            if (action == 'sendEmail') {
+                await this.api.sendBookEmail(book._uid);
+                this.$root.notify.success('Книга отправлена на email');
                 return;
             }
 
@@ -335,6 +353,8 @@ export default class BaseList {
             case 'readBook':
             case 'bookInfo':
             case 'authorInfo':
+            case 'sendTelegram':
+            case 'sendEmail':
                 this.download(event.book, event.action, event.format);//no await
                 break;
         }

@@ -104,6 +104,10 @@ class WebSocketController {
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
                     await this.getBookInfo(req, ws); break;
+                case 'send-book-telegram':
+                    await this.sendBookTelegram(req, ws); break;
+                case 'send-book-email':
+                    await this.sendBookEmail(req, ws); break;
 
                 case 'get-inpx-file':
                     await this.getInpxFile(req, ws); break;
@@ -227,6 +231,22 @@ class WebSocketController {
 
         const result = await this.webWorker.getBookInfo(req.bookUid);
 
+        this.send(result, req, ws);
+    }
+
+    async sendBookTelegram(req, ws) {
+        if (!utils.hasProp(req, 'bookUid'))
+            throw new Error(`bookUid is empty`);
+
+        const result = await this.webWorker.sendBookToTelegram(req.bookUid);
+        this.send(result, req, ws);
+    }
+
+    async sendBookEmail(req, ws) {
+        if (!utils.hasProp(req, 'bookUid'))
+            throw new Error(`bookUid is empty`);
+
+        const result = await this.webWorker.sendBookToEmail(req.bookUid);
         this.send(result, req, ws);
     }
 

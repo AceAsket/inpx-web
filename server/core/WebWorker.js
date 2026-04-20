@@ -4,6 +4,9 @@ const crypto = require('crypto');
 const fs = require('fs-extra');
 const _ = require('lodash');
 const iconv = require('iconv-lite');
+const axios = require('axios');
+const FormData = require('form-data');
+const nodemailer = require('nodemailer');
 
 const ZipReader = require('./ZipReader');
 const WorkerState = require('./WorkerState');//singleton
@@ -75,6 +78,14 @@ function normalizeAuthorText(value) {
         .replace(/[()[\]{}.,;:!?'"`«»]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+}
+
+function formatTemplate(template, book = {}) {
+    return String(template || '')
+        .replace(/\$\{AUTHOR\}/g, book.author || '')
+        .replace(/\$\{TITLE\}/g, book.title || '')
+        .replace(/\$\{SERIES\}/g, book.series || '')
+        .replace(/\$\{EXT\}/g, book.ext || '');
 }
 
 function buildAuthorVariants(author) {
@@ -950,6 +961,86 @@ class WebWorker {
                 throw new Error('404 Файл не найден');
             throw e;
         }
+    }
+
+    async getPreparedBookFile(bookUid) {
+        const {link, downFileName} = await this.getBookLink(bookUid);
+        const hash = path.basename(link);
+        const gzipFile = `${this.config.bookDir}/${hash}`;
+        const rawFile = `${gzipFile}.raw`;
+
+        if (!await fs.pathExists(rawFile))
+            await utils.gunzipFile(gzipFile, rawFile);
+
+        await utils.touchFile(gzipFile);
+        await utils.touchFile(rawFile);
+
+        let rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
+        if (!rows.length)
+            throw new Error('404 Файл не найден');
+
+        return {
+            book: rows[0],
+            rawFile,
+            downFileName,
+        };
+    }
+
+    async sendBookToTelegram(bookUid) {
+        if (!this.config.telegramShareEnabled || !this.config.telegramBotToken || !this.config.telegramChatId)
+            throw new Error('Отправка в Telegram не настроена');
+
+        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid);
+        const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
+        const form = new FormData();
+
+        form.append('chat_id', this.config.telegramChatId);
+        form.append('caption', formatTemplate(this.config.telegramCaptionTemplate, book).trim());
+        form.append('document', fs.createReadStream(rawFile), downFileName);
+
+        const response = await axios.post(url, form, {
+            headers: form.getHeaders(),
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+            timeout: 300000,
+        });
+
+        if (!response.data || response.data.ok !== true)
+            throw new Error('Telegram API не принял файл');
+
+        return {success: true};
+    }
+
+    async sendBookToEmail(bookUid) {
+        if (!this.config.emailShareEnabled || !this.config.smtpHost || !this.config.emailTo)
+            throw new Error('Отправка на email не настроена');
+
+        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid);
+        const transporter = nodemailer.createTransport({
+            host: this.config.smtpHost,
+            port: this.config.smtpPort,
+            secure: this.config.smtpSecure,
+            auth: (this.config.smtpUser ? {
+                user: this.config.smtpUser,
+                pass: this.config.smtpPass,
+            } : undefined),
+        });
+
+        const subject = [book.author, book.title].filter(Boolean).join(' - ') || downFileName;
+        await transporter.sendMail({
+            from: this.config.emailFrom || this.config.smtpUser || 'inpx-web@localhost',
+            to: this.config.emailTo,
+            subject: `Книга: ${subject}`,
+            text: `Во вложении книга "${book.title || downFileName}".`,
+            attachments: [
+                {
+                    filename: downFileName,
+                    path: rawFile,
+                },
+            ],
+        });
+
+        return {success: true};
     }
 
     extractFb2Contents(parser) {

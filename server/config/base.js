@@ -42,7 +42,7 @@ module.exports = {
     lowMemoryMode: false,
     fullOptimization: false,
 
-    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'uiDefaults'],
+    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'uiDefaults'],
 
     allowRemoteLib: false,
     remoteLib: false,
@@ -70,6 +70,18 @@ module.exports = {
     latestReleaseLink: 'https://github.com/AceAsket/inpx-web/releases/latest',
     checkReleaseLink: 'https://api.github.com/repos/AceAsket/inpx-web/releases/latest',
     conversionEnabled: process.env.INPX_ENABLE_CONVERSION !== 'false',
+    telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+    telegramCaptionTemplate: process.env.TELEGRAM_CAPTION_TEMPLATE || '${AUTHOR} - ${TITLE}',
+    emailShareEnabled: Boolean(process.env.SMTP_HOST && process.env.EMAIL_TO),
+    smtpHost: process.env.SMTP_HOST || '',
+    smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
+    smtpSecure: process.env.SMTP_SECURE === 'true',
+    smtpUser: process.env.SMTP_USER || '',
+    smtpPass: process.env.SMTP_PASS || '',
+    emailFrom: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
+    emailTo: process.env.EMAIL_TO || '',
 
     uiDefaults: {
         limit: 20,

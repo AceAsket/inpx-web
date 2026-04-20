@@ -18,6 +18,7 @@ inpx-web
 * расширенный раздел `fb2 info` с содержанием, иллюстрациями и отдельной вкладкой автора
 * поддержка фото автора и краткой биографии из `fLibrary`
 * конвертация книг по запросу в `epub`, `mobi` и `pdf`
+* отправка книги прямо из интерфейса в Telegram через бота или на email
 * улучшенная работа с обложками `fLibrary` и внедрением картинок в `fb2`
 * тёмная тема интерфейса для комфортного чтения и навигации
 * Docker-ориентированные доработки для `.7z`-библиотек и конвертации через Calibre
@@ -97,6 +98,63 @@ docker run -d \
 * первый запуск может быть долгим: приложение создаёт поисковую базу, а конвертация в `epub` / `mobi` / `pdf` требует установленного в образе Calibre
 * после обновления образа контейнер удобнее пересоздавать: `docker rm -f inpx-web` и затем запускать команду снова
 * веб-интерфейс после запуска будет доступен по адресу `http://<ваш_хост>:12380`
+
+### Отправка книг в Telegram и на email
+
+Форк умеет не только скачивать книгу, но и отправлять её:
+
+* в Telegram через Bot API
+* на email через SMTP
+
+Кнопки `Telegram` и `Email` появляются в карточке книги только если интеграции настроены через переменные окружения.
+
+Пример `docker run` с включённой отправкой:
+
+```sh
+docker run -d \
+  --name=inpx-web \
+  --restart unless-stopped \
+  -p 12380:12380 \
+  -e INPX=/library/fb2.flibusta.lib.rus.ec.7z.inpx \
+  -e LIBDIR=/library \
+  -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
+  -e TELEGRAM_BOT_TOKEN=<telegram_bot_token> \
+  -e TELEGRAM_CHAT_ID=<telegram_chat_id> \
+  -e TELEGRAM_CAPTION_TEMPLATE='${AUTHOR} - ${TITLE}' \
+  -e SMTP_HOST=smtp.example.com \
+  -e SMTP_PORT=587 \
+  -e SMTP_SECURE=false \
+  -e SMTP_USER=user@example.com \
+  -e SMTP_PASS=<smtp_password> \
+  -e EMAIL_FROM=user@example.com \
+  -e EMAIL_TO=reader@example.com \
+  -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
+  -v /mnt/user/Torrents/fb2.flibusta.lib.rus.ec.7z:/library:ro \
+  inpx-web-7z:latest
+```
+
+Переменные для Telegram:
+
+* `TELEGRAM_BOT_TOKEN` — токен бота от `@BotFather`
+* `TELEGRAM_CHAT_ID` — чат или пользователь, куда отправлять книги
+* `TELEGRAM_CAPTION_TEMPLATE` — подпись к книге, по умолчанию `${AUTHOR} - ${TITLE}`
+
+Переменные для email:
+
+* `SMTP_HOST` — SMTP-сервер
+* `SMTP_PORT` — порт SMTP, например `587`
+* `SMTP_SECURE` — `true` для SMTPS, иначе `false`
+* `SMTP_USER` — логин SMTP
+* `SMTP_PASS` — пароль SMTP
+* `EMAIL_FROM` — адрес отправителя
+* `EMAIL_TO` — адрес получателя книг
+
+Важно:
+
+* если Telegram не настроен, кнопка `Telegram` в интерфейсе скрыта
+* если SMTP не настроен, кнопка `Email` в интерфейсе скрыта
+* в текущей реализации отправляется оригинальный файл книги
+* после изменения переменных окружения контейнер нужно пересоздать
 
 Веб-сервер для поиска по .inpx-коллекции.
 

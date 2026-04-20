@@ -4,3 +4,4 @@
 dev*.sh
 /.local-data
 /.tools
+/.tmp_flibrary_repo

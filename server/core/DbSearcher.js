@@ -662,12 +662,67 @@ class DbSearcher {
                         return ${checks.join(' && ')};
                     };
 
-                    const result = [];
+                    const dedupeKey = (row) => {
+                        if (row.libid)
+                            return 'libid:' + row.libid;
+
+                        const parts = [
+                            row.folder || '',
+                            row.file || '',
+                            row.ext || '',
+                            String(row.insno || 0),
+                        ];
+
+                        if (parts.some(Boolean))
+                            return 'file:' + parts.join('|');
+
+                        return [
+                            'meta',
+                            row.author || '',
+                            row.series || '',
+                            String(row.serno || 0),
+                            row.title || '',
+                            String(row.size || 0),
+                            row.ext || '',
+                        ].join('|');
+                    };
+
+                    const rowScore = (row) => {
+                        let score = 0;
+                        if (!row.del)
+                            score += 1000;
+                        if (row.librate)
+                            score += row.librate * 100;
+                        if (row.ext === 'fb2')
+                            score += 20;
+                        if (row.size)
+                            score += Math.min(row.size, 100000000) / 1000000;
+
+                        return score;
+                    };
+
+                    const pickBetterRow = (current, next) => {
+                        const currentScore = rowScore(current);
+                        const nextScore = rowScore(next);
+
+                        if (nextScore !== currentScore)
+                            return (nextScore > currentScore ? next : current);
+
+                        return (next.id < current.id ? next : current);
+                    };
+
+                    const deduped = new Map();
                     for (const id of @all()) {
                         const row = @unsafeRow(id);
-                        if (checkBook(row))
-                            result.push(row);
+                        if (!checkBook(row))
+                            continue;
+
+                        const key = dedupeKey(row);
+                        const existing = deduped.get(key);
+                        deduped.set(key, existing ? pickBetterRow(existing, row) : row);
                     }
+
+                    const result = Array.from(deduped.values());
 
                     result.sort((a, b) => {
                         let cmp = a.author.localeCompare(b.author);

@@ -134,6 +134,26 @@
                     </q-btn>
 
                     <q-btn
+                        v-if="telegramShareEnabled"
+                        flat
+                        no-caps
+                        icon="lab la-telegram-plane"
+                        @click.stop.prevent="emit('sendTelegram')"
+                    >
+                        Telegram
+                    </q-btn>
+
+                    <q-btn
+                        v-if="emailShareEnabled"
+                        flat
+                        no-caps
+                        icon="la la-envelope"
+                        @click.stop.prevent="emit('sendEmail')"
+                    >
+                        Email
+                    </q-btn>
+
+                    <q-btn
                         flat
                         round
                         icon="la la-copy"
@@ -225,6 +245,14 @@ class BookView {
 
     get conversionEnabled() {
         return this.config.conversionEnabled !== false;
+    }
+
+    get telegramShareEnabled() {
+        return this.config.telegramShareEnabled === true;
+    }
+
+    get emailShareEnabled() {
+        return this.config.emailShareEnabled === true;
     }
 
     get bookAuthor() {
@@ -624,6 +652,7 @@ export default vueComponent(BookView);
     grid-template-columns: 56px minmax(0, 1fr);
     align-items: start;
     gap: 10px;
+    margin-bottom: 4px;
 }
 
 .serno-slot {
@@ -641,7 +670,8 @@ export default vueComponent(BookView);
     min-width: 0;
     font-size: 23px;
     font-weight: 800;
-    line-height: 1.1;
+    line-height: 1.04;
+    letter-spacing: -0.02em;
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
@@ -653,6 +683,7 @@ export default vueComponent(BookView);
     color: var(--app-muted);
     font-size: 14px;
     font-weight: 600;
+    padding-top: 2px;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -793,6 +824,7 @@ export default vueComponent(BookView);
     .book-series {
         min-height: auto;
         font-size: 13px;
+        padding-top: 3px;
         -webkit-line-clamp: 1;
     }
 
