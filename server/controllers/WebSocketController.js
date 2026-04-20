@@ -104,6 +104,26 @@ class WebSocketController {
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
                     await this.getBookInfo(req, ws); break;
+                case 'get-reading-lists':
+                    await this.getReadingLists(req, ws); break;
+                case 'get-reading-list':
+                    await this.getReadingList(req, ws); break;
+                case 'create-reading-list':
+                    await this.createReadingList(req, ws); break;
+                case 'rename-reading-list':
+                    await this.renameReadingList(req, ws); break;
+                case 'delete-reading-list':
+                    await this.deleteReadingList(req, ws); break;
+                case 'export-reading-lists':
+                    await this.exportReadingLists(req, ws); break;
+                case 'import-reading-lists':
+                    await this.importReadingLists(req, ws); break;
+                case 'update-reading-list-book':
+                    await this.updateReadingListBook(req, ws); break;
+                case 'set-reading-list-book-read':
+                    await this.setReadingListBookRead(req, ws); break;
+                case 'add-series-to-reading-list':
+                    await this.addSeriesToReadingList(req, ws); break;
                 case 'send-book-telegram':
                     await this.sendBookTelegram(req, ws); break;
                 case 'send-book-email':
@@ -231,6 +251,80 @@ class WebSocketController {
 
         const result = await this.webWorker.getBookInfo(req.bookUid);
 
+        this.send(result, req, ws);
+    }
+
+    async getReadingLists(req, ws) {
+        const result = await this.webWorker.getReadingLists(req.bookUid);
+        this.send(result, req, ws);
+    }
+
+    async getReadingList(req, ws) {
+        if (!utils.hasProp(req, 'listId'))
+            throw new Error('listId is empty');
+
+        const result = await this.webWorker.getReadingList(req.listId);
+        this.send(result, req, ws);
+    }
+
+    async createReadingList(req, ws) {
+        const result = await this.webWorker.createReadingList(req.name);
+        this.send(result, req, ws);
+    }
+
+    async renameReadingList(req, ws) {
+        if (!utils.hasProp(req, 'listId'))
+            throw new Error('listId is empty');
+
+        const result = await this.webWorker.renameReadingList(req.listId, req.name);
+        this.send(result, req, ws);
+    }
+
+    async deleteReadingList(req, ws) {
+        if (!utils.hasProp(req, 'listId'))
+            throw new Error('listId is empty');
+
+        const result = await this.webWorker.deleteReadingList(req.listId);
+        this.send(result, req, ws);
+    }
+
+    async exportReadingLists(req, ws) {
+        const result = await this.webWorker.exportReadingLists();
+        this.send(result, req, ws);
+    }
+
+    async importReadingLists(req, ws) {
+        const result = await this.webWorker.importReadingLists(req.data);
+        this.send(result, req, ws);
+    }
+
+    async updateReadingListBook(req, ws) {
+        if (!utils.hasProp(req, 'listId'))
+            throw new Error('listId is empty');
+        if (!utils.hasProp(req, 'bookUid'))
+            throw new Error('bookUid is empty');
+
+        const result = await this.webWorker.updateReadingListBook(req.listId, req.bookUid, req.enabled);
+        this.send(result, req, ws);
+    }
+
+    async setReadingListBookRead(req, ws) {
+        if (!utils.hasProp(req, 'listId'))
+            throw new Error('listId is empty');
+        if (!utils.hasProp(req, 'bookUid'))
+            throw new Error('bookUid is empty');
+
+        const result = await this.webWorker.setReadingListBookRead(req.listId, req.bookUid, req.read);
+        this.send(result, req, ws);
+    }
+
+    async addSeriesToReadingList(req, ws) {
+        if (!utils.hasProp(req, 'listId'))
+            throw new Error('listId is empty');
+        if (!utils.hasProp(req, 'series'))
+            throw new Error('series is empty');
+
+        const result = await this.webWorker.addSeriesToReadingList(req.listId, req.series);
         this.send(result, req, ws);
     }
 

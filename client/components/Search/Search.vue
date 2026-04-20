@@ -294,6 +294,14 @@
                             </template>
                         </DivBtn>
 
+                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-bookmark" round @click.stop.prevent="openReadingLists()">
+                            <template #tooltip>
+                                <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
+                                    Списки чтения
+                                </q-tooltip>
+                            </template>
+                        </DivBtn>
+
                         <DivBtn v-if="!config.freeAccess" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-sign-out-alt" round @click.stop.prevent="logout">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
@@ -368,6 +376,7 @@
             :initial-tab="bookInfoDialogTab"
             @navigate="bookInfoNavigate"
         />
+        <ReadingListsDialog v-model="readingListsDialogVisible" :book="readingListsDialogBook" />
         <SelectExtSearchDialog v-model="selectExtSearchDialogVisible" v-model:ext-search="extSearch" />        
     </div>
 </template>
@@ -391,6 +400,7 @@ import SelectDateDialog from './SelectDateDialog/SelectDateDialog.vue';
 import SelectExtDialog from './SelectExtDialog/SelectExtDialog.vue';
 import BookInfoDialog from './BookInfoDialog/BookInfoDialog.vue';
 import SelectExtSearchDialog from './SelectExtSearchDialog/SelectExtSearchDialog.vue';
+import ReadingListsDialog from './ReadingListsDialog/ReadingListsDialog.vue';
 
 import authorBooksStorage from './authorBooksStorage';
 import DivBtn from '../share/DivBtn.vue';
@@ -426,6 +436,7 @@ const componentOptions = {
         SelectDateDialog,
         SelectExtDialog,
         BookInfoDialog,
+        ReadingListsDialog,
         SelectExtSearchDialog,
         Dialog,
         DivBtn
@@ -540,6 +551,7 @@ class Search {
     selectExtDialogVisible = false;
     bookInfoDialogVisible = false;
     bookInfoDialogTab = 'fb2';
+    readingListsDialogVisible = false;
     selectExtSearchDialogVisible = false;
 
     pageCount = 1;    
@@ -579,6 +591,7 @@ class Search {
     showTooltips = true;
 
     bookInfo = {};
+    readingListsDialogBook = null;
 
     searchDateOptions = [
         {label: 'сегодня', value: 'today'},
@@ -1105,7 +1118,15 @@ class Search {
                 this.bookInfoDialogTab = (event.tab || 'fb2');
                 this.bookInfoDialogVisible = true;
                 break;
+            case 'manageReadingLists':
+                this.openReadingLists(event.book || null);
+                break;
         }
+    }
+
+    openReadingLists(book = null) {
+        this.readingListsDialogBook = (book || null);
+        this.readingListsDialogVisible = true;
     }
 
     bookInfoNavigate(event) {

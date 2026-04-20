@@ -267,6 +267,46 @@ class Api {
         return await this.request({action: 'get-book-info', bookUid}, 120);
     }
 
+    async getReadingLists(bookUid = '') {
+        return await this.request({action: 'get-reading-lists', bookUid}, 120);
+    }
+
+    async getReadingList(listId) {
+        return await this.request({action: 'get-reading-list', listId}, 120);
+    }
+
+    async createReadingList(name) {
+        return await this.request({action: 'create-reading-list', name}, 120);
+    }
+
+    async renameReadingList(listId, name) {
+        return await this.request({action: 'rename-reading-list', listId, name}, 120);
+    }
+
+    async deleteReadingList(listId) {
+        return await this.request({action: 'delete-reading-list', listId}, 120);
+    }
+
+    async exportReadingLists() {
+        return await this.request({action: 'export-reading-lists'}, 120);
+    }
+
+    async importReadingLists(data) {
+        return await this.request({action: 'import-reading-lists', data}, 120);
+    }
+
+    async updateReadingListBook(listId, bookUid, enabled) {
+        return await this.request({action: 'update-reading-list-book', listId, bookUid, enabled}, 120);
+    }
+
+    async setReadingListBookRead(listId, bookUid, read) {
+        return await this.request({action: 'set-reading-list-book-read', listId, bookUid, read}, 120);
+    }
+
+    async addSeriesToReadingList(listId, series) {
+        return await this.request({action: 'add-series-to-reading-list', listId, series}, 120);
+    }
+
     async sendBookTelegram(bookUid, format = '') {
         return await this.request({action: 'send-book-telegram', bookUid, format}, 300);
     }

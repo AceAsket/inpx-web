@@ -134,6 +134,15 @@
                     </q-btn>
 
                     <q-btn
+                        flat
+                        no-caps
+                        icon="la la-bookmark"
+                        @click.stop.prevent="emit('readingList')"
+                    >
+                        {{ readingListLabel }}
+                    </q-btn>
+
+                    <q-btn
                         v-if="telegramShareEnabled"
                         flat
                         no-caps
@@ -410,6 +419,10 @@ class BookView {
 
     get authorInfoLabel() {
         return '\u041e\u0431\u0020\u0430\u0432\u0442\u043e\u0440\u0435';
+    }
+
+    get readingListLabel() {
+        return '\u0412\u0020\u0441\u043f\u0438\u0441\u043e\u043a';
     }
 
     get seriesLabel() {

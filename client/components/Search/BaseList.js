@@ -348,6 +348,9 @@ export default class BaseList {
                 (this.isExtendedSearch ? this.extSearch : this.search).genre = event.format;
                 this.scrollToTop();
                 break;
+            case 'readingList':
+                this.$emit('listEvent', {action: 'manageReadingLists', book: event.book});
+                break;
             case 'download':
             case 'copyLink':
             case 'readBook':

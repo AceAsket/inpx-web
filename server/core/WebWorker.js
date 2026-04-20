@@ -16,6 +16,7 @@ const DbSearcher = require('./DbSearcher');
 const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
 const FileDownloader = require('./FileDownloader');
+const ReadingListStore = require('./ReadingListStore');
 const imageUtils = require('./ImageUtils');
 const bookConverter = require('./BookConverter');
 
@@ -140,6 +141,7 @@ class WebWorker {
             }
             
             this.inpxHashCreator = new InpxHashCreator(config);
+            this.readingListStore = new ReadingListStore(config);
             this.fb2Helper = new Fb2Helper();
             this.inpxFileHash = '';
             this.authorInfoCache = new Map();
@@ -488,6 +490,192 @@ class WebWorker {
         }
 
         return result;
+    }
+
+    async getBookRecordByUid(bookUid) {
+        const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
+        return (rows.length ? rows[0] : null);
+    }
+
+    sortReadingListBooks(books = [], order = []) {
+        const orderMap = new Map(order.map((uid, index) => [uid, index]));
+        return books.sort((a, b) => {
+            const ai = orderMap.has(a._uid) ? orderMap.get(a._uid) : Number.MAX_SAFE_INTEGER;
+            const bi = orderMap.has(b._uid) ? orderMap.get(b._uid) : Number.MAX_SAFE_INTEGER;
+            if (ai !== bi)
+                return ai - bi;
+
+            return (a.title || '').localeCompare(b.title || '', 'ru');
+        });
+    }
+
+    async getReadingLists(bookUid = '') {
+        this.checkMyState();
+
+        const lists = await this.readingListStore.getLists();
+        return {
+            lists: lists
+                .map((item) => {
+                    const currentEntry = (bookUid ? this.readingListStore.findEntry(item.books, bookUid) : null);
+                    return {
+                        id: item.id,
+                        name: item.name,
+                        createdAt: item.createdAt,
+                        updatedAt: item.updatedAt,
+                        bookCount: Array.isArray(item.books) ? item.books.length : 0,
+                        readCount: this.readingListStore.countRead(item.books),
+                        containsBook: !!currentEntry,
+                        readBook: !!(currentEntry && currentEntry.read),
+                    };
+                })
+                .sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+        };
+    }
+
+    async getReadingList(listId) {
+        this.checkMyState();
+
+        const item = await this.readingListStore.getList(listId);
+        if (!item)
+            throw new Error('Список не найден');
+
+        const books = [];
+        for (const entry of this.readingListStore.normalizeEntries(item.books)) {
+            const book = await this.getBookRecordByUid(entry.bookUid);
+            if (book) {
+                book._readingListRead = !!entry.read;
+                books.push(book);
+            }
+        }
+
+        this.sortReadingListBooks(books, this.readingListStore.normalizeEntries(item.books).map((entry) => entry.bookUid));
+
+        return {
+            list: {
+                id: item.id,
+                name: item.name,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
+                bookCount: (item.books || []).length,
+                readCount: this.readingListStore.countRead(item.books),
+            },
+            books,
+        };
+    }
+
+    async createReadingList(name) {
+        this.checkMyState();
+
+        const item = await this.readingListStore.createList(name);
+        return {
+            list: {
+                id: item.id,
+                name: item.name,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
+                bookCount: 0,
+            },
+        };
+    }
+
+    async renameReadingList(listId, name) {
+        this.checkMyState();
+
+        const item = await this.readingListStore.renameList(listId, name);
+        return {
+            list: {
+                id: item.id,
+                name: item.name,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
+                bookCount: (item.books || []).length,
+                readCount: this.readingListStore.countRead(item.books),
+            },
+        };
+    }
+
+    async deleteReadingList(listId) {
+        this.checkMyState();
+        return await this.readingListStore.deleteList(listId);
+    }
+
+    async exportReadingLists() {
+        this.checkMyState();
+        return await this.readingListStore.exportData();
+    }
+
+    async importReadingLists(data) {
+        this.checkMyState();
+        return await this.readingListStore.importData(data);
+    }
+
+    async updateReadingListBook(listId, bookUid, enabled) {
+        this.checkMyState();
+
+        const book = await this.getBookRecordByUid(bookUid);
+        if (!book)
+            throw new Error('404 Файл не найден');
+
+        const item = await this.readingListStore.setBookMembership(listId, bookUid, enabled);
+        return {
+            list: {
+                id: item.id,
+                name: item.name,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
+                bookCount: (item.books || []).length,
+                readCount: this.readingListStore.countRead(item.books),
+            },
+            bookUid,
+            enabled: !!enabled,
+        };
+    }
+
+    async setReadingListBookRead(listId, bookUid, read) {
+        this.checkMyState();
+
+        const book = await this.getBookRecordByUid(bookUid);
+        if (!book)
+            throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+
+        const item = await this.readingListStore.setBookRead(listId, bookUid, read);
+        return {
+            list: {
+                id: item.id,
+                name: item.name,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
+                bookCount: (item.books || []).length,
+                readCount: this.readingListStore.countRead(item.books),
+            },
+            bookUid,
+            read: !!read,
+        };
+    }
+
+    async addSeriesToReadingList(listId, series) {
+        this.checkMyState();
+
+        const seriesName = String(series || '').trim();
+        if (!seriesName)
+            throw new Error('series is empty');
+
+        const result = await this.dbSearcher.getSeriesBookList(seriesName);
+        const bookUids = (result.books || []).map((book) => book._uid).filter(Boolean);
+        const added = await this.readingListStore.addBooks(listId, bookUids);
+
+        return {
+            list: {
+                id: added.item.id,
+                name: added.item.name,
+                createdAt: added.item.createdAt,
+                updatedAt: added.item.updatedAt,
+                bookCount: (added.item.books || []).length,
+                readCount: this.readingListStore.countRead(added.item.books),
+            },
+            series: seriesName,
+            addedBooks: added.added,
+        };
     }
 
     async extractBook(libFolder, libFile) {
