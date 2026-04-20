@@ -1,0 +1,26 @@
+services:
+  inpx-web:
+    image: inpx-web-7z:latest
+    container_name: inpx-web
+    restart: unless-stopped
+    ports:
+      - "12380:12380"
+    environment:
+      INPX: /library/fb2.flibusta.lib.rus.ec.7z.inpx
+      LIBDIR: /library
+      CACHE_DIR: /usr/local/bin/.inpx-web/cache
+
+      TELEGRAM_BOT_TOKEN: "PUT_YOUR_BOT_TOKEN_HERE"
+      TELEGRAM_CHAT_ID: "PUT_YOUR_CHAT_ID_HERE"
+      TELEGRAM_CAPTION_TEMPLATE: "${AUTHOR} - ${TITLE}"
+
+      SMTP_HOST: "smtp.example.com"
+      SMTP_PORT: 587
+      SMTP_SECURE: "false"
+      SMTP_USER: "user@example.com"
+      SMTP_PASS: "PUT_YOUR_SMTP_PASSWORD_HERE"
+      EMAIL_FROM: "user@example.com"
+      EMAIL_TO: "reader@example.com"
+    volumes:
+      - /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web
+      - /mnt/user/Torrents/fb2.flibusta.lib.rus.ec.7z:/library:ro

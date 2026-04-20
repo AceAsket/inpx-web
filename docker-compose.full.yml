@@ -1,0 +1,14 @@
+services:
+  inpx-web:
+    image: inpx-web-7z:latest
+    container_name: inpx-web
+    restart: unless-stopped
+    ports:
+      - "12380:12380"
+    environment:
+      INPX: /library/fb2.flibusta.lib.rus.ec.7z.inpx
+      LIBDIR: /library
+      CACHE_DIR: /usr/local/bin/.inpx-web/cache
+    volumes:
+      - /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web
+      - /mnt/user/Torrents/fb2.flibusta.lib.rus.ec.7z:/library:ro
