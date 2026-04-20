@@ -78,3 +78,5 @@ LABEL org.opencontainers.image.title="inpx-web-lite" \
       org.opencontainers.image.source="https://github.com/AceAsket/inpx-web"
 
 ENV INPX_ENABLE_CONVERSION=false
+
+FROM runtime AS final
