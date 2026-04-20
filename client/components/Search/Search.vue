@@ -42,6 +42,7 @@
                                 <q-select
                                     :model-value="currentUserId"
                                     class="q-ml-sm profile-select"
+                                    :class="{'profile-select--needs-login': currentProfileNeedsLogin}"
                                     dense
                                     outlined
                                     emit-value
@@ -50,24 +51,32 @@
                                     label="Профиль"
                                     style="min-width: 180px"
                                     @update:model-value="selectUserProfile"
-                                />
-
-                                <q-chip
-                                    v-if="currentProfileNeedsLogin"
-                                    class="q-ml-xs profile-login-chip"
-                                    dense
-                                    square
-                                    color="orange-1"
-                                    text-color="orange-9"
-                                    icon="la la-user-lock"
                                 >
-                                    Вход не выполнен
-                                </q-chip>
+                                    <template v-if="currentProfileNeedsLogin" #append>
+                                        <q-icon
+                                            name="la la-user-lock"
+                                            class="profile-login-action"
+                                            @click.stop.prevent="promptCurrentProfileLogin"
+                                        >
+                                            <q-tooltip :delay="600" anchor="bottom middle" content-style="font-size: 80%">
+                                                Войти в выбранный профиль
+                                            </q-tooltip>
+                                        </q-icon>
+                                    </template>
+                                </q-select>
 
-                                <DivBtn class="q-ml-xs text-grey-5 bg-yellow-1" :size="28" :icon-size="22" icon="la la-users-cog" round @click.stop.prevent="openUserProfilesDialog">
+                                <DivBtn
+                                    class="q-ml-xs user-profiles-btn"
+                                    :class="currentProfileNeedsLogin ? 'user-profiles-btn--needs-login text-orange-9 bg-orange-1' : 'text-grey-5 bg-yellow-1'"
+                                    :size="currentProfileNeedsLogin ? 32 : 28"
+                                    :icon-size="currentProfileNeedsLogin ? 24 : 22"
+                                    icon="la la-users-cog"
+                                    round
+                                    @click.stop.prevent="openUserProfilesDialog"
+                                >
                                     <template #tooltip>
                                         <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
-                                            Профили пользователей
+                                            {{ currentProfileNeedsLogin ? 'Профиль защищён: требуется вход' : 'Профили пользователей' }}
                                         </q-tooltip>
                                     </template>
                                 </DivBtn>
@@ -1202,6 +1211,19 @@ class Search {
         this.userProfilesDialogVisible = true;
     }
 
+    async promptCurrentProfileLogin() {
+        const target = this.currentSelectedProfile;
+        if (!(target && target.requiresLogin && !this.config.profileAuthorized))
+            return;
+
+        try {
+            await this.api.showProfileLoginDialog(target.login || '');
+        } catch (e) {
+            if (e.message !== 'Вход в профиль отменён')
+                this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
+    }
+
     async selectUserProfile(userId) {
         const users = this.config.userProfiles || [];
         const target = users.find((item) => item.id === userId);
@@ -1547,9 +1569,32 @@ export default vueComponent(Search);
     max-width: 220px;
 }
 
-.profile-login-chip {
-    font-weight: 700;
-    border: 1px solid rgba(201, 140, 0, 0.28);
+.profile-select--needs-login :deep(.q-field__control) {
+    border-color: rgba(201, 140, 0, 0.58);
+    box-shadow: 0 0 0 1px rgba(201, 140, 0, 0.18);
+    background: rgba(255, 245, 214, 0.78);
+}
+
+.profile-login-action {
+    color: #c98c00;
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.profile-login-action:hover {
+    color: #a66c00;
+}
+
+.user-profiles-btn {
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.user-profiles-btn--needs-login {
+    box-shadow: 0 0 0 1px rgba(201, 140, 0, 0.2), 0 8px 18px rgba(201, 140, 0, 0.14);
+}
+
+.user-profiles-btn--needs-login:hover {
+    transform: translateY(-1px);
 }
 
 .result-bar {
