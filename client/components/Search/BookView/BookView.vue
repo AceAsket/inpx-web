@@ -208,6 +208,10 @@ class BookView {
         return this.$store.state.config;
     }
 
+    get conversionEnabled() {
+        return this.config.conversionEnabled !== false;
+    }
+
     get bookAuthor() {
         if (this.book.author) {
             let a = this.book.author.split(',');
@@ -341,6 +345,9 @@ class BookView {
 
     get extraFormats() {
         const currentExt = (this.book.ext || '').toLowerCase();
+        if (!this.conversionEnabled)
+            return [];
+
         return ['epub', 'mobi', 'pdf'].filter(format => format !== currentExt);
     }
 

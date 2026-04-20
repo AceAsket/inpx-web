@@ -172,6 +172,9 @@ module.exports = (app, config) => {
                                 await generateZip(bookFile, rawFile, downFileName);
                             downFileName += '.zip';
                         } else if (bookConverter.canConvertTo(fileType)) {
+                            if (!config.conversionEnabled)
+                                throw new Error('Book conversion is disabled in this image');
+
                             bookFile += `.${fileType}`;
                             if (!await fs.pathExists(bookFile))
                                 await bookConverter.convert({inputFile: rawFile, outputFile: bookFile, format: fileType, sourceFileName: downFileName});

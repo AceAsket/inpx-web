@@ -63,6 +63,8 @@ LABEL org.opencontainers.image.title="inpx-web" \
       org.opencontainers.image.description="Dockerized inpx-web fork for fLibrary and .7z collections" \
       org.opencontainers.image.source="https://github.com/AceAsket/inpx-web"
 
+ENV INPX_ENABLE_CONVERSION=true
+
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
@@ -74,3 +76,5 @@ FROM runtime-base AS runtime-lite
 LABEL org.opencontainers.image.title="inpx-web-lite" \
       org.opencontainers.image.description="Lighter inpx-web image without Calibre conversion support" \
       org.opencontainers.image.source="https://github.com/AceAsket/inpx-web"
+
+ENV INPX_ENABLE_CONVERSION=false

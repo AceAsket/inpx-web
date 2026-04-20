@@ -42,7 +42,7 @@ module.exports = {
     lowMemoryMode: false,
     fullOptimization: false,
 
-    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'uiDefaults'],
+    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'uiDefaults'],
 
     allowRemoteLib: false,
     remoteLib: false,
@@ -69,6 +69,7 @@ module.exports = {
 
     latestReleaseLink: 'https://github.com/AceAsket/inpx-web/releases/latest',
     checkReleaseLink: 'https://api.github.com/repos/AceAsket/inpx-web/releases/latest',
+    conversionEnabled: process.env.INPX_ENABLE_CONVERSION !== 'false',
 
     uiDefaults: {
         limit: 20,

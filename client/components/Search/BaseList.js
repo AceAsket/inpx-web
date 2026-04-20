@@ -222,6 +222,11 @@ export default class BaseList {
         if (this.downloadFlag)
             return;
 
+        if (format && this.config.conversionEnabled === false) {
+            this.$root.stdDialog.alert('Конвертация книг отключена в текущем образе.', 'Информация');
+            return;
+        }
+
         this.downloadFlag = true;
         (async() => {
             await utils.sleep(200);
