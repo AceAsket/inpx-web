@@ -39,47 +39,49 @@
                                     rounded
                                 />
 
-                                <q-select
-                                    :model-value="currentUserId"
-                                    class="q-ml-sm profile-select"
-                                    :class="{'profile-select--needs-login': currentProfileNeedsLogin}"
-                                    dense
-                                    outlined
-                                    emit-value
-                                    map-options
-                                    :options="userProfileOptions"
-                                    label="Профиль"
-                                    style="min-width: 180px"
-                                    @update:model-value="selectUserProfile"
-                                >
-                                    <template v-if="currentProfileNeedsLogin" #append>
-                                        <q-icon
-                                            name="la la-user-lock"
-                                            class="profile-login-action"
-                                            @click.stop.prevent="promptCurrentProfileLogin"
-                                        >
-                                            <q-tooltip :delay="600" anchor="bottom middle" content-style="font-size: 80%">
-                                                Войти в выбранный профиль
-                                            </q-tooltip>
-                                        </q-icon>
-                                    </template>
-                                </q-select>
+                                <div class="row no-wrap items-center profile-controls">
+                                    <q-select
+                                        :model-value="currentUserId"
+                                        class="q-ml-sm profile-select"
+                                        :class="{'profile-select--needs-login': currentProfileNeedsLogin}"
+                                        dense
+                                        outlined
+                                        emit-value
+                                        map-options
+                                        :options="userProfileOptions"
+                                        label="Профиль"
+                                        style="min-width: 180px"
+                                        @update:model-value="selectUserProfile"
+                                    >
+                                        <template v-if="currentProfileNeedsLogin" #append>
+                                            <q-icon
+                                                name="la la-user-lock"
+                                                class="profile-login-action"
+                                                @click.stop.prevent="promptCurrentProfileLogin"
+                                            >
+                                                <q-tooltip :delay="600" anchor="bottom middle" content-style="font-size: 80%">
+                                                    Войти в выбранный профиль
+                                                </q-tooltip>
+                                            </q-icon>
+                                        </template>
+                                    </q-select>
 
-                                <DivBtn
-                                    class="q-ml-xs user-profiles-btn"
-                                    :class="currentProfileNeedsLogin ? 'user-profiles-btn--needs-login text-orange-9 bg-orange-1' : 'text-grey-5 bg-yellow-1'"
-                                    :size="currentProfileNeedsLogin ? 32 : 28"
-                                    :icon-size="currentProfileNeedsLogin ? 24 : 22"
-                                    icon="la la-users-cog"
-                                    round
-                                    @click.stop.prevent="openUserProfilesDialog"
-                                >
-                                    <template #tooltip>
-                                        <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
-                                            {{ currentProfileNeedsLogin ? 'Профиль защищён: требуется вход' : 'Профили пользователей' }}
-                                        </q-tooltip>
-                                    </template>
-                                </DivBtn>
+                                    <DivBtn
+                                        class="q-ml-xs user-profiles-btn"
+                                        :class="currentProfileNeedsLogin ? 'user-profiles-btn--needs-login text-orange-9 bg-orange-1' : 'text-grey-5 bg-yellow-1'"
+                                        :size="currentProfileNeedsLogin ? 32 : 28"
+                                        :icon-size="currentProfileNeedsLogin ? 24 : 22"
+                                        icon="la la-users-cog"
+                                        round
+                                        @click.stop.prevent="openUserProfilesDialog"
+                                    >
+                                        <template #tooltip>
+                                            <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
+                                                {{ currentProfileNeedsLogin ? 'Профиль защищён: требуется вход' : 'Профили пользователей' }}
+                                            </q-tooltip>
+                                        </template>
+                                    </DivBtn>
+                                </div>
                             </div>
 
                             <div class="collection-title row items-center q-ml-sm" style="font-size: 150%;">
@@ -1569,6 +1571,10 @@ export default vueComponent(Search);
     max-width: 220px;
 }
 
+.profile-controls {
+    min-width: 0;
+}
+
 .profile-select--needs-login :deep(.q-field__control) {
     border-color: rgba(201, 140, 0, 0.58);
     box-shadow: 0 0 0 1px rgba(201, 140, 0, 0.18);
@@ -1674,6 +1680,18 @@ export default vueComponent(Search);
         width: 100%;
     }
 
+    .profile-controls {
+        display: flex;
+        align-items: center;
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+
+    .profile-controls .profile-select {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
     .toolbar-actions {
         flex-direction: row;
         align-items: center;
@@ -1709,6 +1727,18 @@ export default vueComponent(Search);
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 8px;
+    }
+
+    .profile-controls {
+        width: 100%;
+    }
+
+    .profile-controls .profile-select {
+        width: auto;
+    }
+
+    .profile-controls .user-profiles-btn {
+        flex: 0 0 auto;
     }
 
     .toolbar-actions {
