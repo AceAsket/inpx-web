@@ -168,10 +168,16 @@ export default vueComponent(ExtendedList);
 
 .rating-chip {
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     min-height: 38px;
-    padding: 0 8px;
+    height: 38px;
+    padding: 0 10px;
     border-radius: 999px;
     font-weight: 700;
+    line-height: 1;
+    vertical-align: middle;
     box-shadow: 0 4px 14px rgba(23, 32, 38, 0.08);
     transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
 }

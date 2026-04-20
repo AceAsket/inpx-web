@@ -50,6 +50,7 @@
                             class="bg-grey-4 text-grey-7"
                         >
                             <q-tab v-if="fb2.length" name="fb2" label="Fb2 info" />
+                            <q-tab v-if="contents.length" name="contents" label="Содержание" />
                             <q-tab name="inpx" label="Inpx info" />
                             <q-tab v-if="hasAuthorTab" name="author" :label="authorTabLabel" />
                         </q-tabs>
@@ -84,6 +85,25 @@
 
                                 <div v-else class="author-empty-state">
                                     {{ noAuthorInfoLabel }}
+                                </div>
+                            </div>
+                        </template>
+
+                        <template v-else-if="selectedTab == 'contents'">
+                            <div class="fb2-contents q-mx-sm q-mt-md q-mb-sm">
+                                <div class="text-blue section-label q-mb-sm">
+                                    Содержание
+                                </div>
+                                <div class="fb2-contents-list">
+                                    <div
+                                        v-for="(item, index) in contents"
+                                        :key="`toc-tab-${index}`"
+                                        class="fb2-contents-item"
+                                        :style="{paddingLeft: `${item.level * 14}px`}"
+                                    >
+                                        <span class="fb2-contents-bullet">•</span>
+                                        <span class="fb2-contents-title">{{ item.title }}</span>
+                                    </div>
                                 </div>
                             </div>
                         </template>
@@ -143,7 +163,7 @@
                 </div>
             </div>
 
-            <div v-if="selectedTab != 'author'" class="q-mt-md" v-html="annotation" />
+            <div v-if="selectedTab == 'fb2' && annotation" class="q-mt-md" v-html="annotation" />
         </div>
 
         <template #footer>
