@@ -1385,4 +1385,93 @@ export default vueComponent(Search);
     border-bottom: 1px solid var(--app-border);
     margin: 8px 0;
 }
+
+@media (max-width: 900px) {
+    .search-toolbar {
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 8px 8px 10px;
+    }
+
+    .header {
+        min-height: auto;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .collection-title {
+        margin-left: 0 !important;
+        font-size: 122% !important;
+        flex-wrap: wrap;
+    }
+
+    .search-fields {
+        max-width: none !important;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .search-fields :deep(.q-field) {
+        min-width: 0 !important;
+        width: 100%;
+        flex: 1 1 220px;
+    }
+
+    .search-fields :deep(.q-select),
+    .search-fields :deep(.q-input) {
+        max-width: none;
+    }
+}
+
+@media (max-width: 640px) {
+    .tool-panel {
+        padding-bottom: 6px;
+    }
+
+    .search-toolbar {
+        padding: 6px 6px 10px;
+    }
+
+    .header {
+        margin-left: 8px !important;
+        margin-right: 8px !important;
+    }
+
+    .header > .row.no-wrap.items-center {
+        width: 100%;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .collection-title {
+        width: 100%;
+        row-gap: 6px;
+    }
+
+    .search-fields {
+        margin-left: 8px !important;
+        margin-right: 8px !important;
+    }
+
+    .search-fields :deep(.q-field) {
+        flex: 1 1 100%;
+    }
+
+    .search-fields :deep(.q-field__control) {
+        min-height: 46px;
+    }
+
+    .result-bar {
+        min-height: 32px;
+        padding-left: 8px;
+        padding-right: 8px;
+        font-size: 13px;
+    }
+
+    .project-pill {
+        margin-left: 8px;
+        margin-right: 8px;
+    }
+}
 </style>

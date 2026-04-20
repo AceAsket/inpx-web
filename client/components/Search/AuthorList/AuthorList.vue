@@ -619,4 +619,27 @@ export default vueComponent(AuthorList);
         height: 122px;
     }
 }
+
+@media (max-width: 560px) {
+    .author-group {
+        padding: 6px 0 12px;
+    }
+
+    .book-row {
+        margin-left: 8px;
+    }
+
+    .author-info-card {
+        gap: 12px;
+        padding: 12px;
+        border-radius: 14px;
+    }
+
+    .author-photo-wrap,
+    .author-photo {
+        width: 80px;
+        min-width: 80px;
+        height: 108px;
+    }
+}
 </style>

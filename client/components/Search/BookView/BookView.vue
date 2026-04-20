@@ -689,4 +689,86 @@ export default vueComponent(BookView);
     }
 }
 
+@media (max-width: 520px) {
+    .book-view {
+        margin-top: 8px;
+        margin-bottom: 8px;
+    }
+
+    .book-card {
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 10px;
+        padding: 10px;
+        border-radius: 14px;
+    }
+
+    .cover-box {
+        height: 116px;
+        padding: 8px;
+        border-radius: 12px;
+    }
+
+    .book-card.is-poster-mode .cover-box {
+        height: 208px;
+    }
+
+    .book-content {
+        gap: 8px;
+    }
+
+    .book-topline {
+        gap: 8px;
+    }
+
+    .book-author {
+        font-size: 13px;
+    }
+
+    .meta-pill,
+    .serno-pill {
+        padding: 3px 8px;
+        font-size: 11px;
+    }
+
+    .book-title {
+        font-size: 16px;
+        min-height: calc(1.1em * 2);
+        -webkit-line-clamp: 2;
+    }
+
+    .book-series {
+        min-height: auto;
+        font-size: 13px;
+        -webkit-line-clamp: 1;
+    }
+
+    .book-genres {
+        gap: 6px;
+        min-height: auto;
+    }
+
+    .genre-chip {
+        padding: 3px 8px;
+        font-size: 12px;
+    }
+
+    .book-actions {
+        gap: 6px;
+        min-height: auto;
+    }
+
+    .book-actions :deep(.q-btn),
+    .format-actions :deep(.q-btn) {
+        min-height: 34px;
+        padding-left: 8px;
+        padding-right: 8px;
+        font-size: 12px;
+    }
+
+    .format-actions {
+        gap: 6px;
+        min-height: auto;
+    }
+}
+
 </style>

@@ -13,6 +13,7 @@
             <q-chip
                 v-for="item in ratingFilterOptions"
                 :key="item.value"
+                class="rating-chip"
                 clickable
                 :outline="activeRatingFilter !== item.value"
                 :color="activeRatingFilter === item.value ? 'primary' : 'grey-7'"
@@ -23,6 +24,7 @@
             </q-chip>
             <q-chip
                 v-if="activeRatingFilter"
+                class="rating-chip rating-chip-reset"
                 clickable
                 outline
                 color="grey-7"
@@ -183,6 +185,29 @@ export default vueComponent(TitleList);
     color: var(--app-muted);
     font-size: 13px;
     font-weight: 700;
+}
+
+.rating-chip {
+    cursor: pointer;
+    min-height: 38px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-weight: 700;
+    box-shadow: 0 4px 14px rgba(23, 32, 38, 0.08);
+    transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+}
+
+.rating-chip:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 18px rgba(23, 32, 38, 0.12);
+}
+
+.rating-chip:active {
+    transform: translateY(0);
+}
+
+.rating-chip-reset {
+    background: rgba(23, 32, 38, 0.04);
 }
 
 .title-grid {

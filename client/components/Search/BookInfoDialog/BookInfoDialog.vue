@@ -105,6 +105,23 @@
                                 </div>
                             </div>
 
+                            <div v-if="selectedTab == 'fb2' && contents.length" class="fb2-contents q-mx-sm q-mt-md q-mb-sm">
+                                <div class="text-blue section-label q-mb-sm">
+                                    Содержание
+                                </div>
+                                <div class="fb2-contents-list">
+                                    <div
+                                        v-for="(item, index) in contents"
+                                        :key="`toc-${index}`"
+                                        class="fb2-contents-item"
+                                        :style="{paddingLeft: `${item.level * 14}px`}"
+                                    >
+                                        <span class="fb2-contents-bullet">•</span>
+                                        <span class="fb2-contents-title">{{ item.title }}</span>
+                                    </div>
+                                </div>
+                            </div>
+
                             <div v-if="selectedTab == 'fb2' && fb2Images.length" class="fb2-gallery q-mx-sm q-mt-md q-mb-sm">
                                 <div class="text-blue section-label q-mb-sm">
                                     Иллюстрации
@@ -481,17 +498,6 @@ class BookInfoDialog {
             });
 
             this.contents = this.extractContents(parser);
-            if (this.contents.length) {
-                this.fb2.push({
-                    name: 'contents',
-                    label: 'Содержание',
-                    value: this.contents.map((item, index) => ({
-                        name: `contents-${index}`,
-                        label: item.level ? `${' '.repeat(item.level * 2)}•` : '•',
-                        value: item.title,
-                    })),
-                });
-            }
         }
 
         if (bookInfo.book)
@@ -617,6 +623,35 @@ export default vueComponent(BookInfoDialog);
 .fb2-gallery {
     border-top: 1px solid #ccc;
     padding-top: 12px;
+}
+
+.fb2-contents {
+    border-top: 1px solid #ccc;
+    padding-top: 12px;
+}
+
+.fb2-contents-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.fb2-contents-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--app-text);
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+.fb2-contents-bullet {
+    color: var(--app-link);
+    flex: 0 0 auto;
+}
+
+.fb2-contents-title {
+    min-width: 0;
 }
 
 .fb2-gallery-grid {
@@ -796,6 +831,28 @@ export default vueComponent(BookInfoDialog);
 }
 
 @media (max-width: 820px) {
+    .info-box > .row.q-mt-sm.no-wrap {
+        flex-wrap: wrap;
+    }
+
+    .poster-size {
+        width: 140px;
+        height: 210px;
+        min-width: 140px;
+    }
+
+    .info-panel {
+        min-width: 0;
+        width: 100%;
+        margin-left: 0 !important;
+        margin-top: 12px;
+    }
+
+    .info-scroll {
+        height: auto;
+        max-height: 46vh;
+    }
+
     .author-info-body {
         flex-wrap: wrap;
     }
@@ -805,6 +862,54 @@ export default vueComponent(BookInfoDialog);
         width: 92px;
         min-width: 92px;
         height: 122px;
+    }
+}
+
+@media (max-width: 560px) {
+    .info-box {
+        padding: 0 6px 10px;
+    }
+
+    .poster-size {
+        width: 100%;
+        height: auto;
+        min-width: 0;
+    }
+
+    .poster,
+    .no-poster {
+        min-height: 220px;
+    }
+
+    .poster-title {
+        font-size: 13px;
+    }
+
+    .info-panel {
+        border-radius: 14px;
+        overflow: hidden;
+    }
+
+    .info-scroll {
+        max-height: none;
+    }
+
+    .info-key {
+        width: 82px;
+        font-size: 12px;
+    }
+
+    .info-value {
+        font-size: 13px;
+    }
+
+    .fb2-gallery-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+    }
+
+    .author-tab-wrap {
+        padding: 10px;
     }
 }
 </style>
