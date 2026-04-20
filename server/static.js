@@ -27,17 +27,17 @@ function generateZip(zipFile, dataFile, dataFileInZip) {
 }
 
 async function getCoverArchives(config) {
-    if (coverArchives)
+    if (coverArchives && coverArchives.length)
         return coverArchives;
 
-    coverArchives = [];
     const coverDir = `${config.libDir}/covers`;
     if (!await fs.pathExists(coverDir))
-        return coverArchives;
+        return [];
 
+    coverArchives = [];
     const files = await fs.readdir(coverDir);
     for (const file of files) {
-        const match = file.match(/(\d+)-(\d+)\.zip$/i);
+        const match = file.match(/(\d+)-(\d+)\.(zip|7z)$/i);
         if (!match)
             continue;
 
@@ -50,6 +50,19 @@ async function getCoverArchives(config) {
 
     coverArchives.sort((a, b) => a.from - b.from);
     return coverArchives;
+}
+
+function matchingArchivesBySpecificity(archives, libid) {
+    return archives
+        .filter(item => libid >= item.from && libid <= item.to)
+        .sort((a, b) => {
+            const aspan = a.to - a.from;
+            const bspan = b.to - b.from;
+            if (aspan !== bspan)
+                return aspan - bspan;
+
+            return a.from - b.from;
+        });
 }
 
 module.exports = (app, config) => {
@@ -74,33 +87,39 @@ module.exports = (app, config) => {
                 return;
             }
 
-            const archives = await getCoverArchives(config);
-            const archive = archives.find(item => libid >= item.from && libid <= item.to);
-            if (!archive) {
+            const archives = matchingArchivesBySpecificity(await getCoverArchives(config), libid);
+            if (!archives.length) {
                 res.sendStatus(404);
                 return;
             }
 
-            const zipReader = new ZipReader();
-            await zipReader.open(archive.file, false);
+            for (const archive of archives) {
+                const zipReader = new ZipReader();
+                await zipReader.open(archive.file, false);
 
-            try {
-                let cover = await zipReader.extractToBuf(String(libid));
-                let type = imageUtils.contentType(cover);
-                if (type === 'image/jxl') {
-                    cover = await imageUtils.jxlToPng(cover, config.tempDir);
-                    type = 'image/png';
+                try {
+                    let cover = await zipReader.extractToBuf(String(libid));
+                    let type = imageUtils.contentType(cover);
+                    if (type === 'image/jxl') {
+                        cover = await imageUtils.jxlToPng(cover, config.tempDir);
+                        type = 'image/png';
 
-                    await fs.ensureDir(cacheDir);
-                    await fs.writeFile(cacheFile, cover);
+                        await fs.ensureDir(cacheDir);
+                        await fs.writeFile(cacheFile, cover);
+                    }
+
+                    res.set('Cache-Control', 'public, max-age=2592000, immutable');
+                    res.type(type);
+                    res.send(cover);
+                    return;
+                } catch(e) {
+                    // try next matching archive
+                } finally {
+                    await zipReader.close();
                 }
-
-                res.set('Cache-Control', 'public, max-age=2592000, immutable');
-                res.type(type);
-                res.send(cover);
-            } finally {
-                await zipReader.close();
             }
+
+            res.sendStatus(404);
         } catch(e) {
             res.sendStatus(404);
         }

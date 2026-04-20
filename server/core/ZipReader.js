@@ -103,6 +103,106 @@ class ZipReader {
         });
     }
 
+    run7zStdout(args) {
+        return new Promise((resolve, reject) => {
+            let index = 0;
+
+            const tryRun = () => {
+                const command = sevenZipCommands[index++];
+                const child = spawn(command, args, {stdio: ['ignore', 'pipe', 'pipe']});
+                const stdout = [];
+                let stderr = '';
+                let settled = false;
+
+                const nextOrReject = (err) => {
+                    if (settled)
+                        return;
+                    settled = true;
+
+                    if (err && err.code === 'ENOENT' && index < sevenZipCommands.length) {
+                        tryRun();
+                    } else if (err && err.code === 'ENOENT') {
+                        reject(new Error('7z executable not found. Install 7-Zip and make 7z/7za available in PATH.'));
+                    } else {
+                        reject(err);
+                    }
+                };
+
+                child.on('error', nextOrReject);
+                child.stdout.on('data', data => {
+                    stdout.push(data);
+                });
+                child.stderr.on('data', data => {
+                    stderr += data.toString();
+                });
+                child.on('close', code => {
+                    if (settled)
+                        return;
+
+                    if (code !== 0) {
+                        settled = true;
+                        reject(new Error(`7z failed with exit code ${code}: ${stderr.trim()}`));
+                        return;
+                    }
+
+                    settled = true;
+                    resolve(Buffer.concat(stdout));
+                });
+            };
+
+            tryRun();
+        });
+    }
+
+    parse7zEntries(listing) {
+        const result = {};
+        let entry = null;
+        let index = 0;
+        let inEntries = false;
+
+        const commit = () => {
+            if (!entry || !entry.name)
+                return;
+
+            result[index++] = {
+                name: entry.name.replace(/\\/g, '/'),
+                isDirectory: !!entry.isDirectory,
+            };
+        };
+
+        for (const line of listing.split(/\r?\n/)) {
+            if (/^-{5,}$/.test(line.trim())) {
+                inEntries = true;
+                continue;
+            }
+
+            if (!inEntries)
+                continue;
+
+            if (!line.trim()) {
+                commit();
+                entry = null;
+                continue;
+            }
+
+            const match = line.match(/^([^=]+) = (.*)$/);
+            if (!match)
+                continue;
+
+            const key = match[1].trim();
+            const value = match[2];
+            entry = entry || {};
+
+            if (key === 'Path')
+                entry.name = value;
+            else if (key === 'Folder')
+                entry.isDirectory = value === '+';
+        }
+
+        commit();
+        return result;
+    }
+
     async open(zipFile, zipEntries = true) {
         if (this.zip || this.archiveFile)
             throw new Error('Archive file is already open');
@@ -110,6 +210,10 @@ class ZipReader {
         if (path.extname(zipFile).toLowerCase() === '.7z') {
             this.archiveFile = zipFile;
             this.archiveType = '7z';
+            if (zipEntries) {
+                const listing = await this.run7zStdout(['l', '-slt', zipFile]);
+                this.zipEntries = this.parse7zEntries(listing.toString());
+            }
             return;
         }
 
@@ -132,7 +236,7 @@ class ZipReader {
         this.checkState();
 
         if (this.archiveType === '7z')
-            throw new Error('extractToBuf is not supported for 7z archives');
+            return await this.run7zStdout(['x', '-y', '-bd', '-so', this.archiveFile, entryFilePath]);
 
         return await this.zip.entryData(entryFilePath);
     }

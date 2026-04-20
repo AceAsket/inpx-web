@@ -1,4 +1,4 @@
-FROM node:16-bullseye-slim AS build
+FROM node:18-bookworm-slim AS build
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build:client && node build/prepkg.js linux
 
-FROM node:16-bullseye-slim
+FROM node:18-bookworm-slim
 
 ENV NODE_ENV=production
 
@@ -32,6 +32,7 @@ COPY --from=build /app/dist/public.json ./dist/public.json
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN rm -f server/config/application_env \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
     && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 12380

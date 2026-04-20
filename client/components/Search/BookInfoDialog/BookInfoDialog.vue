@@ -19,9 +19,17 @@
             <div class="row q-mt-sm no-wrap">
                 <div class="poster-size">
                     <div class="column justify-center items-center" :class="{'poster': coverSrc, 'no-poster': !coverSrc}" @click.stop.prevent="posterClick">
-                        <img v-if="coverSrc" :src="coverSrc" class="fit row justify-center items-center" style="object-fit: contain" @error="coverSrc = ''" />
-                        <div v-if="!coverSrc" class="fit row justify-center items-center text-grey-5 overflow-hidden" style="border: 1px solid #ccc; font-size: 300%">
-                            <i>{{ book.ext }}</i>
+                        <img v-if="coverSrc" :src="coverSrc" class="poster-image fit row justify-center items-center" @error="coverSrc = ''" />
+                        <div v-else class="poster-placeholder">
+                            <div class="poster-letter">
+                                {{ posterLetter }}
+                            </div>
+                            <div class="poster-title">
+                                {{ posterTitle }}
+                            </div>
+                            <div class="poster-ext">
+                                {{ posterExt }}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -158,6 +166,18 @@ class BookInfoDialog {
         }
 
         return '';
+    }
+
+    get posterTitle() {
+        return this.book.title || this.bookAuthor || 'Без названия';
+    }
+
+    get posterLetter() {
+        return this.posterTitle.substring(0, 1).toUpperCase();
+    }
+
+    get posterExt() {
+        return (this.book.ext || 'book').toUpperCase();
     }
 
     formatSize(size) {
@@ -344,6 +364,21 @@ export default vueComponent(BookInfoDialog);
     height: 100%;
 }
 
+.poster {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.no-poster {
+    border: 1px solid color-mix(in srgb, var(--app-border) 82%, var(--app-primary));
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.poster-image {
+    object-fit: contain;
+}
+
 .poster:hover {
     position: relative;
     top: -1%;
@@ -351,6 +386,57 @@ export default vueComponent(BookInfoDialog);
     width: 102%;
     height: 102%;
     cursor: pointer;
+}
+
+.poster-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 18px;
+    text-align: center;
+    color: var(--app-text);
+    background:
+        radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.56), transparent 28%),
+        linear-gradient(145deg, rgba(15, 159, 143, 0.22), rgba(232, 93, 117, 0.16)),
+        var(--app-surface-2);
+}
+
+.poster-letter {
+    width: 76px;
+    height: 76px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--app-primary);
+    font-size: 42px;
+    font-weight: 800;
+    box-shadow: 0 12px 26px rgba(23, 32, 38, 0.12);
+}
+
+.poster-title {
+    font-size: 14px;
+    font-weight: 750;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.poster-ext {
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: rgba(15, 23, 26, 0.08);
+    color: var(--app-muted);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0;
 }
 
 </style>

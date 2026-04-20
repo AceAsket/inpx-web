@@ -31,7 +31,7 @@
                         v-if="coverByKey[item.key]"
                         :src="coverByKey[item.key]"
                         class="cover-img"
-                        @error="coverError(item)"
+                        @error="onCoverError(item)"
                     />
                     <div v-else class="cover-placeholder">
                         <div class="cover-letter">
@@ -75,7 +75,7 @@
                     </div>
 
                     <div v-if="item.books.length" class="card-variants">
-                        +{{ item.books.length }} {{ item.books.length == 1 ? 'вариант' : 'варианта' }}
+                        +{{ item.books.length }} вариант{{ utils.wordEnding(item.books.length, 1) }}
                     </div>
                 </div>
             </div>
@@ -94,12 +94,23 @@ import vueComponent from '../../vueComponent.js';
 import { reactive } from 'vue';
 
 import BaseList from '../BaseList';
+import appdir from '../../../../build/appdir';
 
 import * as utils from '../../../share/utils';
 
 import _ from 'lodash';
 
 const coverPreloadLimit = 24;
+
+function getStaticPrefix() {
+    let pathname = (window.location && window.location.pathname ? window.location.pathname : '').replace(/\/+$/, '');
+    const appSuffix = `/${appdir}`;
+
+    if (pathname.endsWith(appSuffix))
+        pathname = pathname.substring(0, pathname.length - appSuffix.length);
+
+    return (pathname === '/' ? '' : pathname);
+}
 
 class ModernTitleList extends BaseList {
     coverByKey = {};
@@ -193,8 +204,7 @@ class ModernTitleList extends BaseList {
         if (!book || !book.libid)
             return '';
 
-        const rootRoute = (this.$root.getRootRoute ? this.$root.getRootRoute() : '');
-        const prefix = (rootRoute && rootRoute !== '/' ? rootRoute : '');
+        const prefix = getStaticPrefix();
         return `${prefix}/cover/${encodeURIComponent(book.libid)}`;
     }
 
@@ -220,6 +230,11 @@ class ModernTitleList extends BaseList {
 
         this.clearCover(item.key);
         this.preloadEmbeddedCover(item);
+    }
+
+    onCoverError(item) {
+        this.clearCover(item.key);
+        this.coverError(item); // no await
     }
 
     async preloadEmbeddedCover(item) {

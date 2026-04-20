@@ -453,18 +453,18 @@ class WebWorker {
         }
     }
 
-    async getFblibraryArchive(subDir, libid) {
+    async ensureFblibraryArchives(subDir) {
         if (!this.fblibraryArchives)
             this.fblibraryArchives = {};
 
-        if (!this.fblibraryArchives[subDir]) {
+        if (!this.fblibraryArchives[subDir] || !this.fblibraryArchives[subDir].length) {
             const result = [];
             const dir = `${this.config.libDir}/${subDir}`;
 
             if (await fs.pathExists(dir)) {
                 const files = await fs.readdir(dir);
                 for (const file of files) {
-                    const match = file.match(/(\d+)-(\d+)\.zip$/i);
+                    const match = file.match(/(\d+)-(\d+)\.(zip|7z)$/i);
                     if (!match)
                         continue;
 
@@ -479,67 +479,86 @@ class WebWorker {
             result.sort((a, b) => a.from - b.from);
             this.fblibraryArchives[subDir] = result;
         }
+    }
 
-        return this.fblibraryArchives[subDir].find(item => libid >= item.from && libid <= item.to);
+    async getFblibraryArchive(subDir, libid) {
+        return (await this.getFblibraryArchives(subDir, libid))[0];
+    }
+
+    async getFblibraryArchives(subDir, libid) {
+        await this.ensureFblibraryArchives(subDir);
+
+        return this.fblibraryArchives[subDir]
+            .filter(item => libid >= item.from && libid <= item.to)
+            .sort((a, b) => {
+                const aspan = a.to - a.from;
+                const bspan = b.to - b.from;
+                if (aspan !== bspan)
+                    return aspan - bspan;
+
+                return a.from - b.from;
+            });
     }
 
     async getFblibraryImages(libid) {
-        const archive = await this.getFblibraryArchive('images', libid);
-        if (!archive)
-            return [];
+        const archives = await this.getFblibraryArchives('images', libid);
+        for (const archive of archives) {
+            const zipReader = new ZipReader();
+            await zipReader.open(archive.file);
 
-        const zipReader = new ZipReader();
-        await zipReader.open(archive.file);
+            try {
+                const prefix = `${libid}/`;
+                const entryNames = Object.values(zipReader.entries)
+                    .map(entry => Object.assign({}, entry, {name: entry.name.replace(/\\/g, '/')}))
+                    .filter(entry => !entry.isDirectory && entry.name.startsWith(prefix))
+                    .map(entry => entry.name)
+                    .sort((a, b) => {
+                        const ai = parseInt(a.substring(prefix.length), 10);
+                        const bi = parseInt(b.substring(prefix.length), 10);
+                        return ai - bi;
+                    });
 
-        try {
-            const prefix = `${libid}/`;
-            const entryNames = Object.values(zipReader.entries)
-                .filter(entry => !entry.isDirectory && entry.name.startsWith(prefix))
-                .map(entry => entry.name)
-                .sort((a, b) => {
-                    const ai = parseInt(a.substring(prefix.length), 10);
-                    const bi = parseInt(b.substring(prefix.length), 10);
-                    return ai - bi;
-                });
+                const result = [];
+                for (const entryName of entryNames) {
+                    const id = entryName.substring(prefix.length);
+                    if (!id)
+                        continue;
 
-            const result = [];
-            for (const entryName of entryNames) {
-                const id = entryName.substring(prefix.length);
-                if (!id)
-                    continue;
-
-                try {
-                    const data = await zipReader.extractToBuf(entryName);
-                    result.push(Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir)));
-                } catch(e) {
-                    log(LM_ERR, `image ${entryName}: ${e.message}`);
+                    try {
+                        const data = await zipReader.extractToBuf(entryName);
+                        result.push(Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir)));
+                    } catch(e) {
+                        log(LM_ERR, `image ${entryName}: ${e.message}`);
+                    }
                 }
-            }
 
-            return result;
-        } finally {
-            await zipReader.close();
+                if (result.length)
+                    return result;
+            } finally {
+                await zipReader.close();
+            }
         }
+
+        return [];
     }
 
     async getFblibraryCover(libid) {
-        const archive = await this.getFblibraryArchive('covers', libid);
-        if (!archive)
-            return null;
+        const archives = await this.getFblibraryArchives('covers', libid);
+        for (const archive of archives) {
+            const zipReader = new ZipReader();
+            await zipReader.open(archive.file, false);
 
-        const zipReader = new ZipReader();
-        await zipReader.open(archive.file, false);
-
-        try {
             try {
                 const data = await zipReader.extractToBuf(String(libid));
                 return Object.assign({id: '0'}, await imageUtils.normalizeForFb2(data, this.config.tempDir));
             } catch(e) {
-                return null;
+                // try next matching archive
+            } finally {
+                await zipReader.close();
             }
-        } finally {
-            await zipReader.close();
         }
+
+        return null;
     }
 
     async injectFblibraryImages(bookFile, libid) {
