@@ -1,6 +1,14 @@
 <template>
     <div class="book-view q-my-sm">
-        <div class="book-card" :class="{'is-poster-mode': isPosterMode}">
+        <div
+            class="book-card"
+            :class="{'is-poster-mode': isPosterMode}"
+            role="button"
+            tabindex="0"
+            @click="emit('bookInfo')"
+            @keydown.enter.prevent="emit('bookInfo')"
+            @keydown.space.prevent="emit('bookInfo')"
+        >
             <div class="cover-box">
                 <img
                     v-if="coverSrc"
@@ -52,7 +60,7 @@
                     <div v-if="book.serno" class="serno-pill">
                         {{ book.serno }}
                     </div>
-                    <div class="book-title clickable2" :class="titleColor" @click.stop.prevent="emit('titleClick')">
+                    <div class="book-title clickable2" :class="titleColor" @click.stop.prevent="emit('bookInfo')">
                         {{ posterTitle }}
                     </div>
                 </div>
@@ -404,6 +412,7 @@ export default vueComponent(BookView);
     box-shadow: 0 14px 30px rgba(23, 32, 38, 0.06);
     transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
     height: 100%;
+    cursor: pointer;
 }
 
 .book-card.is-poster-mode {
@@ -417,6 +426,11 @@ export default vueComponent(BookView);
     transform: translateY(-1px);
     box-shadow: 0 18px 34px rgba(23, 32, 38, 0.10);
     border-color: color-mix(in srgb, var(--app-border) 70%, var(--app-primary));
+}
+
+.book-card:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--app-primary) 72%, white);
+    outline-offset: 2px;
 }
 
 .book-card.is-poster-mode .cover-box {
