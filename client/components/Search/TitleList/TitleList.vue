@@ -6,19 +6,46 @@
         <LoadingMessage :message="loadingMessage2" z-index="1" />
 
         <!-- Формирование списка ------------------------------------------------------------------------>
-        <div v-for="item in tableData" :key="item.key" class="column title-group">
-            <BookView
-                class="q-mx-md"
-                :book="item.book" mode="title" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
-            />
-            <BookView
-                v-for="book in item.books" :key="book.id"
-                class="q-mx-md"
-                :book="book"
-                mode="title"
-                :genre-map="genreMap" :show-read-link="showReadLink"
-                @book-event="bookEvent"
-            />
+        <div class="rating-toolbar q-mx-md q-mb-sm">
+            <div class="rating-toolbar-label">
+                Топы по оценкам
+            </div>
+            <q-chip
+                v-for="item in ratingFilterOptions"
+                :key="item.value"
+                clickable
+                :outline="activeRatingFilter !== item.value"
+                :color="activeRatingFilter === item.value ? 'primary' : 'grey-7'"
+                :text-color="activeRatingFilter === item.value ? 'white' : 'grey-9'"
+                @click="applyRatingFilter(item.value)"
+            >
+                {{ item.label }}
+            </q-chip>
+            <q-chip
+                v-if="activeRatingFilter"
+                clickable
+                outline
+                color="grey-7"
+                text-color="grey-9"
+                @click="clearRatingFilter"
+            >
+                Сброс
+            </q-chip>
+        </div>
+
+        <div class="title-grid q-mx-md">
+            <template v-for="item in tableData" :key="item.key">
+                <BookView
+                    :book="item.book" mode="title" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
+                />
+                <BookView
+                    v-for="book in item.books" :key="book.id"
+                    :book="book"
+                    mode="title"
+                    :genre-map="genreMap" :show-read-link="showReadLink"
+                    @book-event="bookEvent"
+                />
+            </template>
         </div>
         <!-- Формирование списка конец ------------------------------------------------------------------>
 
@@ -145,7 +172,30 @@ export default vueComponent(TitleList);
 </script>
 
 <style scoped>
-.title-group + .title-group {
-    margin-top: 4px;
+.rating-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.rating-toolbar-label {
+    color: var(--app-muted);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.title-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 18px;
+    align-items: stretch;
+}
+
+@media (max-width: 760px) {
+    .title-grid {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
 }
 </style>

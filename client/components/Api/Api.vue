@@ -247,6 +247,10 @@ class Api {
         return await this.request({action: 'get-author-series-list', authorId});
     }
 
+    async getAuthorInfo(authorId, author) {
+        return await this.request({action: 'get-author-info', authorId, author}, 120);
+    }
+
     async getSeriesBookList(series) {
         return await this.request({action: 'get-series-book-list', series});
     }

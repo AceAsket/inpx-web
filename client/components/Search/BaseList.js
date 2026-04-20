@@ -1,4 +1,4 @@
-import axios from 'axios';
+﻿import axios from 'axios';
 import dayjs from 'dayjs';
 import _ from 'lodash';
 
@@ -105,8 +105,24 @@ export default class BaseList {
         return this.$store.state.settings;
     }
 
+    get currentSearch() {
+        return (this.isExtendedSearch ? this.extSearch : this.search);
+    }
+
     get showReadLink() {
         return this.config.bookReadLink != '' || this.list.liberamaReady;
+    }
+
+    get ratingFilterOptions() {
+        return [
+            {label: 'Топ 5', value: '5'},
+            {label: '4+', value: '4,5'},
+            {label: '3+', value: '3,4,5'},
+        ];
+    }
+
+    get activeRatingFilter() {
+        return this.currentSearch.librate || '';
     }
 
     scrollToTop() {
@@ -125,11 +141,84 @@ export default class BaseList {
     }
 
     selectTitle(title) {
-        const search = (this.isExtendedSearch ? this.extSearch : this.search);
-        search.title = `=${title}`;
+        this.currentSearch.title = `=${title}`;
     }
 
-    async download(book, action) {
+    applyRatingFilter(value = '') {
+        this.currentSearch.librate = value;
+        this.scrollToTop();
+    }
+
+    clearRatingFilter() {
+        this.applyRatingFilter('');
+    }
+
+    getActionLoadingMessage(action, format = '') {
+        if (action == 'bookInfo')
+            return 'Загрузка информации о книге...';
+
+        if (action == 'authorInfo')
+            return 'Загрузка информации об авторе...';
+
+        if (format)
+            return `Подготовка ${format.toUpperCase()}...`;
+
+        return 'Подготовка файла...';
+    }
+
+    getDownloadFileName(response, book, format = '') {
+        const disposition = (response.headers ? response.headers['content-disposition'] : '');
+        if (disposition) {
+            const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+            if (utfMatch && utfMatch[1])
+                return decodeURIComponent(utfMatch[1]);
+
+            const plainMatch = disposition.match(/filename="?([^"]+)"?/i);
+            if (plainMatch && plainMatch[1])
+                return plainMatch[1];
+        }
+
+        const baseName = (book.file || book.title || 'book').toString().replace(/[\\/:*?"<>|]+/g, '_');
+        if (format)
+            return `${baseName}.${format}`;
+
+        const ext = (book.ext || '').toLowerCase();
+        return (ext ? `${baseName}.${ext}` : baseName);
+    }
+
+    downloadBlob(blob, fileName) {
+        const href = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = href;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+
+        setTimeout(() => {
+            window.URL.revokeObjectURL(href);
+        }, 1000);
+    }
+
+    async getErrorMessage(error) {
+        if (error.response && error.response.data) {
+            const responseData = error.response.data;
+            if (typeof(responseData) === 'string')
+                return responseData;
+
+            if (responseData && typeof(responseData.text) === 'function') {
+                try {
+                    return await responseData.text();
+                } catch(e) {
+                    // ignore
+                }
+            }
+        }
+
+        return error.message;
+    }
+
+    async download(book, action, format = '') {
         if (this.downloadFlag)
             return;
 
@@ -137,10 +226,20 @@ export default class BaseList {
         (async() => {
             await utils.sleep(200);
             if (this.downloadFlag)
-                this.loadingMessage2 = 'Подготовка файла...';
+                this.loadingMessage2 = this.getActionLoadingMessage(action, format);
         })();
 
         try {
+            if (action == 'bookInfo' || action == 'authorInfo') {
+                const response = await this.api.getBookInfo(book._uid);
+                this.$emit('listEvent', {
+                    action: 'bookInfo',
+                    data: response.bookInfo,
+                    tab: (action == 'authorInfo' ? 'author' : 'fb2'),
+                });
+                return;
+            }
+
             //подготовка
             const response = await this.api.getBookLink(book._uid);
             
@@ -148,19 +247,28 @@ export default class BaseList {
             let href = `${window.location.origin}${link}`;
 
             //downloadAsZip
-            if (this.downloadAsZip && (action == 'download' || action == 'copyLink')) {
+            if (this.downloadAsZip && !format && (action == 'download' || action == 'copyLink')) {
                 href += '/zip';
                 //подожлем формирования zip-файла
                 await axios.head(href);
             }
 
+            if (format) {
+                href += `/${format}`;
+            }
+
             //action
             if (action == 'download') {
-                //скачивание
-                const d = this.$refs.download;
-                d.href = href;
-
-                d.click();
+                if (format) {
+                    const downloadResponse = await axios.get(href, {responseType: 'blob'});
+                    const fileName = this.getDownloadFileName(downloadResponse, book, format);
+                    this.downloadBlob(downloadResponse.data, fileName);
+                } else {
+                    //скачивание
+                    const d = this.$refs.download;
+                    d.href = href;
+                    d.click();
+                }
             } else if (action == 'copyLink') {
                 //копирование ссылки
                 if (await utils.copyTextToClipboard(href))
@@ -192,13 +300,10 @@ export default class BaseList {
 
                     window.open(url, '_blank');
                 }
-            } else if (action == 'bookInfo') {
-                //информация о книге
-                const response = await this.api.getBookInfo(book._uid);
-                this.$emit('listEvent', {action: 'bookInfo', data: response.bookInfo});
             }
         } catch(e) {
-            this.$root.stdDialog.alert(e.message, 'Ошибка');
+            const message = await this.getErrorMessage(e);
+            this.$root.stdDialog.alert(message, 'Ошибка');
         } finally {
             this.downloadFlag = false;
             this.loadingMessage2 = '';
@@ -216,11 +321,16 @@ export default class BaseList {
             case 'titleClick':
                 this.selectTitle(event.book.title);
                 break;
+            case 'genreClick':
+                (this.isExtendedSearch ? this.extSearch : this.search).genre = event.format;
+                this.scrollToTop();
+                break;
             case 'download':
             case 'copyLink':
             case 'readBook':
             case 'bookInfo':
-                this.download(event.book, event.action);//no await
+            case 'authorInfo':
+                this.download(event.book, event.action, event.format);//no await
                 break;
         }
     }

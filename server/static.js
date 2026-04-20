@@ -6,6 +6,7 @@ const express = require('express');
 const utils = require('./core/utils');
 const ZipReader = require('./core/ZipReader');
 const imageUtils = require('./core/ImageUtils');
+const bookConverter = require('./core/BookConverter');
 const webAppDir = require('../build/appdir');
 
 const log = new (require('./core/AppLogger'))().log;//singleton
@@ -24,6 +25,12 @@ function generateZip(zipFile, dataFile, dataFileInZip) {
         );
         zip.end();
     });
+}
+
+function convertedFileName(downFileName, format) {
+    const ext = path.extname(downFileName);
+    const base = (ext ? downFileName.slice(0, -ext.length) : downFileName);
+    return `${base}.${format}`;
 }
 
 async function getCoverArchives(config) {
@@ -164,6 +171,11 @@ module.exports = (app, config) => {
                             if (!await fs.pathExists(bookFile))
                                 await generateZip(bookFile, rawFile, downFileName);
                             downFileName += '.zip';
+                        } else if (bookConverter.canConvertTo(fileType)) {
+                            bookFile += `.${fileType}`;
+                            if (!await fs.pathExists(bookFile))
+                                await bookConverter.convert({inputFile: rawFile, outputFile: bookFile, format: fileType, sourceFileName: downFileName});
+                            downFileName = convertedFileName(downFileName, fileType);
                         } else {
                             throw new Error(`Unsupported file type: ${fileType}`);
                         }
@@ -182,6 +194,10 @@ module.exports = (app, config) => {
             }
         } catch(e) {
             log(LM_ERR, e.message);
+            if (bookConverter.canConvertTo(req.params.fileType)) {
+                res.status(500).send(e.message);
+                return;
+            }
         }
 
         return next();

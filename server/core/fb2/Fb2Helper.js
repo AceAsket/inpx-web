@@ -92,7 +92,6 @@ class Fb2Helper {
             }
         }
 
-        parser.remove('binary');
         return {fb2: parser, cover, coverExt};
     }
 }

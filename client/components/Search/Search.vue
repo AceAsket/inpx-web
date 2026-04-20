@@ -347,7 +347,13 @@
         <SelectLibRateDialog v-model="selectLibRateDialogVisible" v-model:librate="search.librate" />
         <SelectDateDialog v-model="selectDateDialogVisible" v-model:date="search.date" />
         <SelectExtDialog v-model="selectExtDialogVisible" v-model:ext="search.ext" :ext-list="extList" />        
-        <BookInfoDialog v-model="bookInfoDialogVisible" :book-info="bookInfo" :genre-map="genreMap" />
+        <BookInfoDialog
+            v-model="bookInfoDialogVisible"
+            :book-info="bookInfo"
+            :genre-map="genreMap"
+            :initial-tab="bookInfoDialogTab"
+            @navigate="bookInfoNavigate"
+        />
         <SelectExtSearchDialog v-model="selectExtSearchDialogVisible" v-model:ext-search="extSearch" />        
     </div>
 </template>
@@ -516,6 +522,7 @@ class Search {
     selectDateDialogVisible = false;
     selectExtDialogVisible = false;
     bookInfoDialogVisible = false;
+    bookInfoDialogTab = 'fb2';
     selectExtSearchDialogVisible = false;
 
     pageCount = 1;    
@@ -1069,9 +1076,32 @@ class Search {
                 break;
             case 'bookInfo':
                 this.bookInfo = event.data;
+                this.bookInfoDialogTab = (event.tab || 'fb2');
                 this.bookInfoDialogVisible = true;
                 break;
         }
+    }
+
+    bookInfoNavigate(event) {
+        if (!event || !event.value)
+            return;
+
+        switch (event.type) {
+            case 'author':
+                this.search.author = `=${event.value}`;
+                this.selectedList = '/author';
+                break;
+            case 'series':
+                this.search.series = `=${event.value}`;
+                this.selectedList = '/series';
+                break;
+            case 'title':
+                this.search.title = `=${event.value}`;
+                this.selectedList = '/title';
+                break;
+        }
+
+        this.scrollToTop();
     }
 
     setSetting(name, newValue) {

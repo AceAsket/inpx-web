@@ -1,6 +1,6 @@
 <template>
     <div class="book-view q-my-sm">
-        <div class="book-card">
+        <div class="book-card" :class="{'is-poster-mode': isPosterMode}">
             <div class="cover-box">
                 <img
                     v-if="coverSrc"
@@ -22,9 +22,6 @@
                     </div>
                 </div>
 
-                <div v-if="showRates && !book.del && book.librate" class="cover-badge rating-badge" :class="rateBadgeColor">
-                    {{ book.librate }}/5
-                </div>
                 <div v-if="book.del && showDeleted" class="cover-badge deleted-badge">
                     {{ deletedLabel }}
                 </div>
@@ -38,6 +35,9 @@
                     <div class="book-meta-pills">
                         <div class="meta-pill">
                             {{ posterExt }}
+                        </div>
+                        <div v-if="showRates && !book.del && book.librate" class="meta-pill rating-pill" :class="rateBadgeColor">
+                            {{ book.librate }}/5
                         </div>
                         <div class="meta-pill">
                             {{ bookSize }}
@@ -61,8 +61,18 @@
                     {{ bookSeries }}
                 </div>
 
-                <div v-if="showGenres && book.genre" class="book-genres">
-                    {{ bookGenre }}
+                <div v-if="showGenres && bookGenreItems.length" class="book-genres">
+                    <span
+                        v-for="genre in bookGenreItems"
+                        :key="genre.value"
+                        class="genre-chip clickable2"
+                        @click.stop.prevent="emit('genreClick', genre.value)"
+                    >
+                        {{ genre.label }}
+                    </span>
+                    <span v-if="genreOverflowCount" class="genre-chip genre-chip-muted">
+                        +{{ genreOverflowCount }}
+                    </span>
                 </div>
 
                 <div class="book-actions">
@@ -99,11 +109,36 @@
                     </q-btn>
 
                     <q-btn
+                        v-if="bookAuthor"
+                        flat
+                        no-caps
+                        icon="la la-user-circle"
+                        @click.stop.prevent="emit('authorInfo')"
+                    >
+                        {{ authorInfoLabel }}
+                    </q-btn>
+
+                    <q-btn
                         flat
                         round
                         icon="la la-copy"
                         @click.stop.prevent="emit('copyLink')"
                     />
+                </div>
+
+                <div class="format-actions">
+                    <q-btn
+                        v-for="format in extraFormats"
+                        :key="format"
+                        class="format-chip"
+                        outline
+                        dense
+                        no-caps
+                        color="primary"
+                        @click.stop.prevent="emit('download', format)"
+                    >
+                        {{ format.toUpperCase() }}
+                    </q-btn>
                 </div>
 
                 <div v-show="showJson && mode == 'extended'" class="book-json">
@@ -229,17 +264,29 @@ class BookView {
         return 'badge-bad';
     }
 
-    get bookGenre() {
+    get bookGenreItems() {
         let result = [];
         const genre = this.book.genre.split(',');
 
         for (const g of genre) {
             const name = this.genreMap.get(g);
             if (name)
-                result.push(name);
+                result.push({value: g, label: name});
         }
 
-        return result.join(' / ');
+        return result.slice(0, 3);
+    }
+
+    get genreOverflowCount() {
+        const genre = this.book.genre.split(',');
+        let count = 0;
+
+        for (const g of genre) {
+            if (this.genreMap.get(g))
+                count++;
+        }
+
+        return (count > 3 ? count - 3 : 0);
     }
 
     get bookDate() {
@@ -268,6 +315,10 @@ class BookView {
         return '\u0418\u043d\u0444\u043e';
     }
 
+    get authorInfoLabel() {
+        return '\u041e\u0431\u0020\u0430\u0432\u0442\u043e\u0440\u0435';
+    }
+
     get seriesLabel() {
         return '\u0421\u0435\u0440\u0438\u044f';
     }
@@ -282,6 +333,15 @@ class BookView {
 
     get downloadIcon() {
         return (this.book.ext && this.book.ext.toLowerCase() == 'fb2' ? 'la la-file-download' : 'la la-download');
+    }
+
+    get isPosterMode() {
+        return this.mode == 'title' || this.mode == 'extended';
+    }
+
+    get extraFormats() {
+        const currentExt = (this.book.ext || '').toLowerCase();
+        return ['epub', 'mobi', 'pdf'].filter(format => format !== currentExt);
     }
 
     get placeholderStyle() {
@@ -304,8 +364,8 @@ class BookView {
         };
     }
 
-    emit(action) {
-        this.$emit('bookEvent', {action, book: this.book});
+    emit(action, format = '') {
+        this.$emit('bookEvent', {action, format, book: this.book});
     }
 }
 
@@ -320,6 +380,7 @@ export default vueComponent(BookView);
 
 .book-view {
     line-height: 1.35;
+    height: 100%;
 }
 
 .book-card {
@@ -335,6 +396,14 @@ export default vueComponent(BookView);
         var(--app-surface);
     box-shadow: 0 14px 30px rgba(23, 32, 38, 0.06);
     transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    height: 100%;
+}
+
+.book-card.is-poster-mode {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    overflow: hidden;
+    padding: 0;
 }
 
 .book-card:hover {
@@ -343,9 +412,36 @@ export default vueComponent(BookView);
     border-color: color-mix(in srgb, var(--app-border) 70%, var(--app-primary));
 }
 
+.book-card.is-poster-mode .cover-box {
+    height: 292px;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.book-card.is-poster-mode .cover-placeholder,
+.book-card.is-poster-mode .cover-image {
+    border-radius: 0;
+}
+
+.book-card.is-poster-mode .book-content {
+    padding: 12px;
+}
+
+.book-card.is-poster-mode .book-title {
+    font-size: 18px;
+}
+
+.book-card.is-poster-mode .book-actions {
+    padding-top: 6px;
+}
+
 .cover-box {
     position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     height: 164px;
+    padding: 10px;
     border-radius: 16px;
     overflow: hidden;
     background: var(--app-surface-2);
@@ -360,7 +456,7 @@ export default vueComponent(BookView);
 
 .cover-image {
     display: block;
-    object-fit: cover;
+    object-fit: contain;
 }
 
 .cover-placeholder {
@@ -420,16 +516,19 @@ export default vueComponent(BookView);
     backdrop-filter: blur(8px);
 }
 
-.rating-badge.badge-good {
+.rating-pill.badge-good {
     background: rgba(21, 128, 61, 0.85);
+    color: white;
 }
 
-.rating-badge.badge-mid {
+.rating-pill.badge-mid {
     background: rgba(180, 83, 9, 0.82);
+    color: white;
 }
 
-.rating-badge.badge-bad {
+.rating-pill.badge-bad {
     background: rgba(185, 28, 28, 0.82);
+    color: white;
 }
 
 .deleted-badge {
@@ -441,7 +540,7 @@ export default vueComponent(BookView);
     display: flex;
     flex-direction: column;
     gap: 10px;
-    justify-content: center;
+    height: 100%;
 }
 
 .book-topline {
@@ -456,6 +555,10 @@ export default vueComponent(BookView);
     color: #14705e;
     font-size: 14px;
     font-weight: 700;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
 .book-meta-pills {
@@ -488,17 +591,46 @@ export default vueComponent(BookView);
     font-size: 23px;
     font-weight: 800;
     line-height: 1.1;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    min-height: calc(1.1em * 3);
 }
 
 .book-series {
     color: var(--app-muted);
     font-size: 14px;
     font-weight: 600;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    min-height: calc(1.35em * 2);
 }
 
 .book-genres {
-    color: var(--app-muted);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
     font-size: 13px;
+    min-height: 32px;
+    align-content: flex-start;
+}
+
+.genre-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(15, 159, 143, 0.10);
+    color: var(--app-link);
+    font-weight: 600;
+}
+
+.genre-chip-muted {
+    background: rgba(23, 32, 38, 0.06);
+    color: var(--app-muted);
 }
 
 .book-actions {
@@ -507,6 +639,20 @@ export default vueComponent(BookView);
     gap: 8px;
     flex-wrap: wrap;
     padding-top: 2px;
+    margin-top: auto;
+    min-height: 42px;
+}
+
+.format-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 32px;
+    align-content: flex-start;
+}
+
+.format-chip {
+    border-radius: 999px;
 }
 
 .primary-action {
@@ -532,6 +678,10 @@ export default vueComponent(BookView);
 
     .cover-box {
         height: 132px;
+    }
+
+    .book-card.is-poster-mode .cover-box {
+        height: 236px;
     }
 
     .book-title {

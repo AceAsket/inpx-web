@@ -1,5 +1,6 @@
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const fs = require('fs-extra');
 const _ = require('lodash');
 const iconv = require('iconv-lite');
@@ -34,6 +35,69 @@ const stateToText = {
 const cleanDirInterval = 60*60*1000;//каждый час
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const bookAssetVersion = 'fblibrary-assets-v1';
+const bookInfoVersion = 'fb2-binaries-v1';
+
+function decodeHtmlBuffer(data) {
+    let text = iconv.decode(data, 'utf8');
+    if (text.includes('\uFFFD'))
+        text = iconv.decode(data, 'win1251');
+
+    return text;
+}
+
+function stripHtml(html) {
+    return (html || '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, '\'')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function normalizeAuthorText(value) {
+    return stripHtml(value)
+        .toLowerCase()
+        .replace(/ё/g, 'е')
+        .replace(/[()[\]{}.,;:!?'"`«»]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function buildAuthorVariants(author) {
+    const result = new Set();
+    const normalized = normalizeAuthorText(author);
+    if (normalized)
+        result.add(normalized);
+
+    const parts = (author || '')
+        .split(',')
+        .map(part => normalizeAuthorText(part))
+        .filter(Boolean);
+
+    if (parts.length) {
+        result.add(parts.join(' '));
+        result.add(parts.join(', '));
+    }
+
+    if (parts.length > 1)
+        result.add([...parts].reverse().join(' '));
+
+    return Array.from(result)
+        .filter(value => value.length >= 3)
+        .sort((a, b) => b.length - a.length);
+}
+
+function flibraryAuthorHash(author) {
+    return crypto.createHash('md5')
+        .update((author || '').split(/\s+/).filter(Boolean).join(' ').toLowerCase().trim(), 'utf8')
+        .digest('hex');
+}
 
 //singleton
 let instance = null;
@@ -52,6 +116,10 @@ class WebWorker {
             this.inpxHashCreator = new InpxHashCreator(config);
             this.fb2Helper = new Fb2Helper();
             this.inpxFileHash = '';
+            this.authorInfoCache = new Map();
+            this.authorInfoArchives = null;
+            this.authorPictureArchives = null;
+            this.authorToArchive = null;
 
             this.wState = this.workerState.getControl('server_state');
             this.myState = '';
@@ -561,6 +629,160 @@ class WebWorker {
         return null;
     }
 
+    async ensureAuthorInfoArchives() {
+        if (this.authorInfoArchives && this.authorPictureArchives && this.authorToArchive)
+            return;
+
+        const authorsDir = `${this.config.libDir}/etc/authors`;
+        this.authorInfoArchives = [];
+        this.authorPictureArchives = [];
+        this.authorToArchive = new Map();
+
+        if (!await fs.pathExists(authorsDir))
+            return;
+
+        const files = await fs.readdir(authorsDir);
+        for (const file of files) {
+            if (!/^\d+\.7z$/i.test(file))
+                continue;
+
+            const id = path.basename(file, path.extname(file));
+            this.authorInfoArchives.push({
+                id,
+                file: `${authorsDir}/${file}`,
+            });
+        }
+
+        const picturesDir = `${authorsDir}/pictures`;
+        if (await fs.pathExists(picturesDir)) {
+            const pictureFiles = await fs.readdir(picturesDir);
+            for (const file of pictureFiles) {
+                if (!/^\d+\.zip$/i.test(file))
+                    continue;
+
+                const id = path.basename(file, path.extname(file));
+                this.authorPictureArchives.push({
+                    id,
+                    file: `${picturesDir}/${file}`,
+                });
+            }
+        }
+
+        this.authorInfoArchives.sort((a, b) => parseInt(a.id, 10) - parseInt(b.id, 10));
+        this.authorPictureArchives.sort((a, b) => parseInt(a.id, 10) - parseInt(b.id, 10));
+
+        for (const archive of this.authorInfoArchives) {
+            const zipReader = new ZipReader();
+            await zipReader.open(archive.file);
+
+            try {
+                for (const entry of Object.values(zipReader.entries)) {
+                    const name = (entry.name || '').replace(/\\/g, '/');
+                    if (!name || entry.isDirectory)
+                        continue;
+
+                    this.authorToArchive.set(name, archive.id);
+                }
+            } finally {
+                await zipReader.close();
+            }
+        }
+    }
+
+    async getAuthorPictureByKey(authorKey, archiveId = '') {
+        await this.ensureAuthorInfoArchives();
+
+        const archives = [];
+        if (archiveId) {
+            const exactArchive = this.authorPictureArchives.find(item => item.id === String(archiveId));
+            if (exactArchive)
+                archives.push(exactArchive);
+        }
+
+        archives.push(...this.authorPictureArchives.filter(item => item.id !== String(archiveId)));
+
+        for (const archive of archives) {
+            const zipReader = new ZipReader();
+            await zipReader.open(archive.file);
+
+            try {
+                const entryNames = Object.values(zipReader.entries)
+                    .map(entry => Object.assign({}, entry, {name: entry.name.replace(/\\/g, '/')}))
+                    .filter(entry => !entry.isDirectory && entry.name.startsWith(`${authorKey}/`))
+                    .map(entry => entry.name)
+                    .sort();
+
+                for (const entryName of entryNames) {
+                    try {
+                        const data = await zipReader.extractToBuf(entryName);
+                        const image = await imageUtils.normalizeForFb2(data, this.config.tempDir);
+                        return `data:${image.contentType};base64,${image.data.toString('base64')}`;
+                    } catch(e) {
+                        log(LM_WARN, `author picture ${entryName}: ${e.message}`);
+                    }
+                }
+            } finally {
+                await zipReader.close();
+            }
+        }
+
+        return '';
+    }
+
+    async findAuthorInfo(author) {
+        await this.ensureAuthorInfoArchives();
+
+        const hashed = flibraryAuthorHash(author);
+        const archiveId = this.authorToArchive.get(hashed);
+        if (!hashed || archiveId === undefined)
+            return null;
+
+        const archive = this.authorInfoArchives.find(item => item.id === String(archiveId));
+        if (!archive)
+            return null;
+
+        const zipReader = new ZipReader();
+        await zipReader.open(archive.file, false);
+
+        let html = '';
+        try {
+            html = decodeHtmlBuffer(await zipReader.extractToBuf(hashed));
+        } catch(e) {
+            log(LM_WARN, `author info ${archive.file}:${hashed}: ${e.message}`);
+            return null;
+        } finally {
+            await zipReader.close();
+        }
+
+        return {
+            key: hashed,
+            html,
+            text: stripHtml(html),
+            photo: await this.getAuthorPictureByKey(hashed, archive.id),
+        };
+    }
+
+    async getAuthorInfo(authorId, author) {
+        let authorName = author || '';
+        if (!authorName && authorId) {
+            const rows = await this.db.select({table: 'author', where: `@@id(${this.db.esc(authorId)})`});
+            if (rows.length)
+                authorName = rows[0].value;
+        }
+
+        const normalized = normalizeAuthorText(authorName);
+        if (!normalized)
+            return {authorInfo: null};
+
+        const cacheKey = flibraryAuthorHash(authorName);
+        if (this.authorInfoCache.has(cacheKey))
+            return {authorInfo: this.authorInfoCache.get(cacheKey)};
+
+        const authorInfo = await this.findAuthorInfo(authorName);
+        this.authorInfoCache.set(cacheKey, authorInfo);
+        return {authorInfo};
+    }
+
     async injectFblibraryImages(bookFile, libid) {
         const images = await this.getFblibraryImages(libid);
         const cover = await this.getFblibraryCover(libid);
@@ -742,6 +964,7 @@ class WebWorker {
                 result.book = book;
                 result.cover = '';
                 result.fb2 = false;
+                result.infoVersion = bookInfoVersion;
                 let parser = null;
 
                 if (book.ext == 'fb2') {
@@ -776,7 +999,7 @@ class WebWorker {
                 if (tmpInfo.cover)
                     coverFile = `${this.config.publicFilesDir}${tmpInfo.cover}`;
 
-                if (book.id != tmpInfo.book.id || (coverFile && !await fs.pathExists(coverFile))) {
+                if (book.id != tmpInfo.book.id || tmpInfo.infoVersion !== bookInfoVersion || (coverFile && !await fs.pathExists(coverFile))) {
                     await restoreBookInfo(bookInfo);
                 } else {
                     bookInfo = tmpInfo;

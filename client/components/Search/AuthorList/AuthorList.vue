@@ -36,6 +36,28 @@
             </div>
 
             <div v-if="isExpandedAuthor(item) && item.books">
+                <div v-if="item.authorInfoLoading" class="book-row row items-center q-mb-md author-info-loading">
+                    <q-icon class="la la-spinner icon-rotate text-green-8" size="24px" />
+                    <div class="q-ml-xs">
+                        Загрузка информации об авторе...
+                    </div>
+                </div>
+
+                <div v-else-if="item.authorInfo" class="book-row q-mb-md">
+                    <div class="author-info-card row no-wrap">
+                        <div v-if="item.authorInfo.photo" class="author-photo-wrap">
+                            <img :src="item.authorInfo.photo" class="author-photo" />
+                        </div>
+
+                        <div class="col author-info-text">
+                            <div class="author-info-title">
+                                Об авторе
+                            </div>
+                            <div class="author-info-html" v-html="item.authorInfo.html"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <div v-for="book in item.books" :key="book.key" class="book-row column">
                     <!-- серия книг -->
                     <div v-if="book.type == 'series'" class="column">
@@ -148,6 +170,7 @@ import _ from 'lodash';
 
 class AuthorList extends BaseList {
     cachedAuthors = {};
+    cachedAuthorInfo = {};
 
     showHiddenHelp() {
         this.$root.stdDialog.alert(`
@@ -218,6 +241,7 @@ class AuthorList extends BaseList {
             expanded.push(key);
 
             await this.getAuthorBooks(item);
+            this.loadAuthorInfo(item);//no await
 
             if (expanded.length > 10) {
                 expanded.shift();
@@ -230,6 +254,29 @@ class AuthorList extends BaseList {
                 expanded.splice(i, 1);
                 this.setSetting('expandedAuthor', expanded);
             }
+        }
+    }
+
+    async loadAuthorInfo(item) {
+        if (!item || item.authorInfoLoading)
+            return;
+
+        if (Object.prototype.hasOwnProperty.call(this.cachedAuthorInfo, item.author)) {
+            item.authorInfo = this.cachedAuthorInfo[item.author];
+            return;
+        }
+
+        item.authorInfoLoading = true;
+        try {
+            const response = await this.api.getAuthorInfo(item.key, item.author);
+            const info = (response && response.authorInfo ? response.authorInfo : null);
+            this.cachedAuthorInfo[item.author] = info;
+            item.authorInfo = info;
+        } catch(e) {
+            this.cachedAuthorInfo[item.author] = null;
+            item.authorInfo = null;
+        } finally {
+            item.authorInfoLoading = false;
         }
     }
 
@@ -379,6 +426,8 @@ class AuthorList extends BaseList {
                 author: rec.author,
                 name: rec.author.replace(/,/g, ', '),
                 count,
+                authorInfo: (Object.prototype.hasOwnProperty.call(this.cachedAuthorInfo, rec.author) ? this.cachedAuthorInfo[rec.author] : null),
+                authorInfoLoading: false,
                 booksLoaded: false,
                 seriesLoaded: false,
                 books: false,
@@ -395,6 +444,8 @@ class AuthorList extends BaseList {
                         this.tableData = [];
                         return;
                     }
+
+                this.loadAuthorInfo(item);//no await
             }
 
             result.push(item);
@@ -501,9 +552,71 @@ export default vueComponent(AuthorList);
     border-bottom: 1px solid var(--app-border);
 }
 
+.author-info-card {
+    gap: 16px;
+    padding: 16px;
+    border: 1px solid color-mix(in srgb, var(--app-border) 84%, var(--app-primary));
+    border-radius: 18px;
+    background:
+        radial-gradient(circle at top right, rgba(15, 159, 143, 0.08), transparent 30%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
+        var(--app-surface);
+}
+
+.author-photo-wrap {
+    width: 112px;
+    min-width: 112px;
+}
+
+.author-photo {
+    display: block;
+    width: 112px;
+    height: 148px;
+    border-radius: 14px;
+    object-fit: cover;
+    box-shadow: 0 10px 24px rgba(23, 32, 38, 0.12);
+}
+
+.author-info-title {
+    margin-bottom: 8px;
+    color: var(--app-muted);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.author-info-text {
+    min-width: 0;
+}
+
+.author-info-html {
+    line-height: 1.55;
+    word-break: break-word;
+}
+
+.author-info-html :deep(a) {
+    color: var(--app-link);
+}
+
+.author-info-html :deep(b) {
+    color: var(--app-text);
+}
+
 @media (max-width: 720px) {
     .book-row {
         margin-left: 16px;
+    }
+
+    .author-info-card {
+        flex-wrap: wrap;
+    }
+
+    .author-photo-wrap,
+    .author-photo {
+        width: 92px;
+        min-width: 92px;
+        height: 122px;
     }
 }
 </style>

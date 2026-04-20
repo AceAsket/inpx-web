@@ -8,18 +8,21 @@
             </div>
         </template>
 
-        <div ref="box" class="fit column q-mt-xs overflow-auto no-wrap" style="padding: 0px 10px 10px 10px;">
-            <div class="text-green-10">
+        <div ref="box" class="fit column q-mt-xs overflow-auto no-wrap info-box">
+            <div v-if="bookAuthor" class="text-green-10 info-link" @click.stop.prevent="emitNavigate('author', book.author)">
                 {{ bookAuthor }}
             </div>
             <div>
-                <b>{{ book.title }}</b>
+                <b class="info-link" @click.stop.prevent="emitNavigate('title', book.title)">{{ book.title }}</b>
+            </div>
+            <div v-if="book.series" class="q-mt-xs info-series-link" @click.stop.prevent="emitNavigate('series', book.series)">
+                {{ seriesLabel }}: {{ book.series }}<span v-if="book.serno"> #{{ book.serno }}</span>
             </div>
 
             <div class="row q-mt-sm no-wrap">
                 <div class="poster-size">
                     <div class="column justify-center items-center" :class="{'poster': coverSrc, 'no-poster': !coverSrc}" @click.stop.prevent="posterClick">
-                        <img v-if="coverSrc" :src="coverSrc" class="poster-image fit row justify-center items-center" @error="coverSrc = ''" />
+                        <img v-if="coverSrc" :src="coverSrc" class="poster-image fit row justify-center items-center" @error="onCoverError" />
                         <div v-else class="poster-placeholder">
                             <div class="poster-letter">
                                 {{ posterLetter }}
@@ -34,7 +37,7 @@
                     </div>
                 </div>
 
-                <div class="col column q-ml-sm" style="min-width: 400px; border: 1px solid #ccc">
+                <div class="col column q-ml-sm info-panel">
                     <div class="bg-grey-3 row">
                         <q-tabs
                             v-model="selectedTab"
@@ -46,34 +49,84 @@
                             inline-label
                             class="bg-grey-4 text-grey-7"
                         >
-                            <q-tab v-if="fb2.length" name="fb2" label="Fb2 инфо" />
-                            <q-tab name="inpx" label="Inpx инфо" />
+                            <q-tab v-if="fb2.length" name="fb2" label="Fb2 info" />
+                            <q-tab name="inpx" label="Inpx info" />
+                            <q-tab v-if="hasAuthorTab" name="author" :label="authorTabLabel" />
                         </q-tabs>
                     </div>
 
-                    <div class="overflow-auto full-width" style="height: 262px">
-                        <div v-for="item in info" :key="item.name">
-                            <div class="row q-ml-sm q-mt-sm items-center">
-                                <div class="text-blue" style="font-size: 90%">
-                                    {{ item.label }}
+                    <div class="overflow-auto full-width info-scroll">
+                        <template v-if="selectedTab == 'author'">
+                            <div class="author-tab-wrap">
+                                <div v-if="authorInfoLoading" class="author-info-panel">
+                                    <div class="author-info-head">
+                                        Об авторе
+                                    </div>
+                                    <div class="row items-center text-grey-7">
+                                        <q-icon class="la la-spinner icon-rotate text-green-8" size="24px" />
+                                        <div class="q-ml-sm">
+                                            Загрузка информации об авторе...
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="col q-mx-xs" style="height: 0px; border-top: 1px solid #ccc"></div>
+
+                                <div v-else-if="authorInfo" class="author-info-panel">
+                                    <div class="author-info-head">
+                                        Об авторе
+                                    </div>
+                                    <div class="row no-wrap author-info-body">
+                                        <div v-if="authorInfo.photo" class="author-photo-box">
+                                            <img :src="authorInfo.photo" class="author-photo" />
+                                        </div>
+                                        <div class="col author-info-html" v-html="authorInfo.html"></div>
+                                    </div>
+                                </div>
+
+                                <div v-else class="author-empty-state">
+                                    {{ noAuthorInfoLabel }}
+                                </div>
+                            </div>
+                        </template>
+
+                        <template v-else>
+                            <div v-for="item in info" :key="item.name">
+                                <div class="row q-ml-sm q-mt-sm items-center">
+                                    <div class="text-blue section-label">
+                                        {{ item.label }}
+                                    </div>
+                                    <div class="col q-mx-xs section-divider"></div>
+                                </div>
+
+                                <div v-for="subItem in item.value" :key="subItem.name" class="row q-ml-md info-row">
+                                    <div class="info-key">
+                                        {{ subItem.label }}
+                                    </div>
+                                    <div class="q-ml-sm info-value" v-html="subItem.value" />
+                                </div>
                             </div>
 
-                            <div v-for="subItem in item.value" :key="subItem.name" class="row q-ml-md">
-                                <div style="width: 100px">
-                                    {{ subItem.label }}
+                            <div v-if="selectedTab == 'fb2' && fb2Images.length" class="fb2-gallery q-mx-sm q-mt-md q-mb-sm">
+                                <div class="text-blue section-label q-mb-sm">
+                                    Иллюстрации
                                 </div>
-                                <div class="q-ml-sm" v-html="subItem.value" />
+                                <div class="fb2-gallery-grid">
+                                    <img
+                                        v-for="image in fb2Images"
+                                        :key="image.id"
+                                        :src="image.src"
+                                        :alt="`fb2-${image.id}`"
+                                        class="fb2-gallery-image"
+                                    />
+                                </div>
                             </div>
-                        </div>
+                        </template>
 
                         <div class="q-mt-xs"></div>
                     </div>
                 </div>
             </div>
 
-            <div class="q-mt-md" v-html="annotation" />
+            <div v-if="selectedTab != 'author'" class="q-mt-md" v-html="annotation" />
         </div>
 
         <template #footer>
@@ -81,7 +134,6 @@
                 OK
             </q-btn>
         </template>
-
 
         <Dialog v-model="posterDialogVisible">
             <template #header>
@@ -110,6 +162,7 @@ const componentOptions = {
     components: {
         Dialog
     },
+    emits: ['update:modelValue', 'navigate'],
     watch: {
         modelValue(newValue) {
             this.dialogVisible = newValue;
@@ -127,41 +180,53 @@ class BookInfoDialog {
         modelValue: Boolean,
         bookInfo: Object,
         genreMap: Object,
+        initialTab: {type: String, default: 'fb2'},
     };
 
     dialogVisible = false;
     posterDialogVisible = false;
     selectedTab = 'fb2';
 
-    //info props
     coverSrc = '';
+    coverError = false;
     annotation = '';
     fb2 = [];
+    contents = [];
+    fb2Images = [];
     book = {};
+    authorInfo = null;
+    authorInfoLoading = false;
 
     created() {
         this.commit = this.$store.commit;
     }
 
-    mounted() {
-    }
-
     init() {
-        //defaults
         this.coverSrc = '';
+        this.coverError = false;
         this.annotation = '';
         this.fb2 = [];
+        this.contents = [];
+        this.fb2Images = [];
         this.book = {};
+        this.authorInfo = null;
+        this.authorInfoLoading = false;
 
         this.parseBookInfo();
+        this.selectedTab = this.resolveInitialTab();
+        this.loadAuthorInfo();//no await
 
-        if (!this.fb2.length)
+        if (!this.fb2.length && this.selectedTab == 'fb2')
             this.selectedTab = 'inpx';
+    }
+
+    get config() {
+        return this.$store.state.config;
     }
 
     get bookAuthor() {
         if (this.book.author) {
-            let a = this.book.author.split(',');
+            const a = this.book.author.split(',');
             return a.slice(0, 3).join(', ') + (a.length > 3 ? ' и др.' : '');
         }
 
@@ -178,6 +243,30 @@ class BookInfoDialog {
 
     get posterExt() {
         return (this.book.ext || 'book').toUpperCase();
+    }
+
+    get seriesLabel() {
+        return 'Серия';
+    }
+
+    get authorTabLabel() {
+        return 'Об авторе';
+    }
+
+    get noAuthorInfoLabel() {
+        return 'Информация об авторе не найдена.';
+    }
+
+    get hasAuthorTab() {
+        return Boolean(this.book.author || this.authorInfo || this.authorInfoLoading);
+    }
+
+    get fallbackCoverSrc() {
+        if (this.coverError || !this.book.libid)
+            return '';
+
+        const root = this.config.rootPathStatic || '';
+        return `${root}/cover/${this.book.libid}`;
     }
 
     formatSize(size) {
@@ -206,15 +295,14 @@ class BookInfoDialog {
     get inpx() {
         const mapping = [
             {name: 'fileInfo', label: 'Информация о файле', value: [
-                {name: 'folder', label: 'Папка'},
-                {name: 'file', label: 'Файл'},
+                {name: 'folder', label: 'Архив'},
+                {name: 'file', label: 'Файл в архиве'},
                 {name: 'size', label: 'Размер'},
                 {name: 'date', label: 'Добавлен'},
                 {name: 'del', label: 'Удален'},
                 {name: 'libid', label: 'LibId'},
                 {name: 'insno', label: 'InsideNo'},
             ]},
-
             {name: 'titleInfo', label: 'Общая информация', value: [
                 {name: 'author', label: 'Автор(ы)'},
                 {name: 'title', label: 'Название'},
@@ -226,9 +314,12 @@ class BookInfoDialog {
             ]},
         ];
 
-        const valueToString = (value, nodePath, b) => {//eslint-disable-line no-unused-vars
+        const valueToString = (value, nodePath, b) => {
             if (nodePath == 'fileInfo/file')
                 return `${value}.${b.ext}`;
+
+            if (nodePath == 'fileInfo/folder')
+                return value;
 
             if (nodePath == 'fileInfo/size')
                 return `${this.formatSize(value)} (${value.toString().replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1 ')} Bytes)`;
@@ -251,14 +342,13 @@ class BookInfoDialog {
             if (nodePath == 'titleInfo/librate' && !value)
                 return null;
 
-            if (typeof(value) === 'string') {
+            if (typeof(value) === 'string')
                 return value;
-            }
 
-            return (value.toString ? value.toString() : '');
+            return (value && value.toString ? value.toString() : '');
         };
 
-        let result = [];
+        const result = [];
         const book = _.cloneDeep(this.book);
         book.series = [book.series, book.serno].filter(v => v).join(' #');
 
@@ -283,8 +373,6 @@ class BookInfoDialog {
     }
 
     get info() {
-        let result = [];
-
         switch (this.selectedTab) {
             case 'fb2':
                 return this.fb2;
@@ -292,48 +380,169 @@ class BookInfoDialog {
                 return this.inpx;
         }
 
-        return result;
+        return [];
+    }
+
+    resolveInitialTab() {
+        if (this.initialTab == 'author' && this.hasAuthorTab)
+            return 'author';
+
+        if (this.initialTab == 'inpx')
+            return 'inpx';
+
+        return 'fb2';
+    }
+
+    normalizeBinaryType(contentType = '') {
+        let type = (contentType || '').toLowerCase();
+        if (type == 'image/jpg' || type == 'application/octet-stream')
+            type = 'image/jpeg';
+
+        return type;
+    }
+
+    extractFb2Images(parser) {
+        const result = [];
+        const coverNode = parser.$$('/description/title-info/coverpage/image');
+        let coverId = '';
+
+        if (coverNode && coverNode.count) {
+            const attrs = coverNode.attrs() || {};
+            const href = attrs[`${parser.xlinkNS}:href`];
+            if (href)
+                coverId = (href[0] == '#' ? href.substring(1) : href);
+        }
+
+        for (const node of parser.$$array('/binary')) {
+            const attrs = (node.attrs() || {});
+            const id = attrs.id;
+            const contentType = this.normalizeBinaryType(attrs['content-type']);
+            const base64 = node.text();
+
+            if (!id || !base64 || !contentType.startsWith('image/'))
+                continue;
+            if (id === coverId)
+                continue;
+
+            result.push({
+                id,
+                src: `data:${contentType};base64,${base64}`,
+            });
+        }
+
+        return result.slice(0, 18);
+    }
+
+    replaceInlineFb2Images(html) {
+        if (!html || !this.fb2Images.length)
+            return html;
+
+        const imageMap = new Map(this.fb2Images.map(item => [String(item.id), item.src]));
+        return html.replace(/<image\b[^>]*href=["']#([^"']+)["'][^>]*\/?>/gi, (match, id) => {
+            const src = imageMap.get(String(id));
+            if (!src)
+                return '';
+
+            return `<img src="${src}" class="fb2-inline-image" alt="fb2-${id}">`;
+        });
     }
 
     parseBookInfo() {
-        const bookInfo = this.bookInfo;
+        const bookInfo = this.bookInfo || {};
+        this.authorInfo = (bookInfo.authorInfo ? bookInfo.authorInfo : null);
 
-        //cover
         if (bookInfo.cover)
             this.coverSrc = bookInfo.cover;
 
-        //fb2
         if (bookInfo.fb2) {
             const parser = new Fb2Parser(bookInfo.fb2);
-
             const infoObj = parser.bookInfo();
+            this.fb2Images = this.extractFb2Images(parser);
 
             if (infoObj.titleInfo) {
                 let ann = infoObj.titleInfo.annotationHtml;
                 if (ann) {
+                    ann = this.replaceInlineFb2Images(ann);
                     ann = ann.replace(/<p>/g, `<p class="p-annotation">`);
                     this.annotation = ann;
                 }
             }
 
-            const self = this;
             this.fb2 = parser.bookInfoList(infoObj, {
-                valueToString(value, nodePath, origVTS) {//eslint-disable-line no-unused-vars
+                valueToString: (value, nodePath, origVTS) => {
                     if (nodePath == 'documentInfo/historyHtml' && value)
-                        return value.replace(/<p>/g, `<p class="p-history">`);
+                        return this.replaceInlineFb2Images(value).replace(/<p>/g, `<p class="p-history">`);
 
-                    if ((nodePath == 'titleInfo/genre' || nodePath == 'srcTitleInfo/genre') && value) {
-                        return self.convertGenres(value);
-                    }
+                    if ((nodePath == 'titleInfo/genre' || nodePath == 'srcTitleInfo/genre') && value)
+                        return this.convertGenres(value);
 
                     return origVTS(value, nodePath);
                 },
             });
+
+            this.contents = this.extractContents(parser);
+            if (this.contents.length) {
+                this.fb2.push({
+                    name: 'contents',
+                    label: 'Содержание',
+                    value: this.contents.map((item, index) => ({
+                        name: `contents-${index}`,
+                        label: item.level ? `${' '.repeat(item.level * 2)}•` : '•',
+                        value: item.title,
+                    })),
+                });
+            }
         }
 
-        //book
         if (bookInfo.book)
             this.book = bookInfo.book;
+
+        if (!this.coverSrc && this.fallbackCoverSrc)
+            this.coverSrc = this.fallbackCoverSrc;
+    }
+
+    async loadAuthorInfo() {
+        if (this.authorInfo || !this.book.author)
+            return;
+
+        const firstAuthor = this.book.author.split(',').map(item => item.trim()).filter(Boolean)[0];
+        if (!firstAuthor)
+            return;
+
+        this.authorInfoLoading = true;
+        try {
+            const response = await this.$root.api.getAuthorInfo(0, firstAuthor);
+            this.authorInfo = (response && response.authorInfo ? response.authorInfo : null);
+        } catch(e) {
+            this.authorInfo = null;
+        } finally {
+            this.authorInfoLoading = false;
+        }
+    }
+
+    extractContents(parser) {
+        const result = [];
+
+        const walk = (sections, level = 0) => {
+            for (const section of sections) {
+                const titleNode = section.$$('title/');
+                let title = '';
+                if (titleNode && titleNode.count)
+                    title = titleNode.concat().replace(/\s+/g, ' ').trim();
+
+                if (title)
+                    result.push({title, level});
+
+                const childSections = section.$$array('section');
+                if (childSections.length)
+                    walk(childSections, level + 1);
+            }
+        };
+
+        for (const body of parser.$$array('/body'))
+            walk(body.$$array('section'));
+
+        return result.slice(0, 200);
     }
 
     posterClick() {
@@ -346,6 +555,24 @@ class BookInfoDialog {
     okClick() {
         this.dialogVisible = false;
     }
+
+    onCoverError() {
+        if (this.coverSrc && this.coverSrc !== this.fallbackCoverSrc && this.fallbackCoverSrc) {
+            this.coverSrc = this.fallbackCoverSrc;
+            return;
+        }
+
+        this.coverError = true;
+        this.coverSrc = '';
+    }
+
+    emitNavigate(type, value) {
+        if (!value)
+            return;
+
+        this.dialogVisible = false;
+        this.$emit('navigate', {type, value});
+    }
 }
 
 export default vueComponent(BookInfoDialog);
@@ -353,13 +580,87 @@ export default vueComponent(BookInfoDialog);
 </script>
 
 <style scoped>
+.info-box {
+    padding: 0 10px 10px;
+}
+
 .poster-size {
     height: 300px;
     width: 200px;
     min-width: 100px;
 }
 
-.poster, .no-poster {
+.info-link {
+    cursor: pointer;
+}
+
+.info-series-link {
+    color: var(--app-muted);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.info-panel {
+    min-width: 400px;
+    border: 1px solid #ccc;
+}
+
+.info-scroll {
+    height: 262px;
+}
+
+.author-tab-wrap {
+    padding: 12px;
+}
+
+.fb2-gallery {
+    border-top: 1px solid #ccc;
+    padding-top: 12px;
+}
+
+.fb2-gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 10px;
+}
+
+.fb2-gallery-image {
+    display: block;
+    width: 100%;
+    aspect-ratio: 3 / 4;
+    object-fit: cover;
+    border-radius: 12px;
+    background: var(--app-surface-2);
+    box-shadow: 0 6px 18px rgba(23, 32, 38, 0.10);
+}
+
+.section-label {
+    font-size: 90%;
+}
+
+.section-divider {
+    height: 0;
+    border-top: 1px solid #ccc;
+}
+
+.info-row {
+    align-items: flex-start;
+}
+
+.info-key {
+    width: 100px;
+    white-space: pre-wrap;
+}
+
+.info-value {
+    min-width: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.poster,
+.no-poster {
     width: 100%;
     height: 100%;
 }
@@ -439,6 +740,73 @@ export default vueComponent(BookInfoDialog);
     letter-spacing: 0;
 }
 
+.author-info-panel {
+    padding: 16px;
+    border: 1px solid color-mix(in srgb, var(--app-border) 84%, var(--app-primary));
+    border-radius: 16px;
+    background:
+        radial-gradient(circle at top right, rgba(15, 159, 143, 0.08), transparent 30%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
+        var(--app-surface);
+}
+
+.author-info-head {
+    margin-bottom: 10px;
+    color: var(--app-muted);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.author-info-body {
+    gap: 16px;
+}
+
+.author-photo-box {
+    width: 110px;
+    min-width: 110px;
+}
+
+.author-photo {
+    display: block;
+    width: 110px;
+    height: 146px;
+    border-radius: 14px;
+    object-fit: cover;
+    box-shadow: 0 10px 24px rgba(23, 32, 38, 0.12);
+}
+
+.author-info-html {
+    min-width: 0;
+    line-height: 1.55;
+    word-break: break-word;
+}
+
+.author-info-html :deep(a) {
+    color: var(--app-link);
+}
+
+.author-empty-state {
+    padding: 18px;
+    border: 1px dashed color-mix(in srgb, var(--app-border) 78%, var(--app-primary));
+    border-radius: 16px;
+    color: var(--app-muted);
+    background: rgba(15, 159, 143, 0.04);
+}
+
+@media (max-width: 820px) {
+    .author-info-body {
+        flex-wrap: wrap;
+    }
+
+    .author-photo-box,
+    .author-photo {
+        width: 92px;
+        min-width: 92px;
+        height: 122px;
+    }
+}
 </style>
 
 <style>
@@ -452,5 +820,14 @@ export default vueComponent(BookInfoDialog);
 .p-history {
     padding: 0;
     margin: 0;
+}
+
+.fb2-inline-image {
+    display: block;
+    max-width: min(100%, 360px);
+    height: auto;
+    margin: 12px 0;
+    border-radius: 12px;
+    box-shadow: 0 10px 24px rgba(23, 32, 38, 0.12);
 }
 </style>
