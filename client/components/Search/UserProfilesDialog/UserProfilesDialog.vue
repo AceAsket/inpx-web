@@ -53,6 +53,11 @@
                                 Выбрать
                             </q-btn>
                             <q-btn
+                                v-if="canManageProfiles && !item.isAdmin"
+                                flat dense round icon="la la-key" color="warning"
+                                @click="resetPassword(item)"
+                            />
+                            <q-btn
                                 v-if="item.id === currentUserId && config.profileAuthorized"
                                 flat dense round icon="la la-save" color="primary"
                                 @click="saveCurrentProfile"
@@ -235,6 +240,27 @@ class UserProfilesDialog {
                 });
             }
             await this.loadProfiles();
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
+    }
+
+    async resetPassword(item) {
+        const prompt = await this.$root.stdDialog.password(
+            `Введите новый пароль для профиля «${item.name || ''}»:`,
+            'Сброс пароля',
+            {
+                inputValidator: (value) => (String(value || '') ? true : 'Пароль не должен быть пустым'),
+            },
+        );
+        if (!prompt || prompt === false)
+            return;
+
+        try {
+            await this.api.updateUserProfile(item.id, {
+                password: String(prompt.value || ''),
+            });
+            this.$root.notify.success(`Пароль профиля «${item.name || ''}» обновлён`);
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
