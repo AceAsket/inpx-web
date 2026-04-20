@@ -61,7 +61,7 @@
                                     text-color="orange-9"
                                     icon="la la-user-lock"
                                 >
-                                    Не вошли
+                                    Вход не выполнен
                                 </q-chip>
 
                                 <DivBtn class="q-ml-xs text-grey-5 bg-yellow-1" :size="28" :icon-size="22" icon="la la-users-cog" round @click.stop.prevent="openUserProfilesDialog">

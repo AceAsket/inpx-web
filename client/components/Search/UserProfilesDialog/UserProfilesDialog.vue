@@ -45,7 +45,7 @@
                         <div class="profile-name">
                             {{ item.name }}
                             <span v-if="item.id === currentUserId" class="current-badge">Текущий</span>
-                            <span v-if="item.id === currentUserId && item.requiresLogin && !config.profileAuthorized" class="pending-badge">Не вошли</span>
+                            <span v-if="item.id === currentUserId && item.requiresLogin && !config.profileAuthorized" class="pending-badge">Вход не выполнен</span>
                             <span v-if="item.isAdmin" class="admin-badge">Admin</span>
                             <span v-if="item.requiresLogin && !item.isAdmin" class="lock-badge">Логин</span>
                         </div>
