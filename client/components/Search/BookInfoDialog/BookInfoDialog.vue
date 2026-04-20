@@ -44,10 +44,13 @@
                             active-color="black"
                             active-bg-color="white"
                             indicator-color="white"
+                            align="left"
                             dense
                             no-caps
                             inline-label
-                            class="bg-grey-4 text-grey-7"
+                            outside-arrows
+                            mobile-arrows
+                            class="bg-grey-4 text-grey-7 info-tabs"
                         >
                             <q-tab v-if="fb2.length" name="fb2" label="Fb2 info" />
                             <q-tab name="inpx" label="Inpx info" />
@@ -1104,6 +1107,19 @@ export default vueComponent(BookInfoDialog);
     font-size: inherit;
 }
 
+.info-tabs {
+    width: 100%;
+    min-width: 0;
+}
+
+.info-tabs :deep(.q-tabs__content) {
+    min-width: 0;
+}
+
+.info-tabs :deep(.q-tab) {
+    min-width: fit-content;
+}
+
 @media (max-width: 820px) {
     .info-box {
         min-height: min(78vh, 760px);
@@ -1147,6 +1163,22 @@ export default vueComponent(BookInfoDialog);
     .info-box {
         padding: 0 6px 10px;
         min-height: auto;
+    }
+
+    .info-tabs :deep(.q-tabs__arrow) {
+        color: var(--app-link);
+        background: rgba(15, 159, 143, 0.08);
+    }
+
+    .info-tabs :deep(.q-tab) {
+        min-height: 40px;
+        padding: 0 10px;
+    }
+
+    .info-tabs :deep(.q-tab__label) {
+        font-size: 12px;
+        line-height: 1.15;
+        white-space: nowrap;
     }
 
     .poster-size {

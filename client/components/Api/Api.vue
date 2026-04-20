@@ -105,6 +105,7 @@ class Api {
 
     async updateConfig() {
         try {
+            this.loadSettings();
             const config = await this.getConfig();
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
@@ -209,12 +210,17 @@ class Api {
         let errCount = 0;
         while (1) {// eslint-disable-line
             try {
-                if (this.accessToken)
-                    params.accessToken = this.accessToken;
-                if (this.currentUserId)
-                    params.userId = this.currentUserId;
-                if (this.profileAccessToken)
-                    params.profileAccessToken = this.profileAccessToken;
+                const settings = this.settings;
+                const accessToken = settings.accessToken || this.accessToken;
+                const currentUserId = settings.currentUserId || this.currentUserId;
+                const profileAccessToken = settings.profileAccessToken || this.profileAccessToken;
+
+                if (accessToken)
+                    params.accessToken = accessToken;
+                if (currentUserId)
+                    params.userId = currentUserId;
+                if (profileAccessToken)
+                    params.profileAccessToken = profileAccessToken;
 
                 const response = await wsc.message(await wsc.send(params), timeoutSecs);
 
@@ -412,6 +418,8 @@ class Api {
             currentUserId: result.userId,
             profileAccessToken: result.profileAccessToken,
         });
+        this.currentUserId = result.userId;
+        this.profileAccessToken = result.profileAccessToken;
         await this.updateConfig();
         return result;
     }

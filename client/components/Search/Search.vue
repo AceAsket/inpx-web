@@ -52,7 +52,19 @@
                                     @update:model-value="selectUserProfile"
                                 />
 
-                                <DivBtn class="q-ml-xs text-grey-5 bg-yellow-1" :size="28" :icon-size="22" icon="la la-users-cog" round @click.stop.prevent="userProfilesDialogVisible = true">
+                                <q-chip
+                                    v-if="currentProfileNeedsLogin"
+                                    class="q-ml-xs profile-login-chip"
+                                    dense
+                                    square
+                                    color="orange-1"
+                                    text-color="orange-9"
+                                    icon="la la-user-lock"
+                                >
+                                    Не вошли
+                                </q-chip>
+
+                                <DivBtn class="q-ml-xs text-grey-5 bg-yellow-1" :size="28" :icon-size="22" icon="la la-users-cog" round @click.stop.prevent="openUserProfilesDialog">
                                     <template #tooltip>
                                         <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                             Профили пользователей
@@ -305,7 +317,7 @@
                         </div>
                     </div><!-- 1-1 -->
                     <!-- 1-2 -->
-                    <div class="column q-mx-sm">
+                    <div class="toolbar-actions q-mx-sm">
                         <div style="height: 3px" />
                         <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-cog" round @click.stop.prevent="settingsDialogVisible = true">
                             <template #tooltip>
@@ -785,6 +797,16 @@ class Search {
         return this.settings.currentUserId || this.config.currentUserId || '';
     }
 
+    get currentSelectedProfile() {
+        const users = this.config.userProfiles || [];
+        return users.find((item) => item.id === this.currentUserId) || null;
+    }
+
+    get currentProfileNeedsLogin() {
+        const current = this.currentSelectedProfile;
+        return !!(current && current.requiresLogin && !this.config.profileAuthorized);
+    }
+
     get userProfileOptions() {
         const users = this.config.userProfiles || [];
         return users.map((item) => ({
@@ -1166,6 +1188,20 @@ class Search {
         this.readingListsDialogVisible = true;
     }
 
+    async openUserProfilesDialog() {
+        const target = this.currentSelectedProfile;
+        if (target && target.requiresLogin && !this.config.profileAuthorized) {
+            try {
+                await this.api.showProfileLoginDialog(target.login || '');
+            } catch (e) {
+                if (e.message !== 'Вход в профиль отменён')
+                    this.$root.stdDialog.alert(e.message, 'Ошибка');
+            }
+        }
+
+        this.userProfilesDialogVisible = true;
+    }
+
     async selectUserProfile(userId) {
         const users = this.config.userProfiles || [];
         const target = users.find((item) => item.id === userId);
@@ -1464,6 +1500,12 @@ export default vueComponent(Search);
     padding: 2px 4px 4px;
 }
 
+.toolbar-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
 .header {
     min-height: 42px;
 }
@@ -1503,6 +1545,11 @@ export default vueComponent(Search);
 
 .profile-select {
     max-width: 220px;
+}
+
+.profile-login-chip {
+    font-weight: 700;
+    border: 1px solid rgba(201, 140, 0, 0.28);
 }
 
 .result-bar {
@@ -1581,6 +1628,21 @@ export default vueComponent(Search);
         max-width: none;
         width: 100%;
     }
+
+    .toolbar-actions {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        margin-left: 12px !important;
+    }
+
+    .toolbar-actions > div:first-child {
+        display: none;
+    }
+
+    .toolbar-actions :deep(.button) {
+        margin-top: 0 !important;
+    }
 }
 
 @media (max-width: 640px) {
@@ -1602,6 +1664,13 @@ export default vueComponent(Search);
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 8px;
+    }
+
+    .toolbar-actions {
+        width: 100%;
+        justify-content: flex-start;
+        margin-left: 8px !important;
+        margin-right: 8px !important;
     }
 
     .collection-title {

@@ -20,8 +20,8 @@
                     <q-input v-model="newProfile.password" outlined dense clearable type="password" label="Пароль" />
                     <q-input v-model="newProfile.emailTo" outlined dense clearable label="Email для отправки" />
                     <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Telegram chat id" />
-                    <q-toggle v-model="newProfile.opdsEnabled" label="Показывать профиль в OPDS" />
-                    <q-btn color="primary" dense no-caps @click="createProfile">
+                    <q-toggle class="profile-toggle" v-model="newProfile.opdsEnabled" label="Показывать профиль в OPDS" />
+                    <q-btn class="profile-submit" color="primary" dense no-caps @click="createProfile">
                         Создать
                     </q-btn>
                 </div>
@@ -45,8 +45,9 @@
                         <div class="profile-name">
                             {{ item.name }}
                             <span v-if="item.id === currentUserId" class="current-badge">Текущий</span>
+                            <span v-if="item.id === currentUserId && item.requiresLogin && !config.profileAuthorized" class="pending-badge">Не вошли</span>
                             <span v-if="item.isAdmin" class="admin-badge">Admin</span>
-                            <span v-if="item.requiresLogin" class="lock-badge">Логин</span>
+                            <span v-if="item.requiresLogin && !item.isAdmin" class="lock-badge">Логин</span>
                         </div>
                         <div class="profile-actions">
                             <q-btn flat dense no-caps color="primary" @click="selectProfile(item)">
@@ -72,21 +73,24 @@
 
                     <div v-if="item.id === currentUserId" class="profile-body">
                         <div v-if="!config.profileAuthorized && item.requiresLogin" class="profile-locked">
-                            Для редактирования этого профиля войдите по логину и паролю.
+                            <div>Для редактирования этого профиля войдите по логину и паролю.</div>
+                            <q-btn class="q-mt-sm" color="primary" dense no-caps @click="loginCurrentProfile(item)">
+                                Войти
+                            </q-btn>
                         </div>
 
-                        <div v-else class="profile-grid">
+                        <div v-else class="profile-grid profile-edit-grid">
                             <q-input v-model="editableProfile.name" outlined dense label="Имя" />
                             <q-input v-model="editableProfile.login" outlined dense clearable label="Логин" />
                             <q-input v-model="editableProfile.password" outlined dense clearable type="password" label="Новый пароль" />
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
                             <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Telegram chat id" />
-                            <q-toggle v-model="editableProfile.opdsEnabled" label="Показывать профиль в OPDS" />
+                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" label="Показывать профиль в OPDS" />
                         </div>
                     </div>
 
-                    <div class="opds-link">
-                        OPDS: <code>{{ opdsUrl(item.id) }}</code>
+                    <div v-if="item.id === currentUserId" class="opds-link">
+                        OPDS: <code>{{ opdsUrl(item.publicId || item.id) }}</code>
                     </div>
                 </div>
             </div>
@@ -196,6 +200,7 @@ class UserProfilesDialog {
             id: item.id,
             name: item.name || '',
             login: item.login || '',
+            publicId: item.login || item.id,
             requiresLogin: !!item.requiresLogin,
             isAdmin: !!item.isAdmin,
         }));
@@ -293,6 +298,16 @@ class UserProfilesDialog {
         await this.loadProfiles();
     }
 
+    async loginCurrentProfile(item) {
+        try {
+            await this.api.showProfileLoginDialog(item.login || '');
+            await this.loadProfiles();
+        } catch (e) {
+            if (e.message !== 'Вход в профиль отменён')
+                this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
+    }
+
     opdsUrl(userId) {
         const root = this.config.opdsRoot || '/opds';
         return `${window.location.origin}${root}?user=${encodeURIComponent(userId)}`;
@@ -304,10 +319,11 @@ export default vueComponent(UserProfilesDialog);
 
 <style scoped>
 .dialog-box {
-    width: min(1240px, 98vw);
+    width: min(760px, 92vw);
     max-height: min(82vh, 860px);
     padding: 10px 12px 12px;
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .dialog-header {
@@ -323,14 +339,24 @@ export default vueComponent(UserProfilesDialog);
 .create-grid,
 .profile-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
     align-items: center;
+    min-width: 0;
 }
 
 .create-grid :deep(.q-toggle),
-.profile-grid :deep(.q-toggle) {
+.profile-grid :deep(.q-toggle),
+.profile-submit {
     grid-column: span 2;
+}
+
+.profile-edit-grid {
+    margin-top: 6px;
+}
+
+.profile-toggle {
+    padding-top: 2px;
 }
 
 .profiles-box {
@@ -352,19 +378,25 @@ export default vueComponent(UserProfilesDialog);
     gap: 10px;
     align-items: center;
     margin-bottom: 10px;
+    min-width: 0;
 }
 
 .profile-name {
     font-weight: 700;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .profile-actions {
     display: flex;
     gap: 4px;
     flex-wrap: wrap;
+    justify-content: flex-end;
+    flex-shrink: 0;
 }
 
 .current-badge,
+.pending-badge,
 .lock-badge,
 .admin-badge {
     margin-left: 8px;
@@ -380,6 +412,11 @@ export default vueComponent(UserProfilesDialog);
 }
 
 .admin-badge {
+    background: rgba(201, 140, 0, 0.14);
+    color: #c98c00;
+}
+
+.pending-badge {
     background: rgba(201, 140, 0, 0.14);
     color: #c98c00;
 }
@@ -419,34 +456,26 @@ export default vueComponent(UserProfilesDialog);
     padding: 18px 8px;
 }
 
-@media (max-width: 1180px) {
-    .create-grid,
-    .profile-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-}
-
-@media (max-width: 980px) {
-    .create-grid,
-    .profile-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-}
-
-@media (max-width: 680px) {
+@media (max-width: 820px) {
     .create-grid,
     .profile-grid {
         grid-template-columns: 1fr;
     }
 
     .create-grid :deep(.q-toggle),
-    .profile-grid :deep(.q-toggle) {
+    .profile-grid :deep(.q-toggle),
+    .profile-submit {
         grid-column: span 1;
     }
 
     .profile-head {
         flex-direction: column;
         align-items: flex-start;
+    }
+
+    .profile-actions {
+        width: 100%;
+        justify-content: flex-start;
     }
 }
 </style>

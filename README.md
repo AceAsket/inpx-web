@@ -92,11 +92,11 @@ docker run -d \
   --name=inpx-web \
   --restart unless-stopped \
   -p 12380:12380 \
-  -e INPX=/library/fb2.flibusta.lib.rus.ec.7z.inpx \
+  -e INPX=/library/my-library.inpx \
   -e LIBDIR=/library \
   -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
-  -v /mnt/user/Torrents/fb2.flibusta.lib.rus.ec.7z:/library:ro \
+  -v /mnt/user/books/my-library:/library:ro \
   inpx-web-7z:latest
 ```
 
@@ -125,7 +125,7 @@ docker run -d \
   --name=inpx-web \
   --restart unless-stopped \
   -p 12380:12380 \
-  -e INPX=/library/fb2.flibusta.lib.rus.ec.7z.inpx \
+  -e INPX=/library/my-library.inpx \
   -e LIBDIR=/library \
   -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
   -e TELEGRAM_BOT_TOKEN=<telegram_bot_token> \
@@ -139,7 +139,7 @@ docker run -d \
   -e EMAIL_FROM=user@example.com \
   -e EMAIL_TO=reader@example.com \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
-  -v /mnt/user/Torrents/fb2.flibusta.lib.rus.ec.7z:/library:ro \
+  -v /mnt/user/books/my-library:/library:ro \
   inpx-web-7z:latest
 ```
 
@@ -355,11 +355,11 @@ docker run -d \
   --name=inpx-web \
   --restart unless-stopped \
   -p 12380:12380 \
-  -e INPX=/library/fb2.flibusta.lib.rus.ec.7z.inpx \
+  -e INPX=/library/my-library.inpx \
   -e LIBDIR=/library \
   -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
-  -v /mnt/user/Torrents/fb2.flibusta.lib.rus.ec.7z:/library:ro \
+  -v /mnt/user/books/my-library:/library:ro \
   inpx-web-7z:latest
 ```
 

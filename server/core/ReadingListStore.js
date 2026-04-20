@@ -294,7 +294,9 @@ class ReadingListStore {
     async resolveUser(userId = '') {
         const data = await this.load();
         const normalizedUserId = String(userId || '').trim();
-        const user = data.users.find((item) => item.id === normalizedUserId) || data.users[0];
+        const user = data.users.find((item) => item.id === normalizedUserId)
+            || data.users.find((item) => item.login === normalizedUserId)
+            || data.users[0];
         if (!user)
             throw new Error('Пользователь не найден');
 
@@ -357,6 +359,7 @@ class ReadingListStore {
             .filter((item) => item.opdsEnabled && stats.has(item.id))
             .map((item) => ({
                 id: item.id,
+                publicId: item.login || item.id,
                 name: item.name,
                 opdsListCount: stats.get(item.id) || 0,
             }))

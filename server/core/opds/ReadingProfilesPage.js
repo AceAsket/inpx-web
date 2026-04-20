@@ -18,7 +18,7 @@ class ReadingProfilesPage extends BasePage {
                 this.makeEntry({
                     id: item.id,
                     title: item.name,
-                    link: this.navLink({href: '/root', req, query: {user: item.id}}),
+                    link: this.navLink({href: '/root', req, query: {user: item.publicId || item.id}}),
                     content: {
                         '*ATTRS': {type: 'text'},
                         '*TEXT': `OPDS-подборок: ${item.opdsListCount}`,
