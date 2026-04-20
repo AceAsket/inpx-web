@@ -1026,13 +1026,29 @@ class WebWorker {
             binaries.push(`<binary id="${image.id}" content-type="${image.contentType}">${base64}</binary>`);
         }
 
-        if (!binaries.length)
+        let coverLinked = false;
+        if (cover) {
+            coverLinked = /<coverpage\b[\s\S]*?<image\b[^>]*?(?:l:href|xlink:href|href)=["']#?[^"']+["'][^>]*\/?>[\s\S]*?<\/coverpage>/i.test(text);
+            if (!coverLinked) {
+                const titleInfoRe = /<title-info\b[^>]*>/i;
+                const titleInfoMatch = text.match(titleInfoRe);
+                if (titleInfoMatch) {
+                    const hrefAttr = 'xlink:href';
+                    const coverpage = `\n<coverpage><image ${hrefAttr}="#${cover.id}"/></coverpage>`;
+                    const insertAt = titleInfoMatch.index + titleInfoMatch[0].length;
+                    text = `${text.slice(0, insertAt)}${coverpage}${text.slice(insertAt)}`;
+                    coverLinked = true;
+                }
+            }
+        }
+
+        if (!binaries.length && !coverLinked)
             return false;
 
         text = text.replace(/<\/FictionBook>\s*$/i, `\n${binaries.join('\n')}\n</FictionBook>`);
         await fs.writeFile(bookFile, text);
 
-        return true;
+        return (binaries.length > 0 || coverLinked);
     }
 
     async restoreBook(bookUid, libFolder, libFile, downFileName) {
@@ -1177,8 +1193,9 @@ class WebWorker {
         let preparedFile = rawFile;
         let preparedFileName = downFileName;
         const targetFormat = String(format || '').toLowerCase();
+        const sourceFormat = String(rows[0].ext || '').toLowerCase();
 
-        if (targetFormat) {
+        if (targetFormat && targetFormat !== sourceFormat) {
             if (!bookConverter.canConvertTo(targetFormat))
                 throw new Error(`Неподдерживаемый формат отправки: ${targetFormat}`);
 

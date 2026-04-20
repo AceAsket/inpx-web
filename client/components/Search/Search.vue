@@ -331,7 +331,7 @@
             <!-- Tool Panel end -->
 
             <div class="result-bar row items-center q-ml-lg q-mt-sm">
-                <div style="width: 400px;">
+                <div class="result-scroller-wrap">
                     <PageScroller v-show="pageCount > 1" ref="pageScroller1" v-model="search.page" :page-count="pageCount" />
                 </div>
 
@@ -352,7 +352,7 @@
             </div>
             <!-- Формирование списка конец ------------------------------------------------------------------>
 
-            <div class="row q-ml-lg q-mb-sm">
+            <div class="bottom-scroller-bar row q-ml-lg q-mb-sm">
                 <PageScroller v-show="pageCount > 1" v-model="search.page" :page-count="pageCount" />
             </div>
 
@@ -1437,6 +1437,17 @@ export default vueComponent(Search);
 .result-bar {
     min-height: 40px;
     color: var(--app-muted);
+    flex-wrap: wrap;
+    gap: 8px 12px;
+}
+
+.result-scroller-wrap {
+    width: 400px;
+    max-width: 100%;
+}
+
+.bottom-scroller-bar {
+    flex-wrap: wrap;
 }
 
 .project-pill {
@@ -1536,10 +1547,23 @@ export default vueComponent(Search);
     }
 
     .result-bar {
-        min-height: 32px;
+        min-height: auto;
         padding-left: 8px;
         padding-right: 8px;
         font-size: 13px;
+        margin-left: 0 !important;
+        margin-top: 8px !important;
+        align-items: flex-start;
+    }
+
+    .result-scroller-wrap {
+        width: 100%;
+    }
+
+    .bottom-scroller-bar {
+        margin-left: 8px !important;
+        margin-right: 8px !important;
+        margin-bottom: 10px !important;
     }
 
     .project-pill {

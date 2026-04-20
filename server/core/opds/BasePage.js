@@ -100,7 +100,7 @@ class BasePage {
     baseLinks(req, selfAcq = false) {
         const result = [
             this.makeLink({href: `${this.opdsRoot}/opensearch`, rel: 'search', type: 'application/opensearchdescription+xml'}),
-            this.makeLink({href: `${this.opdsRoot}/search?term={searchTerms}`, rel: 'search', type: 'application/atom+xml'}),
+            this.makeLink({href: `${this.opdsRoot}/search?type=title&term={searchTerms}`, rel: 'search', type: 'application/atom+xml'}),
 
             this.navLink({rel: 'start'}),
         ];

@@ -142,71 +142,71 @@
                         {{ readingListLabel }}
                     </q-btn>
 
-                    <q-btn
-                        v-if="telegramShareEnabled"
-                        flat
-                        no-caps
-                        icon="lab la-telegram-plane"
-                        @click.stop.prevent="emit('sendTelegram')"
-                    >
-                        Telegram
-                    </q-btn>
+                    <div v-if="telegramShareEnabled" class="action-split" @click.stop>
+                        <q-btn
+                            flat
+                            no-caps
+                            icon="lab la-telegram-plane"
+                            @click.stop.prevent="emit('sendTelegram')"
+                        >
+                            Telegram
+                        </q-btn>
 
-                    <q-btn-dropdown
-                        v-if="telegramShareEnabled"
-                        flat
-                        dense
-                        dropdown-icon="la la-angle-down"
-                        auto-close
-                        @click.stop.prevent
-                    >
-                        <q-list dense style="min-width: 140px">
-                            <q-item
+                        <button
+                            type="button"
+                            class="action-split-toggle"
+                            :aria-expanded="telegramMenuOpen ? 'true' : 'false'"
+                            aria-label="Выбрать формат для Telegram"
+                            @click.stop.prevent="toggleShareMenu('telegram')"
+                        >
+                            <i :class="telegramMenuOpen ? 'la la-angle-up' : 'la la-angle-up'"></i>
+                        </button>
+
+                        <div v-if="telegramMenuOpen" class="action-split-menu">
+                            <button
                                 v-for="format in telegramFormats"
                                 :key="format"
-                                clickable
-                                v-close-popup
-                                @click.stop.prevent="emit('sendTelegram', format)"
+                                type="button"
+                                class="action-split-item"
+                                @click.stop.prevent="selectShareFormat('telegram', format)"
                             >
-                                <q-item-section>
-                                    {{ format.toUpperCase() }}
-                                </q-item-section>
-                            </q-item>
-                        </q-list>
-                    </q-btn-dropdown>
+                                {{ format.toUpperCase() }}
+                            </button>
+                        </div>
+                    </div>
 
-                    <q-btn
-                        v-if="emailShareEnabled"
-                        flat
-                        no-caps
-                        icon="la la-envelope"
-                        @click.stop.prevent="emit('sendEmail')"
-                    >
-                        Email
-                    </q-btn>
+                    <div v-if="emailShareEnabled" class="action-split" @click.stop>
+                        <q-btn
+                            flat
+                            no-caps
+                            icon="la la-envelope"
+                            @click.stop.prevent="emit('sendEmail')"
+                        >
+                            Email
+                        </q-btn>
 
-                    <q-btn-dropdown
-                        v-if="emailShareEnabled"
-                        flat
-                        dense
-                        dropdown-icon="la la-angle-down"
-                        auto-close
-                        @click.stop.prevent
-                    >
-                        <q-list dense style="min-width: 140px">
-                            <q-item
+                        <button
+                            type="button"
+                            class="action-split-toggle"
+                            :aria-expanded="emailMenuOpen ? 'true' : 'false'"
+                            aria-label="Выбрать формат для email"
+                            @click.stop.prevent="toggleShareMenu('email')"
+                        >
+                            <i :class="emailMenuOpen ? 'la la-angle-up' : 'la la-angle-up'"></i>
+                        </button>
+
+                        <div v-if="emailMenuOpen" class="action-split-menu">
+                            <button
                                 v-for="format in emailFormats"
                                 :key="format"
-                                clickable
-                                v-close-popup
-                                @click.stop.prevent="emit('sendEmail', format)"
+                                type="button"
+                                class="action-split-item"
+                                @click.stop.prevent="selectShareFormat('email', format)"
                             >
-                                <q-item-section>
-                                    {{ format.toUpperCase() }}
-                                </q-item-section>
-                            </q-item>
-                        </q-list>
-                    </q-btn-dropdown>
+                                {{ format.toUpperCase() }}
+                            </button>
+                        </div>
+                    </div>
 
                     <q-btn
                         flat
@@ -274,9 +274,19 @@ class BookView {
     showDates = false;
     showJson = false;
     coverError = false;
+    telegramMenuOpen = false;
+    emailMenuOpen = false;
 
     created() {
         this.loadSettings();
+    }
+
+    mounted() {
+        document.addEventListener('click', this.handleOutsideClick);
+    }
+
+    beforeUnmount() {
+        document.removeEventListener('click', this.handleOutsideClick);
     }
 
     loadSettings() {
@@ -472,6 +482,33 @@ class BookView {
 
     get emailFormats() {
         return this.telegramFormats;
+    }
+
+    handleOutsideClick() {
+        this.telegramMenuOpen = false;
+        this.emailMenuOpen = false;
+    }
+
+    toggleShareMenu(type) {
+        if (type == 'telegram') {
+            this.telegramMenuOpen = !this.telegramMenuOpen;
+            if (this.telegramMenuOpen)
+                this.emailMenuOpen = false;
+        } else if (type == 'email') {
+            this.emailMenuOpen = !this.emailMenuOpen;
+            if (this.emailMenuOpen)
+                this.telegramMenuOpen = false;
+        }
+    }
+
+    selectShareFormat(type, format) {
+        this.telegramMenuOpen = false;
+        this.emailMenuOpen = false;
+
+        if (type == 'telegram')
+            this.emit('sendTelegram', format);
+        else if (type == 'email')
+            this.emit('sendEmail', format);
     }
 
     get placeholderStyle() {
@@ -802,6 +839,59 @@ export default vueComponent(BookView);
     flex-wrap: wrap;
     padding-top: 2px;
     min-height: 42px;
+}
+
+.action-split {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    background: rgba(23, 32, 38, 0.04);
+}
+
+.action-split-toggle {
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+
+.action-split-toggle:hover {
+    background: rgba(23, 32, 38, 0.06);
+}
+
+.action-split-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    z-index: 20;
+    min-width: 120px;
+    padding: 6px;
+    border-radius: 14px;
+    border: 1px solid var(--app-border);
+    background: var(--app-surface);
+    box-shadow: 0 14px 28px rgba(23, 32, 38, 0.16);
+}
+
+.action-split-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.action-split-item:hover {
+    background: rgba(15, 159, 143, 0.08);
 }
 
 .format-actions {

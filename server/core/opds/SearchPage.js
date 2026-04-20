@@ -10,6 +10,34 @@ class SearchPage extends BasePage {
         this.title = 'Поиск';
     }
 
+    async searchBooks(term = '', genre = '') {
+        const normalized = String(term || '').trim();
+        if (!normalized)
+            return [];
+
+        const queries = [
+            {title: `*${normalized}`, genre, del: '0', limit: 120, offset: 0},
+            {series: `*${normalized}`, genre, del: '0', limit: 120, offset: 0},
+            {author: `*${normalized}`, genre, del: '0', limit: 120, offset: 0},
+        ];
+
+        const result = [];
+        const seen = new Set();
+
+        for (const query of queries) {
+            const res = await this.webWorker.bookSearch(query);
+            for (const book of (res.found || [])) {
+                if (!book || seen.has(book._uid))
+                    continue;
+
+                seen.add(book._uid);
+                result.push(book);
+            }
+        }
+
+        return result;
+    }
+
     async body(req) {
         const result = {};
 
@@ -22,7 +50,56 @@ class SearchPage extends BasePage {
 
         let entry = [];
         if (query.type) {
-            if (['author', 'series', 'title'].includes(query.type)) {
+            if (query.type == 'title') {
+                try {
+                    let found = await this.searchBooks(query.term, query.genre);
+
+                    if (!found.length) {
+                        const fallbackTerm = iconv.encode(query.term, 'ISO-8859-1').toString();
+                        found = await this.searchBooks(fallbackTerm, query.genre);
+                    }
+
+                    const page = query.page;
+                    const limit = 100;
+                    const offset = (page - 1)*limit;
+                    const pageItems = found.slice(offset, offset + limit);
+
+                    for (const book of pageItems) {
+                        const title = `${book.serno ? `${book.serno}. ` : ''}${book.title || 'Без названия'} (${book.ext})`;
+                        const subtitle = [this.bookAuthor(book.author), book.series ? `Серия: ${book.series}` : ''].filter(Boolean).join(' · ');
+
+                        entry.push(
+                            this.makeEntry({
+                                id: book._uid,
+                                title,
+                                link: this.acqLink({href: `/book?uid=${encodeURIComponent(book._uid)}`}),
+                                content: {
+                                    '*ATTRS': {type: 'text'},
+                                    '*TEXT': subtitle,
+                                },
+                            }),
+                        );
+                    }
+
+                    if (found.length > offset + pageItems.length) {
+                        entry.push(
+                            this.makeEntry({
+                                id: 'next_page',
+                                title: '[Следующая страница]',
+                                link: this.navLink({href: `/${this.id}?type=title&term=${encodeURIComponent(query.term)}&genre=${encodeURIComponent(query.genre)}&page=${page + 1}`}),
+                            })
+                        );
+                    }
+                } catch(e) {
+                    entry.push(
+                        this.makeEntry({
+                            id: 'error',
+                            title: `Ошибка: ${e.message}`,
+                            link: this.navLink({href: `/fake-error-link`}),
+                        })
+                    );
+                }
+            } else if (['author', 'series'].includes(query.type)) {
                 try {
                     const from = query.type;
                     const page = query.page;
@@ -33,7 +110,7 @@ class SearchPage extends BasePage {
                     const searchQuery = {[from]: query.term, genre: query.genre, del: '0', offset, limit};
                     let queryRes = await this.webWorker.search(from, searchQuery);
                     
-                    if (queryRes.totalFound === 0) { // не нашли ничего, проверим, может term в кодировке ISO-8859-1 (баг koreader)
+                    if (queryRes.totalFound === 0) {
                         searchQuery[from] = iconv.encode(query.term, 'ISO-8859-1').toString();
                         queryRes = await this.webWorker.search(from, searchQuery);
                     }
@@ -48,7 +125,7 @@ class SearchPage extends BasePage {
                         entry.push(
                             this.makeEntry({
                                 id: row.id,
-                                title: `${(from === 'series' ? 'Серия: ': '')}${from === 'author' ? this.bookAuthor(row[from]) : row[from]}`,
+                                title: `${(from === 'series' ? 'Серия: ' : '')}${from === 'author' ? this.bookAuthor(row[from]) : row[from]}`,
                                 link: this.navLink({href: `/${from}?${from}==${encodeURIComponent(row[from])}`}),
                                 content: {
                                     '*ATTRS': {type: 'text'},
@@ -78,7 +155,6 @@ class SearchPage extends BasePage {
                 }
             }
         } else {
-            //корневой раздел
             entry = [
                 this.makeEntry({
                     id: 'search_author',
@@ -86,7 +162,7 @@ class SearchPage extends BasePage {
                     link: this.navLink({href: `/${this.id}?type=author&term=${encodeURIComponent(query.term)}`}),
                     content: {
                         '*ATTRS': {type: 'text'},
-                        '*TEXT': `Искать по именам авторов`,
+                        '*TEXT': 'Искать по именам авторов',
                     },
                 }),
                 this.makeEntry({
@@ -95,7 +171,7 @@ class SearchPage extends BasePage {
                     link: this.navLink({href: `/${this.id}?type=series&term=${encodeURIComponent(query.term)}`}),
                     content: {
                         '*ATTRS': {type: 'text'},
-                        '*TEXT': `Искать по названиям серий`,
+                        '*TEXT': 'Искать по названиям серий',
                     },
                 }),
                 this.makeEntry({
@@ -104,7 +180,7 @@ class SearchPage extends BasePage {
                     link: this.navLink({href: `/${this.id}?type=title&term=${encodeURIComponent(query.term)}`}),
                     content: {
                         '*ATTRS': {type: 'text'},
-                        '*TEXT': `Искать по названиям книг`,
+                        '*TEXT': 'Искать книги по слову в названии, серии и авторе',
                     },
                 }),
                 this.makeEntry({
@@ -113,7 +189,7 @@ class SearchPage extends BasePage {
                     link: this.navLink({href: `/genre?from=search&term=${encodeURIComponent(query.term)}`}),
                     content: {
                         '*ATTRS': {type: 'text'},
-                        '*TEXT': `Искать по названиям книг в выбранном жанре`,
+                        '*TEXT': 'Искать по названиям книг в выбранном жанре',
                     },
                 }),
                 this.makeEntry({
@@ -122,10 +198,10 @@ class SearchPage extends BasePage {
                     link: this.acqLink({href: `/search-help`}),
                     content: {
                         '*ATTRS': {type: 'text'},
-                        '*TEXT': `Описание формата поискового значения`,
+                        '*TEXT': 'Описание формата поискового значения',
                     },
                 }),
-            ]
+            ];
         }
 
         result.entry = entry;

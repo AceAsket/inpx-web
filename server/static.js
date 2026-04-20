@@ -33,6 +33,13 @@ function convertedFileName(downFileName, format) {
     return `${base}.${format}`;
 }
 
+function normalizedRawFileName(downFileName, fileType) {
+    if (fileType === 'raw' || fileType === undefined)
+        return downFileName;
+
+    return downFileName;
+}
+
 async function getCoverArchives(config) {
     if (coverArchives && coverArchives.length)
         return coverArchives;
@@ -133,7 +140,7 @@ module.exports = (app, config) => {
     });
 
     //загрузка или восстановление файлов в /public-files, при необходимости
-    app.use([`${config.bookPathStatic}/:fileName/:fileType`, `${config.bookPathStatic}/:fileName`], async(req, res, next) => {
+    app.use([`${config.bookPathStatic}/:fileName/:fileType/:downloadName`, `${config.bookPathStatic}/:fileName/:fileType`, `${config.bookPathStatic}/:fileName`], async(req, res, next) => {
         if (req.method !== 'GET' && req.method !== 'HEAD') {
             return next();
         }
@@ -165,6 +172,7 @@ module.exports = (app, config) => {
 
                         if (fileType === undefined || fileType === 'raw') {
                             bookFile = rawFile;
+                            downFileName = normalizedRawFileName(downFileName, fileType);
                         } else if (fileType === 'zip') {
                             //создаем zip-файл
                             bookFile += '.zip';
