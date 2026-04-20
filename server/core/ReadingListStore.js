@@ -50,6 +50,19 @@ class ReadingListStore {
         return normalized;
     }
 
+    normalizeLogin(login) {
+        return String(login || '').trim().toLowerCase();
+    }
+
+    validateLogin(login) {
+        const normalized = this.normalizeLogin(login);
+        if (!normalized)
+            return '';
+        if (!/^[a-z0-9._-]{3,64}$/i.test(normalized))
+            throw new Error('Логин должен содержать 3-64 символа: буквы, цифры, точку, дефис или подчёркивание');
+        return normalized;
+    }
+
     normalizeBookUid(bookUid) {
         return String(bookUid || '').trim();
     }
@@ -63,6 +76,8 @@ class ReadingListStore {
         return {
             id: 'default',
             name: 'Основной',
+            login: '',
+            passwordHash: '',
             emailTo: String(this.config.emailTo || '').trim(),
             telegramChatId: String(this.config.telegramChatId || '').trim(),
             opdsEnabled: true,
@@ -104,6 +119,8 @@ class ReadingListStore {
         const normalized = Object.assign({}, fallback, item);
         normalized.id = String(normalized.id || '').trim() || this.makeId();
         normalized.name = this.validateUserName(normalized.name || fallback.name || 'Пользователь');
+        normalized.login = this.validateLogin(normalized.login || '');
+        normalized.passwordHash = String(normalized.passwordHash || '').trim();
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
@@ -203,12 +220,35 @@ class ReadingListStore {
             throw new Error('Пользователь с таким именем уже существует');
     }
 
+    ensureUniqueUserLogin(users, login, excludeId = '') {
+        if (!login)
+            return;
+
+        const duplicate = users.find((item) => item.id !== excludeId && item.login === login);
+        if (duplicate)
+            throw new Error('Пользователь с таким логином уже существует');
+    }
+
     async getUsers(currentUserId = '') {
         const {data, user} = await this.resolveUser(currentUserId);
         return {
             users: data.users,
             currentUser: user,
         };
+    }
+
+    async getUser(userId = '') {
+        const {user} = await this.resolveUser(userId);
+        return user;
+    }
+
+    async findUserByLogin(login = '') {
+        const normalizedLogin = this.validateLogin(login);
+        if (!normalizedLogin)
+            return null;
+
+        const data = await this.load();
+        return data.users.find((item) => item.login === normalizedLogin) || null;
     }
 
     async getOpdsUsers() {
@@ -237,9 +277,13 @@ class ReadingListStore {
         const data = await this.load();
         const normalizedName = this.validateUserName(profile.name);
         this.ensureUniqueUserName(data.users, normalizedName);
+        const normalizedLogin = this.validateLogin(profile.login);
+        this.ensureUniqueUserLogin(data.users, normalizedLogin);
 
         const user = this.normalizeUser({
             name: normalizedName,
+            login: normalizedLogin,
+            passwordHash: String(profile.passwordHash || '').trim(),
             emailTo: profile.emailTo,
             telegramChatId: profile.telegramChatId,
             opdsEnabled: profile.opdsEnabled,
@@ -257,9 +301,14 @@ class ReadingListStore {
             throw new Error('Пользователь не найден');
 
         const nextName = this.validateUserName(utilsHasProp(patch, 'name') ? patch.name : target.name);
+        const nextLogin = this.validateLogin(utilsHasProp(patch, 'login') ? patch.login : target.login);
         this.ensureUniqueUserName(data.users, nextName, target.id);
+        this.ensureUniqueUserLogin(data.users, nextLogin, target.id);
 
         target.name = nextName;
+        target.login = nextLogin;
+        if (utilsHasProp(patch, 'passwordHash'))
+            target.passwordHash = String(patch.passwordHash || '').trim();
         if (utilsHasProp(patch, 'emailTo'))
             target.emailTo = String(patch.emailTo || '').trim();
         if (utilsHasProp(patch, 'telegramChatId'))

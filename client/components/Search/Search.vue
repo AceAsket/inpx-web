@@ -1167,8 +1167,33 @@ class Search {
     }
 
     async selectUserProfile(userId) {
-        this.commit('setSettings', {currentUserId: userId || ''});
+        const users = this.config.userProfiles || [];
+        const target = users.find((item) => item.id === userId);
+        if (!target)
+            return;
+
+        if (this.settings.profileAccessToken) {
+            try {
+                await this.api.logoutUserProfile();
+            } catch (e) {
+                // Ignore stale profile session cleanup errors while switching profiles.
+            }
+        }
+
+        this.commit('setSettings', {
+            currentUserId: userId || '',
+            profileAccessToken: '',
+        });
         await this.api.updateConfig();
+
+        if (target.requiresLogin) {
+            try {
+                await this.api.showProfileLoginDialog(target.login || '');
+            } catch (e) {
+                await this.api.updateConfig();
+                this.$root.stdDialog.alert(e.message, 'Ошибка');
+            }
+        }
     }
 
     bookInfoNavigate(event) {

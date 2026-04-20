@@ -4,6 +4,7 @@ const state = {
     settings: {
         accessToken: '',
         currentUserId: '',
+        profileAccessToken: '',
         extendedParams: false,
         expandedAuthor: [],
         expandedSeries: [],

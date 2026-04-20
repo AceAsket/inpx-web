@@ -143,6 +143,7 @@ class WebWorker {
             this.inpxHashCreator = new InpxHashCreator(config);
             this.readingListStore = new ReadingListStore(config);
             this.fb2Helper = new Fb2Helper();
+            this.profileSessions = new Map();
             this.inpxFileHash = '';
             this.authorInfoCache = new Map();
             this.authorInfoArchives = null;
@@ -518,14 +519,102 @@ class WebWorker {
                 .map((item) => ({
                     id: item.id,
                     name: item.name,
-                    emailTo: item.emailTo || '',
-                    telegramChatId: item.telegramChatId || '',
+                    login: item.login || '',
+                    requiresLogin: !!item.passwordHash,
                     opdsEnabled: item.opdsEnabled !== false,
                     createdAt: item.createdAt,
                     updatedAt: item.updatedAt,
                 }))
                 .sort((a, b) => a.name.localeCompare(b.name, 'ru')),
             currentUserId: (currentUser ? currentUser.id : ''),
+        };
+    }
+
+    hashProfilePassword(login, password) {
+        return utils.getBufHash(`${String(login || '').trim().toLowerCase()}::${String(password || '')}`, 'sha256', 'hex');
+    }
+
+    createProfileSession(userId) {
+        const token = utils.randomHexString(24);
+        this.profileSessions.set(token, {
+            userId,
+            time: Date.now(),
+        });
+        return token;
+    }
+
+    getProfileSessionUser(token = '') {
+        const rec = this.profileSessions.get(String(token || '').trim());
+        if (!rec)
+            return '';
+
+        rec.time = Date.now();
+        return rec.userId || '';
+    }
+
+    closeProfileSession(token = '') {
+        this.profileSessions.delete(String(token || '').trim());
+        return {success: true};
+    }
+
+    async getEffectiveUser(userId = '', profileAccessToken = '') {
+        const sessionUserId = this.getProfileSessionUser(profileAccessToken);
+        if (sessionUserId)
+            return await this.readingListStore.getUser(sessionUserId);
+
+        const requestedUser = await this.readingListStore.getUser(userId);
+        if (requestedUser && !requestedUser.passwordHash)
+            return requestedUser;
+
+        return requestedUser;
+    }
+
+    async requireAuthorizedUser(userId = '', profileAccessToken = '') {
+        const requestedUser = await this.readingListStore.getUser(userId);
+        if (!requestedUser.passwordHash)
+            return requestedUser;
+
+        const sessionUserId = this.getProfileSessionUser(profileAccessToken);
+        if (!sessionUserId || sessionUserId !== requestedUser.id)
+            throw new Error('need_profile_login');
+
+        return requestedUser;
+    }
+
+    async getCurrentUserProfile(userId = '', profileAccessToken = '') {
+        this.checkMyState();
+
+        const user = await this.getEffectiveUser(userId, profileAccessToken);
+        const profileAuthorized = (!user.passwordHash || this.getProfileSessionUser(profileAccessToken) === user.id);
+        return {
+            currentUserId: user.id,
+            profileAuthorized,
+            currentUserProfile: {
+                id: user.id,
+                name: user.name,
+                login: user.login || '',
+                hasPassword: !!user.passwordHash,
+                emailTo: (profileAuthorized ? user.emailTo || '' : ''),
+                telegramChatId: (profileAuthorized ? user.telegramChatId || '' : ''),
+                opdsEnabled: user.opdsEnabled !== false,
+            },
+        };
+    }
+
+    async loginUserProfile(login = '', password = '') {
+        this.checkMyState();
+
+        const user = await this.readingListStore.findUserByLogin(login);
+        if (!user || !user.passwordHash)
+            throw new Error('Неверный логин или пароль');
+
+        const passwordHash = this.hashProfilePassword(user.login, password);
+        if (passwordHash !== user.passwordHash)
+            throw new Error('Неверный логин или пароль');
+
+        return {
+            userId: user.id,
+            profileAccessToken: this.createProfileSession(user.id),
         };
     }
 

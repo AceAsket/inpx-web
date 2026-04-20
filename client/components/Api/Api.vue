@@ -82,6 +82,7 @@ class Api {
     progress = 0;
     accessToken = '';
     currentUserId = '';
+    profileAccessToken = '';
 
     created() {
         this.commit = this.$store.commit;
@@ -99,6 +100,7 @@ class Api {
 
         this.accessToken = settings.accessToken;
         this.currentUserId = settings.currentUserId;
+        this.profileAccessToken = settings.profileAccessToken;
     }
 
     async updateConfig() {
@@ -167,6 +169,8 @@ class Api {
                     params.accessToken = this.accessToken;
                 if (this.currentUserId)
                     params.userId = this.currentUserId;
+                if (this.profileAccessToken)
+                    params.profileAccessToken = this.profileAccessToken;
 
                 const server = await wsc.message(await wsc.send(params));
 
@@ -209,12 +213,16 @@ class Api {
                     params.accessToken = this.accessToken;
                 if (this.currentUserId)
                     params.userId = this.currentUserId;
+                if (this.profileAccessToken)
+                    params.profileAccessToken = this.profileAccessToken;
 
                 const response = await wsc.message(await wsc.send(params), timeoutSecs);
 
                 if (response && response.error == 'need_access_token') {
                     this.accessGranted = false;
                     await this.showPasswordDialog();
+                } else if (response && response.error == 'need_profile_login') {
+                    await this.showProfileLoginDialog();
                 } else if (response && response.error == 'server_busy') {
                     this.accessGranted = true;
                     await this.showBusyDialog();
@@ -281,6 +289,14 @@ class Api {
 
     async getUserProfiles() {
         return await this.request({action: 'get-user-profiles'}, 120);
+    }
+
+    async loginUserProfile(login, password) {
+        return await this.request({action: 'login-user-profile', login, password}, 120);
+    }
+
+    async logoutUserProfile() {
+        return await this.request({action: 'logout-user-profile'}, 120);
     }
 
     async createUserProfile(profile) {
@@ -352,9 +368,52 @@ class Api {
     }
 
     async logout() {
+        if (this.profileAccessToken) {
+            try {
+                await this.logoutUserProfile();
+            } catch (e) {
+                // Ignore profile session cleanup errors during global logout.
+            }
+        }
         await this.request({action: 'logout'});
+        this.commit('setSettings', {
+            currentUserId: '',
+            profileAccessToken: '',
+        });
         this.accessGranted = false;
         await this.request({action: 'test'});
+    }
+
+    async showProfileLoginDialog(prefillLogin = '') {
+        const current = this.$store.state.config.currentUserProfile || {};
+        const loginPrompt = await this.$root.stdDialog.prompt(
+            'Введите логин профиля:',
+            'Вход в профиль',
+            {
+                inputValue: prefillLogin || current.login || '',
+                inputValidator: (value) => (String(value || '').trim() ? true : 'Логин не должен быть пустым'),
+            },
+        );
+        if (!loginPrompt || loginPrompt === false)
+            throw new Error('Вход в профиль отменён');
+
+        const passwordPrompt = await this.$root.stdDialog.password(
+            'Введите пароль профиля:',
+            'Вход в профиль',
+            {
+                inputValidator: (value) => (String(value || '') ? true : 'Пароль не должен быть пустым'),
+            },
+        );
+        if (!passwordPrompt || passwordPrompt === false)
+            throw new Error('Вход в профиль отменён');
+
+        const result = await this.loginUserProfile(String(loginPrompt.value || '').trim(), String(passwordPrompt.value || ''));
+        this.commit('setSettings', {
+            currentUserId: result.userId,
+            profileAccessToken: result.profileAccessToken,
+        });
+        await this.updateConfig();
+        return result;
     }
 }
 
