@@ -6,14 +6,14 @@
         <LoadingMessage :message="loadingMessage2" z-index="1" />
 
         <!-- Формирование списка ------------------------------------------------------------------------>
-        <div v-for="item in tableData" :key="item.key" class="column" :class="{'odd-item': item.num % 2}" style="font-size: 120%">
+        <div v-for="item in tableData" :key="item.key" class="column title-group">
             <BookView
-                class="q-ml-md"
+                class="q-mx-md"
                 :book="item.book" mode="title" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
             />
             <BookView
                 v-for="book in item.books" :key="book.id"
-                class="q-ml-md"
+                class="q-mx-md"
                 :book="book"
                 mode="title"
                 :genre-map="genreMap" :show-read-link="showReadLink"
@@ -145,11 +145,7 @@ export default vueComponent(TitleList);
 </script>
 
 <style scoped>
-.clickable2 {
-    cursor: pointer;
-}
-
-.odd-item {
-    background-color: #e8e8e8;
+.title-group + .title-group {
+    margin-top: 4px;
 }
 </style>

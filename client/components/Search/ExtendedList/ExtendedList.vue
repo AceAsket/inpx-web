@@ -6,9 +6,9 @@
         <LoadingMessage :message="loadingMessage2" z-index="1" />
 
         <!-- Формирование списка ------------------------------------------------------------------------>
-        <div v-for="item in tableData" :key="item.key" class="column" :class="{'odd-item': item.num % 2}" style="font-size: 120%">
+        <div v-for="item in tableData" :key="item.key" class="column extended-group">
             <BookView
-                class="q-ml-md"
+                class="q-mx-md"
                 :book="item.book" mode="extended" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
             />
         </div>
@@ -124,11 +124,7 @@ export default vueComponent(ExtendedList);
 </script>
 
 <style scoped>
-.clickable2 {
-    cursor: pointer;
-}
-
-.odd-item {
-    background-color: #e8e8e8;
+.extended-group + .extended-group {
+    margin-top: 4px;
 }
 </style>

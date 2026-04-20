@@ -6,7 +6,7 @@
         <LoadingMessage :message="loadingMessage2" z-index="1" />
 
         <!-- Формирование списка ------------------------------------------------------------------------>
-        <div v-for="item in tableData" :key="item.key" class="column" :class="{'odd-item': item.num % 2}" style="font-size: 120%">
+        <div v-for="item in tableData" :key="item.key" class="column author-group">
             <div class="row items-center q-ml-md q-mr-xs no-wrap">
                 <div class="row items-center clickable2 q-py-xs no-wrap" @click="expandAuthor(item)">
                     <div style="min-width: 30px">
@@ -492,11 +492,18 @@ export default vueComponent(AuthorList);
     cursor: pointer;
 }
 
-.odd-item {
-    background-color: #e8e8e8;
-}
-
 .book-row {
     margin-left: 50px;
+}
+
+.author-group {
+    padding: 8px 0 16px;
+    border-bottom: 1px solid var(--app-border);
+}
+
+@media (max-width: 720px) {
+    .book-row {
+        margin-left: 16px;
+    }
 }
 </style>
