@@ -48,6 +48,23 @@ docker compose up -d
 
 или напрямую через `docker run` с тегом `inpx-web-7z:latest`.
 
+### Быстрый старт через docker run
+
+Пример запуска для библиотеки Flibusta / `fLibrary`:
+
+```sh
+docker run -d \
+  --name=inpx-web \
+  --restart unless-stopped \
+  -p 12380:12380 \
+  -e INPX=/library/fb2.flibusta.lib.rus.ec.7z.inpx \
+  -e LIBDIR=/library \
+  -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
+  -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
+  -v /mnt/user/Torrents/fb2.flibusta.lib.rus.ec.7z:/library:ro \
+  inpx-web-7z:latest
+```
+
 Веб-сервер для поиска по .inpx-коллекции.
 
 Выглядит следующим образом: [https://lib.omnireader.ru](https://lib.omnireader.ru)
