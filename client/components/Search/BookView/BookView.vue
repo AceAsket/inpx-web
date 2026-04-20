@@ -160,7 +160,7 @@
                                 @click.stop.prevent="emit('sendTelegram', format)"
                             >
                                 <q-item-section>
-                                    В Telegram: {{ format.toUpperCase() }}
+                                    {{ format.toUpperCase() }}
                                 </q-item-section>
                             </q-item>
                         </q-list>
@@ -193,7 +193,7 @@
                                 @click.stop.prevent="emit('sendEmail', format)"
                             >
                                 <q-item-section>
-                                    На email: {{ format.toUpperCase() }}
+                                    {{ format.toUpperCase() }}
                                 </q-item-section>
                             </q-item>
                         </q-list>

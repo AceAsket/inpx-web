@@ -28,6 +28,11 @@ inpx-web
 
 Для этого форка основной способ запуска рассчитан на Docker.
 
+Готовые YAML-примеры:
+
+* [docker-compose.full.yml](./docker-compose.full.yml) — полный образ с конвертацией
+* [docker-compose.telegram-email.yml](./docker-compose.telegram-email.yml) — пример с отправкой книг в Telegram и на email
+
 Собрать полный образ с конвертацией через Calibre можно так:
 
 ```sh
