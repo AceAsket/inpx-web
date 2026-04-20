@@ -6,6 +6,22 @@ inpx-web
 > Original author: **bookpauk**.
 > This repository contains deployment and UI changes for the `inpx-web-7z` variant while preserving attribution to the upstream project.
 
+## What's New In This Fork
+
+This fork extends the original project for large `fLibrary` / `.7z`-based collections and a more visual reading experience.
+
+Key additions:
+
+* refreshed card-based UI for books, series and authors
+* automatic cover loading with a decorative placeholder when no cover is available
+* clickable navigation from a book card and info dialog to author, series and genres
+* richer `fb2` info view with table of contents, illustrations and separate author tab
+* author photo and short biography support from `fLibrary`
+* on-demand download conversion to `epub`, `mobi` and `pdf`
+* improved support for `fLibrary` covers and embedded image enrichment for `fb2`
+* Docker-oriented deployment updates for `.7z` libraries and Calibre-based conversion
+* mobile-oriented layout improvements for search, cards and book info dialogs
+
 Веб-сервер для поиска по .inpx-коллекции.
 
 Выглядит следующим образом: [https://lib.omnireader.ru](https://lib.omnireader.ru)
