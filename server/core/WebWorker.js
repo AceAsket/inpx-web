@@ -989,8 +989,9 @@ class WebWorker {
         let preparedFile = rawFile;
         let preparedFileName = downFileName;
         const targetFormat = String(format || '').toLowerCase();
+        const sourceFormat = String(rows[0].ext || '').toLowerCase();
 
-        if (targetFormat) {
+        if (targetFormat && targetFormat !== sourceFormat) {
             if (!bookConverter.canConvertTo(targetFormat))
                 throw new Error(`Неподдерживаемый формат отправки: ${targetFormat}`);
 

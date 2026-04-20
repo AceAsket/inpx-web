@@ -31,7 +31,7 @@ class OpensearchPage extends BasePage {
             Url: {
                 '*ATTRS': {
                     type: 'application/atom+xml;profile=opds-catalog;kind=navigation',
-                    template: `${this.opdsRoot}/search?term={searchTerms}`,
+                    template: `${this.opdsRoot}/search?type=title&term={searchTerms}`,
                 },
             },
         }

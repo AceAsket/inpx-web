@@ -761,6 +761,7 @@ export default vueComponent(BookInfoDialog);
 <style scoped>
 .info-box {
     padding: 0 10px 10px;
+    min-height: min(74vh, 760px);
 }
 
 .poster-size {
@@ -787,6 +788,8 @@ export default vueComponent(BookInfoDialog);
 
 .info-scroll {
     height: 262px;
+    font-size: 14px;
+    line-height: 1.5;
 }
 
 .author-tab-wrap {
@@ -814,8 +817,8 @@ export default vueComponent(BookInfoDialog);
     align-items: flex-start;
     gap: 8px;
     color: var(--app-text);
-    font-size: 13px;
-    line-height: 1.35;
+    font-size: inherit;
+    line-height: inherit;
 }
 
 .fb2-contents-bullet {
@@ -924,7 +927,9 @@ export default vueComponent(BookInfoDialog);
 }
 
 .section-label {
-    font-size: 90%;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
 }
 
 .section-divider {
@@ -939,12 +944,15 @@ export default vueComponent(BookInfoDialog);
 .info-key {
     width: 100px;
     white-space: pre-wrap;
+    color: var(--app-muted);
+    font-size: inherit;
 }
 
 .info-value {
     min-width: 0;
     white-space: pre-wrap;
     word-break: break-word;
+    font-size: inherit;
 }
 
 .info-value :deep(.info-token-link) {
@@ -1078,6 +1086,7 @@ export default vueComponent(BookInfoDialog);
 
 .author-info-html {
     min-width: 0;
+    font-size: inherit;
     line-height: 1.55;
     word-break: break-word;
 }
@@ -1092,9 +1101,14 @@ export default vueComponent(BookInfoDialog);
     border-radius: 16px;
     color: var(--app-muted);
     background: rgba(15, 159, 143, 0.04);
+    font-size: inherit;
 }
 
 @media (max-width: 820px) {
+    .info-box {
+        min-height: min(78vh, 760px);
+    }
+
     .info-box > .row.q-mt-sm.no-wrap {
         flex-wrap: wrap;
     }
@@ -1132,6 +1146,7 @@ export default vueComponent(BookInfoDialog);
 @media (max-width: 560px) {
     .info-box {
         padding: 0 6px 10px;
+        min-height: auto;
     }
 
     .poster-size {
@@ -1160,7 +1175,7 @@ export default vueComponent(BookInfoDialog);
 
     .info-key {
         width: 82px;
-        font-size: 12px;
+        font-size: 13px;
     }
 
     .info-value {

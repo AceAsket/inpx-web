@@ -147,15 +147,22 @@ class BookPage extends BasePage {
 
                 //format
                 const ext = bookInfo.book.ext;
-                const formats = {
-                    [`${ext}+zip`]: `${bookInfo.link}/zip`,
-                    [ext]: bookInfo.link,
+                const rawHref = `${bookInfo.link}/raw`;
+                const links = [];
+                const addLink = (href, type) => {
+                    links.push({href, type});
                 };
 
-                if (ext === 'mobi') {
-                    formats['x-mobipocket-ebook'] = bookInfo.link;
-                } else if (ext == 'epub') {
-                    formats[`${ext}+zip`] = bookInfo.link;
+                if (ext === 'fb2') {
+                    addLink(rawHref, 'application/fb2+xml');
+                    addLink(rawHref, 'application/x-fictionbook+xml');
+                } else if (ext === 'epub') {
+                    addLink(rawHref, 'application/epub+zip');
+                } else if (ext === 'mobi') {
+                    addLink(rawHref, 'application/x-mobipocket-ebook');
+                } else {
+                    addLink(rawHref, `application/${ext}`);
+                    addLink(`${bookInfo.link}/zip`, 'application/zip');
                 }
 
                 //entry
@@ -170,7 +177,14 @@ class BookPage extends BasePage {
                 }
 
                 e['dc:language'] = bookInfo.book.lang;
-                e['dc:format'] = ext;
+                if (ext === 'fb2')
+                    e['dc:format'] = 'application/fb2+xml';
+                else if (ext === 'epub')
+                    e['dc:format'] = 'application/epub+zip';
+                else if (ext === 'mobi')
+                    e['dc:format'] = 'application/x-mobipocket-ebook';
+                else
+                    e['dc:format'] = `application/${ext}`;
 
                 //genre
                 const genre = bookInfo.book.genre.split(',');
@@ -228,8 +242,8 @@ class BookPage extends BasePage {
 
                 //links
                 e.link = [];
-                for (const [fileFormat, downHref] of Object.entries(formats))
-                    e.link.push(this.downLink({href: downHref, type: `application/${fileFormat}`}));
+                for (const item of links)
+                    e.link.push(this.downLink(item));
 
                 if (bookInfo.cover) {
                     let coverType = 'image/jpeg';
