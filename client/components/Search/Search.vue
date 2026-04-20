@@ -113,6 +113,20 @@
                         </div>
                         <div v-show="!isExtendedSearch && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
+                                v-model="search.keywords" :maxlength="inputMaxLength" :debounce="inputDebounce"
+                                class="q-mt-xs col-3" :bg-color="inputBgColor()" style="min-width: 140px;" label="Ключевые слова" stack-label outlined dense clearable readonly
+                            >
+                                <template v-if="search.keywords" #append>
+                                    <q-icon name="la la-times-circle" class="q-field__focusable-action" @click.stop.prevent="search.keywords = ''" />
+                                </template>
+
+                                <q-tooltip v-if="search.keywords && showTooltips" :delay="500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
+                                    {{ search.keywords }}
+                                </q-tooltip>
+                            </q-input>
+
+                            <div class="q-mx-xs" />
+                            <q-input
                                 v-model="genreNames" :maxlength="inputMaxLength" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor()" input-style="cursor: pointer" style="min-width: 140px;" label="Жанр" stack-label outlined dense clearable readonly
                                 @click.stop.prevent="selectGenre"
@@ -129,7 +143,7 @@
                             <div class="q-mx-xs" />
                             <q-select 
                                 v-model="searchDate"
-                                class="q-mt-xs col-3"
+                                class="q-mt-xs col-2"
                                 :options="searchDateOptions"
                                 dropdown-icon="la la-angle-down la-sm"
                                 :bg-color="inputBgColor()"
@@ -160,7 +174,7 @@
                             <div class="q-mx-xs" />
                             <q-input
                                 v-model="librateNames" :maxlength="inputMaxLength" :debounce="inputDebounce"
-                                class="q-mt-xs col-2" :bg-color="inputBgColor()" input-style="cursor: pointer" style="min-width: 140px;" label="Оценка" stack-label outlined dense clearable readonly
+                                class="q-mt-xs col-2" :bg-color="inputBgColor()" input-style="cursor: pointer" style="min-width: 120px;" label="Оценка" stack-label outlined dense clearable readonly
                                 @click.stop.prevent="selectLibRate"
                             >
                                 <template v-if="librateNames" #append>
@@ -175,7 +189,7 @@
                             <div class="q-mx-xs" />
                             <q-input
                                 v-model="search.ext" :maxlength="inputMaxLength" :debounce="inputDebounce"
-                                class="q-mt-xs col-2" :bg-color="inputBgColor()" input-style="cursor: pointer" style="min-width: 140px;" label="Тип файла" stack-label outlined dense clearable readonly
+                                class="q-mt-xs col-2" :bg-color="inputBgColor()" input-style="cursor: pointer" style="min-width: 120px;" label="Тип файла" stack-label outlined dense clearable readonly
                                 @click.stop.prevent="selectExt"
                             >
                                 <template v-if="search.ext" #append>
@@ -250,7 +264,7 @@
                                 </div>
                                 <template #tooltip>
                                     <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
-                                        В раздел "Книги" с переносом значения title={{ extSearch.title }}
+                                        В раздел "Названия" с переносом значения title={{ extSearch.title }}
                                     </q-tooltip>
                                 </template>
                             </DivBtn>
@@ -365,6 +379,7 @@ import vueComponent from '../vueComponent.js';
 import AuthorList from './AuthorList/AuthorList.vue';
 import SeriesList from './SeriesList/SeriesList.vue';
 import TitleList from './TitleList/TitleList.vue';
+import AllBooksList from './AllBooksList/AllBooksList.vue';
 import ExtendedList from './ExtendedList/ExtendedList.vue';
 
 import PageScroller from './PageScroller/PageScroller.vue';
@@ -391,7 +406,8 @@ const maxLimit = 1000;
 const route2component = {
     'author': {component: 'AuthorList', label: 'Авторы'},
     'series': {component: 'SeriesList', label: 'Серии'},
-    'title': {component: 'TitleList', label: 'Книги'},
+    'title': {component: 'TitleList', label: 'Названия'},
+    'books': {component: 'AllBooksList', label: 'Книги'},
     'extended': {component: 'ExtendedList', label: 'Расширенный поиск'},
 };
 
@@ -400,6 +416,7 @@ const componentOptions = {
         AuthorList,
         SeriesList,
         TitleList,
+        AllBooksList,
         ExtendedList,
         PageScroller,
         SettingsDialog,
@@ -588,7 +605,7 @@ class Search {
         this.commit = this.$store.commit;
         this.api = this.$root.api;
 
-        this.generateDefaults(this.search, ['author', 'series', 'title', 'genre', 'lang', 'date', 'librate', 'ext']);
+        this.generateDefaults(this.search, ['author', 'series', 'title', 'keywords', 'genre', 'lang', 'date', 'librate', 'ext']);
         this.search.setDefaults(this.search);
 
         this.loadSettings();
@@ -733,6 +750,7 @@ class Search {
     get extendedParamsMessage() {
         const s = this.search;
         const result = [];
+        result.push(s.keywords ? 'Ключевые слова' : '');
         result.push(s.genre ? 'Жанр' : '');
         result.push(s.date ? 'Дата поступления' : '');
         result.push(s.librate ? 'Оценка' : '');
@@ -743,6 +761,10 @@ class Search {
 
     get isExtendedSearch() {
         return this.selectedList === 'extended';
+    }
+
+    get isBooksBrowse() {
+        return this.selectedList === 'books';
     }
 
     get extSearchNames() {
@@ -827,6 +849,8 @@ class Search {
 
                 result = [s, t].filter(v => v).join(' ');
                 result = [a, result].filter(v => v).join(' ');
+            } else if (this.isBooksBrowse) {
+                result = `Все книги: ${this.collection}`;
             }
         } else {
             if (this.extSearchNames)
@@ -881,7 +905,9 @@ class Search {
     <br>
     Специльное имя автора "?" служит для поиска и группировки книг без автора.
     <br><br>
-    Для разделов <b>Серии</b>, <b>Книги</b> все аналогично разделу <b>Авторы</b>.
+    Для разделов <b>Серии</b>, <b>Названия</b> все аналогично разделу <b>Авторы</b>.
+    <br><br>
+    Раздел <b>Все книги</b> показывает библиотеку единым карточным списком с постраничным просмотром. В нем можно просто листать всю коллекцию или сужать ее обычными полями поиска и дополнительными фильтрами.
 </p>
 `;
 
@@ -1099,9 +1125,34 @@ class Search {
                 this.search.title = `=${event.value}`;
                 this.selectedList = '/title';
                 break;
+            case 'genreName': {
+                const genreCode = this.findGenreCodeByName(event.value);
+                if (!genreCode)
+                    return;
+
+                this.search.genre = genreCode;
+                this.selectedList = '/books';
+                break;
+            }
+            case 'keyword':
+                this.search.keywords = `*${event.value}`;
+                this.selectedList = '/books';
+                break;
         }
 
         this.scrollToTop();
+    }
+
+    findGenreCodeByName(name) {
+        if (!name)
+            return '';
+
+        for (const [code, title] of this.genreMap.entries()) {
+            if (title === name)
+                return code;
+        }
+
+        return '';
     }
 
     setSetting(name, newValue) {
@@ -1139,6 +1190,7 @@ class Search {
             author: query.author,
             series: query.series,
             title: query.title,
+            keywords: query.keywords,
             genre: query.genre,
             lang: (typeof(query.lang) == 'string' ? query.lang : this.langDefault),
             date: query.date,

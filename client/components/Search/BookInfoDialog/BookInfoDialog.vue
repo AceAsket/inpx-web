@@ -121,7 +121,7 @@
                                     <div class="info-key">
                                         {{ subItem.label }}
                                     </div>
-                                    <div class="q-ml-sm info-value" v-html="subItem.value" />
+                                    <div class="q-ml-sm info-value" v-html="subItem.value" @click="onInfoValueClick($event)" />
                                 </div>
                             </div>
 
@@ -329,6 +329,38 @@ class BookInfoDialog {
         return result.join(', ');
     }
 
+    escapeHtml(value = '') {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    renderTokenLinks(values = [], type = '') {
+        return values
+            .map((value) => {
+                const text = String(value || '').trim();
+                if (!text)
+                    return '';
+
+                const safeText = this.escapeHtml(text);
+                return `<span class="info-token-link" data-nav-type="${type}" data-nav-value="${safeText}">${safeText}</span>`;
+            })
+            .filter(Boolean)
+            .join(', ');
+    }
+
+    renderKeywordLinks(value = '') {
+        const tokens = String(value)
+            .split(/[;,]/)
+            .map(item => item.trim())
+            .filter(Boolean);
+
+        return this.renderTokenLinks(tokens, 'keyword');
+    }
+
     get inpx() {
         const mapping = [
             {name: 'fileInfo', label: 'Информация о файле', value: [
@@ -374,7 +406,10 @@ class BookInfoDialog {
                 return value.split(',').join(', ');
 
             if (nodePath == 'titleInfo/genre')
-                return this.convertGenres(value.split(','));
+                return this.renderTokenLinks(this.convertGenres(value.split(',')).split(',').map(item => item.trim()).filter(Boolean), 'genreName');
+
+            if (nodePath == 'titleInfo/keywords')
+                return this.renderKeywordLinks(value);
 
             if (nodePath == 'titleInfo/librate' && !value)
                 return null;
@@ -511,7 +546,10 @@ class BookInfoDialog {
                         return this.replaceInlineFb2Images(value).replace(/<p>/g, `<p class="p-history">`);
 
                     if ((nodePath == 'titleInfo/genre' || nodePath == 'srcTitleInfo/genre') && value)
-                        return this.convertGenres(value);
+                        return this.renderTokenLinks(this.convertGenres(value).split(',').map(item => item.trim()).filter(Boolean), 'genreName');
+
+                    if ((nodePath == 'titleInfo/keywords' || nodePath == 'srcTitleInfo/keywords') && value)
+                        return this.renderKeywordLinks(value);
 
                     return origVTS(value, nodePath);
                 },
@@ -607,6 +645,22 @@ class BookInfoDialog {
 
         this.dialogVisible = false;
         this.$emit('navigate', {type, value});
+    }
+
+    onInfoValueClick(event) {
+        const node = event.target.closest('[data-nav-type][data-nav-value]');
+        if (!node)
+            return;
+
+        const type = node.getAttribute('data-nav-type');
+        const value = node.getAttribute('data-nav-value');
+        if (!type || !value)
+            return;
+
+        if (type === 'genreName')
+            this.emitNavigate('genreName', value);
+        else if (type === 'keyword')
+            this.emitNavigate('keyword', value);
     }
 }
 
@@ -721,6 +775,17 @@ export default vueComponent(BookInfoDialog);
     min-width: 0;
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+.info-value :deep(.info-token-link) {
+    color: var(--app-link);
+    cursor: pointer;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.info-value :deep(.info-token-link:hover) {
+    text-decoration: underline;
 }
 
 .poster,

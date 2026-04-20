@@ -538,4 +538,4 @@ node server --app-dir=.inpx-web
 npm run dev
 ```
 
-Связаться с автором проекта: [bookpauk@gmail.com](mailto:bookpauk@gmail.com)
+По вопросам этого форка используйте Issues в репозитории: https://github.com/AceAsket/inpx-web/issues
