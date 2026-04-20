@@ -133,71 +133,75 @@
                         {{ authorInfoLabel }}
                     </q-btn>
 
-                    <q-btn
-                        v-if="telegramShareEnabled"
-                        flat
-                        no-caps
-                        icon="lab la-telegram-plane"
-                        @click.stop.prevent="emit('sendTelegram')"
-                    >
-                        Telegram
-                    </q-btn>
+                    <div v-if="telegramShareEnabled" class="action-split">
+                        <q-btn
+                            flat
+                            no-caps
+                            icon="lab la-telegram-plane"
+                            @click.stop.prevent="emit('sendTelegram')"
+                        >
+                            Telegram
+                        </q-btn>
 
-                    <q-btn-dropdown
-                        v-if="telegramShareEnabled"
-                        flat
-                        dense
-                        dropdown-icon="la la-angle-down"
-                        auto-close
-                        @click.stop.prevent
-                    >
-                        <q-list dense style="min-width: 140px">
-                            <q-item
-                                v-for="format in telegramFormats"
-                                :key="format"
-                                clickable
-                                v-close-popup
-                                @click.stop.prevent="emit('sendTelegram', format)"
-                            >
-                                <q-item-section>
-                                    {{ format.toUpperCase() }}
-                                </q-item-section>
-                            </q-item>
-                        </q-list>
-                    </q-btn-dropdown>
+                        <q-btn
+                            flat
+                            round
+                            dense
+                            icon="la la-angle-down"
+                            @click.stop.prevent
+                        >
+                            <q-menu auto-close anchor="bottom right" self="top right">
+                                <q-list dense style="min-width: 120px">
+                                    <q-item
+                                        v-for="format in telegramFormats"
+                                        :key="format"
+                                        clickable
+                                        v-close-popup
+                                        @click.stop.prevent="emit('sendTelegram', format)"
+                                    >
+                                        <q-item-section>
+                                            {{ format.toUpperCase() }}
+                                        </q-item-section>
+                                    </q-item>
+                                </q-list>
+                            </q-menu>
+                        </q-btn>
+                    </div>
 
-                    <q-btn
-                        v-if="emailShareEnabled"
-                        flat
-                        no-caps
-                        icon="la la-envelope"
-                        @click.stop.prevent="emit('sendEmail')"
-                    >
-                        Email
-                    </q-btn>
+                    <div v-if="emailShareEnabled" class="action-split">
+                        <q-btn
+                            flat
+                            no-caps
+                            icon="la la-envelope"
+                            @click.stop.prevent="emit('sendEmail')"
+                        >
+                            Email
+                        </q-btn>
 
-                    <q-btn-dropdown
-                        v-if="emailShareEnabled"
-                        flat
-                        dense
-                        dropdown-icon="la la-angle-down"
-                        auto-close
-                        @click.stop.prevent
-                    >
-                        <q-list dense style="min-width: 140px">
-                            <q-item
-                                v-for="format in emailFormats"
-                                :key="format"
-                                clickable
-                                v-close-popup
-                                @click.stop.prevent="emit('sendEmail', format)"
-                            >
-                                <q-item-section>
-                                    {{ format.toUpperCase() }}
-                                </q-item-section>
-                            </q-item>
-                        </q-list>
-                    </q-btn-dropdown>
+                        <q-btn
+                            flat
+                            round
+                            dense
+                            icon="la la-angle-down"
+                            @click.stop.prevent
+                        >
+                            <q-menu auto-close anchor="bottom right" self="top right">
+                                <q-list dense style="min-width: 120px">
+                                    <q-item
+                                        v-for="format in emailFormats"
+                                        :key="format"
+                                        clickable
+                                        v-close-popup
+                                        @click.stop.prevent="emit('sendEmail', format)"
+                                    >
+                                        <q-item-section>
+                                            {{ format.toUpperCase() }}
+                                        </q-item-section>
+                                    </q-item>
+                                </q-list>
+                            </q-menu>
+                        </q-btn>
+                    </div>
 
                     <q-btn
                         flat
@@ -789,6 +793,26 @@ export default vueComponent(BookView);
     flex-wrap: wrap;
     padding-top: 2px;
     min-height: 42px;
+}
+
+.action-split {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    border-radius: 999px;
+    background: rgba(23, 32, 38, 0.04);
+}
+
+.action-split :deep(.q-btn) {
+    min-height: 36px;
+}
+
+.action-split :deep(.q-btn:first-child) {
+    padding-right: 4px;
+}
+
+.action-split :deep(.q-btn:last-child) {
+    min-width: 30px;
 }
 
 .format-actions {

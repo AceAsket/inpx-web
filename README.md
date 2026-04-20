@@ -33,6 +33,9 @@ inpx-web
 * [docker-compose.full.yml](./docker-compose.full.yml) — полный образ с конвертацией
 * [docker-compose.telegram-email.yml](./docker-compose.telegram-email.yml) — пример с отправкой книг в Telegram и на email
 
+Важно: путь в `INPX` и каталог в `LIBDIR` должны совпадать с путём внутри контейнера из правой части `volume`.
+Например, если библиотека смонтирована как `...:/library:ro`, то и `INPX` должен быть вида `/library/имя.inpx`, а `LIBDIR` — `/library`.
+
 Собрать полный образ с конвертацией через Calibre можно так:
 
 ```sh
