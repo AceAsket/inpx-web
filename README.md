@@ -323,11 +323,11 @@ Options:
     },
 
     // страница для скачивания свежего релиза
-    "latestReleaseLink": "https://github.com/bookpauk/inpx-web/releases/latest",
+    "latestReleaseLink": "https://github.com/AceAsket/inpx-web/releases/latest",
 
     // api для проверки новой версии, 
     // пустая строка - отключить проверку выхода новых версий
-    "checkReleaseLink": "https://api.github.com/repos/bookpauk/inpx-web/releases/latest",
+    "checkReleaseLink": "https://api.github.com/repos/AceAsket/inpx-web/releases/latest",
 
     // настройки по умолчанию для веб-интерфейса
     // устанавливаются при первой загрузке страницы в браузере
@@ -475,7 +475,7 @@ sudo service nginx reload
 Для сборки linux-arm64 необходимо предварительно установить [QEMU](https://wiki.debian.org/QemuUserEmulation).
 
 ```sh
-git clone https://github.com/bookpauk/inpx-web
+git clone https://github.com/AceAsket/inpx-web
 cd inpx-web
 npm i
 npm run release
@@ -496,7 +496,7 @@ curl -s https://deb.nodesource.com/setup_16.x | sudo bash
 sudo apt install nodejs -y
 
 # подготовка
-git clone https://github.com/bookpauk/inpx-web
+git clone https://github.com/AceAsket/inpx-web
 cd inpx-web
 npm i
 npm run build:client && node build/prepkg.js linux

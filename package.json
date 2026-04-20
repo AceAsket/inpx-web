@@ -3,7 +3,7 @@
   "version": "1.5.9",
   "author": "Book Pauk <bookpauk@gmail.com>",
   "license": "CC0-1.0",
-  "repository": "bookpauk/inpx-web",
+  "repository": "AceAsket/inpx-web",
   "engines": {
     "node": ">=16.16.0"
   },

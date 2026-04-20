@@ -67,8 +67,8 @@ module.exports = {
         root: '/opds',
     },
 
-    latestReleaseLink: 'https://github.com/bookpauk/inpx-web/releases/latest',
-    checkReleaseLink: 'https://api.github.com/repos/bookpauk/inpx-web/releases/latest',
+    latestReleaseLink: 'https://github.com/AceAsket/inpx-web/releases/latest',
+    checkReleaseLink: 'https://api.github.com/repos/AceAsket/inpx-web/releases/latest',
 
     uiDefaults: {
         limit: 20,
