@@ -359,7 +359,6 @@ import vueComponent from '../vueComponent.js';
 import AuthorList from './AuthorList/AuthorList.vue';
 import SeriesList from './SeriesList/SeriesList.vue';
 import TitleList from './TitleList/TitleList.vue';
-import ModernTitleList from './ModernTitleList/ModernTitleList.vue';
 import ExtendedList from './ExtendedList/ExtendedList.vue';
 
 import PageScroller from './PageScroller/PageScroller.vue';
@@ -395,7 +394,6 @@ const componentOptions = {
         AuthorList,
         SeriesList,
         TitleList,
-        ModernTitleList,
         ExtendedList,
         PageScroller,
         SettingsDialog,
@@ -540,8 +538,6 @@ class Search {
     extendedParams = false;
     showJson = false;
     showNewReleaseAvailable = true;
-    newInterface = false;
-
     //stuff
     prevList = {};
     list = {
@@ -644,7 +640,6 @@ class Search {
         this.langDefault = settings.langDefault;
         this.showJson = settings.showJson;
         this.showNewReleaseAvailable = settings.showNewReleaseAvailable;
-        this.newInterface = !!settings.newInterface;
     }
 
     recvMessage(d) {
@@ -725,9 +720,6 @@ class Search {
     }
 
     getSelectedListComponent(route) {
-        if (route === 'title' && this.newInterface)
-            return 'ModernTitleList';
-
         return (route2component[route] ? route2component[route].component : null);
     }
 

@@ -84,7 +84,6 @@ module.exports = {
         showJson: false,
         showNewReleaseAvailable: true,
         darkTheme: false,
-        newInterface: false,
     },
 };
 
