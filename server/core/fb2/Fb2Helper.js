@@ -60,7 +60,6 @@ class Fb2Helper {
 
         parser.fromString(data.toString(), {
             lowerCase: true,
-            pickNode: route => route.indexOf('fictionbook/body') !== 0,
         });
 
         const coverImage = parser.$$('/description/title-info/coverpage/image');

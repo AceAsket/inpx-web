@@ -35,7 +35,7 @@ const stateToText = {
 const cleanDirInterval = 60*60*1000;//каждый час
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const bookAssetVersion = 'fblibrary-assets-v1';
-const bookInfoVersion = 'fb2-binaries-v1';
+const bookInfoVersion = 'fb2-binaries-v2';
 
 function decodeHtmlBuffer(data) {
     let text = iconv.decode(data, 'utf8');
