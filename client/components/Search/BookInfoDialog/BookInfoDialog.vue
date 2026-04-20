@@ -517,7 +517,7 @@ class BookInfoDialog {
                 },
             });
 
-            this.contents = this.extractContents(parser);
+            this.contents = (bookInfo.contents && bookInfo.contents.length ? bookInfo.contents : this.extractContents(parser));
         }
 
         if (bookInfo.book)

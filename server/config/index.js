@@ -103,11 +103,24 @@ class ConfigManager {
             if (await fs.pathExists(this._config.configFile)) {
                 const data = JSON.parse(await fs.readFile(this._config.configFile, 'utf8'));
                 const config = _.pick(data, propsToSave);
+                let needsSave = false;
+
+                if (!config.latestReleaseLink || config.latestReleaseLink === 'https://github.com/bookpauk/inpx-web/releases/latest') {
+                    config.latestReleaseLink = 'https://github.com/AceAsket/inpx-web/releases/latest';
+                    needsSave = true;
+                }
+
+                if (!config.checkReleaseLink || config.checkReleaseLink === 'https://api.github.com/repos/bookpauk/inpx-web/releases/latest') {
+                    config.checkReleaseLink = 'https://api.github.com/repos/AceAsket/inpx-web/releases/latest';
+                    needsSave = true;
+                }
 
                 this.config = config;
 
                 //сохраним конфиг, если не все атрибуты присутствуют в файле конфига
-                if (config.allowConfigRewrite) {
+                if (needsSave) {
+                    await this.save();
+                } else if (config.allowConfigRewrite) {
                     for (const prop of propsToSave) {
                         if (!Object.prototype.hasOwnProperty.call(config, prop)) {
                             await this.save();

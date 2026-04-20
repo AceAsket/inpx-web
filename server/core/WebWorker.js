@@ -35,7 +35,7 @@ const stateToText = {
 const cleanDirInterval = 60*60*1000;//каждый час
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const bookAssetVersion = 'fblibrary-assets-v1';
-const bookInfoVersion = 'fb2-binaries-v2';
+const bookInfoVersion = 'fb2-binaries-v3';
 
 function decodeHtmlBuffer(data) {
     let text = iconv.decode(data, 'utf8');
@@ -942,6 +942,31 @@ class WebWorker {
         }
     }
 
+    extractFb2Contents(parser) {
+        const result = [];
+
+        const walk = (sections, level = 0) => {
+            for (const section of sections) {
+                const titleNode = section.$$('title/');
+                let title = '';
+                if (titleNode && titleNode.count)
+                    title = titleNode.concat().replace(/\s+/g, ' ').trim();
+
+                if (title)
+                    result.push({title, level});
+
+                const childSections = section.$$array('section');
+                if (childSections.length)
+                    walk(childSections, level + 1);
+            }
+        };
+
+        for (const body of parser.$$array('/body'))
+            walk(body.$$array('section'));
+
+        return result.slice(0, 200);
+    }
+
     async getBookInfo(bookUid) {
         this.checkMyState();
 
@@ -964,6 +989,7 @@ class WebWorker {
                 result.book = book;
                 result.cover = '';
                 result.fb2 = false;
+                result.contents = [];
                 result.infoVersion = bookInfoVersion;
                 let parser = null;
 
@@ -971,6 +997,7 @@ class WebWorker {
                     const {fb2, cover, coverExt} = await this.fb2Helper.getDescAndCover(bookFile);
                     parser = fb2;
                     result.fb2 = fb2.rawNodes;
+                    result.contents = this.extractFb2Contents(fb2);
 
                     if (cover) {
                         result.cover = `${this.config.bookPathStatic}/${hash}${coverExt}`;
