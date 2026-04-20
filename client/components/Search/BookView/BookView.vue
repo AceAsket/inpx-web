@@ -36,26 +36,25 @@
             </div>
 
             <div class="book-content">
-                <div class="book-topline">
-                    <div v-if="(mode == 'series' || mode == 'title' || mode == 'extended') && bookAuthor" class="book-author clickable2" @click.stop.prevent="emit('authorClick')">
-                        {{ bookAuthor }}
+                <div v-if="(mode == 'series' || mode == 'title' || mode == 'extended') && bookAuthor" class="book-author clickable2" @click.stop.prevent="emit('authorClick')">
+                    {{ bookAuthor }}
+                </div>
+
+                <div class="book-meta-pills">
+                    <div class="meta-pill">
+                        {{ posterExt }}
                     </div>
-                    <div class="book-meta-pills">
-                        <div class="meta-pill">
-                            {{ posterExt }}
-                        </div>
-                        <div v-if="showRates && !book.del && book.librate" class="meta-pill rating-pill" :class="rateBadgeColor">
-                            {{ book.librate }}/5
-                        </div>
-                        <div v-else-if="showRates && !book.del" class="meta-pill rating-pill rating-pill-placeholder" aria-hidden="true">
-                            0/5
-                        </div>
-                        <div class="meta-pill">
-                            {{ bookSize }}
-                        </div>
-                        <div v-if="showDates && book.date" class="meta-pill">
-                            {{ bookDate }}
-                        </div>
+                    <div v-if="showRates && !book.del && book.librate" class="meta-pill rating-pill" :class="rateBadgeColor">
+                        {{ book.librate }}/5
+                    </div>
+                    <div v-else-if="showRates && !book.del" class="meta-pill rating-pill rating-pill-placeholder" aria-hidden="true">
+                        0/5
+                    </div>
+                    <div class="meta-pill">
+                        {{ bookSize }}
+                    </div>
+                    <div v-if="showDates && book.date" class="meta-pill">
+                        {{ bookDate }}
                     </div>
                 </div>
 
@@ -567,14 +566,6 @@ export default vueComponent(BookView);
     height: 100%;
 }
 
-.book-topline {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
 .book-author {
     color: #14705e;
     font-size: 14px;
@@ -583,6 +574,7 @@ export default vueComponent(BookView);
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    min-height: calc(1.35em * 2);
 }
 
 .book-meta-pills {
