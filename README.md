@@ -27,10 +27,16 @@ inpx-web
 
 Для этого форка основной способ запуска рассчитан на Docker.
 
-Собрать образ можно так:
+Собрать полный образ с конвертацией через Calibre можно так:
 
 ```sh
 docker build -t inpx-web-7z:latest .
+```
+
+Облегчённый вариант без конвертации в `epub` / `mobi` / `pdf`:
+
+```sh
+docker build --target runtime-lite -t inpx-web-7z:lite .
 ```
 
 Если нужно пересобрать все слои заново без кэша:
@@ -39,7 +45,12 @@ docker build -t inpx-web-7z:latest .
 docker build --no-cache -t inpx-web-7z:latest .
 ```
 
-Важно: сборка может идти заметно дольше обычного, потому что в образ устанавливаются зависимости для работы с `.7z`, обложками и конвертацией книг через Calibre.
+Важно:
+
+* полный образ тяжелее и собирается дольше из-за установки Calibre
+* `runtime-lite` заметно легче и быстрее собирается, но не умеет конвертацию книг
+* Dockerfile использует multi-stage сборку, чтобы не тянуть dev-зависимости в runtime
+* при включённом BuildKit повторные сборки идут быстрее за счёт кэша `apt` и `npm`
 
 После сборки контейнер можно запустить через `docker compose`:
 
@@ -48,6 +59,18 @@ docker compose up -d
 ```
 
 или напрямую через `docker run` с тегом `inpx-web-7z:latest`.
+
+### Публикация в Docker Hub
+
+Пример для публикации полного и облегчённого образов:
+
+```sh
+docker build -t <dockerhub-user>/inpx-web:latest .
+docker build --target runtime-lite -t <dockerhub-user>/inpx-web:lite .
+
+docker push <dockerhub-user>/inpx-web:latest
+docker push <dockerhub-user>/inpx-web:lite
+```
 
 ### Быстрый старт через docker run
 
