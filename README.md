@@ -1,6 +1,11 @@
 inpx-web
 ========
 
+> Public fork / derivative of the original project
+> [`bookpauk/inpx-web`](https://github.com/bookpauk/inpx-web).
+> Original author: **bookpauk**.
+> This repository contains deployment and UI changes for the `inpx-web-7z` variant while preserving attribution to the upstream project.
+
 Веб-сервер для поиска по .inpx-коллекции.
 
 Выглядит следующим образом: [https://lib.omnireader.ru](https://lib.omnireader.ru)
