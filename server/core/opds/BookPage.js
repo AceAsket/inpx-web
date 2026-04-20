@@ -147,7 +147,8 @@ class BookPage extends BasePage {
 
                 //format
                 const ext = bookInfo.book.ext;
-                const rawHref = `${bookInfo.link}/raw`;
+                const fileNameInUrl = encodeURIComponent(bookInfo.downFileName || `${bookInfo.book.title || 'book'}.${ext}`);
+                const rawHref = `${bookInfo.link}/raw/${fileNameInUrl}`;
                 const links = [];
                 const addLink = (href, type) => {
                     links.push({href, type});
@@ -245,13 +246,19 @@ class BookPage extends BasePage {
                 for (const item of links)
                     e.link.push(this.downLink(item));
 
-                if (bookInfo.cover) {
-                    let coverType = 'image/jpeg';
-                    if (path.extname(bookInfo.cover) == '.png')
-                        coverType = 'image/png';
+                let coverHref = bookInfo.cover || '';
+                let coverType = 'image/jpeg';
+                if (coverHref && path.extname(coverHref) == '.png')
+                    coverType = 'image/png';
 
-                    e.link.push(this.imgLink({href: bookInfo.cover, type: coverType}));
-                    e.link.push(this.imgLink({href: bookInfo.cover, type: coverType, thumb: true}));
+                if (!coverHref && bookInfo.book.libid) {
+                    coverHref = `${this.config.rootPathStatic || ''}/cover/${bookInfo.book.libid}`;
+                    coverType = 'image/png';
+                }
+
+                if (coverHref) {
+                    e.link.push(this.imgLink({href: coverHref, type: coverType}));
+                    e.link.push(this.imgLink({href: coverHref, type: coverType, thumb: true}));
                 }
 
                 entry.push(e);
