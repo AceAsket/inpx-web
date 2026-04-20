@@ -13,7 +13,7 @@ class ReadingListStore {
 
         if (!await fs.pathExists(this.file)) {
             await this.save({
-                version: 3,
+                version: 4,
                 users: [this.makeDefaultUser()],
                 lists: [],
             });
@@ -61,6 +61,37 @@ class ReadingListStore {
         if (!/^[a-z0-9._-]{3,64}$/i.test(normalized))
             throw new Error('Логин должен содержать 3-64 символа: буквы, цифры, точку, дефис или подчёркивание');
         return normalized;
+    }
+
+    adminLogin() {
+        return this.validateLogin(this.config.adminLogin || 'admin');
+    }
+
+    adminPassword() {
+        return String(this.config.adminPassword || 'admin');
+    }
+
+    hashProfilePassword(login, password) {
+        return crypto.createHash('sha256')
+            .update(`${String(login || '').trim().toLowerCase()}::${String(password || '')}`, 'utf8')
+            .digest('hex');
+    }
+
+    makeAdminUser() {
+        const now = this.nowIso();
+        const login = this.adminLogin();
+        return {
+            id: 'admin',
+            name: 'Администратор',
+            login,
+            passwordHash: this.hashProfilePassword(login, this.adminPassword()),
+            emailTo: '',
+            telegramChatId: '',
+            opdsEnabled: false,
+            isAdmin: true,
+            createdAt: now,
+            updatedAt: now,
+        };
     }
 
     normalizeBookUid(bookUid) {
@@ -124,6 +155,7 @@ class ReadingListStore {
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
+        normalized.isAdmin = !!normalized.isAdmin;
         normalized.createdAt = normalized.createdAt || now;
         normalized.updatedAt = normalized.updatedAt || now;
         return normalized;
@@ -144,7 +176,7 @@ class ReadingListStore {
 
     normalizeData(data) {
         const defaultUser = this.makeDefaultUser();
-        const source = Object.assign({version: 3, users: [], lists: []}, data || {});
+        const source = Object.assign({version: 4, users: [], lists: []}, data || {});
         let users = [];
 
         if (Array.isArray(source.users) && source.users.length) {
@@ -183,16 +215,74 @@ class ReadingListStore {
         }
 
         return {
-            version: 3,
+            version: 4,
             users,
             lists,
+        };
+    }
+
+    applyAdminBootstrap(data) {
+        const source = this.normalizeData(data);
+        const users = [...source.users];
+        let changed = false;
+
+        const adminTemplate = this.makeAdminUser();
+        let admin = users.find((item) => item.isAdmin) || users.find((item) => item.id === adminTemplate.id) || null;
+
+        if (!admin) {
+            users.unshift(adminTemplate);
+            changed = true;
+        } else {
+            if (!admin.isAdmin) {
+                admin.isAdmin = true;
+                changed = true;
+            }
+
+            if (!admin.login) {
+                admin.login = adminTemplate.login;
+                changed = true;
+            }
+
+            const duplicate = users.find((item) => item.id !== admin.id && item.login === adminTemplate.login);
+            if (duplicate && this.config.resetAdminPassword)
+                throw new Error(`Admin login "${adminTemplate.login}" already used by another profile`);
+
+            if (!admin.passwordHash || this.config.resetAdminPassword) {
+                admin.login = adminTemplate.login;
+                admin.passwordHash = adminTemplate.passwordHash;
+                admin.updatedAt = this.nowIso();
+                changed = true;
+            }
+
+            if (admin.opdsEnabled !== false) {
+                admin.opdsEnabled = false;
+                changed = true;
+            }
+        }
+
+        const adminIndex = users.findIndex((item) => item.id === adminTemplate.id || item.isAdmin);
+        if (adminIndex > 0) {
+            const [adminUser] = users.splice(adminIndex, 1);
+            users.unshift(adminUser);
+            changed = true;
+        }
+
+        return {
+            data: {
+                version: 4,
+                users,
+                lists: source.lists,
+            },
+            changed,
         };
     }
 
     async load() {
         await this.ensureData();
         const raw = JSON.parse(await fs.readFile(this.file, 'utf8'));
-        const data = this.normalizeData(raw);
+        const {data, changed} = this.applyAdminBootstrap(raw);
+        if (changed)
+            await fs.writeFile(this.file, JSON.stringify(data, null, 2));
         return data;
     }
 
@@ -287,6 +377,7 @@ class ReadingListStore {
             emailTo: profile.emailTo,
             telegramChatId: profile.telegramChatId,
             opdsEnabled: profile.opdsEnabled,
+            isAdmin: false,
         });
 
         data.users.push(user);
@@ -329,6 +420,9 @@ class ReadingListStore {
         const index = data.users.findIndex((item) => item.id === userId);
         if (index < 0)
             throw new Error('Пользователь не найден');
+
+        if (data.users[index].isAdmin)
+            throw new Error('Нельзя удалить профиль администратора');
 
         const [removed] = data.users.splice(index, 1);
         data.lists = data.lists.filter((item) => item.userId !== removed.id);

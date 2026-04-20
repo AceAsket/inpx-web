@@ -9,20 +9,26 @@
         </template>
 
         <div class="dialog-box">
-            <div class="section-title">
-                Создать профиль
-            </div>
+            <template v-if="canManageProfiles">
+                <div class="section-title">
+                    Создать профиль
+                </div>
 
-            <div class="profile-grid create-grid">
-                <q-input v-model="newProfile.name" outlined dense clearable label="Имя профиля" />
-                <q-input v-model="newProfile.login" outlined dense clearable label="Логин" />
-                <q-input v-model="newProfile.password" outlined dense clearable type="password" label="Пароль" />
-                <q-input v-model="newProfile.emailTo" outlined dense clearable label="Email для отправки" />
-                <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Telegram chat id" />
-                <q-toggle v-model="newProfile.opdsEnabled" label="Показывать профиль в OPDS" />
-                <q-btn color="primary" dense no-caps @click="createProfile">
-                    Создать
-                </q-btn>
+                <div class="profile-grid create-grid">
+                    <q-input v-model="newProfile.name" outlined dense clearable label="Имя профиля" />
+                    <q-input v-model="newProfile.login" outlined dense clearable label="Логин" />
+                    <q-input v-model="newProfile.password" outlined dense clearable type="password" label="Пароль" />
+                    <q-input v-model="newProfile.emailTo" outlined dense clearable label="Email для отправки" />
+                    <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Telegram chat id" />
+                    <q-toggle v-model="newProfile.opdsEnabled" label="Показывать профиль в OPDS" />
+                    <q-btn color="primary" dense no-caps @click="createProfile">
+                        Создать
+                    </q-btn>
+                </div>
+            </template>
+
+            <div v-else class="admin-note">
+                Создавать и удалять профили может только администратор.
             </div>
 
             <div class="section-title">
@@ -39,6 +45,7 @@
                         <div class="profile-name">
                             {{ item.name }}
                             <span v-if="item.id === currentUserId" class="current-badge">Текущий</span>
+                            <span v-if="item.isAdmin" class="admin-badge">Admin</span>
                             <span v-if="item.requiresLogin" class="lock-badge">Логин</span>
                         </div>
                         <div class="profile-actions">
@@ -51,9 +58,9 @@
                                 @click="saveCurrentProfile"
                             />
                             <q-btn
-                                v-if="item.id === currentUserId && config.profileAuthorized"
+                                v-if="canManageProfiles && !item.isAdmin"
                                 flat dense round icon="la la-trash" color="negative"
-                                @click="deleteCurrentProfile"
+                                @click="deleteProfile(item)"
                             />
                         </div>
                     </div>
@@ -132,6 +139,14 @@ class UserProfilesDialog {
         return this.$store.state.settings.currentUserId || this.config.currentUserId || '';
     }
 
+    get currentProfile() {
+        return this.config.currentUserProfile || {};
+    }
+
+    get canManageProfiles() {
+        return !!(this.config.profileAuthorized && this.currentProfile.isAdmin);
+    }
+
     makeEmptyNew() {
         return {
             name: '',
@@ -177,6 +192,7 @@ class UserProfilesDialog {
             name: item.name || '',
             login: item.login || '',
             requiresLogin: !!item.requiresLogin,
+            isAdmin: !!item.isAdmin,
         }));
         this.syncEditableProfile();
     }
@@ -202,21 +218,22 @@ class UserProfilesDialog {
         }
     }
 
-    async deleteCurrentProfile() {
-        const current = this.config.currentUserProfile || {};
+    async deleteProfile(item) {
         const confirmed = await this.$root.stdDialog.confirm(
-            `Удалить профиль «${current.name || ''}» вместе со всеми его списками?`,
+            `Удалить профиль «${item.name || ''}» вместе со всеми его списками?`,
             'Удаление профиля',
         );
         if (!confirmed)
             return;
 
         try {
-            const result = await this.api.deleteUserProfile(this.currentUserId);
-            this.commit('setSettings', {
-                currentUserId: result.nextUserId || '',
-                profileAccessToken: '',
-            });
+            const result = await this.api.deleteUserProfile(item.id);
+            if (item.id === this.currentUserId) {
+                this.commit('setSettings', {
+                    currentUserId: result.nextUserId || '',
+                    profileAccessToken: '',
+                });
+            }
             await this.loadProfiles();
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
@@ -322,7 +339,8 @@ export default vueComponent(UserProfilesDialog);
 }
 
 .current-badge,
-.lock-badge {
+.lock-badge,
+.admin-badge {
     margin-left: 8px;
     padding: 2px 8px;
     border-radius: 999px;
@@ -333,6 +351,11 @@ export default vueComponent(UserProfilesDialog);
 .current-badge {
     background: rgba(15, 159, 143, 0.1);
     color: var(--app-link);
+}
+
+.admin-badge {
+    background: rgba(201, 140, 0, 0.14);
+    color: #c98c00;
 }
 
 .lock-badge {
@@ -348,6 +371,14 @@ export default vueComponent(UserProfilesDialog);
     padding: 10px 12px;
     border-radius: 12px;
     background: rgba(31, 111, 191, 0.08);
+    color: var(--app-text);
+}
+
+.admin-note {
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(201, 140, 0, 0.12);
     color: var(--app-text);
 }
 

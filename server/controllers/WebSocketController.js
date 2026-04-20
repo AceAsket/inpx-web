@@ -301,6 +301,7 @@ class WebSocketController {
     }
 
     async createUserProfile(req, ws) {
+        await this.webWorker.requireAdmin(req.userId, req.profileAccessToken);
         const profile = Object.assign({}, req.profile || {});
         if (profile.password && !String(profile.login || '').trim())
             throw new Error('Для пароля нужно указать логин');
@@ -317,8 +318,13 @@ class WebSocketController {
             throw new Error('targetUserId is empty');
 
         const target = await this.webWorker.readingListStore.getUser(req.targetUserId);
-        if (target.passwordHash)
+        const current = await this.webWorker.getEffectiveUser(req.userId, req.profileAccessToken);
+        const isOwnProfile = !!(current && current.id === target.id);
+        if (isOwnProfile) {
             await this.webWorker.requireAuthorizedUser(req.targetUserId, req.profileAccessToken);
+        } else {
+            await this.webWorker.requireAdmin(req.userId, req.profileAccessToken);
+        }
 
         const profile = Object.assign({}, req.profile || {});
         if (profile.password && !String(profile.login || '').trim())
@@ -326,6 +332,7 @@ class WebSocketController {
         if (profile.password)
             profile.passwordHash = this.webWorker.hashProfilePassword(profile.login, profile.password);
         delete profile.password;
+        delete profile.isAdmin;
 
         const result = await this.webWorker.updateUserProfile(req.targetUserId, profile);
         this.send(result, req, ws);
@@ -335,9 +342,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'targetUserId'))
             throw new Error('targetUserId is empty');
 
-        const target = await this.webWorker.readingListStore.getUser(req.targetUserId);
-        if (target.passwordHash)
-            await this.webWorker.requireAuthorizedUser(req.targetUserId, req.profileAccessToken);
+        await this.webWorker.requireAdmin(req.userId, req.profileAccessToken);
 
         const result = await this.webWorker.deleteUserProfile(req.targetUserId);
         this.send(result, req, ws);

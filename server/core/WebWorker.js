@@ -521,6 +521,7 @@ class WebWorker {
                     name: item.name,
                     login: item.login || '',
                     requiresLogin: !!item.passwordHash,
+                    isAdmin: !!item.isAdmin,
                     opdsEnabled: item.opdsEnabled !== false,
                     createdAt: item.createdAt,
                     updatedAt: item.updatedAt,
@@ -581,6 +582,13 @@ class WebWorker {
         return requestedUser;
     }
 
+    async requireAdmin(userId = '', profileAccessToken = '') {
+        const user = await this.requireAuthorizedUser(userId, profileAccessToken);
+        if (!user.isAdmin)
+            throw new Error('Только администратор может управлять профилями');
+        return user;
+    }
+
     async getCurrentUserProfile(userId = '', profileAccessToken = '') {
         this.checkMyState();
 
@@ -594,6 +602,7 @@ class WebWorker {
                 name: user.name,
                 login: user.login || '',
                 hasPassword: !!user.passwordHash,
+                isAdmin: !!user.isAdmin,
                 emailTo: (profileAuthorized ? user.emailTo || '' : ''),
                 telegramChatId: (profileAuthorized ? user.telegramChatId || '' : ''),
                 opdsEnabled: user.opdsEnabled !== false,
