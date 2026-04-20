@@ -548,13 +548,22 @@ class BookInfoDialog {
 
     extractContents(parser) {
         const result = [];
+        const getNodeText = (node) => {
+            const parts = [];
+            node.eachDeepSelf((item) => {
+                if (item.type === parser.TEXT || item.type === parser.CDATA)
+                    parts.push(item.value);
+            });
+
+            return parts.join(' ').replace(/\s+/g, ' ').trim();
+        };
 
         const walk = (sections, level = 0) => {
             for (const section of sections) {
                 const titleNode = section.$$('title/');
                 let title = '';
                 if (titleNode && titleNode.count)
-                    title = titleNode.concat().replace(/\s+/g, ' ').trim();
+                    title = getNodeText(titleNode);
 
                 if (title)
                     result.push({title, level});
