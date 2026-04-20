@@ -47,6 +47,9 @@
                         <div v-if="showRates && !book.del && book.librate" class="meta-pill rating-pill" :class="rateBadgeColor">
                             {{ book.librate }}/5
                         </div>
+                        <div v-else-if="showRates && !book.del" class="meta-pill rating-pill rating-pill-placeholder" aria-hidden="true">
+                            0/5
+                        </div>
                         <div class="meta-pill">
                             {{ bookSize }}
                         </div>
@@ -586,6 +589,8 @@ export default vueComponent(BookView);
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    min-height: 30px;
+    align-items: center;
 }
 
 .meta-pill,
@@ -599,6 +604,14 @@ export default vueComponent(BookView);
     color: var(--app-muted);
     font-size: 12px;
     font-weight: 700;
+}
+
+.rating-pill {
+    min-width: 56px;
+}
+
+.rating-pill-placeholder {
+    visibility: hidden;
 }
 
 .book-title-row {
