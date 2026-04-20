@@ -35,9 +35,17 @@ const stateToText = {
 const cleanDirInterval = 60*60*1000;//каждый час
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const bookAssetVersion = 'fblibrary-assets-v1';
-const bookInfoVersion = 'fb2-binaries-v5';
+const bookInfoVersion = 'fb2-binaries-v6';
 
 function decodeHtmlBuffer(data) {
+    let text = iconv.decode(data, 'utf8');
+    if (text.includes('\uFFFD'))
+        text = iconv.decode(data, 'win1251');
+
+        return text;
+}
+
+function decodeArchiveText(data) {
     let text = iconv.decode(data, 'utf8');
     if (text.includes('\uFFFD'))
         text = iconv.decode(data, 'win1251');
@@ -120,6 +128,8 @@ class WebWorker {
             this.authorInfoArchives = null;
             this.authorPictureArchives = null;
             this.authorToArchive = null;
+            this.reviewArchives = null;
+            this.reviewToArchives = null;
 
             this.wState = this.workerState.getControl('server_state');
             this.myState = '';
@@ -976,6 +986,173 @@ class WebWorker {
         return result.slice(0, 200);
     }
 
+    extractFb2NodeText(node, parser) {
+        if (!node)
+            return '';
+
+        const parts = [];
+        node.eachDeepSelf((item) => {
+            if (item.type === parser.TEXT || item.type === parser.CDATA)
+                parts.push(item.value);
+        });
+
+        return parts.join(' ').replace(/\s+/g, ' ').trim();
+    }
+
+    extractFb2AnnotationMeta(parser) {
+        const result = {
+            epigraph: [],
+            epigraphAuthor: '',
+            stats: {
+                letters: 0,
+                words: 0,
+                pages: 0,
+                images: 0,
+            },
+        };
+
+        const topEpigraphs = parser.$$array('/body/epigraph');
+        if (topEpigraphs.length) {
+            const lines = [];
+            let author = '';
+
+            for (const epigraph of topEpigraphs) {
+                for (const p of epigraph.$$array('/p')) {
+                    const text = this.extractFb2NodeText(p, parser);
+                    if (text)
+                        lines.push(text);
+                }
+
+                if (!author) {
+                    const textAuthor = epigraph.$$('\/text-author/');
+                    const value = this.extractFb2NodeText(textAuthor, parser);
+                    if (value)
+                        author = value;
+                }
+            }
+
+            result.epigraph = lines.slice(0, 12);
+            result.epigraphAuthor = author;
+        }
+
+        const textParts = [];
+        for (const body of parser.$$array('/body')) {
+            body.eachDeepSelf((item) => {
+                if (item.type === parser.TEXT || item.type === parser.CDATA)
+                    textParts.push(item.value);
+            });
+        }
+
+        const fullText = textParts.join(' ').replace(/\s+/g, ' ').trim();
+        const letters = fullText.replace(/\s+/g, '').length;
+        const words = (fullText ? fullText.split(/\s+/).filter(Boolean).length : 0);
+        const pages = (words ? Math.max(1, Math.round((words / 250) * 10) / 10) : 0);
+
+        let images = 0;
+        for (const node of parser.$$array('/binary')) {
+            const attrs = node.attrs() || {};
+            const contentType = String(attrs['content-type'] || '').toLowerCase();
+            if (contentType.startsWith('image/'))
+                images++;
+        }
+
+        result.stats = {letters, words, pages, images};
+
+        return result;
+    }
+
+    async getReviewArchives() {
+        if (this.reviewArchives !== null)
+            return this.reviewArchives;
+
+        const reviewsDir = `${this.config.libDir}/reviews`;
+        const result = [];
+
+        if (!await fs.pathExists(reviewsDir)) {
+            this.reviewArchives = result;
+            return result;
+        }
+
+        const files = await fs.readdir(reviewsDir);
+        for (const file of files.sort()) {
+            if (!/\.(7z|zip)$/i.test(file))
+                continue;
+
+            result.push({
+                id: path.basename(file, path.extname(file)),
+                file: `${reviewsDir}/${file}`,
+            });
+        }
+
+        this.reviewArchives = result;
+        return result;
+    }
+
+    async ensureReviewIndex() {
+        if (this.reviewToArchives !== null)
+            return this.reviewToArchives;
+
+        this.reviewToArchives = new Map();
+        const archives = await this.getReviewArchives();
+
+        for (const archive of archives) {
+            const zipReader = new ZipReader();
+            try {
+                await zipReader.open(archive.file);
+                for (const item of Object.values(zipReader.entries || {})) {
+                    const entryName = String(item.name || '').replace(/\\/g, '/');
+                    if (!entryName || item.isDirectory)
+                        continue;
+
+                    const list = this.reviewToArchives.get(entryName) || [];
+                    list.push({archive: archive.file, entryName});
+                    this.reviewToArchives.set(entryName, list);
+                }
+            } catch(e) {
+                log(LM_WARN, `review archive ${archive.file}: ${e.message}`);
+            } finally {
+                await zipReader.close();
+            }
+        }
+
+        return this.reviewToArchives;
+    }
+
+    async getBookReviews(book) {
+        const entryKey = `${book.folder}#${book.file}.${book.ext}`;
+        const reviewIndex = await this.ensureReviewIndex();
+        const matches = reviewIndex.get(entryKey) || [];
+        const reviews = [];
+
+        for (const match of matches) {
+            const zipReader = new ZipReader();
+            try {
+                await zipReader.open(match.archive, false);
+                const raw = await zipReader.extractToBuf(match.entryName);
+                const parsed = JSON.parse(decodeArchiveText(raw));
+                if (!Array.isArray(parsed))
+                    continue;
+
+                for (const item of parsed) {
+                    if (!item || typeof(item) !== 'object')
+                        continue;
+
+                    reviews.push({
+                        name: String(item.name || '').trim() || 'Аноним',
+                        time: String(item.time || '').trim(),
+                        text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
+                    });
+                }
+            } catch(e) {
+                log(LM_WARN, `review entry ${match.archive}:${match.entryName}: ${e.message}`);
+            } finally {
+                await zipReader.close();
+            }
+        }
+
+        return reviews;
+    }
+
     async getBookInfo(bookUid) {
         this.checkMyState();
 
@@ -999,6 +1176,8 @@ class WebWorker {
                 result.cover = '';
                 result.fb2 = false;
                 result.contents = [];
+                result.annotationMeta = null;
+                result.reviews = [];
                 result.infoVersion = bookInfoVersion;
                 let parser = null;
 
@@ -1007,12 +1186,15 @@ class WebWorker {
                     parser = fb2;
                     result.fb2 = fb2.rawNodes;
                     result.contents = this.extractFb2Contents(fb2);
+                    result.annotationMeta = this.extractFb2AnnotationMeta(fb2);
 
                     if (cover) {
                         result.cover = `${this.config.bookPathStatic}/${hash}${coverExt}`;
                         await fs.writeFile(`${bookFile}${coverExt}`, cover);
                     }
                 }
+
+                result.reviews = await this.getBookReviews(book);
 
                 Object.assign(info, result);
 

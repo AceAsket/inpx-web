@@ -163,8 +163,62 @@
                 </div>
             </div>
 
-            <div v-if="selectedTab == 'fb2' && annotation" class="q-mt-md" v-html="annotation" />
+        <div v-if="selectedTab == 'fb2' && annotation" class="q-mt-md" v-html="annotation" />
+        <div v-if="selectedTab == 'fb2' && hasAnnotationMeta" class="annotation-meta q-mt-md">
+            <div class="text-blue section-label q-mb-sm">
+                Аннотация и статистика
+            </div>
+
+            <div v-if="annotationMeta.epigraph && annotationMeta.epigraph.length" class="annotation-card q-mb-md">
+                <div class="annotation-card-title">
+                    Эпиграф
+                </div>
+                <div
+                    v-for="(line, index) in annotationMeta.epigraph"
+                    :key="`epigraph-${index}`"
+                    class="annotation-epigraph-line"
+                >
+                    {{ line }}
+                </div>
+                <div v-if="annotationMeta.epigraphAuthor" class="annotation-epigraph-author">
+                    {{ annotationMeta.epigraphAuthor }}
+                </div>
+            </div>
+
+            <div v-if="annotationStatRows.length" class="annotation-card q-mb-md">
+                <div class="annotation-card-title">
+                    Статистика текста
+                </div>
+                <div v-for="item in annotationStatRows" :key="item.label" class="annotation-stat-row">
+                    <div class="annotation-stat-label">
+                        {{ item.label }}
+                    </div>
+                    <div class="annotation-stat-value">
+                        {{ item.value }}
+                    </div>
+                </div>
+            </div>
         </div>
+
+        <div v-if="selectedTab == 'fb2' && reviews.length" class="reviews-block q-mt-md">
+            <div class="text-blue section-label q-mb-sm">
+                Отзывы читателей
+            </div>
+            <div v-for="(review, index) in reviews" :key="`review-${index}`" class="review-card q-mb-md">
+                <div class="review-head">
+                    <div class="review-author">
+                        {{ review.name }}
+                    </div>
+                    <div v-if="review.time" class="review-time">
+                        {{ review.time }}
+                    </div>
+                </div>
+                <div class="review-text">
+                    {{ review.text }}
+                </div>
+            </div>
+        </div>
+    </div>
 
         <template #footer>
             <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps @click="okClick">
@@ -230,6 +284,8 @@ class BookInfoDialog {
     fb2 = [];
     contents = [];
     fb2Images = [];
+    annotationMeta = null;
+    reviews = [];
     book = {};
     authorInfo = null;
     authorInfoLoading = false;
@@ -245,6 +301,8 @@ class BookInfoDialog {
         this.fb2 = [];
         this.contents = [];
         this.fb2Images = [];
+        this.annotationMeta = null;
+        this.reviews = [];
         this.book = {};
         this.authorInfo = null;
         this.authorInfoLoading = false;
@@ -304,6 +362,36 @@ class BookInfoDialog {
 
         const root = this.config.rootPathStatic || '';
         return `${root}/cover/${this.book.libid}`;
+    }
+
+    get hasAnnotationMeta() {
+        if (!this.annotationMeta)
+            return false;
+
+        return Boolean(
+            (this.annotationMeta.epigraph && this.annotationMeta.epigraph.length)
+            || this.annotationStatRows.length
+        );
+    }
+
+    get annotationStatRows() {
+        const stats = (this.annotationMeta && this.annotationMeta.stats ? this.annotationMeta.stats : null);
+        if (!stats)
+            return [];
+
+        const formatInt = (value) => Number(value || 0).toLocaleString('ru-RU');
+        const rows = [];
+
+        if (stats.letters)
+            rows.push({label: 'Букв', value: formatInt(stats.letters)});
+        if (stats.words)
+            rows.push({label: 'Слов', value: formatInt(stats.words)});
+        if (stats.pages)
+            rows.push({label: 'Страниц', value: String(stats.pages).replace('.', ',')});
+        if (stats.images || stats.images === 0)
+            rows.push({label: 'Изображений', value: formatInt(stats.images)});
+
+        return rows;
     }
 
     formatSize(size) {
@@ -522,6 +610,8 @@ class BookInfoDialog {
     parseBookInfo() {
         const bookInfo = this.bookInfo || {};
         this.authorInfo = (bookInfo.authorInfo ? bookInfo.authorInfo : null);
+        this.annotationMeta = (bookInfo.annotationMeta ? bookInfo.annotationMeta : null);
+        this.reviews = (Array.isArray(bookInfo.reviews) ? bookInfo.reviews : []);
 
         if (bookInfo.cover)
             this.coverSrc = bookInfo.cover;
@@ -751,6 +841,86 @@ export default vueComponent(BookInfoDialog);
     border-radius: 12px;
     background: var(--app-surface-2);
     box-shadow: 0 6px 18px rgba(23, 32, 38, 0.10);
+}
+
+.annotation-meta,
+.reviews-block {
+    border-top: 1px solid #ccc;
+    padding-top: 12px;
+}
+
+.annotation-card,
+.review-card {
+    background: color-mix(in srgb, var(--app-surface-2) 86%, transparent);
+    border: 1px solid var(--app-border);
+    border-radius: 14px;
+    padding: 12px 14px;
+}
+
+.annotation-card-title {
+    color: var(--app-muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+}
+
+.annotation-epigraph-line {
+    font-style: italic;
+    line-height: 1.5;
+}
+
+.annotation-epigraph-line + .annotation-epigraph-line {
+    margin-top: 4px;
+}
+
+.annotation-epigraph-author {
+    margin-top: 10px;
+    text-align: right;
+    color: var(--app-muted);
+    font-weight: 600;
+}
+
+.annotation-stat-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 6px 0;
+}
+
+.annotation-stat-row + .annotation-stat-row {
+    border-top: 1px solid color-mix(in srgb, var(--app-border) 75%, transparent);
+}
+
+.annotation-stat-label {
+    color: var(--app-muted);
+}
+
+.annotation-stat-value {
+    font-weight: 700;
+}
+
+.review-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.review-author {
+    font-weight: 700;
+}
+
+.review-time {
+    color: var(--app-muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.review-text {
+    white-space: pre-wrap;
+    line-height: 1.55;
 }
 
 .section-label {

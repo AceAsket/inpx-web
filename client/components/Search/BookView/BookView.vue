@@ -59,8 +59,13 @@
                 </div>
 
                 <div class="book-title-row">
-                    <div v-if="book.serno" class="serno-pill">
-                        {{ book.serno }}
+                    <div class="serno-slot">
+                        <div v-if="book.serno" class="serno-pill">
+                            {{ book.serno }}
+                        </div>
+                        <div v-else class="serno-pill serno-pill-placeholder" aria-hidden="true">
+                            00
+                        </div>
                     </div>
                     <div class="book-title clickable2" :class="titleColor" @click.stop.prevent="emit('bookInfo')">
                         {{ posterTitle }}
@@ -615,9 +620,21 @@ export default vueComponent(BookView);
 }
 
 .book-title-row {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+}
+
+.serno-slot {
+    min-width: 56px;
     display: flex;
     align-items: flex-start;
-    gap: 10px;
+    justify-content: flex-start;
+}
+
+.serno-pill-placeholder {
+    visibility: hidden;
 }
 
 .book-title {
