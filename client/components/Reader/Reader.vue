@@ -947,6 +947,29 @@ class Reader {
         return pages.map((page) => (this.isHorizontalPaged ? page.offsetLeft : page.offsetTop));
     }
 
+    get currentPagedPageIndex() {
+        if (!this.isPagedMode)
+            return 0;
+
+        const {pageOffsets} = this.pagedMetrics;
+        if (!pageOffsets.length)
+            return 0;
+
+        const position = this.getPagedScroll();
+        let nearestIndex = 0;
+        let nearestDistance = Number.POSITIVE_INFINITY;
+
+        for (let index = 0; index < pageOffsets.length; index += 1) {
+            const distance = Math.abs((pageOffsets[index] || 0) - position);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestIndex = index;
+            }
+        }
+
+        return nearestIndex;
+    }
+
     get totalPages() {
         const scroller = this.$refs ? this.$refs.scroller : null;
         if (!scroller || !(this.scrollerViewportHeight || scroller.clientHeight))
@@ -963,18 +986,8 @@ class Reader {
         if (!scroller || !(this.scrollerViewportHeight || scroller.clientHeight))
             return 1;
 
-        if (this.isPagedMode) {
-            const {pageOffsets, totalPages} = this.pagedMetrics;
-            const position = (this.isHorizontalPaged ? scroller.scrollLeft : scroller.scrollTop);
-            let pageIndex = 0;
-            for (let index = 0; index < pageOffsets.length; index += 1) {
-                if (pageOffsets[index] <= position + 2)
-                    pageIndex = index;
-                else
-                    break;
-            }
-            return Math.min(totalPages, Math.max(1, pageIndex + 1));
-        }
+        if (this.isPagedMode)
+            return Math.min(this.totalPages, Math.max(1, this.currentPagedPageIndex + 1));
 
         return Math.min(this.totalPages, Math.max(1, Math.floor(scroller.scrollTop / scroller.clientHeight) + 1));
     }
@@ -1341,6 +1354,46 @@ class Reader {
         );
     }
 
+    doesPagedMeasureOverflow(measureHost) {
+        if (!measureHost)
+            return false;
+
+        if (this.isHorizontalPaged)
+            return measureHost.scrollWidth > measureHost.clientWidth + 2;
+
+        return measureHost.scrollHeight > measureHost.clientHeight + 2;
+    }
+
+    getPageOffsetByIndex(index = 0) {
+        const {pageOffsets, maxScroll} = this.pagedMetrics;
+        const safeIndex = Math.max(0, Math.min(pageOffsets.length - 1, index));
+        const offset = (pageOffsets[safeIndex] !== undefined ? pageOffsets[safeIndex] : 0);
+        return Math.max(0, Math.min(maxScroll, offset));
+    }
+
+    getPageIndexForSection(sectionId = '') {
+        const safeId = String(sectionId || '').trim();
+        if (!safeId)
+            return -1;
+
+        const directIndex = this.pagedPages.findIndex((page) => String(page.sectionId || '').trim() === safeId);
+        if (directIndex >= 0)
+            return directIndex;
+
+        const sectionIndex = this.contents.findIndex((item) => item.id === safeId);
+        if (sectionIndex < 0)
+            return -1;
+
+        for (let index = 0; index < this.pagedPages.length; index += 1) {
+            const pageSectionId = String((this.pagedPages[index] || {}).sectionId || '').trim();
+            const pageSectionIndex = this.contents.findIndex((item) => item.id === pageSectionId);
+            if (pageSectionIndex >= sectionIndex)
+                return index;
+        }
+
+        return -1;
+    }
+
     scheduleSnapToNearestPage() {
         if (!this.isPagedMode)
             return;
@@ -1538,7 +1591,7 @@ class Reader {
 
             const candidateUnits = currentUnits.concat(unit.html);
             applyUnits(candidateUnits);
-            if (measureHost.scrollHeight > measureHost.clientHeight + 2 && currentUnits.length) {
+            if (this.doesPagedMeasureOverflow(measureHost) && currentUnits.length) {
                 finalizePage();
                 currentPageSectionId = unit.sectionId || activeSectionId || '';
                 currentUnits = [unit.html];
@@ -1830,6 +1883,15 @@ class Reader {
         const scroller = this.$refs.scroller;
 
         if (this.progress.sectionId) {
+            if (this.isPagedMode) {
+                const pageIndex = this.getPageIndexForSection(this.progress.sectionId);
+                if (pageIndex >= 0) {
+                    this.setPagedScroll(this.getPageOffsetByIndex(pageIndex));
+                    this.updateCurrentSectionFromScroll();
+                    return;
+                }
+            }
+
             const target = scroller.querySelector(`#${this.escapeCssId(this.progress.sectionId)}`);
             if (target) {
                 if (this.isPagedMode)
@@ -1842,9 +1904,8 @@ class Reader {
         }
 
         if (this.isPagedMode) {
-            const {maxScroll} = this.pagedMetrics;
-            this.setPagedScroll(maxScroll * (Number(this.progress.percent || 0) || 0));
-            this.snapToNearestPage();
+            const pageIndex = Math.round((this.totalPages - 1) * (Number(this.progress.percent || 0) || 0));
+            this.setPagedScroll(this.getPageOffsetByIndex(pageIndex));
         } else {
             const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
             scroller.scrollTop = maxScroll * (Number(this.progress.percent || 0) || 0);
@@ -1875,22 +1936,21 @@ class Reader {
         if (!this.$refs.scroller || !this.contents.length)
             return;
 
+        if (this.isPagedMode) {
+            const currentPage = this.pagedPages[this.currentPagedPageIndex] || null;
+            const activeId = String((currentPage && currentPage.sectionId) || '').trim();
+            this.currentSectionId = activeId || (this.contents[0] ? this.contents[0].id : '');
+            return;
+        }
+
         const scroller = this.$refs.scroller;
         let activeId = this.currentSectionId;
-
         for (const item of this.contents) {
             const target = scroller.querySelector(`#${this.escapeCssId(item.id)}`);
             if (!target)
                 continue;
 
-            if (this.isPagedMode) {
-                const offset = this.getPagedOffset(target);
-                const scrollPosition = this.getPagedScroll();
-                if (offset <= scrollPosition + 40)
-                    activeId = item.id;
-                else
-                    break;
-            } else if (target.offsetTop - scroller.scrollTop <= 80) {
+            if (target.offsetTop - scroller.scrollTop <= 80) {
                 activeId = item.id;
             } else {
                 break;
@@ -2024,18 +2084,20 @@ class Reader {
 
         this.$nextTick(() => {
             const scroller = this.$refs.scroller;
+            this.currentSectionId = id;
+            if (this.isPagedMode) {
+                const pageIndex = this.getPageIndexForSection(id);
+                const offset = this.getPageOffsetByIndex(pageIndex >= 0 ? pageIndex : 0);
+                this.scrollToPagedOffset(offset, 'smooth');
+                return;
+            }
+
             const target = scroller.querySelector(`#${this.escapeCssId(id)}`);
             if (!target)
                 return;
 
-            this.currentSectionId = id;
-            if (this.isPagedMode) {
-                const offset = this.getPagedOffset(target);
-                this.scrollToPagedOffset(offset, 'smooth');
-            } else {
-                const top = Math.max(0, target.offsetTop - 18);
-                scroller.scrollTo({top, behavior: 'smooth'});
-            }
+            const top = Math.max(0, target.offsetTop - 18);
+            scroller.scrollTo({top, behavior: 'smooth'});
         });
     }
 
@@ -2055,11 +2117,8 @@ class Reader {
 
         const scroller = this.$refs.scroller;
         if (this.isPagedMode) {
-            const {pageSize, maxScroll} = this.pagedMetrics;
-            const nextOffset = Math.max(0, Math.min(
-                maxScroll,
-                this.getPagedScroll() + delta * pageSize,
-            ));
+            const nextIndex = this.currentPagedPageIndex + delta;
+            const nextOffset = this.getPageOffsetByIndex(nextIndex);
             this.scrollToPagedOffset(nextOffset, 'smooth');
             return;
         }
@@ -2076,11 +2135,7 @@ class Reader {
         if (!this.$refs.scroller || !this.isPagedMode)
             return;
 
-        const {pageOffsets, maxScroll} = this.pagedMetrics;
-        const snappedOffset = Math.max(0, Math.min(
-            maxScroll,
-            (pageOffsets[Math.max(0, Math.round(this.getPagedScroll() / Math.max(1, this.pagedMetrics.pageSize)))] || 0),
-        ));
+        const snappedOffset = this.getPageOffsetByIndex(this.currentPagedPageIndex);
 
         if (Math.abs(snappedOffset - this.getPagedScroll()) < 2)
             return;
@@ -2171,7 +2226,7 @@ class Reader {
 
             if (percent > 0) {
                 if (this.isPagedMode) {
-                    const top = this.pagedMetrics.maxScroll * percent;
+                    const top = this.getPageOffsetByIndex(Math.round((this.totalPages - 1) * percent));
                     this.scrollToPagedOffset(top, 'smooth');
                     return;
                 }
@@ -2504,6 +2559,7 @@ export default vueComponent(Reader);
     width: min(100%, var(--reader-page-frame-width));
     max-width: var(--reader-page-frame-width);
     min-height: var(--reader-page-min-height);
+    height: var(--reader-page-min-height);
     padding: var(--reader-page-padding);
     box-sizing: border-box;
     border: 1px solid var(--reader-border);
@@ -2520,6 +2576,7 @@ export default vueComponent(Reader);
     width: var(--reader-page-frame-width);
     max-width: var(--reader-page-frame-width);
     min-height: var(--reader-page-min-height);
+    height: var(--reader-page-min-height);
 }
 
 .reader-page-sheet--measure {
