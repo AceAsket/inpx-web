@@ -1,5 +1,5 @@
 <template>
-    <div class="reader-page" :class="readerThemeClass">
+    <div ref="page" class="reader-page" :class="readerThemeClass">
         <div class="reader-toolbar">
             <div class="reader-toolbar-main">
                 <q-btn
@@ -20,15 +20,34 @@
                     </div>
                 </div>
 
-                <q-btn
-                    flat
-                    dense
-                    round
-                    icon="la la-sliders-h"
-                    class="reader-controls-toggle"
-                    :class="{'is-active': controlsOpen}"
-                    @click="toggleControls"
-                />
+                <div class="reader-toolbar-quick-actions">
+                    <q-btn
+                        v-if="hasContents"
+                        flat
+                        dense
+                        round
+                        icon="la la-list"
+                        class="reader-icon-btn"
+                        @click="toggleContentsDialog"
+                    />
+                    <q-btn
+                        flat
+                        dense
+                        round
+                        :icon="fullscreenActive ? 'la la-compress-arrows-alt' : 'la la-expand-arrows-alt'"
+                        class="reader-icon-btn"
+                        @click="toggleFullscreen"
+                    />
+                    <q-btn
+                        flat
+                        dense
+                        round
+                        icon="la la-sliders-h"
+                        class="reader-icon-btn"
+                        :class="{'is-active': controlsOpen}"
+                        @click="toggleControls"
+                    />
+                </div>
             </div>
 
             <div v-show="showToolbarActions" class="reader-toolbar-actions">
@@ -93,6 +112,22 @@
                         {{ authorLine }}
                     </div>
 
+                    <div v-if="hasContents" class="reader-contents-inline">
+                        <div class="reader-contents-inline-title">
+                            Содержание
+                        </div>
+                        <div class="reader-contents-inline-list">
+                            <button
+                                v-for="item in displayContents"
+                                :key="item.id"
+                                class="reader-contents-chip"
+                                @click="jumpToContent(item.id)"
+                            >
+                                {{ item.title }}
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="reader-progress-bar">
                         <div class="reader-progress-bar-fill" :style="{width: `${progressPercent}%`}"></div>
                     </div>
@@ -101,6 +136,58 @@
                 </div>
             </div>
         </div>
+
+        <div v-if="isCompactLayout" class="reader-mobile-bar">
+            <q-btn
+                v-if="hasContents"
+                flat
+                no-caps
+                icon="la la-list"
+                class="reader-mobile-btn"
+                @click="toggleContentsDialog"
+            >
+                Содержание
+            </q-btn>
+            <q-btn
+                flat
+                no-caps
+                icon="la la-sliders-h"
+                class="reader-mobile-btn"
+                :class="{'is-active': controlsOpen}"
+                @click="toggleControls"
+            >
+                Настройки
+            </q-btn>
+            <q-btn
+                flat
+                no-caps
+                :icon="fullscreenActive ? 'la la-compress-arrows-alt' : 'la la-expand-arrows-alt'"
+                class="reader-mobile-btn"
+                @click="toggleFullscreen"
+            >
+                Экран
+            </q-btn>
+        </div>
+
+        <q-dialog v-model="contentsDialogOpen" position="right">
+            <div class="reader-dialog reader-dialog--contents">
+                <div class="reader-dialog-header">
+                    <div class="reader-dialog-title">Содержание</div>
+                    <q-btn flat dense round icon="la la-times" @click="contentsDialogOpen = false" />
+                </div>
+
+                <div class="reader-dialog-body">
+                    <button
+                        v-for="item in displayContents"
+                        :key="item.id"
+                        class="reader-dialog-link"
+                        @click="jumpToContent(item.id)"
+                    >
+                        {{ item.title }}
+                    </button>
+                </div>
+            </div>
+        </q-dialog>
     </div>
 </template>
 
@@ -132,6 +219,9 @@ class Reader {
     coverSrc = '';
     readerHtml = '';
     controlsOpen = false;
+    contentsDialogOpen = false;
+    fullscreenActive = false;
+    contents = [];
     preferences = {
         theme: 'dark',
         fontSize: 18,
@@ -151,6 +241,9 @@ class Reader {
         this.handleBeforeUnload = () => {
             this.flushProgress();
         };
+        this.handleFullscreenChange = () => {
+            this.fullscreenActive = !!document.fullscreenElement;
+        };
 
         this.saveProgressDebounced = _.debounce(() => {
             this.persistProgress();// no await
@@ -163,6 +256,8 @@ class Reader {
 
     mounted() {
         window.addEventListener('beforeunload', this.handleBeforeUnload);
+        document.addEventListener('fullscreenchange', this.handleFullscreenChange);
+        this.handleFullscreenChange();
     }
 
     deactivated() {
@@ -173,6 +268,7 @@ class Reader {
 
     beforeUnmount() {
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
+        document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
         this.flushProgress();
         if (this.savePreferencesDebounced && this.savePreferencesDebounced.flush)
             this.savePreferencesDebounced.flush();
@@ -206,6 +302,14 @@ class Reader {
         return !this.isCompactLayout || this.controlsOpen;
     }
 
+    get displayContents() {
+        return this.contents.slice(0, 80);
+    }
+
+    get hasContents() {
+        return this.displayContents.length > 0;
+    }
+
     goBack() {
         if (window.history.length > 1)
             this.$router.back();
@@ -217,11 +321,36 @@ class Reader {
         this.controlsOpen = !this.controlsOpen;
     }
 
+    toggleContentsDialog() {
+        this.contentsDialogOpen = !this.contentsDialogOpen;
+    }
+
+    async toggleFullscreen() {
+        try {
+            if (document.fullscreenElement) {
+                await document.exitFullscreen();
+            } else if (this.$refs.page && this.$refs.page.requestFullscreen) {
+                await this.$refs.page.requestFullscreen();
+            }
+        } catch(e) {
+            // ignore browser-specific fullscreen failures
+        }
+    }
+
     normalizeBinaryType(type = '') {
         let result = String(type || '').trim().toLowerCase();
         if (result === 'image/jpg' || result === 'application/octet-stream')
             result = 'image/jpeg';
         return result;
+    }
+
+    sanitizeContents(list = []) {
+        return (Array.isArray(list) ? list : [])
+            .map((item, index) => ({
+                id: `section-${index + 1}`,
+                title: String(item && item.title ? item.title : '').trim(),
+            }))
+            .filter((item) => item.title);
     }
 
     extractImageMap(parser) {
@@ -252,6 +381,20 @@ class Reader {
         });
     }
 
+    injectHeadingAnchors(html) {
+        if (!html || !this.contents.length)
+            return html;
+
+        let index = 0;
+        return html.replace(/<h([1-4])>/gi, (match, level) => {
+            const item = this.contents[index++];
+            if (!item)
+                return `<h${level}>`;
+
+            return `<h${level} id="${item.id}" class="reader-anchored-heading">`;
+        });
+    }
+
     buildReaderHtml(parser) {
         const parts = [];
         const imageMap = this.extractImageMap(parser);
@@ -263,6 +406,7 @@ class Reader {
             let html = parser.toHtml(bodyXml);
             html = this.replaceInlineImages(html, imageMap);
             html = html.replace(/<p>/g, '<p class="reader-paragraph">');
+            html = this.injectHeadingAnchors(html);
 
             if (bodyName === 'notes')
                 parts.push(`<section class="reader-notes"><h2>Примечания</h2>${html}</section>`);
@@ -280,8 +424,10 @@ class Reader {
         this.loading = true;
         this.error = '';
         this.readerHtml = '';
+        this.contents = [];
         this.restorePending = false;
         this.controlsOpen = false;
+        this.contentsDialogOpen = false;
 
         try {
             const [bookResponse, stateResponse] = await Promise.all([
@@ -301,6 +447,7 @@ class Reader {
             this.authorLine = book.author || ((fb2Info.titleInfo && fb2Info.titleInfo.author) ? fb2Info.titleInfo.author.join(', ') : '');
             this.seriesLine = (book.series ? `${book.series}${book.serno ? ` #${book.serno}` : ''}` : '');
             this.coverSrc = info.cover || '';
+            this.contents = this.sanitizeContents(info.contents || []);
             this.readerHtml = this.buildReaderHtml(parser);
 
             this.preferences = Object.assign({}, this.preferences, stateResponse.preferences || {});
@@ -337,6 +484,22 @@ class Reader {
         const percent = (maxScroll > 0 ? scroller.scrollTop / maxScroll : 0);
         this.progress = Object.assign({}, this.progress, {percent});
         this.saveProgressDebounced();
+    }
+
+    jumpToContent(id = '') {
+        this.contentsDialogOpen = false;
+        if (!id || !this.$refs.scroller)
+            return;
+
+        this.$nextTick(() => {
+            const scroller = this.$refs.scroller;
+            const target = scroller.querySelector(`#${CSS.escape(id)}`);
+            if (!target)
+                return;
+
+            const top = target.offsetTop - 18;
+            scroller.scrollTo({top, behavior: 'smooth'});
+        });
     }
 
     async persistProgress() {
@@ -418,17 +581,6 @@ export default vueComponent(Reader);
     min-width: 0;
 }
 
-.reader-controls-toggle {
-    margin-left: auto;
-    border: 1px solid var(--reader-border);
-    background: var(--reader-surface-2);
-}
-
-.reader-controls-toggle.is-active {
-    background: var(--reader-accent-soft);
-    color: var(--reader-accent);
-}
-
 .reader-book-meta {
     min-width: 0;
 }
@@ -443,6 +595,23 @@ export default vueComponent(Reader);
     margin-top: 2px;
     color: var(--reader-muted);
     font-size: 13px;
+}
+
+.reader-toolbar-quick-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.reader-icon-btn {
+    border: 1px solid var(--reader-border);
+    background: var(--reader-surface-2);
+}
+
+.reader-icon-btn.is-active {
+    background: var(--reader-accent-soft);
+    color: var(--reader-accent);
 }
 
 .reader-toolbar-actions {
@@ -492,7 +661,7 @@ export default vueComponent(Reader);
 }
 
 .reader-shell {
-    padding: 28px 18px 56px;
+    padding: 28px 18px 96px;
 }
 
 .reader-cover-box {
@@ -533,6 +702,36 @@ export default vueComponent(Reader);
     font-size: 0.98em;
 }
 
+.reader-contents-inline {
+    margin: 22px 0 0;
+    padding: 14px 16px;
+    border: 1px solid var(--reader-border);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--reader-surface) 82%, transparent);
+}
+
+.reader-contents-inline-title {
+    font-size: 14px;
+    font-weight: 750;
+    color: var(--reader-muted);
+}
+
+.reader-contents-inline-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.reader-contents-chip {
+    padding: 8px 12px;
+    border: 1px solid var(--reader-border);
+    border-radius: 999px;
+    background: var(--reader-surface-2);
+    color: var(--reader-text);
+    cursor: pointer;
+}
+
 .reader-progress-bar {
     margin: 20px 0 28px;
     width: 100%;
@@ -557,6 +756,10 @@ export default vueComponent(Reader);
 .reader-html :deep(h4) {
     line-height: 1.15;
     margin: 1.45em 0 0.5em;
+}
+
+.reader-html :deep(.reader-anchored-heading) {
+    scroll-margin-top: 84px;
 }
 
 .reader-html :deep(p),
@@ -586,6 +789,77 @@ export default vueComponent(Reader);
     margin-top: 2.5em;
     padding-top: 1.5em;
     border-top: 1px solid var(--reader-border);
+}
+
+.reader-mobile-bar {
+    position: sticky;
+    bottom: 0;
+    z-index: 14;
+    display: flex;
+    gap: 8px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--reader-border);
+    background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
+    backdrop-filter: blur(12px);
+}
+
+.reader-mobile-btn {
+    flex: 1 1 0;
+    min-height: 42px;
+    border: 1px solid var(--reader-border);
+    border-radius: 14px;
+    background: var(--reader-surface-2);
+}
+
+.reader-mobile-btn.is-active {
+    background: var(--reader-accent-soft);
+    color: var(--reader-accent);
+}
+
+.reader-dialog {
+    width: min(92vw, 420px);
+    max-height: 85vh;
+    border-radius: 22px;
+    background: var(--reader-surface);
+    color: var(--reader-text);
+    box-shadow: 0 24px 56px rgba(0, 0, 0, 0.26);
+}
+
+.reader-dialog--contents {
+    overflow: hidden;
+}
+
+.reader-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--reader-border);
+}
+
+.reader-dialog-title {
+    font-size: 18px;
+    font-weight: 750;
+}
+
+.reader-dialog-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: calc(85vh - 64px);
+    overflow: auto;
+    padding: 12px;
+}
+
+.reader-dialog-link {
+    padding: 12px 14px;
+    border: 1px solid var(--reader-border);
+    border-radius: 14px;
+    background: var(--reader-surface-2);
+    color: var(--reader-text);
+    text-align: left;
+    cursor: pointer;
 }
 
 .reader-theme-dark {
@@ -619,12 +893,6 @@ export default vueComponent(Reader);
     --reader-border: rgba(96, 112, 125, 0.18);
     --reader-accent: #0f9f8f;
     --reader-accent-soft: rgba(15, 159, 143, 0.12);
-}
-
-@media (min-width: 901px) {
-    .reader-controls-toggle {
-        display: none;
-    }
 }
 
 @media (max-width: 900px) {
@@ -673,7 +941,7 @@ export default vueComponent(Reader);
     }
 
     .reader-shell {
-        padding: 18px 10px 42px;
+        padding: 18px 10px 110px;
     }
 
     .reader-cover {
@@ -683,6 +951,10 @@ export default vueComponent(Reader);
 
     .reader-body {
         width: 100%;
+    }
+
+    .reader-contents-inline {
+        display: none;
     }
 
     .reader-html :deep(p),
