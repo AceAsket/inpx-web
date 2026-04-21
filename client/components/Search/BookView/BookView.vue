@@ -841,6 +841,25 @@ export default vueComponent(BookView);
     min-height: 42px;
 }
 
+.book-actions :deep(.q-btn) {
+    min-height: 36px;
+}
+
+.book-actions :deep(.q-btn__content) {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1;
+}
+
+.book-actions :deep(.q-icon),
+.book-actions :deep([class*='la-']) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
 .action-split {
     position: relative;
     display: inline-flex;
@@ -849,18 +868,34 @@ export default vueComponent(BookView);
     background: rgba(23, 32, 38, 0.04);
 }
 
+.action-split :deep(.q-btn) {
+    min-height: 36px;
+}
+
 .action-split-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 32px;
-    height: 32px;
+    height: 36px;
     border: 0;
     border-radius: 999px;
     background: transparent;
     color: inherit;
     cursor: pointer;
+    line-height: 1;
 }
 
 .action-split-toggle:hover {
     background: rgba(23, 32, 38, 0.06);
+}
+
+.action-split-toggle i {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 1;
 }
 
 .action-split-menu {
@@ -1019,6 +1054,10 @@ export default vueComponent(BookView);
         padding-left: 8px;
         padding-right: 8px;
         font-size: 12px;
+    }
+
+    .action-split-toggle {
+        height: 34px;
     }
 
     .format-actions {
