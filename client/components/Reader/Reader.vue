@@ -680,6 +680,7 @@ class Reader {
     snapTimer = null;
     pageTurnTimer = null;
     pageTurnAnimating = false;
+    pageTurnDirection = 1;
     touchStartPoint = null;
 
     created() {
@@ -910,7 +911,10 @@ class Reader {
     }
 
     get pagedTransitionName() {
-        return (this.isHorizontalPaged ? 'reader-page-slide-x' : 'reader-page-slide-y');
+        if (this.isHorizontalPaged)
+            return (this.pageTurnDirection < 0 ? 'reader-page-slide-x-back' : 'reader-page-slide-x-forward');
+
+        return (this.pageTurnDirection < 0 ? 'reader-page-slide-y-back' : 'reader-page-slide-y-forward');
     }
 
     get readerPageMeta() {
@@ -1394,7 +1398,9 @@ class Reader {
         if (!this.isPagedMode)
             return;
 
-        this.currentPageIndex = Math.max(0, Math.min(this.totalPages - 1, Math.round(index)));
+        const nextIndex = Math.max(0, Math.min(this.totalPages - 1, Math.round(index)));
+        this.pageTurnDirection = (nextIndex < this.currentPageIndex ? -1 : 1);
+        this.currentPageIndex = nextIndex;
         this.syncPagedProgress(save);
     }
 
@@ -2625,18 +2631,21 @@ export default vueComponent(Reader);
 }
 
 .reader-pages {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: var(--reader-page-gap);
     align-items: center;
     justify-content: flex-start;
     width: 100%;
+    min-height: var(--reader-page-min-height);
 }
 
 .reader-pages--horizontal {
     flex-direction: row;
     gap: 0;
-    align-items: stretch;
+    align-items: center;
+    justify-content: center;
 }
 
 .reader-page-sheet {
@@ -2672,23 +2681,57 @@ export default vueComponent(Reader);
     z-index: -1;
 }
 
-.reader-page-slide-x-enter-active,
-.reader-page-slide-x-leave-active,
-.reader-page-slide-y-enter-active,
-.reader-page-slide-y-leave-active {
-    transition: opacity 0.18s ease, transform 0.18s ease;
+.reader-page-slide-x-forward-enter-active,
+.reader-page-slide-x-forward-leave-active,
+.reader-page-slide-x-back-enter-active,
+.reader-page-slide-x-back-leave-active,
+.reader-page-slide-y-forward-enter-active,
+.reader-page-slide-y-forward-leave-active,
+.reader-page-slide-y-back-enter-active,
+.reader-page-slide-y-back-leave-active {
+    transition: opacity 0.28s ease, transform 0.28s cubic-bezier(.22, .8, .3, 1);
 }
 
-.reader-page-slide-x-enter-from,
-.reader-page-slide-x-leave-to {
+.reader-page-slide-x-forward-enter-from,
+.reader-page-slide-x-back-enter-from,
+.reader-page-slide-y-forward-enter-from,
+.reader-page-slide-y-back-enter-from {
     opacity: 0;
-    transform: translateX(18px);
 }
 
-.reader-page-slide-y-enter-from,
-.reader-page-slide-y-leave-to {
+.reader-page-slide-x-forward-leave-active,
+.reader-page-slide-x-back-leave-active,
+.reader-page-slide-y-forward-leave-active,
+.reader-page-slide-y-back-leave-active {
+    position: absolute;
+    inset: 0;
+}
+
+.reader-page-slide-x-forward-enter-from,
+.reader-page-slide-x-back-leave-to {
+    transform: translateX(42px) scale(0.992);
+}
+
+.reader-page-slide-x-forward-leave-to,
+.reader-page-slide-x-back-enter-from {
+    transform: translateX(-42px) scale(0.992);
+}
+
+.reader-page-slide-y-forward-enter-from,
+.reader-page-slide-y-back-leave-to {
+    transform: translateY(26px) scale(0.996);
+}
+
+.reader-page-slide-y-forward-leave-to,
+.reader-page-slide-y-back-enter-from {
+    transform: translateY(-26px) scale(0.996);
+}
+
+.reader-page-slide-x-forward-leave-to,
+.reader-page-slide-x-back-leave-to,
+.reader-page-slide-y-forward-leave-to,
+.reader-page-slide-y-back-leave-to {
     opacity: 0;
-    transform: translateY(18px);
 }
 
 .reader-body--paged .reader-section,
