@@ -1,5 +1,14 @@
 <template>
-    <q-dialog ref="dialog" v-model="active" no-route-dismiss :no-esc-dismiss="noEscDismiss" :no-backdrop-dismiss="noBackdropDismiss" @show="onShow" @hide="onHide">
+    <q-dialog
+        ref="dialog"
+        v-model="active"
+        no-route-dismiss
+        :position="dialogPosition"
+        :no-esc-dismiss="noEscDismiss"
+        :no-backdrop-dismiss="noBackdropDismiss"
+        @show="onShow"
+        @hide="onHide"
+    >
         <slot></slot>
 
         <!--------------------------------------------------->
@@ -183,6 +192,16 @@ class StdDialog {
     noEscDismiss = false;
     noBackdropDismiss = false;
     noCancel = false;
+
+    get isCompactLayout() {
+        return !!(this.$q && this.$q.screen && this.$q.screen.lt && this.$q.screen.lt.md);
+    }
+
+    get dialogPosition() {
+        return (this.isCompactLayout && (this.type == 'prompt' || this.type == 'password'))
+            ? 'top'
+            : 'standard';
+    }
 
     created() {
         if (this.$root.addKeyHook) {
@@ -401,6 +420,11 @@ export default vueComponent(StdDialog);
 </script>
 
 <style scoped>
+.q-dialog__inner--top {
+    padding-top: max(12px, env(safe-area-inset-top));
+    align-items: flex-start;
+}
+
 .header {
     height: 50px;
 }
@@ -422,5 +446,11 @@ export default vueComponent(StdDialog);
     height: 20px;
     font-size: 80%;
     color: red;
+}
+
+@media (max-width: 640px) {
+    .q-dialog__inner--top > div {
+        margin-top: 0;
+    }
 }
 </style>

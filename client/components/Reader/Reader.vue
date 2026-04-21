@@ -1030,7 +1030,7 @@ class Reader {
 
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
-        const chromeOffset = (this.isCompactLayout ? 156 : 72);
+        const chromeOffset = (this.isCompactLayout ? 122 : 72);
         return Math.max(360, scrollerHeight - chromeOffset);
     }
 
