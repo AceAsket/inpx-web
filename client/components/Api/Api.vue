@@ -39,6 +39,7 @@ import LockQueue from '../../../server/core/LockQueue';
 import packageJson from '../../../package.json';
 
 const rotor = '|/-\\';
+const profileSessionStorageKey = 'inpx-web-profile-session';
 const stepBound = [
     0,
     0,// jobStep = 1
@@ -95,12 +96,49 @@ class Api {
         this.updateConfig();//no await
     }
 
+    readStoredProfileSession() {
+        try {
+            const raw = localStorage.getItem(profileSessionStorageKey);
+            if (!raw)
+                return {};
+
+            const parsed = JSON.parse(raw);
+            return {
+                currentUserId: String(parsed.currentUserId || '').trim(),
+                profileAccessToken: String(parsed.profileAccessToken || '').trim(),
+            };
+        } catch (e) {
+            return {};
+        }
+    }
+
+    writeStoredProfileSession(currentUserId = '', profileAccessToken = '') {
+        try {
+            if (!currentUserId || !profileAccessToken) {
+                localStorage.removeItem(profileSessionStorageKey);
+                return;
+            }
+
+            localStorage.setItem(profileSessionStorageKey, JSON.stringify({
+                currentUserId: String(currentUserId || '').trim(),
+                profileAccessToken: String(profileAccessToken || '').trim(),
+            }));
+        } catch (e) {
+            // ignore storage failures
+        }
+    }
+
     loadSettings() {
         const settings = this.settings;
+        const storedProfile = this.readStoredProfileSession();
 
-        this.accessToken = settings.accessToken;
-        this.currentUserId = settings.currentUserId;
-        this.profileAccessToken = settings.profileAccessToken;
+        if ((!settings.currentUserId || !settings.profileAccessToken) && storedProfile.currentUserId && storedProfile.profileAccessToken)
+            this.commit('setSettings', storedProfile);
+
+        const resolvedSettings = this.$store.state.settings;
+        this.accessToken = resolvedSettings.accessToken;
+        this.currentUserId = resolvedSettings.currentUserId;
+        this.profileAccessToken = resolvedSettings.profileAccessToken;
     }
 
     async updateConfig() {
@@ -111,6 +149,10 @@ class Api {
             this.commit('setConfig', config);
             if (config.currentUserId && this.settings.currentUserId !== config.currentUserId)
                 this.commit('setSettings', {currentUserId: config.currentUserId});
+            if (config.profileAuthorized && this.$store.state.settings.currentUserId && this.$store.state.settings.profileAccessToken)
+                this.writeStoredProfileSession(this.$store.state.settings.currentUserId, this.$store.state.settings.profileAccessToken);
+            else if (!config.profileAuthorized)
+                this.writeStoredProfileSession('', '');
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
@@ -398,6 +440,7 @@ class Api {
             currentUserId: '',
             profileAccessToken: '',
         });
+        this.writeStoredProfileSession('', '');
         this.accessGranted = false;
         await this.request({action: 'test'});
     }
@@ -432,6 +475,7 @@ class Api {
         });
         this.currentUserId = result.userId;
         this.profileAccessToken = result.profileAccessToken;
+        this.writeStoredProfileSession(result.userId, result.profileAccessToken);
         await this.updateConfig();
         return result;
     }

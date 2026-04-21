@@ -450,8 +450,13 @@ class Reader {
     }
 
     async loadReader() {
-        if (!this.bookUid)
+        if (!this.bookUid) {
+            this.loading = false;
+            this.readerHtml = '';
+            this.contents = [];
+            this.error = 'Книга для чтения не выбрана. Откройте читалку из карточки книги.';
             return;
+        }
 
         const api = this.$root.api;
         if (!api) {

@@ -474,6 +474,7 @@ import diffUtils from '../../share/diffUtils';
 import _ from 'lodash';
 
 const maxLimit = 1000;
+const searchRoutePaths = new Set(['/', '/author', '/series', '/title', '/books', '/extended']);
 
 const route2component = {
     'author': {component: 'AuthorList', label: 'Авторы'},
@@ -549,6 +550,9 @@ const componentOptions = {
             this.updatePageCount();
         },
         $route(to) {
+            if (!this.isSearchRoute(to))
+                return;
+
             this.updateListFromRoute(to);
             this.updateSearchFromRouteQuery(to);
         },
@@ -855,6 +859,11 @@ class Search {
         return (route2component[route] ? route2component[route].component : null);
     }
 
+    isSearchRoute(route = this.$route) {
+        const path = (typeof(route) === 'string' ? route : ((route && route.path) || ''));
+        return searchRoutePaths.has(path);
+    }
+
     get extendedParamsMessage() {
         const s = this.search;
         const result = [];
@@ -892,6 +901,9 @@ class Search {
     }
 
     async updateListFromRoute(to) {
+        if (!this.isSearchRoute(to))
+            return;
+
         const newPath = to.path;
 
         let newList = this.getListRoute(newPath);
@@ -1365,6 +1377,8 @@ class Search {
     updateSearchFromRouteQuery(to) {
         if (!this.ready)
             return;
+        if (!this.isSearchRoute(to))
+            return;
         if (this.list.liberamaReady)
             this.sendCurrentUrl();
 
@@ -1407,6 +1421,8 @@ class Search {
 
     updateRouteQueryFromSearch() {
         if (!this.ready)
+            return;
+        if (!this.isSearchRoute(this.$route))
             return;
 
         this.routeUpdating = true;
