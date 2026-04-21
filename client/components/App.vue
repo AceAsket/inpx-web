@@ -486,14 +486,4 @@ body.body--dark pre {
     }
 }
 
-@font-face {
-    font-family: 'Web Default';
-    src: url('fonts/web-default.ttf') format('truetype');
-}
-
-@font-face {
-    font-family: 'Verdana';
-    font-weight: bold;
-    src: url('fonts/web-default-bold.ttf') format('truetype');
-}
 </style>

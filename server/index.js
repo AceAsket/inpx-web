@@ -14,7 +14,7 @@ let log;
 let config;
 let argv;
 let branch = '';
-const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx'];
+const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'admin-login', 'admin-password'];
 
 function showHelp(defaultConfig) {
     console.log(utils.versionText(defaultConfig));
@@ -29,6 +29,9 @@ Options:
   --data-dir=<dirpath> (or --app-dir) Set application working directory, default: <execDir>/.${defaultConfig.name}
   --lib-dir=<dirpath>  Set library directory, default: the same as ${defaultConfig.name} executable's
   --inpx=<filepath>    Set INPX collection file, default: the one that found in library dir
+  --admin-login=<str>  Set admin profile login, default: ${defaultConfig.adminLogin}
+  --admin-password=<str> Set admin profile password, default: ${defaultConfig.adminPassword}
+  --reset-admin-password Force reset of admin login/password on start
   --recreate           Force recreation of the search database on start
   --unsafe-filter      Use filter config at your own risk
 `
@@ -89,6 +92,18 @@ async function init() {
 
     if (argv.port) {
         config.server.port = argv.port;
+    }
+
+    if (argv['admin-login']) {
+        config.adminLogin = argv['admin-login'];
+    }
+
+    if (Object.prototype.hasOwnProperty.call(argv, 'admin-password')) {
+        config.adminPassword = String(argv['admin-password'] || '');
+    }
+
+    if (argv['reset-admin-password']) {
+        config.resetAdminPassword = true;
     }
 
     if (!config.remoteLib) {

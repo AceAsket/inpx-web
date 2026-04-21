@@ -2,7 +2,7 @@
     <div class="root column fit" style="position: relative">
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
-            <div ref="toolPanel" class="tool-panel column bg-cyan-2" style="position: sticky; top: 0; z-index: 10;">
+            <div ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
                 <!-- Обновление -->
                 <div v-show="showNewReleaseAvailable && newReleaseAvailable" class="row q-py-sm bg-green-4 items-center">
                     <div class="q-ml-sm" style="font-size: 120%">
@@ -38,9 +38,69 @@
                                     no-caps
                                     rounded
                                 />
+
+                                <div class="row no-wrap items-center profile-controls">
+                                    <q-select
+                                        :model-value="currentUserId"
+                                        class="q-ml-sm profile-select"
+                                        :class="{'profile-select--needs-login': currentProfileNeedsLogin}"
+                                        dense
+                                        outlined
+                                        emit-value
+                                        map-options
+                                        :options="userProfileOptions"
+                                        label="Профиль"
+                                        style="min-width: 180px"
+                                        @update:model-value="selectUserProfile"
+                                    >
+                                        <template v-if="currentProfileNeedsLogin" #append>
+                                            <q-icon
+                                                name="la la-user-lock"
+                                                class="profile-login-action"
+                                                @click.stop.prevent="promptCurrentProfileLogin"
+                                            >
+                                                <q-tooltip :delay="600" anchor="bottom middle" content-style="font-size: 80%">
+                                                    Войти в выбранный профиль
+                                                </q-tooltip>
+                                            </q-icon>
+                                        </template>
+                                    </q-select>
+
+                                    <DivBtn
+                                        class="q-ml-xs user-profiles-btn"
+                                        :class="currentProfileNeedsLogin ? 'user-profiles-btn--needs-login text-orange-9 bg-orange-1' : 'text-grey-5 bg-yellow-1'"
+                                        :size="currentProfileNeedsLogin ? 32 : 28"
+                                        :icon-size="currentProfileNeedsLogin ? 24 : 22"
+                                        icon="la la-users-cog"
+                                        round
+                                        @click.stop.prevent="openUserProfilesDialog"
+                                    >
+                                        <template #tooltip>
+                                            <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
+                                                {{ currentProfileNeedsLogin ? 'Профиль защищён: требуется вход' : 'Профили пользователей' }}
+                                            </q-tooltip>
+                                        </template>
+                                    </DivBtn>
+
+                                    <DivBtn
+                                        v-if="isCompactMobile"
+                                        class="q-ml-xs mobile-filter-toggle text-grey-5 bg-yellow-1"
+                                        :size="28"
+                                        :icon-size="22"
+                                        :icon="mobileFiltersCollapsed ? 'la la-angle-down' : 'la la-angle-up'"
+                                        round
+                                        @click.stop.prevent="toggleMobileFilters"
+                                    >
+                                        <template #tooltip>
+                                            <q-tooltip :delay="800" anchor="bottom middle" content-style="font-size: 80%" max-width="320px">
+                                                {{ mobileFiltersCollapsed ? 'Развернуть фильтры' : 'Свернуть фильтры' }}
+                                            </q-tooltip>
+                                        </template>
+                                    </DivBtn>
+                                </div>
                             </div>
 
-                            <div class="collection-title row items-center q-ml-sm" style="font-size: 150%;">
+                            <div v-show="showMobileFiltersBody" class="collection-title row items-center q-ml-sm" style="font-size: 150%;">
                                 <div class="collection-label q-mr-xs">
                                     Коллекция
                                 </div>
@@ -57,7 +117,7 @@
                                 </DivBtn>
                             </div>
                         </div>
-                        <div v-show="!isExtendedSearch" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 ref="authorInput" v-model="search.author" :maxlength="5000" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor('author')" style="min-width: 140px" label="Автор" stack-label outlined dense clearable
@@ -111,7 +171,7 @@
                                 </template>
                             </DivBtn>
                         </div>
-                        <div v-show="!isExtendedSearch && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 v-model="search.keywords" :maxlength="inputMaxLength" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor()" style="min-width: 140px;" label="Ключевые слова" stack-label outlined dense clearable readonly
@@ -201,11 +261,11 @@
                                 </q-tooltip>
                             </q-input>                            
                         </div>
-                        <div v-show="!isExtendedSearch && !extendedParams && extendedParamsMessage" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !extendedParams && extendedParamsMessage" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
                             +{{ extendedParamsMessage }}
                         </div>
 
-                        <div v-show="isExtendedSearch" class="search-fields row q-mx-md q-mb-xs items-center">
+                        <div v-show="showMobileFiltersBody && isExtendedSearch" class="search-fields row q-mx-md q-mb-xs items-center">
                             <q-input
                                 v-model="extSearchNames"
                                 class="col q-mt-xs" :bg-color="inputBgColor('extended')" input-style="cursor: pointer"
@@ -284,12 +344,20 @@
                         </div>
                     </div><!-- 1-1 -->
                     <!-- 1-2 -->
-                    <div class="column q-mx-sm">
+                    <div class="toolbar-actions q-mx-sm">
                         <div style="height: 3px" />
                         <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-cog" round @click.stop.prevent="settingsDialogVisible = true">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     Настройки
+                                </q-tooltip>
+                            </template>
+                        </DivBtn>
+
+                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-bookmark" round @click.stop.prevent="openReadingLists()">
+                            <template #tooltip>
+                                <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
+                                    Списки чтения
                                 </q-tooltip>
                             </template>
                         </DivBtn>
@@ -368,6 +436,8 @@
             :initial-tab="bookInfoDialogTab"
             @navigate="bookInfoNavigate"
         />
+        <ReadingListsDialog v-model="readingListsDialogVisible" :book="readingListsDialogBook" />
+        <UserProfilesDialog v-model="userProfilesDialogVisible" />
         <SelectExtSearchDialog v-model="selectExtSearchDialogVisible" v-model:ext-search="extSearch" />        
     </div>
 </template>
@@ -391,6 +461,8 @@ import SelectDateDialog from './SelectDateDialog/SelectDateDialog.vue';
 import SelectExtDialog from './SelectExtDialog/SelectExtDialog.vue';
 import BookInfoDialog from './BookInfoDialog/BookInfoDialog.vue';
 import SelectExtSearchDialog from './SelectExtSearchDialog/SelectExtSearchDialog.vue';
+import ReadingListsDialog from './ReadingListsDialog/ReadingListsDialog.vue';
+import UserProfilesDialog from './UserProfilesDialog/UserProfilesDialog.vue';
 
 import authorBooksStorage from './authorBooksStorage';
 import DivBtn from '../share/DivBtn.vue';
@@ -402,6 +474,7 @@ import diffUtils from '../../share/diffUtils';
 import _ from 'lodash';
 
 const maxLimit = 1000;
+const searchRoutePaths = new Set(['/', '/author', '/series', '/title', '/books', '/extended']);
 
 const route2component = {
     'author': {component: 'AuthorList', label: 'Авторы'},
@@ -426,6 +499,8 @@ const componentOptions = {
         SelectDateDialog,
         SelectExtDialog,
         BookInfoDialog,
+        ReadingListsDialog,
+        UserProfilesDialog,
         SelectExtSearchDialog,
         Dialog,
         DivBtn
@@ -475,6 +550,9 @@ const componentOptions = {
             this.updatePageCount();
         },
         $route(to) {
+            if (!this.isSearchRoute(to))
+                return;
+
             this.updateListFromRoute(to);
             this.updateSearchFromRouteQuery(to);
         },
@@ -540,7 +618,10 @@ class Search {
     selectExtDialogVisible = false;
     bookInfoDialogVisible = false;
     bookInfoDialogTab = 'fb2';
+    readingListsDialogVisible = false;
+    userProfilesDialogVisible = false;
     selectExtSearchDialogVisible = false;
+    mobileFiltersCollapsed = false;
 
     pageCount = 1;    
 
@@ -579,6 +660,7 @@ class Search {
     showTooltips = true;
 
     bookInfo = {};
+    readingListsDialogBook = null;
 
     searchDateOptions = [
         {label: 'сегодня', value: 'today'},
@@ -739,12 +821,54 @@ class Search {
                 }
             } else {
                 result.push({label: rec.label, value: route, icon: rec.icon});
-            }
+        }
         return result;
+    }
+
+    get currentUserId() {
+        return this.settings.currentUserId || this.config.currentUserId || '';
+    }
+
+    get currentSelectedProfile() {
+        const users = this.config.userProfiles || [];
+        return users.find((item) => item.id === this.currentUserId) || null;
+    }
+
+    get isCompactMobile() {
+        return !!this.$root.isMobileDevice;
+    }
+
+    get showMobileFiltersBody() {
+        return !this.isCompactMobile || !this.mobileFiltersCollapsed;
+    }
+
+    get currentProfileNeedsLogin() {
+        const current = this.currentSelectedProfile;
+        return !!(current && current.requiresLogin && !this.config.profileAuthorized);
+    }
+
+    get canViewAllProfiles() {
+        const current = this.config.currentUserProfile || {};
+        return !!(this.config.profileAuthorized && current.isAdmin);
+    }
+
+    get userProfileOptions() {
+        const users = (this.canViewAllProfiles
+            ? (this.config.userProfiles || [])
+            : [this.currentSelectedProfile].filter(Boolean));
+        return users.map((item) => ({
+            label: item.name,
+            value: item.id,
+        }));
     }
 
     getSelectedListComponent(route) {
         return (route2component[route] ? route2component[route].component : null);
+    }
+
+    isSearchRoute(route = this.$route) {
+        const path = (typeof(route) === 'string' ? route : ((route && route.path) || ''));
+        return searchRoutePaths.has(path);
     }
 
     get extendedParamsMessage() {
@@ -784,6 +908,9 @@ class Search {
     }
 
     async updateListFromRoute(to) {
+        if (!this.isSearchRoute(to))
+            return;
+
         const newPath = to.path;
 
         let newList = this.getListRoute(newPath);
@@ -1105,6 +1232,85 @@ class Search {
                 this.bookInfoDialogTab = (event.tab || 'fb2');
                 this.bookInfoDialogVisible = true;
                 break;
+            case 'manageReadingLists':
+                this.openReadingLists(event.book || null);
+                break;
+        }
+    }
+
+    openReadingLists(book = null) {
+        this.readingListsDialogBook = (book || null);
+        this.readingListsDialogVisible = true;
+    }
+
+    async openUserProfilesDialog() {
+        const target = this.currentSelectedProfile;
+        if (target && target.requiresLogin && !this.config.profileAuthorized) {
+            try {
+                await this.api.showProfileLoginDialog(target.login || '');
+            } catch (e) {
+                if (e.message !== 'Вход в профиль отменён')
+                    this.$root.stdDialog.alert(e.message, 'Ошибка');
+            }
+        }
+
+        this.userProfilesDialogVisible = true;
+    }
+
+    async promptCurrentProfileLogin() {
+        const target = this.currentSelectedProfile;
+        if (!(target && target.requiresLogin && !this.config.profileAuthorized))
+            return;
+
+        try {
+            await this.api.showProfileLoginDialog(target.login || '');
+        } catch (e) {
+            if (e.message !== 'Вход в профиль отменён')
+                this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
+    }
+
+    toggleMobileFilters() {
+        if (!this.isCompactMobile)
+            return;
+
+        this.mobileFiltersCollapsed = !this.mobileFiltersCollapsed;
+
+        if (!this.mobileFiltersCollapsed) {
+            this.$nextTick(() => {
+                this.$refs.toolPanel.style.top = '0px';
+                this.$refs.toolPanel.style.position = 'sticky';
+            });
+        }
+    }
+
+    async selectUserProfile(userId) {
+        const users = this.config.userProfiles || [];
+        const target = users.find((item) => item.id === userId);
+        if (!target)
+            return;
+
+        if (this.settings.profileAccessToken) {
+            try {
+                await this.api.logoutUserProfile();
+            } catch (e) {
+                // Ignore stale profile session cleanup errors while switching profiles.
+            }
+        }
+
+        this.commit('setSettings', {
+            currentUserId: userId || '',
+            profileAccessToken: '',
+        });
+        await this.api.updateConfig();
+
+        if (target.requiresLogin) {
+            try {
+                await this.api.showProfileLoginDialog(target.login || '');
+            } catch (e) {
+                await this.api.updateConfig();
+                this.$root.stdDialog.alert(e.message, 'Ошибка');
+            }
         }
     }
 
@@ -1178,6 +1384,8 @@ class Search {
     updateSearchFromRouteQuery(to) {
         if (!this.ready)
             return;
+        if (!this.isSearchRoute(to))
+            return;
         if (this.list.liberamaReady)
             this.sendCurrentUrl();
 
@@ -1220,6 +1428,8 @@ class Search {
 
     updateRouteQueryFromSearch() {
         if (!this.ready)
+            return;
+        if (!this.isSearchRoute(this.$route))
             return;
 
         this.routeUpdating = true;
@@ -1372,8 +1582,18 @@ export default vueComponent(Search);
     box-shadow: 0 8px 28px rgba(23, 32, 42, 0.08);
 }
 
+.tool-panel--mobile-collapsed {
+    box-shadow: 0 4px 16px rgba(23, 32, 42, 0.08);
+}
+
 .search-toolbar {
     padding: 2px 4px 4px;
+}
+
+.toolbar-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
 .header {
@@ -1411,6 +1631,46 @@ export default vueComponent(Search);
 
 .search-fields {
     gap: 2px;
+}
+
+.profile-select {
+    max-width: 220px;
+}
+
+.profile-controls {
+    min-width: 0;
+}
+
+.profile-select--needs-login :deep(.q-field__control) {
+    border-color: rgba(201, 140, 0, 0.58);
+    box-shadow: 0 0 0 1px rgba(201, 140, 0, 0.18);
+    background: rgba(255, 245, 214, 0.78);
+}
+
+.profile-login-action {
+    color: #c98c00;
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.profile-login-action:hover {
+    color: #a66c00;
+}
+
+.user-profiles-btn {
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.user-profiles-btn--needs-login {
+    box-shadow: 0 0 0 1px rgba(201, 140, 0, 0.2), 0 8px 18px rgba(201, 140, 0, 0.14);
+}
+
+.user-profiles-btn--needs-login:hover {
+    transform: translateY(-1px);
+}
+
+.mobile-filter-toggle {
+    flex: 0 0 auto;
 }
 
 .result-bar {
@@ -1484,6 +1744,38 @@ export default vueComponent(Search);
     .search-fields :deep(.q-input) {
         max-width: none;
     }
+
+    .profile-select {
+        max-width: none;
+        width: 100%;
+    }
+
+    .profile-controls {
+        display: flex;
+        align-items: center;
+        flex: 1 1 100%;
+        min-width: 0;
+    }
+
+    .profile-controls .profile-select {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .toolbar-actions {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        margin-left: 12px !important;
+    }
+
+    .toolbar-actions > div:first-child {
+        display: none;
+    }
+
+    .toolbar-actions :deep(.button) {
+        margin-top: 0 !important;
+    }
 }
 
 @media (max-width: 640px) {
@@ -1491,8 +1783,16 @@ export default vueComponent(Search);
         padding-bottom: 6px;
     }
 
+    .tool-panel--mobile-collapsed {
+        padding-bottom: 0;
+    }
+
     .search-toolbar {
         padding: 6px 6px 10px;
+    }
+
+    .tool-panel--mobile-collapsed .search-toolbar {
+        padding-bottom: 6px;
     }
 
     .header {
@@ -1505,6 +1805,25 @@ export default vueComponent(Search);
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 8px;
+    }
+
+    .profile-controls {
+        width: 100%;
+    }
+
+    .profile-controls .profile-select {
+        width: auto;
+    }
+
+    .profile-controls .user-profiles-btn {
+        flex: 0 0 auto;
+    }
+
+    .toolbar-actions {
+        width: 100%;
+        justify-content: flex-start;
+        margin-left: 8px !important;
+        margin-right: 8px !important;
     }
 
     .collection-title {

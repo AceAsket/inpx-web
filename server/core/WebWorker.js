@@ -16,6 +16,7 @@ const DbSearcher = require('./DbSearcher');
 const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
 const FileDownloader = require('./FileDownloader');
+const ReadingListStore = require('./ReadingListStore');
 const imageUtils = require('./ImageUtils');
 const bookConverter = require('./BookConverter');
 
@@ -140,7 +141,9 @@ class WebWorker {
             }
             
             this.inpxHashCreator = new InpxHashCreator(config);
+            this.readingListStore = new ReadingListStore(config);
             this.fb2Helper = new Fb2Helper();
+            this.profileSessions = new Map();
             this.inpxFileHash = '';
             this.authorInfoCache = new Map();
             this.authorInfoArchives = null;
@@ -488,6 +491,368 @@ class WebWorker {
         }
 
         return result;
+    }
+
+    async getBookRecordByUid(bookUid) {
+        const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
+        return (rows.length ? rows[0] : null);
+    }
+
+    sortReadingListBooks(books = [], order = []) {
+        const orderMap = new Map(order.map((uid, index) => [uid, index]));
+        return books.sort((a, b) => {
+            const ai = orderMap.has(a._uid) ? orderMap.get(a._uid) : Number.MAX_SAFE_INTEGER;
+            const bi = orderMap.has(b._uid) ? orderMap.get(b._uid) : Number.MAX_SAFE_INTEGER;
+            if (ai !== bi)
+                return ai - bi;
+
+            return (a.title || '').localeCompare(b.title || '', 'ru');
+        });
+    }
+
+    async buildUserReadingSummary(user = null, limit = 6) {
+        const progressMap = (user && user.readerProgress && typeof(user.readerProgress) === 'object'
+            ? user.readerProgress
+            : {});
+
+        const rows = Object.entries(progressMap)
+            .map(([bookUid, progress]) => ({
+                bookUid: String(bookUid || '').trim(),
+                progress: Object.assign({percent: 0, sectionId: '', updatedAt: ''}, progress || {}),
+            }))
+            .filter((item) => item.bookUid)
+            .sort((a, b) => String(b.progress.updatedAt || '').localeCompare(String(a.progress.updatedAt || '')))
+            .slice(0, Math.max(0, limit));
+
+        const result = [];
+        for (const item of rows) {
+            const book = await this.getBookRecordByUid(item.bookUid);
+            if (!book)
+                continue;
+
+            result.push({
+                bookUid: item.bookUid,
+                title: book.title || 'Без названия',
+                author: book.author || '',
+                series: book.series || '',
+                serno: book.serno || '',
+                ext: book.ext || '',
+                percent: Math.max(0, Math.min(1, Number(item.progress.percent || 0) || 0)),
+                sectionId: String(item.progress.sectionId || '').trim(),
+                updatedAt: String(item.progress.updatedAt || '').trim(),
+            });
+        }
+
+        return {
+            count: Object.keys(progressMap).length,
+            items: result,
+        };
+    }
+
+    async getUserProfiles(currentUserId = '') {
+        this.checkMyState();
+
+        const {users, currentUser} = await this.readingListStore.getUsers(currentUserId);
+        return {
+            users: users
+                .map((item) => ({
+                    id: item.id,
+                    name: item.name,
+                    login: item.login || '',
+                    requiresLogin: !!item.passwordHash,
+                    isAdmin: !!item.isAdmin,
+                    opdsEnabled: item.opdsEnabled !== false,
+                    currentReadingCount: Object.keys(item.readerProgress || {}).length,
+                    createdAt: item.createdAt,
+                    updatedAt: item.updatedAt,
+                }))
+                .sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+            currentUserId: (currentUser ? currentUser.id : ''),
+        };
+    }
+
+    hashProfilePassword(login, password) {
+        return utils.getBufHash(`${String(login || '').trim().toLowerCase()}::${String(password || '')}`, 'sha256', 'hex');
+    }
+
+    createProfileSession(userId) {
+        const token = utils.randomHexString(24);
+        this.profileSessions.set(token, {
+            userId,
+            time: Date.now(),
+        });
+        return token;
+    }
+
+    getProfileSessionUser(token = '') {
+        const rec = this.profileSessions.get(String(token || '').trim());
+        if (!rec)
+            return '';
+
+        rec.time = Date.now();
+        return rec.userId || '';
+    }
+
+    closeProfileSession(token = '') {
+        this.profileSessions.delete(String(token || '').trim());
+        return {success: true};
+    }
+
+    async getEffectiveUser(userId = '', profileAccessToken = '') {
+        const sessionUserId = this.getProfileSessionUser(profileAccessToken);
+        if (sessionUserId)
+            return await this.readingListStore.getUser(sessionUserId);
+
+        const requestedUser = await this.readingListStore.getUser(userId);
+        if (requestedUser && !requestedUser.passwordHash)
+            return requestedUser;
+
+        return requestedUser;
+    }
+
+    async requireAuthorizedUser(userId = '', profileAccessToken = '') {
+        const requestedUser = await this.readingListStore.getUser(userId);
+        if (!requestedUser.passwordHash)
+            return requestedUser;
+
+        const sessionUserId = this.getProfileSessionUser(profileAccessToken);
+        if (!sessionUserId || sessionUserId !== requestedUser.id)
+            throw new Error('need_profile_login');
+
+        return requestedUser;
+    }
+
+    async requireAdmin(userId = '', profileAccessToken = '') {
+        const user = await this.requireAuthorizedUser(userId, profileAccessToken);
+        if (!user.isAdmin)
+            throw new Error('Только администратор может управлять профилями');
+        return user;
+    }
+
+    async getCurrentUserProfile(userId = '', profileAccessToken = '') {
+        this.checkMyState();
+
+        const user = await this.getEffectiveUser(userId, profileAccessToken);
+        const profileAuthorized = (!user.passwordHash || this.getProfileSessionUser(profileAccessToken) === user.id);
+        const readingSummary = (profileAuthorized ? await this.buildUserReadingSummary(user) : {count: 0, items: []});
+        return {
+            currentUserId: user.id,
+            profileAuthorized,
+            currentUserProfile: {
+                id: user.id,
+                name: user.name,
+                login: user.login || '',
+                hasPassword: !!user.passwordHash,
+                isAdmin: !!user.isAdmin,
+                emailTo: (profileAuthorized ? user.emailTo || '' : ''),
+                telegramChatId: (profileAuthorized ? user.telegramChatId || '' : ''),
+                opdsEnabled: user.opdsEnabled !== false,
+                readerPreferences: (profileAuthorized ? this.readingListStore.normalizeReaderPreferences(user.readerPreferences) : null),
+                currentReading: readingSummary.items,
+                currentReadingCount: readingSummary.count,
+            },
+        };
+    }
+
+    async loginUserProfile(login = '', password = '') {
+        this.checkMyState();
+
+        const user = await this.readingListStore.findUserByLogin(login);
+        if (!user || !user.passwordHash)
+            throw new Error('Неверный логин или пароль');
+
+        const passwordHash = this.hashProfilePassword(user.login, password);
+        if (passwordHash !== user.passwordHash)
+            throw new Error('Неверный логин или пароль');
+
+        return {
+            userId: user.id,
+            profileAccessToken: this.createProfileSession(user.id),
+        };
+    }
+
+    async createUserProfile(profile = {}) {
+        this.checkMyState();
+        return {user: await this.readingListStore.createUser(profile)};
+    }
+
+    async updateUserProfile(userId, patch = {}) {
+        this.checkMyState();
+        return {user: await this.readingListStore.updateUser(userId, patch)};
+    }
+
+    async deleteUserProfile(userId) {
+        this.checkMyState();
+        return await this.readingListStore.deleteUser(userId);
+    }
+
+    async getOpdsUsers() {
+        this.checkMyState();
+        return await this.readingListStore.getOpdsUsers();
+    }
+
+    async getReaderState(userId = '', bookUid = '') {
+        this.checkMyState();
+        return await this.readingListStore.getReaderState(userId, bookUid);
+    }
+
+    async updateReaderPreferences(userId = '', patch = {}) {
+        this.checkMyState();
+        const preferences = await this.readingListStore.updateReaderPreferences(userId, patch);
+        return {preferences};
+    }
+
+    async updateReaderProgress(userId = '', bookUid = '', patch = {}) {
+        this.checkMyState();
+        const progress = await this.readingListStore.updateReaderProgress(userId, bookUid, patch);
+        return {progress};
+    }
+
+    async deleteReaderProgress(userId = '', bookUid = '') {
+        this.checkMyState();
+        return await this.readingListStore.deleteReaderProgress(userId, bookUid);
+    }
+
+    async addReaderBookmark(userId = '', bookUid = '', bookmark = {}) {
+        this.checkMyState();
+        const bookmarks = await this.readingListStore.addReaderBookmark(userId, bookUid, bookmark);
+        return {bookmarks};
+    }
+
+    async deleteReaderBookmark(userId = '', bookUid = '', bookmarkId = '') {
+        this.checkMyState();
+        const bookmarks = await this.readingListStore.deleteReaderBookmark(userId, bookUid, bookmarkId);
+        return {bookmarks};
+    }
+
+    async getReadingLists(userId = '', bookUid = '', options = {}) {
+        this.checkMyState();
+
+        const lists = await this.readingListStore.getLists(userId, options);
+        return {
+            lists: lists
+                .map((item) => this.readingListStore.listStats(item, bookUid))
+                .sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+        };
+    }
+
+    async getReadingList(userId = '', listId, options = {}) {
+        this.checkMyState();
+
+        const item = await this.readingListStore.getList(userId, listId, options);
+        if (!item)
+            throw new Error('Список не найден');
+
+        const listEntries = this.readingListStore.normalizeEntries(item.books);
+        const books = [];
+        for (const entry of listEntries) {
+            const book = await this.getBookRecordByUid(entry.bookUid);
+            if (book) {
+                book._readingListRead = !!entry.read;
+                books.push(book);
+            }
+        }
+
+        this.sortReadingListBooks(books, listEntries.map((entry) => entry.bookUid));
+
+        return {
+            list: {
+                id: item.id,
+                userId: item.userId,
+                name: item.name,
+                visibility: item.visibility,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
+                bookCount: (item.books || []).length,
+                readCount: this.readingListStore.countRead(item.books),
+            },
+            books,
+        };
+    }
+
+    async createReadingList(userId = '', name, visibility = 'private') {
+        this.checkMyState();
+
+        const item = await this.readingListStore.createList(userId, name, visibility);
+        return {
+            list: this.readingListStore.listStats(item),
+        };
+    }
+
+    async renameReadingList(userId = '', listId, name) {
+        this.checkMyState();
+
+        const item = await this.readingListStore.renameList(userId, listId, name);
+        return {list: this.readingListStore.listStats(item)};
+    }
+
+    async setReadingListVisibility(userId = '', listId, visibility) {
+        this.checkMyState();
+        const item = await this.readingListStore.setListVisibility(userId, listId, visibility);
+        return {list: this.readingListStore.listStats(item)};
+    }
+
+    async deleteReadingList(userId = '', listId) {
+        this.checkMyState();
+        return await this.readingListStore.deleteList(userId, listId);
+    }
+
+    async exportReadingLists(userId = '') {
+        this.checkMyState();
+        return await this.readingListStore.exportData(userId);
+    }
+
+    async importReadingLists(userId = '', data) {
+        this.checkMyState();
+        return await this.readingListStore.importData(userId, data);
+    }
+
+    async updateReadingListBook(userId = '', listId, bookUid, enabled) {
+        this.checkMyState();
+
+        const book = await this.getBookRecordByUid(bookUid);
+        if (!book)
+            throw new Error('404 Файл не найден');
+
+        const item = await this.readingListStore.setBookMembership(userId, listId, bookUid, enabled);
+        return {
+            list: this.readingListStore.listStats(item),
+            bookUid,
+            enabled: !!enabled,
+        };
+    }
+
+    async setReadingListBookRead(userId = '', listId, bookUid, read) {
+        this.checkMyState();
+
+        const book = await this.getBookRecordByUid(bookUid);
+        if (!book)
+            throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+
+        const item = await this.readingListStore.setBookRead(userId, listId, bookUid, read);
+        return {
+            list: this.readingListStore.listStats(item),
+            bookUid,
+            read: !!read,
+        };
+    }
+
+    async addSeriesToReadingList(userId = '', listId, series) {
+        this.checkMyState();
+
+        const seriesName = String(series || '').trim();
+        if (!seriesName)
+            throw new Error('series is empty');
+
+        const result = await this.dbSearcher.getSeriesBookList(seriesName);
+        const bookUids = (result.books || []).map((book) => book._uid).filter(Boolean);
+        const added = await this.readingListStore.addBooks(userId, listId, bookUids);
+
+        return {
+            list: this.readingListStore.listStats(added.item),
+            series: seriesName,
+            addedBooks: added.added,
+        };
     }
 
     async extractBook(libFolder, libFile) {
@@ -1034,15 +1399,17 @@ class WebWorker {
         };
     }
 
-    async sendBookToTelegram(bookUid, format = '') {
-        if (!this.config.telegramShareEnabled || !this.config.telegramBotToken || !this.config.telegramChatId)
+    async sendBookToTelegram(bookUid, format = '', userId = '') {
+        const {currentUser} = await this.readingListStore.getUsers(userId);
+        const chatId = String((currentUser && currentUser.telegramChatId) || this.config.telegramChatId || '').trim();
+        if (!this.config.telegramBotToken || !chatId)
             throw new Error('Отправка в Telegram не настроена');
 
         const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
         const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
         const form = new FormData();
 
-        form.append('chat_id', this.config.telegramChatId);
+        form.append('chat_id', chatId);
         form.append('caption', formatTemplate(this.config.telegramCaptionTemplate, book).trim());
         form.append('document', fs.createReadStream(rawFile), downFileName);
 
@@ -1059,8 +1426,10 @@ class WebWorker {
         return {success: true};
     }
 
-    async sendBookToEmail(bookUid, format = '') {
-        if (!this.config.emailShareEnabled || !this.config.smtpHost || !this.config.emailTo)
+    async sendBookToEmail(bookUid, format = '', userId = '') {
+        const {currentUser} = await this.readingListStore.getUsers(userId);
+        const emailTo = String((currentUser && currentUser.emailTo) || this.config.emailTo || '').trim();
+        if (!this.config.smtpHost || !emailTo)
             throw new Error('Отправка на email не настроена');
 
         const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
@@ -1077,7 +1446,7 @@ class WebWorker {
         const subject = [book.author, book.title].filter(Boolean).join(' - ') || downFileName;
         await transporter.sendMail({
             from: this.config.emailFrom || this.config.smtpUser || 'inpx-web@localhost',
-            to: this.config.emailTo,
+            to: emailTo,
             subject: `Книга: ${subject}`,
             text: `Во вложении книга "${book.title || downFileName}".`,
             attachments: [

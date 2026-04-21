@@ -3,6 +3,8 @@ const AuthorPage = require('./AuthorPage');
 const SeriesPage = require('./SeriesPage');
 const TitlePage = require('./TitlePage');
 const GenrePage = require('./GenrePage');
+const ReadingListsPage = require('./ReadingListsPage');
+const ReadingProfilesPage = require('./ReadingProfilesPage');
 
 class RootPage extends BasePage {
     constructor(config) {
@@ -15,6 +17,8 @@ class RootPage extends BasePage {
         this.seriesPage = new SeriesPage(config);
         this.titlePage = new TitlePage(config);
         this.genrePage = new GenrePage(config);
+        this.readingListsPage = new ReadingListsPage(config);
+        this.readingProfilesPage = new ReadingProfilesPage(config);
     }
 
     async body(req) {
@@ -28,12 +32,23 @@ class RootPage extends BasePage {
                 this.title = 'Неизвестная коллекция';
         }
 
-        result.entry = [
-            this.authorPage.myEntry(),
-            this.seriesPage.myEntry(),
-            this.titlePage.myEntry(),
-            this.genrePage.myEntry(),
+        const resultEntry = [
+            this.authorPage.myEntry(req),
+            this.seriesPage.myEntry(req),
+            this.titlePage.myEntry(req),
+            this.genrePage.myEntry(req),
         ];
+
+        const userId = this.getScopeUserId(req);
+        if (userId) {
+            resultEntry.push(this.readingListsPage.myEntry(req));
+        } else {
+            const publicUsers = await this.webWorker.getOpdsUsers();
+            if (publicUsers.length)
+                resultEntry.push(this.readingProfilesPage.myEntry(req));
+        }
+
+        result.entry = resultEntry;
 
         return this.makeBody(result, req);
     }

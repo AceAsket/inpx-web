@@ -133,6 +133,15 @@
                         {{ authorInfoLabel }}
                     </q-btn>
 
+                    <q-btn
+                        flat
+                        no-caps
+                        icon="la la-bookmark"
+                        @click.stop.prevent="emit('readingList')"
+                    >
+                        {{ readingListLabel }}
+                    </q-btn>
+
                     <div v-if="telegramShareEnabled" class="action-split" @click.stop>
                         <q-btn
                             flat
@@ -200,11 +209,13 @@
                     </div>
 
                     <q-btn
+                        class="copy-action"
                         flat
-                        round
                         icon="la la-copy"
                         @click.stop.prevent="emit('copyLink')"
-                    />
+                    >
+                        URL
+                    </q-btn>
                 </div>
 
                 <div class="format-actions">
@@ -420,6 +431,10 @@ class BookView {
 
     get authorInfoLabel() {
         return '\u041e\u0431\u0020\u0430\u0432\u0442\u043e\u0440\u0435';
+    }
+
+    get readingListLabel() {
+        return '\u0412\u0020\u0441\u043f\u0438\u0441\u043e\u043a';
     }
 
     get seriesLabel() {
@@ -820,34 +835,86 @@ export default vueComponent(BookView);
 }
 
 .book-actions {
-    display: flex;
-    align-items: center;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
-    flex-wrap: wrap;
     padding-top: 2px;
-    min-height: 42px;
+    min-height: 84px;
+}
+
+.book-actions > * {
+    min-width: 0;
+    align-self: stretch;
+}
+
+.book-actions :deep(.q-btn) {
+    min-height: 36px;
+    width: 100%;
+}
+
+.book-actions :deep(.q-btn__content) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+    line-height: 1;
+    width: 100%;
+}
+
+.book-actions :deep(.q-icon),
+.book-actions :deep([class*='la-']) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.book-actions :deep(.q-btn--round) {
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    padding: 0;
 }
 
 .action-split {
     position: relative;
     display: inline-flex;
     align-items: center;
+    align-self: stretch;
+    width: 100%;
     border-radius: 999px;
     background: rgba(23, 32, 38, 0.04);
 }
 
+.action-split :deep(.q-btn) {
+    min-height: 36px;
+    flex: 1 1 auto;
+}
+
 .action-split-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 32px;
-    height: 32px;
+    height: 36px;
     border: 0;
     border-radius: 999px;
     background: transparent;
     color: inherit;
     cursor: pointer;
+    line-height: 1;
 }
 
 .action-split-toggle:hover {
     background: rgba(23, 32, 38, 0.06);
+}
+
+.action-split-toggle i {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 1;
 }
 
 .action-split-menu {
@@ -895,6 +962,15 @@ export default vueComponent(BookView);
 
 .primary-action {
     border-radius: 12px;
+}
+
+.copy-action {
+    min-width: 0;
+    border-radius: 12px;
+}
+
+.copy-action :deep(.q-btn__content) {
+    justify-content: flex-start;
 }
 
 .book-json pre {
@@ -1006,6 +1082,10 @@ export default vueComponent(BookView);
         padding-left: 8px;
         padding-right: 8px;
         font-size: 12px;
+    }
+
+    .action-split-toggle {
+        height: 34px;
     }
 
     .format-actions {

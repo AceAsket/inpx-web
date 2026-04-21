@@ -44,11 +44,11 @@ class BasePage {
         return Object.assign(result, entry);
     }
 
-    myEntry() {
+    myEntry(req = null) {
         return this.makeEntry({
             id: this.id,
             title: this.title, 
-            link: this.navLink({href: `/${this.id}`}),
+            link: this.navLink({href: `/${this.id}`, req}),
         });
     }
 
@@ -57,9 +57,32 @@ class BasePage {
         return {'*ATTRS': attrs};
     }
 
+    scopedHref(href, req = null, query = {}) {
+        const [base, rawQuery = ''] = String(href || '').split('?');
+        const params = new URLSearchParams(rawQuery);
+
+        if (req && req.query && req.query.user && !params.has('user') && !Object.prototype.hasOwnProperty.call(query || {}, 'user'))
+            params.set('user', req.query.user);
+
+        for (const [key, value] of Object.entries(query || {})) {
+            if (value === undefined || value === null || value === '') {
+                params.delete(key);
+            } else {
+                params.set(key, String(value));
+            }
+        }
+
+        const queryString = params.toString();
+        return (queryString ? `${base}?${queryString}` : base);
+    }
+
+    getScopeUserId(req) {
+        return String((req && req.query && req.query.user) || '').trim();
+    }
+
     navLink(attrs) {
         return this.makeLink({
-            href: (attrs.hrefAsIs ? attrs.href : `${this.opdsRoot}${attrs.href || ''}`),
+            href: this.scopedHref((attrs.hrefAsIs ? attrs.href : `${this.opdsRoot}${attrs.href || ''}`), attrs.req, attrs.query),
             rel: attrs.rel || 'subsection',
             type: 'application/atom+xml;profile=opds-catalog;kind=navigation',
         });
@@ -67,7 +90,7 @@ class BasePage {
 
     acqLink(attrs) {
         return this.makeLink({
-            href: (attrs.hrefAsIs ? attrs.href : `${this.opdsRoot}${attrs.href || ''}`),
+            href: this.scopedHref((attrs.hrefAsIs ? attrs.href : `${this.opdsRoot}${attrs.href || ''}`), attrs.req, attrs.query),
             rel: attrs.rel || 'subsection',
             type: 'application/atom+xml;profile=opds-catalog;kind=acquisition',
         });
@@ -98,17 +121,18 @@ class BasePage {
     }
 
     baseLinks(req, selfAcq = false) {
+        const scopeQuery = (this.getScopeUserId(req) ? {user: this.getScopeUserId(req)} : {});
         const result = [
-            this.makeLink({href: `${this.opdsRoot}/opensearch`, rel: 'search', type: 'application/opensearchdescription+xml'}),
-            this.makeLink({href: `${this.opdsRoot}/search?type=title&term={searchTerms}`, rel: 'search', type: 'application/atom+xml'}),
+            this.makeLink({href: this.scopedHref(`${this.opdsRoot}/opensearch`, req), rel: 'search', type: 'application/opensearchdescription+xml'}),
+            this.makeLink({href: this.scopedHref(`${this.opdsRoot}/search?type=title&term={searchTerms}`, req), rel: 'search', type: 'application/atom+xml'}),
 
-            this.navLink({rel: 'start'}),
+            this.navLink({rel: 'start', req, query: scopeQuery}),
         ];
         
         if (selfAcq) {
-            result.push(this.acqLink({rel: 'self', href: req.originalUrl, hrefAsIs: true}));
+            result.push(this.acqLink({rel: 'self', href: req.originalUrl, hrefAsIs: true, req}));
         } else {
-            result.push(this.navLink({rel: 'self', href: req.originalUrl, hrefAsIs: true}));
+            result.push(this.navLink({rel: 'self', href: req.originalUrl, hrefAsIs: true, req}));
         }
 
         return result;

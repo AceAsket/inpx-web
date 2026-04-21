@@ -39,6 +39,7 @@ import LockQueue from '../../../server/core/LockQueue';
 import packageJson from '../../../package.json';
 
 const rotor = '|/-\\';
+const profileSessionStorageKey = 'inpx-web-profile-session';
 const stepBound = [
     0,
     0,// jobStep = 1
@@ -81,6 +82,8 @@ class Api {
     //jsonMessage = '';
     progress = 0;
     accessToken = '';
+    currentUserId = '';
+    profileAccessToken = '';
 
     created() {
         this.commit = this.$store.commit;
@@ -93,17 +96,63 @@ class Api {
         this.updateConfig();//no await
     }
 
+    readStoredProfileSession() {
+        try {
+            const raw = localStorage.getItem(profileSessionStorageKey);
+            if (!raw)
+                return {};
+
+            const parsed = JSON.parse(raw);
+            return {
+                currentUserId: String(parsed.currentUserId || '').trim(),
+                profileAccessToken: String(parsed.profileAccessToken || '').trim(),
+            };
+        } catch (e) {
+            return {};
+        }
+    }
+
+    writeStoredProfileSession(currentUserId = '', profileAccessToken = '') {
+        try {
+            if (!currentUserId || !profileAccessToken) {
+                localStorage.removeItem(profileSessionStorageKey);
+                return;
+            }
+
+            localStorage.setItem(profileSessionStorageKey, JSON.stringify({
+                currentUserId: String(currentUserId || '').trim(),
+                profileAccessToken: String(profileAccessToken || '').trim(),
+            }));
+        } catch (e) {
+            // ignore storage failures
+        }
+    }
+
     loadSettings() {
         const settings = this.settings;
+        const storedProfile = this.readStoredProfileSession();
 
-        this.accessToken = settings.accessToken;
+        if ((!settings.currentUserId || !settings.profileAccessToken) && storedProfile.currentUserId && storedProfile.profileAccessToken)
+            this.commit('setSettings', storedProfile);
+
+        const resolvedSettings = this.$store.state.settings;
+        this.accessToken = resolvedSettings.accessToken;
+        this.currentUserId = resolvedSettings.currentUserId;
+        this.profileAccessToken = resolvedSettings.profileAccessToken;
     }
 
     async updateConfig() {
         try {
+            this.loadSettings();
             const config = await this.getConfig();
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
+            if (config.currentUserId && this.settings.currentUserId !== config.currentUserId)
+                this.commit('setSettings', {currentUserId: config.currentUserId});
+            if (config.profileAuthorized && this.$store.state.settings.currentUserId && this.$store.state.settings.profileAccessToken)
+                this.writeStoredProfileSession(this.$store.state.settings.currentUserId, this.$store.state.settings.profileAccessToken);
+            else if (!config.profileAuthorized)
+                this.writeStoredProfileSession('', '');
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
@@ -161,6 +210,10 @@ class Api {
                 const params = {action: 'get-worker-state', workerId: 'server_state'};
                 if (this.accessToken)
                     params.accessToken = this.accessToken;
+                if (this.currentUserId)
+                    params.userId = this.currentUserId;
+                if (this.profileAccessToken)
+                    params.profileAccessToken = this.profileAccessToken;
 
                 const server = await wsc.message(await wsc.send(params));
 
@@ -199,14 +252,25 @@ class Api {
         let errCount = 0;
         while (1) {// eslint-disable-line
             try {
-                if (this.accessToken)
-                    params.accessToken = this.accessToken;
+                const settings = this.settings;
+                const accessToken = settings.accessToken || this.accessToken;
+                const currentUserId = settings.currentUserId || this.currentUserId;
+                const profileAccessToken = settings.profileAccessToken || this.profileAccessToken;
+
+                if (accessToken)
+                    params.accessToken = accessToken;
+                if (currentUserId)
+                    params.userId = currentUserId;
+                if (profileAccessToken)
+                    params.profileAccessToken = profileAccessToken;
 
                 const response = await wsc.message(await wsc.send(params), timeoutSecs);
 
                 if (response && response.error == 'need_access_token') {
                     this.accessGranted = false;
                     await this.showPasswordDialog();
+                } else if (response && response.error == 'need_profile_login') {
+                    await this.showProfileLoginDialog();
                 } else if (response && response.error == 'server_busy') {
                     this.accessGranted = true;
                     await this.showBusyDialog();
@@ -267,6 +331,102 @@ class Api {
         return await this.request({action: 'get-book-info', bookUid}, 120);
     }
 
+    async getReaderState(bookUid) {
+        return await this.request({action: 'get-reader-state', bookUid}, 120);
+    }
+
+    async updateReaderProgress(bookUid, progress = {}) {
+        return await this.request({action: 'update-reader-progress', bookUid, progress}, 120);
+    }
+
+    async deleteReaderProgress(bookUid) {
+        return await this.request({action: 'delete-reader-progress', bookUid}, 120);
+    }
+
+    async updateReaderPreferences(preferences = {}) {
+        return await this.request({action: 'update-reader-preferences', preferences}, 120);
+    }
+
+    async addReaderBookmark(bookUid, bookmark = {}) {
+        return await this.request({action: 'add-reader-bookmark', bookUid, bookmark}, 120);
+    }
+
+    async deleteReaderBookmark(bookUid, bookmarkId) {
+        return await this.request({action: 'delete-reader-bookmark', bookUid, bookmarkId}, 120);
+    }
+
+    async getReadingLists(bookUid = '') {
+        return await this.request({action: 'get-reading-lists', bookUid}, 120);
+    }
+
+    async getUserProfiles() {
+        return await this.request({action: 'get-user-profiles'}, 120);
+    }
+
+    async loginUserProfile(login, password) {
+        return await this.request({action: 'login-user-profile', login, password}, 120);
+    }
+
+    async logoutUserProfile() {
+        return await this.request({action: 'logout-user-profile'}, 120);
+    }
+
+    async createUserProfile(profile) {
+        return await this.request({action: 'create-user-profile', profile}, 120);
+    }
+
+    async updateUserProfile(targetUserId, profile) {
+        return await this.request({action: 'update-user-profile', targetUserId, profile}, 120);
+    }
+
+    async deleteUserProfile(targetUserId) {
+        return await this.request({action: 'delete-user-profile', targetUserId}, 120);
+    }
+
+    async getReadingList(listId) {
+        return await this.request({action: 'get-reading-list', listId}, 120);
+    }
+
+    async createReadingList(name) {
+        return await this.request({action: 'create-reading-list', name}, 120);
+    }
+
+    async createReadingListWithVisibility(name, visibility = 'private') {
+        return await this.request({action: 'create-reading-list', name, visibility}, 120);
+    }
+
+    async renameReadingList(listId, name) {
+        return await this.request({action: 'rename-reading-list', listId, name}, 120);
+    }
+
+    async setReadingListVisibility(listId, visibility) {
+        return await this.request({action: 'set-reading-list-visibility', listId, visibility}, 120);
+    }
+
+    async deleteReadingList(listId) {
+        return await this.request({action: 'delete-reading-list', listId}, 120);
+    }
+
+    async exportReadingLists() {
+        return await this.request({action: 'export-reading-lists'}, 120);
+    }
+
+    async importReadingLists(data) {
+        return await this.request({action: 'import-reading-lists', data}, 120);
+    }
+
+    async updateReadingListBook(listId, bookUid, enabled) {
+        return await this.request({action: 'update-reading-list-book', listId, bookUid, enabled}, 120);
+    }
+
+    async setReadingListBookRead(listId, bookUid, read) {
+        return await this.request({action: 'set-reading-list-book-read', listId, bookUid, read}, 120);
+    }
+
+    async addSeriesToReadingList(listId, series) {
+        return await this.request({action: 'add-series-to-reading-list', listId, series}, 120);
+    }
+
     async sendBookTelegram(bookUid, format = '') {
         return await this.request({action: 'send-book-telegram', bookUid, format}, 300);
     }
@@ -280,9 +440,56 @@ class Api {
     }
 
     async logout() {
+        if (this.profileAccessToken) {
+            try {
+                await this.logoutUserProfile();
+            } catch (e) {
+                // Ignore profile session cleanup errors during global logout.
+            }
+        }
         await this.request({action: 'logout'});
+        this.commit('setSettings', {
+            currentUserId: '',
+            profileAccessToken: '',
+        });
+        this.writeStoredProfileSession('', '');
         this.accessGranted = false;
         await this.request({action: 'test'});
+    }
+
+    async showProfileLoginDialog(prefillLogin = '') {
+        const current = this.$store.state.config.currentUserProfile || {};
+        const loginPrompt = await this.$root.stdDialog.prompt(
+            'Введите логин профиля:',
+            'Вход в профиль',
+            {
+                inputValue: prefillLogin || current.login || '',
+                inputValidator: (value) => (String(value || '').trim() ? true : 'Логин не должен быть пустым'),
+            },
+        );
+        if (!loginPrompt || loginPrompt === false)
+            throw new Error('Вход в профиль отменён');
+
+        const passwordPrompt = await this.$root.stdDialog.password(
+            'Введите пароль профиля:',
+            'Вход в профиль',
+            {
+                inputValidator: (value) => (String(value || '') ? true : 'Пароль не должен быть пустым'),
+            },
+        );
+        if (!passwordPrompt || passwordPrompt === false)
+            throw new Error('Вход в профиль отменён');
+
+        const result = await this.loginUserProfile(String(loginPrompt.value || '').trim(), String(passwordPrompt.value || ''));
+        this.commit('setSettings', {
+            currentUserId: result.userId,
+            profileAccessToken: result.profileAccessToken,
+        });
+        this.currentUserId = result.userId;
+        this.profileAccessToken = result.profileAccessToken;
+        this.writeStoredProfileSession(result.userId, result.profileAccessToken);
+        await this.updateConfig();
+        return result;
     }
 }
 

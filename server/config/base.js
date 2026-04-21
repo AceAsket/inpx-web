@@ -42,7 +42,7 @@ module.exports = {
     lowMemoryMode: false,
     fullOptimization: false,
 
-    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'uiDefaults'],
+    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'onlineReaderEnabled', 'uiDefaults'],
 
     allowRemoteLib: false,
     remoteLib: false,
@@ -69,6 +69,9 @@ module.exports = {
 
     latestReleaseLink: 'https://github.com/AceAsket/inpx-web/releases/latest',
     checkReleaseLink: 'https://api.github.com/repos/AceAsket/inpx-web/releases/latest',
+    adminLogin: process.env.INPX_ADMIN_LOGIN || 'admin',
+    adminPassword: process.env.INPX_ADMIN_PASSWORD || 'admin',
+    resetAdminPassword: process.env.INPX_RESET_ADMIN_PASSWORD === 'true',
     conversionEnabled: process.env.INPX_ENABLE_CONVERSION !== 'false',
     telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
@@ -82,6 +85,7 @@ module.exports = {
     smtpPass: process.env.SMTP_PASS || '',
     emailFrom: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
     emailTo: process.env.EMAIL_TO || '',
+    onlineReaderEnabled: true,
 
     uiDefaults: {
         limit: 20,
