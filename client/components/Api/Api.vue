@@ -289,6 +289,18 @@ class Api {
         return await this.request({action: 'get-book-info', bookUid}, 120);
     }
 
+    async getReaderState(bookUid) {
+        return await this.request({action: 'get-reader-state', bookUid}, 120);
+    }
+
+    async updateReaderProgress(bookUid, progress = {}) {
+        return await this.request({action: 'update-reader-progress', bookUid, progress}, 120);
+    }
+
+    async updateReaderPreferences(preferences = {}) {
+        return await this.request({action: 'update-reader-preferences', preferences}, 120);
+    }
+
     async getReadingLists(bookUid = '') {
         return await this.request({action: 'get-reading-lists', bookUid}, 120);
     }

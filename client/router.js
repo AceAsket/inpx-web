@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory } from 'vue-router';
 import _ from 'lodash';
 
 const Search = () => import('./components/Search/Search.vue');
+const Reader = () => import('./components/Reader/Reader.vue');
 
 const myRoutes = [
     ['/', Search],
@@ -10,6 +11,7 @@ const myRoutes = [
     ['/title', Search],
     ['/books', Search],
     ['/extended', Search],
+    ['/reader/:bookUid', Reader],
     ['/:pathMatch(.*)*', null, null, '/'],
 ];
 

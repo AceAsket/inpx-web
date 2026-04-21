@@ -104,6 +104,12 @@ class WebSocketController {
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
                     await this.getBookInfo(req, ws); break;
+                case 'get-reader-state':
+                    await this.getReaderState(req, ws); break;
+                case 'update-reader-progress':
+                    await this.updateReaderProgress(req, ws); break;
+                case 'update-reader-preferences':
+                    await this.updateReaderPreferences(req, ws); break;
                 case 'get-reading-lists':
                     await this.getReadingLists(req, ws); break;
                 case 'get-user-profiles':
@@ -282,6 +288,30 @@ class WebSocketController {
     async getReadingLists(req, ws) {
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
         const result = await this.webWorker.getReadingLists(user.id, req.bookUid, req.options || {});
+        this.send(result, req, ws);
+    }
+
+    async getReaderState(req, ws) {
+        if (!utils.hasProp(req, 'bookUid'))
+            throw new Error('bookUid is empty');
+
+        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        const result = await this.webWorker.getReaderState(user.id, req.bookUid);
+        this.send(result, req, ws);
+    }
+
+    async updateReaderProgress(req, ws) {
+        if (!utils.hasProp(req, 'bookUid'))
+            throw new Error('bookUid is empty');
+
+        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        const result = await this.webWorker.updateReaderProgress(user.id, req.bookUid, req.progress || {});
+        this.send(result, req, ws);
+    }
+
+    async updateReaderPreferences(req, ws) {
+        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        const result = await this.webWorker.updateReaderPreferences(user.id, req.preferences || {});
         this.send(result, req, ws);
     }
 

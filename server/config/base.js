@@ -42,7 +42,7 @@ module.exports = {
     lowMemoryMode: false,
     fullOptimization: false,
 
-    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'uiDefaults'],
+    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'onlineReaderEnabled', 'uiDefaults'],
 
     allowRemoteLib: false,
     remoteLib: false,
@@ -85,6 +85,7 @@ module.exports = {
     smtpPass: process.env.SMTP_PASS || '',
     emailFrom: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
     emailTo: process.env.EMAIL_TO || '',
+    onlineReaderEnabled: true,
 
     uiDefaults: {
         limit: 20,

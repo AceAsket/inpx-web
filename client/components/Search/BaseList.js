@@ -110,7 +110,7 @@ export default class BaseList {
     }
 
     get showReadLink() {
-        return this.config.bookReadLink != '' || this.list.liberamaReady;
+        return !!(this.config.onlineReaderEnabled || this.config.bookReadLink != '' || this.list.liberamaReady);
     }
 
     get ratingFilterOptions() {
@@ -306,10 +306,16 @@ export default class BaseList {
 поэтому повторная попытка должна быть успешной.`, 'Ошибка');
             } else if (action == 'readBook') {
                 //читать
-                if (this.list.liberamaReady) {
+                if (this.config.onlineReaderEnabled && String(book.ext || '').toLowerCase() === 'fb2') {
+                    this.$router.push(`/reader/${encodeURIComponent(book._uid)}`);
+                } else if (this.list.liberamaReady) {
                     this.$emit('listEvent', {action: 'submitUrl', data: href});
                 } else {
                     const bookReadLink = this.config.bookReadLink;
+                    if (!bookReadLink) {
+                        this.$root.stdDialog.alert('Встроенная читалка пока поддерживает только FB2.', 'Информация');
+                        return;
+                    }
                     let url = bookReadLink;
 
                     if (bookReadLink.indexOf('${DOWNLOAD_LINK}') >= 0) {

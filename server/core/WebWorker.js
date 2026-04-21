@@ -606,6 +606,7 @@ class WebWorker {
                 emailTo: (profileAuthorized ? user.emailTo || '' : ''),
                 telegramChatId: (profileAuthorized ? user.telegramChatId || '' : ''),
                 opdsEnabled: user.opdsEnabled !== false,
+                readerPreferences: (profileAuthorized ? this.readingListStore.normalizeReaderPreferences(user.readerPreferences) : null),
             },
         };
     }
@@ -645,6 +646,23 @@ class WebWorker {
     async getOpdsUsers() {
         this.checkMyState();
         return await this.readingListStore.getOpdsUsers();
+    }
+
+    async getReaderState(userId = '', bookUid = '') {
+        this.checkMyState();
+        return await this.readingListStore.getReaderState(userId, bookUid);
+    }
+
+    async updateReaderPreferences(userId = '', patch = {}) {
+        this.checkMyState();
+        const preferences = await this.readingListStore.updateReaderPreferences(userId, patch);
+        return {preferences};
+    }
+
+    async updateReaderProgress(userId = '', bookUid = '', patch = {}) {
+        this.checkMyState();
+        const progress = await this.readingListStore.updateReaderProgress(userId, bookUid, patch);
+        return {progress};
     }
 
     async getReadingLists(userId = '', bookUid = '', options = {}) {

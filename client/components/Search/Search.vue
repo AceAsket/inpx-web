@@ -2,7 +2,7 @@
     <div class="root column fit" style="position: relative">
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
-            <div ref="toolPanel" class="tool-panel column bg-cyan-2" style="position: sticky; top: 0; z-index: 10;">
+            <div ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
                 <!-- Обновление -->
                 <div v-show="showNewReleaseAvailable && newReleaseAvailable" class="row q-py-sm bg-green-4 items-center">
                     <div class="q-ml-sm" style="font-size: 120%">
@@ -81,10 +81,26 @@
                                             </q-tooltip>
                                         </template>
                                     </DivBtn>
+
+                                    <DivBtn
+                                        v-if="isCompactMobile"
+                                        class="q-ml-xs mobile-filter-toggle text-grey-5 bg-yellow-1"
+                                        :size="28"
+                                        :icon-size="22"
+                                        :icon="mobileFiltersCollapsed ? 'la la-angle-down' : 'la la-angle-up'"
+                                        round
+                                        @click.stop.prevent="toggleMobileFilters"
+                                    >
+                                        <template #tooltip>
+                                            <q-tooltip :delay="800" anchor="bottom middle" content-style="font-size: 80%" max-width="320px">
+                                                {{ mobileFiltersCollapsed ? 'Развернуть фильтры' : 'Свернуть фильтры' }}
+                                            </q-tooltip>
+                                        </template>
+                                    </DivBtn>
                                 </div>
                             </div>
 
-                            <div class="collection-title row items-center q-ml-sm" style="font-size: 150%;">
+                            <div v-show="showMobileFiltersBody" class="collection-title row items-center q-ml-sm" style="font-size: 150%;">
                                 <div class="collection-label q-mr-xs">
                                     Коллекция
                                 </div>
@@ -101,7 +117,7 @@
                                 </DivBtn>
                             </div>
                         </div>
-                        <div v-show="!isExtendedSearch" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 ref="authorInput" v-model="search.author" :maxlength="5000" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor('author')" style="min-width: 140px" label="Автор" stack-label outlined dense clearable
@@ -155,7 +171,7 @@
                                 </template>
                             </DivBtn>
                         </div>
-                        <div v-show="!isExtendedSearch && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 v-model="search.keywords" :maxlength="inputMaxLength" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor()" style="min-width: 140px;" label="Ключевые слова" stack-label outlined dense clearable readonly
@@ -245,11 +261,11 @@
                                 </q-tooltip>
                             </q-input>                            
                         </div>
-                        <div v-show="!isExtendedSearch && !extendedParams && extendedParamsMessage" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !extendedParams && extendedParamsMessage" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
                             +{{ extendedParamsMessage }}
                         </div>
 
-                        <div v-show="isExtendedSearch" class="search-fields row q-mx-md q-mb-xs items-center">
+                        <div v-show="showMobileFiltersBody && isExtendedSearch" class="search-fields row q-mx-md q-mb-xs items-center">
                             <q-input
                                 v-model="extSearchNames"
                                 class="col q-mt-xs" :bg-color="inputBgColor('extended')" input-style="cursor: pointer"
@@ -601,6 +617,7 @@ class Search {
     readingListsDialogVisible = false;
     userProfilesDialogVisible = false;
     selectExtSearchDialogVisible = false;
+    mobileFiltersCollapsed = false;
 
     pageCount = 1;    
 
@@ -811,6 +828,14 @@ class Search {
     get currentSelectedProfile() {
         const users = this.config.userProfiles || [];
         return users.find((item) => item.id === this.currentUserId) || null;
+    }
+
+    get isCompactMobile() {
+        return !!this.$root.isMobileDevice;
+    }
+
+    get showMobileFiltersBody() {
+        return !this.isCompactMobile || !this.mobileFiltersCollapsed;
     }
 
     get currentProfileNeedsLogin() {
@@ -1226,6 +1251,20 @@ class Search {
         }
     }
 
+    toggleMobileFilters() {
+        if (!this.isCompactMobile)
+            return;
+
+        this.mobileFiltersCollapsed = !this.mobileFiltersCollapsed;
+
+        if (!this.mobileFiltersCollapsed) {
+            this.$nextTick(() => {
+                this.$refs.toolPanel.style.top = '0px';
+                this.$refs.toolPanel.style.position = 'sticky';
+            });
+        }
+    }
+
     async selectUserProfile(userId) {
         const users = this.config.userProfiles || [];
         const target = users.find((item) => item.id === userId);
@@ -1520,6 +1559,10 @@ export default vueComponent(Search);
     box-shadow: 0 8px 28px rgba(23, 32, 42, 0.08);
 }
 
+.tool-panel--mobile-collapsed {
+    box-shadow: 0 4px 16px rgba(23, 32, 42, 0.08);
+}
+
 .search-toolbar {
     padding: 2px 4px 4px;
 }
@@ -1601,6 +1644,10 @@ export default vueComponent(Search);
 
 .user-profiles-btn--needs-login:hover {
     transform: translateY(-1px);
+}
+
+.mobile-filter-toggle {
+    flex: 0 0 auto;
 }
 
 .result-bar {
@@ -1713,8 +1760,16 @@ export default vueComponent(Search);
         padding-bottom: 6px;
     }
 
+    .tool-panel--mobile-collapsed {
+        padding-bottom: 0;
+    }
+
     .search-toolbar {
         padding: 6px 6px 10px;
+    }
+
+    .tool-panel--mobile-collapsed .search-toolbar {
+        padding-bottom: 6px;
     }
 
     .header {

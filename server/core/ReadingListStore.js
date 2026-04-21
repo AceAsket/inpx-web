@@ -13,7 +13,7 @@ class ReadingListStore {
 
         if (!await fs.pathExists(this.file)) {
             await this.save({
-                version: 4,
+                version: 5,
                 users: [this.makeDefaultUser()],
                 lists: [],
             });
@@ -102,6 +102,36 @@ class ReadingListStore {
         return (value === 'opds' ? 'opds' : 'private');
     }
 
+    normalizeReaderTheme(theme) {
+        const value = String(theme || '').trim().toLowerCase();
+        return (['light', 'sepia', 'dark'].includes(value) ? value : 'dark');
+    }
+
+    normalizeReaderPreferences(value = {}) {
+        return {
+            theme: this.normalizeReaderTheme(value.theme),
+            fontSize: Math.max(14, Math.min(30, parseInt(value.fontSize || 18, 10) || 18)),
+            lineHeight: Math.max(1.35, Math.min(2.2, Number(value.lineHeight || 1.7) || 1.7)),
+            contentWidth: Math.max(560, Math.min(1200, parseInt(value.contentWidth || 820, 10) || 820)),
+        };
+    }
+
+    normalizeReaderProgress(value = {}) {
+        const result = {};
+        for (const [bookUid, row] of Object.entries(value || {})) {
+            const normalizedBookUid = this.normalizeBookUid(bookUid);
+            if (!normalizedBookUid || !row || typeof(row) !== 'object')
+                continue;
+
+            const percent = Number(row.percent);
+            result[normalizedBookUid] = {
+                percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
+                updatedAt: String(row.updatedAt || '').trim() || this.nowIso(),
+            };
+        }
+        return result;
+    }
+
     makeDefaultUser() {
         const now = this.nowIso();
         return {
@@ -112,6 +142,8 @@ class ReadingListStore {
             emailTo: String(this.config.emailTo || '').trim(),
             telegramChatId: String(this.config.telegramChatId || '').trim(),
             opdsEnabled: true,
+            readerPreferences: this.normalizeReaderPreferences(),
+            readerProgress: {},
             createdAt: now,
             updatedAt: now,
         };
@@ -155,6 +187,8 @@ class ReadingListStore {
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
+        normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
+        normalized.readerProgress = this.normalizeReaderProgress(normalized.readerProgress);
         normalized.isAdmin = !!normalized.isAdmin;
         normalized.createdAt = normalized.createdAt || now;
         normalized.updatedAt = normalized.updatedAt || now;
@@ -176,7 +210,7 @@ class ReadingListStore {
 
     normalizeData(data) {
         const defaultUser = this.makeDefaultUser();
-        const source = Object.assign({version: 4, users: [], lists: []}, data || {});
+        const source = Object.assign({version: 5, users: [], lists: []}, data || {});
         let users = [];
 
         if (Array.isArray(source.users) && source.users.length) {
@@ -215,7 +249,7 @@ class ReadingListStore {
         }
 
         return {
-            version: 4,
+            version: 5,
             users,
             lists,
         };
@@ -269,7 +303,7 @@ class ReadingListStore {
 
         return {
             data: {
-                version: 4,
+                version: 5,
                 users,
                 lists: source.lists,
             },
@@ -409,10 +443,61 @@ class ReadingListStore {
             target.telegramChatId = String(patch.telegramChatId || '').trim();
         if (utilsHasProp(patch, 'opdsEnabled'))
             target.opdsEnabled = (patch.opdsEnabled !== false);
+        if (utilsHasProp(patch, 'readerPreferences'))
+            target.readerPreferences = this.normalizeReaderPreferences(patch.readerPreferences);
         target.updatedAt = this.nowIso();
 
         await this.save(data);
         return target;
+    }
+
+    async getReaderState(userId = '', bookUid = '') {
+        const {user} = await this.resolveUser(userId);
+        const normalizedBookUid = this.normalizeBookUid(bookUid);
+        if (!normalizedBookUid)
+            throw new Error('bookUid is empty');
+
+        return {
+            preferences: this.normalizeReaderPreferences(user.readerPreferences),
+            progress: Object.assign({percent: 0, updatedAt: ''}, user.readerProgress[normalizedBookUid] || {}),
+        };
+    }
+
+    async updateReaderPreferences(userId = '', patch = {}) {
+        const {data, user} = await this.resolveUser(userId);
+        const target = data.users.find((item) => item.id === user.id);
+        if (!target)
+            throw new Error('РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ');
+
+        target.readerPreferences = this.normalizeReaderPreferences(Object.assign({}, target.readerPreferences || {}, patch || {}));
+        target.updatedAt = this.nowIso();
+        await this.save(data);
+        return target.readerPreferences;
+    }
+
+    async updateReaderProgress(userId = '', bookUid = '', patch = {}) {
+        const {data, user} = await this.resolveUser(userId);
+        const target = data.users.find((item) => item.id === user.id);
+        if (!target)
+            throw new Error('РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ');
+
+        const normalizedBookUid = this.normalizeBookUid(bookUid);
+        if (!normalizedBookUid)
+            throw new Error('bookUid is empty');
+
+        if (!target.readerProgress || typeof(target.readerProgress) !== 'object')
+            target.readerProgress = {};
+
+        const current = target.readerProgress[normalizedBookUid] || {};
+        const percent = Number(utilsHasProp(patch, 'percent') ? patch.percent : current.percent);
+        target.readerProgress[normalizedBookUid] = {
+            percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
+            updatedAt: this.nowIso(),
+        };
+        target.updatedAt = this.nowIso();
+
+        await this.save(data);
+        return target.readerProgress[normalizedBookUid];
     }
 
     async deleteUser(userId) {
