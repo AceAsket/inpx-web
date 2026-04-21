@@ -185,8 +185,6 @@
             class="reader-scroll"
             :class="{
                 'reader-scroll--paged': activePreferences.readMode === 'paged',
-                'reader-scroll--paged-vertical': isVerticalPaged,
-                'reader-scroll--paged-horizontal': isHorizontalPaged,
             }"
             @scroll="onScroll"
             @wheel="handleReaderWheel"
@@ -199,8 +197,6 @@
                 class="reader-shell"
                 :class="{
                     'reader-shell--paged': activePreferences.readMode === 'paged',
-                    'reader-shell--paged-vertical': isVerticalPaged,
-                    'reader-shell--paged-horizontal': isHorizontalPaged,
                 }"
             >
                 <div v-if="coverSrc && !isPagedMode" class="reader-cover-box">
@@ -212,8 +208,6 @@
                     class="reader-body"
                     :class="{
                         'reader-body--paged': activePreferences.readMode === 'paged',
-                        'reader-body--paged-vertical': isVerticalPaged,
-                        'reader-body--paged-horizontal': isHorizontalPaged,
                     }"
                     :style="readerBodyStyle"
                 >
@@ -257,14 +251,13 @@
                     </template>
 
                     <template v-else>
-                        <div class="reader-pages" :class="{'reader-pages--horizontal': isHorizontalPaged, 'reader-pages--vertical': isVerticalPaged}">
+                        <div class="reader-pages">
                             <div class="reader-page-stage">
                                 <transition :name="pagedTransitionName" mode="out-in">
                                     <article
                                         v-if="activePagedPage"
                                         :key="`page-${currentPageIndex}-${activePagedPage.sectionId || 'page'}`"
                                         class="reader-page-sheet reader-page-sheet--live"
-                                        :class="{'reader-page-sheet--horizontal': isHorizontalPaged, 'reader-page-sheet--vertical': isVerticalPaged}"
                                         :data-page-index="currentPageIndex"
                                     >
                                         <div class="reader-html" v-html="activePagedPage.html"></div>
@@ -281,7 +274,7 @@
             v-if="isPagedMode"
             ref="pageMeasure"
             class="reader-page-sheet reader-page-sheet--measure"
-            :class="[readerThemeClass, {'reader-page-sheet--horizontal': isHorizontalPaged, 'reader-page-sheet--vertical': isVerticalPaged}]"
+            :class="[readerThemeClass]"
             :style="readerBodyStyle"
         >
             <div class="reader-html"></div>
@@ -1026,15 +1019,11 @@ class Reader {
     }
 
     get pageGap() {
-        if (this.isHorizontalPaged)
-            return 0;
         return (this.isCompactLayout ? 18 : 32);
     }
 
     get pageFrameWidth() {
         const scrollerWidth = (this.scrollerViewportWidth || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0));
-        if (this.isHorizontalPaged)
-            return Math.max(280, scrollerWidth || 280);
         const reservedGap = (this.isCompactLayout ? 16 : 120);
         return Math.max(280, Math.min(this.activePreferences.contentWidth, Math.max(280, scrollerWidth - reservedGap)));
     }
@@ -1322,56 +1311,24 @@ class Reader {
         const contentRoot = readerBody.querySelector('.reader-html') || readerBody;
         const style = window.getComputedStyle(readerBody);
 
-        if (this.isVerticalPaged) {
-            const blocks = [readerBody, contentRoot]
-                .concat(Array.from(contentRoot.querySelectorAll('*')));
-            const padBottom = parseFloat(style.paddingBottom || '0') || 0;
-            const maxBottom = blocks.reduce((acc, node) => (
-                Math.max(acc, (node.offsetTop || 0) + (node.offsetHeight || 0))
-            ), 0);
-
-            return Math.max(
-                maxBottom + padBottom,
-                contentRoot.scrollHeight || 0,
-                readerBody.scrollHeight || 0,
-                (scroller && scroller.scrollHeight) || 0,
-            );
-        }
-
-        const tailNode = this.getDeepestLastElement(contentRoot);
-        if (!tailNode || !tailNode.getBoundingClientRect)
-            return 0;
-
-        const bodyRect = readerBody.getBoundingClientRect();
-        const tailRect = tailNode.getBoundingClientRect();
-        const padEnd = parseFloat(
-            this.isHorizontalPaged
-                ? (style.paddingRight || '0')
-                : (style.paddingBottom || '0'),
-        ) || 0;
-        const intrinsicContentSize = Math.max(
-            0,
-            (this.isHorizontalPaged
-                ? (contentRoot.scrollWidth || 0)
-                : (contentRoot.scrollHeight || 0)),
-        );
+        const blocks = [readerBody, contentRoot]
+            .concat(Array.from(contentRoot.querySelectorAll('*')));
+        const padBottom = parseFloat(style.paddingBottom || '0') || 0;
+        const maxBottom = blocks.reduce((acc, node) => (
+            Math.max(acc, (node.offsetTop || 0) + (node.offsetHeight || 0))
+        ), 0);
 
         return Math.max(
-            0,
-            intrinsicContentSize,
-            (this.isHorizontalPaged
-                ? (tailRect.right - bodyRect.left)
-                : (tailRect.bottom - bodyRect.top)) + padEnd,
-            (scroller && scroller.scrollWidth) || 0,
+            maxBottom + padBottom,
+            contentRoot.scrollHeight || 0,
+            readerBody.scrollHeight || 0,
+            (scroller && scroller.scrollHeight) || 0,
         );
     }
 
     doesPagedMeasureOverflow(measureHost) {
         if (!measureHost)
             return false;
-
-        if (this.isHorizontalPaged)
-            return measureHost.scrollWidth > measureHost.clientWidth + 2;
 
         return measureHost.scrollHeight > measureHost.clientHeight + 2;
     }
