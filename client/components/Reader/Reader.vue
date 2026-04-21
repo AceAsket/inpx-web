@@ -258,7 +258,7 @@
 
                     <template v-else>
                         <div class="reader-pages" :class="{'reader-pages--horizontal': isHorizontalPaged, 'reader-pages--vertical': isVerticalPaged}">
-                            <transition :name="pagedTransitionName" mode="out-in">
+                            <transition :name="pagedTransitionName">
                                 <article
                                     v-if="activePagedPage"
                                     :key="`page-${currentPageIndex}-${activePagedPage.sectionId || 'page'}`"
@@ -1256,17 +1256,8 @@ class Reader {
         this.clearSnapTimer();
         this.$nextTick(() => {
             requestAnimationFrame(() => {
-                if (this.$refs && this.$refs.scroller) {
-                    this.$refs.scroller.scrollLeft = 0;
-                    this.$refs.scroller.scrollTop = 0;
-                }
-                if (this.isPagedMode)
-                    this.currentPageIndex = 0;
                 this.updateScrollerViewport();
-                requestAnimationFrame(() => {
-                    this.updateScrollerViewport();
-                    this.restoreProgress();
-                });
+                requestAnimationFrame(() => this.restoreProgress());
             });
         });
     }
@@ -2711,7 +2702,7 @@ export default vueComponent(Reader);
 .reader-page-slide-y-forward-leave-active,
 .reader-page-slide-y-back-enter-active,
 .reader-page-slide-y-back-leave-active {
-    transition: opacity 0.28s ease, transform 0.28s cubic-bezier(.22, .8, .3, 1);
+    transition: opacity 0.22s ease, transform 0.22s cubic-bezier(.22, .8, .3, 1);
     will-change: opacity, transform;
 }
 
@@ -2720,6 +2711,7 @@ export default vueComponent(Reader);
 .reader-page-slide-y-forward-enter-from,
 .reader-page-slide-y-back-enter-from {
     opacity: 0;
+    transform: scale(0.996);
 }
 
 .reader-page-slide-x-forward-leave-active,
@@ -2730,31 +2722,12 @@ export default vueComponent(Reader);
     inset: 0;
 }
 
-.reader-page-slide-x-forward-enter-from,
-.reader-page-slide-x-back-leave-to {
-    transform: translateX(42px) scale(0.992);
-}
-
-.reader-page-slide-x-forward-leave-to,
-.reader-page-slide-x-back-enter-from {
-    transform: translateX(-42px) scale(0.992);
-}
-
-.reader-page-slide-y-forward-enter-from,
-.reader-page-slide-y-back-leave-to {
-    transform: translateY(26px) scale(0.996);
-}
-
-.reader-page-slide-y-forward-leave-to,
-.reader-page-slide-y-back-enter-from {
-    transform: translateY(-26px) scale(0.996);
-}
-
 .reader-page-slide-x-forward-leave-to,
 .reader-page-slide-x-back-leave-to,
 .reader-page-slide-y-forward-leave-to,
 .reader-page-slide-y-back-leave-to {
     opacity: 0;
+    transform: scale(1.004);
 }
 
 .reader-body--paged .reader-section,
@@ -3255,6 +3228,32 @@ export default vueComponent(Reader);
     --reader-border: var(--reader-eink-border, rgba(17, 17, 17, 0.14));
     --reader-accent: var(--reader-eink-text, #111111);
     --reader-accent-soft: var(--reader-eink-accent-soft, rgba(17, 17, 17, 0.08));
+}
+
+.reader-theme-eink .reader-inline-image,
+.reader-theme-eink .reader-page-sheet,
+.reader-theme-eink .reader-mobile-bar,
+.reader-theme-eink .reader-status-bar,
+.reader-theme-eink .reader-dialog,
+.reader-theme-eink .reader-overlay-panel {
+    box-shadow: none;
+}
+
+.reader-theme-eink .reader-mobile-bar,
+.reader-theme-eink .reader-status-bar {
+    backdrop-filter: none;
+}
+
+.reader-theme-eink .reader-page-slide-x-forward-enter-active,
+.reader-theme-eink .reader-page-slide-x-forward-leave-active,
+.reader-theme-eink .reader-page-slide-x-back-enter-active,
+.reader-theme-eink .reader-page-slide-x-back-leave-active,
+.reader-theme-eink .reader-page-slide-y-forward-enter-active,
+.reader-theme-eink .reader-page-slide-y-forward-leave-active,
+.reader-theme-eink .reader-page-slide-y-back-enter-active,
+.reader-theme-eink .reader-page-slide-y-back-leave-active {
+    transition: none;
+    will-change: auto;
 }
 
 @media (max-width: 900px) {
