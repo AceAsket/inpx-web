@@ -208,7 +208,7 @@ import _ from 'lodash';
 
 const componentOptions = {
     watch: {
-        '$route.params.bookUid': {
+        '$route.query.bookUid': {
             immediate: true,
             handler() {
                 this.loadReader();// no await
@@ -288,7 +288,7 @@ class Reader {
     }
 
     get bookUid() {
-        return String(this.$route.params.bookUid || '').trim();
+        return String(this.$route.query.bookUid || this.$route.params.bookUid || '').trim();
     }
 
     get readerThemeClass() {

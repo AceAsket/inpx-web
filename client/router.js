@@ -11,7 +11,7 @@ const myRoutes = [
     ['/title', Search],
     ['/books', Search],
     ['/extended', Search],
-    ['/reader/:bookUid', Reader],
+    ['/reader', Reader],
     ['/:pathMatch(.*)*', null, null, '/'],
 ];
 

@@ -307,7 +307,7 @@ export default class BaseList {
             } else if (action == 'readBook') {
                 //читать
                 if (this.config.onlineReaderEnabled && String(book.ext || '').toLowerCase() === 'fb2') {
-                    this.$router.push(`/reader/${encodeURIComponent(book._uid)}`);
+                    this.$router.push({path: '/reader', query: {bookUid: book._uid}});
                 } else if (this.list.liberamaReady) {
                     this.$emit('listEvent', {action: 'submitUrl', data: href});
                 } else {
