@@ -785,6 +785,25 @@ class Reader {
         });
     }
 
+    get readerNotifyOptions() {
+        return {
+            color: 'transparent',
+            icon: 'la la-bookmark',
+            iconColor: 'var(--reader-accent)',
+            messageColor: 'var(--reader-text)',
+            captionColor: 'var(--reader-text)',
+            position: (this.isCompactLayout ? 'bottom' : 'top-right'),
+            style: `
+                background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
+                color: var(--reader-text);
+                border: 1px solid var(--reader-border);
+                border-radius: 18px;
+                box-shadow: 0 18px 42px rgba(0, 0, 0, 0.18);
+                backdrop-filter: blur(10px);
+            `,
+        };
+    }
+
     get progressPercent() {
         return Math.round((Number(this.progress.percent || 0) || 0) * 100);
     }
@@ -1924,7 +1943,7 @@ class Reader {
             const response = await api.addReaderBookmark(this.bookUid, bookmark);
             this.bookmarks = Array.isArray(response.bookmarks) ? response.bookmarks : this.bookmarks;
             this.currentPlacesTab = (String(bookmark.note || '').trim() ? 'notes' : 'bookmarks');
-            this.$root.notify.success(successText);
+            this.$root.notify.success(successText, '', this.readerNotifyOptions);
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.uiText.error);
         }
