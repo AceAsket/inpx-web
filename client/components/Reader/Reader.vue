@@ -304,7 +304,26 @@
             </div>
         </div>
 
-        <q-dialog v-model="contentsDialogOpen" position="right">
+        <div v-if="fullscreenActive && contentsDialogOpen" class="reader-overlay-panel" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
+            <div class="reader-dialog-header">
+                <div class="reader-dialog-title">{{ uiText.contents }}</div>
+                <q-btn flat dense round icon="la la-times" @click="contentsDialogOpen = false" />
+            </div>
+
+            <div class="reader-dialog-body">
+                <button
+                    v-for="item in displayContents"
+                    :key="item.id"
+                    class="reader-dialog-link"
+                    :class="{'is-active': item.id === currentSectionId}"
+                    @click="jumpToContent(item.id)"
+                >
+                    {{ item.title }}
+                </button>
+            </div>
+        </div>
+
+        <q-dialog v-if="!fullscreenActive" v-model="contentsDialogOpen" position="right">
             <div class="reader-dialog reader-dialog--contents" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
                 <div class="reader-dialog-header">
                     <div class="reader-dialog-title">{{ uiText.contents }}</div>
@@ -770,10 +789,9 @@ class Reader {
         );
         const contentSize = Math.max(
             pageSize,
-            this.measurePagedContentSize(),
             (this.isHorizontalPaged
-                ? ((readerBody && readerBody.scrollWidth) || (scroller && scroller.scrollWidth) || 0)
-                : ((readerBody && readerBody.scrollHeight) || (scroller && scroller.scrollHeight) || 0)),
+                ? ((scroller && scroller.scrollWidth) || (readerBody && readerBody.scrollWidth) || this.measurePagedContentSize())
+                : ((scroller && scroller.scrollHeight) || (readerBody && readerBody.scrollHeight) || this.measurePagedContentSize())),
         );
         const totalPages = Math.max(1, Math.ceil(contentSize / pageSize));
         const maxScroll = Math.max(0, (totalPages - 1) * pageSize);
@@ -1520,8 +1538,8 @@ class Reader {
         const targetRect = target.getBoundingClientRect();
         const rawOffset = Math.max(0, (
             this.isHorizontalPaged
-                ? scroller.scrollLeft + (targetRect.left - scrollerRect.left) - 18
-                : scroller.scrollTop + (targetRect.top - scrollerRect.top) - 18
+                ? scroller.scrollLeft + (targetRect.left - scrollerRect.left)
+                : scroller.scrollTop + (targetRect.top - scrollerRect.top)
         ));
         const {pageSize, maxScroll} = this.pagedMetrics;
 
@@ -2422,6 +2440,21 @@ export default vueComponent(Reader);
     border-radius: 22px;
     background: var(--reader-surface) !important;
     color: var(--reader-text) !important;
+    box-shadow: 0 24px 56px rgba(0, 0, 0, 0.26);
+}
+
+.reader-overlay-panel {
+    position: absolute;
+    top: 76px;
+    right: 14px;
+    z-index: 35;
+    width: min(92vw, 420px);
+    max-height: calc(100vh - 120px);
+    border: 1px solid var(--reader-border);
+    border-radius: 22px;
+    overflow: hidden;
+    background: var(--reader-surface);
+    color: var(--reader-text);
     box-shadow: 0 24px 56px rgba(0, 0, 0, 0.26);
 }
 
