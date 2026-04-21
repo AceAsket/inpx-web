@@ -1022,7 +1022,7 @@ class Reader {
 
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
-        const chromeOffset = (this.isCompactLayout ? 96 : 72);
+        const chromeOffset = (this.isCompactLayout ? 156 : 72);
         return Math.max(360, scrollerHeight - chromeOffset);
     }
 
@@ -3348,6 +3348,17 @@ export default vueComponent(Reader);
         width: 100%;
         border-radius: 20px;
         box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+    }
+
+    .reader-pages {
+        min-height: calc(var(--reader-page-min-height) + 2px);
+    }
+
+    .reader-page-sheet,
+    .reader-page-sheet--horizontal {
+        width: 100%;
+        max-width: 100%;
+        border-radius: 20px;
     }
 
     .reader-shell--paged-horizontal {
