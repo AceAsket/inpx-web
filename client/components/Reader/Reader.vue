@@ -323,6 +323,103 @@
             </div>
         </div>
 
+        <div v-if="fullscreenActive && bookmarksDialogOpen" class="reader-overlay-panel" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
+            <div class="reader-dialog-header">
+                <div class="reader-dialog-title">{{ uiText.myPlaces }}</div>
+                <q-btn flat dense round icon="la la-times" @click="bookmarksDialogOpen = false" />
+            </div>
+
+            <div class="reader-dialog-body">
+                <div class="reader-dialog-tabs">
+                    <button
+                        type="button"
+                        class="reader-dialog-tab"
+                        :class="{'is-active': currentPlacesTab === 'progress'}"
+                        @click="currentPlacesTab = 'progress'"
+                    >
+                        {{ uiText.continueReading }}
+                    </button>
+                    <button
+                        type="button"
+                        class="reader-dialog-tab"
+                        :class="{'is-active': currentPlacesTab === 'bookmarks'}"
+                        @click="currentPlacesTab = 'bookmarks'"
+                    >
+                        {{ uiText.bookmarks }} <span v-if="plainBookmarks.length">{{ plainBookmarks.length }}</span>
+                    </button>
+                    <button
+                        type="button"
+                        class="reader-dialog-tab"
+                        :class="{'is-active': currentPlacesTab === 'notes'}"
+                        @click="currentPlacesTab = 'notes'"
+                    >
+                        {{ uiText.notes }} <span v-if="noteBookmarks.length">{{ noteBookmarks.length }}</span>
+                    </button>
+                </div>
+
+                <div v-if="currentPlacesTab === 'progress'" class="reader-continue-card">
+                    <div class="reader-continue-title">{{ currentSectionTitle || title }}</div>
+                    <div class="reader-continue-meta">
+                        {{ progressPercent }}%<span v-if="activePreferences.readMode === 'paged' && totalPages > 1"> | {{ currentPage }}/{{ totalPages }}</span>
+                    </div>
+                    <div v-if="progress.updatedAt" class="reader-continue-updated">{{ formatBookmarkDate(progress.updatedAt) }}</div>
+                    <div class="reader-continue-actions">
+                        <q-btn flat dense no-caps icon="la la-book-open" class="reader-inline-action-btn" @click="jumpToProgress">{{ uiText.continueReading }}</q-btn>
+                        <q-btn flat dense no-caps icon="la la-bookmark" class="reader-inline-action-btn" @click="addCurrentBookmark">{{ uiText.bookmark }}</q-btn>
+                    </div>
+                </div>
+
+                <template v-else-if="currentPlacesTab === 'bookmarks'">
+                    <button
+                        v-for="item in plainBookmarks"
+                        :key="item.id"
+                        class="reader-dialog-link reader-dialog-link--bookmark"
+                        @click="jumpToBookmark(item)"
+                    >
+                        <span class="reader-dialog-link-text">
+                            <span>{{ item.title }}</span>
+                            <small v-if="item.excerpt" class="reader-dialog-link-subtext">{{ item.excerpt }}</small>
+                        </span>
+                        <span class="reader-dialog-link-meta">{{ Math.round((Number(item.percent || 0) || 0) * 100) }}%</span>
+                        <q-btn
+                            flat
+                            dense
+                            round
+                            icon="la la-trash"
+                            class="reader-bookmark-delete"
+                            @click.stop="removeBookmark(item.id)"
+                        />
+                    </button>
+                    <div v-if="!plainBookmarks.length" class="reader-dialog-empty">{{ uiText.noBookmarks }}</div>
+                </template>
+
+                <template v-else>
+                    <button
+                        v-for="item in noteBookmarks"
+                        :key="item.id"
+                        class="reader-dialog-link reader-dialog-link--bookmark"
+                        @click="jumpToBookmark(item)"
+                    >
+                        <span class="reader-dialog-link-text">
+                            <span>{{ item.title }}</span>
+                            <small v-if="item.note" class="reader-dialog-link-note">{{ item.note }}</small>
+                            <small v-if="item.excerpt" class="reader-dialog-link-subtext">{{ item.excerpt }}</small>
+                        </span>
+                        <span class="reader-dialog-link-meta">{{ Math.round((Number(item.percent || 0) || 0) * 100) }}%</span>
+                        <q-btn
+                            flat
+                            dense
+                            round
+                            icon="la la-trash"
+                            class="reader-bookmark-delete"
+                            @click.stop="removeBookmark(item.id)"
+                        />
+                    </button>
+                    <div v-if="!noteBookmarks.length" class="reader-dialog-empty">{{ uiText.noNotes }}</div>
+                </template>
+            </div>
+        </div>
+
         <q-dialog v-if="!fullscreenActive" v-model="contentsDialogOpen" position="right">
             <div class="reader-dialog reader-dialog--contents" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
                 <div class="reader-dialog-header">
@@ -344,7 +441,7 @@
             </div>
         </q-dialog>
 
-        <q-dialog v-model="bookmarksDialogOpen" position="right">
+        <q-dialog v-if="!fullscreenActive" v-model="bookmarksDialogOpen" position="right">
             <div class="reader-dialog reader-dialog--contents" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
                 <div class="reader-dialog-header">
                     <div class="reader-dialog-title">{{ uiText.myPlaces }}</div>
