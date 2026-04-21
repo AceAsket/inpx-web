@@ -834,11 +834,15 @@ export default vueComponent(BookView);
 
 .book-actions {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 8px;
     flex-wrap: wrap;
     padding-top: 2px;
     min-height: 42px;
+}
+
+.book-actions > * {
+    align-self: stretch;
 }
 
 .book-actions :deep(.q-btn) {
@@ -860,10 +864,18 @@ export default vueComponent(BookView);
     line-height: 1;
 }
 
+.book-actions :deep(.q-btn--round) {
+    width: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0;
+}
+
 .action-split {
     position: relative;
     display: inline-flex;
     align-items: center;
+    align-self: stretch;
     border-radius: 999px;
     background: rgba(23, 32, 38, 0.04);
 }
