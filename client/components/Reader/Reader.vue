@@ -250,7 +250,6 @@ class Reader {
     savePreferencesDebounced = null;
 
     created() {
-        this.api = this.$root.api;
         this.handleBeforeUnload = () => {
             this.flushProgress();
         };
@@ -454,6 +453,12 @@ class Reader {
         if (!this.bookUid)
             return;
 
+        const api = this.$root.api;
+        if (!api) {
+            this.error = 'Читалка ещё не готова. Попробуйте открыть книгу ещё раз.';
+            return;
+        }
+
         this.loading = true;
         this.error = '';
         this.readerHtml = '';
@@ -465,10 +470,13 @@ class Reader {
         this.chromeHidden = false;
 
         try {
-            const [bookResponse, stateResponse] = await Promise.all([
-                this.api.getBookInfo(this.bookUid),
-                this.api.getReaderState(this.bookUid),
-            ]);
+            const bookResponse = await api.getBookInfo(this.bookUid);
+            let stateResponse = {preferences: {}, progress: {}};
+            try {
+                stateResponse = await api.getReaderState(this.bookUid);
+            } catch(e) {
+                stateResponse = {preferences: {}, progress: {}};
+            }
 
             this.bookInfo = (bookResponse ? bookResponse.bookInfo : null);
             const info = (this.bookInfo || {});
@@ -605,15 +613,22 @@ class Reader {
     async persistProgress() {
         if (!this.bookUid)
             return;
+        const api = this.$root.api;
+        if (!api)
+            return;
 
-        await this.api.updateReaderProgress(this.bookUid, {
+        await api.updateReaderProgress(this.bookUid, {
             percent: Number(this.progress.percent || 0) || 0,
             sectionId: this.currentSectionId || '',
         });
     }
 
     async persistPreferences() {
-        await this.api.updateReaderPreferences(this.preferences);
+        const api = this.$root.api;
+        if (!api)
+            return;
+
+        await api.updateReaderPreferences(this.preferences);
     }
 
     flushProgress() {
