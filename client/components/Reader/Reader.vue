@@ -789,10 +789,11 @@ class Reader {
         return {
             color: 'transparent',
             icon: 'la la-bookmark',
-            iconColor: 'var(--reader-accent)',
+            iconColor: 'var(--reader-text)',
             messageColor: 'var(--reader-text)',
             captionColor: 'var(--reader-text)',
             position: (this.isCompactLayout ? 'bottom' : 'top-right'),
+            textColor: 'black',
             style: `
                 background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
                 color: var(--reader-text);
