@@ -2660,7 +2660,7 @@ export default vueComponent(Reader);
 
 .reader-dialog-link--bookmark {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) 56px 36px;
     align-items: center;
     gap: 10px;
 }
@@ -2679,12 +2679,15 @@ export default vueComponent(Reader);
 }
 
 .reader-dialog-link-meta {
+    min-width: 56px;
+    text-align: right;
     color: var(--reader-muted);
     font-size: 12px;
     font-weight: 700;
 }
 
 .reader-bookmark-delete {
+    justify-self: end;
     color: var(--reader-muted);
 }
 
