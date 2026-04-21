@@ -1467,6 +1467,48 @@ class Reader {
         return parts.join('');
     }
 
+    splitOversizedUnit(unit = {}) {
+        const html = String(unit.html || '').trim();
+        if (!html || typeof(document) === 'undefined')
+            return [];
+
+        const host = document.createElement('div');
+        host.innerHTML = html;
+
+        if (host.childNodes.length !== 1 || !host.firstChild || host.firstChild.nodeType !== Node.ELEMENT_NODE)
+            return [];
+
+        const root = host.firstChild;
+        const childNodes = Array.from(root.childNodes || []).filter((child) => (
+            child.nodeType !== Node.TEXT_NODE || String(child.textContent || '').trim()
+        ));
+
+        if (childNodes.length <= 1)
+            return [];
+
+        let first = true;
+        return childNodes.map((child) => {
+            let childHtml = '';
+            if (child.nodeType === Node.TEXT_NODE) {
+                childHtml = `<p class="reader-paragraph">${this.escapeHtml(String(child.textContent || '').trim())}</p>`;
+            } else if (child.nodeType === Node.ELEMENT_NODE) {
+                childHtml = child.outerHTML;
+            }
+
+            const childSectionId = (child.nodeType === Node.ELEMENT_NODE
+                ? (child.id || ((child.querySelector && child.querySelector('[id]')) || {}).id || '')
+                : '');
+
+            const result = {
+                html: childHtml,
+                breakBefore: (first ? !!unit.breakBefore : false),
+                sectionId: (childSectionId || (first ? String(unit.sectionId || '').trim() : '')),
+            };
+            first = false;
+            return result;
+        }).filter((item) => String(item.html || '').trim());
+    }
+
     buildPagedUnits() {
         const units = [];
         const pushUnit = (html = '', opts = {}) => {
@@ -1559,7 +1601,7 @@ class Reader {
         if (!measureHtml)
             return;
 
-        const units = this.buildPagedUnits();
+        const queue = this.buildPagedUnits().slice();
         const pages = [];
         let currentUnits = [];
         let activeSectionId = '';
@@ -1581,7 +1623,8 @@ class Reader {
         };
 
         applyUnits([]);
-        for (const unit of units) {
+        for (let index = 0; index < queue.length; index += 1) {
+            const unit = queue[index];
             if (unit.sectionId)
                 activeSectionId = unit.sectionId;
             if (unit.breakBefore && currentUnits.length) {
@@ -1591,11 +1634,31 @@ class Reader {
 
             const candidateUnits = currentUnits.concat(unit.html);
             applyUnits(candidateUnits);
+            if (this.doesPagedMeasureOverflow(measureHost) && !currentUnits.length) {
+                const splitUnits = this.splitOversizedUnit(unit);
+                if (splitUnits.length) {
+                    queue.splice(index, 1, ...splitUnits);
+                    index -= 1;
+                    applyUnits([]);
+                    continue;
+                }
+            }
+
             if (this.doesPagedMeasureOverflow(measureHost) && currentUnits.length) {
                 finalizePage();
                 currentPageSectionId = unit.sectionId || activeSectionId || '';
                 currentUnits = [unit.html];
                 applyUnits(currentUnits);
+                if (this.doesPagedMeasureOverflow(measureHost)) {
+                    const splitUnits = this.splitOversizedUnit(unit);
+                    if (splitUnits.length) {
+                        currentUnits = [];
+                        applyUnits([]);
+                        queue.splice(index, 1, ...splitUnits);
+                        index -= 1;
+                        continue;
+                    }
+                }
             } else {
                 currentUnits = candidateUnits;
                 if (unit.sectionId && !currentPageSectionId)
