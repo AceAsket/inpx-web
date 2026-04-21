@@ -766,7 +766,7 @@ class Reader {
             1,
             (this.isHorizontalPaged
                 ? (this.scrollerViewportWidth || (scroller && scroller.clientWidth) || this.pageFrameWidth)
-                : (this.pageMinHeight + this.pageGap)),
+                : (this.scrollerViewportHeight || (scroller && scroller.clientHeight) || this.pageMinHeight)),
         );
         const contentSize = Math.max(
             pageSize,
@@ -1043,6 +1043,7 @@ class Reader {
         const scroller = (this.$refs ? this.$refs.scroller : null);
         this.scrollerViewportWidth = ((scroller && scroller.clientWidth) || 0);
         this.scrollerViewportHeight = ((scroller && scroller.clientHeight) || 0);
+        this.applyVerticalSectionAlignment();
     }
 
     reflowReaderLayout() {
@@ -1067,6 +1068,35 @@ class Reader {
         if (this.snapTimer) {
             clearTimeout(this.snapTimer);
             this.snapTimer = null;
+        }
+    }
+
+    applyVerticalSectionAlignment() {
+        const readerBody = (this.$refs ? this.$refs.readerBody : null);
+        if (!readerBody)
+            return;
+
+        const sections = Array.from(readerBody.querySelectorAll('.reader-section-block'));
+        if (!sections.length)
+            return;
+
+        for (const section of sections)
+            section.style.marginTop = '';
+
+        if (!this.isVerticalPaged)
+            return;
+
+        const pageSize = Math.max(1, this.scrollerViewportHeight || this.pageMinHeight || 1);
+        if (pageSize <= 1)
+            return;
+
+        const baseSpacing = 18;
+        for (let index = 1; index < sections.length; index += 1) {
+            const section = sections[index];
+            const offsetTop = section.offsetTop;
+            const remainder = offsetTop % pageSize;
+            const extraSpacing = (remainder <= 2 ? 0 : (pageSize - remainder));
+            section.style.marginTop = `${baseSpacing + extraSpacing}px`;
         }
     }
 
