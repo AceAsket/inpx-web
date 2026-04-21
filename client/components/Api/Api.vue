@@ -84,6 +84,7 @@ class Api {
     accessToken = '';
     currentUserId = '';
     profileAccessToken = '';
+    profileLoginPromise = null;
 
     created() {
         this.commit = this.$store.commit;
@@ -270,7 +271,16 @@ class Api {
                     this.accessGranted = false;
                     await this.showPasswordDialog();
                 } else if (response && response.error == 'need_profile_login') {
-                    await this.showProfileLoginDialog();
+                    if (this.profileLoginPromise) {
+                        await this.profileLoginPromise;
+                    } else {
+                        this.profileLoginPromise = this.showProfileLoginDialog();
+                        try {
+                            await this.profileLoginPromise;
+                        } finally {
+                            this.profileLoginPromise = null;
+                        }
+                    }
                 } else if (response && response.error == 'server_busy') {
                     this.accessGranted = true;
                     await this.showBusyDialog();
