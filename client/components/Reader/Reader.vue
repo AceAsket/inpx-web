@@ -258,15 +258,17 @@
 
                     <template v-else>
                         <div class="reader-pages" :class="{'reader-pages--horizontal': isHorizontalPaged, 'reader-pages--vertical': isVerticalPaged}">
-                            <article
-                                v-for="(page, index) in pagedPages"
-                                :key="`page-${index}`"
-                                class="reader-page-sheet reader-page-sheet--live"
-                                :class="{'reader-page-sheet--horizontal': isHorizontalPaged, 'reader-page-sheet--vertical': isVerticalPaged}"
-                                :data-page-index="index"
-                            >
-                                <div class="reader-html" v-html="page.html"></div>
-                            </article>
+                            <transition :name="pagedTransitionName" mode="out-in">
+                                <article
+                                    v-if="activePagedPage"
+                                    :key="`page-${currentPageIndex}-${activePagedPage.sectionId || 'page'}`"
+                                    class="reader-page-sheet reader-page-sheet--live"
+                                    :class="{'reader-page-sheet--horizontal': isHorizontalPaged, 'reader-page-sheet--vertical': isVerticalPaged}"
+                                    :data-page-index="currentPageIndex"
+                                >
+                                    <div class="reader-html" v-html="activePagedPage.html"></div>
+                                </article>
+                            </transition>
                         </div>
                     </template>
                 </div>
@@ -622,6 +624,7 @@ class Reader {
     coverSrc = '';
     readerHtml = '';
     pagedPages = [];
+    currentPageIndex = 0;
     controlsOpen = false;
     contentsDialogOpen = false;
     bookmarksDialogOpen = false;
@@ -675,6 +678,8 @@ class Reader {
     saveProgressDebounced = null;
     savePreferencesDebounced = null;
     snapTimer = null;
+    pageTurnTimer = null;
+    pageTurnAnimating = false;
     touchStartPoint = null;
 
     created() {
@@ -711,6 +716,7 @@ class Reader {
     deactivated() {
         this.flushProgress();
         this.clearSnapTimer();
+        clearTimeout(this.pageTurnTimer);
         if (this.savePreferencesDebounced && this.savePreferencesDebounced.flush)
             this.savePreferencesDebounced.flush();
     }
@@ -721,6 +727,7 @@ class Reader {
         window.removeEventListener('resize', this.handleWindowResize);
         this.detachScrollerObserver();
         this.clearSnapTimer();
+        clearTimeout(this.pageTurnTimer);
         this.flushProgress();
         if (this.savePreferencesDebounced && this.savePreferencesDebounced.flush)
             this.savePreferencesDebounced.flush();
@@ -895,6 +902,17 @@ class Reader {
             : this.readerProgressLabel;
     }
 
+    get activePagedPage() {
+        if (!this.isPagedMode || !this.pagedPages.length)
+            return null;
+
+        return this.pagedPages[Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex))] || null;
+    }
+
+    get pagedTransitionName() {
+        return (this.isHorizontalPaged ? 'reader-page-slide-x' : 'reader-page-slide-y');
+    }
+
     get readerPageMeta() {
         return (this.activePreferences.readMode === 'paged')
             ? `${this.currentPage}/${this.totalPages}`
@@ -922,72 +940,48 @@ class Reader {
     }
 
     get pagedMetrics() {
-        const pageSize = Math.max(
-            1,
-            (this.isHorizontalPaged
-                ? (this.scrollerViewportWidth || this.pageFrameWidth)
-                : (this.scrollerViewportHeight || this.pageMinHeight)),
-        );
         const pageOffsets = this.pageOffsets;
-        const totalPages = Math.max(1, pageOffsets.length);
-        const maxScroll = (pageOffsets.length ? pageOffsets[pageOffsets.length - 1] : 0);
+        const totalPages = Math.max(1, this.pagedPages.length || pageOffsets.length);
+        const pageSize = 1;
+        const maxScroll = Math.max(0, totalPages - 1);
 
         return {pageSize, maxScroll, totalPages, pageOffsets};
     }
 
     get pageOffsets() {
-        const scroller = (this.$refs ? this.$refs.scroller : null);
-        if (!this.isPagedMode || !scroller)
+        if (!this.isPagedMode)
             return [0];
 
-        const pages = Array.from(scroller.querySelectorAll('.reader-page-sheet--live'));
-        if (!pages.length)
-            return [0];
-
-        return pages.map((page) => (this.isHorizontalPaged ? page.offsetLeft : page.offsetTop));
+        return (this.pagedPages.length
+            ? this.pagedPages.map((_, index) => index)
+            : [0]);
     }
 
     get currentPagedPageIndex() {
         if (!this.isPagedMode)
             return 0;
 
-        const {pageOffsets} = this.pagedMetrics;
-        if (!pageOffsets.length)
-            return 0;
-
-        const position = this.getPagedScroll();
-        let nearestIndex = 0;
-        let nearestDistance = Number.POSITIVE_INFINITY;
-
-        for (let index = 0; index < pageOffsets.length; index += 1) {
-            const distance = Math.abs((pageOffsets[index] || 0) - position);
-            if (distance < nearestDistance) {
-                nearestDistance = distance;
-                nearestIndex = index;
-            }
-        }
-
-        return nearestIndex;
+        return Math.max(0, Math.min(this.totalPages - 1, this.currentPageIndex));
     }
 
     get totalPages() {
         const scroller = this.$refs ? this.$refs.scroller : null;
+        if (this.isPagedMode)
+            return Math.max(1, this.pagedPages.length);
+
         if (!scroller || !(this.scrollerViewportHeight || scroller.clientHeight))
             return 1;
-
-        if (this.activePreferences.readMode === 'paged')
-            return this.pagedMetrics.totalPages;
 
         return Math.max(1, Math.ceil(scroller.scrollHeight / scroller.clientHeight));
     }
 
     get currentPage() {
+        if (this.isPagedMode)
+            return Math.min(this.totalPages, Math.max(1, this.currentPagedPageIndex + 1));
+
         const scroller = this.$refs ? this.$refs.scroller : null;
         if (!scroller || !(this.scrollerViewportHeight || scroller.clientHeight))
             return 1;
-
-        if (this.isPagedMode)
-            return Math.min(this.totalPages, Math.max(1, this.currentPagedPageIndex + 1));
 
         return Math.min(this.totalPages, Math.max(1, Math.floor(scroller.scrollTop / scroller.clientHeight) + 1));
     }
@@ -1229,8 +1223,10 @@ class Reader {
         const scroller = (this.$refs ? this.$refs.scroller : null);
         this.scrollerViewportWidth = ((scroller && scroller.clientWidth) || 0);
         this.scrollerViewportHeight = ((scroller && scroller.clientHeight) || 0);
-        if (this.isPagedMode)
+        if (this.isPagedMode) {
             this.buildPagedPages();
+            this.syncPagedProgress(false);
+        }
         this.applyVerticalSectionAlignment();
     }
 
@@ -1243,6 +1239,8 @@ class Reader {
                     this.$refs.scroller.scrollLeft = 0;
                     this.$refs.scroller.scrollTop = 0;
                 }
+                if (this.isPagedMode)
+                    this.currentPageIndex = 0;
                 this.updateScrollerViewport();
                 requestAnimationFrame(() => {
                     this.updateScrollerViewport();
@@ -1371,6 +1369,35 @@ class Reader {
         return Math.max(0, Math.min(maxScroll, offset));
     }
 
+    syncPagedProgress(save = false) {
+        if (!this.isPagedMode)
+            return;
+
+        const safeIndex = Math.max(0, Math.min(this.totalPages - 1, this.currentPageIndex));
+        const currentPage = this.pagedPages[safeIndex] || null;
+        const sectionId = String((currentPage && currentPage.sectionId) || '').trim()
+            || (this.contents[0] ? this.contents[0].id : '');
+        const percent = (this.totalPages > 1 ? safeIndex / (this.totalPages - 1) : 0);
+
+        this.currentPageIndex = safeIndex;
+        this.currentSectionId = sectionId;
+        this.progress = Object.assign({}, this.progress, {
+            percent,
+            sectionId,
+        });
+
+        if (save)
+            this.saveProgressDebounced();
+    }
+
+    setCurrentPagedPage(index = 0, save = false) {
+        if (!this.isPagedMode)
+            return;
+
+        this.currentPageIndex = Math.max(0, Math.min(this.totalPages - 1, Math.round(index)));
+        this.syncPagedProgress(save);
+    }
+
     getPageIndexForSection(sectionId = '') {
         const safeId = String(sectionId || '').trim();
         if (!safeId)
@@ -1405,27 +1432,26 @@ class Reader {
     }
 
     getPagedScroll() {
-        if (!this.$refs || !this.$refs.scroller)
+        if (!this.isPagedMode)
             return 0;
-        return (this.isHorizontalPaged ? this.$refs.scroller.scrollLeft : this.$refs.scroller.scrollTop);
+
+        return this.currentPagedPageIndex;
     }
 
     setPagedScroll(value = 0) {
-        if (!this.$refs || !this.$refs.scroller)
-            return;
-        if (this.isHorizontalPaged)
-            this.$refs.scroller.scrollLeft = value;
-        else
-            this.$refs.scroller.scrollTop = value;
+        this.setCurrentPagedPage(value, false);
     }
 
     scrollToPagedOffset(value = 0, behavior = 'auto') {
-        if (!this.$refs || !this.$refs.scroller)
-            return;
-        if (this.isHorizontalPaged)
-            this.$refs.scroller.scrollTo({left: value, behavior});
-        else
-            this.$refs.scroller.scrollTo({top: value, behavior});
+        const nextIndex = Math.round(Number(value || 0) || 0);
+        if (behavior === 'smooth') {
+            this.pageTurnAnimating = true;
+            clearTimeout(this.pageTurnTimer);
+            this.pageTurnTimer = setTimeout(() => {
+                this.pageTurnAnimating = false;
+            }, 220);
+        }
+        this.setCurrentPagedPage(nextIndex, true);
     }
 
     async toggleFullscreen() {
@@ -1668,6 +1694,7 @@ class Reader {
 
         finalizePage();
         this.pagedPages = (pages.length ? pages : [{html: this.readerHtml || '', sectionId: ''}]);
+        this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
     }
 
     extractImageMap(parser) {
@@ -1921,6 +1948,7 @@ class Reader {
             this.bookmarks = Array.isArray(stateResponse.bookmarks) ? stateResponse.bookmarks : [];
             this.currentSectionId = String(this.progress.sectionId || '').trim();
             this.restorePending = true;
+            this.currentPageIndex = 0;
 
             this.$root.setAppTitle(this.title);
             this.$nextTick(() => {
@@ -1949,8 +1977,7 @@ class Reader {
             if (this.isPagedMode) {
                 const pageIndex = this.getPageIndexForSection(this.progress.sectionId);
                 if (pageIndex >= 0) {
-                    this.setPagedScroll(this.getPageOffsetByIndex(pageIndex));
-                    this.updateCurrentSectionFromScroll();
+                    this.setCurrentPagedPage(pageIndex, false);
                     return;
                 }
             }
@@ -1968,12 +1995,12 @@ class Reader {
 
         if (this.isPagedMode) {
             const pageIndex = Math.round((this.totalPages - 1) * (Number(this.progress.percent || 0) || 0));
-            this.setPagedScroll(this.getPageOffsetByIndex(pageIndex));
+            this.setCurrentPagedPage(pageIndex, false);
         } else {
             const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
             scroller.scrollTop = maxScroll * (Number(this.progress.percent || 0) || 0);
+            this.updateCurrentSectionFromScroll();
         }
-        this.updateCurrentSectionFromScroll();
     }
 
     getPagedOffset(target) {
@@ -2027,19 +2054,18 @@ class Reader {
         if (this.loading || !this.$refs.scroller)
             return;
 
+        if (this.isPagedMode)
+            return;
+
         const scroller = this.$refs.scroller;
-        const maxScroll = (this.isPagedMode
-            ? this.pagedMetrics.maxScroll
-            : Math.max(0, scroller.scrollHeight - scroller.clientHeight));
-        const currentScroll = (this.isPagedMode ? this.getPagedScroll() : scroller.scrollTop);
+        const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        const currentScroll = scroller.scrollTop;
         const percent = (maxScroll > 0 ? currentScroll / maxScroll : 0);
         this.updateCurrentSectionFromScroll();
         this.progress = Object.assign({}, this.progress, {
             percent,
             sectionId: this.currentSectionId || '',
         });
-        if (this.isPagedMode)
-            this.scheduleSnapToNearestPage();
         this.saveProgressDebounced();
     }
 
@@ -2142,19 +2168,21 @@ class Reader {
     jumpToContent(id = '') {
         this.contentsDialogOpen = false;
         this.chromeHidden = false;
-        if (!id || !this.$refs.scroller)
+        if (!id)
             return;
 
         this.$nextTick(() => {
-            const scroller = this.$refs.scroller;
             this.currentSectionId = id;
             if (this.isPagedMode) {
                 const pageIndex = this.getPageIndexForSection(id);
-                const offset = this.getPageOffsetByIndex(pageIndex >= 0 ? pageIndex : 0);
-                this.scrollToPagedOffset(offset, 'smooth');
+                this.setCurrentPagedPage((pageIndex >= 0 ? pageIndex : 0), true);
                 return;
             }
 
+            if (!this.$refs.scroller)
+                return;
+
+            const scroller = this.$refs.scroller;
             const target = scroller.querySelector(`#${this.escapeCssId(id)}`);
             if (!target)
                 return;
@@ -2181,8 +2209,7 @@ class Reader {
         const scroller = this.$refs.scroller;
         if (this.isPagedMode) {
             const nextIndex = this.currentPagedPageIndex + delta;
-            const nextOffset = this.getPageOffsetByIndex(nextIndex);
-            this.scrollToPagedOffset(nextOffset, 'smooth');
+            this.setCurrentPagedPage(nextIndex, true);
             return;
         }
 
@@ -2195,15 +2222,9 @@ class Reader {
     }
 
     snapToNearestPage() {
-        if (!this.$refs.scroller || !this.isPagedMode)
+        if (!this.isPagedMode)
             return;
-
-        const snappedOffset = this.getPageOffsetByIndex(this.currentPagedPageIndex);
-
-        if (Math.abs(snappedOffset - this.getPagedScroll()) < 2)
-            return;
-
-        this.scrollToPagedOffset(snappedOffset, 'smooth');
+        this.setCurrentPagedPage(this.currentPagedPageIndex, false);
     }
 
     async addCurrentBookmark() {
@@ -2289,8 +2310,7 @@ class Reader {
 
             if (percent > 0) {
                 if (this.isPagedMode) {
-                    const top = this.getPageOffsetByIndex(Math.round((this.totalPages - 1) * percent));
-                    this.scrollToPagedOffset(top, 'smooth');
+                    this.setCurrentPagedPage(Math.round((this.totalPages - 1) * percent), true);
                     return;
                 }
 
@@ -2307,8 +2327,7 @@ class Reader {
             }
 
             if (this.isPagedMode) {
-                const top = this.pagedMetrics.maxScroll * percent;
-                this.scrollToPagedOffset(top, 'smooth');
+                this.setCurrentPagedPage(Math.round((this.totalPages - 1) * percent), true);
                 return;
             }
 
@@ -2610,6 +2629,8 @@ export default vueComponent(Reader);
     flex-direction: column;
     gap: var(--reader-page-gap);
     align-items: center;
+    justify-content: flex-start;
+    width: 100%;
 }
 
 .reader-pages--horizontal {
@@ -2649,6 +2670,25 @@ export default vueComponent(Reader);
     visibility: hidden;
     pointer-events: none;
     z-index: -1;
+}
+
+.reader-page-slide-x-enter-active,
+.reader-page-slide-x-leave-active,
+.reader-page-slide-y-enter-active,
+.reader-page-slide-y-leave-active {
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.reader-page-slide-x-enter-from,
+.reader-page-slide-x-leave-to {
+    opacity: 0;
+    transform: translateX(18px);
+}
+
+.reader-page-slide-y-enter-from,
+.reader-page-slide-y-leave-to {
+    opacity: 0;
+    transform: translateY(18px);
 }
 
 .reader-body--paged .reader-section,
