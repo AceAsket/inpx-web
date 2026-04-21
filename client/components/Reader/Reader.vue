@@ -203,7 +203,7 @@
                     'reader-shell--paged-horizontal': isHorizontalPaged,
                 }"
             >
-                <div v-if="coverSrc" class="reader-cover-box">
+                <div v-if="coverSrc && !isPagedMode" class="reader-cover-box">
                     <img :src="coverSrc" class="reader-cover" :alt="title" />
                 </div>
 
@@ -217,44 +217,70 @@
                     }"
                     :style="readerBodyStyle"
                 >
-                    <div v-if="seriesLine" class="reader-series">
-                        {{ seriesLine }}
-                    </div>
-                    <h1 class="reader-heading">
-                        {{ title }}
-                    </h1>
-                    <div v-if="authorLine" class="reader-subheading">
-                        {{ authorLine }}
-                    </div>
+                    <template v-if="!isPagedMode">
+                        <div v-if="seriesLine" class="reader-series">
+                            {{ seriesLine }}
+                        </div>
+                        <h1 class="reader-heading">
+                            {{ title }}
+                        </h1>
+                        <div v-if="authorLine" class="reader-subheading">
+                            {{ authorLine }}
+                        </div>
 
-                    <div v-if="hasContents && !isCompactLayout" class="reader-contents-inline">
-                        <div class="reader-contents-inline-head">
-                        <div class="reader-contents-inline-title">
-                            {{ uiText.contents }}
+                        <div v-if="hasContents && !isCompactLayout" class="reader-contents-inline">
+                            <div class="reader-contents-inline-head">
+                            <div class="reader-contents-inline-title">
+                                {{ uiText.contents }}
+                            </div>
+                                <button class="reader-contents-toggle" @click="toggleInlineContents">
+                                    {{ inlineContentsVisible ? uiText.hide : uiText.show }}
+                                </button>
+                            </div>
+                            <div v-if="inlineContentsVisible" class="reader-contents-inline-list">
+                                <button
+                                    v-for="item in inlineContents"
+                                    :key="item.id"
+                                    class="reader-contents-chip"
+                                    @click="jumpToContent(item.id)"
+                                >
+                                    {{ item.title }}
+                                </button>
+                            </div>
                         </div>
-                            <button class="reader-contents-toggle" @click="toggleInlineContents">
-                                {{ inlineContentsVisible ? uiText.hide : uiText.show }}
-                            </button>
+
+                        <div class="reader-progress-bar">
+                            <div class="reader-progress-bar-fill" :style="{width: `${progressPercent}%`}"></div>
                         </div>
-                        <div v-if="inlineContentsVisible" class="reader-contents-inline-list">
-                            <button
-                                v-for="item in inlineContents"
-                                :key="item.id"
-                                class="reader-contents-chip"
-                                @click="jumpToContent(item.id)"
+
+                        <div ref="readerHtml" class="reader-html" v-html="readerHtml"></div>
+                    </template>
+
+                    <template v-else>
+                        <div class="reader-pages" :class="{'reader-pages--horizontal': isHorizontalPaged, 'reader-pages--vertical': isVerticalPaged}">
+                            <article
+                                v-for="(page, index) in pagedPages"
+                                :key="`page-${index}`"
+                                class="reader-page-sheet reader-page-sheet--live"
+                                :class="{'reader-page-sheet--horizontal': isHorizontalPaged, 'reader-page-sheet--vertical': isVerticalPaged}"
+                                :data-page-index="index"
                             >
-                                {{ item.title }}
-                            </button>
+                                <div class="reader-html" v-html="page.html"></div>
+                            </article>
                         </div>
-                    </div>
-
-                    <div class="reader-progress-bar">
-                        <div class="reader-progress-bar-fill" :style="{width: `${progressPercent}%`}"></div>
-                    </div>
-
-                    <div ref="readerHtml" class="reader-html" v-html="readerHtml"></div>
+                    </template>
                 </div>
             </div>
+        </div>
+
+        <div
+            v-if="isPagedMode"
+            ref="pageMeasure"
+            class="reader-page-sheet reader-page-sheet--measure"
+            :class="[readerThemeClass, {'reader-page-sheet--horizontal': isHorizontalPaged, 'reader-page-sheet--vertical': isVerticalPaged}]"
+            :style="readerBodyStyle"
+        >
+            <div class="reader-html"></div>
         </div>
 
         <div v-if="isCompactLayout && (showCompactStatusBar || !compactChromeHidden)" class="reader-mobile-footer">
@@ -595,6 +621,7 @@ class Reader {
     seriesLine = '';
     coverSrc = '';
     readerHtml = '';
+    pagedPages = [];
     controlsOpen = false;
     contentsDialogOpen = false;
     bookmarksDialogOpen = false;
@@ -909,16 +936,15 @@ class Reader {
     }
 
     get pageOffsets() {
-        const pageSize = Math.max(
-            1,
-            (this.isHorizontalPaged
-                ? (this.scrollerViewportWidth || this.pageFrameWidth)
-                : (this.scrollerViewportHeight || this.pageMinHeight)),
-        );
-        const contentSize = Math.max(pageSize, this.measurePagedContentSize());
-        const totalPages = Math.max(1, Math.ceil(contentSize / pageSize));
+        const scroller = (this.$refs ? this.$refs.scroller : null);
+        if (!this.isPagedMode || !scroller)
+            return [0];
 
-        return Array.from({length: totalPages}, (_, index) => index * pageSize);
+        const pages = Array.from(scroller.querySelectorAll('.reader-page-sheet--live'));
+        if (!pages.length)
+            return [0];
+
+        return pages.map((page) => (this.isHorizontalPaged ? page.offsetLeft : page.offsetTop));
     }
 
     get totalPages() {
@@ -1190,6 +1216,8 @@ class Reader {
         const scroller = (this.$refs ? this.$refs.scroller : null);
         this.scrollerViewportWidth = ((scroller && scroller.clientWidth) || 0);
         this.scrollerViewportHeight = ((scroller && scroller.clientHeight) || 0);
+        if (this.isPagedMode)
+            this.buildPagedPages();
         this.applyVerticalSectionAlignment();
     }
 
@@ -1221,6 +1249,9 @@ class Reader {
     applyVerticalSectionAlignment() {
         const readerBody = (this.$refs ? this.$refs.readerBody : null);
         if (!readerBody)
+            return;
+
+        if (this.isPagedMode)
             return;
 
         const sections = Array.from(readerBody.querySelectorAll('.reader-section-block'));
@@ -1377,6 +1408,150 @@ class Reader {
         if (typeof(CSS) !== 'undefined' && CSS.escape)
             return CSS.escape(value);
         return value.replace(/([ #;?%&,.+*~\\':"!^$[\]()=>|/@])/g, '\\$1');
+    }
+
+    wrapPagedMeasureHtml(parts = []) {
+        return parts.join('');
+    }
+
+    buildPagedUnits() {
+        const units = [];
+        const pushUnit = (html = '', opts = {}) => {
+            if (!String(html || '').trim())
+                return;
+            units.push({
+                html,
+                breakBefore: !!opts.breakBefore,
+                sectionId: String(opts.sectionId || '').trim(),
+            });
+        };
+
+        if (this.coverSrc)
+            pushUnit(`<div class="reader-cover-box"><img src="${this.coverSrc}" class="reader-cover" alt="${this.escapeHtml(this.title)}"></div>`);
+        if (this.seriesLine)
+            pushUnit(`<div class="reader-series">${this.escapeHtml(this.seriesLine)}</div>`);
+        if (this.title)
+            pushUnit(`<h1 class="reader-heading">${this.escapeHtml(this.title)}</h1>`);
+        if (this.authorLine)
+            pushUnit(`<div class="reader-subheading">${this.escapeHtml(this.authorLine)}</div>`);
+
+        const root = document.createElement('div');
+        root.innerHTML = this.readerHtml || '';
+
+        const flattenNode = (node, sectionBreak = false) => {
+            if (!node)
+                return;
+
+            if (node.nodeType === Node.TEXT_NODE) {
+                const text = String(node.textContent || '').trim();
+                if (text)
+                    pushUnit(`<p class="reader-paragraph">${this.escapeHtml(text)}</p>`, {breakBefore: sectionBreak});
+                return;
+            }
+
+            if (node.nodeType !== Node.ELEMENT_NODE)
+                return;
+
+            const element = node;
+            if (element.classList.contains('reader-section-block')) {
+                const children = Array.from(element.childNodes).filter((child) => (
+                    child.nodeType !== Node.TEXT_NODE || String(child.textContent || '').trim()
+                ));
+                if (!children.length) {
+                    pushUnit(element.outerHTML, {
+                        breakBefore: sectionBreak,
+                        sectionId: (element.querySelector('[id]') || {}).id || '',
+                    });
+                    return;
+                }
+
+                let first = true;
+                for (const child of children) {
+                    const sectionId = (child.nodeType === Node.ELEMENT_NODE
+                        ? (child.id || ((child.querySelector && child.querySelector('[id]')) || {}).id || '')
+                        : '');
+                    flattenNode(child, (sectionBreak && first));
+                    if (sectionId && units.length) {
+                        units[units.length - 1].sectionId = sectionId;
+                        units[units.length - 1].breakBefore = units[units.length - 1].breakBefore || (sectionBreak && first);
+                    }
+                    first = false;
+                }
+                return;
+            }
+
+            const sectionId = element.id || ((element.querySelector && element.querySelector('[id]')) || {}).id || '';
+            pushUnit(element.outerHTML, {breakBefore: sectionBreak, sectionId});
+        };
+
+        for (const node of Array.from(root.childNodes)) {
+            const isSection = (node.nodeType === Node.ELEMENT_NODE && node.classList.contains('reader-section-block'));
+            flattenNode(node, isSection);
+        }
+
+        return units;
+    }
+
+    buildPagedPages() {
+        if (!this.isPagedMode) {
+            this.pagedPages = [];
+            return;
+        }
+
+        const measureHost = this.$refs ? this.$refs.pageMeasure : null;
+        if (!measureHost)
+            return;
+
+        const measureHtml = measureHost.querySelector('.reader-html');
+        if (!measureHtml)
+            return;
+
+        const units = this.buildPagedUnits();
+        const pages = [];
+        let currentUnits = [];
+        let activeSectionId = '';
+        let currentPageSectionId = '';
+
+        const applyUnits = (list) => {
+            measureHtml.innerHTML = this.wrapPagedMeasureHtml(list);
+        };
+        const finalizePage = () => {
+            if (!currentUnits.length)
+                return;
+            pages.push({
+                html: this.wrapPagedMeasureHtml(currentUnits),
+                sectionId: currentPageSectionId || activeSectionId || '',
+            });
+            currentUnits = [];
+            currentPageSectionId = activeSectionId || '';
+            applyUnits([]);
+        };
+
+        applyUnits([]);
+        for (const unit of units) {
+            if (unit.sectionId)
+                activeSectionId = unit.sectionId;
+            if (unit.breakBefore && currentUnits.length) {
+                finalizePage();
+                currentPageSectionId = unit.sectionId || activeSectionId || '';
+            }
+
+            const candidateUnits = currentUnits.concat(unit.html);
+            applyUnits(candidateUnits);
+            if (measureHost.scrollHeight > measureHost.clientHeight + 2 && currentUnits.length) {
+                finalizePage();
+                currentPageSectionId = unit.sectionId || activeSectionId || '';
+                currentUnits = [unit.html];
+                applyUnits(currentUnits);
+            } else {
+                currentUnits = candidateUnits;
+                if (unit.sectionId && !currentPageSectionId)
+                    currentPageSectionId = unit.sectionId;
+            }
+        }
+
+        finalizePage();
+        this.pagedPages = (pages.length ? pages : [{html: this.readerHtml || '', sectionId: ''}]);
     }
 
     extractImageMap(parser) {
@@ -2299,6 +2474,33 @@ export default vueComponent(Reader);
 }
 
 .reader-body--paged {
+    width: 100%;
+    max-width: none;
+    min-height: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.reader-body--paged .reader-html {
+    height: auto;
+}
+
+.reader-pages {
+    display: flex;
+    flex-direction: column;
+    gap: var(--reader-page-gap);
+    align-items: center;
+}
+
+.reader-pages--horizontal {
+    flex-direction: row;
+    gap: 0;
+    align-items: stretch;
+}
+
+.reader-page-sheet {
     width: min(100%, var(--reader-page-frame-width));
     max-width: var(--reader-page-frame-width);
     min-height: var(--reader-page-min-height);
@@ -2309,36 +2511,24 @@ export default vueComponent(Reader);
     background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
     box-shadow: 0 18px 42px rgba(0, 0, 0, 0.14);
     scroll-snap-align: start;
-}
-
-.reader-body--paged-vertical {
-    scroll-snap-align: start;
-}
-
-.reader-body--paged-horizontal {
-    width: max-content;
-    min-width: var(--reader-page-frame-width);
-    max-width: none;
-    height: var(--reader-page-min-height);
-    min-height: var(--reader-page-min-height);
-    margin-right: var(--reader-page-gap);
-    box-sizing: content-box;
-    overflow: visible;
-    column-width: var(--reader-page-column-width);
-    column-gap: var(--reader-page-gap);
-    column-fill: auto;
-    column-rule: 1px solid color-mix(in srgb, var(--reader-border) 92%, transparent);
-    scroll-snap-align: start;
     scroll-snap-stop: always;
-    transition: transform 180ms ease, box-shadow 180ms ease;
+    overflow: hidden;
 }
 
-.reader-body--paged .reader-html {
-    height: auto;
+.reader-page-sheet--horizontal {
+    flex: 0 0 var(--reader-page-frame-width);
+    width: var(--reader-page-frame-width);
+    max-width: var(--reader-page-frame-width);
+    min-height: var(--reader-page-min-height);
 }
 
-.reader-body--paged-horizontal .reader-html {
-    display: block;
+.reader-page-sheet--measure {
+    position: fixed;
+    left: -20000px;
+    top: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: -1;
 }
 
 .reader-body--paged .reader-section,
