@@ -71,17 +71,27 @@ docker compose up -d
 
 или напрямую через `docker run` с тегом `inpx-web-7z:latest`.
 
-### Публикация в Docker Hub
+### Обновление контейнера
 
-Пример для публикации полного и облегчённого образов:
+Если вы обновили код или перешли на новый тег образа, удобнее всего пересоздать контейнер:
 
 ```sh
-docker build -t <dockerhub-user>/inpx-web:latest .
-docker build --target runtime-lite -t <dockerhub-user>/inpx-web:lite .
+docker rm -f inpx-web 2>/dev/null || true
+docker build -t inpx-web-7z:latest .
 
-docker push <dockerhub-user>/inpx-web:latest
-docker push <dockerhub-user>/inpx-web:lite
+docker run -d \
+  --name=inpx-web \
+  --restart unless-stopped \
+  -p 12380:12380 \
+  -e INPX=/library/my-library.inpx \
+  -e LIBDIR=/library \
+  -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
+  -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
+  -v /mnt/user/books/my-library:/library:ro \
+  inpx-web-7z:latest
 ```
+
+Если образ уже собран и нужно только перезапустить контейнер на новой версии, достаточно удалить старый контейнер и запустить ту же команду `docker run` снова.
 
 ### Быстрый старт через docker run
 
@@ -108,6 +118,22 @@ docker run -d \
 * первый запуск может быть долгим: приложение создаёт поисковую базу, а конвертация в `epub` / `mobi` / `pdf` требует установленного в образе Calibre
 * после обновления образа контейнер удобнее пересоздавать: `docker rm -f inpx-web` и затем запускать команду снова
 * веб-интерфейс после запуска будет доступен по адресу `http://<ваш_хост>:12380`
+
+### Кэш книг
+
+Приложение хранит подготовленные книги в рабочем каталоге контейнера, внутри volume с данными приложения:
+
+* gzip-кэш восстановленных книг
+* временно распакованные `.raw` файлы
+* результаты конвертации в `epub`, `mobi` и `pdf`
+
+Этот кэш нужен для быстрого повторного скачивания, чтения и конвертации. Обычно вручную его чистить не нужно:
+
+* сервер сам периодически подчищает кэш каталога книг
+* лимит размера задаётся параметром `maxFilesDirSize`
+* интервал проверки задаётся параметром `cacheCleanInterval`
+
+Если нужно очистить кэш вручную, удаляйте только каталог с книжным кэшем внутри appdata, не трогая весь каталог `/usr/local/bin/.inpx-web` целиком.
 
 ### Отправка книг в Telegram и на email
 
