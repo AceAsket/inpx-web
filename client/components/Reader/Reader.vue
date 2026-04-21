@@ -1,6 +1,10 @@
 <template>
-    <div ref="page" class="reader-page" :class="readerThemeClass">
-        <div class="reader-toolbar">
+    <div
+        ref="page"
+        class="reader-page"
+        :class="[readerThemeClass, {'reader-page--immersive': compactChromeHidden}]"
+    >
+        <div v-show="!compactChromeHidden" class="reader-toolbar">
             <div class="reader-toolbar-main">
                 <q-btn
                     flat
@@ -95,6 +99,7 @@
             ref="scroller"
             class="reader-scroll"
             @scroll="onScroll"
+            @click="handleReaderTap"
         >
             <div class="reader-shell">
                 <div v-if="coverSrc" class="reader-cover-box">
@@ -112,13 +117,13 @@
                         {{ authorLine }}
                     </div>
 
-                    <div v-if="hasContents" class="reader-contents-inline">
+                    <div v-if="hasContents && !isCompactLayout" class="reader-contents-inline">
                         <div class="reader-contents-inline-title">
                             Содержание
                         </div>
                         <div class="reader-contents-inline-list">
                             <button
-                                v-for="item in displayContents"
+                                v-for="item in inlineContents"
                                 :key="item.id"
                                 class="reader-contents-chip"
                                 @click="jumpToContent(item.id)"
@@ -137,7 +142,7 @@
             </div>
         </div>
 
-        <div v-if="isCompactLayout" class="reader-mobile-bar">
+        <div v-if="isCompactLayout && !compactChromeHidden" class="reader-mobile-bar">
             <q-btn
                 v-if="hasContents"
                 flat
@@ -169,6 +174,10 @@
             </q-btn>
         </div>
 
+        <div v-if="compactChromeHidden && isCompactLayout" class="reader-tap-hint">
+            {{ currentSectionTitle || `${progressPercent}%` }}
+        </div>
+
         <q-dialog v-model="contentsDialogOpen" position="right">
             <div class="reader-dialog reader-dialog--contents">
                 <div class="reader-dialog-header">
@@ -181,6 +190,7 @@
                         v-for="item in displayContents"
                         :key="item.id"
                         class="reader-dialog-link"
+                        :class="{'is-active': item.id === currentSectionId}"
                         @click="jumpToContent(item.id)"
                     >
                         {{ item.title }}
@@ -221,7 +231,9 @@ class Reader {
     controlsOpen = false;
     contentsDialogOpen = false;
     fullscreenActive = false;
+    chromeHidden = false;
     contents = [];
+    currentSectionId = '';
     preferences = {
         theme: 'dark',
         fontSize: 18,
@@ -230,6 +242,7 @@ class Reader {
     };
     progress = {
         percent: 0,
+        sectionId: '',
         updatedAt: '',
     };
     restorePending = false;
@@ -298,16 +311,29 @@ class Reader {
         return !!(this.$q && this.$q.screen && this.$q.screen.lt && this.$q.screen.lt.md);
     }
 
+    get compactChromeHidden() {
+        return this.isCompactLayout && this.chromeHidden;
+    }
+
     get showToolbarActions() {
         return !this.isCompactLayout || this.controlsOpen;
     }
 
     get displayContents() {
-        return this.contents.slice(0, 80);
+        return this.contents.slice(0, 120);
+    }
+
+    get inlineContents() {
+        return this.displayContents.slice(0, 12);
     }
 
     get hasContents() {
         return this.displayContents.length > 0;
+    }
+
+    get currentSectionTitle() {
+        const current = this.contents.find((item) => item.id === this.currentSectionId);
+        return (current ? current.title : '');
     }
 
     goBack() {
@@ -351,6 +377,13 @@ class Reader {
                 title: String(item && item.title ? item.title : '').trim(),
             }))
             .filter((item) => item.title);
+    }
+
+    escapeCssId(id = '') {
+        const value = String(id || '');
+        if (typeof(CSS) !== 'undefined' && CSS.escape)
+            return CSS.escape(value);
+        return value.replace(/([ #;?%&,.+*~\\':"!^$[\]()=>|/@])/g, '\\$1');
     }
 
     extractImageMap(parser) {
@@ -425,9 +458,11 @@ class Reader {
         this.error = '';
         this.readerHtml = '';
         this.contents = [];
+        this.currentSectionId = '';
         this.restorePending = false;
         this.controlsOpen = false;
         this.contentsDialogOpen = false;
+        this.chromeHidden = false;
 
         try {
             const [bookResponse, stateResponse] = await Promise.all([
@@ -451,7 +486,8 @@ class Reader {
             this.readerHtml = this.buildReaderHtml(parser);
 
             this.preferences = Object.assign({}, this.preferences, stateResponse.preferences || {});
-            this.progress = Object.assign({percent: 0, updatedAt: ''}, stateResponse.progress || {});
+            this.progress = Object.assign({percent: 0, sectionId: '', updatedAt: ''}, stateResponse.progress || {});
+            this.currentSectionId = String(this.progress.sectionId || '').trim();
             this.restorePending = true;
 
             this.$root.setAppTitle(this.title);
@@ -471,8 +507,40 @@ class Reader {
 
         this.restorePending = false;
         const scroller = this.$refs.scroller;
+
+        if (this.progress.sectionId) {
+            const target = scroller.querySelector(`#${this.escapeCssId(this.progress.sectionId)}`);
+            if (target) {
+                scroller.scrollTop = Math.max(0, target.offsetTop - 18);
+                this.updateCurrentSectionFromScroll();
+                return;
+            }
+        }
+
         const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
         scroller.scrollTop = maxScroll * (Number(this.progress.percent || 0) || 0);
+        this.updateCurrentSectionFromScroll();
+    }
+
+    updateCurrentSectionFromScroll() {
+        if (!this.$refs.scroller || !this.contents.length)
+            return;
+
+        const scroller = this.$refs.scroller;
+        let activeId = this.currentSectionId;
+
+        for (const item of this.contents) {
+            const target = scroller.querySelector(`#${this.escapeCssId(item.id)}`);
+            if (!target)
+                continue;
+
+            if (target.offsetTop - scroller.scrollTop <= 80)
+                activeId = item.id;
+            else
+                break;
+        }
+
+        this.currentSectionId = activeId || (this.contents[0] ? this.contents[0].id : '');
     }
 
     onScroll() {
@@ -482,22 +550,54 @@ class Reader {
         const scroller = this.$refs.scroller;
         const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
         const percent = (maxScroll > 0 ? scroller.scrollTop / maxScroll : 0);
-        this.progress = Object.assign({}, this.progress, {percent});
+        this.updateCurrentSectionFromScroll();
+        this.progress = Object.assign({}, this.progress, {
+            percent,
+            sectionId: this.currentSectionId || '',
+        });
         this.saveProgressDebounced();
+    }
+
+    handleReaderTap(event) {
+        if (!this.isCompactLayout || !this.$refs.scroller)
+            return;
+
+        const target = event.target;
+        if (target && target.closest && target.closest('button, a, img, input, textarea, select, .q-btn, .reader-dialog'))
+            return;
+
+        const selection = (window.getSelection ? window.getSelection().toString().trim() : '');
+        if (selection)
+            return;
+
+        const rect = this.$refs.scroller.getBoundingClientRect();
+        const relX = (event.clientX - rect.left) / rect.width;
+        const relY = (event.clientY - rect.top) / rect.height;
+        const isCenterTap = (relX >= 0.18 && relX <= 0.82 && relY >= 0.18 && relY <= 0.82);
+        if (!isCenterTap)
+            return;
+
+        this.chromeHidden = !this.chromeHidden;
+        if (this.chromeHidden) {
+            this.controlsOpen = false;
+            this.contentsDialogOpen = false;
+        }
     }
 
     jumpToContent(id = '') {
         this.contentsDialogOpen = false;
+        this.chromeHidden = false;
         if (!id || !this.$refs.scroller)
             return;
 
         this.$nextTick(() => {
             const scroller = this.$refs.scroller;
-            const target = scroller.querySelector(`#${CSS.escape(id)}`);
+            const target = scroller.querySelector(`#${this.escapeCssId(id)}`);
             if (!target)
                 return;
 
-            const top = target.offsetTop - 18;
+            this.currentSectionId = id;
+            const top = Math.max(0, target.offsetTop - 18);
             scroller.scrollTo({top, behavior: 'smooth'});
         });
     }
@@ -508,6 +608,7 @@ class Reader {
 
         await this.api.updateReaderProgress(this.bookUid, {
             percent: Number(this.progress.percent || 0) || 0,
+            sectionId: this.currentSectionId || '',
         });
     }
 
@@ -559,6 +660,10 @@ export default vueComponent(Reader);
     min-height: 100%;
     background: var(--reader-bg);
     color: var(--reader-text);
+}
+
+.reader-page--immersive {
+    cursor: default;
 }
 
 .reader-toolbar {
@@ -816,6 +921,22 @@ export default vueComponent(Reader);
     color: var(--reader-accent);
 }
 
+.reader-tap-hint {
+    position: fixed;
+    left: 50%;
+    bottom: calc(18px + env(safe-area-inset-bottom));
+    z-index: 15;
+    transform: translateX(-50%);
+    padding: 8px 14px;
+    border: 1px solid var(--reader-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--reader-surface) 92%, transparent);
+    color: var(--reader-muted);
+    font-size: 13px;
+    font-weight: 700;
+    backdrop-filter: blur(10px);
+}
+
 .reader-dialog {
     width: min(92vw, 420px);
     max-height: 85vh;
@@ -860,6 +981,11 @@ export default vueComponent(Reader);
     color: var(--reader-text);
     text-align: left;
     cursor: pointer;
+}
+
+.reader-dialog-link.is-active {
+    background: var(--reader-accent-soft);
+    color: var(--reader-accent);
 }
 
 .reader-theme-dark {
@@ -951,10 +1077,6 @@ export default vueComponent(Reader);
 
     .reader-body {
         width: 100%;
-    }
-
-    .reader-contents-inline {
-        display: none;
     }
 
     .reader-html :deep(p),

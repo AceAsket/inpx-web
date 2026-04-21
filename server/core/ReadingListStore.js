@@ -126,6 +126,7 @@ class ReadingListStore {
             const percent = Number(row.percent);
             result[normalizedBookUid] = {
                 percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
+                sectionId: String(row.sectionId || '').trim(),
                 updatedAt: String(row.updatedAt || '').trim() || this.nowIso(),
             };
         }
@@ -459,7 +460,7 @@ class ReadingListStore {
 
         return {
             preferences: this.normalizeReaderPreferences(user.readerPreferences),
-            progress: Object.assign({percent: 0, updatedAt: ''}, user.readerProgress[normalizedBookUid] || {}),
+            progress: Object.assign({percent: 0, sectionId: '', updatedAt: ''}, user.readerProgress[normalizedBookUid] || {}),
         };
     }
 
@@ -490,8 +491,10 @@ class ReadingListStore {
 
         const current = target.readerProgress[normalizedBookUid] || {};
         const percent = Number(utilsHasProp(patch, 'percent') ? patch.percent : current.percent);
+        const sectionId = String(utilsHasProp(patch, 'sectionId') ? patch.sectionId : current.sectionId || '').trim();
         target.readerProgress[normalizedBookUid] = {
             percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
+            sectionId,
             updatedAt: this.nowIso(),
         };
         target.updatedAt = this.nowIso();
