@@ -896,24 +896,30 @@ class Reader {
     }
 
     get pagedMetrics() {
-        const scroller = this.$refs ? this.$refs.scroller : null;
-        const readerBody = this.$refs ? this.$refs.readerBody : null;
         const pageSize = Math.max(
             1,
             (this.isHorizontalPaged
-                ? (this.scrollerViewportWidth || (scroller && scroller.clientWidth) || this.pageFrameWidth)
-                : (this.scrollerViewportHeight || (scroller && scroller.clientHeight) || this.pageMinHeight)),
+                ? (this.scrollerViewportWidth || this.pageFrameWidth)
+                : (this.scrollerViewportHeight || this.pageMinHeight)),
         );
-        const contentSize = Math.max(
-            pageSize,
-            (this.isHorizontalPaged
-                ? ((scroller && scroller.scrollWidth) || (readerBody && readerBody.scrollWidth) || this.measurePagedContentSize())
-                : ((scroller && scroller.scrollHeight) || (readerBody && readerBody.scrollHeight) || this.measurePagedContentSize())),
-        );
-        const totalPages = Math.max(1, Math.ceil(contentSize / pageSize));
-        const maxScroll = Math.max(0, (totalPages - 1) * pageSize);
+        const pageOffsets = this.pageOffsets;
+        const totalPages = Math.max(1, pageOffsets.length);
+        const maxScroll = (pageOffsets.length ? pageOffsets[pageOffsets.length - 1] : 0);
 
-        return {pageSize, maxScroll, totalPages};
+        return {pageSize, maxScroll, totalPages, pageOffsets};
+    }
+
+    get pageOffsets() {
+        const pageSize = Math.max(
+            1,
+            (this.isHorizontalPaged
+                ? (this.scrollerViewportWidth || this.pageFrameWidth)
+                : (this.scrollerViewportHeight || this.pageMinHeight)),
+        );
+        const contentSize = Math.max(pageSize, this.measurePagedContentSize());
+        const totalPages = Math.max(1, Math.ceil(contentSize / pageSize));
+
+        return Array.from({length: totalPages}, (_, index) => index * pageSize);
     }
 
     get totalPages() {
@@ -933,9 +939,16 @@ class Reader {
             return 1;
 
         if (this.isPagedMode) {
-            const {pageSize, totalPages} = this.pagedMetrics;
+            const {pageOffsets, totalPages} = this.pagedMetrics;
             const position = (this.isHorizontalPaged ? scroller.scrollLeft : scroller.scrollTop);
-            return Math.min(totalPages, Math.max(1, Math.round(position / pageSize) + 1));
+            let pageIndex = 0;
+            for (let index = 0; index < pageOffsets.length; index += 1) {
+                if (pageOffsets[index] <= position + 2)
+                    pageIndex = index;
+                else
+                    break;
+            }
+            return Math.min(totalPages, Math.max(1, pageIndex + 1));
         }
 
         return Math.min(this.totalPages, Math.max(1, Math.floor(scroller.scrollTop / scroller.clientHeight) + 1));
@@ -1250,28 +1263,13 @@ class Reader {
             return 0;
 
         const readerBody = this.$refs.readerBody;
+        const scroller = (this.$refs ? this.$refs.scroller : null);
         const contentRoot = readerBody.querySelector('.reader-html') || readerBody;
         const style = window.getComputedStyle(readerBody);
 
         if (this.isVerticalPaged) {
-            const blocks = Array.from(contentRoot.querySelectorAll([
-                '.reader-section-block',
-                '.reader-section',
-                '.reader-notes',
-                '.reader-progress-bar',
-                '.reader-contents-inline',
-                '.reader-image-block',
-                '.reader-series',
-                '.reader-heading',
-                '.reader-subheading',
-                'p',
-                'blockquote',
-                'h1',
-                'h2',
-                'h3',
-                'h4',
-                'img',
-            ].join(', ')));
+            const blocks = [readerBody, contentRoot]
+                .concat(Array.from(contentRoot.querySelectorAll('*')));
             const padBottom = parseFloat(style.paddingBottom || '0') || 0;
             const maxBottom = blocks.reduce((acc, node) => (
                 Math.max(acc, (node.offsetTop || 0) + (node.offsetHeight || 0))
@@ -1281,6 +1279,7 @@ class Reader {
                 maxBottom + padBottom,
                 contentRoot.scrollHeight || 0,
                 readerBody.scrollHeight || 0,
+                (scroller && scroller.scrollHeight) || 0,
             );
         }
 
@@ -1308,6 +1307,7 @@ class Reader {
             (this.isHorizontalPaged
                 ? (tailRect.right - bodyRect.left)
                 : (tailRect.bottom - bodyRect.top)) + padEnd,
+            (scroller && scroller.scrollWidth) || 0,
         );
     }
 
@@ -1690,9 +1690,11 @@ class Reader {
                 ? scroller.scrollLeft + (targetRect.left - scrollerRect.left)
                 : scroller.scrollTop + (targetRect.top - scrollerRect.top)
         ));
-        const {pageSize, maxScroll} = this.pagedMetrics;
+        const {pageOffsets, maxScroll} = this.pagedMetrics;
+        const pageIndex = Math.max(0, Math.floor(rawOffset / Math.max(1, this.pagedMetrics.pageSize)));
+        const snappedOffset = (pageOffsets[pageIndex] !== undefined ? pageOffsets[pageIndex] : 0);
 
-        return Math.max(0, Math.min(maxScroll, Math.floor(rawOffset / pageSize) * pageSize));
+        return Math.max(0, Math.min(maxScroll, snappedOffset));
     }
 
     updateCurrentSectionFromScroll() {
@@ -1900,10 +1902,10 @@ class Reader {
         if (!this.$refs.scroller || !this.isPagedMode)
             return;
 
-        const {pageSize, maxScroll} = this.pagedMetrics;
+        const {pageOffsets, maxScroll} = this.pagedMetrics;
         const snappedOffset = Math.max(0, Math.min(
             maxScroll,
-            Math.round(this.getPagedScroll() / pageSize) * pageSize,
+            (pageOffsets[Math.max(0, Math.round(this.getPagedScroll() / Math.max(1, this.pagedMetrics.pageSize)))] || 0),
         ));
 
         if (Math.abs(snappedOffset - this.getPagedScroll()) < 2)
