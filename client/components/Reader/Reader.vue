@@ -1231,13 +1231,45 @@ class Reader {
 
         const readerBody = this.$refs.readerBody;
         const contentRoot = readerBody.querySelector('.reader-html') || readerBody;
+        const style = window.getComputedStyle(readerBody);
+
+        if (this.isVerticalPaged) {
+            const blocks = Array.from(contentRoot.querySelectorAll([
+                '.reader-section-block',
+                '.reader-section',
+                '.reader-notes',
+                '.reader-progress-bar',
+                '.reader-contents-inline',
+                '.reader-image-block',
+                '.reader-series',
+                '.reader-heading',
+                '.reader-subheading',
+                'p',
+                'blockquote',
+                'h1',
+                'h2',
+                'h3',
+                'h4',
+                'img',
+            ].join(', ')));
+            const padBottom = parseFloat(style.paddingBottom || '0') || 0;
+            const maxBottom = blocks.reduce((acc, node) => (
+                Math.max(acc, (node.offsetTop || 0) + (node.offsetHeight || 0))
+            ), 0);
+
+            return Math.max(
+                maxBottom + padBottom,
+                contentRoot.scrollHeight || 0,
+                readerBody.scrollHeight || 0,
+            );
+        }
+
         const tailNode = this.getDeepestLastElement(contentRoot);
         if (!tailNode || !tailNode.getBoundingClientRect)
             return 0;
 
         const bodyRect = readerBody.getBoundingClientRect();
         const tailRect = tailNode.getBoundingClientRect();
-        const style = window.getComputedStyle(readerBody);
         const padEnd = parseFloat(
             this.isHorizontalPaged
                 ? (style.paddingRight || '0')
