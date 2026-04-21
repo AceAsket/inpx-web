@@ -258,17 +258,19 @@
 
                     <template v-else>
                         <div class="reader-pages" :class="{'reader-pages--horizontal': isHorizontalPaged, 'reader-pages--vertical': isVerticalPaged}">
-                            <transition :name="pagedTransitionName">
-                                <article
-                                    v-if="activePagedPage"
-                                    :key="`page-${currentPageIndex}-${activePagedPage.sectionId || 'page'}`"
-                                    class="reader-page-sheet reader-page-sheet--live"
-                                    :class="{'reader-page-sheet--horizontal': isHorizontalPaged, 'reader-page-sheet--vertical': isVerticalPaged}"
-                                    :data-page-index="currentPageIndex"
-                                >
-                                    <div class="reader-html" v-html="activePagedPage.html"></div>
-                                </article>
-                            </transition>
+                            <div class="reader-page-stage">
+                                <transition :name="pagedTransitionName" mode="out-in">
+                                    <article
+                                        v-if="activePagedPage"
+                                        :key="`page-${currentPageIndex}-${activePagedPage.sectionId || 'page'}`"
+                                        class="reader-page-sheet reader-page-sheet--live"
+                                        :class="{'reader-page-sheet--horizontal': isHorizontalPaged, 'reader-page-sheet--vertical': isVerticalPaged}"
+                                        :data-page-index="currentPageIndex"
+                                    >
+                                        <div class="reader-html" v-html="activePagedPage.html"></div>
+                                    </article>
+                                </transition>
+                            </div>
                         </div>
                     </template>
                 </div>
@@ -2653,6 +2655,17 @@ export default vueComponent(Reader);
     min-height: var(--reader-page-min-height);
 }
 
+.reader-page-stage {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: min(100%, var(--reader-page-frame-width));
+    max-width: var(--reader-page-frame-width);
+    min-height: var(--reader-page-min-height);
+    height: var(--reader-page-min-height);
+}
+
 .reader-pages--horizontal {
     flex-direction: row;
     gap: 0;
@@ -2683,6 +2696,12 @@ export default vueComponent(Reader);
     max-width: var(--reader-page-frame-width);
     min-height: var(--reader-page-min-height);
     height: var(--reader-page-min-height);
+}
+
+.reader-page-sheet--live {
+    position: absolute;
+    inset: 0;
+    margin: auto;
 }
 
 .reader-page-sheet--measure {
