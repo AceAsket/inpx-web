@@ -434,7 +434,7 @@ class Reader {
         for (const body of parser.$$array('/body')) {
             const attrs = (body.attrs() || new Map());
             const bodyName = (attrs.get('name') || '').toLowerCase();
-            const bodyXml = parser.newParser([body.raw]).toString({noHeader: true});
+            const bodyXml = parser.newParser(body.value || []).toString({noHeader: true});
             let html = parser.toHtml(bodyXml);
             html = this.replaceInlineImages(html, imageMap);
             html = html.replace(/<p>/g, '<p class="reader-paragraph">');
