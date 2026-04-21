@@ -787,7 +787,7 @@ class Reader {
 
     get readerNotifyOptions() {
         return {
-            color: 'transparent',
+            color: 'white',
             icon: 'la la-bookmark',
             iconColor: 'var(--reader-text)',
             messageColor: 'var(--reader-text)',
@@ -795,12 +795,11 @@ class Reader {
             position: (this.isCompactLayout ? 'bottom' : 'top-right'),
             textColor: 'black',
             style: `
-                background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
+                background: var(--reader-surface);
                 color: var(--reader-text);
                 border: 1px solid var(--reader-border);
                 border-radius: 18px;
                 box-shadow: 0 18px 42px rgba(0, 0, 0, 0.18);
-                backdrop-filter: blur(10px);
             `,
         };
     }
