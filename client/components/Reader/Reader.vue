@@ -748,6 +748,23 @@ class Reader {
             : this.preferences;
     }
 
+    getActivePreferencesForTheme(theme = '', basePreferences = null) {
+        const source = Object.assign({}, (basePreferences || this.preferences || {}), {theme});
+        return (theme === 'eink')
+            ? Object.assign({}, source, source.einkProfile || {})
+            : source;
+    }
+
+    layoutSignatureForPreferences(prefs = {}) {
+        return [
+            prefs.readMode || 'scroll',
+            prefs.pagedDirection || 'vertical',
+            prefs.fontSize || 18,
+            prefs.contentWidth || 820,
+            prefs.lineHeight || 1.7,
+        ].join('|');
+    }
+
     get readerThemeStyle() {
         if (this.preferences.theme !== 'eink')
             return {};
@@ -2390,9 +2407,12 @@ class Reader {
     }
 
     setTheme(theme) {
+        const previousSignature = this.layoutSignatureForPreferences(this.activePreferences);
         this.preferences = Object.assign({}, this.preferences, {theme});
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        const nextSignature = this.layoutSignatureForPreferences(this.getActivePreferencesForTheme(theme, this.preferences));
+        if (previousSignature !== nextSignature)
+            this.reflowReaderLayout();
     }
 
     changeFontSize(delta) {
@@ -2515,6 +2535,7 @@ export default vueComponent(Reader);
     gap: 10px;
     flex-wrap: wrap;
     justify-content: flex-end;
+    contain: layout paint;
 }
 
 .reader-theme-switch,
@@ -2662,6 +2683,7 @@ export default vueComponent(Reader);
     scroll-snap-align: start;
     scroll-snap-stop: always;
     overflow: hidden;
+    contain: layout paint style;
 }
 
 .reader-page-sheet--horizontal {
@@ -2690,6 +2712,7 @@ export default vueComponent(Reader);
 .reader-page-slide-y-back-enter-active,
 .reader-page-slide-y-back-leave-active {
     transition: opacity 0.28s ease, transform 0.28s cubic-bezier(.22, .8, .3, 1);
+    will-change: opacity, transform;
 }
 
 .reader-page-slide-x-forward-enter-from,
