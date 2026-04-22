@@ -1027,9 +1027,9 @@ class Reader {
     get pageAnimationDurationMs() {
         const speed = String(this.activePreferences.pageAnimationSpeed || 'normal');
         if (speed === 'fast')
-            return 120;
+            return 90;
         if (speed === 'slow')
-            return 280;
+            return 320;
         return 180;
     }
 
@@ -1038,12 +1038,26 @@ class Reader {
         if (animation === 'none')
             return 0;
         if (animation === 'slide')
-            return 22;
-        return 10;
+            return 34;
+        return 0;
     }
 
     get pageAnimationOpacityStart() {
-        return (String(this.activePreferences.pageAnimation || 'soft') === 'none') ? 1 : 0;
+        const animation = String(this.activePreferences.pageAnimation || 'soft');
+        if (animation === 'none')
+            return 1;
+        if (animation === 'slide')
+            return 0;
+        return 0.15;
+    }
+
+    get pageAnimationScaleStart() {
+        const animation = String(this.activePreferences.pageAnimation || 'soft');
+        if (animation === 'none')
+            return 1;
+        if (animation === 'slide')
+            return 1;
+        return 0.992;
     }
 
     get readerBodyStyle() {
@@ -1063,6 +1077,7 @@ class Reader {
             '--reader-page-shift-x': `${this.pageAnimationShiftPx}px`,
             '--reader-page-shift-y': `${Math.max(0, Math.round(this.pageAnimationShiftPx * 0.72))}px`,
             '--reader-page-enter-opacity': String(this.pageAnimationOpacityStart),
+            '--reader-page-enter-scale': String(this.pageAnimationScaleStart),
         };
     }
 
@@ -1078,7 +1093,9 @@ class Reader {
 
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
-        const chromeOffset = (this.isCompactLayout ? 84 : 72);
+        if (this.isCompactLayout)
+            return Math.max(320, scrollerHeight - 8);
+        const chromeOffset = 72;
         return Math.max(360, scrollerHeight - chromeOffset);
     }
 
@@ -2755,26 +2772,27 @@ export default vueComponent(Reader);
 .reader-page-slide-x-back-leave-to,
 .reader-page-slide-y-back-leave-to {
     opacity: var(--reader-page-enter-opacity, 0);
+    transform: scale(var(--reader-page-enter-scale, 1));
 }
 
 .reader-page-slide-x-forward-enter-from,
 .reader-page-slide-x-back-leave-to {
-    transform: translateX(var(--reader-page-shift-x, 10px));
+    transform: translateX(var(--reader-page-shift-x, 10px)) scale(var(--reader-page-enter-scale, 1));
 }
 
 .reader-page-slide-x-back-enter-from,
 .reader-page-slide-x-forward-leave-to {
-    transform: translateX(calc(var(--reader-page-shift-x, 10px) * -1));
+    transform: translateX(calc(var(--reader-page-shift-x, 10px) * -1)) scale(var(--reader-page-enter-scale, 1));
 }
 
 .reader-page-slide-y-forward-enter-from,
 .reader-page-slide-y-back-leave-to {
-    transform: translateY(var(--reader-page-shift-y, 8px));
+    transform: translateY(var(--reader-page-shift-y, 8px)) scale(var(--reader-page-enter-scale, 1));
 }
 
 .reader-page-slide-y-back-enter-from,
 .reader-page-slide-y-forward-leave-to {
-    transform: translateY(calc(var(--reader-page-shift-y, 8px) * -1));
+    transform: translateY(calc(var(--reader-page-shift-y, 8px) * -1)) scale(var(--reader-page-enter-scale, 1));
 }
 
 .reader-body--paged .reader-section,
