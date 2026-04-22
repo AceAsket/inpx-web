@@ -2607,8 +2607,10 @@ export default vueComponent(Reader);
 }
 
 .reader-scroll--paged {
+    overflow: hidden;
     scroll-behavior: smooth;
     overscroll-behavior: contain;
+    touch-action: none;
 }
 
 .reader-scroll--paged-vertical {
