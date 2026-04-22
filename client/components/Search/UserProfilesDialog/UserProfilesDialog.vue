@@ -357,6 +357,24 @@ class UserProfilesDialog {
             delete: '\u0423\u0434\u0430\u043b\u0438\u0442\u044c',
             private: '\u041b\u0438\u0447\u043d\u044b\u0439',
             noReadingLists: '\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0441\u043f\u0438\u0441\u043a\u043e\u0432 \u0447\u0442\u0435\u043d\u0438\u044f.',
+            errorTitle: '\u041e\u0448\u0438\u0431\u043a\u0430',
+            currentReadingTitle: '\u0422\u0435\u043a\u0443\u0449\u0435\u0435 \u0447\u0442\u0435\u043d\u0438\u0435',
+            removeReadingConfirm: '\u0423\u0431\u0440\u0430\u0442\u044c \u043a\u043d\u0438\u0433\u0443 \u00ab{title}\u00bb \u0438\u0437 \u0442\u0435\u043a\u0443\u0449\u0435\u0433\u043e \u0447\u0442\u0435\u043d\u0438\u044f?',
+            removeReadingSuccess: '\u041a\u043d\u0438\u0433\u0430 \u0443\u0431\u0440\u0430\u043d\u0430 \u0438\u0437 \u0442\u0435\u043a\u0443\u0449\u0435\u0433\u043e \u0447\u0442\u0435\u043d\u0438\u044f',
+            renameListPrompt: '\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u043e\u0432\u043e\u0435 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u0441\u043f\u0438\u0441\u043a\u0430:',
+            renameListTitle: '\u041f\u0435\u0440\u0435\u0438\u043c\u0435\u043d\u043e\u0432\u0430\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a',
+            nameRequired: '\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u043d\u0435 \u0434\u043e\u043b\u0436\u043d\u043e \u0431\u044b\u0442\u044c \u043f\u0443\u0441\u0442\u044b\u043c',
+            renameListSuccess: '\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u0435\u0440\u0435\u0438\u043c\u0435\u043d\u043e\u0432\u0430\u043d',
+            deleteListConfirm: '\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a \u00ab{name}\u00bb?',
+            deleteListTitle: '\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0441\u043f\u0438\u0441\u043a\u0430',
+            deleteListSuccess: '\u0421\u043f\u0438\u0441\u043e\u043a \u0443\u0434\u0430\u043b\u0451\u043d',
+            profileSaved: '\u041f\u0440\u043e\u0444\u0438\u043b\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d',
+            deleteProfileConfirm: '\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044c \u00ab{name}\u00bb \u0432\u043c\u0435\u0441\u0442\u0435 \u0441\u043e \u0432\u0441\u0435\u043c\u0438 \u0435\u0433\u043e \u0441\u043f\u0438\u0441\u043a\u0430\u043c\u0438?',
+            deleteProfileTitle: '\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u043f\u0440\u043e\u0444\u0438\u043b\u044f',
+            resetPasswordPrompt: '\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u043e\u0432\u044b\u0439 \u043f\u0430\u0440\u043e\u043b\u044c \u0434\u043b\u044f \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u00ab{name}\u00bb:',
+            resetPasswordTitle: '\u0421\u0431\u0440\u043e\u0441 \u043f\u0430\u0440\u043e\u043b\u044f',
+            passwordRequired: '\u041f\u0430\u0440\u043e\u043b\u044c \u043d\u0435 \u0434\u043e\u043b\u0436\u0435\u043d \u0431\u044b\u0442\u044c \u043f\u0443\u0441\u0442\u044b\u043c',
+            resetPasswordSuccess: '\u041f\u0430\u0440\u043e\u043b\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u00ab{name}\u00bb \u043e\u0431\u043d\u043e\u0432\u043b\u0451\u043d',
             close: '\u0417\u0430\u043a\u0440\u044b\u0442\u044c',
         };
     }
@@ -451,8 +469,8 @@ class UserProfilesDialog {
             return;
 
         const confirmed = await this.$root.stdDialog.confirm(
-            `РЈР±СЂР°С‚СЊ РєРЅРёРіСѓ В«${book.title || ''}В» РёР· С‚РµРєСѓС‰РµРіРѕ С‡С‚РµРЅРёСЏ?`,
-            'РўРµРєСѓС‰РµРµ С‡С‚РµРЅРёРµ',
+            this.uiText.removeReadingConfirm.replace('{title}', String(book.title || '')),
+            this.uiText.currentReadingTitle,
         );
         if (!confirmed)
             return;
@@ -460,16 +478,16 @@ class UserProfilesDialog {
         try {
             await this.api.deleteReaderProgress(bookUid);
             await this.loadProfiles();
-            this.$root.notify.success('РљРЅРёРіР° СѓР±СЂР°РЅР° РёР· С‚РµРєСѓС‰РµРіРѕ С‡С‚РµРЅРёСЏ');
+            this.$root.notify.success(this.uiText.removeReadingSuccess);
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
         }
     }
 
     async renameList(item) {
-        const response = await this.$root.stdDialog.prompt('Р’РІРµРґРёС‚Рµ РЅРѕРІРѕРµ РЅР°Р·РІР°РЅРёРµ СЃРїРёСЃРєР°:', 'РџРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ СЃРїРёСЃРѕРє', {
+        const response = await this.$root.stdDialog.prompt(this.uiText.renameListPrompt, this.uiText.renameListTitle, {
             inputValue: item.name,
-            inputValidator: (value) => (String(value || '').trim() ? true : 'РќР°Р·РІР°РЅРёРµ РЅРµ РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ РїСѓСЃС‚С‹Рј'),
+            inputValidator: (value) => (String(value || '').trim() ? true : this.uiText.nameRequired),
         });
         if (!response || response === false)
             return;
@@ -477,16 +495,16 @@ class UserProfilesDialog {
         try {
             await this.api.renameReadingList(item.id, response.value);
             await this.loadCurrentReadingLists();
-            this.$root.notify.success('РЎРїРёСЃРѕРє РїРµСЂРµРёРјРµРЅРѕРІР°РЅ');
+            this.$root.notify.success(this.uiText.renameListSuccess);
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
         }
     }
 
     async deleteListEntry(item) {
         const confirmed = await this.$root.stdDialog.confirm(
-            `РЈРґР°Р»РёС‚СЊ СЃРїРёСЃРѕРє В«${item.name || ''}В»?`,
-            'РЈРґР°Р»РµРЅРёРµ СЃРїРёСЃРєР°',
+            this.uiText.deleteListConfirm.replace('{name}', String(item.name || '')),
+            this.uiText.deleteListTitle,
         );
         if (!confirmed)
             return;
@@ -494,9 +512,9 @@ class UserProfilesDialog {
         try {
             await this.api.deleteReadingList(item.id);
             await this.loadCurrentReadingLists();
-            this.$root.notify.success('РЎРїРёСЃРѕРє СѓРґР°Р»С‘РЅ');
+            this.$root.notify.success(this.uiText.deleteListSuccess);
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
         }
     }
 
@@ -512,7 +530,7 @@ class UserProfilesDialog {
             this.newProfile = this.makeEmptyNew();
             await this.loadProfiles();
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
         }
     }
 
@@ -521,16 +539,16 @@ class UserProfilesDialog {
             await this.api.updateUserProfile(this.currentUserId, this.editableProfile);
             this.editableProfile.password = '';
             await this.loadProfiles();
-            this.$root.notify.success('РџСЂРѕС„РёР»СЊ СЃРѕС…СЂР°РЅС‘РЅ');
+            this.$root.notify.success(this.uiText.profileSaved);
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
         }
     }
 
     async deleteProfile(item) {
         const confirmed = await this.$root.stdDialog.confirm(
-            `РЈРґР°Р»РёС‚СЊ РїСЂРѕС„РёР»СЊ В«${item.name || ''}В» РІРјРµСЃС‚Рµ СЃРѕ РІСЃРµРјРё РµРіРѕ СЃРїРёСЃРєР°РјРё?`,
-            'РЈРґР°Р»РµРЅРёРµ РїСЂРѕС„РёР»СЏ',
+            this.uiText.deleteProfileConfirm.replace('{name}', String(item.name || '')),
+            this.uiText.deleteProfileTitle,
         );
         if (!confirmed)
             return;
@@ -545,16 +563,16 @@ class UserProfilesDialog {
             }
             await this.loadProfiles();
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
         }
     }
 
     async resetPassword(item) {
         const prompt = await this.$root.stdDialog.password(
-            `Р’РІРµРґРёС‚Рµ РЅРѕРІС‹Р№ РїР°СЂРѕР»СЊ РґР»СЏ РїСЂРѕС„РёР»СЏ В«${item.name || ''}В»:`,
-            'РЎР±СЂРѕСЃ РїР°СЂРѕР»СЏ',
+            this.uiText.resetPasswordPrompt.replace('{name}', String(item.name || '')),
+            this.uiText.resetPasswordTitle,
             {
-                inputValidator: (value) => (String(value || '') ? true : 'РџР°СЂРѕР»СЊ РЅРµ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РїСѓСЃС‚С‹Рј'),
+                inputValidator: (value) => (String(value || '') ? true : this.uiText.passwordRequired),
             },
         );
         if (!prompt || prompt === false)
@@ -564,9 +582,9 @@ class UserProfilesDialog {
             await this.api.updateUserProfile(item.id, {
                 password: String(prompt.value || ''),
             });
-            this.$root.notify.success(`РџР°СЂРѕР»СЊ РїСЂРѕС„РёР»СЏ В«${item.name || ''}В» РѕР±РЅРѕРІР»С‘РЅ`);
+            this.$root.notify.success(this.uiText.resetPasswordSuccess.replace('{name}', String(item.name || '')));
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
         }
     }
 
