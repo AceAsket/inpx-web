@@ -1427,6 +1427,18 @@ class Reader {
         return Math.max(0, measureHost.clientHeight - padTop - padBottom);
     }
 
+    measureContentInnerHeight(contentNode) {
+        if (!contentNode || typeof window === 'undefined' || !window.getComputedStyle)
+            return 0;
+
+        const nodes = [contentNode].concat(Array.from(contentNode.querySelectorAll('*')));
+        return nodes.reduce((acc, node) => {
+            const style = window.getComputedStyle(node);
+            const marginBottom = parseFloat(style.marginBottom || '0') || 0;
+            return Math.max(acc, (node.offsetTop || 0) + (node.offsetHeight || 0) + marginBottom);
+        }, 0);
+    }
+
     doesPagedMeasureOverflow(measureHost, measureHtml = null) {
         if (!measureHost)
             return false;
@@ -1439,6 +1451,7 @@ class Reader {
         const measuredHeight = Math.max(
             contentNode.scrollHeight || 0,
             contentNode.offsetHeight || 0,
+            this.measureContentInnerHeight(contentNode),
         );
 
         return measuredHeight > Math.max(0, availableHeight - 4);
