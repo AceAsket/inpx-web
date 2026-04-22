@@ -1477,7 +1477,13 @@ class Reader {
         const style = window.getComputedStyle(measureHost);
         const padTop = parseFloat(style.paddingTop || '0') || 0;
         const padBottom = parseFloat(style.paddingBottom || '0') || 0;
-        return Math.max(0, measureHost.clientHeight - padTop - padBottom);
+        return Math.max(0, measureHost.clientHeight - padTop - padBottom - this.pagedContentSafetyInset);
+    }
+
+    get pagedContentSafetyInset() {
+        if (this.isCompactLayout)
+            return 22;
+        return 8;
     }
 
     measureContentInnerHeight(contentNode) {
