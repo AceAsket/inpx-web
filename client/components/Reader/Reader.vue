@@ -1417,11 +1417,31 @@ class Reader {
         );
     }
 
-    doesPagedMeasureOverflow(measureHost) {
+    getPagedMeasureAvailableHeight(measureHost) {
+        if (!measureHost || typeof window === 'undefined' || !window.getComputedStyle)
+            return 0;
+
+        const style = window.getComputedStyle(measureHost);
+        const padTop = parseFloat(style.paddingTop || '0') || 0;
+        const padBottom = parseFloat(style.paddingBottom || '0') || 0;
+        return Math.max(0, measureHost.clientHeight - padTop - padBottom);
+    }
+
+    doesPagedMeasureOverflow(measureHost, measureHtml = null) {
         if (!measureHost)
             return false;
 
-        return measureHost.scrollHeight > measureHost.clientHeight + 2;
+        const availableHeight = this.getPagedMeasureAvailableHeight(measureHost);
+        if (!availableHeight)
+            return false;
+
+        const contentNode = (measureHtml || measureHost.querySelector('.reader-html') || measureHost);
+        const measuredHeight = Math.max(
+            contentNode.scrollHeight || 0,
+            contentNode.offsetHeight || 0,
+        );
+
+        return measuredHeight > Math.max(0, availableHeight - 4);
     }
 
     getPageOffsetByIndex(index = 0) {
@@ -1724,7 +1744,7 @@ class Reader {
 
             const candidateUnits = currentUnits.concat(unit.html);
             applyUnits(candidateUnits);
-            if (this.doesPagedMeasureOverflow(measureHost) && !currentUnits.length) {
+            if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && !currentUnits.length) {
                 const splitUnits = this.splitOversizedUnit(unit);
                 if (splitUnits.length) {
                     queue.splice(index, 1, ...splitUnits);
@@ -1734,12 +1754,12 @@ class Reader {
                 }
             }
 
-            if (this.doesPagedMeasureOverflow(measureHost) && currentUnits.length) {
+            if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && currentUnits.length) {
                 finalizePage();
                 currentPageSectionId = unit.sectionId || activeSectionId || '';
                 currentUnits = [unit.html];
                 applyUnits(currentUnits);
-                if (this.doesPagedMeasureOverflow(measureHost)) {
+                if (this.doesPagedMeasureOverflow(measureHost, measureHtml)) {
                     const splitUnits = this.splitOversizedUnit(unit);
                     if (splitUnits.length) {
                         currentUnits = [];
