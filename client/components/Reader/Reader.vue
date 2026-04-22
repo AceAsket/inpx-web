@@ -2639,6 +2639,7 @@ export default vueComponent(Reader);
 }
 
 .reader-scroll--paged {
+    overflow: clip;
     overflow: hidden;
     scroll-behavior: smooth;
     overscroll-behavior: contain;
@@ -2668,6 +2669,7 @@ export default vueComponent(Reader);
     min-height: 100%;
     box-sizing: border-box;
     overflow: hidden;
+    padding-bottom: 0;
 }
 
 .reader-shell--paged-horizontal {
@@ -2711,6 +2713,7 @@ export default vueComponent(Reader);
     max-width: none;
     min-height: auto;
     height: 100%;
+    max-height: var(--reader-page-min-height);
     padding: 0;
     border: 0;
     background: transparent;
@@ -2732,6 +2735,7 @@ export default vueComponent(Reader);
     width: 100%;
     min-height: var(--reader-page-min-height);
     height: var(--reader-page-min-height);
+    max-height: var(--reader-page-min-height);
     overflow: hidden;
 }
 
@@ -2744,6 +2748,7 @@ export default vueComponent(Reader);
     max-width: var(--reader-page-frame-width);
     min-height: var(--reader-page-min-height);
     height: var(--reader-page-min-height);
+    max-height: var(--reader-page-min-height);
     overflow: hidden;
 }
 
