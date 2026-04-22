@@ -10,20 +10,35 @@
 
         <div class="dialog-box">
             <template v-if="canManageProfiles">
-                <div class="section-title">
-                    {{ uiText.createProfile }}
+                <div class="section-title section-title--actions">
+                    <span>{{ uiText.createProfile }}</span>
+                    <q-btn
+                        flat
+                        dense
+                        no-caps
+                        color="primary"
+                        icon="la la-user-plus"
+                        @click="showCreateProfileForm = !showCreateProfileForm"
+                    >
+                        {{ showCreateProfileForm ? uiText.hideCreateForm : uiText.showCreateForm }}
+                    </q-btn>
                 </div>
 
-                <div class="profile-grid create-grid">
+                <div v-if="showCreateProfileForm" class="profile-grid create-grid">
                     <q-input v-model="newProfile.name" outlined dense clearable :label="uiText.profileName" />
                     <q-input v-model="newProfile.login" outlined dense clearable :label="uiText.login" />
                     <q-input v-model="newProfile.password" outlined dense clearable type="password" :label="uiText.password" />
                     <q-input v-model="newProfile.emailTo" outlined dense clearable :label="uiText.emailTo" />
                     <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Telegram chat id" />
                     <q-toggle class="profile-toggle" v-model="newProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
-                    <q-btn class="profile-submit" color="primary" dense no-caps @click="createProfile">
-                        {{ uiText.create }}
-                    </q-btn>
+                    <div class="profile-submit-row">
+                        <q-btn flat dense no-caps @click="showCreateProfileForm = false">
+                            {{ uiText.cancel }}
+                        </q-btn>
+                        <q-btn class="profile-submit" color="primary" dense no-caps @click="createProfile">
+                            {{ uiText.create }}
+                        </q-btn>
+                    </div>
                 </div>
             </template>
 
@@ -290,6 +305,7 @@ class UserProfilesDialog {
     currentProfileTab = 'reading';
     currentReadingLists = [];
     readingListsDialogVisible = false;
+    showCreateProfileForm = false;
     editableProfile = this.makeEmptyEditable();
     newProfile = this.makeEmptyNew();
 
@@ -327,6 +343,8 @@ class UserProfilesDialog {
         return {
             dialogTitle: '\u041f\u0440\u043e\u0444\u0438\u043b\u0438 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u0439',
             createProfile: '\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044c',
+            showCreateForm: '\u041d\u043e\u0432\u044b\u0439 \u043f\u0440\u043e\u0444\u0438\u043b\u044c',
+            hideCreateForm: '\u0421\u043a\u0440\u044b\u0442\u044c \u0444\u043e\u0440\u043c\u0443',
             profileName: '\u0418\u043c\u044f \u043f\u0440\u043e\u0444\u0438\u043b\u044f',
             name: '\u0418\u043c\u044f',
             login: '\u041b\u043e\u0433\u0438\u043d',
@@ -375,6 +393,7 @@ class UserProfilesDialog {
             resetPasswordTitle: '\u0421\u0431\u0440\u043e\u0441 \u043f\u0430\u0440\u043e\u043b\u044f',
             passwordRequired: '\u041f\u0430\u0440\u043e\u043b\u044c \u043d\u0435 \u0434\u043e\u043b\u0436\u0435\u043d \u0431\u044b\u0442\u044c \u043f\u0443\u0441\u0442\u044b\u043c',
             resetPasswordSuccess: '\u041f\u0430\u0440\u043e\u043b\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u00ab{name}\u00bb \u043e\u0431\u043d\u043e\u0432\u043b\u0451\u043d',
+            cancel: '\u041e\u0442\u043c\u0435\u043d\u0430',
             close: '\u0417\u0430\u043a\u0440\u044b\u0442\u044c',
         };
     }
@@ -528,6 +547,7 @@ class UserProfilesDialog {
         try {
             await this.api.createUserProfile(this.newProfile);
             this.newProfile = this.makeEmptyNew();
+            this.showCreateProfileForm = false;
             await this.loadProfiles();
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
@@ -677,6 +697,13 @@ export default vueComponent(UserProfilesDialog);
     font-weight: 700;
 }
 
+.section-title--actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
 .create-grid,
 .profile-grid {
     display: grid;
@@ -690,6 +717,13 @@ export default vueComponent(UserProfilesDialog);
 .profile-grid :deep(.q-toggle),
 .profile-submit {
     grid-column: span 2;
+}
+
+.profile-submit-row {
+    grid-column: span 2;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
 }
 
 .profile-edit-grid {
