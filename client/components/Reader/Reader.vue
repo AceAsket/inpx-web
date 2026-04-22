@@ -253,7 +253,7 @@
                     <template v-else>
                         <div class="reader-pages">
                             <div class="reader-page-stage">
-                                <transition :name="pagedTransitionName" mode="out-in">
+                                <transition :name="pagedTransitionName">
                                     <article
                                         v-if="activePagedPage"
                                         :key="`page-${currentPageIndex}-${activePagedPage.sectionId || 'page'}`"
@@ -1004,7 +1004,7 @@ class Reader {
 
     get readerBodyStyle() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
-        const pagePaddingX = (this.isCompactLayout ? 28 : 64);
+        const pagePaddingX = (this.isCompactLayout ? 20 : 64);
         const pageColumnWidth = Math.max(180, this.pageFrameWidth - pagePaddingX - 2);
         return {
             '--reader-font-size': `${this.activePreferences.fontSize}px`,
@@ -1014,7 +1014,7 @@ class Reader {
             '--reader-page-gap': `${this.pageGap}px`,
             '--reader-page-frame-width': `${this.pageFrameWidth}px`,
             '--reader-page-column-width': `${pageColumnWidth}px`,
-            '--reader-page-padding': (this.isCompactLayout ? '14px 14px 20px' : '28px 32px 34px'),
+            '--reader-page-padding': (this.isCompactLayout ? '10px 10px 12px' : '28px 32px 34px'),
         };
     }
 
@@ -1030,7 +1030,7 @@ class Reader {
 
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
-        const chromeOffset = (this.isCompactLayout ? 122 : 72);
+        const chromeOffset = (this.isCompactLayout ? 102 : 72);
         return Math.max(360, scrollerHeight - chromeOffset);
     }
 
@@ -2678,32 +2678,41 @@ export default vueComponent(Reader);
 .reader-page-slide-y-forward-leave-active,
 .reader-page-slide-y-back-enter-active,
 .reader-page-slide-y-back-leave-active {
-    transition: opacity 0.22s ease, transform 0.22s cubic-bezier(.22, .8, .3, 1);
+    position: absolute;
+    inset: 0;
+    transition: opacity 0.18s ease, transform 0.18s cubic-bezier(.2, .75, .3, 1);
     will-change: opacity, transform;
 }
 
 .reader-page-slide-x-forward-enter-from,
-.reader-page-slide-x-back-enter-from,
 .reader-page-slide-y-forward-enter-from,
-.reader-page-slide-y-back-enter-from {
-    opacity: 0;
-    transform: scale(0.996);
-}
-
-.reader-page-slide-x-forward-leave-active,
-.reader-page-slide-x-back-leave-active,
-.reader-page-slide-y-forward-leave-active,
-.reader-page-slide-y-back-leave-active {
-    position: absolute;
-    inset: 0;
-}
-
+.reader-page-slide-x-back-enter-from,
+.reader-page-slide-y-back-enter-from,
 .reader-page-slide-x-forward-leave-to,
-.reader-page-slide-x-back-leave-to,
 .reader-page-slide-y-forward-leave-to,
+.reader-page-slide-x-back-leave-to,
 .reader-page-slide-y-back-leave-to {
     opacity: 0;
-    transform: scale(1.004);
+}
+
+.reader-page-slide-x-forward-enter-from,
+.reader-page-slide-x-back-leave-to {
+    transform: translateX(14px);
+}
+
+.reader-page-slide-x-back-enter-from,
+.reader-page-slide-x-forward-leave-to {
+    transform: translateX(-14px);
+}
+
+.reader-page-slide-y-forward-enter-from,
+.reader-page-slide-y-back-leave-to {
+    transform: translateY(14px);
+}
+
+.reader-page-slide-y-back-enter-from,
+.reader-page-slide-y-forward-leave-to {
+    transform: translateY(-14px);
 }
 
 .reader-body--paged .reader-section,
@@ -2903,8 +2912,8 @@ export default vueComponent(Reader);
 .reader-mobile-footer {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+    gap: 6px;
+    padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--reader-border);
     background: color-mix(in srgb, var(--reader-surface) 96%, transparent);
 }
@@ -2922,7 +2931,7 @@ export default vueComponent(Reader);
 
 .reader-mobile-btn {
     flex: 1 1 0;
-    min-height: 42px;
+    min-height: 38px;
     border: 1px solid var(--reader-border);
     border-radius: 14px;
     background: var(--reader-surface-2);
@@ -2938,7 +2947,7 @@ export default vueComponent(Reader);
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    padding: 6px 10px;
+    padding: 5px 10px;
     border: 1px solid var(--reader-border);
     border-radius: 999px;
     background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
@@ -3339,7 +3348,7 @@ export default vueComponent(Reader);
     }
 
     .reader-shell {
-        padding: 10px 8px 18px;
+        padding: 6px 6px 10px;
     }
 
     .reader-body--paged {
@@ -3356,7 +3365,7 @@ export default vueComponent(Reader);
     .reader-page-sheet--horizontal {
         width: 100%;
         max-width: 100%;
-        border-radius: 20px;
+        border-radius: 16px;
     }
 
     .reader-shell--paged-horizontal {
@@ -3378,9 +3387,9 @@ export default vueComponent(Reader);
     }
 
     .reader-mobile-btn {
-        min-height: 40px;
+        min-height: 36px;
         font-size: 11px;
-        border-radius: 14px;
+        border-radius: 12px;
     }
 
     .reader-html :deep(p),
