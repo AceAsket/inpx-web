@@ -2664,6 +2664,12 @@ export default vueComponent(Reader);
     padding: 28px 18px 72px;
 }
 
+.reader-shell--paged {
+    min-height: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
 .reader-shell--paged-horizontal {
     display: flex;
     justify-content: flex-start;
@@ -2704,10 +2710,12 @@ export default vueComponent(Reader);
     width: 100%;
     max-width: none;
     min-height: auto;
+    height: 100%;
     padding: 0;
     border: 0;
     background: transparent;
     box-shadow: none;
+    overflow: hidden;
 }
 
 .reader-body--paged .reader-html {
@@ -2723,6 +2731,8 @@ export default vueComponent(Reader);
     justify-content: flex-start;
     width: 100%;
     min-height: var(--reader-page-min-height);
+    height: var(--reader-page-min-height);
+    overflow: hidden;
 }
 
 .reader-page-stage {
@@ -2734,6 +2744,7 @@ export default vueComponent(Reader);
     max-width: var(--reader-page-frame-width);
     min-height: var(--reader-page-min-height);
     height: var(--reader-page-min-height);
+    overflow: hidden;
 }
 
 .reader-pages--horizontal {
