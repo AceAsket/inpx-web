@@ -293,7 +293,11 @@
             <div class="reader-html"></div>
         </div>
 
-        <div v-if="isCompactLayout && (showCompactStatusBar || !compactChromeHidden)" class="reader-mobile-footer">
+        <div
+            v-if="isCompactLayout && (showCompactStatusBar || !compactChromeHidden)"
+            ref="readerMobileFooter"
+            class="reader-mobile-footer"
+        >
             <div v-if="showCompactStatusBar" class="reader-status-bar">
                 <span>{{ compactStatusBarText }}</span>
             </div>
@@ -1102,15 +1106,31 @@ class Reader {
         ));
     }
 
+    get readerMobileFooterHeight() {
+        if (!this.isCompactLayout)
+            return 0;
+
+        const footer = (this.$refs ? this.$refs.readerMobileFooter : null);
+        if (!footer)
+            return 0;
+
+        const rect = (typeof footer.getBoundingClientRect === 'function')
+            ? footer.getBoundingClientRect()
+            : null;
+
+        return Math.max(0, Math.round((rect && rect.height) || footer.offsetHeight || 0));
+    }
+
     get readerBodyStyle() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         const pagePaddingX = (this.isCompactLayout ? 20 : 64);
         const pageColumnWidth = Math.max(180, this.pageFrameWidth - pagePaddingX - 2);
+        const minPageHeight = (this.isCompactLayout ? 220 : 360);
         return {
             '--reader-font-size': `${this.activePreferences.fontSize}px`,
             '--reader-line-height': String(this.activePreferences.lineHeight),
             '--reader-content-width': `${this.activePreferences.contentWidth}px`,
-            '--reader-page-min-height': `${Math.max(360, this.pageMinHeight || (scrollerHeight - 56))}px`,
+            '--reader-page-min-height': `${Math.max(minPageHeight, this.pageMinHeight || (scrollerHeight - 56))}px`,
             '--reader-page-gap': `${this.pageGap}px`,
             '--reader-page-frame-width': `${this.pageFrameWidth}px`,
             '--reader-page-column-width': `${pageColumnWidth}px`,
@@ -1137,7 +1157,8 @@ class Reader {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         if (this.isCompactLayout) {
             const visibleScrollerHeight = this.compactVisibleScrollerHeight || scrollerHeight;
-            return Math.max(300, visibleScrollerHeight - this.readerShellVerticalPadding - 8);
+            const footerHeight = this.readerMobileFooterHeight || 0;
+            return Math.max(220, visibleScrollerHeight - this.readerShellVerticalPadding - footerHeight - 6);
         }
         const chromeOffset = 72;
         return Math.max(360, scrollerHeight - chromeOffset);
