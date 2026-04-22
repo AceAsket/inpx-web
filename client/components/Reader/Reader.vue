@@ -1030,7 +1030,7 @@ class Reader {
 
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
-        const chromeOffset = (this.isCompactLayout ? 102 : 72);
+        const chromeOffset = (this.isCompactLayout ? 84 : 72);
         return Math.max(360, scrollerHeight - chromeOffset);
     }
 
@@ -2912,8 +2912,8 @@ export default vueComponent(Reader);
 .reader-mobile-footer {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
+    gap: 4px;
+    padding: 4px 8px calc(6px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--reader-border);
     background: color-mix(in srgb, var(--reader-surface) 96%, transparent);
 }
@@ -2947,7 +2947,7 @@ export default vueComponent(Reader);
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    padding: 5px 10px;
+    padding: 4px 10px;
     border: 1px solid var(--reader-border);
     border-radius: 999px;
     background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
@@ -3348,7 +3348,7 @@ export default vueComponent(Reader);
     }
 
     .reader-shell {
-        padding: 6px 6px 10px;
+        padding: 4px 4px 4px;
     }
 
     .reader-body--paged {
@@ -3358,7 +3358,7 @@ export default vueComponent(Reader);
     }
 
     .reader-pages {
-        min-height: calc(var(--reader-page-min-height) + 2px);
+        min-height: var(--reader-page-min-height);
     }
 
     .reader-page-sheet,
