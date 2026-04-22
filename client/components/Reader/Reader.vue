@@ -206,6 +206,7 @@
             @touchcancel="handleReaderTouchCancel"
         >
             <div
+                ref="readerShell"
                 class="reader-shell"
                 :class="{
                     'reader-shell--paged': activePreferences.readMode === 'paged',
@@ -1060,6 +1061,17 @@ class Reader {
         return 0.992;
     }
 
+    get readerShellVerticalPadding() {
+        const shell = (this.$refs ? this.$refs.readerShell : null);
+        if (!shell || typeof window === 'undefined' || !window.getComputedStyle)
+            return 0;
+
+        const style = window.getComputedStyle(shell);
+        const padTop = parseFloat(style.paddingTop || '0') || 0;
+        const padBottom = parseFloat(style.paddingBottom || '0') || 0;
+        return padTop + padBottom;
+    }
+
     get readerBodyStyle() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         const pagePaddingX = (this.isCompactLayout ? 20 : 64);
@@ -1094,7 +1106,7 @@ class Reader {
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         if (this.isCompactLayout)
-            return Math.max(320, scrollerHeight - 8);
+            return Math.max(320, scrollerHeight - this.readerShellVerticalPadding);
         const chromeOffset = 72;
         return Math.max(360, scrollerHeight - chromeOffset);
     }
