@@ -705,6 +705,9 @@ class Reader {
         this.handleWindowResize = () => {
             this.updateScrollerViewport();
         };
+        this.handleVisualViewportResize = () => {
+            this.updateScrollerViewport();
+        };
 
         this.saveProgressDebounced = _.debounce(() => {
             this.persistProgress();// no await
@@ -719,6 +722,10 @@ class Reader {
         window.addEventListener('beforeunload', this.handleBeforeUnload);
         document.addEventListener('fullscreenchange', this.handleFullscreenChange);
         window.addEventListener('resize', this.handleWindowResize);
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', this.handleVisualViewportResize);
+            window.visualViewport.addEventListener('scroll', this.handleVisualViewportResize);
+        }
         this.handleFullscreenChange();
         this.$nextTick(() => {
             this.attachScrollerObserver();
@@ -738,6 +745,10 @@ class Reader {
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
         document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
         window.removeEventListener('resize', this.handleWindowResize);
+        if (window.visualViewport) {
+            window.visualViewport.removeEventListener('resize', this.handleVisualViewportResize);
+            window.visualViewport.removeEventListener('scroll', this.handleVisualViewportResize);
+        }
         this.detachScrollerObserver();
         this.clearSnapTimer();
         clearTimeout(this.pageTurnTimer);
@@ -1072,6 +1083,25 @@ class Reader {
         return padTop + padBottom;
     }
 
+    get compactVisibleScrollerHeight() {
+        if (!this.isCompactLayout || typeof window === 'undefined')
+            return 0;
+
+        const scroller = (this.$refs ? this.$refs.scroller : null);
+        if (!scroller || !window.visualViewport)
+            return 0;
+
+        const rect = scroller.getBoundingClientRect();
+        const viewportHeight = Number(window.visualViewport.height || 0) || 0;
+        if (!viewportHeight)
+            return 0;
+
+        return Math.max(0, Math.min(
+            rect.height || 0,
+            viewportHeight - Math.max(0, rect.top || 0),
+        ));
+    }
+
     get readerBodyStyle() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         const pagePaddingX = (this.isCompactLayout ? 20 : 64);
@@ -1105,8 +1135,10 @@ class Reader {
 
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
-        if (this.isCompactLayout)
-            return Math.max(320, scrollerHeight - this.readerShellVerticalPadding);
+        if (this.isCompactLayout) {
+            const visibleScrollerHeight = this.compactVisibleScrollerHeight || scrollerHeight;
+            return Math.max(300, visibleScrollerHeight - this.readerShellVerticalPadding - 8);
+        }
         const chromeOffset = 72;
         return Math.max(360, scrollerHeight - chromeOffset);
     }
