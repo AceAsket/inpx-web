@@ -159,6 +159,18 @@
                     <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedDirection === 'horizontal'}" @click="setPagedDirection('horizontal')">{{ uiText.directionHorizontal }}</q-btn>
                 </div>
 
+                <div v-if="activePreferences.readMode === 'paged'" class="reader-theme-switch">
+                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimation === 'none'}" @click="setPageAnimation('none')">{{ uiText.animationNone }}</q-btn>
+                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimation === 'soft'}" @click="setPageAnimation('soft')">{{ uiText.animationSoft }}</q-btn>
+                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimation === 'slide'}" @click="setPageAnimation('slide')">{{ uiText.animationSlide }}</q-btn>
+                </div>
+
+                <div v-if="activePreferences.readMode === 'paged'" class="reader-theme-switch">
+                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimationSpeed === 'fast'}" @click="setPageAnimationSpeed('fast')">{{ uiText.speedFast }}</q-btn>
+                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimationSpeed === 'normal'}" @click="setPageAnimationSpeed('normal')">{{ uiText.speedNormal }}</q-btn>
+                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimationSpeed === 'slow'}" @click="setPageAnimationSpeed('slow')">{{ uiText.speedSlow }}</q-btn>
+                </div>
+
                 <div v-if="isCompactLayout" class="reader-theme-switch">
                     <q-btn flat dense no-caps :class="{'is-active': activePreferences.showStatusBar}" @click="setStatusBarVisible(true)">{{ uiText.statusBarOn }}</q-btn>
                     <q-btn flat dense no-caps :class="{'is-active': !activePreferences.showStatusBar}" @click="setStatusBarVisible(false)">{{ uiText.statusBarOff }}</q-btn>
@@ -647,6 +659,8 @@ class Reader {
         readMode: 'scroll',
         pagedNavigation: 'tap',
         pagedDirection: 'vertical',
+        pageAnimation: 'soft',
+        pageAnimationSpeed: 'normal',
         showStatusBar: true,
         fontSize: 18,
         lineHeight: 1.7,
@@ -655,6 +669,8 @@ class Reader {
             readMode: 'paged',
             pagedNavigation: 'tap',
             pagedDirection: 'vertical',
+            pageAnimation: 'none',
+            pageAnimationSpeed: 'fast',
             showStatusBar: true,
             fontSize: 19,
             lineHeight: 1.8,
@@ -889,6 +905,12 @@ class Reader {
             navWheel: '\u041a\u043e\u043b\u0435\u0441\u043e',
             directionVertical: '\u0412\u0435\u0440\u0442\u0438\u043a\u0430\u043b\u044c\u043d\u043e',
             directionHorizontal: '\u0413\u043e\u0440\u0438\u0437\u043e\u043d\u0442\u0430\u043b\u044c\u043d\u043e',
+            animationNone: '\u0411\u0435\u0437 \u0430\u043d\u0438\u043c\u0430\u0446\u0438\u0438',
+            animationSoft: '\u041c\u044f\u0433\u043a\u043e',
+            animationSlide: '\u0421\u043b\u0430\u0439\u0434',
+            speedFast: '\u0411\u044b\u0441\u0442\u0440\u043e',
+            speedNormal: '\u041d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u043e',
+            speedSlow: '\u041c\u0435\u0434\u043b\u0435\u043d\u043d\u043e',
             statusBarOn: '\u0421\u0442\u0430\u0442\u0443\u0441 \u0432\u043d\u0438\u0437\u0443',
             statusBarOff: '\u0411\u0435\u0437 \u0441\u0442\u0430\u0442\u0443\u0441\u0430',
             einkContrast: '\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442',
@@ -1002,6 +1024,28 @@ class Reader {
         return Math.min(this.totalPages, Math.max(1, Math.floor(scroller.scrollTop / scroller.clientHeight) + 1));
     }
 
+    get pageAnimationDurationMs() {
+        const speed = String(this.activePreferences.pageAnimationSpeed || 'normal');
+        if (speed === 'fast')
+            return 120;
+        if (speed === 'slow')
+            return 280;
+        return 180;
+    }
+
+    get pageAnimationShiftPx() {
+        const animation = String(this.activePreferences.pageAnimation || 'soft');
+        if (animation === 'none')
+            return 0;
+        if (animation === 'slide')
+            return 22;
+        return 10;
+    }
+
+    get pageAnimationOpacityStart() {
+        return (String(this.activePreferences.pageAnimation || 'soft') === 'none') ? 1 : 0;
+    }
+
     get readerBodyStyle() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         const pagePaddingX = (this.isCompactLayout ? 20 : 64);
@@ -1015,6 +1059,10 @@ class Reader {
             '--reader-page-frame-width': `${this.pageFrameWidth}px`,
             '--reader-page-column-width': `${pageColumnWidth}px`,
             '--reader-page-padding': (this.isCompactLayout ? '10px 10px 12px' : '28px 32px 34px'),
+            '--reader-page-transition-duration': `${this.pageAnimationDurationMs}ms`,
+            '--reader-page-shift-x': `${this.pageAnimationShiftPx}px`,
+            '--reader-page-shift-y': `${Math.max(0, Math.round(this.pageAnimationShiftPx * 0.72))}px`,
+            '--reader-page-enter-opacity': String(this.pageAnimationOpacityStart),
         };
     }
 
@@ -1166,6 +1214,20 @@ class Reader {
         });
         this.savePreferencesDebounced();
         this.reflowReaderLayout();
+    }
+
+    setPageAnimation(mode = 'soft') {
+        this.updateActivePreferences({
+            pageAnimation: (['none', 'soft', 'slide'].includes(mode) ? mode : 'soft'),
+        });
+        this.savePreferencesDebounced();
+    }
+
+    setPageAnimationSpeed(speed = 'normal') {
+        this.updateActivePreferences({
+            pageAnimationSpeed: (['fast', 'normal', 'slow'].includes(speed) ? speed : 'normal'),
+        });
+        this.savePreferencesDebounced();
     }
 
     setStatusBarVisible(enabled = true) {
@@ -2680,7 +2742,7 @@ export default vueComponent(Reader);
 .reader-page-slide-y-back-leave-active {
     position: absolute;
     inset: 0;
-    transition: opacity 0.18s ease, transform 0.18s cubic-bezier(.2, .75, .3, 1);
+    transition: opacity var(--reader-page-transition-duration, 180ms) ease, transform var(--reader-page-transition-duration, 180ms) cubic-bezier(.2, .75, .3, 1);
     will-change: opacity, transform;
 }
 
@@ -2692,27 +2754,27 @@ export default vueComponent(Reader);
 .reader-page-slide-y-forward-leave-to,
 .reader-page-slide-x-back-leave-to,
 .reader-page-slide-y-back-leave-to {
-    opacity: 0;
+    opacity: var(--reader-page-enter-opacity, 0);
 }
 
 .reader-page-slide-x-forward-enter-from,
 .reader-page-slide-x-back-leave-to {
-    transform: translateX(14px);
+    transform: translateX(var(--reader-page-shift-x, 10px));
 }
 
 .reader-page-slide-x-back-enter-from,
 .reader-page-slide-x-forward-leave-to {
-    transform: translateX(-14px);
+    transform: translateX(calc(var(--reader-page-shift-x, 10px) * -1));
 }
 
 .reader-page-slide-y-forward-enter-from,
 .reader-page-slide-y-back-leave-to {
-    transform: translateY(14px);
+    transform: translateY(var(--reader-page-shift-y, 8px));
 }
 
 .reader-page-slide-y-back-enter-from,
 .reader-page-slide-y-forward-leave-to {
-    transform: translateY(-14px);
+    transform: translateY(calc(var(--reader-page-shift-y, 8px) * -1));
 }
 
 .reader-body--paged .reader-section,
