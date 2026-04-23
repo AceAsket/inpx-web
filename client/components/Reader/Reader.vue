@@ -1474,7 +1474,7 @@ class Reader {
             '--reader-page-gap': `${this.pageGap}px`,
             '--reader-page-frame-width': `${this.pageFrameWidth}px`,
             '--reader-page-column-width': `${pageColumnWidth}px`,
-            '--reader-page-padding': (this.isCompactLayout ? '10px 8px 28px' : '28px 32px 44px'),
+            '--reader-page-padding': (this.isCompactLayout ? '10px 8px 14px' : '28px 32px 44px'),
             '--reader-page-media-max-height': `${Math.max(120, pageHeight - (this.isCompactLayout ? 60 : 128))}px`,
             '--reader-page-transition-duration': `${this.pageAnimationDurationMs}ms`,
             '--reader-page-shift-x': `${this.pageAnimationShiftPx}px`,
@@ -2467,9 +2467,9 @@ class Reader {
     get pagedContentSafetyInset() {
         const fontSize = Math.max(14, Number(this.activePreferences.fontSize || 18) || 18);
         const lineHeight = Math.max(1.2, Number(this.activePreferences.lineHeight || 1.7) || 1.7);
-        const reserveLines = (this.isCompactLayout ? 4.1 : 3.0);
+        const reserveLines = (this.isCompactLayout ? 2.9 : 3.0);
         const reserve = Math.ceil(fontSize * lineHeight * reserveLines);
-        return Math.max((this.isCompactLayout ? 68 : 52), reserve);
+        return Math.max((this.isCompactLayout ? 48 : 52), reserve);
     }
 
     measureElementContentInnerHeight(contentNode) {
@@ -4772,7 +4772,7 @@ export default vueComponent(Reader);
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 12px 8px calc(8px + env(safe-area-inset-bottom));
+    padding: 10px 8px calc(8px + env(safe-area-inset-bottom));
     border-top: 0;
     background: linear-gradient(to top, color-mix(in srgb, var(--reader-bg) 96%, transparent), transparent);
 }
@@ -4806,14 +4806,14 @@ export default vueComponent(Reader);
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    padding: 3px 10px;
-    border: 1px solid var(--reader-border);
+    padding: 4px 10px;
+    border: 1px solid color-mix(in srgb, var(--reader-border) 72%, var(--reader-surface-2));
     border-radius: 999px;
-    background: color-mix(in srgb, var(--reader-surface) 98%, transparent);
+    background: color-mix(in srgb, var(--reader-surface-2) 96%, transparent);
     color: var(--reader-muted);
     font-size: 12px;
     font-weight: 700;
-    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.08);
     backdrop-filter: blur(10px);
 }
 
@@ -5258,7 +5258,7 @@ export default vueComponent(Reader);
     }
 
     .reader-pages {
-        margin-bottom: 14px;
+        margin-bottom: 12px;
     }
 
     .reader-page-sheet,

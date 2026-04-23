@@ -7,5 +7,7 @@ dev*.sh
 /.tmp_flibrary_repo
 /data-local-*/
 /local-test-library/
-/Лукьяненко С.В._Ночной Дозор.fb2
+/tmp/
+/*.fb2
+/Р›СѓРєСЊСЏРЅРµРЅРєРѕ РЎ.Р’._РќРѕС‡РЅРѕР№ Р”РѕР·РѕСЂ.fb2
 /remote-one-page-check.png
