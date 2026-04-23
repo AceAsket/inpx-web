@@ -304,8 +304,12 @@
             </div>
 
             <transition name="reader-reflow-fade">
-                <div v-if="showLayoutRefreshIndicator" class="reader-reflow-indicator">
-                    <div class="reader-reflow-card">
+                <div
+                    v-if="showLayoutRefreshIndicator"
+                    class="reader-reflow-indicator"
+                    :class="{'reader-reflow-indicator--compact': isCompactChromeLayoutRefresh}"
+                >
+                    <div class="reader-reflow-card" :class="{'reader-reflow-card--compact': isCompactChromeLayoutRefresh}">
                         <q-icon class="la la-spinner icon-rotate" size="22px" />
                         <span>{{ uiText.refreshingLayout }}</span>
                     </div>
@@ -857,6 +861,7 @@ class Reader {
     layoutRefreshing = false;
     layoutRefreshTimer = null;
     layoutRefreshStartedAt = 0;
+    layoutRefreshReason = '';
     bottomCalibrationFrame = 0;
     bottomClipCalibrationPending = true;
     dynamicBottomClipCompensationCompact = 0;
@@ -1258,7 +1263,15 @@ class Reader {
     }
 
     get showLayoutRefreshIndicator() {
-        return !!(this.layoutRefreshing && !this.bookPreparing && !this.pagedBuildInProgress);
+        return !!(
+            this.layoutRefreshing
+            && !this.bookPreparing
+            && (!this.pagedBuildInProgress || this.layoutRefreshReason === 'compact-chrome')
+        );
+    }
+
+    get isCompactChromeLayoutRefresh() {
+        return this.layoutRefreshReason === 'compact-chrome';
     }
 
     get activePagedPage() {
@@ -1474,7 +1487,7 @@ class Reader {
             '--reader-page-gap': `${this.pageGap}px`,
             '--reader-page-frame-width': `${this.pageFrameWidth}px`,
             '--reader-page-column-width': `${pageColumnWidth}px`,
-            '--reader-page-padding': (this.isCompactLayout ? '10px 8px 14px' : '28px 32px 44px'),
+            '--reader-page-padding': (this.isCompactLayout ? '10px 8px 12px' : '28px 32px 44px'),
             '--reader-page-media-max-height': `${Math.max(120, pageHeight - (this.isCompactLayout ? 60 : 128))}px`,
             '--reader-page-transition-duration': `${this.pageAnimationDurationMs}ms`,
             '--reader-page-shift-x': `${this.pageAnimationShiftPx}px`,
@@ -1602,7 +1615,7 @@ class Reader {
     }
 
     async toggleCompactChromeVisibility() {
-        this.beginLayoutRefresh();
+        this.beginLayoutRefresh('compact-chrome');
         await this.afterLayoutRefreshPaint();
 
         this.chromeHidden = !this.chromeHidden;
@@ -1840,12 +1853,13 @@ class Reader {
         this.bottomClipCalibrationPending = true;
     }
 
-    beginLayoutRefresh() {
+    beginLayoutRefresh(reason = 'default') {
         if (this.layoutRefreshTimer) {
             clearTimeout(this.layoutRefreshTimer);
             this.layoutRefreshTimer = null;
         }
         this.layoutRefreshStartedAt = Date.now();
+        this.layoutRefreshReason = String(reason || 'default');
         this.layoutRefreshing = true;
     }
 
@@ -1970,6 +1984,7 @@ class Reader {
         this.layoutRefreshTimer = setTimeout(() => {
             this.layoutRefreshTimer = null;
             this.layoutRefreshing = false;
+            this.layoutRefreshReason = '';
             if (this.isPagedMode && this.bottomClipCalibrationPending)
                 this.scheduleBottomClipCalibration();
         }, Math.max(0, waitMs));
@@ -2467,9 +2482,9 @@ class Reader {
     get pagedContentSafetyInset() {
         const fontSize = Math.max(14, Number(this.activePreferences.fontSize || 18) || 18);
         const lineHeight = Math.max(1.2, Number(this.activePreferences.lineHeight || 1.7) || 1.7);
-        const reserveLines = (this.isCompactLayout ? 2.9 : 3.0);
+        const reserveLines = (this.isCompactLayout ? 2.65 : 3.0);
         const reserve = Math.ceil(fontSize * lineHeight * reserveLines);
-        return Math.max((this.isCompactLayout ? 48 : 52), reserve);
+        return Math.max((this.isCompactLayout ? 44 : 52), reserve);
     }
 
     measureElementContentInnerHeight(contentNode) {
@@ -2795,7 +2810,7 @@ class Reader {
         return chunks.filter(Boolean);
     }
 
-    splitOversizedTextElement(root, unit = {}) {
+    splitOversizedTextElement(root, unit = {}, options = {}) {
         if (!root || root.nodeType !== Node.ELEMENT_NODE)
             return [];
 
@@ -2817,6 +2832,8 @@ class Reader {
 
         const measureHost = (this.$refs ? this.$refs.pageMeasure : null);
         const measureHtml = (measureHost ? measureHost.querySelector('.reader-html') : null);
+        const baseHtml = (Array.isArray(options.baseHtml) ? options.baseHtml : []).filter(Boolean);
+        const allowOverflowFallback = (options.allowOverflowFallback !== false);
         const words = sourceText.split(/\s+/).filter(Boolean);
         if (words.length <= 1)
             return [];
@@ -2831,7 +2848,7 @@ class Reader {
         const fits = (end) => {
             const clone = root.cloneNode(false);
             clone.textContent = words.slice(start, end).join(' ');
-            measureHtml.innerHTML = this.wrapPagedMeasureHtml([clone.outerHTML]);
+            measureHtml.innerHTML = this.wrapPagedMeasureHtml(baseHtml.concat(clone.outerHTML));
             return !this.doesPagedMeasureOverflow(measureHost, measureHtml);
         };
 
@@ -2850,8 +2867,11 @@ class Reader {
                 }
             }
 
-            if (best <= start)
+            if (best <= start) {
+                if (!allowOverflowFallback)
+                    break;
                 best = Math.min(words.length, start + 1);
+            }
 
             const chunk = words.slice(start, best).join(' ').trim();
             if (!chunk)
@@ -2863,7 +2883,7 @@ class Reader {
 
         measureHtml.innerHTML = '';
         if (chunks.length <= 1)
-            return this.wrapSplitTextChunks(root, unit, fallbackChunks);
+            return (allowOverflowFallback ? this.wrapSplitTextChunks(root, unit, fallbackChunks) : []);
 
         return this.wrapSplitTextChunks(root, unit, chunks);
     }
@@ -2931,6 +2951,54 @@ class Reader {
         return (childSplit.length ? childSplit : this.splitOversizedTextElement(root, unit));
     }
 
+    splitUnitToFitCurrentPage(unit = {}, currentUnits = []) {
+        const html = String(unit.html || '').trim();
+        if (!html || typeof(document) === 'undefined' || !Array.isArray(currentUnits) || !currentUnits.length)
+            return [];
+
+        const host = document.createElement('div');
+        host.innerHTML = html;
+
+        if (host.childNodes.length !== 1 || !host.firstChild || host.firstChild.nodeType !== Node.ELEMENT_NODE)
+            return [];
+
+        const root = host.firstChild;
+        const childNodes = Array.from(root.childNodes || []).filter((child) => (
+            child.nodeType !== Node.TEXT_NODE || String(child.textContent || '').trim()
+        ));
+
+        if (childNodes.length <= 1) {
+            return this.splitOversizedTextElement(root, unit, {
+                baseHtml: currentUnits,
+                allowOverflowFallback: false,
+            });
+        }
+
+        let first = true;
+        const childSplit = childNodes.map((child) => {
+            let childHtml = '';
+            if (child.nodeType === Node.TEXT_NODE) {
+                childHtml = `<p class="reader-paragraph">${this.escapeHtml(String(child.textContent || '').trim())}</p>`;
+            } else if (child.nodeType === Node.ELEMENT_NODE) {
+                childHtml = child.outerHTML;
+            }
+
+            const childSectionId = (child.nodeType === Node.ELEMENT_NODE
+                ? (child.id || ((child.querySelector && child.querySelector('[id]')) || {}).id || '')
+                : '');
+
+            const result = {
+                html: childHtml,
+                breakBefore: (first ? !!unit.breakBefore : false),
+                sectionId: (childSectionId || (first ? String(unit.sectionId || '').trim() : '')),
+            };
+            first = false;
+            return result;
+        }).filter((item) => String(item.html || '').trim());
+
+        return childSplit;
+    }
+
     buildPagedUnits() {
         const units = [];
         const pushUnit = (html = '', opts = {}) => {
@@ -2970,7 +3038,11 @@ class Reader {
                 return;
 
             const element = node;
-            if (element.classList.contains('reader-section-block')) {
+            if (
+                element.classList.contains('reader-section')
+                || element.classList.contains('reader-section-block')
+                || element.classList.contains('reader-notes')
+            ) {
                 const children = Array.from(element.childNodes).filter((child) => (
                     child.nodeType !== Node.TEXT_NODE || String(child.textContent || '').trim()
                 ));
@@ -2998,7 +3070,11 @@ class Reader {
             }
 
             const sectionId = element.id || ((element.querySelector && element.querySelector('[id]')) || {}).id || '';
-            pushUnit(element.outerHTML, {breakBefore: sectionBreak, sectionId});
+            const breakBefore = (
+                sectionBreak
+                || element.classList.contains('reader-section-heading')
+            );
+            pushUnit(element.outerHTML, {breakBefore, sectionId});
         };
 
         for (const node of Array.from(root.childNodes)) {
@@ -3067,6 +3143,14 @@ class Reader {
             }
 
             if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && currentUnits.length) {
+                const fitCurrentPageSplit = this.splitUnitToFitCurrentPage(unit, currentUnits);
+                if (fitCurrentPageSplit.length) {
+                    queue.splice(index, 1, ...fitCurrentPageSplit);
+                    index -= 1;
+                    applyUnits(currentUnits);
+                    continue;
+                }
+
                 finalizePage();
                 currentPageSectionId = unit.sectionId || activeSectionId || '';
                 currentUnits = [unit.html];
@@ -3174,6 +3258,15 @@ class Reader {
                 }
 
                 if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && currentUnits.length) {
+                    const fitCurrentPageSplit = this.splitUnitToFitCurrentPage(unit, currentUnits);
+                    if (fitCurrentPageSplit.length) {
+                        queue.splice(index, 1, ...fitCurrentPageSplit);
+                        index -= 1;
+                        applyUnits(currentUnits);
+                        await maybeYield(index + 1);
+                        continue;
+                    }
+
                     finalizePage();
                     currentPageSectionId = unit.sectionId || activeSectionId || '';
                     currentUnits = [unit.html];
@@ -4233,6 +4326,12 @@ export default vueComponent(Reader);
     pointer-events: none;
 }
 
+.reader-reflow-indicator--compact {
+    z-index: 20;
+    background: color-mix(in srgb, var(--reader-bg) 18%, transparent);
+    backdrop-filter: blur(2px);
+}
+
 .reader-reflow-indicator--strong {
     z-index: 22;
     background: color-mix(in srgb, var(--reader-bg) 48%, transparent);
@@ -4252,6 +4351,11 @@ export default vueComponent(Reader);
     backdrop-filter: blur(10px);
     font-size: 13px;
     font-weight: 700;
+}
+
+.reader-reflow-card--compact {
+    padding: 12px 16px;
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.18);
 }
 
 .reader-reflow-card--loading {
@@ -5127,6 +5231,35 @@ export default vueComponent(Reader);
 .reader-theme-eink .reader-mobile-bar,
 .reader-theme-eink .reader-status-bar {
     backdrop-filter: none;
+}
+
+.reader-theme-sepia .reader-mobile-footer,
+.reader-theme-light .reader-mobile-footer {
+    background:
+        linear-gradient(
+            to top,
+            color-mix(in srgb, var(--reader-bg) 98%, var(--reader-surface) 2%) 0%,
+            color-mix(in srgb, var(--reader-bg) 92%, transparent) 42%,
+            transparent 100%
+        );
+}
+
+.reader-theme-sepia .reader-status-bar,
+.reader-theme-light .reader-status-bar {
+    border-color: color-mix(in srgb, var(--reader-border) 88%, var(--reader-surface-2));
+    background: color-mix(in srgb, var(--reader-surface) 90%, var(--reader-surface-2) 10%);
+    box-shadow:
+        0 10px 20px rgba(0, 0, 0, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.reader-theme-sepia .reader-mobile-bar,
+.reader-theme-light .reader-mobile-bar {
+    border-color: color-mix(in srgb, var(--reader-border) 90%, var(--reader-surface-2));
+    background: color-mix(in srgb, var(--reader-surface) 96%, transparent);
+    box-shadow:
+        0 14px 28px rgba(0, 0, 0, 0.12),
+        inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 .reader-theme-eink .reader-page-slide-x-forward-enter-active,

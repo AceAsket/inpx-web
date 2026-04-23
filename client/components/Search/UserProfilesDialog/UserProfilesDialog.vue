@@ -213,6 +213,26 @@
                                     <div class="reading-progress-meta">
                                         {{ list.visibility === 'opds' ? 'OPDS' : uiText.private }}
                                     </div>
+                                    <div v-if="list.previewBooks && list.previewBooks.length" class="profile-list-preview">
+                                        <div
+                                            v-for="book in list.previewBooks"
+                                            :key="`${list.id}-${book.bookUid}`"
+                                            class="profile-list-preview-item"
+                                        >
+                                            <div class="profile-list-preview-title">
+                                                {{ book.title || uiText.untitledBook }}
+                                            </div>
+                                            <div v-if="book.author" class="profile-list-preview-meta">
+                                                {{ book.author }}
+                                            </div>
+                                        </div>
+                                        <div v-if="list.hiddenBookCount > 0" class="profile-list-preview-more">
+                                            {{ uiText.moreBooks.replace('{count}', String(list.hiddenBookCount)) }}
+                                        </div>
+                                    </div>
+                                    <div v-else class="reading-progress-meta">
+                                        {{ uiText.listIsEmpty }}
+                                    </div>
                                     <div class="reading-progress-actions">
                                         <q-btn
                                             flat
@@ -375,6 +395,9 @@ class UserProfilesDialog {
             delete: '\u0423\u0434\u0430\u043b\u0438\u0442\u044c',
             private: '\u041b\u0438\u0447\u043d\u044b\u0439',
             noReadingLists: '\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0441\u043f\u0438\u0441\u043a\u043e\u0432 \u0447\u0442\u0435\u043d\u0438\u044f.',
+            listIsEmpty: '\u0412 \u044d\u0442\u043e\u043c \u0441\u043f\u0438\u0441\u043a\u0435 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u043a\u043d\u0438\u0433.',
+            moreBooks: '\u0415\u0449\u0451 {count} \u043a\u043d\u0438\u0433',
+            untitledBook: '\u0411\u0435\u0437 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044f',
             errorTitle: '\u041e\u0448\u0438\u0431\u043a\u0430',
             currentReadingTitle: '\u0422\u0435\u043a\u0443\u0449\u0435\u0435 \u0447\u0442\u0435\u043d\u0438\u0435',
             removeReadingConfirm: '\u0423\u0431\u0440\u0430\u0442\u044c \u043a\u043d\u0438\u0433\u0443 \u00ab{title}\u00bb \u0438\u0437 \u0442\u0435\u043a\u0443\u0449\u0435\u0433\u043e \u0447\u0442\u0435\u043d\u0438\u044f?',
@@ -463,7 +486,30 @@ class UserProfilesDialog {
 
         try {
             const result = await this.api.getReadingLists('');
-            this.currentReadingLists = (result && Array.isArray(result.lists) ? result.lists : []);
+            const lists = (result && Array.isArray(result.lists) ? result.lists : []);
+            const detailedLists = await Promise.all(lists.map(async(list) => {
+                const normalized = Object.assign({}, list, {
+                    previewBooks: [],
+                    hiddenBookCount: 0,
+                });
+
+                try {
+                    const detail = await this.api.getReadingList(list.id);
+                    const books = (detail && Array.isArray(detail.books) ? detail.books : []);
+                    normalized.previewBooks = books.slice(0, 4).map((book) => ({
+                        bookUid: String(book.bookUid || book._uid || '').trim(),
+                        title: String(book.title || '').trim(),
+                        author: String(book.author || '').trim(),
+                    }));
+                    normalized.hiddenBookCount = Math.max(0, books.length - normalized.previewBooks.length);
+                } catch (e) {
+                    normalized.previewBooks = [];
+                    normalized.hiddenBookCount = 0;
+                }
+
+                return normalized;
+            }));
+            this.currentReadingLists = detailedLists;
         } catch (e) {
             this.currentReadingLists = [];
         }
@@ -905,6 +951,37 @@ export default vueComponent(UserProfilesDialog);
     display: flex;
     justify-content: flex-end;
     margin-top: 8px;
+}
+
+.profile-list-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.profile-list-preview-item {
+    padding: 8px 10px;
+    border: 1px solid var(--app-border);
+    border-radius: 10px;
+    background: rgba(15, 159, 143, 0.04);
+}
+
+.profile-list-preview-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--app-text);
+    overflow-wrap: anywhere;
+}
+
+.profile-list-preview-meta,
+.profile-list-preview-more {
+    font-size: 12px;
+    color: var(--app-muted);
+}
+
+.profile-list-preview-more {
+    padding: 0 2px;
 }
 
 .reading-empty {
