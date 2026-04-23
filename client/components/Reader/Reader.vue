@@ -862,6 +862,15 @@ class Reader {
     pagedBuildInProgress = false;
     pagedBuildNeedsRefresh = false;
     pagedBuildJobId = 0;
+    compactChromePagedBuildPending = false;
+    compactChromeAwaitingCalibration = false;
+    compactChromeInitialTotalPages = 0;
+    compactChromeLatestTotalPages = 0;
+    compactChromeBuildSettleTimer = null;
+    compactChromeBuildLastActivityAt = 0;
+    compactChromeStatusHold = false;
+    compactChromeStatusHoldTimer = null;
+    compactChromeStatusHoldUntil = 0;
     boundReaderImages = new WeakSet();
     layoutRefreshing = false;
     layoutRefreshTimer = null;
@@ -977,6 +986,10 @@ class Reader {
         if (this.layoutRefreshTimer) {
             clearTimeout(this.layoutRefreshTimer);
             this.layoutRefreshTimer = null;
+        }
+        if (this.compactChromeStatusHoldTimer) {
+            clearTimeout(this.compactChromeStatusHoldTimer);
+            this.compactChromeStatusHoldTimer = null;
         }
         this.flushProgress();
         if (this.savePreferencesDebounced && this.savePreferencesDebounced.flush)
@@ -1263,14 +1276,19 @@ class Reader {
 
     get compactStatusBarBuildText() {
         const sourceMessage = String(this.loadingMessage || '').trim();
-        const hasMeasuredProgress = this.pagedBuildProgressPercent > 0;
+        const isActivePagedBuild = !!(this.bookPreparing || this.isPagedBuildPending);
+        const hasMeasuredProgress = isActivePagedBuild && this.pagedBuildProgressPercent > 0;
         let pagesMessage = '';
 
-        if (sourceMessage && sourceMessage.startsWith(this.uiText.loadingPages.replace('...', '')))
+        if (
+            isActivePagedBuild
+            && sourceMessage
+            && sourceMessage.startsWith(this.uiText.loadingPages.replace('...', ''))
+        )
             pagesMessage = sourceMessage;
         else if (hasMeasuredProgress)
             pagesMessage = `${this.uiText.loadingPagesCompact.replace('...', '')} ${this.pagedBuildProgressPercent}%`;
-        else if (this.isCompactChromeLayoutRefresh)
+        else if (this.isCompactChromeBuildPending || this.compactChromeStatusHold)
             pagesMessage = this.uiText.refreshingPagesCompact;
         else
             pagesMessage = this.uiText.loadingPagesCompact;
@@ -1286,7 +1304,15 @@ class Reader {
         return !!(
             this.isCompactLayout
             && this.showCompactStatusBar
-            && (this.isPagedBuildPending || this.isCompactChromeLayoutRefresh)
+            && (this.isPagedBuildPending || this.isCompactChromeBuildPending || this.compactChromeStatusHold)
+        );
+    }
+
+    get isCompactChromeBuildPending() {
+        return !!(
+            this.layoutRefreshReason === 'compact-chrome'
+            || this.compactChromePagedBuildPending
+            || this.compactChromeAwaitingCalibration
         );
     }
 
@@ -1648,6 +1674,15 @@ class Reader {
 
     async toggleCompactChromeVisibility() {
         this.beginLayoutRefresh('compact-chrome');
+        if (this.isPagedMode) {
+            this.compactChromePagedBuildPending = true;
+            this.compactChromeAwaitingCalibration = true;
+            this.compactChromeInitialTotalPages = Math.max(1, this.totalPages || 1);
+            this.compactChromeLatestTotalPages = this.compactChromeInitialTotalPages;
+            this.beginCompactChromeStatusHold();
+        }
+        this.touchCompactChromeBuildActivity();
+        this.cancelCompactChromeBuildPendingClear();
         await this.afterLayoutRefreshPaint();
 
         this.chromeHidden = !this.chromeHidden;
@@ -1825,6 +1860,11 @@ class Reader {
         if (calibrate)
             this.requestBottomClipCalibration();
 
+        if (this.compactChromePagedBuildPending && this.isPagedMode)
+            this.cancelCompactChromeBuildPendingClear();
+        if (this.compactChromePagedBuildPending)
+            this.touchCompactChromeBuildActivity();
+
         if (this.viewportRefreshFrame)
             return;
 
@@ -1839,6 +1879,8 @@ class Reader {
         this.scrollerViewportWidth = ((scroller && scroller.clientWidth) || 0);
         this.scrollerViewportHeight = ((scroller && scroller.clientHeight) || 0);
         if (this.isPagedMode) {
+            if (this.compactChromePagedBuildPending)
+                this.touchCompactChromeBuildActivity();
             if (this.pagedBuildInProgress) {
                 this.pagedBuildNeedsRefresh = true;
                 return;
@@ -1856,6 +1898,11 @@ class Reader {
             this.pagedBuildNeedsRefresh = true;
             return;
         }
+
+        if (this.compactChromePagedBuildPending && this.isPagedMode)
+            this.cancelCompactChromeBuildPendingClear();
+        if (this.compactChromePagedBuildPending)
+            this.touchCompactChromeBuildActivity();
 
         if (this.pagedViewportFrame) {
             cancelAnimationFrame(this.pagedViewportFrame);
@@ -1883,6 +1930,90 @@ class Reader {
 
     requestBottomClipCalibration() {
         this.bottomClipCalibrationPending = true;
+    }
+
+    cancelCompactChromeBuildPendingClear() {
+        if (!this.compactChromeBuildSettleTimer)
+            return;
+
+        clearTimeout(this.compactChromeBuildSettleTimer);
+        this.compactChromeBuildSettleTimer = null;
+    }
+
+    clearCompactChromeStatusHold() {
+        if (this.compactChromeStatusHoldTimer) {
+            clearTimeout(this.compactChromeStatusHoldTimer);
+            this.compactChromeStatusHoldTimer = null;
+        }
+        this.compactChromeStatusHold = false;
+        this.compactChromeStatusHoldUntil = 0;
+    }
+
+    beginCompactChromeStatusHold(delayMs = 9000) {
+        const safeDelay = Math.max(1200, Math.round(Number(delayMs || 0) || 0));
+        const nextUntil = Date.now() + safeDelay;
+        this.compactChromeStatusHoldUntil = Math.max(this.compactChromeStatusHoldUntil || 0, nextUntil);
+        this.compactChromeStatusHold = true;
+        if (this.compactChromeStatusHoldTimer)
+            clearTimeout(this.compactChromeStatusHoldTimer);
+        const waitMs = Math.max(1200, this.compactChromeStatusHoldUntil - Date.now());
+        this.compactChromeStatusHoldTimer = setTimeout(() => {
+            this.compactChromeStatusHoldTimer = null;
+            this.compactChromeStatusHold = false;
+            this.compactChromeStatusHoldUntil = 0;
+        }, waitMs);
+    }
+
+    touchCompactChromeBuildActivity() {
+        this.compactChromeBuildLastActivityAt = Date.now();
+        if (this.compactChromeStatusHold)
+            this.beginCompactChromeStatusHold(2600);
+    }
+
+    scheduleCompactChromeBuildPendingClear(delayMs = 420) {
+        this.cancelCompactChromeBuildPendingClear();
+        const quietWindowMs = 900;
+        this.compactChromeBuildSettleTimer = setTimeout(() => {
+            this.compactChromeBuildSettleTimer = null;
+            const elapsedSinceActivity = Math.max(0, Date.now() - (this.compactChromeBuildLastActivityAt || 0));
+            const hasQueuedWork = !!(
+                this.layoutRefreshing
+                || this.viewportRefreshFrame
+                || this.pagedViewportFrame
+                || this.pagedBuildInProgress
+                || this.pagedBuildNeedsRefresh
+                || this.compactChromeAwaitingCalibration
+                || this.bottomClipCalibrationPending
+                || this.bottomCalibrationFrame
+            );
+            if (hasQueuedWork || elapsedSinceActivity < quietWindowMs) {
+                const nextDelay = Math.max(delayMs, quietWindowMs - elapsedSinceActivity, 140);
+                this.scheduleCompactChromeBuildPendingClear(nextDelay);
+                return;
+            }
+            this.compactChromePagedBuildPending = false;
+            this.compactChromeAwaitingCalibration = false;
+            this.compactChromeInitialTotalPages = 0;
+            this.compactChromeLatestTotalPages = 0;
+            this.compactChromeBuildLastActivityAt = 0;
+            this.clearCompactChromeStatusHold();
+        }, Math.max(120, Math.round(Number(delayMs || 0) || 0)));
+    }
+
+    noteCompactChromeTotalPages() {
+        if (!this.compactChromePagedBuildPending || !this.isPagedMode)
+            return;
+
+        const total = Math.max(1, Number(this.totalPages || 1) || 1);
+        if (!this.compactChromeInitialTotalPages)
+            this.compactChromeInitialTotalPages = total;
+        this.compactChromeLatestTotalPages = total;
+
+        if (total !== this.compactChromeInitialTotalPages) {
+            this.compactChromeAwaitingCalibration = false;
+            this.touchCompactChromeBuildActivity();
+            this.scheduleCompactChromeBuildPendingClear(540);
+        }
     }
 
     beginLayoutRefresh(reason = 'default') {
@@ -2045,6 +2176,11 @@ class Reader {
             return;
 
         this.bottomClipCalibrationPending = false;
+        if (this.compactChromePagedBuildPending) {
+            this.compactChromeAwaitingCalibration = true;
+            this.touchCompactChromeBuildActivity();
+            this.beginCompactChromeStatusHold(4200);
+        }
         if (this.bottomCalibrationFrame)
             cancelAnimationFrame(this.bottomCalibrationFrame);
 
@@ -2219,6 +2355,13 @@ class Reader {
             }
 
             this.reflowReaderLayout();
+            return;
+        }
+
+        if (this.compactChromePagedBuildPending) {
+            this.compactChromeAwaitingCalibration = false;
+            this.touchCompactChromeBuildActivity();
+            this.scheduleCompactChromeBuildPendingClear(720);
         }
     }
 
@@ -2373,6 +2516,11 @@ class Reader {
     }
 
     reflowReaderLayout() {
+        if (this.isPagedMode && this.isCompactLayout && this.compactChromeHidden) {
+            this.compactChromePagedBuildPending = true;
+            this.beginCompactChromeStatusHold(5200);
+            this.touchCompactChromeBuildActivity();
+        }
         this.beginLayoutRefresh();
         this.restorePending = true;
         this.clearSnapTimer();
@@ -3207,6 +3355,7 @@ class Reader {
         finalizePage();
         this.pagedPages = (pages.length ? pages : [{html: this.readerHtml || '', sectionId: ''}]);
         this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
+        this.noteCompactChromeTotalPages();
         this.rebuildSearchResults(false);
     }
 
@@ -3263,6 +3412,8 @@ class Reader {
         this.pagedBuildInProgress = true;
         this.pagedBuildNeedsRefresh = false;
         this.pagedBuildProgressPercent = 1;
+        if (this.compactChromePagedBuildPending)
+            this.touchCompactChromeBuildActivity();
 
         try {
             applyUnits([]);
@@ -3328,13 +3479,18 @@ class Reader {
             finalizePage();
             this.pagedPages = (pages.length ? pages : [{html: this.readerHtml || '', sectionId: ''}]);
             this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
+            this.noteCompactChromeTotalPages();
             this.rebuildSearchResults(false);
         } finally {
             this.pagedBuildInProgress = false;
             this.pagedBuildProgressPercent = 0;
+            if (this.compactChromePagedBuildPending)
+                this.touchCompactChromeBuildActivity();
             if (this.pagedBuildNeedsRefresh) {
                 this.pagedBuildNeedsRefresh = false;
                 this.updateScrollerViewport();
+            } else if (this.compactChromePagedBuildPending) {
+                this.scheduleCompactChromeBuildPendingClear();
             }
         }
     }

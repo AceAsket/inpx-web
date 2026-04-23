@@ -218,9 +218,10 @@ export default vueComponent(TitleList);
 
 .title-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 18px;
     align-items: stretch;
+    grid-auto-rows: 1fr;
 }
 
 @media (max-width: 760px) {

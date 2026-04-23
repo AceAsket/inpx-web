@@ -6,10 +6,13 @@
                 <!-- Обновление -->
                 <div v-show="showNewReleaseAvailable && newReleaseAvailable" class="row q-py-sm bg-green-4 items-center">
                     <div class="q-ml-sm" style="font-size: 120%">
-                        Доступна новая версия <b>{{ config.name }} v{{ config.latestVersion }}</b>
+                        Доступна новая {{ releaseChannelTitle }}версия <b>{{ config.name }} v{{ config.latestVersion }}</b>
+                    </div>
+                    <div v-if="isDockerInstall" class="q-ml-sm text-grey-9" style="font-size: 95%">
+                        В Docker обновление ставится через новый образ и перезапуск контейнера.
                     </div>
                     <DivBtn class="q-ml-sm q-px-sm bg-white" :size="20" @click.stop.prevent="openReleasePage">
-                        Скачать
+                        {{ releaseActionLabel }}
                     </DivBtn>
                     <DivBtn class="q-ml-sm q-px-sm bg-white" :size="20" @click.stop.prevent="settingsDialogVisible = true">
                         Отключить уведомление
@@ -774,7 +777,19 @@ class Search {
     }
 
     get newReleaseAvailable() {
-        return (this.config.latestVersion && this.config.version != this.config.latestVersion);
+        return !!(this.config.latestVersion && this.compareReleaseVersions(this.config.latestVersion, this.config.version) > 0);
+    }
+
+    get isDockerInstall() {
+        return String(this.config.installMode || '').trim().toLowerCase() === 'docker';
+    }
+
+    get releaseChannelTitle() {
+        return (String(this.config.updateChannel || '').trim().toLowerCase() === 'rc' ? 'RC-' : '');
+    }
+
+    get releaseActionLabel() {
+        return (this.isDockerInstall ? 'Открыть релиз' : 'Скачать');
     }
 
     get recStruct() {
@@ -931,6 +946,61 @@ class Search {
     openReleasePage() {
         if (this.config.latestReleaseLink)
             window.open(this.config.latestReleaseLink, '_blank');
+    }
+
+    normalizeReleaseVersion(value = '') {
+        return String(value || '').trim().replace(/^v/i, '');
+    }
+
+    parseReleaseVersion(value = '') {
+        const normalized = this.normalizeReleaseVersion(value);
+        const [mainPart, prePart = ''] = normalized.split('-', 2);
+        const main = mainPart.split('.').map(part => parseInt(part || '0', 10) || 0);
+        while (main.length < 3)
+            main.push(0);
+
+        let pre = null;
+        if (prePart) {
+            const match = prePart.match(/^([a-z]+)(?:[.\-]?(\d+))?$/i);
+            if (match) {
+                pre = {
+                    label: String(match[1] || '').toLowerCase(),
+                    num: parseInt(match[2] || '0', 10) || 0,
+                };
+            } else {
+                pre = {
+                    label: prePart.toLowerCase(),
+                    num: 0,
+                };
+            }
+        }
+
+        return {main, pre};
+    }
+
+    compareReleaseVersions(left = '', right = '') {
+        const a = this.parseReleaseVersion(left);
+        const b = this.parseReleaseVersion(right);
+
+        for (let i = 0; i < 3; i++) {
+            if (a.main[i] !== b.main[i])
+                return (a.main[i] > b.main[i] ? 1 : -1);
+        }
+
+        if (!a.pre && !b.pre)
+            return 0;
+        if (!a.pre)
+            return 1;
+        if (!b.pre)
+            return -1;
+
+        if (a.pre.label !== b.pre.label)
+            return a.pre.label.localeCompare(b.pre.label);
+
+        if (a.pre.num !== b.pre.num)
+            return (a.pre.num > b.pre.num ? 1 : -1);
+
+        return 0;
     }
 
     makeProjectName() {

@@ -42,6 +42,102 @@ const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const bookAssetVersion = 'fblibrary-assets-v1';
 const bookInfoVersion = 'fb2-binaries-v6';
 
+function normalizeVersionTag(value = '') {
+    return String(value || '').trim().replace(/^v/i, '');
+}
+
+function parseReleaseVersion(value = '') {
+    const normalized = normalizeVersionTag(value);
+    const [mainPart, prePart = ''] = normalized.split('-', 2);
+    const main = mainPart.split('.').map(part => parseInt(part || '0', 10) || 0);
+    while (main.length < 3)
+        main.push(0);
+
+    let pre = null;
+    if (prePart) {
+        const match = prePart.match(/^([a-z]+)(?:[.\-]?(\d+))?$/i);
+        if (match) {
+            pre = {
+                label: String(match[1] || '').toLowerCase(),
+                num: parseInt(match[2] || '0', 10) || 0,
+            };
+        } else {
+            pre = {
+                label: prePart.toLowerCase(),
+                num: 0,
+            };
+        }
+    }
+
+    return {main, pre};
+}
+
+function compareReleaseVersions(left = '', right = '') {
+    const a = parseReleaseVersion(left);
+    const b = parseReleaseVersion(right);
+
+    for (let i = 0; i < 3; i++) {
+        if (a.main[i] !== b.main[i])
+            return (a.main[i] > b.main[i] ? 1 : -1);
+    }
+
+    if (!a.pre && !b.pre)
+        return 0;
+    if (!a.pre)
+        return 1;
+    if (!b.pre)
+        return -1;
+
+    if (a.pre.label !== b.pre.label)
+        return a.pre.label.localeCompare(b.pre.label);
+
+    if (a.pre.num !== b.pre.num)
+        return (a.pre.num > b.pre.num ? 1 : -1);
+
+    return 0;
+}
+
+function isRcReleaseTag(value = '') {
+    return /-rc(?:[.\-]?\d+)?$/i.test(normalizeVersionTag(value));
+}
+
+function resolveReleaseChannel(config = {}) {
+    const raw = String(config.updateChannel || '').trim().toLowerCase();
+    if (raw === 'rc' || raw === 'stable')
+        return raw;
+
+    return (isRcReleaseTag(config.version) ? 'rc' : 'stable');
+}
+
+function buildReleaseCheckRequest(checkReleaseLink = '', channel = 'stable') {
+    const baseLink = String(checkReleaseLink || '').trim();
+    if (!baseLink)
+        return null;
+
+    if (channel === 'rc') {
+        const rcLink = baseLink.replace(/\/latest\/?$/i, '');
+        const separator = (rcLink.includes('?') ? '&' : '?');
+        return {url: `${rcLink}${separator}per_page=20`};
+    }
+
+    return {url: baseLink};
+}
+
+function pickReleaseFromPayload(payload, channel = 'stable') {
+    const list = (Array.isArray(payload) ? payload : [payload])
+        .filter(item => item && item.tag_name && !item.draft);
+
+    if (channel === 'rc') {
+        return list
+            .filter(item => item.prerelease || isRcReleaseTag(item.tag_name))
+            .sort((a, b) => compareReleaseVersions(b.tag_name, a.tag_name))[0] || null;
+    }
+
+    return list
+        .filter(item => !item.prerelease)
+        .sort((a, b) => compareReleaseVersions(b.tag_name, a.tag_name))[0] || null;
+}
+
 function decodeHtmlBuffer(data) {
     let text = iconv.decode(data, 'utf8');
     if (text.includes('\uFFFD'))
@@ -827,7 +923,7 @@ class WebWorker {
 
         const book = await this.getBookRecordByUid(bookUid);
         if (!book)
-            throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+            throw new Error('404 Файл не найден');
 
         const item = await this.readingListStore.setBookRead(userId, listId, bookUid, read);
         return {
@@ -1876,14 +1972,23 @@ class WebWorker {
         if (!checkReleaseLink)
             return;
         const down = new FileDownloader(1024*1024);
+        const channel = resolveReleaseChannel(this.config);
+        const request = buildReleaseCheckRequest(checkReleaseLink, channel);
+        if (!request)
+            return;
 
         while (1) {// eslint-disable-line no-constant-condition
             try {
-                let release = await down.load(checkReleaseLink);
+                let release = await down.load(request.url);
                 release = JSON.parse(release.toString());
+                const latestRelease = pickReleaseFromPayload(release, channel);
 
-                if (release.tag_name)
-                    this.config.latestVersion = release.tag_name;
+                if (latestRelease && compareReleaseVersions(latestRelease.tag_name, this.config.version) > 0) {
+                    this.config.latestVersion = latestRelease.tag_name;
+                    this.config.latestReleaseLink = latestRelease.html_url || this.config.latestReleaseLink;
+                } else {
+                    this.config.latestVersion = '';
+                }
             } catch(e) {
                 log(LM_ERR, `periodicCheckNewRelease: ${e.message}`);
             }

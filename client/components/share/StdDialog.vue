@@ -113,7 +113,23 @@
             <div class="q-mx-md">
                 <div v-html="message"></div>
                 <input type="text" name="username" autocomplete="username" :value="userName" hidden />
-                <q-input ref="input" v-model="inputValue" type="password" autocomplete="current-password" class="q-mt-xs" outlined dense />
+                <q-input
+                    ref="input"
+                    v-model="inputValue"
+                    :type="passwordVisible ? 'text' : 'password'"
+                    autocomplete="current-password"
+                    class="q-mt-xs"
+                    outlined
+                    dense
+                >
+                    <template #append>
+                        <q-icon
+                            :name="passwordVisible ? 'la la-eye-slash' : 'la la-eye'"
+                            class="password-visibility-toggle"
+                            @click="passwordVisible = !passwordVisible"
+                        />
+                    </template>
+                </q-input>
                 <div class="error">
                     <span v-show="error != ''">{{ error }}</span>
                 </div>
@@ -189,6 +205,7 @@ class StdDialog {
     iconName = '';
     hotKeyCode = '';
     userName = '';
+    passwordVisible = false;
     noEscDismiss = false;
     noBackdropDismiss = false;
     noCancel = false;
@@ -237,6 +254,8 @@ class StdDialog {
         if (opts && opts.hotKeyCode) {
             this.hotKeyCode = opts.hotKeyCode;
         }
+
+        this.passwordVisible = false;
     }
 
     onHide() {
@@ -418,6 +437,12 @@ class StdDialog {
 export default vueComponent(StdDialog);
 //-----------------------------------------------------------------------------
 </script>
+
+<style scoped>
+.password-visibility-toggle {
+    cursor: pointer;
+}
+</style>
 
 <style scoped>
 .q-dialog__inner--top {

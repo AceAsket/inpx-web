@@ -550,6 +550,7 @@ export default vueComponent(BookView);
 .book-view {
     line-height: 1.35;
     height: 100%;
+    display: flex;
 }
 
 .book-card {
@@ -566,6 +567,7 @@ export default vueComponent(BookView);
     box-shadow: 0 14px 30px rgba(23, 32, 38, 0.06);
     transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
     height: 100%;
+    width: 100%;
     cursor: pointer;
 }
 
@@ -714,10 +716,10 @@ export default vueComponent(BookView);
     min-width: 0;
     display: grid;
     grid-template-rows:
-        minmax(calc(1.35em * 2), auto)
+        calc(1.35em * 2)
         30px
-        minmax(calc(1.1em * 3), auto)
-        minmax(calc(1.35em * 2), auto)
+        calc(1.1em * 3)
+        calc(1.35em * 2)
         minmax(32px, auto)
         minmax(42px, auto)
         minmax(32px, auto);
@@ -726,6 +728,7 @@ export default vueComponent(BookView);
 }
 
 .book-author {
+    grid-row: 1;
     color: #14705e;
     font-size: 14px;
     font-weight: 700;
@@ -737,6 +740,7 @@ export default vueComponent(BookView);
 }
 
 .book-meta-pills {
+    grid-row: 2;
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
@@ -767,9 +771,11 @@ export default vueComponent(BookView);
 }
 
 .book-title-row {
+    grid-row: 3;
     display: grid;
     grid-template-columns: 56px minmax(0, 1fr);
     align-items: start;
+    min-height: calc(1.1em * 3);
     gap: 10px;
     margin-bottom: 4px;
 }
@@ -795,10 +801,11 @@ export default vueComponent(BookView);
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    min-height: calc(1.1em * 3);
+    block-size: calc(1.1em * 3);
 }
 
 .book-series {
+    grid-row: 4;
     color: var(--app-muted);
     font-size: 14px;
     font-weight: 600;
@@ -807,10 +814,11 @@ export default vueComponent(BookView);
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    min-height: calc(1.35em * 2);
+    block-size: calc(1.35em * 2);
 }
 
 .book-genres {
+    grid-row: 5;
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
@@ -835,6 +843,7 @@ export default vueComponent(BookView);
 }
 
 .book-actions {
+    grid-row: 6;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -949,6 +958,7 @@ export default vueComponent(BookView);
 }
 
 .format-actions {
+    grid-row: 7;
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
@@ -980,6 +990,10 @@ export default vueComponent(BookView);
     background: rgba(23, 32, 38, 0.05);
     font-size: 12px;
     white-space: pre-wrap;
+}
+
+.book-json {
+    grid-row: 8;
 }
 
 @media (max-width: 720px) {
@@ -1028,9 +1042,9 @@ export default vueComponent(BookView);
 
     .book-content {
         grid-template-rows:
-            minmax(calc(1.35em * 2), auto)
+            calc(1.35em * 2)
             26px
-            minmax(calc(1.1em * 2), auto)
+            calc(1.1em * 2)
             auto
             auto
             minmax(42px, auto)
@@ -1050,12 +1064,12 @@ export default vueComponent(BookView);
 
     .book-title {
         font-size: 16px;
-        min-height: calc(1.1em * 2);
+        block-size: calc(1.1em * 2);
         -webkit-line-clamp: 2;
     }
 
     .book-series {
-        min-height: auto;
+        block-size: 1.35em;
         font-size: 13px;
         padding-top: 3px;
         -webkit-line-clamp: 1;

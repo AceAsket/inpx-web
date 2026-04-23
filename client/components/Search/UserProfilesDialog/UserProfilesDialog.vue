@@ -27,7 +27,22 @@
                 <div v-if="showCreateProfileForm" class="profile-grid create-grid">
                     <q-input v-model="newProfile.name" outlined dense clearable :label="uiText.profileName" />
                     <q-input v-model="newProfile.login" outlined dense clearable :label="uiText.login" />
-                    <q-input v-model="newProfile.password" outlined dense clearable type="password" :label="uiText.password" />
+                    <q-input
+                        v-model="newProfile.password"
+                        outlined
+                        dense
+                        clearable
+                        :type="newProfilePasswordVisible ? 'text' : 'password'"
+                        :label="uiText.password"
+                    >
+                        <template #append>
+                            <q-icon
+                                :name="newProfilePasswordVisible ? 'la la-eye-slash' : 'la la-eye'"
+                                class="password-visibility-toggle"
+                                @click="newProfilePasswordVisible = !newProfilePasswordVisible"
+                            />
+                        </template>
+                    </q-input>
                     <q-input v-model="newProfile.emailTo" outlined dense clearable :label="uiText.emailTo" />
                     <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Telegram chat id" />
                     <q-toggle class="profile-toggle" v-model="newProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
@@ -111,7 +126,7 @@
                                 :class="{'is-active': currentProfileTab === 'reading'}"
                                 @click="currentProfileTab = 'reading'"
                             >
-                                {{ uiText.reading }} <span v-if="currentReadingItems.length">{{ currentReadingItems.length }}</span>
+                                {{ uiText.reading }}
                             </button>
                             <button
                                 type="button"
@@ -119,7 +134,7 @@
                                 :class="{'is-active': currentProfileTab === 'lists'}"
                                 @click="currentProfileTab = 'lists'"
                             >
-                                {{ uiText.lists }} <span v-if="currentReadingLists.length">{{ currentReadingLists.length }}</span>
+                                {{ uiText.lists }}
                             </button>
                             <button
                                 type="button"
@@ -140,12 +155,17 @@
 
                         <div v-else-if="currentProfileTab === 'reading'" class="reading-progress-box">
                             <div v-if="currentReadingItems.length">
-                                <div class="reading-progress-actions reading-progress-actions--header">
+                                <div class="reading-progress-header">
+                                    <div class="reading-progress-summary">
+                                        <span class="reading-progress-summary-badge">{{ currentReadingItems.length }}</span>
+                                        <span class="reading-progress-summary-text">книг в чтении</span>
+                                    </div>
                                     <q-btn
                                         flat
                                         dense
                                         no-caps
                                         color="primary"
+                                        class="reading-progress-toggle-btn"
                                         :icon="expandedReadingSection ? 'la la-angle-up' : 'la la-angle-down'"
                                         @click="toggleReadingSectionExpanded"
                                     >
@@ -195,9 +215,6 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div v-else class="reading-progress-meta">
-                                    {{ uiText.listCollapsedHint.replace('{count}', currentReadingItems.length) }}
-                                </div>
                             </div>
                             <div v-else class="reading-empty">
                                 {{ uiText.noReadingProgress }}
@@ -224,11 +241,14 @@
                                             {{ list.name }}
                                         </div>
                                         <div class="reading-progress-percent">
-                                            {{ list.readCount }}/{{ list.bookCount }}
+                                            {{ formatBookCountLabel(list.bookCount) }}
                                         </div>
                                     </div>
                                     <div class="reading-progress-meta">
                                         {{ list.visibility === 'opds' ? 'OPDS' : uiText.private }}
+                                        <template v-if="Number(list.readCount || 0) > 0">
+                                            · {{ list.readCount }}/{{ list.bookCount }}
+                                        </template>
                                     </div>
                                     <div class="reading-progress-actions reading-progress-actions--list">
                                         <q-btn
@@ -292,13 +312,6 @@
                                     <div v-else-if="isReadingListExpanded(list.id)" class="reading-progress-meta">
                                         {{ uiText.listIsEmpty }}
                                     </div>
-                                    <div v-else class="profile-list-preview-more">
-                                        {{
-                                            (Number(list.bookCount || 0) > 0)
-                                                ? uiText.listCollapsedHint.replace('{count}', String(list.bookCount || 0))
-                                                : uiText.listIsEmpty
-                                        }}
-                                    </div>
                                 </div>
                             </div>
                             <div v-else class="reading-empty">
@@ -309,7 +322,22 @@
                         <div v-else class="profile-grid profile-edit-grid">
                             <q-input v-model="editableProfile.name" outlined dense :label="uiText.name" />
                             <q-input v-model="editableProfile.login" outlined dense clearable :label="uiText.login" />
-                            <q-input v-model="editableProfile.password" outlined dense clearable type="password" :label="uiText.newPassword" />
+                            <q-input
+                                v-model="editableProfile.password"
+                                outlined
+                                dense
+                                clearable
+                                :type="editableProfilePasswordVisible ? 'text' : 'password'"
+                                :label="uiText.newPassword"
+                            >
+                                <template #append>
+                                    <q-icon
+                                        :name="editableProfilePasswordVisible ? 'la la-eye-slash' : 'la la-eye'"
+                                        class="password-visibility-toggle"
+                                        @click="editableProfilePasswordVisible = !editableProfilePasswordVisible"
+                                    />
+                                </template>
+                            </q-input>
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
                             <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Telegram chat id" />
                             <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
@@ -372,6 +400,8 @@ class UserProfilesDialog {
     expandedReadingLists = {};
     readingListsDialogVisible = false;
     showCreateProfileForm = false;
+    newProfilePasswordVisible = false;
+    editableProfilePasswordVisible = false;
     editableProfile = this.makeEmptyEditable();
     newProfile = this.makeEmptyNew();
 
@@ -500,6 +530,7 @@ class UserProfilesDialog {
 
     syncEditableProfile() {
         const current = this.config.currentUserProfile || {};
+        this.editableProfilePasswordVisible = false;
         this.editableProfile = {
             name: current.name || '',
             login: current.login || '',
@@ -527,6 +558,7 @@ class UserProfilesDialog {
         }));
         this.currentProfileTab = 'reading';
         this.expandedReadingSection = false;
+        this.newProfilePasswordVisible = false;
         this.syncEditableProfile();
         await this.loadCurrentReadingLists();
     }
@@ -595,6 +627,19 @@ class UserProfilesDialog {
 
     formatPercent(value) {
         return Math.max(0, Math.min(100, Math.round((Number(value || 0) || 0) * 100)));
+    }
+
+    formatBookCountLabel(value) {
+        const count = Math.max(0, Math.round(Number(value || 0) || 0));
+        const mod10 = count % 10;
+        const mod100 = count % 100;
+        let noun = 'книг';
+        if (mod10 === 1 && mod100 !== 11)
+            noun = 'книга';
+        else if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14))
+            noun = 'книги';
+
+        return `${count} ${noun}`;
     }
 
     toggleReadingSectionExpanded() {
@@ -703,6 +748,7 @@ class UserProfilesDialog {
         try {
             await this.api.createUserProfile(this.newProfile);
             this.newProfile = this.makeEmptyNew();
+            this.newProfilePasswordVisible = false;
             this.showCreateProfileForm = false;
             await this.loadProfiles();
         } catch (e) {
@@ -784,7 +830,7 @@ class UserProfilesDialog {
             try {
                 await this.api.showProfileLoginDialog(item.login || '');
             } catch (e) {
-                this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+                this.$root.stdDialog.alert(e.message, 'Ошибка');
             }
         }
 
@@ -796,8 +842,9 @@ class UserProfilesDialog {
             await this.api.showProfileLoginDialog(item.login || '');
             await this.loadProfiles();
         } catch (e) {
-            if (e.message !== 'Р’С…РѕРґ РІ РїСЂРѕС„РёР»СЊ РѕС‚РјРµРЅС‘РЅ')
-                this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+            if (e.message !== 'Вход в профиль отменён')
+                this.$root.stdDialog.alert(e.message, 'Ошибка');
+                this.$root.stdDialog.alert(e.message, 'ÐÑÐ¸Ð±ÐºÐ°');
         }
     }
 
@@ -806,8 +853,9 @@ class UserProfilesDialog {
             await this.api.showProfileLoginDialog('');
             await this.loadProfiles();
         } catch (e) {
-            if (e.message !== 'Р вЂ™РЎвЂ¦Р С•Р Т‘ Р Р† Р С—РЎР‚Р С•РЎвЂћР С‘Р В»РЎРЉ Р С•РЎвЂљР СР ВµР Р…РЎвЂР Р…')
-                this.$root.stdDialog.alert(e.message, 'Р С›РЎв‚¬Р С‘Р В±Р С”Р В°');
+            if (e.message !== 'Вход в профиль отменён')
+                this.$root.stdDialog.alert(e.message, 'Ошибка');
+                this.$root.stdDialog.alert(e.message, 'ÐÑÐ¸Ð±ÐºÐ°');
         }
     }
 
@@ -880,6 +928,10 @@ export default vueComponent(UserProfilesDialog);
     display: flex;
     justify-content: flex-end;
     gap: 8px;
+}
+
+.password-visibility-toggle {
+    cursor: pointer;
 }
 
 .profile-edit-grid {
@@ -1005,6 +1057,48 @@ export default vueComponent(UserProfilesDialog);
     font-weight: 700;
 }
 
+.reading-progress-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.reading-progress-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 6px 10px;
+    border: 1px solid rgba(15, 159, 143, 0.2);
+    border-radius: 999px;
+    background: rgba(15, 159, 143, 0.08);
+    color: var(--app-text);
+}
+
+.reading-progress-summary-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(15, 159, 143, 0.18);
+    color: var(--app-link);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.reading-progress-summary-text {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--app-muted);
+    white-space: nowrap;
+}
+
 .reading-progress-list {
     display: flex;
     flex-direction: column;
@@ -1067,6 +1161,10 @@ export default vueComponent(UserProfilesDialog);
 
 .reading-progress-actions--list {
     justify-content: flex-start;
+}
+
+.reading-progress-toggle-btn {
+    flex: 0 0 auto;
 }
 
 .profile-list-preview {

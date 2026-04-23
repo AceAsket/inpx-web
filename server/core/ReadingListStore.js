@@ -540,7 +540,7 @@ class ReadingListStore {
         const {data, user} = await this.resolveUser(userId);
         const target = data.users.find((item) => item.id === user.id);
         if (!target)
-            throw new Error('РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ');
+            throw new Error('Пользователь не найден');
 
         target.readerPreferences = this.normalizeReaderPreferences(Object.assign({}, target.readerPreferences || {}, patch || {}));
         target.updatedAt = this.nowIso();
@@ -552,7 +552,7 @@ class ReadingListStore {
         const {data, user} = await this.resolveUser(userId);
         const target = data.users.find((item) => item.id === user.id);
         if (!target)
-            throw new Error('РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ');
+            throw new Error('Пользователь не найден');
 
         const normalizedBookUid = this.normalizeBookUid(bookUid);
         if (!normalizedBookUid)
@@ -579,7 +579,7 @@ class ReadingListStore {
         const {data, user} = await this.resolveUser(userId);
         const target = data.users.find((item) => item.id === user.id);
         if (!target)
-            throw new Error('РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ');
+            throw new Error('Пользователь не найден');
 
         const normalizedBookUid = this.normalizeBookUid(bookUid);
         if (!normalizedBookUid)

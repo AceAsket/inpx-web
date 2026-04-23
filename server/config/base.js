@@ -42,7 +42,7 @@ module.exports = {
     lowMemoryMode: false,
     fullOptimization: false,
 
-    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'onlineReaderEnabled', 'uiDefaults'],
+    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'onlineReaderEnabled', 'updateChannel', 'installMode', 'uiDefaults'],
 
     allowRemoteLib: false,
     remoteLib: false,
@@ -69,6 +69,8 @@ module.exports = {
 
     latestReleaseLink: 'https://github.com/AceAsket/inpx-web/releases/latest',
     checkReleaseLink: 'https://api.github.com/repos/AceAsket/inpx-web/releases/latest',
+    updateChannel: process.env.INPX_UPDATE_CHANNEL || 'auto',
+    installMode: process.env.INPX_INSTALL_MODE || '',
     adminLogin: process.env.INPX_ADMIN_LOGIN || 'admin',
     adminPassword: process.env.INPX_ADMIN_PASSWORD || 'admin',
     resetAdminPassword: process.env.INPX_RESET_ADMIN_PASSWORD === 'true',
