@@ -94,7 +94,15 @@ class Api {
     }
 
     mounted() {
-        this.updateConfig();//no await
+        if (!this.isStandaloneReaderLab)
+            this.updateConfig();//no await
+    }
+
+    get isStandaloneReaderLab() {
+        const route = (this.$router && this.$router.currentRoute && this.$router.currentRoute.value)
+            ? this.$router.currentRoute.value
+            : this.$route;
+        return String((route && route.path) || '').startsWith('/reader-lab');
     }
 
     readStoredProfileSession() {

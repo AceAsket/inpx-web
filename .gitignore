@@ -5,3 +5,7 @@ dev*.sh
 /.local-data
 /.tools
 /.tmp_flibrary_repo
+/data-local-*/
+/local-test-library/
+/Лукьяненко С.В._Ночной Дозор.fb2
+/remote-one-page-check.png

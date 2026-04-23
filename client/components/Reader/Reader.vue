@@ -62,6 +62,16 @@
                         @click="toggleContentsDialog"
                     />
                     <q-btn
+                        v-if="isPagedMode"
+                        flat
+                        dense
+                        round
+                        icon="la la-search"
+                        class="reader-icon-btn"
+                        :class="{'is-active': searchDialogOpen}"
+                        @click="toggleSearchDialog"
+                    />
+                    <q-btn
                         flat
                         dense
                         round
@@ -76,6 +86,14 @@
                         :icon="fullscreenActive ? 'la la-compress-arrows-alt' : 'la la-expand-arrows-alt'"
                         class="reader-icon-btn"
                         @click="toggleFullscreen"
+                    />
+                    <q-btn
+                        flat
+                        dense
+                        round
+                        icon="la la-question-circle"
+                        class="reader-icon-btn"
+                        @click="toggleHelpDialog"
                     />
                     <q-btn
                         flat
@@ -150,11 +168,6 @@
                 </div>
 
                 <div v-if="activePreferences.readMode === 'paged'" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedNavigation === 'tap'}" @click="setPagedNavigation('tap')">{{ uiText.navTap }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedNavigation === 'wheel'}" @click="setPagedNavigation('wheel')">{{ uiText.navWheel }}</q-btn>
-                </div>
-
-                <div v-if="activePreferences.readMode === 'paged'" class="reader-theme-switch">
                     <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedDirection === 'vertical'}" @click="setPagedDirection('vertical')">{{ uiText.directionVertical }}</q-btn>
                     <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedDirection === 'horizontal'}" @click="setPagedDirection('horizontal')">{{ uiText.directionHorizontal }}</q-btn>
                 </div>
@@ -177,121 +190,160 @@
                 </div>
 
                 <div class="reader-progress-text">
-                    {{ progressPercent }}%<span v-if="activePreferences.readMode === 'paged' && totalPages > 1"> | {{ currentPage }}/{{ totalPages }}</span>
+                    {{ progressPercent }}%<span v-if="showPagedPageCounter"> | {{ currentPage }}/{{ totalPages }}</span>
                 </div>
             </div>
         </div>
 
         <div v-if="loading" class="reader-loading">
             <q-icon class="la la-spinner icon-rotate text-green-8" size="28px" />
-            <div class="q-ml-sm">{{ uiText.loadingBook }}</div>
+            <div class="q-ml-sm">{{ loadingMessage || uiText.loadingBook }}</div>
         </div>
 
         <div v-else-if="error" class="reader-error">
             {{ error }}
         </div>
 
-        <div
-            v-else
-            ref="scroller"
-            class="reader-scroll"
-            :class="{
-                'reader-scroll--paged': activePreferences.readMode === 'paged',
-            }"
-            @scroll="onScroll"
-            @wheel="handleReaderWheel"
-            @click="handleReaderTap"
-            @touchstart.passive="handleReaderTouchStart"
-            @touchend="handleReaderTouchEnd"
-            @touchcancel="handleReaderTouchCancel"
-        >
+        <template v-else>
             <div
-                ref="readerShell"
-                class="reader-shell"
+                ref="scroller"
+                class="reader-scroll"
                 :class="{
-                    'reader-shell--paged': activePreferences.readMode === 'paged',
+                    'reader-scroll--paged': activePreferences.readMode === 'paged',
                 }"
+                @scroll="onScroll"
+                @wheel="handleReaderWheel"
+                @click="handleReaderTap"
+                @touchstart.passive="handleReaderTouchStart"
+                @touchend="handleReaderTouchEnd"
+                @touchcancel="handleReaderTouchCancel"
             >
-                <div v-if="coverSrc && !isPagedMode" class="reader-cover-box">
-                    <img :src="coverSrc" class="reader-cover" :alt="title" />
-                </div>
-
                 <div
-                    ref="readerBody"
-                    class="reader-body"
+                    ref="readerShell"
+                    class="reader-shell"
                     :class="{
-                        'reader-body--paged': activePreferences.readMode === 'paged',
+                        'reader-shell--paged': activePreferences.readMode === 'paged',
                     }"
-                    :style="readerBodyStyle"
                 >
-                    <template v-if="!isPagedMode">
-                        <div v-if="seriesLine" class="reader-series">
-                            {{ seriesLine }}
-                        </div>
-                        <h1 class="reader-heading">
-                            {{ title }}
-                        </h1>
-                        <div v-if="authorLine" class="reader-subheading">
-                            {{ authorLine }}
-                        </div>
+                    <div v-if="coverSrc && !isPagedMode" class="reader-cover-box">
+                        <img :src="coverSrc" class="reader-cover" :alt="title" />
+                    </div>
 
-                        <div v-if="hasContents && !isCompactLayout" class="reader-contents-inline">
-                            <div class="reader-contents-inline-head">
-                            <div class="reader-contents-inline-title">
-                                {{ uiText.contents }}
+                    <div
+                        ref="readerBody"
+                        class="reader-body"
+                        :class="{
+                            'reader-body--paged': activePreferences.readMode === 'paged',
+                        }"
+                        :style="readerBodyStyle"
+                    >
+                        <template v-if="!isPagedMode">
+                            <div v-if="seriesLine" class="reader-series">
+                                {{ seriesLine }}
                             </div>
-                                <button class="reader-contents-toggle" @click="toggleInlineContents">
-                                    {{ inlineContentsVisible ? uiText.hide : uiText.show }}
-                                </button>
+                            <h1 class="reader-heading">
+                                {{ title }}
+                            </h1>
+                            <div v-if="authorLine" class="reader-subheading">
+                                {{ authorLine }}
                             </div>
-                            <div v-if="inlineContentsVisible" class="reader-contents-inline-list">
-                                <button
-                                    v-for="item in inlineContents"
-                                    :key="item.id"
-                                    class="reader-contents-chip"
-                                    @click="jumpToContent(item.id)"
-                                >
-                                    {{ item.title }}
-                                </button>
-                            </div>
-                        </div>
 
-                        <div class="reader-progress-bar">
-                            <div class="reader-progress-bar-fill" :style="{width: `${progressPercent}%`}"></div>
-                        </div>
-
-                        <div ref="readerHtml" class="reader-html" v-html="readerHtml"></div>
-                    </template>
-
-                    <template v-else>
-                        <div class="reader-pages">
-                            <div class="reader-page-stage">
-                                <transition :name="pagedTransitionName">
-                                    <article
-                                        v-if="activePagedPage"
-                                        :key="`page-${currentPageIndex}-${activePagedPage.sectionId || 'page'}`"
-                                        class="reader-page-sheet reader-page-sheet--live"
-                                        :data-page-index="currentPageIndex"
+                            <div v-if="hasContents && !isCompactLayout" class="reader-contents-inline">
+                                <div class="reader-contents-inline-head">
+                                <div class="reader-contents-inline-title">
+                                    {{ uiText.contents }}
+                                </div>
+                                    <button class="reader-contents-toggle" @click="toggleInlineContents">
+                                        {{ inlineContentsVisible ? uiText.hide : uiText.show }}
+                                    </button>
+                                </div>
+                                <div v-if="inlineContentsVisible" class="reader-contents-inline-list">
+                                    <button
+                                        v-for="item in inlineContents"
+                                        :key="item.id"
+                                        class="reader-contents-chip"
+                                        @click="jumpToContent(item.id)"
                                     >
-                                        <div class="reader-html" v-html="activePagedPage.html"></div>
-                                    </article>
-                                </transition>
+                                        {{ item.title }}
+                                    </button>
+                                </div>
                             </div>
-                        </div>
-                    </template>
+
+                            <div class="reader-progress-bar">
+                                <div class="reader-progress-bar-fill" :style="{width: `${progressPercent}%`}"></div>
+                            </div>
+
+                            <div ref="readerHtml" class="reader-html" v-html="readerHtml"></div>
+                        </template>
+
+                        <template v-else>
+                            <div class="reader-pages">
+                                <div ref="pageStage" class="reader-page-stage">
+                                    <transition :name="pagedTransitionName">
+                                        <article
+                                            v-if="activePagedPage"
+                                            :key="`page-${currentPageIndex}-${activePagedPage.sectionId || 'page'}`"
+                                            class="reader-page-sheet reader-page-sheet--live"
+                                            :data-page-index="currentPageIndex"
+                                        >
+                                            <div class="reader-html" v-html="activePagedPageRenderedHtml"></div>
+                                        </article>
+                                    </transition>
+                                    <article
+                                        ref="pageMeasure"
+                                        class="reader-page-sheet reader-page-sheet--measure"
+                                        aria-hidden="true"
+                                    >
+                                        <div class="reader-html"></div>
+                                    </article>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <div
-            v-if="isPagedMode"
-            ref="pageMeasure"
-            class="reader-page-sheet reader-page-sheet--measure"
-            :class="[readerThemeClass]"
-            :style="readerBodyStyle"
-        >
-            <div class="reader-html"></div>
-        </div>
+            <transition name="reader-reflow-fade">
+                <div v-if="showLayoutRefreshIndicator" class="reader-reflow-indicator">
+                    <div class="reader-reflow-card">
+                        <q-icon class="la la-spinner icon-rotate" size="22px" />
+                        <span>{{ uiText.refreshingLayout }}</span>
+                    </div>
+                </div>
+            </transition>
+
+            <transition name="reader-reflow-fade">
+                <div v-if="bookPreparing" class="reader-reflow-indicator reader-reflow-indicator--strong">
+                    <div class="reader-reflow-card reader-reflow-card--loading">
+                        <q-icon class="la la-spinner icon-rotate" size="24px" />
+                        <span>{{ loadingMessage || uiText.loadingBook }}</span>
+                    </div>
+                </div>
+            </transition>
+
+            <div v-if="readerDebugEnabled" class="reader-debug-panel">
+                <div class="reader-debug-title">Reader Debug</div>
+                <div>mode: {{ isCompactLayout ? 'mobile' : 'desktop' }} / {{ isPagedMode ? 'paged' : 'scroll' }}</div>
+                <div>page: {{ currentPage }}/{{ totalPages }}</div>
+                <div>measure available: {{ readerDebug.measureAvailableHeight }}px</div>
+                <div>measure content: {{ readerDebug.measureContentHeight }}px</div>
+                <div>measure overflow: {{ readerDebug.measureOverflowPx }}px</div>
+                <div>sheet height: {{ readerDebug.liveSheetHeight }}px</div>
+                <div>sheet bottom safe: {{ readerDebug.liveSafeBottom }}px</div>
+                <div>text last bottom: {{ readerDebug.liveTextBottom }}px</div>
+                <div>live overflow: {{ readerDebug.liveOverflowPx }}px</div>
+                <div>clip base: {{ readerDebug.baseBottomClipCompensation }}px</div>
+                <div>clip dynamic: {{ currentDynamicBottomClipCompensation }}px</div>
+                <div>clip total: {{ readerDebug.totalBottomClipCompensation }}px</div>
+                <div>safety inset: {{ readerDebug.pagedContentSafetyInset }}px</div>
+                <div>font/line: {{ activePreferences.fontSize }} / {{ activePreferences.lineHeight }}</div>
+                <div class="reader-debug-actions">
+                    <button class="reader-debug-btn" @click.stop="adjustDebugBottomCompensation(-1)">- line</button>
+                    <button class="reader-debug-btn" @click.stop="adjustDebugBottomCompensation(1)">+ line</button>
+                    <button class="reader-debug-btn" @click.stop="resetDebugBottomCompensation">reset</button>
+                </div>
+            </div>
+        </template>
 
         <div
             v-if="isCompactLayout && (showCompactStatusBar || !compactChromeHidden)"
@@ -400,7 +452,7 @@
                 <div v-if="currentPlacesTab === 'progress'" class="reader-continue-card">
                     <div class="reader-continue-title">{{ currentSectionTitle || title }}</div>
                     <div class="reader-continue-meta">
-                        {{ progressPercent }}%<span v-if="activePreferences.readMode === 'paged' && totalPages > 1"> | {{ currentPage }}/{{ totalPages }}</span>
+                        {{ progressPercent }}%<span v-if="showPagedPageCounter"> | {{ currentPage }}/{{ totalPages }}</span>
                     </div>
                     <div v-if="progress.updatedAt" class="reader-continue-updated">{{ formatBookmarkDate(progress.updatedAt) }}</div>
                     <div class="reader-continue-actions">
@@ -457,6 +509,46 @@
                     </button>
                     <div v-if="!noteBookmarks.length" class="reader-dialog-empty">{{ uiText.noNotes }}</div>
                 </template>
+            </div>
+        </div>
+
+        <div v-if="fullscreenActive && helpDialogOpen" class="reader-overlay-panel" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
+            <div class="reader-dialog-header">
+                <div class="reader-dialog-title">{{ uiText.readerHelp }}</div>
+                <q-btn flat dense round icon="la la-times" @click="helpDialogOpen = false" />
+            </div>
+
+            <div class="reader-dialog-body">
+                <div class="reader-help-intro">{{ readerHelpIntro }}</div>
+                <div v-for="item in readerHelpItems" :key="item" class="reader-help-item">{{ item }}</div>
+            </div>
+        </div>
+
+        <div v-if="fullscreenActive && searchDialogOpen && isPagedMode" class="reader-overlay-panel" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
+            <div class="reader-dialog-header">
+                <div class="reader-dialog-title">{{ uiText.searchTitle }}</div>
+                <q-btn flat dense round icon="la la-times" @click="searchDialogOpen = false" />
+            </div>
+
+            <div class="reader-dialog-body">
+                <q-input
+                    v-model="searchQuery"
+                    dense
+                    outlined
+                    clearable
+                    :placeholder="uiText.searchPlaceholder"
+                    @update:model-value="handleSearchInput"
+                    @keyup.enter="jumpToNextSearchResult"
+                />
+                <div class="reader-search-toolbar">
+                    <q-btn flat dense no-caps icon="la la-angle-up" class="reader-inline-action-btn" :disable="!hasSearchResults" @click="jumpToPrevSearchResult">{{ uiText.searchPrev }}</q-btn>
+                    <q-btn flat dense no-caps icon-right="la la-angle-down" class="reader-inline-action-btn" :disable="!hasSearchResults" @click="jumpToNextSearchResult">{{ uiText.searchNext }}</q-btn>
+                </div>
+                <div class="reader-search-meta">
+                    <span v-if="hasSearchResults">{{ searchResultsLabel }}</span>
+                    <span v-else-if="searchQuery.trim()">{{ uiText.searchEmpty }}</span>
+                    <span v-else>{{ uiText.searchHint }}</span>
+                </div>
             </div>
         </div>
 
@@ -519,7 +611,7 @@
                     <div v-if="currentPlacesTab === 'progress'" class="reader-continue-card">
                         <div class="reader-continue-title">{{ currentSectionTitle || title }}</div>
                         <div class="reader-continue-meta">
-                            {{ progressPercent }}%<span v-if="activePreferences.readMode === 'paged' && totalPages > 1"> | {{ currentPage }}/{{ totalPages }}</span>
+                            {{ progressPercent }}%<span v-if="showPagedPageCounter"> | {{ currentPage }}/{{ totalPages }}</span>
                         </div>
                         <div v-if="progress.updatedAt" class="reader-continue-updated">{{ formatBookmarkDate(progress.updatedAt) }}</div>
                         <div class="reader-continue-actions">
@@ -580,6 +672,50 @@
             </div>
         </q-dialog>
 
+        <q-dialog v-if="!fullscreenActive" v-model="helpDialogOpen" position="right">
+            <div class="reader-dialog reader-dialog--contents" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
+                <div class="reader-dialog-header">
+                    <div class="reader-dialog-title">{{ uiText.readerHelp }}</div>
+                    <q-btn flat dense round icon="la la-times" @click="helpDialogOpen = false" />
+                </div>
+
+                <div class="reader-dialog-body">
+                    <div class="reader-help-intro">{{ readerHelpIntro }}</div>
+                    <div v-for="item in readerHelpItems" :key="item" class="reader-help-item">{{ item }}</div>
+                </div>
+            </div>
+        </q-dialog>
+
+        <q-dialog v-if="!fullscreenActive && isPagedMode" v-model="searchDialogOpen" position="right">
+            <div class="reader-dialog reader-dialog--contents" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
+                <div class="reader-dialog-header">
+                    <div class="reader-dialog-title">{{ uiText.searchTitle }}</div>
+                    <q-btn flat dense round icon="la la-times" @click="searchDialogOpen = false" />
+                </div>
+
+                <div class="reader-dialog-body">
+                    <q-input
+                        v-model="searchQuery"
+                        dense
+                        outlined
+                        clearable
+                        :placeholder="uiText.searchPlaceholder"
+                        @update:model-value="handleSearchInput"
+                        @keyup.enter="jumpToNextSearchResult"
+                    />
+                    <div class="reader-search-toolbar">
+                        <q-btn flat dense no-caps icon="la la-angle-up" class="reader-inline-action-btn" :disable="!hasSearchResults" @click="jumpToPrevSearchResult">{{ uiText.searchPrev }}</q-btn>
+                        <q-btn flat dense no-caps icon-right="la la-angle-down" class="reader-inline-action-btn" :disable="!hasSearchResults" @click="jumpToNextSearchResult">{{ uiText.searchNext }}</q-btn>
+                    </div>
+                    <div class="reader-search-meta">
+                        <span v-if="hasSearchResults">{{ searchResultsLabel }}</span>
+                        <span v-else-if="searchQuery.trim()">{{ uiText.searchEmpty }}</span>
+                        <span v-else>{{ uiText.searchHint }}</span>
+                    </div>
+                </div>
+            </div>
+        </q-dialog>
+
         <q-dialog v-model="bookmarkComposerOpen">
             <div class="reader-dialog reader-dialog--composer" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
                 <div class="reader-dialog-header">
@@ -615,7 +751,7 @@ import _ from 'lodash';
 
 const componentOptions = {
     watch: {
-        '$route.query.bookUid': {
+        readerSourceKey: {
             immediate: true,
             handler() {
                 this.loadReader();// no await
@@ -626,8 +762,16 @@ const componentOptions = {
 
 class Reader {
     _options = componentOptions;
+    _props = {
+        standaloneSource: {
+            type: Object,
+            default: null,
+        },
+    };
 
     loading = false;
+    loadingMessage = '';
+    bookPreparing = false;
     error = '';
     bookInfo = null;
     title = '';
@@ -640,6 +784,8 @@ class Reader {
     controlsOpen = false;
     contentsDialogOpen = false;
     bookmarksDialogOpen = false;
+    helpDialogOpen = false;
+    searchDialogOpen = false;
     bookmarkComposerOpen = false;
     inlineContentsVisible = false;
     fullscreenActive = false;
@@ -650,6 +796,9 @@ class Reader {
     scrollerViewportHeight = 0;
     contents = [];
     bookmarks = [];
+    searchQuery = '';
+    searchResults = [];
+    currentSearchResultIndex = -1;
     currentPlacesTab = 'progress';
     currentSectionId = '';
     bookmarkDraft = {
@@ -698,6 +847,32 @@ class Reader {
     pageTurnAnimating = false;
     pageTurnDirection = 1;
     touchStartPoint = null;
+    imageLayoutFrame = 0;
+    pagedViewportFrame = 0;
+    viewportRefreshFrame = 0;
+    pagedBuildInProgress = false;
+    pagedBuildNeedsRefresh = false;
+    pagedBuildJobId = 0;
+    boundReaderImages = new WeakSet();
+    layoutRefreshing = false;
+    layoutRefreshTimer = null;
+    layoutRefreshStartedAt = 0;
+    bottomCalibrationFrame = 0;
+    bottomClipCalibrationPending = true;
+    dynamicBottomClipCompensationCompact = 0;
+    dynamicBottomClipCompensationRegular = 0;
+    readerDebug = {
+        measureAvailableHeight: 0,
+        measureContentHeight: 0,
+        measureOverflowPx: 0,
+        liveSheetHeight: 0,
+        liveSafeBottom: 0,
+        liveTextBottom: 0,
+        liveOverflowPx: 0,
+        baseBottomClipCompensation: 0,
+        totalBottomClipCompensation: 0,
+        pagedContentSafetyInset: 0,
+    };
 
     created() {
         this.handleBeforeUnload = () => {
@@ -705,12 +880,24 @@ class Reader {
         };
         this.handleFullscreenChange = () => {
             this.fullscreenActive = !!document.fullscreenElement;
+            this.beginLayoutRefresh();
+            this.requestBottomClipCalibration();
+            this.runAfterLayoutRefreshPaint(() => {
+                this.updateScrollerViewport();
+                requestAnimationFrame(() => {
+                    this.restoreProgress();
+                    this.endLayoutRefresh(260);
+                });
+            });
         };
         this.handleWindowResize = () => {
-            this.updateScrollerViewport();
+            this.scheduleViewportRefresh();
         };
         this.handleVisualViewportResize = () => {
-            this.updateScrollerViewport();
+            this.scheduleViewportRefresh();
+        };
+        this.handleReaderKeydown = (event) => {
+            this.handleGlobalKeydown(event);
         };
 
         this.saveProgressDebounced = _.debounce(() => {
@@ -726,15 +913,20 @@ class Reader {
         window.addEventListener('beforeunload', this.handleBeforeUnload);
         document.addEventListener('fullscreenchange', this.handleFullscreenChange);
         window.addEventListener('resize', this.handleWindowResize);
+        window.addEventListener('keydown', this.handleReaderKeydown);
         if (window.visualViewport) {
             window.visualViewport.addEventListener('resize', this.handleVisualViewportResize);
-            window.visualViewport.addEventListener('scroll', this.handleVisualViewportResize);
         }
         this.handleFullscreenChange();
         this.$nextTick(() => {
             this.attachScrollerObserver();
             this.updateScrollerViewport();
+            this.bindReaderImageListeners();
         });
+    }
+
+    updated() {
+        this.bindReaderImageListeners();
     }
 
     deactivated() {
@@ -749,13 +941,33 @@ class Reader {
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
         document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
         window.removeEventListener('resize', this.handleWindowResize);
+        window.removeEventListener('keydown', this.handleReaderKeydown);
         if (window.visualViewport) {
             window.visualViewport.removeEventListener('resize', this.handleVisualViewportResize);
-            window.visualViewport.removeEventListener('scroll', this.handleVisualViewportResize);
         }
         this.detachScrollerObserver();
         this.clearSnapTimer();
         clearTimeout(this.pageTurnTimer);
+        if (this.imageLayoutFrame) {
+            cancelAnimationFrame(this.imageLayoutFrame);
+            this.imageLayoutFrame = 0;
+        }
+        if (this.pagedViewportFrame) {
+            cancelAnimationFrame(this.pagedViewportFrame);
+            this.pagedViewportFrame = 0;
+        }
+        if (this.viewportRefreshFrame) {
+            cancelAnimationFrame(this.viewportRefreshFrame);
+            this.viewportRefreshFrame = 0;
+        }
+        if (this.bottomCalibrationFrame) {
+            cancelAnimationFrame(this.bottomCalibrationFrame);
+            this.bottomCalibrationFrame = 0;
+        }
+        if (this.layoutRefreshTimer) {
+            clearTimeout(this.layoutRefreshTimer);
+            this.layoutRefreshTimer = null;
+        }
         this.flushProgress();
         if (this.savePreferencesDebounced && this.savePreferencesDebounced.flush)
             this.savePreferencesDebounced.flush();
@@ -765,14 +977,49 @@ class Reader {
         return String(this.$route.query.bookUid || this.$route.params.bookUid || '').trim();
     }
 
+    get isStandaloneMode() {
+        return !!(this.standaloneSource && String(this.standaloneSource.fb2 || '').trim());
+    }
+
+    get readerSourceKey() {
+        if (this.isStandaloneMode) {
+            const source = (this.standaloneSource || {});
+            return `standalone:${String(source.sourceKey || source.fileName || source.title || source.fb2 || '').slice(0, 256)}`;
+        }
+
+        return `book:${this.bookUid}`;
+    }
+
+    get readerDebugEnabled() {
+        return ['1', 'true', 'yes', 'on'].includes(String(this.$route.query.debugReader || '').trim().toLowerCase());
+    }
+
     get readerThemeClass() {
         return `reader-theme-${this.preferences.theme || 'dark'}`;
     }
 
+    get readerDebugPreferenceOverrides() {
+        if (!this.readerDebugEnabled)
+            return {};
+
+        const query = (this.$route && this.$route.query ? this.$route.query : {});
+        const readMode = String(query.debugReadMode || '').trim().toLowerCase();
+        const pagedDirection = String(query.debugPagedDirection || '').trim().toLowerCase();
+        const result = {};
+
+        if (readMode === 'paged' || readMode === 'scroll')
+            result.readMode = readMode;
+        if (pagedDirection === 'horizontal' || pagedDirection === 'vertical')
+            result.pagedDirection = pagedDirection;
+
+        return result;
+    }
+
     get activePreferences() {
-        return (this.preferences.theme === 'eink')
+        const basePreferences = (this.preferences.theme === 'eink')
             ? Object.assign({}, this.preferences, this.preferences.einkProfile || {})
             : this.preferences;
+        return Object.assign({}, basePreferences, this.readerDebugPreferenceOverrides);
     }
 
     getActivePreferencesForTheme(theme = '', basePreferences = null) {
@@ -899,6 +1146,15 @@ class Reader {
             continueReading: '\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c',
             bookmarks: '\u0417\u0430\u043a\u043b\u0430\u0434\u043a\u0438',
             notes: '\u0417\u0430\u043c\u0435\u0442\u043a\u0438',
+            readerHelp: '\u041a\u0430\u043a \u0447\u0438\u0442\u0430\u0442\u044c',
+            searchTitle: '\u041f\u043e\u0438\u0441\u043a \u043f\u043e \u0442\u0435\u043a\u0441\u0442\u0443',
+            searchPlaceholder: '\u041d\u0430\u0439\u0442\u0438 \u0444\u0440\u0430\u0437\u0443 \u0438\u043b\u0438 \u0441\u043b\u043e\u0432\u043e',
+            searchPrev: '\u041d\u0430\u0437\u0430\u0434',
+            searchNext: '\u0414\u0430\u043b\u044c\u0448\u0435',
+            searchEmpty: '\u0421\u043e\u0432\u043f\u0430\u0434\u0435\u043d\u0438\u0439 \u043d\u0435\u0442.',
+            searchHint: '\u041f\u043e\u0438\u0441\u043a \u0438\u0449\u0435\u0442 \u043f\u043e \u0443\u0436\u0435 \u0440\u0430\u0437\u0431\u0438\u0442\u044b\u043c \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0430\u043c.',
+            helpMobileIntro: '\u041c\u043e\u0431\u0438\u043b\u044c\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c',
+            helpDesktopIntro: '\u0414\u0435\u0441\u043a\u0442\u043e\u043f\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c',
             bookmark: '\u0417\u0430\u043a\u043b\u0430\u0434\u043a\u0430',
             noBookmarks: '\u0423 \u044d\u0442\u043e\u0439 \u043a\u043d\u0438\u0433\u0438 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0440\u0443\u0447\u043d\u044b\u0445 \u0437\u0430\u043a\u043b\u0430\u0434\u043e\u043a.',
             noNotes: '\u0417\u0430\u043c\u0435\u0442\u043e\u043a \u043f\u043e\u043a\u0430 \u043d\u0435\u0442.',
@@ -917,8 +1173,6 @@ class Reader {
             themeEink: 'eink',
             readModeScroll: '\u041b\u0435\u043d\u0442\u0430',
             readModePages: '\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u044b',
-            navTap: '\u041a\u0430\u0441\u0430\u043d\u0438\u0435',
-            navWheel: '\u041a\u043e\u043b\u0435\u0441\u043e',
             directionVertical: '\u0412\u0435\u0440\u0442\u0438\u043a\u0430\u043b\u044c\u043d\u043e',
             directionHorizontal: '\u0413\u043e\u0440\u0438\u0437\u043e\u043d\u0442\u0430\u043b\u044c\u043d\u043e',
             animationNone: '\u0411\u0435\u0437 \u0430\u043d\u0438\u043c\u0430\u0446\u0438\u0438',
@@ -933,24 +1187,78 @@ class Reader {
             einkPaper: '\u0411\u0443\u043c\u0430\u0433\u0430',
             einkInk: '\u0427\u0435\u0440\u043d\u0438\u043b\u0430',
             loadingBook: '\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u043a\u043d\u0438\u0433\u0438...',
+            loadingFetch: '\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u043a\u043d\u0438\u0433\u0438...',
+            loadingParse: '\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0442\u0435\u043a\u0441\u0442\u0430...',
+            loadingPages: '\u0420\u0430\u0437\u0431\u0438\u0432\u043a\u0430 \u043d\u0430 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
             contents: '\u0421\u043e\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u0435',
             show: '\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c',
             hide: '\u0421\u043a\u0440\u044b\u0442\u044c',
             settings: '\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438',
             screen: '\u042d\u043a\u0440\u0430\u043d',
+            refreshingLayout: '\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0432\u0438\u0434\u0430...',
         };
     }
 
+    get readerHelpIntro() {
+        return (this.isCompactLayout ? this.uiText.helpMobileIntro : this.uiText.helpDesktopIntro);
+    }
+
+    get readerHelpItems() {
+        if (this.isPagedMode) {
+            if (this.isCompactLayout) {
+                return [
+                    '\u041a\u0430\u0441\u0430\u043d\u0438\u0435 \u043f\u043e \u0432\u0435\u0440\u0445\u0443/\u043d\u0438\u0437\u0443 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b \u043b\u0438\u0441\u0442\u0430\u0435\u0442 \u043a\u043d\u0438\u0433\u0443.',
+                    '\u0421\u0432\u0430\u0439\u043f \u0432\u0432\u0435\u0440\u0445/\u0432\u043d\u0438\u0437 \u0438\u043b\u0438 \u0432\u043b\u0435\u0432\u043e/\u0432\u043f\u0440\u0430\u0432\u043e \u0442\u043e\u0436\u0435 \u043f\u0435\u0440\u0435\u043b\u0438\u0441\u0442\u044b\u0432\u0430\u0435\u0442.',
+                    '\u041a\u0430\u0441\u0430\u043d\u0438\u0435 \u043f\u043e \u0446\u0435\u043d\u0442\u0440\u0443 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442 \u0438\u043b\u0438 \u0441\u043a\u0440\u044b\u0432\u0430\u0435\u0442 \u043f\u0430\u043d\u0435\u043b\u0438.',
+                    '\u041a\u043d\u043e\u043f\u043a\u0430 \u00ab?\u00bb \u0432\u0441\u0435\u0433\u0434\u0430 \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442 \u044d\u0442\u0443 \u043f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0443.',
+                ];
+            }
+
+            return [
+                '\u041a\u043b\u0438\u043a \u043f\u043e \u0432\u0435\u0440\u0445\u043d\u0435\u0439/\u043d\u0438\u0436\u043d\u0435\u0439 \u0437\u043e\u043d\u0435 \u0438\u043b\u0438 \u043f\u043e \u043b\u0435\u0432\u043e\u0439/\u043f\u0440\u0430\u0432\u043e\u0439 \u0437\u043e\u043d\u0435 \u043b\u0438\u0441\u0442\u0430\u0435\u0442 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b.',
+                '\u041a\u043e\u043b\u0435\u0441\u043e \u043c\u044b\u0448\u0438 \u0442\u043e\u0436\u0435 \u043b\u0438\u0441\u0442\u0430\u0435\u0442 \u043a\u043d\u0438\u0433\u0443.',
+                '\u041a\u043b\u0430\u0432\u0438\u0448\u0438 `\u2190 \u2192 \u2191 \u2193`, `PageUp`, `PageDown` \u0438 `Space` \u0440\u0430\u0431\u043e\u0442\u0430\u044e\u0442 \u0434\u043b\u044f \u043d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u0438.',
+                '\u041a\u043b\u0438\u043a \u043f\u043e \u0446\u0435\u043d\u0442\u0440\u0443 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442 \u0438\u043b\u0438 \u0441\u043a\u0440\u044b\u0432\u0430\u0435\u0442 \u043f\u0430\u043d\u0435\u043b\u0438.',
+            ];
+        }
+
+        if (this.isCompactLayout) {
+            return [
+                '\u041b\u0438\u0441\u0442\u0430\u0439\u0442\u0435 \u043a\u043d\u0438\u0433\u0443 \u043e\u0431\u044b\u0447\u043d\u044b\u043c \u0441\u043a\u0440\u043e\u043b\u043b\u043e\u043c \u0438\u043b\u0438 \u0441\u0432\u0430\u0439\u043f\u043e\u043c.',
+                '\u041d\u0438\u0436\u043d\u044f\u044f \u043f\u0430\u043d\u0435\u043b\u044c \u0434\u0430\u0451\u0442 \u0431\u044b\u0441\u0442\u0440\u044b\u0439 \u0434\u043e\u0441\u0442\u0443\u043f \u043a \u043c\u0435\u0441\u0442\u0430\u043c, \u043e\u0433\u043b\u0430\u0432\u043b\u0435\u043d\u0438\u044e \u0438 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430\u043c.',
+                '\u041a\u043d\u043e\u043f\u043a\u0430 \u00ab?\u00bb \u0432 \u043b\u044e\u0431\u043e\u0439 \u043c\u043e\u043c\u0435\u043d\u0442 \u043e\u0442\u043a\u0440\u043e\u0435\u0442 \u044d\u0442\u0443 \u043f\u0430\u043c\u044f\u0442\u043a\u0443.',
+            ];
+        }
+
+        return [
+            '\u0412 \u0440\u0435\u0436\u0438\u043c\u0435 \u00ab\u043b\u0435\u043d\u0442\u0430\u00bb \u043a\u043d\u0438\u0433\u0430 \u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044f \u043e\u0431\u044b\u0447\u043d\u044b\u043c \u0441\u043a\u0440\u043e\u043b\u043b\u043e\u043c.',
+            '\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u043c\u044b\u0448\u044c, \u0442\u0430\u0447\u043f\u0430\u0434 \u0438\u043b\u0438 \u043a\u043b\u0430\u0432\u0438\u0448\u0438 `PageUp`/`PageDown`, `Space`, `Home`, `End`.',
+            '\u041e\u0433\u043b\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u0438 \u00ab\u041c\u043e\u0438 \u043c\u0435\u0441\u0442\u0430\u00bb \u043f\u043e\u043c\u043e\u0433\u0430\u044e\u0442 \u0431\u044b\u0441\u0442\u0440\u043e \u0432\u0435\u0440\u043d\u0443\u0442\u044c\u0441\u044f \u043a \u043d\u0443\u0436\u043d\u043e\u043c\u0443 \u0444\u0440\u0430\u0433\u043c\u0435\u043d\u0442\u0443.',
+        ];
+    }
+
     get compactProgressHint() {
-        return (this.activePreferences.readMode === 'paged' && this.totalPages > 1)
+        return (this.showPagedPageCounter)
             ? `${this.progressPercent}% | ${this.currentPage}/${this.totalPages}`
             : `${this.progressPercent}%`;
     }
 
     get compactStatusBarText() {
-        return (this.activePreferences.readMode === 'paged')
+        return (this.showPagedPageCounter)
             ? `${this.readerProgressLabel} | ${this.currentPage}/${this.totalPages}`
             : this.readerProgressLabel;
+    }
+
+    get isPagedBuildPending() {
+        return !!(this.isPagedMode && (this.bookPreparing || this.pagedBuildInProgress));
+    }
+
+    get showPagedPageCounter() {
+        return !!(this.isPagedMode && !this.isPagedBuildPending && this.totalPages > 1);
+    }
+
+    get showLayoutRefreshIndicator() {
+        return !!(this.layoutRefreshing && !this.bookPreparing && !this.pagedBuildInProgress);
     }
 
     get activePagedPage() {
@@ -958,6 +1266,37 @@ class Reader {
             return null;
 
         return this.pagedPages[Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex))] || null;
+    }
+
+    get currentDynamicBottomClipCompensation() {
+        return (this.isCompactLayout
+            ? (Number(this.dynamicBottomClipCompensationCompact || 0) || 0)
+            : (Number(this.dynamicBottomClipCompensationRegular || 0) || 0));
+    }
+
+    get activePagedPageRenderedHtml() {
+        const page = this.activePagedPage;
+        if (!page)
+            return '';
+
+        if (!this.searchQuery.trim() || !this.hasSearchResults)
+            return page.html || '';
+
+        const activeResult = this.searchResults[this.currentSearchResultIndex] || null;
+        if (!activeResult || activeResult.pageIndex !== this.currentPageIndex)
+            return page.html || '';
+
+        return this.highlightHtmlMatches(page.html || '', this.searchQuery);
+    }
+
+    get hasSearchResults() {
+        return this.searchResults.length > 0;
+    }
+
+    get searchResultsLabel() {
+        if (!this.hasSearchResults)
+            return '';
+        return `${this.currentSearchResultIndex + 1}/${this.searchResults.length} | ${this.uiText.readModePages} ${this.searchResults[this.currentSearchResultIndex].pageIndex + 1}`;
     }
 
     get pagedTransitionName() {
@@ -968,7 +1307,7 @@ class Reader {
     }
 
     get readerPageMeta() {
-        return (this.activePreferences.readMode === 'paged')
+        return (this.showPagedPageCounter)
             ? `${this.currentPage}/${this.totalPages}`
             : '';
     }
@@ -1124,17 +1463,19 @@ class Reader {
     get readerBodyStyle() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         const pagePaddingX = (this.isCompactLayout ? 20 : 64);
+        const fallbackHeight = Math.max((this.isCompactLayout ? 120 : 180), scrollerHeight - (this.isCompactLayout ? 20 : 56));
+        const pageHeight = Math.max((this.isCompactLayout ? 120 : 180), this.pageMinHeight || fallbackHeight);
         const pageColumnWidth = Math.max(180, this.pageFrameWidth - pagePaddingX - 2);
-        const minPageHeight = (this.isCompactLayout ? 220 : 360);
         return {
             '--reader-font-size': `${this.activePreferences.fontSize}px`,
             '--reader-line-height': String(this.activePreferences.lineHeight),
             '--reader-content-width': `${this.activePreferences.contentWidth}px`,
-            '--reader-page-min-height': `${Math.max(minPageHeight, this.pageMinHeight || (scrollerHeight - 56))}px`,
+            '--reader-page-min-height': `${pageHeight}px`,
             '--reader-page-gap': `${this.pageGap}px`,
             '--reader-page-frame-width': `${this.pageFrameWidth}px`,
             '--reader-page-column-width': `${pageColumnWidth}px`,
-            '--reader-page-padding': (this.isCompactLayout ? '10px 10px 12px' : '28px 32px 34px'),
+            '--reader-page-padding': (this.isCompactLayout ? '10px 8px 28px' : '28px 32px 44px'),
+            '--reader-page-media-max-height': `${Math.max(120, pageHeight - (this.isCompactLayout ? 60 : 128))}px`,
             '--reader-page-transition-duration': `${this.pageAnimationDurationMs}ms`,
             '--reader-page-shift-x': `${this.pageAnimationShiftPx}px`,
             '--reader-page-shift-y': `${Math.max(0, Math.round(this.pageAnimationShiftPx * 0.72))}px`,
@@ -1149,19 +1490,21 @@ class Reader {
 
     get pageFrameWidth() {
         const scrollerWidth = (this.scrollerViewportWidth || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0));
-        const reservedGap = (this.isCompactLayout ? 16 : 120);
+        const reservedGap = (this.isCompactLayout ? 6 : 120);
         return Math.max(280, Math.min(this.activePreferences.contentWidth, Math.max(280, scrollerWidth - reservedGap)));
     }
 
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         if (this.isCompactLayout) {
-            const visibleScrollerHeight = this.compactVisibleScrollerHeight || scrollerHeight;
-            const footerHeight = this.readerMobileFooterHeight || 0;
-            return Math.max(220, visibleScrollerHeight - this.readerShellVerticalPadding - footerHeight - 6);
+            const visibleScrollerHeight = this.compactVisibleScrollerHeight || 0;
+            const availableHeight = (visibleScrollerHeight
+                ? Math.min(Math.max(0, scrollerHeight || visibleScrollerHeight), visibleScrollerHeight)
+                : scrollerHeight);
+            return Math.max(120, availableHeight - this.readerShellVerticalPadding);
         }
         const chromeOffset = 72;
-        return Math.max(360, scrollerHeight - chromeOffset);
+        return Math.max(180, scrollerHeight - chromeOffset);
     }
 
     get isCompactLayout() {
@@ -1254,6 +1597,64 @@ class Reader {
         this.contentsDialogOpen = !this.contentsDialogOpen;
     }
 
+    toggleHelpDialog() {
+        this.helpDialogOpen = !this.helpDialogOpen;
+    }
+
+    async toggleCompactChromeVisibility() {
+        this.beginLayoutRefresh();
+        await this.afterLayoutRefreshPaint();
+
+        this.chromeHidden = !this.chromeHidden;
+        if (this.chromeHidden) {
+            this.controlsOpen = false;
+            this.contentsDialogOpen = false;
+            this.helpDialogOpen = false;
+        }
+
+        this.$nextTick(() => {
+            this.runAfterLayoutRefreshPaint(() => {
+                this.updateScrollerViewport();
+                requestAnimationFrame(() => {
+                    if (this.isPagedMode)
+                        this.setCurrentPagedPage(this.currentPageIndex, false);
+                    this.endLayoutRefresh(180);
+                });
+            });
+        });
+    }
+
+    toggleSearchDialog() {
+        if (!this.isPagedMode)
+            return;
+
+        this.searchDialogOpen = !this.searchDialogOpen;
+    }
+
+    adjustDebugBottomCompensation(direction = 1) {
+        const fontSize = Math.max(14, Number(this.activePreferences.fontSize || 18) || 18);
+        const lineHeight = Math.max(1.2, Number(this.activePreferences.lineHeight || 1.7) || 1.7);
+        const step = Math.max(8, Math.round(fontSize * lineHeight));
+        const delta = (direction < 0 ? -step : step);
+
+        if (this.isCompactLayout) {
+            this.dynamicBottomClipCompensationCompact = Math.max(0, Math.min(240, (Number(this.dynamicBottomClipCompensationCompact || 0) || 0) + delta));
+        } else {
+            this.dynamicBottomClipCompensationRegular = Math.max(0, Math.min(320, (Number(this.dynamicBottomClipCompensationRegular || 0) || 0) + delta));
+        }
+
+        this.reflowReaderLayout();
+    }
+
+    resetDebugBottomCompensation() {
+        if (this.isCompactLayout)
+            this.dynamicBottomClipCompensationCompact = 0;
+        else
+            this.dynamicBottomClipCompensationRegular = 0;
+
+        this.reflowReaderLayout();
+    }
+
     toggleInlineContents() {
         this.inlineContentsVisible = !this.inlineContentsVisible;
     }
@@ -1275,7 +1676,9 @@ class Reader {
         this.bookmarksDialogOpen = true;
     }
 
-    setReadMode(mode = 'scroll') {
+    async setReadMode(mode = 'scroll') {
+        this.beginLayoutRefresh();
+        await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({
             readMode: (mode === 'paged' ? 'paged' : 'scroll'),
         });
@@ -1283,14 +1686,9 @@ class Reader {
         this.reflowReaderLayout();
     }
 
-    setPagedNavigation(mode = 'tap') {
-        this.updateActivePreferences({
-            pagedNavigation: (mode === 'wheel' ? 'wheel' : 'tap'),
-        });
-        this.savePreferencesDebounced();
-    }
-
-    setPagedDirection(direction = 'vertical') {
+    async setPagedDirection(direction = 'vertical') {
+        this.beginLayoutRefresh();
+        await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({
             pagedDirection: (direction === 'horizontal' ? 'horizontal' : 'vertical'),
         });
@@ -1363,7 +1761,7 @@ class Reader {
             return;
 
         this.resizeObserver = new ResizeObserver(() => {
-            this.updateScrollerViewport();
+            this.scheduleViewportRefresh({calibrate: false});
         });
         this.resizeObserver.observe(this.$refs.scroller);
     }
@@ -1375,24 +1773,568 @@ class Reader {
         }
     }
 
+    scheduleViewportRefresh({calibrate = true} = {}) {
+        if (typeof window === 'undefined')
+            return;
+
+        if (calibrate)
+            this.requestBottomClipCalibration();
+
+        if (this.viewportRefreshFrame)
+            return;
+
+        this.viewportRefreshFrame = requestAnimationFrame(() => {
+            this.viewportRefreshFrame = 0;
+            this.updateScrollerViewport();
+        });
+    }
+
     updateScrollerViewport() {
         const scroller = (this.$refs ? this.$refs.scroller : null);
         this.scrollerViewportWidth = ((scroller && scroller.clientWidth) || 0);
         this.scrollerViewportHeight = ((scroller && scroller.clientHeight) || 0);
         if (this.isPagedMode) {
-            this.buildPagedPages();
-            this.syncPagedProgress(false);
+            if (this.pagedBuildInProgress) {
+                this.pagedBuildNeedsRefresh = true;
+                return;
+            }
+            this.schedulePagedViewportBuild();
+            return;
         }
         this.applyVerticalSectionAlignment();
     }
 
+    schedulePagedViewportBuild() {
+        if (typeof window === 'undefined')
+            return;
+        if (this.pagedBuildInProgress) {
+            this.pagedBuildNeedsRefresh = true;
+            return;
+        }
+
+        if (this.pagedViewportFrame) {
+            cancelAnimationFrame(this.pagedViewportFrame);
+            this.pagedViewportFrame = 0;
+        }
+
+        this.$nextTick(() => {
+            this.pagedViewportFrame = requestAnimationFrame(async() => {
+                this.pagedViewportFrame = 0;
+                if (!this.isPagedMode)
+                    return;
+
+                await this.waitForStablePagedStage();
+                if (!this.isPagedMode)
+                    return;
+
+                this.pagedBuildJobId += 1;
+                await this.buildPagedPagesChunked(this.pagedBuildJobId);
+                this.syncPagedProgress(false);
+                if (this.bottomClipCalibrationPending)
+                    this.scheduleBottomClipCalibration();
+            });
+        });
+    }
+
+    requestBottomClipCalibration() {
+        this.bottomClipCalibrationPending = true;
+    }
+
+    beginLayoutRefresh() {
+        if (this.layoutRefreshTimer) {
+            clearTimeout(this.layoutRefreshTimer);
+            this.layoutRefreshTimer = null;
+        }
+        this.layoutRefreshStartedAt = Date.now();
+        this.layoutRefreshing = true;
+    }
+
+    runAfterLayoutRefreshPaint(callback = () => {}) {
+        this.$nextTick(() => {
+            setTimeout(() => {
+                let finished = false;
+                let fallbackTimer = 0;
+                const finish = () => {
+                    if (finished)
+                        return;
+                    finished = true;
+                    if (fallbackTimer) {
+                        clearTimeout(fallbackTimer);
+                        fallbackTimer = 0;
+                    }
+                    callback();
+                };
+
+                fallbackTimer = setTimeout(finish, (this.readerDebugEnabled ? 34 : 68));
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(finish);
+                });
+            }, 0);
+        });
+    }
+
+    afterLayoutRefreshPaint() {
+        return new Promise((resolve) => {
+            this.runAfterLayoutRefreshPaint(resolve);
+        });
+    }
+
+    waitForAnimationFrames(count = 2) {
+        const frames = Math.max(1, Math.round(Number(count || 0) || 0));
+        return new Promise((resolve) => {
+            const step = (remaining) => {
+                if (remaining <= 0) {
+                    resolve();
+                    return;
+                }
+
+                let finished = false;
+                let fallbackTimer = 0;
+                const next = () => {
+                    if (finished)
+                        return;
+                    finished = true;
+                    if (fallbackTimer) {
+                        clearTimeout(fallbackTimer);
+                        fallbackTimer = 0;
+                    }
+                    step(remaining - 1);
+                };
+
+                fallbackTimer = setTimeout(next, (this.readerDebugEnabled ? 24 : 34));
+                requestAnimationFrame(next);
+            };
+            step(frames);
+        });
+    }
+
+    getPagedStageRect() {
+        const stage = (this.$refs ? this.$refs.pageStage : null);
+        if (!stage || typeof stage.getBoundingClientRect !== 'function')
+            return {width: 0, height: 0};
+
+        const rect = stage.getBoundingClientRect();
+        return {
+            width: Math.max(0, Math.round(rect.width || stage.clientWidth || 0)),
+            height: Math.max(0, Math.round(rect.height || stage.clientHeight || 0)),
+        };
+    }
+
+    syncMeasureHostToStage() {
+        const measureHost = (this.$refs ? this.$refs.pageMeasure : null);
+        const stageRect = this.getPagedStageRect();
+        if (!measureHost || !stageRect.width || !stageRect.height)
+            return stageRect;
+
+        measureHost.style.width = `${stageRect.width}px`;
+        measureHost.style.maxWidth = `${stageRect.width}px`;
+        measureHost.style.minWidth = `${stageRect.width}px`;
+        measureHost.style.height = `${stageRect.height}px`;
+        measureHost.style.minHeight = `${stageRect.height}px`;
+        return stageRect;
+    }
+
+    async waitForStablePagedStage(requiredStableFrames = 2, timeoutMs = 480) {
+        if (!this.isPagedMode)
+            return {width: 0, height: 0};
+
+        const startedAt = Date.now();
+        let stableFrames = 0;
+        let lastKey = '';
+        let lastRect = {width: 0, height: 0};
+
+        while ((Date.now() - startedAt) < timeoutMs) {
+            await this.$nextTick();
+            await this.waitForAnimationFrames(1);
+
+            lastRect = this.syncMeasureHostToStage();
+            const nextKey = `${lastRect.width}x${lastRect.height}`;
+            if (lastRect.width > 0 && lastRect.height > 0) {
+                stableFrames = (nextKey === lastKey ? stableFrames + 1 : 1);
+                lastKey = nextKey;
+                if (stableFrames >= Math.max(1, requiredStableFrames))
+                    return lastRect;
+            }
+        }
+
+        return lastRect;
+    }
+
+    endLayoutRefresh(delayMs = 180) {
+        if (this.layoutRefreshTimer)
+            clearTimeout(this.layoutRefreshTimer);
+
+        const elapsed = Math.max(0, Date.now() - (this.layoutRefreshStartedAt || 0));
+        const minVisibleMs = 260;
+        const waitMs = Math.max(delayMs, minVisibleMs - elapsed);
+        this.layoutRefreshTimer = setTimeout(() => {
+            this.layoutRefreshTimer = null;
+            this.layoutRefreshing = false;
+            if (this.isPagedMode && this.bottomClipCalibrationPending)
+                this.scheduleBottomClipCalibration();
+        }, Math.max(0, waitMs));
+    }
+
+    scheduleImageLayoutRefresh() {
+        if (typeof window === 'undefined')
+            return;
+
+        this.beginLayoutRefresh();
+        this.requestBottomClipCalibration();
+        if (this.imageLayoutFrame)
+            cancelAnimationFrame(this.imageLayoutFrame);
+
+        this.imageLayoutFrame = requestAnimationFrame(() => {
+            this.imageLayoutFrame = 0;
+            this.runAfterLayoutRefreshPaint(() => {
+                this.updateScrollerViewport();
+                this.endLayoutRefresh(160);
+            });
+        });
+    }
+
+    scheduleBottomClipCalibration() {
+        if (!this.isPagedMode || typeof window === 'undefined')
+            return;
+
+        this.bottomClipCalibrationPending = false;
+        if (this.bottomCalibrationFrame)
+            cancelAnimationFrame(this.bottomCalibrationFrame);
+
+        this.bottomCalibrationFrame = requestAnimationFrame(() => {
+            this.bottomCalibrationFrame = requestAnimationFrame(() => {
+                this.bottomCalibrationFrame = 0;
+                this.calibrateDynamicBottomClipCompensation();
+            });
+        });
+    }
+
+    measureLivePageContentBottom(sheet, html) {
+        if (!sheet || !html || typeof window === 'undefined')
+            return null;
+
+        const sheetRect = sheet.getBoundingClientRect();
+        const sheetStyle = window.getComputedStyle(sheet);
+        const paddingBottom = parseFloat(sheetStyle.paddingBottom || '0') || 0;
+        const safeBottom = sheetRect.bottom - paddingBottom - 2;
+
+        let maxBottom = -Infinity;
+
+        const walker = document.createTreeWalker(
+            html,
+            NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => {
+                    if (node.nodeType === Node.TEXT_NODE)
+                        return (String(node.nodeValue || '').trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT);
+                    return NodeFilter.FILTER_ACCEPT;
+                },
+            },
+        );
+
+        let current = walker.currentNode;
+        while (current) {
+            let rects = [];
+            if (current.nodeType === Node.TEXT_NODE) {
+                const range = document.createRange();
+                range.selectNodeContents(current);
+                rects = Array.from(range.getClientRects());
+                if (typeof range.detach === 'function')
+                    range.detach();
+            } else if (typeof current.getClientRects === 'function') {
+                rects = Array.from(current.getClientRects());
+            }
+
+            for (const rect of rects) {
+                if (!rect || rect.height <= 0)
+                    continue;
+                maxBottom = Math.max(maxBottom, rect.bottom);
+            }
+
+            current = walker.nextNode();
+        }
+
+        if (!Number.isFinite(maxBottom))
+            maxBottom = sheetRect.top;
+
+        return {
+            sheetRect,
+            safeBottom,
+            textBottom: maxBottom,
+            overflow: Math.ceil(maxBottom - safeBottom),
+        };
+    }
+
+    getActiveLivePagedSheet() {
+        const readerBody = (this.$refs ? this.$refs.readerBody : null);
+        if (!readerBody || typeof window === 'undefined')
+            return null;
+
+        const liveSheets = Array.from(readerBody.querySelectorAll('.reader-page-sheet--live'));
+        if (!liveSheets.length)
+            return null;
+
+        const currentIndex = String(this.currentPageIndex);
+        const matchingSheets = liveSheets.filter((sheet) => String(sheet.dataset.pageIndex || '') === currentIndex);
+        const candidates = (matchingSheets.length ? matchingSheets : liveSheets);
+
+        let bestSheet = null;
+        let bestScore = -Infinity;
+
+        for (const sheet of candidates) {
+            const rect = (typeof sheet.getBoundingClientRect === 'function' ? sheet.getBoundingClientRect() : null);
+            if (!rect || rect.width <= 0 || rect.height <= 0)
+                continue;
+
+            const style = window.getComputedStyle(sheet);
+            if (style.display === 'none' || style.visibility === 'hidden')
+                continue;
+
+            const opacity = Math.max(0, Math.min(1, parseFloat(style.opacity || '1') || 0));
+            const visibleWidth = Math.max(0, Math.min(rect.right, window.innerWidth || rect.right) - Math.max(rect.left, 0));
+            const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight || rect.bottom) - Math.max(rect.top, 0));
+            const visibleArea = visibleWidth * visibleHeight;
+            const score = visibleArea * Math.max(0.15, opacity);
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestSheet = sheet;
+            }
+        }
+
+        return (bestSheet || candidates[0] || null);
+    }
+
+    calibrateDynamicBottomClipCompensation() {
+        if (!this.isPagedMode || typeof window === 'undefined' || typeof document === 'undefined')
+            return;
+        if (this.layoutRefreshing) {
+            this.bottomClipCalibrationPending = true;
+            if (this.bottomCalibrationFrame)
+                cancelAnimationFrame(this.bottomCalibrationFrame);
+            this.bottomCalibrationFrame = requestAnimationFrame(() => {
+                this.bottomCalibrationFrame = 0;
+                this.scheduleBottomClipCalibration();
+            });
+            return;
+        }
+
+        const sheet = this.getActiveLivePagedSheet();
+        const html = (sheet ? sheet.querySelector('.reader-html') : null);
+        if (!sheet || !html || typeof document.createRange !== 'function')
+            return;
+
+        const metrics = this.measureLivePageContentBottom(sheet, html);
+        if (!metrics)
+            return;
+
+        this.readerDebug = Object.assign({}, this.readerDebug, {
+            liveSheetHeight: Math.round(metrics.sheetRect.height),
+            liveSafeBottom: Math.round(metrics.safeBottom),
+            liveTextBottom: Math.round(metrics.textBottom),
+            liveOverflowPx: Math.round(metrics.overflow),
+        });
+
+        const overflow = metrics.overflow;
+        const currentDynamic = this.currentDynamicBottomClipCompensation;
+        const measureOverflow = Number(this.readerDebug.measureOverflowPx || 0) || 0;
+        const fontSize = Math.max(14, Number(this.activePreferences.fontSize || 18) || 18);
+        const lineHeight = Math.max(1.2, Number(this.activePreferences.lineHeight || 1.7) || 1.7);
+        const linePx = Math.max(18, Math.round(fontSize * lineHeight));
+        const increaseTolerance = Math.max(6, Math.round(linePx * 0.22));
+        const maxDynamicCompensation = Math.max(
+            linePx * 2,
+            Math.round(linePx * (this.isCompactLayout ? 3.8 : 4.6)),
+        );
+
+        if (overflow > increaseTolerance && overflow <= 160) {
+            const nextValue = Math.min(maxDynamicCompensation, currentDynamic + overflow + 2);
+            if (this.isCompactLayout) {
+                if (nextValue === this.dynamicBottomClipCompensationCompact)
+                    return;
+                this.dynamicBottomClipCompensationCompact = nextValue;
+            } else {
+                if (nextValue === this.dynamicBottomClipCompensationRegular)
+                    return;
+                this.dynamicBottomClipCompensationRegular = nextValue;
+            }
+
+            this.reflowReaderLayout();
+            return;
+        }
+
+        // Clamp runaway manual/auto compensation so one bad page does not leave huge gaps everywhere.
+        if (currentDynamic > maxDynamicCompensation && measureOverflow > increaseTolerance) {
+            if (this.isCompactLayout) {
+                this.dynamicBottomClipCompensationCompact = maxDynamicCompensation;
+            } else {
+                this.dynamicBottomClipCompensationRegular = maxDynamicCompensation;
+            }
+
+            this.reflowReaderLayout();
+        }
+    }
+
+    bindReaderImageListeners() {
+        if (typeof window === 'undefined' || !this.$refs || !this.$refs.page)
+            return;
+
+        const images = Array.from(this.$refs.page.querySelectorAll('img'));
+        for (const img of images) {
+            if (this.boundReaderImages.has(img))
+                continue;
+
+            this.boundReaderImages.add(img);
+            if (img.complete)
+                continue;
+
+            const handleImageReady = () => {
+                this.scheduleImageLayoutRefresh();
+            };
+
+            img.addEventListener('load', handleImageReady, {once: true});
+            img.addEventListener('error', handleImageReady, {once: true});
+        }
+    }
+
+    escapeRegExp(value = '') {
+        return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    stripHtml(html = '') {
+        if (typeof document === 'undefined')
+            return String(html || '');
+
+        const host = document.createElement('div');
+        host.innerHTML = String(html || '');
+        return String(host.textContent || host.innerText || '');
+    }
+
+    highlightHtmlMatches(html = '', query = '') {
+        const safeQuery = String(query || '').trim();
+        if (!safeQuery || typeof document === 'undefined')
+            return html;
+
+        const host = document.createElement('div');
+        host.innerHTML = String(html || '');
+        const pattern = new RegExp(this.escapeRegExp(safeQuery), 'gi');
+        const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+        const textNodes = [];
+
+        while (walker.nextNode())
+            textNodes.push(walker.currentNode);
+
+        for (const textNode of textNodes) {
+            const value = String(textNode.nodeValue || '');
+            if (!value.trim() || !pattern.test(value))
+                continue;
+
+            pattern.lastIndex = 0;
+            const fragment = document.createDocumentFragment();
+            let lastIndex = 0;
+            let match = pattern.exec(value);
+            while (match) {
+                const matchText = match[0];
+                const matchIndex = match.index;
+                if (matchIndex > lastIndex)
+                    fragment.appendChild(document.createTextNode(value.slice(lastIndex, matchIndex)));
+
+                const mark = document.createElement('mark');
+                mark.className = 'reader-search-hit';
+                mark.textContent = matchText;
+                fragment.appendChild(mark);
+                lastIndex = matchIndex + matchText.length;
+                match = pattern.exec(value);
+            }
+
+            if (lastIndex < value.length)
+                fragment.appendChild(document.createTextNode(value.slice(lastIndex)));
+
+            if (textNode.parentNode)
+                textNode.parentNode.replaceChild(fragment, textNode);
+        }
+
+        return host.innerHTML;
+    }
+
+    rebuildSearchResults(resetIndex = false) {
+        const query = String(this.searchQuery || '').trim().toLowerCase();
+        if (!query || !this.isPagedMode || !this.pagedPages.length) {
+            this.searchResults = [];
+            this.currentSearchResultIndex = -1;
+            return;
+        }
+
+        const results = [];
+        for (let index = 0; index < this.pagedPages.length; index += 1) {
+            const page = this.pagedPages[index] || {};
+            const text = this.stripHtml(page.html || '').toLowerCase();
+            if (text.includes(query))
+                results.push({pageIndex: index});
+        }
+
+        this.searchResults = results;
+        if (!results.length) {
+            this.currentSearchResultIndex = -1;
+            return;
+        }
+
+        if (resetIndex || this.currentSearchResultIndex < 0 || this.currentSearchResultIndex >= results.length) {
+            const nearestIndex = results.findIndex((item) => item.pageIndex >= this.currentPageIndex);
+            this.currentSearchResultIndex = (nearestIndex >= 0 ? nearestIndex : 0);
+            return;
+        }
+
+        const activePageIndex = (this.searchResults[this.currentSearchResultIndex] || {}).pageIndex;
+        const nextCurrentIndex = results.findIndex((item) => item.pageIndex === activePageIndex);
+        this.currentSearchResultIndex = (nextCurrentIndex >= 0 ? nextCurrentIndex : 0);
+    }
+
+    handleSearchInput() {
+        this.rebuildSearchResults(true);
+        if (this.hasSearchResults)
+            this.goToSearchResult(this.currentSearchResultIndex, false);
+    }
+
+    goToSearchResult(index = 0, save = true) {
+        if (!this.hasSearchResults)
+            return;
+
+        const safeIndex = Math.max(0, Math.min(this.searchResults.length - 1, index));
+        this.currentSearchResultIndex = safeIndex;
+        const result = this.searchResults[safeIndex];
+        if (!result)
+            return;
+
+        this.setCurrentPagedPage(result.pageIndex, save);
+    }
+
+    jumpToNextSearchResult() {
+        if (!this.hasSearchResults)
+            return;
+
+        const nextIndex = (this.currentSearchResultIndex + 1) % this.searchResults.length;
+        this.goToSearchResult(nextIndex, true);
+    }
+
+    jumpToPrevSearchResult() {
+        if (!this.hasSearchResults)
+            return;
+
+        const nextIndex = (this.currentSearchResultIndex <= 0 ? this.searchResults.length - 1 : this.currentSearchResultIndex - 1);
+        this.goToSearchResult(nextIndex, true);
+    }
+
     reflowReaderLayout() {
+        this.beginLayoutRefresh();
         this.restorePending = true;
         this.clearSnapTimer();
-        this.$nextTick(() => {
+        this.requestBottomClipCalibration();
+        this.runAfterLayoutRefreshPaint(() => {
+            this.updateScrollerViewport();
             requestAnimationFrame(() => {
-                this.updateScrollerViewport();
-                requestAnimationFrame(() => this.restoreProgress());
+                this.restoreProgress();
+                this.endLayoutRefresh(220);
             });
         });
     }
@@ -1474,28 +2416,154 @@ class Reader {
         if (!measureHost || typeof window === 'undefined' || !window.getComputedStyle)
             return 0;
 
-        const style = window.getComputedStyle(measureHost);
-        const padTop = parseFloat(style.paddingTop || '0') || 0;
-        const padBottom = parseFloat(style.paddingBottom || '0') || 0;
-        return Math.max(0, measureHost.clientHeight - padTop - padBottom - this.pagedContentSafetyInset);
+        const measureHtml = measureHost.querySelector('.reader-html');
+        const htmlRect = (measureHtml && typeof measureHtml.getBoundingClientRect === 'function'
+            ? measureHtml.getBoundingClientRect()
+            : {height: 0});
+        const hostStyle = window.getComputedStyle(measureHost);
+        const htmlStyle = (measureHtml ? window.getComputedStyle(measureHtml) : null);
+        const syncedStageRect = this.syncMeasureHostToStage();
+        const hostRect = (typeof measureHost.getBoundingClientRect === 'function'
+            ? measureHost.getBoundingClientRect()
+            : {height: 0});
+        const hostPaddingTop = parseFloat(hostStyle.paddingTop || '0') || 0;
+        const hostPaddingBottom = parseFloat(hostStyle.paddingBottom || '0') || 0;
+        const htmlPaddingTop = parseFloat((htmlStyle && htmlStyle.paddingTop) || '0') || 0;
+        const htmlPaddingBottom = parseFloat((htmlStyle && htmlStyle.paddingBottom) || '0') || 0;
+        const directHtmlHeight = Math.max(
+            0,
+            Math.round(Math.max(
+                (measureHtml && measureHtml.clientHeight) || 0,
+                htmlRect.height || 0,
+            )),
+        );
+        const pageOuterHeight = Math.max(
+            0,
+            Math.round(Math.max(
+                syncedStageRect.height || 0,
+                hostRect.height || 0,
+                this.pageMinHeight || 0,
+                measureHost.clientHeight || 0,
+            )),
+        );
+        const fallbackHeight = Math.max(0, Math.round(
+            pageOuterHeight
+            - hostPaddingTop
+            - hostPaddingBottom
+            - htmlPaddingTop
+            - htmlPaddingBottom
+        ));
+        const availableHeight = (directHtmlHeight || fallbackHeight);
+
+        this.readerDebug = Object.assign({}, this.readerDebug, {
+            measureAvailableHeight: Math.round(availableHeight),
+            baseBottomClipCompensation: 0,
+            totalBottomClipCompensation: 0,
+            pagedContentSafetyInset: 0,
+        });
+        return availableHeight;
     }
 
     get pagedContentSafetyInset() {
-        if (this.isCompactLayout)
-            return 22;
-        return 8;
+        const fontSize = Math.max(14, Number(this.activePreferences.fontSize || 18) || 18);
+        const lineHeight = Math.max(1.2, Number(this.activePreferences.lineHeight || 1.7) || 1.7);
+        const reserveLines = (this.isCompactLayout ? 4.1 : 3.0);
+        const reserve = Math.ceil(fontSize * lineHeight * reserveLines);
+        return Math.max((this.isCompactLayout ? 68 : 52), reserve);
     }
 
-    measureContentInnerHeight(contentNode) {
+    measureElementContentInnerHeight(contentNode) {
         if (!contentNode || typeof window === 'undefined' || !window.getComputedStyle)
             return 0;
 
-        const nodes = [contentNode].concat(Array.from(contentNode.querySelectorAll('*')));
-        return nodes.reduce((acc, node) => {
-            const style = window.getComputedStyle(node);
-            const marginBottom = parseFloat(style.marginBottom || '0') || 0;
-            return Math.max(acc, (node.offsetTop || 0) + (node.offsetHeight || 0) + marginBottom);
-        }, 0);
+        const rootRect = contentNode.getBoundingClientRect();
+        let maxBottom = Math.max(
+            rootRect.top,
+            rootRect.top + (contentNode.scrollHeight || 0),
+            rootRect.top + (contentNode.offsetHeight || 0),
+            rootRect.top + (contentNode.clientHeight || 0),
+        );
+
+        for (const node of Array.from(contentNode.querySelectorAll('*'))) {
+            if (!node || typeof node.getBoundingClientRect !== 'function')
+                continue;
+
+            const rect = node.getBoundingClientRect();
+            if (!rect || rect.height <= 0)
+                continue;
+
+            maxBottom = Math.max(maxBottom, rect.bottom);
+        }
+
+        const lastElement = this.getDeepestLastElement(contentNode);
+        if (lastElement && typeof lastElement.getBoundingClientRect === 'function') {
+            const lastRect = lastElement.getBoundingClientRect();
+            if (lastRect && lastRect.height > 0) {
+                const lastStyle = window.getComputedStyle(lastElement);
+                const marginBottom = parseFloat(lastStyle.marginBottom || '0') || 0;
+                maxBottom = Math.max(maxBottom, lastRect.bottom + Math.max(0, marginBottom));
+            }
+        }
+
+        return Math.max(0, Math.ceil(maxBottom - rootRect.top));
+    }
+
+    measureContentInnerHeight(contentNode) {
+        if (!contentNode || typeof window === 'undefined' || !window.getComputedStyle || typeof document.createRange !== 'function')
+            return 0;
+
+        const isMeasureNode = !!(contentNode.closest && contentNode.closest('.reader-page-sheet--measure'));
+        if (isMeasureNode)
+            return this.measureElementContentInnerHeight(contentNode);
+
+        const rootRect = contentNode.getBoundingClientRect();
+        let maxBottom = rootRect.top;
+
+        const walker = document.createTreeWalker(
+            contentNode,
+            NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => {
+                    if (node.nodeType === Node.TEXT_NODE)
+                        return (String(node.nodeValue || '').trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT);
+                    return NodeFilter.FILTER_ACCEPT;
+                },
+            },
+        );
+
+        let current = walker.currentNode;
+        while (current) {
+            let rects = [];
+            if (current.nodeType === Node.TEXT_NODE) {
+                const range = document.createRange();
+                range.selectNodeContents(current);
+                rects = Array.from(range.getClientRects());
+                if (typeof range.detach === 'function')
+                    range.detach();
+            } else if (typeof current.getClientRects === 'function') {
+                rects = Array.from(current.getClientRects());
+            }
+
+            for (const rect of rects) {
+                if (!rect || rect.height <= 0)
+                    continue;
+                maxBottom = Math.max(maxBottom, rect.bottom);
+            }
+
+            current = walker.nextNode();
+        }
+
+        const lastElement = this.getDeepestLastElement(contentNode);
+        if (lastElement && typeof lastElement.getBoundingClientRect === 'function') {
+            const lastRect = lastElement.getBoundingClientRect();
+            if (lastRect && lastRect.height > 0) {
+                const lastStyle = window.getComputedStyle(lastElement);
+                const marginBottom = parseFloat(lastStyle.marginBottom || '0') || 0;
+                maxBottom = Math.max(maxBottom, lastRect.bottom + Math.max(0, marginBottom));
+            }
+        }
+
+        return Math.max(0, Math.ceil(maxBottom - rootRect.top));
     }
 
     doesPagedMeasureOverflow(measureHost, measureHtml = null) {
@@ -1506,14 +2574,25 @@ class Reader {
         if (!availableHeight)
             return false;
 
-        const contentNode = (measureHtml || measureHost.querySelector('.reader-html') || measureHost);
+        const htmlNode = (measureHtml || measureHost.querySelector('.reader-html') || null);
+        const contentNode = (
+            (htmlNode && htmlNode.querySelector('.reader-page-content'))
+            || htmlNode
+            || measureHost
+        );
         const measuredHeight = Math.max(
             contentNode.scrollHeight || 0,
             contentNode.offsetHeight || 0,
+            contentNode.clientHeight || 0,
             this.measureContentInnerHeight(contentNode),
         );
 
-        return measuredHeight > Math.max(0, availableHeight - 4);
+        this.readerDebug = Object.assign({}, this.readerDebug, {
+            measureContentHeight: Math.round(measuredHeight),
+            measureOverflowPx: Math.round(measuredHeight - availableHeight),
+        });
+
+        return measuredHeight > Math.max(0, availableHeight - 12);
     }
 
     getPageOffsetByIndex(index = 0) {
@@ -1646,7 +2725,166 @@ class Reader {
     }
 
     wrapPagedMeasureHtml(parts = []) {
-        return parts.join('');
+        return `
+            <div class="reader-page-content">
+                ${parts.join('')}
+                <div class="reader-page-spacer" aria-hidden="true"></div>
+            </div>
+        `;
+    }
+
+    splitTextIntoReadableChunks(text = '', targetLength = 420, minChunkLength = 140) {
+        const source = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!source)
+            return [];
+
+        const sentenceParts = source.match(/[^.!?…]+(?:[.!?…]+|$)/g) || [source];
+        const chunks = [];
+        let current = '';
+
+        const pushCurrent = () => {
+            const value = String(current || '').trim();
+            if (value)
+                chunks.push(value);
+            current = '';
+        };
+
+        const pushWords = (sentence = '') => {
+            const words = String(sentence || '').trim().split(/\s+/).filter(Boolean);
+            if (!words.length)
+                return;
+
+            let part = '';
+            for (const word of words) {
+                const candidate = (part ? `${part} ${word}` : word);
+                if (part && candidate.length > targetLength) {
+                    chunks.push(part);
+                    part = word;
+                } else {
+                    part = candidate;
+                }
+            }
+
+            if (part)
+                chunks.push(part);
+        };
+
+        for (const sentence of sentenceParts.map((item) => String(item || '').trim()).filter(Boolean)) {
+            const candidate = (current ? `${current} ${sentence}` : sentence);
+            if (!current || candidate.length <= targetLength) {
+                current = candidate;
+                continue;
+            }
+
+            if (current.length >= minChunkLength) {
+                pushCurrent();
+            }
+
+            if (sentence.length > targetLength) {
+                if (current)
+                    pushCurrent();
+                pushWords(sentence);
+            } else {
+                current = sentence;
+            }
+        }
+
+        if (current)
+            pushCurrent();
+
+        return chunks.filter(Boolean);
+    }
+
+    splitOversizedTextElement(root, unit = {}) {
+        if (!root || root.nodeType !== Node.ELEMENT_NODE)
+            return [];
+
+        const tagName = String(root.tagName || '').toLowerCase();
+        const className = String(root.className || '');
+        const canSplitText = (
+            tagName === 'p'
+            || tagName === 'blockquote'
+            || className.includes('reader-paragraph')
+            || className.includes('reader-epigraph')
+            || className.includes('reader-cite')
+        );
+        if (!canSplitText)
+            return [];
+
+        const sourceText = String(root.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!sourceText)
+            return [];
+
+        const measureHost = (this.$refs ? this.$refs.pageMeasure : null);
+        const measureHtml = (measureHost ? measureHost.querySelector('.reader-html') : null);
+        const words = sourceText.split(/\s+/).filter(Boolean);
+        if (words.length <= 1)
+            return [];
+
+        const fallbackChunks = this.splitTextIntoReadableChunks(sourceText, (this.isCompactLayout ? 220 : 420), (this.isCompactLayout ? 90 : 140));
+        if (!measureHost || !measureHtml)
+            return this.wrapSplitTextChunks(root, unit, fallbackChunks);
+
+        const chunks = [];
+        let start = 0;
+
+        const fits = (end) => {
+            const clone = root.cloneNode(false);
+            clone.textContent = words.slice(start, end).join(' ');
+            measureHtml.innerHTML = this.wrapPagedMeasureHtml([clone.outerHTML]);
+            return !this.doesPagedMeasureOverflow(measureHost, measureHtml);
+        };
+
+        while (start < words.length) {
+            let low = start + 1;
+            let high = words.length;
+            let best = -1;
+
+            while (low <= high) {
+                const mid = Math.floor((low + high) / 2);
+                if (fits(mid)) {
+                    best = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+            }
+
+            if (best <= start)
+                best = Math.min(words.length, start + 1);
+
+            const chunk = words.slice(start, best).join(' ').trim();
+            if (!chunk)
+                break;
+
+            chunks.push(chunk);
+            start = best;
+        }
+
+        measureHtml.innerHTML = '';
+        if (chunks.length <= 1)
+            return this.wrapSplitTextChunks(root, unit, fallbackChunks);
+
+        return this.wrapSplitTextChunks(root, unit, chunks);
+    }
+
+    wrapSplitTextChunks(root, unit = {}, chunks = []) {
+        const safeChunks = (Array.isArray(chunks) ? chunks : []).map((item) => String(item || '').trim()).filter(Boolean);
+        if (safeChunks.length <= 1)
+            return [];
+
+        let first = true;
+        return safeChunks.map((chunk) => {
+            const clone = root.cloneNode(false);
+            clone.textContent = chunk;
+            const result = {
+                html: clone.outerHTML,
+                breakBefore: (first ? !!unit.breakBefore : false),
+                sectionId: (first ? String(unit.sectionId || root.id || '').trim() : ''),
+            };
+            first = false;
+            return result;
+        }).filter((item) => String(item.html || '').trim());
     }
 
     splitOversizedUnit(unit = {}) {
@@ -1666,10 +2904,10 @@ class Reader {
         ));
 
         if (childNodes.length <= 1)
-            return [];
+            return this.splitOversizedTextElement(root, unit);
 
         let first = true;
-        return childNodes.map((child) => {
+        const childSplit = childNodes.map((child) => {
             let childHtml = '';
             if (child.nodeType === Node.TEXT_NODE) {
                 childHtml = `<p class="reader-paragraph">${this.escapeHtml(String(child.textContent || '').trim())}</p>`;
@@ -1689,6 +2927,8 @@ class Reader {
             first = false;
             return result;
         }).filter((item) => String(item.html || '').trim());
+
+        return (childSplit.length ? childSplit : this.splitOversizedTextElement(root, unit));
     }
 
     buildPagedUnits() {
@@ -1851,6 +3091,124 @@ class Reader {
         finalizePage();
         this.pagedPages = (pages.length ? pages : [{html: this.readerHtml || '', sectionId: ''}]);
         this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
+        this.rebuildSearchResults(false);
+    }
+
+    async buildPagedPagesChunked(jobId = 0) {
+        if (!this.isPagedMode) {
+            this.pagedPages = [];
+            return;
+        }
+
+        const measureHost = this.$refs ? this.$refs.pageMeasure : null;
+        if (!measureHost) {
+            this.buildPagedPages();
+            return;
+        }
+
+        const measureHtml = measureHost.querySelector('.reader-html');
+        if (!measureHtml) {
+            this.buildPagedPages();
+            return;
+        }
+
+        const queue = this.buildPagedUnits().slice();
+        const totalUnits = Math.max(1, queue.length || 1);
+        const pages = [];
+        let currentUnits = [];
+        let activeSectionId = '';
+        let currentPageSectionId = '';
+
+        const applyUnits = (list) => {
+            measureHtml.innerHTML = this.wrapPagedMeasureHtml(list);
+        };
+        const finalizePage = () => {
+            if (!currentUnits.length)
+                return;
+            pages.push({
+                html: this.wrapPagedMeasureHtml(currentUnits),
+                sectionId: currentPageSectionId || activeSectionId || '',
+            });
+            currentUnits = [];
+            currentPageSectionId = activeSectionId || '';
+            applyUnits([]);
+        };
+        const maybeYield = async(index) => {
+            if (index <= 0 || index % 18 !== 0)
+                return;
+            if (jobId && jobId !== this.pagedBuildJobId)
+                return;
+            const percent = Math.min(99, Math.max(1, Math.round((index / totalUnits) * 100)));
+            this.loadingMessage = `${this.uiText.loadingPages} ${percent}%`;
+            await this.waitForAnimationFrames(1);
+        };
+
+        this.pagedBuildInProgress = true;
+        this.pagedBuildNeedsRefresh = false;
+
+        try {
+            applyUnits([]);
+            for (let index = 0; index < queue.length; index += 1) {
+                if (jobId && jobId !== this.pagedBuildJobId)
+                    return;
+
+                const unit = queue[index];
+                if (unit.sectionId)
+                    activeSectionId = unit.sectionId;
+                if (unit.breakBefore && currentUnits.length) {
+                    finalizePage();
+                    currentPageSectionId = unit.sectionId || activeSectionId || '';
+                }
+
+                const candidateUnits = currentUnits.concat(unit.html);
+                applyUnits(candidateUnits);
+                if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && !currentUnits.length) {
+                    const splitUnits = this.splitOversizedUnit(unit);
+                    if (splitUnits.length) {
+                        queue.splice(index, 1, ...splitUnits);
+                        index -= 1;
+                        applyUnits([]);
+                        await maybeYield(index + 1);
+                        continue;
+                    }
+                }
+
+                if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && currentUnits.length) {
+                    finalizePage();
+                    currentPageSectionId = unit.sectionId || activeSectionId || '';
+                    currentUnits = [unit.html];
+                    applyUnits(currentUnits);
+                    if (this.doesPagedMeasureOverflow(measureHost, measureHtml)) {
+                        const splitUnits = this.splitOversizedUnit(unit);
+                        if (splitUnits.length) {
+                            currentUnits = [];
+                            applyUnits([]);
+                            queue.splice(index, 1, ...splitUnits);
+                            index -= 1;
+                            await maybeYield(index + 1);
+                            continue;
+                        }
+                    }
+                } else {
+                    currentUnits = candidateUnits;
+                    if (unit.sectionId && !currentPageSectionId)
+                        currentPageSectionId = unit.sectionId;
+                }
+
+                await maybeYield(index + 1);
+            }
+
+            finalizePage();
+            this.pagedPages = (pages.length ? pages : [{html: this.readerHtml || '', sectionId: ''}]);
+            this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
+            this.rebuildSearchResults(false);
+        } finally {
+            this.pagedBuildInProgress = false;
+            if (this.pagedBuildNeedsRefresh) {
+                this.pagedBuildNeedsRefresh = false;
+                this.updateScrollerViewport();
+            }
+        }
     }
 
     extractImageMap(parser) {
@@ -2036,7 +3394,7 @@ class Reader {
             const html = this.renderBlockNodes((bodyNode && bodyNode[3]) || [], imageMap, context);
 
             if (bodyName === 'notes')
-                parts.push(`<section class="reader-notes"><h2>РџСЂРёРјРµС‡Р°РЅРёСЏ</h2>${html}</section>`);
+                parts.push(`<section class="reader-notes"><h2>Примечания</h2>${html}</section>`);
             else
                 parts.push(`<section class="reader-section">${html}</section>`);
         }
@@ -2044,22 +3402,78 @@ class Reader {
         return parts.join('\n');
     }
 
+    createFb2Parser(source = '') {
+        if (source instanceof Fb2Parser)
+            return source;
+
+        if (Array.isArray(source))
+            return new Fb2Parser(source);
+
+        if (source && typeof source === 'object') {
+            if (Array.isArray(source.rawNodes))
+                return new Fb2Parser(source.rawNodes);
+
+            // Some API responses already send parsed FictionBook root nodes.
+            if (source[0] && Array.isArray(source[0]))
+                return new Fb2Parser(source);
+        }
+
+        const parser = new Fb2Parser();
+        parser.fromString(String(source || ''), {
+            lowerCase: true,
+        });
+        return parser;
+    }
+
+    async applyReaderDocumentSource({
+        book = {},
+        fb2 = '',
+        cover = '',
+        contents = [],
+        stateResponse = {},
+    } = {}) {
+        const parser = this.createFb2Parser(fb2);
+        const fb2Info = parser.bookInfo();
+        const authorFallback = ((fb2Info.titleInfo && fb2Info.titleInfo.author) ? fb2Info.titleInfo.author.join(', ') : '');
+
+        this.title = book.title || (fb2Info.titleInfo && fb2Info.titleInfo.bookTitle) || 'Без названия';
+        this.authorLine = book.author || authorFallback;
+        this.seriesLine = (book.series ? `${book.series}${book.serno ? ` #${book.serno}` : ''}` : '');
+        this.coverSrc = cover || '';
+        this.contents = this.sanitizeContents(contents || []);
+        this.readerHtml = this.buildReaderHtml(parser);
+
+        if (stateResponse && stateResponse.preferences)
+            this.preferences = Object.assign({}, this.preferences, stateResponse.preferences || {});
+        this.progress = Object.assign({percent: 0, sectionId: '', updatedAt: ''}, (stateResponse && stateResponse.progress) || {});
+        this.bookmarks = Array.isArray(stateResponse && stateResponse.bookmarks) ? stateResponse.bookmarks : [];
+        this.currentSectionId = String(this.progress.sectionId || '').trim();
+        this.restorePending = true;
+        this.currentPageIndex = 0;
+
+        this.$root.setAppTitle(this.title);
+    }
+
     async loadReader() {
-        if (!this.bookUid) {
+        if (!this.bookUid && !this.isStandaloneMode) {
             this.loading = false;
+            this.loadingMessage = '';
+            this.bookPreparing = false;
             this.readerHtml = '';
             this.contents = [];
-            this.error = 'РљРЅРёРіР° РґР»СЏ С‡С‚РµРЅРёСЏ РЅРµ РІС‹Р±СЂР°РЅР°. РћС‚РєСЂРѕР№С‚Рµ С‡РёС‚Р°Р»РєСѓ РёР· РєР°СЂС‚РѕС‡РєРё РєРЅРёРіРё.';
+            this.error = 'Книга для чтения не выбрана. Откройте читалку из карточки книги.';
             return;
         }
 
         const api = this.$root.api;
-        if (!api) {
-            this.error = 'Р§РёС‚Р°Р»РєР° РµС‰С‘ РЅРµ РіРѕС‚РѕРІР°. РџРѕРїСЂРѕР±СѓР№С‚Рµ РѕС‚РєСЂС‹С‚СЊ РєРЅРёРіСѓ РµС‰С‘ СЂР°Р·.';
+        if (!api && !this.isStandaloneMode) {
+            this.error = 'Читалка ещё не готова. Попробуйте открыть книгу ещё раз.';
             return;
         }
 
         this.loading = true;
+        this.loadingMessage = this.uiText.loadingFetch;
+        this.bookPreparing = false;
         this.error = '';
         this.readerHtml = '';
         this.contents = [];
@@ -2070,55 +3484,91 @@ class Reader {
         this.controlsOpen = false;
         this.contentsDialogOpen = false;
         this.bookmarksDialogOpen = false;
+        this.helpDialogOpen = false;
         this.bookmarkComposerOpen = false;
         this.inlineContentsVisible = false;
         this.chromeHidden = false;
         this.readerMetaExpanded = false;
 
         try {
-            const bookResponse = await api.getBookInfo(this.bookUid);
-            let stateResponse = {preferences: {}, progress: {}};
-            try {
-                stateResponse = await api.getReaderState(this.bookUid);
-            } catch(e) {
-                stateResponse = {preferences: {}, progress: {}};
+            await this.afterLayoutRefreshPaint();
+
+        this.loadingMessage = this.uiText.loadingParse;
+        await this.afterLayoutRefreshPaint();
+
+        if (this.isStandaloneMode) {
+                const source = (this.standaloneSource || {});
+                this.bookInfo = {
+                    book: Object.assign({}, source.book || {}, {
+                        title: source.title || (source.book && source.book.title) || '',
+                        author: source.author || (source.book && source.book.author) || '',
+                        series: source.series || (source.book && source.book.series) || '',
+                        serno: source.serno || (source.book && source.book.serno) || 0,
+                    }),
+                    fb2: source.fb2 || '',
+                    cover: source.cover || '',
+                    contents: Array.isArray(source.contents) ? source.contents : [],
+                };
+
+                await this.applyReaderDocumentSource({
+                    book: this.bookInfo.book || {},
+                    fb2: this.bookInfo.fb2 || '',
+                    cover: this.bookInfo.cover || '',
+                    contents: this.bookInfo.contents || [],
+                    stateResponse: (source.stateResponse || {}),
+                });
+            } else {
+                const [bookResponse, stateResponseRaw] = await Promise.all([
+                    api.getBookInfo(this.bookUid),
+                    api.getReaderState(this.bookUid).catch(() => ({preferences: {}, progress: {}})),
+                ]);
+                const stateResponse = (stateResponseRaw || {preferences: {}, progress: {}});
+
+                this.bookInfo = (bookResponse ? bookResponse.bookInfo : null);
+                const info = (this.bookInfo || {});
+                if (!info.fb2)
+                    throw new Error('Встроенная читалка пока поддерживает только FB2.');
+
+                await this.applyReaderDocumentSource({
+                    book: (info.book || {}),
+                    fb2: info.fb2 || '',
+                    cover: info.cover || '',
+                    contents: info.contents || [],
+                    stateResponse,
+                });
             }
 
-            this.bookInfo = (bookResponse ? bookResponse.bookInfo : null);
-            const info = (this.bookInfo || {});
-            const book = (info.book || {});
-            if (!info.fb2)
-                throw new Error('Р’СЃС‚СЂРѕРµРЅРЅР°СЏ С‡РёС‚Р°Р»РєР° РїРѕРєР° РїРѕРґРґРµСЂР¶РёРІР°РµС‚ С‚РѕР»СЊРєРѕ FB2.');
-
-            const parser = new Fb2Parser(info.fb2);
-            const fb2Info = parser.bookInfo();
-            this.title = book.title || (fb2Info.titleInfo && fb2Info.titleInfo.bookTitle) || 'Р‘РµР· РЅР°Р·РІР°РЅРёСЏ';
-            this.authorLine = book.author || ((fb2Info.titleInfo && fb2Info.titleInfo.author) ? fb2Info.titleInfo.author.join(', ') : '');
-            this.seriesLine = (book.series ? `${book.series}${book.serno ? ` #${book.serno}` : ''}` : '');
-            this.coverSrc = info.cover || '';
-            this.contents = this.sanitizeContents(info.contents || []);
-            this.readerHtml = this.buildReaderHtml(parser);
-
-            this.preferences = Object.assign({}, this.preferences, stateResponse.preferences || {});
-            this.progress = Object.assign({percent: 0, sectionId: '', updatedAt: ''}, stateResponse.progress || {});
-            this.bookmarks = Array.isArray(stateResponse.bookmarks) ? stateResponse.bookmarks : [];
-            this.currentSectionId = String(this.progress.sectionId || '').trim();
-            this.restorePending = true;
+            this.loading = false;
+            this.bookPreparing = true;
+            this.loadingMessage = this.uiText.loadingPages;
+            this.pagedPages = [];
             this.currentPageIndex = 0;
 
-            this.$root.setAppTitle(this.title);
-            this.$nextTick(() => {
-                this.attachScrollerObserver();
+            await this.$nextTick();
+            await this.afterLayoutRefreshPaint();
+            if (this.isPagedMode) {
+                await this.waitForStablePagedStage();
+                this.scrollerViewportWidth = ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0);
+                this.scrollerViewportHeight = ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0);
+                this.pagedBuildJobId += 1;
+                await this.buildPagedPagesChunked(this.pagedBuildJobId);
+                this.syncPagedProgress(false);
+                if (this.bottomClipCalibrationPending)
+                    this.scheduleBottomClipCalibration();
+            } else {
                 this.updateScrollerViewport();
-                requestAnimationFrame(() => {
-                    this.updateScrollerViewport();
-                    this.restoreProgress();
-                });
-            });
+                await this.waitForAnimationFrames(2);
+            }
+            this.attachScrollerObserver();
+            await this.waitForAnimationFrames(2);
+            this.restoreProgress();
+            await this.waitForAnimationFrames(2);
         } catch (e) {
             this.error = e.message;
         } finally {
             this.loading = false;
+            this.bookPreparing = false;
+            this.loadingMessage = '';
         }
     }
 
@@ -2240,7 +3690,7 @@ class Reader {
         const rect = this.$refs.scroller.getBoundingClientRect();
         const relX = (event.clientX - rect.left) / rect.width;
         const relY = (event.clientY - rect.top) / rect.height;
-        if (this.isPagedMode && this.activePreferences.pagedNavigation === 'tap') {
+        if (this.isPagedMode) {
             if (this.isHorizontalPaged) {
                 if (relX <= 0.22) {
                     this.goToRelativePage(-1);
@@ -2265,15 +3715,11 @@ class Reader {
         if (!isCenterTap)
             return;
 
-        this.chromeHidden = !this.chromeHidden;
-        if (this.chromeHidden) {
-            this.controlsOpen = false;
-            this.contentsDialogOpen = false;
-        }
+        this.toggleCompactChromeVisibility();
     }
 
     handleReaderWheel(event) {
-        if (!this.isPagedMode || this.activePreferences.pagedNavigation !== 'wheel' || !this.$refs.scroller || !event)
+        if (!this.isPagedMode || !this.$refs.scroller || !event)
             return;
 
         const delta = (this.isHorizontalPaged ? (Number(event.deltaX || 0) || Number(event.deltaY || 0)) : Number(event.deltaY || 0));
@@ -2282,6 +3728,66 @@ class Reader {
 
         event.preventDefault();
         this.goToRelativePage(delta > 0 ? 1 : -1);
+    }
+
+    handleGlobalKeydown(event) {
+        if (!event)
+            return;
+
+        const target = event.target;
+        const tagName = String((target && target.tagName) || '').toLowerCase();
+        const isTypingField = (
+            (target && target.isContentEditable)
+            || ['input', 'textarea', 'select'].includes(tagName)
+            || (target && target.closest && target.closest('.q-dialog'))
+        );
+        if (isTypingField)
+            return;
+
+        if (!this.$route || !String(this.$route.path || '').startsWith('/reader'))
+            return;
+
+        const key = String(event.key || '');
+        if (key === 'Escape') {
+            if (this.searchDialogOpen) {
+                this.searchDialogOpen = false;
+                return;
+            }
+            if (this.helpDialogOpen) {
+                this.helpDialogOpen = false;
+                return;
+            }
+            return;
+        }
+
+        if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === 'f' && this.isPagedMode) {
+            event.preventDefault();
+            this.searchDialogOpen = true;
+            return;
+        }
+
+        if (key === '?' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+            event.preventDefault();
+            this.toggleHelpDialog();
+            return;
+        }
+
+        if (!this.isPagedMode || this.helpDialogOpen)
+            return;
+
+        const nextKeys = ['ArrowRight', 'ArrowDown', 'PageDown'];
+        const prevKeys = ['ArrowLeft', 'ArrowUp', 'PageUp'];
+
+        if (nextKeys.includes(key) || (key === ' ' && !event.shiftKey)) {
+            event.preventDefault();
+            this.goToRelativePage(1);
+            return;
+        }
+
+        if (prevKeys.includes(key) || (key === ' ' && event.shiftKey)) {
+            event.preventDefault();
+            this.goToRelativePage(-1);
+        }
     }
 
     handleReaderTouchStart(event) {
@@ -2305,15 +3811,16 @@ class Reader {
         this.touchStartPoint = null;
 
         const threshold = 36;
-        if (this.isHorizontalPaged) {
-            if (Math.abs(deltaX) < threshold || Math.abs(deltaX) <= Math.abs(deltaY))
-                return;
+        const absX = Math.abs(deltaX);
+        const absY = Math.abs(deltaY);
+        if (absX < threshold && absY < threshold)
+            return;
+
+        if (absX >= absY) {
             this.goToRelativePage(deltaX < 0 ? 1 : -1);
             return;
         }
 
-        if (Math.abs(deltaY) < threshold || Math.abs(deltaY) <= Math.abs(deltaX))
-            return;
         this.goToRelativePage(deltaY < 0 ? 1 : -1);
     }
 
@@ -2450,7 +3957,7 @@ class Reader {
             const response = await api.deleteReaderBookmark(this.bookUid, bookmarkId);
             this.bookmarks = Array.isArray(response.bookmarks) ? response.bookmarks : [];
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, 'РћС€РёР±РєР°');
+            this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
     }
 
@@ -2539,16 +4046,23 @@ class Reader {
             this.saveProgressDebounced.flush();
     }
 
-    setTheme(theme) {
+    async setTheme(theme) {
         const previousSignature = this.layoutSignatureForPreferences(this.activePreferences);
+        this.beginLayoutRefresh();
+        await this.afterLayoutRefreshPaint();
         this.preferences = Object.assign({}, this.preferences, {theme});
         this.savePreferencesDebounced();
         const nextSignature = this.layoutSignatureForPreferences(this.getActivePreferencesForTheme(theme, this.preferences));
-        if (previousSignature !== nextSignature)
+        if (previousSignature !== nextSignature) {
             this.reflowReaderLayout();
+        } else {
+            this.endLayoutRefresh(140);
+        }
     }
 
-    changeFontSize(delta) {
+    async changeFontSize(delta) {
+        this.beginLayoutRefresh();
+        await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({
             fontSize: Math.max(14, Math.min(30, this.activePreferences.fontSize + delta)),
         });
@@ -2556,7 +4070,9 @@ class Reader {
         this.reflowReaderLayout();
     }
 
-    changeContentWidth(delta) {
+    async changeContentWidth(delta) {
+        this.beginLayoutRefresh();
+        await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({
             contentWidth: Math.max(560, Math.min(1200, this.activePreferences.contentWidth + delta)),
         });
@@ -2564,7 +4080,9 @@ class Reader {
         this.reflowReaderLayout();
     }
 
-    changeLineHeight(delta) {
+    async changeLineHeight(delta) {
+        this.beginLayoutRefresh();
+        await this.afterLayoutRefreshPaint();
         const next = Math.round((this.activePreferences.lineHeight + delta) * 100) / 100;
         this.updateActivePreferences({
             lineHeight: Math.max(1.35, Math.min(2.2, next)),
@@ -2704,6 +4222,95 @@ export default vueComponent(Reader);
     padding: 24px;
 }
 
+.reader-reflow-indicator {
+    position: absolute;
+    inset: 0;
+    z-index: 18;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    pointer-events: none;
+}
+
+.reader-reflow-indicator--strong {
+    z-index: 22;
+    background: color-mix(in srgb, var(--reader-bg) 48%, transparent);
+    backdrop-filter: blur(4px);
+}
+
+.reader-reflow-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border: 1px solid var(--reader-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
+    color: var(--reader-text);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.14);
+    backdrop-filter: blur(10px);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.reader-reflow-card--loading {
+    padding: 14px 18px;
+    border-radius: 18px;
+    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.18);
+    font-size: 14px;
+}
+
+.reader-reflow-fade-enter-active,
+.reader-reflow-fade-leave-active {
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.reader-reflow-fade-enter-from,
+.reader-reflow-fade-leave-to {
+    opacity: 0;
+    transform: translateY(6px);
+}
+
+.reader-debug-panel {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    z-index: 26;
+    width: min(92vw, 320px);
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 120, 120, 0.45);
+    border-radius: 14px;
+    background: rgba(25, 12, 12, 0.88);
+    color: #ffe9d8;
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.24);
+    font: 12px/1.35 Consolas, "Courier New", monospace;
+    pointer-events: none;
+}
+
+.reader-debug-title {
+    margin-bottom: 6px;
+    color: #ffb38a;
+    font-weight: 700;
+}
+
+.reader-debug-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    pointer-events: auto;
+}
+
+.reader-debug-btn {
+    padding: 4px 8px;
+    border: 1px solid rgba(255, 179, 138, 0.35);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffe9d8;
+    font: inherit;
+    cursor: pointer;
+}
+
 .reader-scroll {
     flex: 1 1 auto;
     min-height: 0;
@@ -2784,17 +4391,53 @@ export default vueComponent(Reader);
     width: 100%;
     max-width: none;
     min-height: auto;
-    height: 100%;
-    max-height: var(--reader-page-min-height);
+    height: auto;
+    max-height: none;
     padding: 0;
     border: 0;
     background: transparent;
     box-shadow: none;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .reader-body--paged .reader-html {
+    display: block;
     height: auto;
+    max-height: none;
+    overflow: hidden;
+}
+
+.reader-page-sheet {
+    display: flex;
+    flex-direction: column;
+}
+
+.reader-page-sheet .reader-html {
+    flex: 1 1 auto;
+    min-height: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    padding-bottom: 0;
+}
+
+.reader-page-sheet .reader-html :deep(.reader-page-content) {
+    display: flow-root;
+    min-height: 0;
+    padding-bottom: 0;
+    box-sizing: border-box;
+}
+
+.reader-page-sheet .reader-html :deep(.reader-page-spacer) {
+    height: 0;
+    pointer-events: none;
+}
+
+.reader-body--paged .reader-html > .reader-page-content > :first-child {
+    margin-top: 0;
+}
+
+.reader-body--paged .reader-html > .reader-page-content > :last-child {
+    margin-bottom: 0;
 }
 
 .reader-pages {
@@ -2805,10 +4448,8 @@ export default vueComponent(Reader);
     align-items: center;
     justify-content: flex-start;
     width: 100%;
-    min-height: var(--reader-page-min-height);
     height: var(--reader-page-min-height);
-    max-height: var(--reader-page-min-height);
-    overflow: hidden;
+    overflow: visible;
 }
 
 .reader-page-stage {
@@ -2818,10 +4459,8 @@ export default vueComponent(Reader);
     justify-content: center;
     width: min(100%, var(--reader-page-frame-width));
     max-width: var(--reader-page-frame-width);
-    min-height: var(--reader-page-min-height);
     height: var(--reader-page-min-height);
-    max-height: var(--reader-page-min-height);
-    overflow: hidden;
+    overflow: visible;
 }
 
 .reader-pages--horizontal {
@@ -2834,14 +4473,15 @@ export default vueComponent(Reader);
 .reader-page-sheet {
     width: min(100%, var(--reader-page-frame-width));
     max-width: var(--reader-page-frame-width);
-    min-height: var(--reader-page-min-height);
     height: var(--reader-page-min-height);
     padding: var(--reader-page-padding);
     box-sizing: border-box;
     border: 1px solid var(--reader-border);
     border-radius: 26px;
     background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
-    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.14);
+    box-shadow: none;
+    filter: drop-shadow(0 18px 42px rgba(0, 0, 0, 0.14));
+    background-clip: padding-box;
     scroll-snap-align: start;
     scroll-snap-stop: always;
     overflow: hidden;
@@ -2852,7 +4492,6 @@ export default vueComponent(Reader);
     flex: 0 0 var(--reader-page-frame-width);
     width: var(--reader-page-frame-width);
     max-width: var(--reader-page-frame-width);
-    min-height: var(--reader-page-min-height);
     height: var(--reader-page-min-height);
 }
 
@@ -2863,12 +4502,13 @@ export default vueComponent(Reader);
 }
 
 .reader-page-sheet--measure {
-    position: fixed;
-    left: -20000px;
-    top: 0;
+    position: absolute;
+    inset: 0;
+    margin: auto;
     visibility: hidden;
     pointer-events: none;
     z-index: -1;
+    filter: none;
 }
 
 .reader-page-slide-x-forward-enter-active,
@@ -2923,7 +4563,9 @@ export default vueComponent(Reader);
 .reader-body--paged .reader-contents-inline,
 .reader-body--paged .reader-series,
 .reader-body--paged .reader-heading,
-.reader-body--paged .reader-subheading {
+.reader-body--paged .reader-subheading,
+.reader-body--paged .reader-image-block,
+.reader-body--paged .reader-cover-box {
     break-inside: avoid;
 }
 
@@ -3105,6 +4747,21 @@ export default vueComponent(Reader);
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
 }
 
+.reader-body--paged .reader-cover {
+    width: auto;
+    max-width: min(100%, 320px);
+    max-height: var(--reader-page-media-max-height);
+    object-fit: contain;
+}
+
+.reader-body--paged .reader-html :deep(img),
+.reader-body--paged .reader-inline-image {
+    width: auto;
+    max-width: 100%;
+    max-height: var(--reader-page-media-max-height);
+    object-fit: contain;
+}
+
 .reader-notes {
     margin-top: 2.5em;
     padding-top: 1.5em;
@@ -3114,10 +4771,10 @@ export default vueComponent(Reader);
 .reader-mobile-footer {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 4px 8px calc(6px + env(safe-area-inset-bottom));
-    border-top: 1px solid var(--reader-border);
-    background: color-mix(in srgb, var(--reader-surface) 96%, transparent);
+    gap: 6px;
+    padding: 12px 8px calc(8px + env(safe-area-inset-bottom));
+    border-top: 0;
+    background: linear-gradient(to top, color-mix(in srgb, var(--reader-bg) 96%, transparent), transparent);
 }
 
 .reader-mobile-bar {
@@ -3149,14 +4806,14 @@ export default vueComponent(Reader);
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    padding: 4px 10px;
+    padding: 3px 10px;
     border: 1px solid var(--reader-border);
     border-radius: 999px;
-    background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
+    background: color-mix(in srgb, var(--reader-surface) 98%, transparent);
     color: var(--reader-muted);
     font-size: 12px;
     font-weight: 700;
-    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16);
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.1);
     backdrop-filter: blur(10px);
 }
 
@@ -3317,6 +4974,47 @@ export default vueComponent(Reader);
 .reader-dialog-empty {
     color: var(--reader-muted);
     font-size: 12px;
+}
+
+.reader-help-intro {
+    margin-bottom: 12px;
+    color: var(--reader-muted);
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.reader-help-item {
+    padding: 12px 14px;
+    border: 1px solid var(--reader-border);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--reader-surface-2) 86%, transparent);
+    line-height: 1.45;
+}
+
+.reader-help-item + .reader-help-item {
+    margin-top: 10px;
+}
+
+.reader-search-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.reader-search-meta {
+    margin-top: 6px;
+    color: var(--reader-muted);
+    font-size: 12px;
+}
+
+.reader-html :deep(.reader-search-hit) {
+    padding: 0.04em 0.14em;
+    border-radius: 0.28em;
+    background: color-mix(in srgb, var(--reader-accent) 28%, transparent);
+    color: inherit;
 }
 
 .reader-continue-actions,
@@ -3482,8 +5180,8 @@ export default vueComponent(Reader);
     }
 
     .reader-book-title {
-        font-size: 15px;
-        line-height: 1.15;
+        font-size: 13px;
+        line-height: 1.12;
         display: -webkit-box;
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
@@ -3550,7 +5248,7 @@ export default vueComponent(Reader);
     }
 
     .reader-shell {
-        padding: 4px 4px 4px;
+        padding: 2px 2px 10px;
     }
 
     .reader-body--paged {
@@ -3560,7 +5258,7 @@ export default vueComponent(Reader);
     }
 
     .reader-pages {
-        min-height: var(--reader-page-min-height);
+        margin-bottom: 14px;
     }
 
     .reader-page-sheet,

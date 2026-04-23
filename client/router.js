@@ -3,6 +3,7 @@ import _ from 'lodash';
 
 const Search = () => import('./components/Search/Search.vue');
 const Reader = () => import('./components/Reader/Reader.vue');
+const ReaderLab = () => import('./components/Reader/ReaderLab.vue');
 
 const myRoutes = [
     ['/', Search],
@@ -12,6 +13,7 @@ const myRoutes = [
     ['/books', Search],
     ['/extended', Search],
     ['/reader', Reader],
+    ['/reader-lab', ReaderLab],
     ['/:pathMatch(.*)*', null, null, '/'],
 ];
 

@@ -6,6 +6,13 @@ inpx-web
 > Original author: **bookpauk**.
 > This repository contains deployment and UI changes for the `inpx-web-7z` variant while preserving attribution to the upstream project.
 
+## Quick Highlights
+
+* готовый запуск в Proxmox LXC через `scripts/proxmox-lxc-install.sh`
+* отдельный маршрут `/#/reader-lab` для локальной FB2 и отладки пагинации
+* улучшенная встроенная FB2-читалка с paged-режимом, мобильной адаптацией и debug-режимом
+* Docker-ориентированная сборка для `.7z` / `fLibrary` библиотек и конвертации через Calibre
+
 ## Что нового в этом форке
 
 Этот форк развивает оригинальный проект для больших `fLibrary` / `.7z`-коллекций и более современного визуального интерфейса чтения.
@@ -750,6 +757,74 @@ node server --app-dir=.inpx-web
 ### Разработка
 ```sh
 npm run dev
+```
+
+### Proxmox LXC
+
+Для контейнеров Proxmox LXC в репозитории есть готовый установочный скрипт:
+
+```sh
+sudo ./scripts/proxmox-lxc-install.sh \
+  --library-dir /mnt/books/flibusta \
+  --inpx-file fb2.flibusta.lib.rus.ec.7z.inpx
+```
+
+Что делает скрипт:
+
+* ставит Docker Engine и Docker Compose plugin внутри Debian/Ubuntu LXC
+* копирует текущий репозиторий в рабочий каталог контейнера
+* создаёт `docker-compose.proxmox.yml`
+* собирает образ проекта и поднимает `inpx-web`
+
+Перед запуском важно включить для LXC поддержку Docker:
+
+```sh
+pct set <CTID> -features nesting=1,keyctl=1
+```
+
+После этого контейнер нужно перезапустить.
+
+Основные опции скрипта:
+
+* `--app-root` — куда копировать проект, по умолчанию `/opt/inpx-web`
+* `--data-dir` — постоянный каталог данных, по умолчанию `/opt/inpx-web-data`
+* `--port` — внешний HTTP-порт, по умолчанию `12380`
+* `--lite` — собрать облегчённый образ `runtime-lite`
+* `--skip-build` — не пересобирать образ, только перезапустить compose-стек
+* `--project-name` — имя docker compose проекта
+
+Полный help:
+
+```sh
+./scripts/proxmox-lxc-install.sh --help
+```
+
+### Локальная FB2-читалка Для Отладки
+
+Для отладки рендера и пагинации есть отдельный маршрут:
+
+```text
+/#/reader-lab
+```
+
+Что он умеет:
+
+* открыть локальный `.fb2` прямо с компьютера
+* загрузить sample-FB2 из подключённой библиотеки
+* использовать ту же `Reader.vue`, что и основной маршрут `/#/reader?bookUid=...`
+* удобно проверять paged-режим без поиска книги в библиотеке
+
+Полезные query-параметры:
+
+* `debugReader=1` — включить debug-панель ридера
+* `debugReadMode=paged` — сразу открыть режим страниц
+* `debugReadMode=scroll` — сразу открыть режим ленты
+* `sample=night-watch.fb2` — автоматически загрузить sample-файл
+
+Пример:
+
+```text
+http://127.0.0.1:12380/#/reader-lab?sample=night-watch.fb2&debugReader=1&debugReadMode=paged
 ```
 
 По вопросам этого форка используйте Issues в репозитории: https://github.com/AceAsket/inpx-web/issues

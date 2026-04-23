@@ -84,6 +84,28 @@ module.exports = (app, config) => {
     config.bookPathStatic = `${config.rootPathStatic}/book`;
     config.bookDir = `${config.publicFilesDir}/book`;
     */
+    app.get(`${config.rootPathStatic || ''}/reader-lab-source/:fileName`, async(req, res) => {
+        try {
+            const safeFileName = path.basename(String(req.params.fileName || '').trim());
+            if (!safeFileName || path.extname(safeFileName).toLowerCase() !== '.fb2') {
+                res.sendStatus(404);
+                return;
+            }
+
+            const sourceFile = path.join(config.libDir, safeFileName);
+            if (!await fs.pathExists(sourceFile)) {
+                res.sendStatus(404);
+                return;
+            }
+
+            res.set('Cache-Control', 'no-store');
+            res.type('application/xml; charset=utf-8');
+            res.sendFile(sourceFile);
+        } catch (e) {
+            res.sendStatus(404);
+        }
+    });
+
     app.get(`${config.rootPathStatic || ''}/cover/:libid`, async(req, res) => {
         const libid = parseInt(req.params.libid, 10);
         if (!libid) {
