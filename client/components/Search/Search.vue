@@ -515,7 +515,7 @@ const route2component = {
     'for-you': {component: 'DiscoveryShelves', label: 'Для вас'},
     'newest': {component: 'DiscoveryShelves', label: 'Новинки'},
     'popular': {component: 'DiscoveryShelves', label: 'Популярное'},
-    'bestsellers': {component: 'DiscoveryShelves', label: 'Внешняя витрина'},
+    'bestsellers': {component: 'DiscoveryShelves', label: 'Внешний источник'},
     'author': {component: 'AuthorList', label: 'Авторы'},
     'series': {component: 'SeriesList', label: 'Серии'},
     'title': {component: 'TitleList', label: 'Названия'},
@@ -826,10 +826,13 @@ class Search {
         this.discoveryNewestLimit = parseInt(settings.discoveryNewestLimit, 10) || 8;
         this.discoveryPopularLimit = parseInt(settings.discoveryPopularLimit, 10) || 8;
         this.discoveryExternalLimit = parseInt(settings.discoveryExternalLimit, 10) || 8;
-        this.discoveryExternalSource = String(settings.discoveryExternalSource || '').trim().toLowerCase();
-        this.discoveryExternalName = String(settings.discoveryExternalName || '').trim();
-        this.discoveryExternalUrl = String(settings.discoveryExternalUrl || '').trim();
-        this.discoveryExternalTtlMinutes = parseInt(settings.discoveryExternalTtlMinutes, 10) || 1440;
+        this.discoveryExternalSource = String(settings.discoveryExternalSource || ((this.config.discovery || {}).externalSource || '')).trim().toLowerCase();
+        this.discoveryExternalName = String(settings.discoveryExternalName || ((this.config.discovery || {}).externalName || '')).trim();
+        this.discoveryExternalUrl = String(settings.discoveryExternalUrl || ((this.config.discovery || {}).externalUrl || '')).trim();
+        this.discoveryExternalTtlMinutes = Math.max(
+            1440,
+            parseInt(settings.discoveryExternalTtlMinutes, 10) || parseInt(((this.config.discovery || {}).externalTtlMinutes), 10) || 1440,
+        );
     }
 
     recvMessage(d) {
@@ -963,6 +966,11 @@ class Search {
         return !!(this.config.profileAuthorized && current.isAdmin);
     }
 
+    get canEditExternalDiscovery() {
+        const current = this.config.currentUserProfile || {};
+        return !!(this.config.profileAuthorized && current.isAdmin);
+    }
+
     get userProfileOptions() {
         const users = (this.canViewAllProfiles
             ? (this.config.userProfiles || [])
@@ -1009,24 +1017,41 @@ class Search {
     }
 
     get activeDiscoveryExternalSource() {
-        const value = String(this.discoveryExternalSource || ((this.config.discovery || {}).externalSource || '')).trim().toLowerCase();
+        const value = String(
+            this.canEditExternalDiscovery
+                ? (this.discoveryExternalSource || ((this.config.discovery || {}).externalSource || ''))
+                : ((this.config.discovery || {}).externalSource || ''),
+        ).trim().toLowerCase();
         return (value && value !== 'none' ? 'web-page' : 'none');
     }
 
     get activeDiscoveryExternalName() {
-        return String(this.discoveryExternalName || ((this.config.discovery || {}).externalName || '')).trim();
+        return String(
+            this.canEditExternalDiscovery
+                ? (this.discoveryExternalName || ((this.config.discovery || {}).externalName || ''))
+                : ((this.config.discovery || {}).externalName || ''),
+        ).trim();
     }
 
     get activeDiscoveryExternalLabel() {
-        return (this.activeDiscoveryExternalName || 'Внешняя витрина');
+        return (this.activeDiscoveryExternalName || 'Внешний источник');
     }
 
     get activeDiscoveryExternalUrl() {
-        return String(this.discoveryExternalUrl || ((this.config.discovery || {}).externalUrl || '')).trim();
+        return String(
+            this.canEditExternalDiscovery
+                ? (this.discoveryExternalUrl || ((this.config.discovery || {}).externalUrl || ''))
+                : ((this.config.discovery || {}).externalUrl || ''),
+        ).trim();
     }
 
     get activeDiscoveryExternalTtlMinutes() {
-        return parseInt(this.discoveryExternalTtlMinutes, 10) || parseInt(((this.config.discovery || {}).externalTtlMinutes), 10) || 1440;
+        return Math.max(
+            1440,
+            this.canEditExternalDiscovery
+                ? (parseInt(this.discoveryExternalTtlMinutes, 10) || parseInt(((this.config.discovery || {}).externalTtlMinutes), 10) || 1440)
+                : (parseInt(((this.config.discovery || {}).externalTtlMinutes), 10) || 1440),
+        );
     }
 
     isDiscoveryListEnabled(route) {

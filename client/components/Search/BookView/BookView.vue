@@ -5,9 +5,9 @@
             :class="{'is-poster-mode': isPosterMode, 'is-compact-discovery': compactDiscovery}"
             role="button"
             tabindex="0"
-            @click="emit('bookInfo')"
-            @keydown.enter.prevent="emit('bookInfo')"
-            @keydown.space.prevent="emit('bookInfo')"
+            @click="handleCardActivate"
+            @keydown.enter.prevent="handleCardActivate"
+            @keydown.space.prevent="handleCardActivate"
         >
             <div class="cover-box">
                 <img
@@ -47,10 +47,10 @@
                     <div v-if="showRates && !book.del && book.librate" class="meta-pill rating-pill" :class="rateBadgeColor">
                         {{ book.librate }}/5
                     </div>
-                    <div v-else-if="showRates && !book.del" class="meta-pill rating-pill rating-pill-placeholder" aria-hidden="true">
+                    <div v-else-if="showRates && !book.del && !isExternalOnlyDiscoveryBook" class="meta-pill rating-pill rating-pill-placeholder" aria-hidden="true">
                         0/5
                     </div>
-                    <div class="meta-pill">
+                    <div v-if="bookSize" class="meta-pill">
                         {{ bookSize }}
                     </div>
                     <div v-if="showDates && book.date" class="meta-pill">
@@ -67,7 +67,7 @@
                             00
                         </div>
                     </div>
-                    <div class="book-title clickable2" :class="titleColor" @click.stop.prevent="emit('bookInfo')">
+                    <div class="book-title clickable2" :class="titleColor" @click.stop.prevent="handleCardActivate">
                         {{ posterTitle }}
                     </div>
                 </div>
@@ -82,15 +82,15 @@
 
                 <div v-if="showGenres && bookGenreItems.length" class="book-genres">
                     <span
-                        v-for="genre in bookGenreItems"
+                        v-for="genre in displayGenreItems"
                         :key="genre.value"
                         class="genre-chip clickable2"
                         @click.stop.prevent="emit('genreClick', genre.value)"
                     >
                         {{ genre.label }}
                     </span>
-                    <span v-if="genreOverflowCount" class="genre-chip genre-chip-muted">
-                        +{{ genreOverflowCount }}
+                    <span v-if="displayGenreOverflowCount" class="genre-chip genre-chip-muted">
+                        +{{ displayGenreOverflowCount }}
                     </span>
                 </div>
 
@@ -100,25 +100,25 @@
                         color="primary"
                         unelevated
                         no-caps
-                        :icon="downloadIcon"
-                        @click.stop.prevent="emit('download')"
+                        :icon="primaryActionIcon"
+                        @click.stop.prevent="handlePrimaryAction"
                     >
-                        {{ downloadLabel }}
+                        {{ primaryActionLabel }}
                     </q-btn>
 
                     <q-btn
-                        v-if="showReadLink"
+                        v-if="showReadLink && !isExternalOnlyDiscoveryBook"
                         color="secondary"
                         flat
                         no-caps
                         icon="la la-book-open"
                         @click.stop.prevent="emit('readBook')"
                     >
-                        {{ readLabel }}
+                        {{ effectiveReadLabel }}
                     </q-btn>
 
                     <q-btn
-                        v-if="showInfo"
+                        v-if="showInfo && !isCompactDiscoveryMode && !isExternalOnlyDiscoveryBook"
                         flat
                         no-caps
                         icon="la la-info-circle"
@@ -128,7 +128,7 @@
                     </q-btn>
 
                     <q-btn
-                        v-if="bookAuthor"
+                        v-if="bookAuthor && !isCompactDiscoveryMode && !isExternalOnlyDiscoveryBook"
                         flat
                         no-caps
                         icon="la la-user-circle"
@@ -138,12 +138,13 @@
                     </q-btn>
 
                     <q-btn
+                        v-if="!isExternalOnlyDiscoveryBook"
                         flat
                         no-caps
                         icon="la la-bookmark"
                         @click.stop.prevent="emit('readingList')"
                     >
-                        {{ readingListLabel }}
+                        {{ effectiveReadingListLabel }}
                     </q-btn>
 
                     <q-btn
@@ -153,7 +154,7 @@
                         icon="la la-eye-slash"
                         @click.stop.prevent="emit('discoveryDismiss')"
                     >
-                        {{ discoveryDismissLabel }}
+                        {{ effectiveDiscoveryDismissLabel }}
                     </q-btn>
 
                     <q-btn
@@ -163,10 +164,10 @@
                         icon="la la-undo"
                         @click.stop.prevent="emit('discoveryRestore')"
                     >
-                        {{ discoveryRestoreLabel }}
+                        {{ effectiveDiscoveryRestoreLabel }}
                     </q-btn>
 
-                    <div v-if="telegramShareEnabled" class="action-split" @click.stop>
+                    <div v-if="telegramShareEnabled && !isCompactDiscoveryMode && !isExternalOnlyDiscoveryBook" class="action-split" @click.stop>
                         <q-btn
                             flat
                             no-caps
@@ -199,7 +200,7 @@
                         </div>
                     </div>
 
-                    <div v-if="emailShareEnabled" class="action-split" @click.stop>
+                    <div v-if="emailShareEnabled && !isCompactDiscoveryMode && !isExternalOnlyDiscoveryBook" class="action-split" @click.stop>
                         <q-btn
                             flat
                             no-caps
@@ -233,6 +234,7 @@
                     </div>
 
                     <q-btn
+                        v-if="!isCompactDiscoveryMode && !isExternalOnlyDiscoveryBook"
                         class="copy-action"
                         flat
                         icon="la la-copy"
@@ -242,7 +244,7 @@
                     </q-btn>
                 </div>
 
-                <div class="format-actions">
+                <div v-if="!isCompactDiscoveryMode && !isExternalOnlyDiscoveryBook" class="format-actions">
                     <q-btn
                         v-for="format in extraFormats"
                         :key="format"
@@ -377,11 +379,15 @@ class BookView {
     }
 
     get posterExt() {
+        if (this.isExternalOnlyDiscoveryBook)
+            return 'WEB';
         return (this.book.ext || 'book').toUpperCase();
     }
 
     get bookSize() {
-        let size = this.book.size/1024;
+        let size = Number(this.book.size || 0) / 1024;
+        if (!(size > 0))
+            return '';
         let unit = 'KB';
         if (size > 1024) {
             size = size/1024;
@@ -391,7 +397,13 @@ class BookView {
     }
 
     get coverSrc() {
-        if (this.coverError || !this.book.libid)
+        if (this.coverError)
+            return '';
+
+        if (this.book.discoveryCoverUrl)
+            return this.book.discoveryCoverUrl;
+
+        if (!this.book.libid)
             return '';
 
         const root = this.config.rootPathStatic || '';
@@ -409,7 +421,7 @@ class BookView {
 
     get bookGenreItems() {
         let result = [];
-        const genre = this.book.genre.split(',');
+        const genre = String(this.book.genre || '').split(',');
 
         for (const g of genre) {
             const name = this.genreMap.get(g);
@@ -421,7 +433,7 @@ class BookView {
     }
 
     get genreOverflowCount() {
-        const genre = this.book.genre.split(',');
+        const genre = String(this.book.genre || '').split(',');
         let count = 0;
 
         for (const g of genre) {
@@ -430,6 +442,33 @@ class BookView {
         }
 
         return (count > 3 ? count - 3 : 0);
+    }
+
+    get isCompactDiscoveryMode() {
+        return this.compactDiscovery === true;
+    }
+
+    get isExternalOnlyDiscoveryBook() {
+        return this.book && this.book.discoveryMissingLocal === true;
+    }
+
+    get displayGenreItems() {
+        return (this.isCompactDiscoveryMode ? this.bookGenreItems.slice(0, 2) : this.bookGenreItems);
+    }
+
+    get displayGenreOverflowCount() {
+        if (!this.isCompactDiscoveryMode)
+            return this.genreOverflowCount;
+
+        const genre = (this.book.genre || '').split(',');
+        let count = 0;
+
+        for (const g of genre) {
+            if (this.genreMap.get(g))
+                count++;
+        }
+
+        return (count > 2 ? count - 2 : 0);
     }
 
     get bookDate() {
@@ -446,12 +485,27 @@ class BookView {
         return this.downloadBase;
     }
 
+    get effectiveDownloadLabel() {
+        return (this.isCompactDiscoveryMode ? this.downloadBase : this.downloadLabel);
+    }
+
+    get primaryActionLabel() {
+        if (this.isExternalOnlyDiscoveryBook)
+            return 'Открыть источник';
+
+        return this.effectiveDownloadLabel;
+    }
+
     get deletedLabel() {
         return '\u0423\u0434\u0430\u043b\u0435\u043d\u043e';
     }
 
     get readLabel() {
         return '\u0427\u0438\u0442\u0430\u0442\u044c';
+    }
+
+    get effectiveReadLabel() {
+        return this.readLabel;
     }
 
     get infoLabel() {
@@ -464,6 +518,18 @@ class BookView {
 
     get readingListLabel() {
         return '\u0412\u0020\u0441\u043f\u0438\u0441\u043e\u043a';
+    }
+
+    get effectiveReadingListLabel() {
+        return (this.isCompactDiscoveryMode ? '\u0421\u043f\u0438\u0441\u043e\u043a' : this.readingListLabel);
+    }
+
+    get effectiveDiscoveryDismissLabel() {
+        return (this.isCompactDiscoveryMode ? '\u0421\u043a\u0440\u044b\u0442\u044c' : this.discoveryDismissLabel);
+    }
+
+    get effectiveDiscoveryRestoreLabel() {
+        return (this.isCompactDiscoveryMode ? '\u0412\u0435\u0440\u043d\u0443\u0442\u044c' : this.discoveryRestoreLabel);
     }
 
     get seriesLabel() {
@@ -480,6 +546,10 @@ class BookView {
 
     get downloadIcon() {
         return (this.book.ext && this.book.ext.toLowerCase() == 'fb2' ? 'la la-file-download' : 'la la-download');
+    }
+
+    get primaryActionIcon() {
+        return (this.isExternalOnlyDiscoveryBook ? 'la la-external-link-alt' : this.downloadIcon);
     }
 
     get isPosterMode() {
@@ -562,6 +632,29 @@ class BookView {
         };
     }
 
+    handlePrimaryAction() {
+        if (this.isExternalOnlyDiscoveryBook) {
+            this.openExternalSource();
+            return;
+        }
+
+        this.emit('download');
+    }
+
+    handleCardActivate() {
+        if (this.isExternalOnlyDiscoveryBook) {
+            this.openExternalSource();
+            return;
+        }
+
+        this.emit('bookInfo');
+    }
+
+    openExternalSource() {
+        if (this.book && this.book.discoveryUrl)
+            window.open(this.book.discoveryUrl, '_blank');
+    }
+
     emit(action, format = '') {
         this.$emit('bookEvent', {action, format, book: this.book});
     }
@@ -642,22 +735,55 @@ export default vueComponent(BookView);
 }
 
 .book-card.is-compact-discovery {
-    grid-template-columns: 92px minmax(0, 1fr);
-    gap: 14px;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 12px;
     padding: 12px;
 }
 
 .book-card.is-compact-discovery .cover-box {
-    height: 142px;
+    height: 132px;
     padding: 8px;
 }
 
 .book-card.is-compact-discovery .book-content {
-    row-gap: 4px;
+    grid-template-rows:
+        auto
+        auto
+        auto
+        auto
+        auto
+        minmax(0, 1fr)
+        auto;
+    row-gap: 6px;
+    align-content: start;
+}
+
+.book-card.is-compact-discovery .book-author {
+    min-height: 0;
+    font-size: 13px;
+    -webkit-line-clamp: 1;
+}
+
+.book-card.is-compact-discovery .book-meta-pills {
+    height: auto;
+    gap: 5px;
 }
 
 .book-card.is-compact-discovery .book-title {
-    font-size: 16px;
+    font-size: 17px;
+    block-size: calc(1.1em * 2);
+    -webkit-line-clamp: 2;
+}
+
+.book-card.is-compact-discovery .book-title-row {
+    grid-template-columns: 44px minmax(0, 1fr);
+    min-height: 0;
+    gap: 8px;
+    margin-bottom: 0;
+}
+
+.book-card.is-compact-discovery .serno-slot {
+    min-width: 44px;
 }
 
 .book-card.is-compact-discovery .book-meta-pills {
@@ -667,16 +793,51 @@ export default vueComponent(BookView);
 .book-card.is-compact-discovery .meta-pill,
 .book-card.is-compact-discovery .serno-pill {
     font-size: 11px;
-    min-height: 24px;
+    min-height: 22px;
+    padding: 3px 8px;
+}
+
+.book-card.is-compact-discovery .book-series {
+    block-size: auto;
+    min-height: 0;
+    font-size: 13px;
+    -webkit-line-clamp: 1;
+}
+
+.book-card.is-compact-discovery .book-discovery-note {
+    font-size: 12px;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.book-card.is-compact-discovery .book-genres {
+    gap: 5px;
+    min-height: 0;
+}
+
+.book-card.is-compact-discovery .genre-chip {
+    padding: 3px 7px;
+    font-size: 11px;
 }
 
 .book-card.is-compact-discovery .book-actions {
     gap: 6px;
+    min-height: 0;
+    padding-top: 0;
+}
+
+.book-card.is-compact-discovery .primary-action {
+    grid-column: 1 / -1;
+    border-radius: 10px;
 }
 
 .book-card.is-compact-discovery .book-actions :deep(.q-btn) {
-    min-height: 34px;
+    min-height: 32px;
     font-size: 12px;
+    border-radius: 10px;
 }
 
 .book-card.is-compact-discovery .format-actions {

@@ -1,16 +1,16 @@
-<template>
+﻿<template>
     <Dialog ref="dialog" v-model="dialogVisible">
         <template #header>
             <div class="row items-center" style="font-size: 110%">
                 <q-icon class="q-mr-sm text-green" name="la la-cog" size="28px"></q-icon>
-                Настройки
+                РќР°СЃС‚СЂРѕР№РєРё
             </div>
         </template>
 
         <div class="q-mx-md column" style="min-width: 300px; font-size: 120%;">
             <div class="row items-center q-ml-sm">
                 <div class="q-mr-sm">
-                    Результатов на странице
+                    Р РµР·СѓР»СЊС‚Р°С‚РѕРІ РЅР° СЃС‚СЂР°РЅРёС†Рµ
                 </div>
                 <q-select
                     v-model="limit"
@@ -24,32 +24,32 @@
                 />
             </div>
 
-            <q-checkbox v-show="config.latestVersion" v-model="showNewReleaseAvailable" size="36px" label="Уведомлять о выходе новой версии" />
-            <q-checkbox v-model="downloadAsZip" size="36px" label="Скачивать книги в виде zip-архива" />
-            <q-checkbox v-model="showCounts" size="36px" label="Показывать количество" />
-            <q-checkbox v-model="showRates" size="36px" label="Показывать оценки" />
-            <q-checkbox v-model="showInfo" size="36px" label="Показывать кнопку «Инфо»" />
-            <q-checkbox v-model="showGenres" size="36px" label="Показывать жанры" />
-            <q-checkbox v-model="showDates" size="36px" label="Показывать даты поступления" />
-            <q-checkbox v-model="showDeleted" size="36px" label="Показывать удалённые" />
-            <q-checkbox v-model="abCacheEnabled" size="36px" label="Кешировать запросы" />
-            <q-checkbox v-model="darkTheme" size="36px" label="Ночная тема" />
+            <q-checkbox v-show="config.latestVersion" v-model="showNewReleaseAvailable" size="36px" label="РЈРІРµРґРѕРјР»СЏС‚СЊ Рѕ РІС‹С…РѕРґРµ РЅРѕРІРѕР№ РІРµСЂСЃРёРё" />
+            <q-checkbox v-model="downloadAsZip" size="36px" label="РЎРєР°С‡РёРІР°С‚СЊ РєРЅРёРіРё РІ РІРёРґРµ zip-Р°СЂС…РёРІР°" />
+            <q-checkbox v-model="showCounts" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РєРѕР»РёС‡РµСЃС‚РІРѕ" />
+            <q-checkbox v-model="showRates" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РѕС†РµРЅРєРё" />
+            <q-checkbox v-model="showInfo" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РєРЅРѕРїРєСѓ В«РРЅС„РѕВ»" />
+            <q-checkbox v-model="showGenres" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ Р¶Р°РЅСЂС‹" />
+            <q-checkbox v-model="showDates" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РґР°С‚С‹ РїРѕСЃС‚СѓРїР»РµРЅРёСЏ" />
+            <q-checkbox v-model="showDeleted" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ СѓРґР°Р»С‘РЅРЅС‹Рµ" />
+            <q-checkbox v-model="abCacheEnabled" size="36px" label="РљРµС€РёСЂРѕРІР°С‚СЊ Р·Р°РїСЂРѕСЃС‹" />
+            <q-checkbox v-model="darkTheme" size="36px" label="РќРѕС‡РЅР°СЏ С‚РµРјР°" />
 
             <div v-if="discoveryEnabled" class="q-mt-sm q-ml-sm text-weight-medium" style="font-size: 92%;">
-                Витрины
+                Р’РёС‚СЂРёРЅС‹
             </div>
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryNewest" size="36px" label="Показывать вкладку «Новинки»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryPopular" size="36px" label="Показывать вкладку «Популярное»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryContinueReading" size="36px" label="Показывать полку «Продолжить чтение»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryFromLists" size="36px" label="Показывать полку «Из ваших списков»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnfinishedSeries" size="36px" label="Показывать полку «Незаконченные серии»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoverySimilar" size="36px" label="Показывать полку «Похоже на то, что вы читали»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnreadOnly" size="36px" label="Во вкладке «Для вас» показывать только непрочитанное" />
-            <q-checkbox v-if="discoveryEnabled" v-model="compactDiscoveryCards" size="36px" label="Использовать компактные карточки в витринах" />
-            <q-checkbox v-if="externalDiscoveryUiEnabled" v-model="showDiscoveryExternal" size="36px" label="Показывать вкладку внешнего источника" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryNewest" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РІРєР»Р°РґРєСѓ В«РќРѕРІРёРЅРєРёВ»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryPopular" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РІРєР»Р°РґРєСѓ В«РџРѕРїСѓР»СЏСЂРЅРѕРµВ»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryContinueReading" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РїРѕР»РєСѓ В«РџСЂРѕРґРѕР»Р¶РёС‚СЊ С‡С‚РµРЅРёРµВ»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryFromLists" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РїРѕР»РєСѓ В«РР· РІР°С€РёС… СЃРїРёСЃРєРѕРІВ»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnfinishedSeries" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РїРѕР»РєСѓ В«РќРµР·Р°РєРѕРЅС‡РµРЅРЅС‹Рµ СЃРµСЂРёРёВ»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoverySimilar" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РїРѕР»РєСѓ В«РџРѕС…РѕР¶Рµ РЅР° С‚Рѕ, С‡С‚Рѕ РІС‹ С‡РёС‚Р°Р»РёВ»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnreadOnly" size="36px" label="Р’Рѕ РІРєР»Р°РґРєРµ В«Р”Р»СЏ РІР°СЃВ» РїРѕРєР°Р·С‹РІР°С‚СЊ С‚РѕР»СЊРєРѕ РЅРµРїСЂРѕС‡РёС‚Р°РЅРЅРѕРµ" />
+            <q-checkbox v-if="discoveryEnabled" v-model="compactDiscoveryCards" size="36px" label="РСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РєРѕРјРїР°РєС‚РЅС‹Рµ РєР°СЂС‚РѕС‡РєРё РІ РІРёС‚СЂРёРЅР°С…" />
+            <q-checkbox v-if="effectiveExternalDiscoveryAvailable" v-model="showDiscoveryExternal" size="36px" label="Показывать вкладку внешнего источника" />
 
             <div v-if="discoveryEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Лимит «Новинки»</div>
+                <div class="q-mr-sm">Р›РёРјРёС‚ В«РќРѕРІРёРЅРєРёВ»</div>
                 <q-select
                     v-model="discoveryNewestLimit"
                     :options="discoveryLimitOptions"
@@ -63,7 +63,7 @@
             </div>
 
             <div v-if="discoveryEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Лимит «Популярное»</div>
+                <div class="q-mr-sm">Р›РёРјРёС‚ В«РџРѕРїСѓР»СЏСЂРЅРѕРµВ»</div>
                 <q-select
                     v-model="discoveryPopularLimit"
                     :options="discoveryLimitOptions"
@@ -76,72 +76,30 @@
                 />
             </div>
 
-            <div v-if="discoveryEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Внешний источник</div>
-                <q-select
-                    v-model="discoveryExternalSource"
-                    :options="externalSourceOptions"
-                    class="bg-white"
-                    dropdown-icon="la la-angle-down la-sm"
-                    outlined
+            <div v-if="discoveryEnabled && canEditExternalDiscovery" class="row items-center q-ml-sm q-mt-sm settings-inline-row">
+                <div class="q-mr-sm settings-inline-label">Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє</div>
+                <div class="settings-inline-summary text-grey-8">
+                    {{ externalDiscoverySummary }}
+                </div>
+                <q-btn
+                    class="q-ml-sm"
+                    color="primary"
+                    flat
                     dense
-                    emit-value
-                    map-options
-                />
+                    no-caps
+                    icon="la la-sliders-h"
+                    @click="discoverySourceDialogVisible = true"
+                >
+                    РЈРїСЂР°РІР»СЏС‚СЊ
+                </q-btn>
             </div>
 
-            <div v-if="externalDiscoveryUiEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Название источника</div>
-                <q-input
-                    v-model="discoveryExternalName"
-                    class="bg-white col"
-                    outlined
-                    dense
-                    clearable
-                    placeholder="Например: Новинки партнёра"
-                />
-            </div>
-
-            <div v-if="externalDiscoveryUiEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">URL витрины</div>
-                <q-input
-                    v-model="discoveryExternalUrl"
-                    class="bg-white col"
-                    outlined
-                    dense
-                    clearable
-                    placeholder="https://..."
-                />
-            </div>
-
-            <div v-if="externalDiscoveryUiEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Лимит внешнего источника</div>
-                <q-select
-                    v-model="discoveryExternalLimit"
-                    :options="discoveryLimitOptions"
-                    class="bg-white"
-                    dropdown-icon="la la-angle-down la-sm"
-                    outlined
-                    dense
-                    emit-value
-                    map-options
-                />
-            </div>
-
-            <div v-if="externalDiscoveryUiEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Период обновления</div>
-                <q-select
-                    v-model="discoveryExternalTtlMinutes"
-                    :options="discoveryTtlOptions"
-                    class="bg-white"
-                    dropdown-icon="la la-angle-down la-sm"
-                    outlined
-                    dense
-                    emit-value
-                    map-options
-                />
+            <div v-if="effectiveExternalDiscoveryAvailable && !canEditExternalDiscovery" class="q-ml-sm q-mt-sm text-grey-7" style="font-size: 85%;">
+                Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє РЅР°СЃС‚СЂР°РёРІР°РµС‚ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ РїСЂРѕС„РёР»СЏ.
             </div>
         </div>
+
+        <DiscoverySourceDialog v-if="canEditExternalDiscovery" v-model="discoverySourceDialogVisible" />
 
         <template #footer>
             <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps @click="okClick">
@@ -156,10 +114,12 @@
 import vueComponent from '../../vueComponent.js';
 
 import Dialog from '../../share/Dialog.vue';
+import DiscoverySourceDialog from '../DiscoverySourceDialog/DiscoverySourceDialog.vue';
 
 const componentOptions = {
     components: {
-        Dialog
+        Dialog,
+        DiscoverySourceDialog,
     },
     watch: {
         modelValue(newValue) {
@@ -168,7 +128,6 @@ const componentOptions = {
         dialogVisible(newValue) {
             this.$emit('update:modelValue', newValue);
         },
-
         settings() {
             this.loadSettings();
         },
@@ -238,28 +197,7 @@ const componentOptions = {
         discoveryPopularLimit(newValue) {
             this.commit('setSettings', {discoveryPopularLimit: newValue});
         },
-        discoveryExternalLimit(newValue) {
-            this.commit('setSettings', {discoveryExternalLimit: newValue});
-        },
-        discoveryExternalSource(newValue) {
-            const normalizedValue = (String(newValue || '').trim().toLowerCase() === 'none' ? 'none' : 'web-page');
-            if (normalizedValue === 'none') {
-                this.discoveryExternalName = '';
-                this.discoveryExternalUrl = '';
-                this.showDiscoveryExternal = false;
-            }
-            this.commit('setSettings', {discoveryExternalSource: normalizedValue});
-        },
-        discoveryExternalName(newValue) {
-            this.commit('setSettings', {discoveryExternalName: newValue});
-        },
-        discoveryExternalUrl(newValue) {
-            this.commit('setSettings', {discoveryExternalUrl: newValue});
-        },
-        discoveryExternalTtlMinutes(newValue) {
-            this.commit('setSettings', {discoveryExternalTtlMinutes: newValue});
-        },
-    }
+    },
 };
 
 class SettingsDialog {
@@ -269,14 +207,13 @@ class SettingsDialog {
     };
 
     dialogVisible = false;
-
     limit = 20;
     downloadAsZip = false;
     showCounts = true;
     showRates = true;
     showInfo = true;
     showGenres = true;
-    showDates = true;
+    showDates = false;
     showDeleted = false;
     abCacheEnabled = true;
     showNewReleaseAvailable = true;
@@ -292,11 +229,10 @@ class SettingsDialog {
     compactDiscoveryCards = false;
     discoveryNewestLimit = 8;
     discoveryPopularLimit = 8;
-    discoveryExternalLimit = 8;
     discoveryExternalSource = '';
     discoveryExternalName = '';
     discoveryExternalUrl = '';
-    discoveryExternalTtlMinutes = 1440;
+    discoverySourceDialogVisible = false;
 
     limitOptions = [
         {label: '10', value: 10},
@@ -317,12 +253,6 @@ class SettingsDialog {
         {label: '16', value: 16},
         {label: '20', value: 20},
         {label: '24', value: 24},
-    ];
-
-    discoveryTtlOptions = [
-        {label: '24 часа', value: 1440},
-        {label: '3 дня', value: 4320},
-        {label: '7 дней', value: 10080},
     ];
 
     created() {
@@ -346,19 +276,63 @@ class SettingsDialog {
         return (this.discoveryConfig.enabled !== false);
     }
 
-    get externalDiscoveryUiEnabled() {
+    get canEditExternalDiscovery() {
+        const current = this.config.currentUserProfile || {};
+        return !!(this.config.profileAuthorized && current.isAdmin);
+    }
+
+    get externalDiscoveryAvailable() {
         return !!(this.discoveryEnabled && this.discoveryExternalSource && this.discoveryExternalSource !== 'none');
     }
 
-    get externalSourceOptions() {
-        return [
-            {label: 'Нет', value: 'none'},
-            {label: 'Веб-витрина', value: 'web-page'},
-        ];
+    get effectiveExternalDiscoverySource() {
+        const value = String(
+            this.canEditExternalDiscovery
+                ? (this.discoveryExternalSource || this.discoveryConfig.externalSource || '')
+                : (this.discoveryConfig.externalSource || ''),
+        ).trim().toLowerCase();
+        return (value && value !== 'none' ? 'web-page' : 'none');
+    }
+
+    get effectiveExternalDiscoveryName() {
+        return String(
+            this.canEditExternalDiscovery
+                ? (this.discoveryExternalName || this.discoveryConfig.externalName || '')
+                : (this.discoveryConfig.externalName || ''),
+        ).trim();
+    }
+
+    get effectiveExternalDiscoveryAvailable() {
+        return !!(this.discoveryEnabled && this.effectiveExternalDiscoverySource !== 'none');
+    }
+
+    get externalDiscoverySummary() {
+        if (!this.effectiveExternalDiscoveryAvailable)
+            return 'Не настроен';
+
+        const name = this.effectiveExternalDiscoveryName || 'Внешний источник';
+        return `${name} · веб-витрина`;
     }
 
     loadSettings() {
         const settings = this.settings;
+        const configExternalSource = (String(this.discoveryConfig.externalSource || 'none').trim().toLowerCase() === 'none'
+            ? 'none'
+            : 'web-page');
+        const hasStoredExternalSettings = !!(
+            String(settings.discoveryExternalSource || '').trim()
+            || String(settings.discoveryExternalName || '').trim()
+            || String(settings.discoveryExternalUrl || '').trim()
+        );
+
+        if (!hasStoredExternalSettings && configExternalSource !== 'none') {
+            this.commit('setSettings', {
+                discoveryExternalSource: configExternalSource,
+                discoveryExternalName: String(this.discoveryConfig.externalName || '').trim(),
+                discoveryExternalUrl: String(this.discoveryConfig.externalUrl || '').trim(),
+                discoveryExternalTtlMinutes: Math.max(1440, parseInt(this.discoveryConfig.externalTtlMinutes, 10) || 1440),
+            });
+        }
 
         this.limit = settings.limit;
         this.downloadAsZip = settings.downloadAsZip;
@@ -382,13 +356,11 @@ class SettingsDialog {
         this.compactDiscoveryCards = (settings.compactDiscoveryCards === true);
         this.discoveryNewestLimit = parseInt(settings.discoveryNewestLimit, 10) || 8;
         this.discoveryPopularLimit = parseInt(settings.discoveryPopularLimit, 10) || 8;
-        this.discoveryExternalLimit = parseInt(settings.discoveryExternalLimit, 10) || 8;
         this.discoveryExternalSource = (String(settings.discoveryExternalSource || this.discoveryConfig.externalSource || 'none').trim().toLowerCase() === 'none'
             ? 'none'
             : 'web-page');
         this.discoveryExternalName = String(settings.discoveryExternalName || this.discoveryConfig.externalName || '').trim();
         this.discoveryExternalUrl = String(settings.discoveryExternalUrl || this.discoveryConfig.externalUrl || '').trim();
-        this.discoveryExternalTtlMinutes = parseInt(settings.discoveryExternalTtlMinutes, 10) || parseInt(this.discoveryConfig.externalTtlMinutes, 10) || 1440;
     }
 
     okClick() {
@@ -401,4 +373,19 @@ export default vueComponent(SettingsDialog);
 </script>
 
 <style scoped>
+.settings-inline-row {
+    flex-wrap: wrap;
+    gap: 6px 8px;
+}
+
+.settings-inline-label {
+    min-width: 132px;
+}
+
+.settings-inline-summary {
+    flex: 1 1 220px;
+    min-width: 180px;
+}
 </style>
+
+

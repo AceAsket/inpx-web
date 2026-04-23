@@ -1,4 +1,4 @@
-const os = require('os');
+﻿const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs-extra');
@@ -33,12 +33,12 @@ const ssDbCreating = 'db_creating';
 
 const stateToText = {
     [ssNormal]: '',
-    [ssDbLoading]: 'Загрузка поисковой базы',
-    [ssDbCreating]: 'Создание поисковой базы',
+    [ssDbLoading]: 'Р—Р°РіСЂСѓР·РєР° РїРѕРёСЃРєРѕРІРѕР№ Р±Р°Р·С‹',
+    [ssDbCreating]: 'РЎРѕР·РґР°РЅРёРµ РїРѕРёСЃРєРѕРІРѕР№ Р±Р°Р·С‹',
 };
 
-const cleanDirInterval = 60*60*1000;//каждый час
-const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
+const cleanDirInterval = 60*60*1000;//РєР°Р¶РґС‹Р№ С‡Р°СЃ
+const checkReleaseInterval = 7*60*60*1000;//РєР°Р¶РґС‹Рµ 7 С‡Р°СЃРѕРІ
 const discoveryCacheTtl = 15*60*1000;//15 minutes
 const bookAssetVersion = 'fblibrary-assets-v1';
 const bookInfoVersion = 'fb2-binaries-v6';
@@ -110,6 +110,62 @@ function resolveReleaseChannel(config = {}) {
     return (isRcReleaseTag(config.version) ? 'rc' : 'stable');
 }
 
+function decodeExternalText(value = '') {
+    return _.unescape(String(value || ''))
+        .replace(/\u00a0/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function stripExternalHtml(value = '') {
+    return decodeExternalText(String(value || '')
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' '));
+}
+
+function toAbsoluteExternalUrl(baseUrl = '', value = '') {
+    const raw = String(value || '').trim();
+    if (!raw)
+        return '';
+
+    try {
+        return new URL(raw, baseUrl).toString();
+    } catch (e) {
+        return raw;
+    }
+}
+
+function buildExternalFlagsByUrl(sourceUrl = '') {
+    const normalized = String(sourceUrl || '').trim().toLowerCase();
+    return {
+        isNew: /\/showroom\/new\/|\/catalog\/new\/|\/novinki\/|\/new\/|[?&]new\b/.test(normalized),
+        isBestseller: /\/popular\/|\/bestsellers?\/|best[_-]?seller|хиты|popular/.test(normalized),
+    };
+}
+
+function dedupeExternalFeedItems(items = [], limit = 8) {
+    const result = [];
+    const seen = new Set();
+
+    for (const item of items) {
+        const title = decodeExternalText(item.title || '');
+        const url = String(item.url || '').trim();
+        if (!title || !url)
+            continue;
+
+        const key = `${title.toLowerCase()}|${url.toLowerCase()}`;
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        result.push(Object.assign({}, item, {title}));
+        if (result.length >= limit)
+            break;
+    }
+
+    return result;
+}
+
 function buildReleaseCheckRequest(checkReleaseLink = '', channel = 'stable') {
     const baseLink = String(checkReleaseLink || '').trim();
     if (!baseLink)
@@ -173,8 +229,8 @@ function stripHtml(html) {
 function normalizeAuthorText(value) {
     return stripHtml(value)
         .toLowerCase()
-        .replace(/ё/g, 'е')
-        .replace(/[()[\]{}.,;:!?'"`«»]/g, ' ')
+        .replace(/С‘/g, 'Рµ')
+        .replace(/[()[\]{}.,;:!?'"`В«В»]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 }
@@ -220,9 +276,9 @@ function buildAuthorVariants(author) {
 function normalizeDiscoveryText(value) {
     return stripHtml(value)
         .toLowerCase()
-        .replace(/ё/g, 'е')
+        .replace(/С‘/g, 'Рµ')
         .replace(/&[a-z0-9#]+;/gi, ' ')
-        .replace(/[^a-zа-я0-9]+/gi, ' ')
+        .replace(/[^a-zР°-СЏ0-9]+/gi, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 }
@@ -374,8 +430,8 @@ class WebWorker {
 
             this.inpxFileHash = await this.inpxHashCreator.getInpxFileHash();
 
-            //проверим полный InxpHash (включая фильтр и версию БД)
-            //для этого заглянем в конфиг внутри БД, если он есть
+            //РїСЂРѕРІРµСЂРёРј РїРѕР»РЅС‹Р№ InxpHash (РІРєР»СЋС‡Р°СЏ С„РёР»СЊС‚СЂ Рё РІРµСЂСЃРёСЋ Р‘Р”)
+            //РґР»СЏ СЌС‚РѕРіРѕ Р·Р°РіР»СЏРЅРµРј РІ РєРѕРЅС„РёРі РІРЅСѓС‚СЂРё Р‘Р”, РµСЃР»Рё РѕРЅ РµСЃС‚СЊ
             if (!(config.recreateDb || recreate) && await fs.pathExists(dbPath)) {
                 const newInpxHash = await this.inpxHashCreator.getHash();
 
@@ -396,21 +452,21 @@ class WebWorker {
                 }
             }
 
-            //удалим БД если нужно
+            //СѓРґР°Р»РёРј Р‘Р” РµСЃР»Рё РЅСѓР¶РЅРѕ
             if (config.recreateDb || recreate)
                 await fs.remove(dbPath);
 
-            //пересоздаем БД из INPX если нужно
+            //РїРµСЂРµСЃРѕР·РґР°РµРј Р‘Р” РёР· INPX РµСЃР»Рё РЅСѓР¶РЅРѕ
             if (!await fs.pathExists(dbPath)) {
                 await this.createDb(dbPath);
                 utils.freeMemory();
             }
 
-            //загружаем БД
+            //Р·Р°РіСЂСѓР¶Р°РµРј Р‘Р”
             this.setMyState(ssDbLoading);
             log('Searcher DB loading');
 
-            const db = new JembaDbThread();//в отдельном потоке
+            const db = new JembaDbThread();//РІ РѕС‚РґРµР»СЊРЅРѕРј РїРѕС‚РѕРєРµ
             await db.lock({
                 dbPath,
                 softLock: true,
@@ -421,7 +477,7 @@ class WebWorker {
             });
 
             try {
-                //открываем таблицы
+                //РѕС‚РєСЂС‹РІР°РµРј С‚Р°Р±Р»РёС†С‹
                 await db.openAll({exclude: ['author_id', 'series_id', 'title_id', 'book']});
 
                 const bookCacheSize = 500;
@@ -439,7 +495,7 @@ class WebWorker {
                 return;
             }
 
-            //поисковый движок
+            //РїРѕРёСЃРєРѕРІС‹Р№ РґРІРёР¶РѕРє
             this.dbSearcher = new DbSearcher(config, db);
             await this.dbSearcher.init();
 
@@ -551,7 +607,7 @@ class WebWorker {
                     genreValues.add(g.value);
             }
 
-            //добавим к жанрам те, что нашлись при парсинге
+            //РґРѕР±Р°РІРёРј Рє Р¶Р°РЅСЂР°Рј С‚Рµ, С‡С‚Рѕ РЅР°С€Р»РёСЃСЊ РїСЂРё РїР°СЂСЃРёРЅРіРµ
             const genreParsed = new Set();
             let rows = await db.select({table: 'genre', map: `(r) => ({value: r.value})`});
             for (const row of rows) {
@@ -561,7 +617,7 @@ class WebWorker {
                     last.value.push({name: row.value, value: row.value});
             }
 
-            //уберем те, которые не нашлись при парсинге
+            //СѓР±РµСЂРµРј С‚Рµ, РєРѕС‚РѕСЂС‹Рµ РЅРµ РЅР°С€Р»РёСЃСЊ РїСЂРё РїР°СЂСЃРёРЅРіРµ
             for (let j = 0; j < genres.length; j++) {
                 const section = genres[j];
                 for (let i = 0; i < section.value.length; i++) {
@@ -643,6 +699,32 @@ class WebWorker {
         return discovery;
     }
 
+    async getDiscoveryConfigForRequest(options = {}) {
+        const requestOptions = Object.assign({}, options || {});
+        const hasExternalOverrides = (
+            Object.prototype.hasOwnProperty.call(requestOptions, 'externalSource')
+            || Object.prototype.hasOwnProperty.call(requestOptions, 'externalName')
+            || Object.prototype.hasOwnProperty.call(requestOptions, 'externalUrl')
+            || Object.prototype.hasOwnProperty.call(requestOptions, 'externalLimit')
+            || Object.prototype.hasOwnProperty.call(requestOptions, 'externalTtlMinutes')
+        );
+
+        if (!hasExternalOverrides)
+            return this.getDiscoveryConfig(requestOptions);
+
+        try {
+            await this.requireAdmin(requestOptions.userId, requestOptions.profileAccessToken);
+        } catch (e) {
+            delete requestOptions.externalSource;
+            delete requestOptions.externalName;
+            delete requestOptions.externalUrl;
+            delete requestOptions.externalLimit;
+            delete requestOptions.externalTtlMinutes;
+        }
+
+        return this.getDiscoveryConfig(requestOptions);
+    }
+
     async rememberDiscovery(key, loader, ttl = discoveryCacheTtl) {
         const cached = this.discoveryCache.get(key);
         if (cached && Date.now() - cached.time < ttl)
@@ -660,26 +742,28 @@ class WebWorker {
 
         const diffDays = Math.max(0, Math.floor((Date.now() - time) / 86400000));
         if (diffDays <= 0)
-            return 'Добавлена сегодня';
+            return 'Р”РѕР±Р°РІР»РµРЅР° СЃРµРіРѕРґРЅСЏ';
         if (diffDays === 1)
-            return 'Добавлена 1 день назад';
+            return 'Р”РѕР±Р°РІР»РµРЅР° 1 РґРµРЅСЊ РЅР°Р·Р°Рґ';
         if (diffDays < 5)
-            return `Добавлена ${diffDays} дня назад`;
-        return `Добавлена ${diffDays} дней назад`;
+            return `Р”РѕР±Р°РІР»РµРЅР° ${diffDays} РґРЅСЏ РЅР°Р·Р°Рґ`;
+        return `Р”РѕР±Р°РІР»РµРЅР° ${diffDays} РґРЅРµР№ РЅР°Р·Р°Рґ`;
     }
 
     getDiscoveryMatchLabel(kind = '') {
         switch (String(kind || '').trim()) {
             case 'exact':
-                return 'Точное совпадение';
+                return '?????? ??????????';
             case 'title-author':
-                return 'Совпадение по названию и автору';
+                return '?????????? ?? ???????? ? ??????';
             case 'title':
-                return 'Совпадение по названию';
+                return '?????????? ?? ????????';
             case 'title-partial':
-                return 'Похожее совпадение по названию';
+                return '??????? ?????????? ?? ????????';
+            case 'missing-local':
+                return '??? ? ????????? ??????????';
             default:
-                return 'Совпадение с внешней витриной';
+                return '?????????? ? ??????? ????????';
         }
     }
 
@@ -696,24 +780,27 @@ class WebWorker {
         } else if (mode === 'popular') {
             if (popularityInfo) {
                 if (popularityInfo.progressCount > 0)
-                    reasons.push(`В чтении: ${popularityInfo.progressCount}`);
+                    reasons.push(`? ??????: ${popularityInfo.progressCount}`);
                 if (popularityInfo.listCount > 0)
-                    reasons.push(`В списках: ${popularityInfo.listCount}`);
+                    reasons.push(`? ???????: ${popularityInfo.listCount}`);
                 if (popularityInfo.finishedCount > 0)
-                    reasons.push(`Прочитано: ${popularityInfo.finishedCount}`);
+                    reasons.push(`?????????: ${popularityInfo.finishedCount}`);
             }
             if (book.librate)
-                reasons.push(`Оценка библиотеки ${book.librate}/5`);
+                reasons.push(`?????? ?????????? ${book.librate}/5`);
         }
 
         if (options.discoverySource) {
-            reasons.unshift(`Совпало с ${options.discoverySource} · ${this.getDiscoveryMatchLabel(options.matchKind)}`);
+            const matchLabel = this.getDiscoveryMatchLabel(options.matchKind);
+            if (options.matchKind === 'missing-local')
+                reasons.unshift(`${options.discoverySource} ? ${matchLabel}`);
+            else
+                reasons.unshift(`??????? ? ${options.discoverySource} ? ${matchLabel}`);
         }
 
-        result.discoveryReason = reasons.join(' · ');
+        result.discoveryReason = reasons.join(' ? ');
         return result;
     }
-
     async getDiscoveryDiskCache() {
         if (this.discoveryDiskCache)
             return this.discoveryDiskCache;
@@ -981,14 +1068,14 @@ class WebWorker {
         const shelfConfig = {
             newest: {
                 id: `newest-${options.daysWindow || 0}d`,
-                title: 'Новинки библиотеки',
-                subtitle: 'Последние поступления в индекс',
+                title: 'РќРѕРІРёРЅРєРё Р±РёР±Р»РёРѕС‚РµРєРё',
+                subtitle: 'РџРѕСЃР»РµРґРЅРёРµ РїРѕСЃС‚СѓРїР»РµРЅРёСЏ РІ РёРЅРґРµРєСЃ',
                 mode: 'newest',
             },
             popular: {
                 id: 'popular',
-                title: 'Популярное в библиотеке',
-                subtitle: 'Пилот по локальной оценке библиотеки',
+                title: 'РџРѕРїСѓР»СЏСЂРЅРѕРµ РІ Р±РёР±Р»РёРѕС‚РµРєРµ',
+                subtitle: 'РџРёР»РѕС‚ РїРѕ Р»РѕРєР°Р»СЊРЅРѕР№ РѕС†РµРЅРєРµ Р±РёР±Р»РёРѕС‚РµРєРё',
                 mode: 'popular',
             },
         }[kind];
@@ -1009,10 +1096,279 @@ class WebWorker {
         };
     }
 
+    parseExternalFeedItemsFromNextData(html = '', sourceUrl = '', limit = 8) {
+        const nextDataMatch = String(html || '').match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/i);
+        if (!nextDataMatch)
+            return [];
+
+        let nextData = null;
+        try {
+            nextData = JSON.parse(nextDataMatch[1]);
+        } catch (e) {
+            return [];
+        }
+
+        let initialState = ((((nextData || {}).props || {}).pageProps || {}).initialState || {});
+        if (typeof initialState === 'string') {
+            try {
+                initialState = JSON.parse(initialState || '{}');
+            } catch (e) {
+                initialState = {};
+            }
+        }
+
+        const queries = (((initialState || {}).rtkqApi || {}).queries || {});
+        const candidates = [];
+        const collectRows = (value, result = []) => {
+            if (!value)
+                return result;
+
+            if (Array.isArray(value)) {
+                if (value.some(item => item && typeof item === 'object' && (item.title || item.name) && (item.url || item.link)))
+                    result.push(value);
+
+                for (const item of value) {
+                    if (item && typeof item === 'object')
+                        collectRows(item, result);
+                }
+
+                return result;
+            }
+
+            if (typeof value === 'object') {
+                for (const nestedValue of Object.values(value))
+                    collectRows(nestedValue, result);
+            }
+
+            return result;
+        };
+
+        for (const query of Object.values(queries)) {
+            const rowGroups = collectRows((query || {}).data || {});
+            for (const rows of rowGroups) {
+                for (const item of rows) {
+                    if (!item || (!item.title && !item.name) || (!item.url && !item.link))
+                        continue;
+
+                    const authors = Array.isArray(item.authors)
+                        ? item.authors
+                            .map(author => decodeExternalText(author && typeof author === 'object' ? author.name : author))
+                            .filter(Boolean)
+                        : [];
+
+                    const cover = item.cover_url
+                        || (((item.cover || {}).large) || ((item.cover || {}).small))
+                        || (((item.picture || {}).large) || ((item.picture || {}).small))
+                        || (((item.image || {}).large) || ((item.image || {}).small))
+                        || item.image
+                        || '';
+
+                    candidates.push({
+                        title: decodeExternalText(item.title || item.name),
+                        author: decodeExternalText(authors.join(', ') || getPrimaryDiscoveryAuthor(item.persons)),
+                        url: toAbsoluteExternalUrl(sourceUrl, item.url || item.link),
+                        cover: toAbsoluteExternalUrl(sourceUrl, cover),
+                        rating: (((item.rating || {}).rated_avg) || item.rating || 0),
+                        isBestseller: !!(
+                            ((item.labels || {}).is_bestseller)
+                            || ((item.labels || {}).is_sales_hit)
+                            || ((item.specialTypes || {}).best)
+                            || ((item.specialTypes || {}).bestseller)
+                        ),
+                        isNew: !!(
+                            ((item.labels || {}).is_new)
+                            || ((item.specialTypes || {}).new)
+                            || ((item.specialTypes || {}).soon)
+                        ),
+                    });
+                }
+            }
+        }
+
+        return dedupeExternalFeedItems(candidates, Math.max(limit * 3, limit));
+    }
+
+    parseLitresFeedItemsFromHtml(html = '', sourceUrl = '', limit = 8) {
+        const coverByUrl = new Map();
+        const bookPathByUrl = new Map();
+        const flags = buildExternalFlagsByUrl(sourceUrl);
+        const normalizedHtml = String(html || '');
+
+        for (const match of normalizedHtml.matchAll(/<a[^>]+href="((?:\/|https:\/\/www\.litres\.ru\/)book\/[^"]+\/?)"[^>]*>[\s\S]*?<img[^>]+(?:data-src|src)="([^"]+)"[^>]*>/gi)) {
+            const bookUrl = toAbsoluteExternalUrl(sourceUrl, match[1]);
+            const coverUrl = toAbsoluteExternalUrl(sourceUrl, match[2]);
+            if (bookUrl && coverUrl && !coverByUrl.has(bookUrl))
+                coverByUrl.set(bookUrl, coverUrl);
+        }
+
+        const items = [];
+        let lastBook = null;
+
+        for (const match of normalizedHtml.matchAll(/<a[^>]+href="((?:\/|https:\/\/www\.litres\.ru\/)(?:book|author)\/[^"]+\/?)"[^>]*>([\s\S]*?)<\/a>/gi)) {
+            const href = toAbsoluteExternalUrl(sourceUrl, match[1]);
+            const text = stripExternalHtml(match[2]);
+            if (!href)
+                continue;
+
+            if (/\/book\//i.test(href)) {
+                if (!text)
+                    continue;
+
+                const item = {
+                    title: text,
+                    author: '',
+                    url: href,
+                    cover: (coverByUrl.get(href) || ''),
+                    rating: 0,
+                    isBestseller: flags.isBestseller,
+                    isNew: flags.isNew,
+                };
+
+                items.push(item);
+                lastBook = item;
+                bookPathByUrl.set(href, item);
+                if (items.length >= Math.max(limit * 3, limit))
+                    break;
+                continue;
+            }
+
+            if (/\/author\//i.test(href) && lastBook && !lastBook.author && text)
+                lastBook.author = text;
+        }
+
+        return dedupeExternalFeedItems(items, Math.max(limit * 3, limit));
+    }
+
+    parseJsonLdProductFeedItems(html = '', sourceUrl = '', limit = 8) {
+        const items = [];
+        const flags = buildExternalFlagsByUrl(sourceUrl);
+        const scriptMatches = String(html || '').matchAll(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
+
+        for (const match of scriptMatches) {
+            const raw = String(match[1] || '').trim();
+            if (!raw)
+                continue;
+
+            let data = null;
+            try {
+                data = JSON.parse(raw);
+            } catch (e) {
+                continue;
+            }
+
+            const queue = (Array.isArray(data) ? [...data] : [data]);
+            while (queue.length) {
+                const node = queue.shift();
+                if (!node || typeof node !== 'object')
+                    continue;
+
+                const type = String(node['@type'] || '').trim();
+                if (type === 'Product') {
+                    const title = decodeExternalText(node.name || ((node.offers || {}).name) || '');
+                    const url = toAbsoluteExternalUrl(sourceUrl, ((node.offers || {}).url) || node.url || '');
+                    const image = Array.isArray(node.image) ? node.image[0] : node.image;
+                    if (title && url) {
+                        items.push({
+                            title,
+                            author: decodeExternalText(((node.author || {}).name) || node.author || ''),
+                            url,
+                            cover: toAbsoluteExternalUrl(sourceUrl, image || ((node.offers || {}).image) || ''),
+                            rating: 0,
+                            isBestseller: flags.isBestseller,
+                            isNew: flags.isNew,
+                        });
+                    }
+                }
+
+                for (const value of Object.values(node)) {
+                    if (Array.isArray(value))
+                        queue.push(...value);
+                    else if (value && typeof value === 'object')
+                        queue.push(value);
+                }
+            }
+        }
+
+        return dedupeExternalFeedItems(items, Math.max(limit * 3, limit));
+    }
+
+    parseMifFeedItemsFromHtml(html = '', sourceUrl = '', limit = 8) {
+        const items = [];
+        const flags = buildExternalFlagsByUrl(sourceUrl);
+        const normalizedHtml = String(html || '');
+
+        for (const match of normalizedHtml.matchAll(/<div[^>]+class="[^"]*lego-book[^"]*"[\s\S]{0,5000}?<a href="([^"]*\/catalog\/product\/[^"]+)"[^>]*>[\s\S]{0,2500}?<(?:img|source)[^>]+(?:data-original|src)="([^"]+)"[\s\S]{0,2500}?<div class="lego-book__cover-loading-title">([\s\S]{0,400}?)<\/div>/gi)) {
+            const titleBlock = match[3] || '';
+            const titleParts = Array.from(titleBlock.matchAll(/<p>([\s\S]*?)<\/p>/gi))
+                .map(item => stripExternalHtml(item[1]))
+                .filter(Boolean);
+
+            const title = decodeExternalText(titleParts[0] || '');
+            const author = decodeExternalText(titleParts[1] || '');
+            const url = toAbsoluteExternalUrl(sourceUrl, match[1]);
+            const cover = toAbsoluteExternalUrl(sourceUrl, match[2]);
+            if (!title || !url)
+                continue;
+
+            items.push({
+                title,
+                author,
+                url,
+                cover,
+                rating: 0,
+                isBestseller: flags.isBestseller,
+                isNew: flags.isNew || /РќРѕРІРёРЅРєР°/.test(titleBlock),
+            });
+
+            if (items.length >= Math.max(limit * 3, limit))
+                break;
+        }
+
+        return dedupeExternalFeedItems(items, Math.max(limit * 3, limit));
+    }
+
+    parseAlpinaFeedItemsFromHtml(html = '', sourceUrl = '', limit = 8) {
+        const items = [];
+        const flags = buildExternalFlagsByUrl(sourceUrl);
+        const normalizedHtml = String(html || '');
+
+        for (const match of normalizedHtml.matchAll(/data-book-name="([^"]+)"[\s\S]{0,4000}?<a href="([^"]*\/catalog\/book-[^"]+\/)"[\s\S]{0,2500}?<(?:img|source)[^>]+(?:data-src|src)="([^"]+)"[\s\S]{0,2500}?<div class="book-item-authors[\s\S]{0,2000}?<\/div>/gi)) {
+            const block = match[0];
+            const title = decodeExternalText(match[1]);
+            const url = toAbsoluteExternalUrl(sourceUrl, match[2]);
+            const cover = toAbsoluteExternalUrl(sourceUrl, match[3]);
+            const authors = [];
+
+            for (const authorMatch of block.matchAll(/book-item-authors__item[\s\S]{0,300}?<span[^>]*itemprop="name"[^>]*>([\s\S]*?)<\/span>/gi)) {
+                const author = stripExternalHtml(authorMatch[1]);
+                if (author)
+                    authors.push(author);
+            }
+
+            if (!title || !url)
+                continue;
+
+            items.push({
+                title,
+                author: authors.join(', '),
+                url,
+                cover,
+                rating: 0,
+                isBestseller: flags.isBestseller || /book-item-labels__item[^>]*>[\s\S]*?Бестселлер/i.test(block),
+                isNew: flags.isNew || /book-item-labels__item[^>]*>[\s\S]*?Новинка/i.test(block),
+            });
+
+            if (items.length >= Math.max(limit * 3, limit))
+                break;
+        }
+
+        return dedupeExternalFeedItems(items, Math.max(limit * 3, limit));
+    }
+
     async fetchExternalFeedItems(limit = 8, url = '') {
         const sourceUrl = String(url || '').trim();
         if (!sourceUrl)
-            throw new Error('Не задан URL внешней витрины');
+            throw new Error('РќРµ Р·Р°РґР°РЅ URL РІРЅРµС€РЅРµР№ РІРёС‚СЂРёРЅС‹');
 
         const response = await axios.get(sourceUrl, {
             responseType: 'text',
@@ -1024,32 +1380,45 @@ class WebWorker {
         });
 
         const html = String(response.data || '');
-        const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/i);
-        if (!nextDataMatch)
+        const maxItems = Math.max(limit * 3, limit);
+        const host = (() => {
+            try {
+                return new URL(sourceUrl).hostname.toLowerCase();
+            } catch (e) {
+                return '';
+            }
+        })();
+
+        const parserChain = [
+            () => this.parseExternalFeedItemsFromNextData(html, sourceUrl, limit),
+        ];
+
+        if (host.includes('litres.ru'))
+            parserChain.push(() => this.parseLitresFeedItemsFromHtml(html, sourceUrl, limit));
+        if (host.includes('mann-ivanov-ferber.ru'))
+            parserChain.push(
+                () => this.parseMifFeedItemsFromHtml(html, sourceUrl, limit),
+                () => this.parseJsonLdProductFeedItems(html, sourceUrl, limit),
+            );
+        if (host.includes('alpinabook.ru'))
+            parserChain.push(() => this.parseAlpinaFeedItemsFromHtml(html, sourceUrl, limit));
+
+        parserChain.push(
+            () => this.parseJsonLdProductFeedItems(html, sourceUrl, limit),
+            () => this.parseMifFeedItemsFromHtml(html, sourceUrl, limit),
+            () => this.parseLitresFeedItemsFromHtml(html, sourceUrl, limit),
+            () => this.parseAlpinaFeedItemsFromHtml(html, sourceUrl, limit),
+        );
+
+        let items = [];
+        for (const parseItems of parserChain) {
+            items = dedupeExternalFeedItems(parseItems(), maxItems);
+            if (items.length)
+                break;
+        }
+
+        if (!items.length)
             throw new Error('Не удалось прочитать внешнюю витрину');
-
-        const nextData = JSON.parse(nextDataMatch[1]);
-        const initialState = JSON.parse(((((nextData || {}).props || {}).pageProps || {}).initialState || '{}'));
-        const queries = (((initialState || {}).rtkqApi || {}).queries || {});
-        const collectionQuery = Object.values(queries).find((query) => (
-            query
-            && query.endpointName === 'getCollectionFacets'
-            && query.data
-            && Array.isArray(query.data.data)
-        ));
-
-        const items = ((collectionQuery && collectionQuery.data && collectionQuery.data.data) ? collectionQuery.data.data : [])
-            .map((item) => ({
-                title: String(item.title || '').trim(),
-                author: getPrimaryDiscoveryAuthor(item.persons),
-                url: String(item.url || '').trim(),
-                cover: String(item.cover_url || '').trim(),
-                rating: (((item.rating || {}).rated_avg) || 0),
-                isBestseller: !!(((item.labels || {}).is_bestseller) || ((item.labels || {}).is_sales_hit)),
-                isNew: !!((item.labels || {}).is_new),
-            }))
-            .filter(item => item.title)
-            .slice(0, Math.max(limit * 3, limit));
 
         return {sourceUrl, items};
     }
@@ -1151,21 +1520,21 @@ class WebWorker {
             return null;
 
         if (discovery.externalSource !== 'web-page')
-            throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
+            throw new Error(`РќРµРёР·РІРµСЃС‚РЅС‹Р№ РёСЃС‚РѕС‡РЅРёРє РІРёС‚СЂРёРЅС‹: ${discovery.externalSource}`);
 
         const feed = await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
         const items = await this.matchExternalItemsToLocalBooks(feed.items || [], limit);
-        const sourceName = (discovery.externalName || 'Внешняя витрина');
+        const sourceName = (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє');
 
         return {
             id: 'external-source',
             title: sourceName,
-            subtitle: `Совпадений ${items.length} из ${feed.items.length}`,
+            subtitle: `РЎРѕРІРїР°РґРµРЅРёР№ ${items.length} РёР· ${feed.items.length}`,
             source: 'external',
             sourceName,
             sourceUrl: feed.sourceUrl,
             items,
-            emptyMessage: 'Совпадений с локальной библиотекой пока не нашлось.',
+            emptyMessage: 'РЎРѕРІРїР°РґРµРЅРёР№ СЃ Р»РѕРєР°Р»СЊРЅРѕР№ Р±РёР±Р»РёРѕС‚РµРєРѕР№ РїРѕРєР° РЅРµ РЅР°С€Р»РѕСЃСЊ.',
         };
     }
 
@@ -1209,10 +1578,10 @@ class WebWorker {
             } catch (e) {
                 shelves.push({
                     id: 'external-error',
-                    title: (discovery.externalName || 'Внешняя витрина'),
-                    subtitle: 'Внешний источник временно недоступен',
+                    title: (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє'),
+                    subtitle: 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ',
                     source: 'external',
-                    sourceName: (discovery.externalName || 'Внешняя витрина'),
+                    sourceName: (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє'),
                     sourceUrl: (discovery.externalUrl || ''),
                     items: [],
                     emptyMessage: e.message,
@@ -1228,15 +1597,15 @@ class WebWorker {
         if (kind === 'newest') {
             shelfConfig = {
                 id: `newest-${options.daysWindow || 0}d`,
-                title: `Новинки за ${options.daysWindow || 0} дней`,
-                subtitle: `Книги, добавленные за последние ${options.daysWindow || 0} дней`,
+                title: `РќРѕРІРёРЅРєРё Р·Р° ${options.daysWindow || 0} РґРЅРµР№`,
+                subtitle: `РљРЅРёРіРё, РґРѕР±Р°РІР»РµРЅРЅС‹Рµ Р·Р° РїРѕСЃР»РµРґРЅРёРµ ${options.daysWindow || 0} РґРЅРµР№`,
                 mode: 'newest',
             };
         } else if (kind === 'popular') {
             shelfConfig = {
                 id: 'popular',
-                title: 'Популярное в библиотеке',
-                subtitle: 'Локальный рейтинг по чтению, спискам и оценкам',
+                title: 'РџРѕРїСѓР»СЏСЂРЅРѕРµ РІ Р±РёР±Р»РёРѕС‚РµРєРµ',
+                subtitle: 'Р›РѕРєР°Р»СЊРЅС‹Р№ СЂРµР№С‚РёРЅРі РїРѕ С‡С‚РµРЅРёСЋ, СЃРїРёСЃРєР°Рј Рё РѕС†РµРЅРєР°Рј',
                 mode: 'popular',
             };
         }
@@ -1257,7 +1626,7 @@ class WebWorker {
             title: shelfConfig.title,
             subtitle: shelfConfig.subtitle,
             source: 'local',
-            sourceName: 'Локальная библиотека',
+            sourceName: 'Р›РѕРєР°Р»СЊРЅР°СЏ Р±РёР±Р»РёРѕС‚РµРєР°',
             updatedAt: Date.now(),
             items,
         };
@@ -1322,11 +1691,45 @@ class WebWorker {
         return (bestScore >= 450 ? {book: best, kind: bestKind, score: bestScore} : null);
     }
 
+    makeExternalDiscoveryPlaceholder(item = {}, index = 0) {
+        const rawId = `${item.title || ''}|${item.author || ''}|${item.url || ''}|${index}`;
+        const hash = crypto.createHash('md5').update(rawId, 'utf8').digest('hex');
+
+        return {
+            _uid: `external:${hash}`,
+            id: `external-${hash.substring(0, 12)}`,
+            title: String(item.title || '').trim(),
+            author: String(item.author || '').trim(),
+            series: '',
+            serno: '',
+            genre: '',
+            ext: 'web',
+            size: 0,
+            date: '',
+            librate: '',
+            del: false,
+            libid: '',
+            file: '',
+            discoveryUrl: String(item.url || '').trim(),
+            discoveryCoverUrl: String(item.cover || '').trim(),
+            discoveryRating: item.rating,
+            discoveryMatchType: 'missing-local',
+            discoveryMissingLocal: true,
+            discoveryFlags: {
+                bestseller: !!item.isBestseller,
+                isNew: !!item.isNew,
+            },
+        };
+    }
+
     async matchExternalItemsToLocalBooksV2(items = [], limit = 8) {
         const result = [];
         const seenBookUids = new Set();
+        let matchedCount = 0;
+        let missingCount = 0;
 
-        for (const item of items) {
+        for (let index = 0; index < items.length; index++) {
+            const item = items[index];
             let response = await this.dbSearcher.bookSearch({
                 title: `=${item.title}`,
                 limit: 16,
@@ -1341,17 +1744,24 @@ class WebWorker {
                 match = this.pickDiscoveryBookMatchV2(item, response.found || []);
             }
 
-            if (match && match.book && !seenBookUids.has(match.book._uid)) {
-                seenBookUids.add(match.book._uid);
-                result.push(Object.assign({}, match.book, {
-                    discoveryUrl: item.url,
-                    discoveryRating: item.rating,
-                    discoveryMatchType: match.kind,
-                    discoveryFlags: {
-                        bestseller: !!item.isBestseller,
-                        isNew: !!item.isNew,
-                    },
-                }));
+            if (match && match.book) {
+                if (!seenBookUids.has(match.book._uid)) {
+                    seenBookUids.add(match.book._uid);
+                    result.push(Object.assign({}, match.book, {
+                        discoveryUrl: item.url,
+                        discoveryCoverUrl: item.cover,
+                        discoveryRating: item.rating,
+                        discoveryMatchType: match.kind,
+                        discoveryFlags: {
+                            bestseller: !!item.isBestseller,
+                            isNew: !!item.isNew,
+                        },
+                    }));
+                    matchedCount++;
+                }
+            } else {
+                result.push(this.makeExternalDiscoveryPlaceholder(item, index));
+                missingCount++;
             }
 
             if (result.length >= limit)
@@ -1360,14 +1770,18 @@ class WebWorker {
             await utils.processLoop();
         }
 
-        return result;
+        return {
+            items: result,
+            matchedCount,
+            missingCount,
+        };
     }
 
     async fetchExternalDiscoveryItemsV2(discovery = {}) {
         try {
             return await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
         } catch (e) {
-            throw new Error(`Не удалось обновить источник "${discovery.externalName || 'Внешний источник'}"`);
+            throw new Error(`?? ??????? ???????? ???????? "${discovery.externalName || '??????? ????????'}"`);
         }
     }
 
@@ -1377,34 +1791,34 @@ class WebWorker {
             return null;
 
         if (discovery.externalSource !== 'web-page')
-            throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
+            throw new Error(`??????????? ???????? ???????: ${discovery.externalSource}`);
 
         const feed = await this.fetchExternalDiscoveryItemsV2(discovery);
-        const items = (await this.matchExternalItemsToLocalBooksV2(feed.items || [], limit))
+        const matched = await this.matchExternalItemsToLocalBooksV2(feed.items || [], limit);
+        const items = matched.items
             .map((book) => this.decorateDiscoveryBook(book, {
-                discoverySource: (discovery.externalName || 'Внешний источник'),
+                discoverySource: (discovery.externalName || '??????? ????????'),
                 matchKind: book.discoveryMatchType,
             }));
-        const sourceName = (discovery.externalName || 'Внешняя витрина');
+        const sourceName = (discovery.externalName || '??????? ????????');
 
         return {
             id: 'external-source',
             title: sourceName,
-            subtitle: `Совпадений ${items.length} из ${feed.items.length}`,
+            subtitle: `? ?????????? ${matched.matchedCount} ? ??? ?????????? ${matched.missingCount}` ,
             source: 'external',
             sourceName,
             sourceUrl: feed.sourceUrl,
             updatedAt: Date.now(),
             discoveryStale: false,
             items,
-            emptyMessage: 'Совпадений с локальной библиотекой пока не нашлось.',
+            emptyMessage: '?? ??????? ????????? ???? ?????? ?? ???????.',
         };
     }
-
     async getDiscoveryShelvesV2(options = {}) {
         this.checkMyState();
 
-        const discovery = this.getDiscoveryConfig(options);
+        const discovery = await this.getDiscoveryConfigForRequest(options);
         if (!discovery.enabled)
             return {shelves: []};
 
@@ -1460,10 +1874,10 @@ class WebWorker {
             } catch (e) {
                 shelves.push({
                     id: 'external-error',
-                    title: (discovery.externalName || 'Внешняя витрина'),
-                    subtitle: 'Внешний источник временно недоступен',
+                    title: (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє'),
+                    subtitle: 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ',
                     source: 'external',
-                    sourceName: (discovery.externalName || 'Внешняя витрина'),
+                    sourceName: (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє'),
                     sourceUrl: (discovery.externalUrl || ''),
                     items: [],
                     emptyMessage: e.message,
@@ -2064,7 +2478,7 @@ class WebWorker {
 
             result.push({
                 bookUid: item.bookUid,
-                title: book.title || 'Без названия',
+                title: book.title || 'Р‘РµР· РЅР°Р·РІР°РЅРёСЏ',
                 author: book.author || '',
                 series: book.series || '',
                 serno: book.serno || '',
@@ -2157,7 +2571,7 @@ class WebWorker {
     async requireAdmin(userId = '', profileAccessToken = '') {
         const user = await this.requireAuthorizedUser(userId, profileAccessToken);
         if (!user.isAdmin)
-            throw new Error('Только администратор может управлять профилями');
+            throw new Error('РўРѕР»СЊРєРѕ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ РјРѕР¶РµС‚ СѓРїСЂР°РІР»СЏС‚СЊ РїСЂРѕС„РёР»СЏРјРё');
         return user;
     }
 
@@ -2191,11 +2605,11 @@ class WebWorker {
 
         const user = await this.readingListStore.findUserByLogin(login);
         if (!user || !user.passwordHash)
-            throw new Error('Неверный логин или пароль');
+            throw new Error('РќРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ РёР»Рё РїР°СЂРѕР»СЊ');
 
         const passwordHash = this.hashProfilePassword(user.login, password);
         if (passwordHash !== user.passwordHash)
-            throw new Error('Неверный логин или пароль');
+            throw new Error('РќРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ РёР»Рё РїР°СЂРѕР»СЊ');
 
         return {
             userId: user.id,
@@ -2280,7 +2694,7 @@ class WebWorker {
 
         const item = await this.readingListStore.getList(userId, listId, options);
         if (!item)
-            throw new Error('Список не найден');
+            throw new Error('РЎРїРёСЃРѕРє РЅРµ РЅР°Р№РґРµРЅ');
 
         const listEntries = this.readingListStore.normalizeEntries(item.books);
         const books = [];
@@ -2351,7 +2765,7 @@ class WebWorker {
 
         const book = await this.getBookRecordByUid(bookUid);
         if (!book)
-            throw new Error('404 Файл не найден');
+            throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
 
         const item = await this.readingListStore.setBookMembership(userId, listId, bookUid, enabled);
         return {
@@ -2366,7 +2780,7 @@ class WebWorker {
 
         const book = await this.getBookRecordByUid(bookUid);
         if (!book)
-            throw new Error('404 Файл не найден');
+            throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
 
         const item = await this.readingListStore.setBookRead(userId, listId, bookUid, read);
         return {
@@ -2419,11 +2833,11 @@ class WebWorker {
         
         const fullPath = `${folder}/${file}`;
 
-        if (!file || await fs.pathExists(fullPath)) {// файл есть на диске
+        if (!file || await fs.pathExists(fullPath)) {// С„Р°Р№Р» РµСЃС‚СЊ РЅР° РґРёСЃРєРµ
             
             await fs.copy(fullPath, outFile);
             return outFile;
-        } else {// файл в zip-архиве
+        } else {// С„Р°Р№Р» РІ zip-Р°СЂС…РёРІРµ
             const zipReader = new ZipReader();
             await zipReader.open(folder, false);
 
@@ -2439,7 +2853,7 @@ class WebWorker {
 
                 await extract(file);
 
-                if (!await fs.pathExists(outFile)) {//не удалось найти в архиве, попробуем имя файла в кодировке cp866
+                if (!await fs.pathExists(outFile)) {//РЅРµ СѓРґР°Р»РѕСЃСЊ РЅР°Р№С‚Рё РІ Р°СЂС…РёРІРµ, РїРѕРїСЂРѕР±СѓРµРј РёРјСЏ С„Р°Р№Р»Р° РІ РєРѕРґРёСЂРѕРІРєРµ cp866
                     await extract(iconv.encode(file, 'cp866').toString());
                 }
 
@@ -2826,10 +3240,10 @@ class WebWorker {
             const db = this.db;
             let link = '';
 
-            //найдем downFileName, libFolder, libFile
+            //РЅР°Р№РґРµРј downFileName, libFolder, libFile
             let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
             if (!rows.length)
-                throw new Error('404 Файл не найден');
+                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
 
             const book = rows[0];
             let downFileName = book.file;
@@ -2839,7 +3253,7 @@ class WebWorker {
             for (let i = 1; i < author.length; i++)
                 author[i] = `${(i === 1 ? ' ' : '')}${author[i][0]}.`;
             if (authors.length > 1)
-                author.push(' и др.');
+                author.push(' Рё РґСЂ.');
 
             const at = [author.join(''), (book.title ? `_${book.title}` : '')];
             downFileName = utils.makeValidFileNameOrEmpty(at.filter(r => r).join(''))
@@ -2856,9 +3270,9 @@ class WebWorker {
             const libFolder = book.folder;
             const libFile = `${book.file}${ext}`;
 
-            //найдем хеш
+            //РЅР°Р№РґРµРј С…РµС€
             rows = await db.select({table: 'file_hash', where: `@@id(${db.esc(bookUid)})`});
-            if (rows.length) {//хеш найден по bookUid
+            if (rows.length) {//С…РµС€ РЅР°Р№РґРµРЅ РїРѕ bookUid
                 const hash = rows[0].hash;
                 const bookFile = `${this.config.bookDir}/${hash}`;
                 const bookFileDesc = `${bookFile}.d.json`;
@@ -2879,13 +3293,13 @@ class WebWorker {
             }
 
             if (!link)
-                throw new Error('404 Файл не найден');
+                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
 
             return {link, libFolder, libFile, downFileName};
         } catch(e) {
             log(LM_ERR, `getBookLink error: ${e.message}`);
             if (e.message.indexOf('ENOENT') >= 0)
-                throw new Error('404 Файл не найден');
+                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
             throw e;
         }
     }
@@ -2904,7 +3318,7 @@ class WebWorker {
 
         let rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
         if (!rows.length)
-            throw new Error('404 Файл не найден');
+            throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
 
         let preparedFile = rawFile;
         let preparedFileName = downFileName;
@@ -2913,10 +3327,10 @@ class WebWorker {
 
         if (targetFormat && targetFormat !== sourceFormat) {
             if (!bookConverter.canConvertTo(targetFormat))
-                throw new Error(`Неподдерживаемый формат отправки: ${targetFormat}`);
+                throw new Error(`РќРµРїРѕРґРґРµСЂР¶РёРІР°РµРјС‹Р№ С„РѕСЂРјР°С‚ РѕС‚РїСЂР°РІРєРё: ${targetFormat}`);
 
             if (!this.config.conversionEnabled)
-                throw new Error('Конвертация книг отключена в текущем образе.');
+                throw new Error('РљРѕРЅРІРµСЂС‚Р°С†РёСЏ РєРЅРёРі РѕС‚РєР»СЋС‡РµРЅР° РІ С‚РµРєСѓС‰РµРј РѕР±СЂР°Р·Рµ.');
 
             preparedFile = `${gzipFile}.${targetFormat}`;
             if (!await fs.pathExists(preparedFile)) {
@@ -2942,7 +3356,7 @@ class WebWorker {
         const {currentUser} = await this.readingListStore.getUsers(userId);
         const chatId = String((currentUser && currentUser.telegramChatId) || this.config.telegramChatId || '').trim();
         if (!this.config.telegramBotToken || !chatId)
-            throw new Error('Отправка в Telegram не настроена');
+            throw new Error('РћС‚РїСЂР°РІРєР° РІ Telegram РЅРµ РЅР°СЃС‚СЂРѕРµРЅР°');
 
         const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
         const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
@@ -2960,7 +3374,7 @@ class WebWorker {
         });
 
         if (!response.data || response.data.ok !== true)
-            throw new Error('Telegram API не принял файл');
+            throw new Error('Telegram API РЅРµ РїСЂРёРЅСЏР» С„Р°Р№Р»');
 
         return {success: true};
     }
@@ -2969,7 +3383,7 @@ class WebWorker {
         const {currentUser} = await this.readingListStore.getUsers(userId);
         const emailTo = String((currentUser && currentUser.emailTo) || this.config.emailTo || '').trim();
         if (!this.config.smtpHost || !emailTo)
-            throw new Error('Отправка на email не настроена');
+            throw new Error('РћС‚РїСЂР°РІРєР° РЅР° email РЅРµ РЅР°СЃС‚СЂРѕРµРЅР°');
 
         const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
         const transporter = nodemailer.createTransport({
@@ -2986,8 +3400,8 @@ class WebWorker {
         await transporter.sendMail({
             from: this.config.emailFrom || this.config.smtpUser || 'inpx-web@localhost',
             to: emailTo,
-            subject: `Книга: ${subject}`,
-            text: `Во вложении книга "${book.title || downFileName}".`,
+            subject: `РљРЅРёРіР°: ${subject}`,
+            text: `Р’Рѕ РІР»РѕР¶РµРЅРёРё РєРЅРёРіР° "${book.title || downFileName}".`,
             attachments: [
                 {
                     filename: downFileName,
@@ -3185,7 +3599,7 @@ class WebWorker {
                         continue;
 
                     reviews.push({
-                        name: String(item.name || '').trim() || 'Аноним',
+                        name: String(item.name || '').trim() || 'РђРЅРѕРЅРёРј',
                         time: String(item.time || '').trim(),
                         text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
                     });
@@ -3213,7 +3627,7 @@ class WebWorker {
 
             let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
             if (!rows.length)
-                throw new Error('404 Файл не найден');
+                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
             const book = rows[0];
 
             const restoreBookInfo = async(info) => {
@@ -3259,7 +3673,7 @@ class WebWorker {
                 const info = await fs.readFile(bookFileInfo, 'utf-8');
                 const tmpInfo = JSON.parse(info);
 
-                //проверим существование файла обложки, восстановим если нету
+                //РїСЂРѕРІРµСЂРёРј СЃСѓС‰РµСЃС‚РІРѕРІР°РЅРёРµ С„Р°Р№Р»Р° РѕР±Р»РѕР¶РєРё, РІРѕСЃСЃС‚Р°РЅРѕРІРёРј РµСЃР»Рё РЅРµС‚Сѓ
                 let coverFile = '';
                 if (tmpInfo.cover)
                     coverFile = `${this.config.publicFilesDir}${tmpInfo.cover}`;
@@ -3275,7 +3689,7 @@ class WebWorker {
         } catch(e) {
             log(LM_ERR, `getBookInfo error: ${e.message}`);
             if (e.message.indexOf('ENOENT') >= 0)
-                throw new Error('404 Файл не найден');
+                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
             throw e;
         }
     }
@@ -3321,7 +3735,7 @@ class WebWorker {
 
         let size = 0;
         let files = [];
-        //формируем список
+        //С„РѕСЂРјРёСЂСѓРµРј СЃРїРёСЃРѕРє
         for (const filename of list) {
             const filePath = `${dir}/${filename}`;
             const stat = await fs.stat(filePath);
@@ -3334,7 +3748,7 @@ class WebWorker {
         files.sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs);
 
         let i = 0;
-        //удаляем
+        //СѓРґР°Р»СЏРµРј
         while (i < files.length && size > maxSize) {
             const file = files[i];
             const oldFile = file.name;
@@ -3356,7 +3770,7 @@ class WebWorker {
 
             let lastCleanDirTime = 0;
             while (1) {// eslint-disable-line no-constant-condition
-                //чистка папок
+                //С‡РёСЃС‚РєР° РїР°РїРѕРє
                 if (Date.now() - lastCleanDirTime >= cleanDirInterval) {
                     for (const config of dirConfig) {
                         try {
@@ -3369,7 +3783,7 @@ class WebWorker {
                     lastCleanDirTime = Date.now();
                 }
 
-                await utils.sleep(60*1000);//интервал проверки 1 минута
+                await utils.sleep(60*1000);//РёРЅС‚РµСЂРІР°Р» РїСЂРѕРІРµСЂРєРё 1 РјРёРЅСѓС‚Р°
             }
         } catch (e) {
             log(LM_FATAL, e.message);
@@ -3442,3 +3856,5 @@ class WebWorker {
 }
 
 module.exports = WebWorker;
+
+
