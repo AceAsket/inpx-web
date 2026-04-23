@@ -154,6 +154,18 @@ class ReadingListStore {
         };
     }
 
+    normalizeDiscoveryPreferences(value = {}) {
+        const hiddenBooks = Array.from(new Set(
+            (Array.isArray(value.hiddenBooks) ? value.hiddenBooks : [])
+                .map((bookUid) => this.normalizeBookUid(bookUid))
+                .filter(Boolean)
+        )).slice(0, 5000);
+
+        return {
+            hiddenBooks,
+        };
+    }
+
     normalizeReaderProgress(value = {}) {
         const result = {};
         for (const [bookUid, row] of Object.entries(value || {})) {
@@ -166,6 +178,7 @@ class ReadingListStore {
                 percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
                 sectionId: String(row.sectionId || '').trim(),
                 updatedAt: String(row.updatedAt || '').trim() || this.nowIso(),
+                hidden: (row.hidden === true),
             };
         }
         return result;
@@ -215,6 +228,7 @@ class ReadingListStore {
             readerPreferences: this.normalizeReaderPreferences(),
             readerProgress: {},
             readerBookmarks: {},
+            discoveryPreferences: this.normalizeDiscoveryPreferences(),
             createdAt: now,
             updatedAt: now,
         };
@@ -261,6 +275,7 @@ class ReadingListStore {
         normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
         normalized.readerProgress = this.normalizeReaderProgress(normalized.readerProgress);
         normalized.readerBookmarks = this.normalizeReaderBookmarks(normalized.readerBookmarks);
+        normalized.discoveryPreferences = this.normalizeDiscoveryPreferences(normalized.discoveryPreferences);
         normalized.isAdmin = !!normalized.isAdmin;
         normalized.createdAt = normalized.createdAt || now;
         normalized.updatedAt = normalized.updatedAt || now;
@@ -531,7 +546,7 @@ class ReadingListStore {
 
         return {
             preferences: this.normalizeReaderPreferences(user.readerPreferences),
-            progress: Object.assign({percent: 0, sectionId: '', updatedAt: ''}, user.readerProgress[normalizedBookUid] || {}),
+            progress: Object.assign({percent: 0, sectionId: '', updatedAt: '', hidden: false}, user.readerProgress[normalizedBookUid] || {}),
             bookmarks: (user.readerBookmarks && Array.isArray(user.readerBookmarks[normalizedBookUid]) ? user.readerBookmarks[normalizedBookUid] : []),
         };
     }
@@ -546,6 +561,34 @@ class ReadingListStore {
         target.updatedAt = this.nowIso();
         await this.save(data);
         return target.readerPreferences;
+    }
+
+    async updateDiscoveryPreferences(userId = '', patch = {}) {
+        const {data, user} = await this.resolveUser(userId);
+        const target = data.users.find((item) => item.id === user.id);
+        if (!target)
+            throw new Error('???????????? ?? ??????');
+
+        const current = this.normalizeDiscoveryPreferences(target.discoveryPreferences);
+        let hiddenBooks = Array.from(current.hiddenBooks || []);
+
+        if (utilsHasProp(patch, 'hiddenBooks'))
+            hiddenBooks = this.normalizeDiscoveryPreferences({hiddenBooks: patch.hiddenBooks}).hiddenBooks;
+
+        if (Array.isArray(patch.hiddenBooksAdd)) {
+            const additions = this.normalizeDiscoveryPreferences({hiddenBooks: patch.hiddenBooksAdd}).hiddenBooks;
+            hiddenBooks = Array.from(new Set(hiddenBooks.concat(additions)));
+        }
+
+        if (Array.isArray(patch.hiddenBooksRemove) && patch.hiddenBooksRemove.length) {
+            const removals = new Set(this.normalizeDiscoveryPreferences({hiddenBooks: patch.hiddenBooksRemove}).hiddenBooks);
+            hiddenBooks = hiddenBooks.filter((bookUid) => !removals.has(bookUid));
+        }
+
+        target.discoveryPreferences = this.normalizeDiscoveryPreferences({hiddenBooks});
+        target.updatedAt = this.nowIso();
+        await this.save(data);
+        return target.discoveryPreferences;
     }
 
     async updateReaderProgress(userId = '', bookUid = '', patch = {}) {
@@ -564,10 +607,12 @@ class ReadingListStore {
         const current = target.readerProgress[normalizedBookUid] || {};
         const percent = Number(utilsHasProp(patch, 'percent') ? patch.percent : current.percent);
         const sectionId = String(utilsHasProp(patch, 'sectionId') ? patch.sectionId : current.sectionId || '').trim();
+        const hidden = (utilsHasProp(patch, 'hidden') ? patch.hidden === true : false);
         target.readerProgress[normalizedBookUid] = {
             percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
             sectionId,
             updatedAt: this.nowIso(),
+            hidden,
         };
         target.updatedAt = this.nowIso();
 

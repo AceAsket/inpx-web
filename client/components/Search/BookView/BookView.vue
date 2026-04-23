@@ -2,7 +2,7 @@
     <div class="book-view q-my-sm">
         <div
             class="book-card"
-            :class="{'is-poster-mode': isPosterMode}"
+            :class="{'is-poster-mode': isPosterMode, 'is-compact-discovery': compactDiscovery}"
             role="button"
             tabindex="0"
             @click="emit('bookInfo')"
@@ -76,6 +76,10 @@
                     {{ bookSeries }}
                 </div>
 
+                <div v-if="book.discoveryReason" class="book-discovery-note">
+                    {{ book.discoveryReason }}
+                </div>
+
                 <div v-if="showGenres && bookGenreItems.length" class="book-genres">
                     <span
                         v-for="genre in bookGenreItems"
@@ -140,6 +144,26 @@
                         @click.stop.prevent="emit('readingList')"
                     >
                         {{ readingListLabel }}
+                    </q-btn>
+
+                    <q-btn
+                        v-if="showDiscoveryDismiss"
+                        flat
+                        no-caps
+                        icon="la la-eye-slash"
+                        @click.stop.prevent="emit('discoveryDismiss')"
+                    >
+                        {{ discoveryDismissLabel }}
+                    </q-btn>
+
+                    <q-btn
+                        v-if="showDiscoveryRestore"
+                        flat
+                        no-caps
+                        icon="la la-undo"
+                        @click.stop.prevent="emit('discoveryRestore')"
+                    >
+                        {{ discoveryRestoreLabel }}
                     </q-btn>
 
                     <div v-if="telegramShareEnabled" class="action-split" @click.stop>
@@ -266,6 +290,11 @@ class BookView {
         mode: String,
         genreMap: Object,
         showReadLink: Boolean,
+        showDiscoveryDismiss: { type: Boolean, default: false},
+        discoveryDismissLabel: { type: String, default: 'Неинтересно'},
+        showDiscoveryRestore: { type: Boolean, default: false},
+        discoveryRestoreLabel: { type: String, default: 'Вернуть'},
+        compactDiscovery: { type: Boolean, default: false},
         titleColor: { type: String, default: 'text-blue-10'},
     };
 
@@ -612,6 +641,48 @@ export default vueComponent(BookView);
     padding-top: 6px;
 }
 
+.book-card.is-compact-discovery {
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 14px;
+    padding: 12px;
+}
+
+.book-card.is-compact-discovery .cover-box {
+    height: 142px;
+    padding: 8px;
+}
+
+.book-card.is-compact-discovery .book-content {
+    row-gap: 4px;
+}
+
+.book-card.is-compact-discovery .book-title {
+    font-size: 16px;
+}
+
+.book-card.is-compact-discovery .book-meta-pills {
+    gap: 6px;
+}
+
+.book-card.is-compact-discovery .meta-pill,
+.book-card.is-compact-discovery .serno-pill {
+    font-size: 11px;
+    min-height: 24px;
+}
+
+.book-card.is-compact-discovery .book-actions {
+    gap: 6px;
+}
+
+.book-card.is-compact-discovery .book-actions :deep(.q-btn) {
+    min-height: 34px;
+    font-size: 12px;
+}
+
+.book-card.is-compact-discovery .format-actions {
+    gap: 6px;
+}
+
 .cover-box {
     position: relative;
     display: flex;
@@ -817,8 +888,17 @@ export default vueComponent(BookView);
     block-size: calc(1.35em * 2);
 }
 
-.book-genres {
+.book-discovery-note {
     grid-row: 5;
+    color: var(--app-muted);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.35;
+    padding-top: 2px;
+}
+
+.book-genres {
+    grid-row: 6;
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
@@ -843,7 +923,7 @@ export default vueComponent(BookView);
 }
 
 .book-actions {
-    grid-row: 6;
+    grid-row: 7;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -958,7 +1038,7 @@ export default vueComponent(BookView);
 }
 
 .format-actions {
-    grid-row: 7;
+    grid-row: 8;
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
@@ -993,7 +1073,7 @@ export default vueComponent(BookView);
 }
 
 .book-json {
-    grid-row: 8;
+    grid-row: 9;
 }
 
 @media (max-width: 720px) {

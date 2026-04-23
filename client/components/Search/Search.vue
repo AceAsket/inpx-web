@@ -34,7 +34,7 @@
 
                                 <q-btn-toggle
                                     v-model="selectedList"
-                                    class="q-ml-sm"
+                                    class="q-ml-sm search-list-toggle"
                                     toggle-color="primary"
                                     :options="listOptions"
                                     push
@@ -120,7 +120,7 @@
                                 </DivBtn>
                             </div>
                         </div>
-                        <div v-show="showMobileFiltersBody && !isExtendedSearch" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 ref="authorInput" v-model="search.author" :maxlength="5000" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor('author')" style="min-width: 140px" label="Автор" stack-label outlined dense clearable
@@ -174,7 +174,7 @@
                                 </template>
                             </DivBtn>
                         </div>
-                        <div v-show="showMobileFiltersBody && !isExtendedSearch && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 v-model="search.keywords" :maxlength="inputMaxLength" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor()" style="min-width: 140px;" label="Ключевые слова" stack-label outlined dense clearable readonly
@@ -264,7 +264,7 @@
                                 </q-tooltip>
                             </q-input>                            
                         </div>
-                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !extendedParams && extendedParamsMessage" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && !extendedParams && extendedParamsMessage" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
                             +{{ extendedParamsMessage }}
                         </div>
 
@@ -377,7 +377,7 @@
                 <!-- 2 -->
                 <div class="column">
                     <DivBtn
-                        v-show="!isExtendedSearch && (extendedParams || !extendedParamsMessage)"
+                        v-show="!isExtendedSearch && !isDiscoveryList && (extendedParams || !extendedParamsMessage)"
                         class="text-grey-6" :size="16" :icon-size="14"
                         :icon="(extendedParams ? 'la la-angle-double-up' : 'la la-angle-double-down')"
                         no-shadow
@@ -393,7 +393,7 @@
             </div>
             <!-- Tool Panel end -->
 
-            <div class="result-bar row items-center q-ml-lg q-mt-sm">
+            <div v-if="!isDiscoveryList" class="result-bar row items-center q-ml-lg q-mt-sm">
                 <div class="result-scroller-wrap">
                     <PageScroller v-show="pageCount > 1" ref="pageScroller1" v-model="search.page" :page-count="pageCount" />
                 </div>
@@ -410,12 +410,43 @@
             <!-- Формирование списка ------------------------------------------------------------------------>
             <div v-if="selectedListComponent">
                 <div class="separator" />
-                <component :is="selectedListComponent" ref="list" :list="list" :search="search" :ext-search="extSearch" :genre-map="genreMap" @list-event="listEvent" />
+                <DiscoveryShelves
+                    v-if="selectedListComponent === 'DiscoveryShelves'"
+                    ref="list"
+                    :section-title="getRouteLabel(selectedList)"
+                    :compact-mode="compactDiscoveryCards"
+                    :personal-mode="selectedList === 'for-you'"
+                    :unread-only="showDiscoveryUnreadOnly"
+                    :shelves="selectedDiscoveryShelves"
+                    :loading="discoveryShelvesLoading"
+                    :error-message="discoveryShelvesError"
+                    :list="list"
+                    :search="search"
+                    :ext-search="extSearch"
+                    :genre-map="genreMap"
+                    @list-event="listEvent"
+                    @refresh-shelves="refreshDiscoveryShelves(true)"
+                    @hide-shelf="hideDiscoveryShelf"
+                    @dismiss-book="dismissDiscoveryBook"
+                    @restore-book="restoreDiscoveryBook"
+                    @toggle-unread-only="toggleDiscoveryUnreadOnly"
+                    @toggle-compact="toggleCompactDiscoveryCards"
+                />
+                <component
+                    :is="selectedListComponent"
+                    v-else
+                    ref="list"
+                    :list="list"
+                    :search="search"
+                    :ext-search="extSearch"
+                    :genre-map="genreMap"
+                    @list-event="listEvent"
+                />
                 <div class="separator" />
             </div>
             <!-- Формирование списка конец ------------------------------------------------------------------>
 
-            <div class="bottom-scroller-bar row q-ml-lg q-mb-sm">
+            <div v-if="!isDiscoveryList" class="bottom-scroller-bar row q-ml-lg q-mb-sm">
                 <PageScroller v-show="pageCount > 1" v-model="search.page" :page-count="pageCount" />
             </div>
 
@@ -454,6 +485,7 @@ import SeriesList from './SeriesList/SeriesList.vue';
 import TitleList from './TitleList/TitleList.vue';
 import AllBooksList from './AllBooksList/AllBooksList.vue';
 import ExtendedList from './ExtendedList/ExtendedList.vue';
+import DiscoveryShelves from './DiscoveryShelves/DiscoveryShelves.vue';
 
 import PageScroller from './PageScroller/PageScroller.vue';
 import SettingsDialog from './SettingsDialog/SettingsDialog.vue';
@@ -477,9 +509,13 @@ import diffUtils from '../../share/diffUtils';
 import _ from 'lodash';
 
 const maxLimit = 1000;
-const searchRoutePaths = new Set(['/', '/author', '/series', '/title', '/books', '/extended']);
+const searchRoutePaths = new Set(['/', '/author', '/series', '/title', '/books', '/for-you', '/newest', '/popular', '/bestsellers', '/extended']);
 
 const route2component = {
+    'for-you': {component: 'DiscoveryShelves', label: 'Для вас'},
+    'newest': {component: 'DiscoveryShelves', label: 'Новинки'},
+    'popular': {component: 'DiscoveryShelves', label: 'Популярное'},
+    'bestsellers': {component: 'DiscoveryShelves', label: 'Внешняя витрина'},
     'author': {component: 'AuthorList', label: 'Авторы'},
     'series': {component: 'SeriesList', label: 'Серии'},
     'title': {component: 'TitleList', label: 'Названия'},
@@ -494,6 +530,7 @@ const componentOptions = {
         TitleList,
         AllBooksList,
         ExtendedList,
+        DiscoveryShelves,
         PageScroller,
         SettingsDialog,
         SelectGenreDialog,
@@ -513,9 +550,14 @@ const componentOptions = {
             this.makeProjectName();
             if (newValue.dbConfig)
                 this.list.inpxHash = newValue.dbConfig.inpxHash;
+            this.refreshDiscoveryShelves(true);
         },
         settings() {
             this.loadSettings();
+            if (this.isDiscoveryList && !this.isDiscoveryListEnabled(this.selectedList)) {
+                this.selectedList = 'books';
+                return;
+            }
             this.selectedListComponent = this.getSelectedListComponent(this.selectedList);
         },
         search: {
@@ -528,6 +570,7 @@ const componentOptions = {
                 this.makeTitle();
                 this.updateRouteQueryFromSearch();
                 this.updateSearchDate(true);
+                this.refreshDiscoveryShelves();
 
                 //extSearch
                 if (this.isExtendedSearch) {
@@ -594,6 +637,7 @@ const componentOptions = {
             }
 
             this.makeTitle();
+            this.refreshDiscoveryShelves();
         },
         searchDate() {
             this.updateSearchDate(false);
@@ -646,6 +690,22 @@ class Search {
     extendedParams = false;
     showJson = false;
     showNewReleaseAvailable = true;
+    showDiscoveryNewest = true;
+    showDiscoveryPopular = true;
+    showDiscoveryContinueReading = true;
+    showDiscoveryFromLists = true;
+    showDiscoveryUnfinishedSeries = true;
+    showDiscoverySimilar = true;
+    showDiscoveryExternal = true;
+    showDiscoveryUnreadOnly = false;
+    compactDiscoveryCards = false;
+    discoveryNewestLimit = 8;
+    discoveryPopularLimit = 8;
+    discoveryExternalLimit = 8;
+    discoveryExternalSource = '';
+    discoveryExternalName = '';
+    discoveryExternalUrl = '';
+    discoveryExternalTtlMinutes = 1440;
     //stuff
     prevList = {};
     list = {
@@ -664,6 +724,10 @@ class Search {
 
     bookInfo = {};
     readingListsDialogBook = null;
+    discoveryShelves = [];
+    discoveryShelvesLoading = false;
+    discoveryShelvesError = '';
+    discoveryShelvesCacheKey = '';
 
     searchDateOptions = [
         {label: 'сегодня', value: 'today'},
@@ -734,6 +798,7 @@ class Search {
 
             this.sendMessage({type: 'mes', data: 'hello-from-inpx-web'});
             this.updateSearchFromRouteQuery(this.$route);
+            await this.refreshDiscoveryShelves(true);
         })();
     }
 
@@ -749,6 +814,22 @@ class Search {
         this.langDefault = settings.langDefault;
         this.showJson = settings.showJson;
         this.showNewReleaseAvailable = settings.showNewReleaseAvailable;
+        this.showDiscoveryNewest = (settings.showDiscoveryNewest !== false);
+        this.showDiscoveryPopular = (settings.showDiscoveryPopular !== false);
+        this.showDiscoveryContinueReading = (settings.showDiscoveryContinueReading !== false);
+        this.showDiscoveryFromLists = (settings.showDiscoveryFromLists !== false);
+        this.showDiscoveryUnfinishedSeries = (settings.showDiscoveryUnfinishedSeries !== false);
+        this.showDiscoverySimilar = (settings.showDiscoverySimilar !== false);
+        this.showDiscoveryExternal = (settings.showDiscoveryExternal !== false);
+        this.showDiscoveryUnreadOnly = (settings.showDiscoveryUnreadOnly === true);
+        this.compactDiscoveryCards = (settings.compactDiscoveryCards === true);
+        this.discoveryNewestLimit = parseInt(settings.discoveryNewestLimit, 10) || 8;
+        this.discoveryPopularLimit = parseInt(settings.discoveryPopularLimit, 10) || 8;
+        this.discoveryExternalLimit = parseInt(settings.discoveryExternalLimit, 10) || 8;
+        this.discoveryExternalSource = String(settings.discoveryExternalSource || '').trim().toLowerCase();
+        this.discoveryExternalName = String(settings.discoveryExternalName || '').trim();
+        this.discoveryExternalUrl = String(settings.discoveryExternalUrl || '').trim();
+        this.discoveryExternalTtlMinutes = parseInt(settings.discoveryExternalTtlMinutes, 10) || 1440;
     }
 
     recvMessage(d) {
@@ -829,13 +910,28 @@ class Search {
 
     get listOptions() {
         const result = [];
-        for (const [route, rec] of Object.entries(route2component))
+        const discovery = (this.config.discovery || {});
+        const discoveryEnabled = (discovery.enabled !== false);
+        const externalEnabled = !!(discoveryEnabled && this.activeDiscoveryExternalSource && this.activeDiscoveryExternalSource !== 'none');
+        const routeOrder = ['author', 'series', 'title', 'books', 'for-you', 'newest', 'popular', 'bestsellers', 'extended'];
+
+        for (const route of routeOrder) {
+            const rec = route2component[route];
+            if (!rec)
+                continue;
             if (route == 'extended') {
                 if (this.config.extendedSearch) {
                     result.push({value: route, icon: 'la la-code', size: '10px'});
                 }
+            } else if ((route === 'for-you' || route === 'newest' || route === 'popular') && !discoveryEnabled) {
+                continue;
+            } else if (route === 'bestsellers' && !externalEnabled) {
+                continue;
+            } else if (!this.isDiscoveryListEnabled(route)) {
+                continue;
             } else {
-                result.push({label: rec.label, value: route, icon: rec.icon});
+                result.push({label: this.getRouteLabel(route), value: route, icon: rec.icon});
+            }
         }
         return result;
     }
@@ -881,6 +977,12 @@ class Search {
         return (route2component[route] ? route2component[route].component : null);
     }
 
+    getRouteLabel(route) {
+        if (route === 'bestsellers')
+            return this.activeDiscoveryExternalLabel;
+        return (route2component[route] ? route2component[route].label : route);
+    }
+
     isSearchRoute(route = this.$route) {
         const path = (typeof(route) === 'string' ? route : ((route && route.path) || ''));
         return searchRoutePaths.has(path);
@@ -902,8 +1004,134 @@ class Search {
         return this.selectedList === 'extended';
     }
 
+    get isDiscoveryList() {
+        return ['for-you', 'newest', 'popular', 'bestsellers'].includes(this.selectedList);
+    }
+
+    get activeDiscoveryExternalSource() {
+        const value = String(this.discoveryExternalSource || ((this.config.discovery || {}).externalSource || '')).trim().toLowerCase();
+        return (value && value !== 'none' ? 'web-page' : 'none');
+    }
+
+    get activeDiscoveryExternalName() {
+        return String(this.discoveryExternalName || ((this.config.discovery || {}).externalName || '')).trim();
+    }
+
+    get activeDiscoveryExternalLabel() {
+        return (this.activeDiscoveryExternalName || 'Внешняя витрина');
+    }
+
+    get activeDiscoveryExternalUrl() {
+        return String(this.discoveryExternalUrl || ((this.config.discovery || {}).externalUrl || '')).trim();
+    }
+
+    get activeDiscoveryExternalTtlMinutes() {
+        return parseInt(this.discoveryExternalTtlMinutes, 10) || parseInt(((this.config.discovery || {}).externalTtlMinutes), 10) || 1440;
+    }
+
+    isDiscoveryListEnabled(route) {
+        const discovery = (this.config.discovery || {});
+        const discoveryEnabled = (discovery.enabled !== false);
+        const externalEnabled = !!(discoveryEnabled && this.activeDiscoveryExternalSource && this.activeDiscoveryExternalSource !== 'none');
+
+        if (route === 'for-you')
+            return !!(discoveryEnabled && this.currentUserId && !this.currentProfileNeedsLogin);
+        if (route === 'newest')
+            return !!(discoveryEnabled && this.showDiscoveryNewest);
+        if (route === 'popular')
+            return !!(discoveryEnabled && this.showDiscoveryPopular);
+        if (route === 'bestsellers')
+            return !!(externalEnabled && this.showDiscoveryExternal);
+        return true;
+    }
+
     get isBooksBrowse() {
         return this.selectedList === 'books';
+    }
+
+    get hasActiveBookFilters() {
+        const search = this.search || {};
+        return !!(
+            search.author
+            || search.series
+            || search.title
+            || search.keywords
+            || search.genre
+            || (search.lang && search.lang !== this.langDefault)
+            || search.date
+            || search.librate
+            || search.ext
+        );
+    }
+
+    get showDiscoveryShelves() {
+        return !!(this.ready && this.isDiscoveryList);
+    }
+
+    get selectedDiscoveryShelves() {
+        const shelves = (Array.isArray(this.discoveryShelves) ? this.discoveryShelves : []);
+        if (this.selectedList === 'for-you') {
+            const allowedShelves = new Set();
+            if (this.showDiscoveryContinueReading !== false)
+                allowedShelves.add('continue-reading');
+            if (this.showDiscoveryFromLists !== false)
+                allowedShelves.add('from-your-lists');
+            if (this.showDiscoveryUnfinishedSeries !== false)
+                allowedShelves.add('unfinished-series');
+            if (this.showDiscoverySimilar !== false)
+                allowedShelves.add('similar-books');
+            allowedShelves.add('hidden-books');
+
+            return shelves
+                .filter(item => item && allowedShelves.has(String(item.id || '')))
+                .map((shelf) => ({
+                    ...shelf,
+                    dismissible: (String(shelf.id || '') !== 'hidden-books'),
+                    canHide: (String(shelf.id || '') !== 'hidden-books'),
+                    items: (Array.isArray(shelf.items) ? shelf.items : [])
+                        .filter((book) => !(this.showDiscoveryUnreadOnly === true && book && book.discoveryRead === true && String(shelf.id || '') !== 'hidden-books'))
+                        .map((book) => ({
+                            ...book,
+                            discoveryDismissible: (String(shelf.id || '') !== 'hidden-books'),
+                            discoveryDismissLabel: 'Неинтересно',
+                            discoveryRestoreable: (String(shelf.id || '') === 'hidden-books'),
+                            discoveryRestoreLabel: 'Вернуть',
+                        })),
+                }));
+        }
+        if (this.selectedList === 'newest')
+            return shelves.filter(item => item && /^newest-\d+d$/.test(String(item.id || '')));
+        if (this.selectedList === 'popular')
+            return shelves.filter(item => item && item.id === 'popular');
+        if (this.selectedList === 'bestsellers')
+            return shelves.filter(item => item && item.source === 'external');
+        return shelves;
+    }
+
+    get discoveryShelvesRequestKey() {
+        const config = this.config || {};
+        const discovery = config.discovery || {};
+        const dbHash = (config.dbConfig && config.dbConfig.inpxHash ? config.dbConfig.inpxHash : this.list.inpxHash || '');
+
+        return JSON.stringify({
+            dbHash,
+            enabled: (discovery.enabled !== false),
+            currentUserId: this.currentUserId || '',
+            profileAuthorized: !!this.config.profileAuthorized,
+            showContinueReading: this.showDiscoveryContinueReading !== false,
+            showFromLists: this.showDiscoveryFromLists !== false,
+            showUnfinishedSeries: this.showDiscoveryUnfinishedSeries !== false,
+            showSimilar: this.showDiscoverySimilar !== false,
+            unreadOnly: this.showDiscoveryUnreadOnly === true,
+            compact: this.compactDiscoveryCards === true,
+            source: this.activeDiscoveryExternalSource || 'none',
+            sourceName: this.activeDiscoveryExternalName || '',
+            sourceUrl: this.activeDiscoveryExternalUrl || '',
+            sourceTtl: this.activeDiscoveryExternalTtlMinutes || 1440,
+            newestLimit: this.discoveryNewestLimit || 8,
+            popularLimit: this.discoveryPopularLimit || 8,
+            externalLimit: this.discoveryExternalLimit || 8,
+        });
     }
 
     get extSearchNames() {
@@ -930,6 +1158,8 @@ class Search {
 
         let newList = this.getListRoute(newPath);
         if (newList == 'extended' && !this.config.extendedSearch)
+            newList = '';
+        if (!this.isDiscoveryListEnabled(newList))
             newList = '';
         newList = (newList ? newList : 'author');
 
@@ -1046,6 +1276,14 @@ class Search {
 
                 result = [s, t].filter(v => v).join(' ');
                 result = [a, result].filter(v => v).join(' ');
+            } else if (this.selectedList === 'for-you') {
+                result = `Для вас: ${this.collection}`;
+            } else if (this.selectedList === 'newest') {
+                result = `Новинки: ${this.collection}`;
+            } else if (this.selectedList === 'popular') {
+                result = `Популярное: ${this.collection}`;
+            } else if (this.selectedList === 'bestsellers') {
+                result = `${this.activeDiscoveryExternalLabel}: ${this.collection}`;
             } else if (this.isBooksBrowse) {
                 result = `Все книги: ${this.collection}`;
             }
@@ -1305,12 +1543,78 @@ class Search {
             case 'manageReadingLists':
                 this.openReadingLists(event.book || null);
                 break;
+            case 'refreshDiscoveryShelves':
+                this.refreshDiscoveryShelves(true); // no await
+                break;
+            case 'hideDiscoveryShelf':
+                this.hideDiscoveryShelf(event.shelfId); // no await
+                break;
+            case 'dismissDiscoveryBook':
+                this.dismissDiscoveryBook(event.book || {}); // no await
+                break;
         }
     }
 
     openReadingLists(book = null) {
         this.readingListsDialogBook = (book || null);
         this.readingListsDialogVisible = true;
+    }
+
+    hideDiscoveryShelf(shelfId = '') {
+        const id = String(shelfId || '').trim();
+        if (!id)
+            return;
+
+        const mapping = {
+            'continue-reading': 'showDiscoveryContinueReading',
+            'from-your-lists': 'showDiscoveryFromLists',
+            'unfinished-series': 'showDiscoveryUnfinishedSeries',
+            'similar-books': 'showDiscoverySimilar',
+        };
+        const settingName = mapping[id];
+        if (!settingName)
+            return;
+
+        this.setSetting(settingName, false);
+        this.$root.notify.success('Полка скрыта. Её можно вернуть в настройках.');
+    }
+
+    toggleDiscoveryUnreadOnly() {
+        this.setSetting('showDiscoveryUnreadOnly', !(this.showDiscoveryUnreadOnly === true));
+    }
+
+    toggleCompactDiscoveryCards() {
+        this.setSetting('compactDiscoveryCards', !(this.compactDiscoveryCards === true));
+    }
+
+    async dismissDiscoveryBook(book = {}) {
+        const bookUid = String(book._uid || book.bookUid || '').trim();
+        if (!bookUid)
+            return;
+
+        try {
+            await this.api.updateDiscoveryPreferences({hiddenBooksAdd: [bookUid]});
+            this.discoveryShelvesCacheKey = '';
+            await this.refreshDiscoveryShelves(true);
+            this.$root.notify.success('Книга скрыта из персональных витрин.');
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
+    }
+
+    async restoreDiscoveryBook(book = {}) {
+        const bookUid = String(book._uid || book.bookUid || '').trim();
+        if (!bookUid)
+            return;
+
+        try {
+            await this.api.updateDiscoveryPreferences({hiddenBooksRemove: [bookUid]});
+            this.discoveryShelvesCacheKey = '';
+            await this.refreshDiscoveryShelves(true);
+            this.$root.notify.success('Книга возвращена в персональные витрины.');
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
     }
 
     async openUserProfilesDialog() {
@@ -1577,6 +1881,39 @@ class Search {
         }
     }
 
+    async refreshDiscoveryShelves(force = false) {
+        if (!this.showDiscoveryShelves)
+            return;
+        if (this.discoveryShelvesLoading && !force)
+            return;
+
+        const cacheKey = this.discoveryShelvesRequestKey;
+        if (!force && this.discoveryShelvesCacheKey === cacheKey)
+            return;
+
+        this.discoveryShelvesLoading = true;
+        this.discoveryShelvesError = '';
+        try {
+            const response = await this.api.getDiscoveryShelves({
+                personalLimit: this.discoveryPopularLimit,
+                personalSimilarEnabled: this.showDiscoverySimilar,
+                newestLimit: this.discoveryNewestLimit,
+                popularLimit: this.discoveryPopularLimit,
+                externalLimit: this.discoveryExternalLimit,
+                externalSource: this.activeDiscoveryExternalSource,
+                externalName: this.activeDiscoveryExternalName,
+                externalUrl: this.activeDiscoveryExternalUrl,
+                externalTtlMinutes: this.activeDiscoveryExternalTtlMinutes,
+            });
+            this.discoveryShelves = (response && Array.isArray(response.shelves) ? response.shelves : []);
+            this.discoveryShelvesCacheKey = cacheKey;
+        } catch (e) {
+            this.discoveryShelvesError = `Ошибка витрины: ${e.message}`;
+        } finally {
+            this.discoveryShelvesLoading = false;
+        }
+    }
+
     updateSearchDate(toLocal) {
         if (toLocal) {
             let local = this.search.date || '';
@@ -1743,6 +2080,10 @@ export default vueComponent(Search);
     flex: 0 0 auto;
 }
 
+.search-list-toggle {
+    min-width: 0;
+}
+
 .result-bar {
     min-height: 40px;
     color: var(--app-muted);
@@ -1871,18 +2212,55 @@ export default vueComponent(Search);
     }
 
     .header > .row.no-wrap.items-center {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+            'tabs tabs'
+            'logo controls';
         width: 100%;
-        justify-content: space-between;
-        flex-wrap: wrap;
-        gap: 8px;
+        align-items: center;
+        column-gap: 8px;
+        row-gap: 8px;
+        min-width: 0;
+    }
+
+    .header > .row.no-wrap.items-center > .logo-link {
+        grid-area: logo;
+    }
+
+    .search-list-toggle {
+        grid-area: tabs;
+        width: 100%;
+        margin-left: 0 !important;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding-bottom: 4px;
+        scrollbar-width: thin;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .search-list-toggle :deep(.q-btn-group) {
+        display: inline-flex;
+        flex-wrap: nowrap;
+        min-width: max-content;
+    }
+
+    .search-list-toggle :deep(.q-btn) {
+        white-space: nowrap;
     }
 
     .profile-controls {
+        grid-area: controls;
         width: 100%;
+        min-width: 0;
+        justify-self: end;
+        justify-content: flex-end;
     }
 
     .profile-controls .profile-select {
         width: auto;
+        min-width: 0;
+        max-width: min(240px, calc(100vw - 96px));
     }
 
     .profile-controls .user-profiles-btn {

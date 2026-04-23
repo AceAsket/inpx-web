@@ -35,6 +35,7 @@ const propsToSave = [
     'opds',
     'latestReleaseLink',
     'checkReleaseLink',
+    'discovery',
     'uiDefaults',
 ];
 
@@ -146,7 +147,10 @@ class ConfigManager {
                     needsSave = true;
                 }
 
+                const discovery = Object.assign({}, this._config.discovery || {}, config.discovery || {});
+
                 this.config = config;
+                this._config.discovery = discovery;
                 this._config.updateChannel = resolveUpdateChannel(this._config);
                 this._config.installMode = await resolveInstallMode(this._config);
 

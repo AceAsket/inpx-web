@@ -100,6 +100,10 @@ class WebSocketController {
                     await this.getSeriesBookList(req, ws); break;
                 case 'get-genre-tree':
                     await this.getGenreTree(req, ws); break;
+                case 'get-discovery-shelves':
+                    await this.getDiscoveryShelves(req, ws); break;
+                case 'update-discovery-preferences':
+                    await this.updateDiscoveryPreferences(req, ws); break;
                 case 'get-book-link':
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
@@ -269,6 +273,33 @@ class WebSocketController {
 
     async getGenreTree(req, ws) {
         const result = await this.webWorker.getGenreTree();
+
+        this.send(result, req, ws);
+    }
+
+    async getDiscoveryShelves(req, ws) {
+        const result = await this.webWorker.getDiscoveryShelvesV2({
+            userId: req.userId,
+            profileAccessToken: req.profileAccessToken,
+            personalSimilarEnabled: req.personalSimilarEnabled,
+            newestLimit: req.newestLimit,
+            popularLimit: req.popularLimit,
+            externalLimit: req.externalLimit,
+            externalSource: req.externalSource,
+            externalName: req.externalName,
+            externalUrl: req.externalUrl,
+            externalTtlMinutes: req.externalTtlMinutes,
+        });
+
+        this.send(result, req, ws);
+    }
+
+    async updateDiscoveryPreferences(req, ws) {
+        const result = await this.webWorker.updateDiscoveryPreferences(
+            req.userId,
+            req.profileAccessToken,
+            req.preferences || {},
+        );
 
         this.send(result, req, ws);
     }

@@ -339,7 +339,15 @@ class Api {
 
     async getGenreTree() {
         return await this.request({action: 'get-genre-tree'});
-    }    
+    }
+
+    async getDiscoveryShelves(options = {}) {
+        return await this.request(Object.assign({action: 'get-discovery-shelves'}, options || {}), 120);
+    }
+
+    async updateDiscoveryPreferences(preferences = {}) {
+        return await this.request({action: 'update-discovery-preferences', preferences}, 120);
+    }
 
     async getBookLink(bookUid) {
         return await this.request({action: 'get-book-link', bookUid}, 120);

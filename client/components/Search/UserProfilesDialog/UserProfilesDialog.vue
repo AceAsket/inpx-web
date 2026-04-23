@@ -541,7 +541,8 @@ class UserProfilesDialog {
         };
     }
 
-    async loadProfiles() {
+    async loadProfiles(options = {}) {
+        const preserveState = (options && options.preserveState === true);
         await this.refreshConfig();
         const sourceProfiles = (this.canViewAllProfiles
             ? (this.config.userProfiles || [])
@@ -556,8 +557,10 @@ class UserProfilesDialog {
             isAdmin: !!item.isAdmin,
             currentReadingCount: Number(item.currentReadingCount || 0) || 0,
         }));
-        this.currentProfileTab = 'reading';
-        this.expandedReadingSection = false;
+        if (!preserveState) {
+            this.currentProfileTab = 'reading';
+            this.expandedReadingSection = false;
+        }
         this.newProfilePasswordVisible = false;
         this.syncEditableProfile();
         await this.loadCurrentReadingLists();
@@ -668,8 +671,12 @@ class UserProfilesDialog {
             return;
 
         try {
-            await this.api.deleteReaderProgress(bookUid);
-            await this.loadProfiles();
+            await this.api.updateReaderProgress(bookUid, {
+                hidden: true,
+                percent: Number(book.percent || 0) || 0,
+                sectionId: String(book.sectionId || '').trim(),
+            });
+            await this.loadProfiles({preserveState: true});
             this.$root.notify.success(this.uiText.removeReadingSuccess);
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);

@@ -39,6 +39,7 @@ const stateToText = {
 
 const cleanDirInterval = 60*60*1000;//каждый час
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
+const discoveryCacheTtl = 15*60*1000;//15 minutes
 const bookAssetVersion = 'fblibrary-assets-v1';
 const bookInfoVersion = 'fb2-binaries-v6';
 
@@ -216,6 +217,34 @@ function buildAuthorVariants(author) {
         .sort((a, b) => b.length - a.length);
 }
 
+function normalizeDiscoveryText(value) {
+    return stripHtml(value)
+        .toLowerCase()
+        .replace(/ё/g, 'е')
+        .replace(/&[a-z0-9#]+;/gi, ' ')
+        .replace(/[^a-zа-я0-9]+/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function extractDiscoveryAuthorTokens(author = '') {
+    return Array.from(new Set(
+        normalizeDiscoveryText(author)
+            .split(' ')
+            .map(token => token.trim())
+            .filter(token => token.length >= 3)
+    ));
+}
+
+function getPrimaryDiscoveryAuthor(persons = []) {
+    const list = (Array.isArray(persons) ? persons : [])
+        .filter(person => person && String(person.role || '').toLowerCase() === 'author')
+        .map(person => String(person.full_name || '').trim())
+        .filter(Boolean);
+
+    return (list.length ? list[0] : '');
+}
+
 function flibraryAuthorHash(author) {
     return crypto.createHash('md5')
         .update((author || '').split(/\s+/).filter(Boolean).join(' ').toLowerCase().trim(), 'utf8')
@@ -242,6 +271,7 @@ class WebWorker {
             this.profileSessions = new Map();
             this.inpxFileHash = '';
             this.authorInfoCache = new Map();
+            this.discoveryCache = new Map();
             this.authorInfoArchives = null;
             this.authorPictureArchives = null;
             this.authorToArchive = null;
@@ -589,6 +619,1412 @@ class WebWorker {
         return result;
     }
 
+    getDiscoveryConfig(options = {}) {
+        const discovery = Object.assign({
+            enabled: true,
+            shelfLimit: 8,
+            externalSource: 'none',
+            externalLimit: 8,
+            externalUrl: '',
+            externalName: '',
+            externalTtlMinutes: 1440,
+        }, this.config.discovery || {}, options || {});
+
+        discovery.enabled = (discovery.enabled !== false);
+        discovery.shelfLimit = Math.max(1, Math.min(parseInt(discovery.shelfLimit, 10) || 8, 24));
+        discovery.externalLimit = Math.max(1, Math.min(parseInt(discovery.externalLimit, 10) || discovery.shelfLimit, 24));
+        discovery.externalSource = String(discovery.externalSource || 'none').trim().toLowerCase();
+        if (discovery.externalSource && discovery.externalSource !== 'none')
+            discovery.externalSource = 'web-page';
+        discovery.externalUrl = String(discovery.externalUrl || '').trim();
+        discovery.externalName = String(discovery.externalName || '').trim();
+        discovery.externalTtlMinutes = Math.max(1440, Math.min(parseInt(discovery.externalTtlMinutes, 10) || 1440, 10080));
+
+        return discovery;
+    }
+
+    async rememberDiscovery(key, loader, ttl = discoveryCacheTtl) {
+        const cached = this.discoveryCache.get(key);
+        if (cached && Date.now() - cached.time < ttl)
+            return _.cloneDeep(cached.value);
+
+        const value = await loader();
+        this.discoveryCache.set(key, {time: Date.now(), value: _.cloneDeep(value)});
+        return value;
+    }
+
+    getDiscoveryAgeLabel(dateValue = '') {
+        const time = Date.parse(String(dateValue || ''));
+        if (!Number.isFinite(time))
+            return '';
+
+        const diffDays = Math.max(0, Math.floor((Date.now() - time) / 86400000));
+        if (diffDays <= 0)
+            return 'Добавлена сегодня';
+        if (diffDays === 1)
+            return 'Добавлена 1 день назад';
+        if (diffDays < 5)
+            return `Добавлена ${diffDays} дня назад`;
+        return `Добавлена ${diffDays} дней назад`;
+    }
+
+    getDiscoveryMatchLabel(kind = '') {
+        switch (String(kind || '').trim()) {
+            case 'exact':
+                return 'Точное совпадение';
+            case 'title-author':
+                return 'Совпадение по названию и автору';
+            case 'title':
+                return 'Совпадение по названию';
+            case 'title-partial':
+                return 'Похожее совпадение по названию';
+            default:
+                return 'Совпадение с внешней витриной';
+        }
+    }
+
+    decorateDiscoveryBook(book = {}, options = {}) {
+        const result = Object.assign({}, book);
+        const reasons = [];
+        const mode = String(options.mode || '').trim();
+        const popularityInfo = (options.popularityInfo && typeof(options.popularityInfo) === 'object' ? options.popularityInfo : null);
+
+        if (mode === 'newest') {
+            const ageLabel = this.getDiscoveryAgeLabel(book.date);
+            if (ageLabel)
+                reasons.push(ageLabel);
+        } else if (mode === 'popular') {
+            if (popularityInfo) {
+                if (popularityInfo.progressCount > 0)
+                    reasons.push(`В чтении: ${popularityInfo.progressCount}`);
+                if (popularityInfo.listCount > 0)
+                    reasons.push(`В списках: ${popularityInfo.listCount}`);
+                if (popularityInfo.finishedCount > 0)
+                    reasons.push(`Прочитано: ${popularityInfo.finishedCount}`);
+            }
+            if (book.librate)
+                reasons.push(`Оценка библиотеки ${book.librate}/5`);
+        }
+
+        if (options.discoverySource) {
+            reasons.unshift(`Совпало с ${options.discoverySource} · ${this.getDiscoveryMatchLabel(options.matchKind)}`);
+        }
+
+        result.discoveryReason = reasons.join(' · ');
+        return result;
+    }
+
+    async getDiscoveryDiskCache() {
+        if (this.discoveryDiskCache)
+            return this.discoveryDiskCache;
+
+        this.discoveryDiskCacheFile = path.join(this.config.dataDir, 'discovery-cache.json');
+        let cache = {};
+        try {
+            if (await fs.pathExists(this.discoveryDiskCacheFile))
+                cache = JSON.parse(await fs.readFile(this.discoveryDiskCacheFile, 'utf8')) || {};
+        } catch(e) {
+            cache = {};
+        }
+
+        this.discoveryDiskCache = cache;
+        return cache;
+    }
+
+    async saveDiscoveryDiskCache() {
+        if (!this.discoveryDiskCacheFile)
+            this.discoveryDiskCacheFile = path.join(this.config.dataDir, 'discovery-cache.json');
+        await fs.ensureDir(path.dirname(this.discoveryDiskCacheFile));
+        await fs.writeFile(this.discoveryDiskCacheFile, JSON.stringify(this.discoveryDiskCache || {}, null, 2));
+    }
+
+    async rememberPersistedDiscovery(key, loader, ttl = discoveryCacheTtl) {
+        const cached = this.discoveryCache.get(key);
+        if (cached && Date.now() - cached.time < ttl)
+            return _.cloneDeep(cached.value);
+
+        const diskCache = await this.getDiscoveryDiskCache();
+        const persisted = diskCache[key];
+        if (persisted && Date.now() - persisted.time < ttl) {
+            this.discoveryCache.set(key, {time: persisted.time, value: _.cloneDeep(persisted.value)});
+            return _.cloneDeep(persisted.value);
+        }
+
+        try {
+            const value = await loader();
+            const time = Date.now();
+            this.discoveryCache.set(key, {time, value: _.cloneDeep(value)});
+            diskCache[key] = {time, value: _.cloneDeep(value)};
+            await this.saveDiscoveryDiskCache();
+            return value;
+        } catch(e) {
+            const fallback = cached || persisted;
+            if (fallback) {
+                const value = _.cloneDeep(fallback.value);
+                if (value && typeof(value) === 'object') {
+                    value.discoveryStale = true;
+                    value.discoveryRefreshError = e.message;
+                }
+                return value;
+            }
+            throw e;
+        }
+    }
+
+    async buildDiscoveryPopularityMap() {
+        let data = null;
+        try {
+            data = await this.readingListStore.load();
+        } catch(e) {
+            return {};
+        }
+
+        const result = {};
+        const addScore = (bookUid, patch = {}) => {
+            const normalizedBookUid = this.readingListStore.normalizeBookUid(bookUid);
+            if (!normalizedBookUid)
+                return;
+
+            if (!result[normalizedBookUid]) {
+                result[normalizedBookUid] = {
+                    score: 0,
+                    progressCount: 0,
+                    listCount: 0,
+                    finishedCount: 0,
+                };
+            }
+
+            const target = result[normalizedBookUid];
+            target.score += Number(patch.score || 0);
+            target.progressCount += Number(patch.progressCount || 0);
+            target.listCount += Number(patch.listCount || 0);
+            target.finishedCount += Number(patch.finishedCount || 0);
+        };
+
+        for (const user of (Array.isArray(data.users) ? data.users : [])) {
+            const progressMap = (user && user.readerProgress && typeof(user.readerProgress) === 'object' ? user.readerProgress : {});
+            for (const [bookUid, progress] of Object.entries(progressMap)) {
+                const percent = Number(progress && progress.percent);
+                let score = 8;
+                if (percent >= 0.15)
+                    score += 8;
+                if (percent >= 0.5)
+                    score += 12;
+                if (percent >= 0.95)
+                    score += 18;
+
+                addScore(bookUid, {
+                    score,
+                    progressCount: 1,
+                    finishedCount: (percent >= 0.95 ? 1 : 0),
+                });
+            }
+        }
+
+        for (const list of (Array.isArray(data.lists) ? data.lists : [])) {
+            const entries = this.readingListStore.normalizeEntries(list.books);
+            for (const entry of entries) {
+                addScore(entry.bookUid, {
+                    score: (entry.read ? 14 : 6),
+                    listCount: 1,
+                    finishedCount: (entry.read ? 1 : 0),
+                });
+            }
+        }
+
+        return result;
+    }
+
+    async selectDiscoveryBooks(mode = 'newest', limit = 8, options = {}) {
+        const db = this.db;
+        const daysWindow = Math.max(0, parseInt(options.daysWindow, 10) || 0);
+        const excludedBookUids = Array.isArray(options.excludedBookUids) ? options.excludedBookUids.filter(Boolean) : [];
+        const popularityMap = (options.popularityMap && typeof(options.popularityMap) === 'object' ? options.popularityMap : {});
+        const rows = await db.select({
+            table: 'book',
+            rawResult: true,
+            where: `
+                const mode = ${db.esc(mode)};
+                const limit = ${db.esc(limit)};
+                const daysWindow = ${db.esc(daysWindow)};
+                const excludedBookUids = new Set(${db.esc(excludedBookUids)});
+                const popularityMap = ${db.esc(popularityMap)};
+                const dedupeKey = (row) => {
+                    if (row.libid)
+                        return 'libid:' + row.libid;
+
+                    const parts = [
+                        row.folder || '',
+                        row.file || '',
+                        row.ext || '',
+                        String(row.insno || 0),
+                    ];
+                    if (parts.some(Boolean))
+                        return 'file:' + parts.join('|');
+
+                    return [
+                        'meta',
+                        row.author || '',
+                        row.series || '',
+                        String(row.serno || 0),
+                        row.title || '',
+                        String(row.size || 0),
+                        row.ext || '',
+                    ].join('|');
+                };
+                const rowQuality = (row) => {
+                    let score = 0;
+                    if (!row.del)
+                        score += 1000;
+                    if (row.ext === 'fb2')
+                        score += 120;
+                    else if (row.ext === 'epub')
+                        score += 90;
+                    else if (row.ext === 'mobi')
+                        score += 70;
+                    else if (row.ext === 'pdf')
+                        score += 50;
+                    if (row.librate)
+                        score += row.librate * 10;
+                    if (row.size)
+                        score += Math.min(row.size, 50000000) / 1000000;
+                    return score;
+                };
+                const pickBetterRow = (current, next) => {
+                    const currentScore = rowQuality(current);
+                    const nextScore = rowQuality(next);
+                    if (nextScore !== currentScore)
+                        return (nextScore > currentScore ? next : current);
+                    return (next.id < current.id ? next : current);
+                };
+
+                const deduped = new Map();
+                for (const id of @all()) {
+                    const row = @unsafeRow(id);
+                    if (!row || row.del || !row.title)
+                        continue;
+                    if (excludedBookUids.has(row._uid))
+                        continue;
+                    if (mode === 'popular' && !((row.librate > 0) || (((popularityMap[row._uid] || {}).score) > 0)))
+                        continue;
+                    if (mode === 'newest' && !row.date)
+                        continue;
+                    if (mode === 'newest' && daysWindow > 0) {
+                        const age = Math.floor((Date.now() - Date.parse(row.date)) / 86400000);
+                        if (!(age >= 0 && age <= daysWindow))
+                            continue;
+                    }
+
+                    const key = dedupeKey(row);
+                    const existing = deduped.get(key);
+                    deduped.set(key, existing ? pickBetterRow(existing, row) : row);
+                }
+
+                const result = Array.from(deduped.values());
+                result.sort((a, b) => {
+                    if (mode === 'popular') {
+                        const popularityCmp = (((popularityMap[b._uid] || {}).score) || 0) - (((popularityMap[a._uid] || {}).score) || 0);
+                        if (popularityCmp)
+                            return popularityCmp;
+                        const rateCmp = (b.librate || 0) - (a.librate || 0);
+                        if (rateCmp)
+                            return rateCmp;
+                        const dateCmp = String(b.date || '').localeCompare(String(a.date || ''));
+                        if (dateCmp)
+                            return dateCmp;
+                    } else {
+                        const dateCmp = String(b.date || '').localeCompare(String(a.date || ''));
+                        if (dateCmp)
+                            return dateCmp;
+                        const rateCmp = (b.librate || 0) - (a.librate || 0);
+                        if (rateCmp)
+                            return rateCmp;
+                    }
+
+                    let cmp = (a.author || '').localeCompare(b.author || '', 'ru');
+                    if (cmp === 0)
+                        cmp = (a.title || '').localeCompare(b.title || '', 'ru');
+                    if (cmp === 0)
+                        cmp = a.id - b.id;
+                    return cmp;
+                });
+
+                const filtered = [];
+                const authorCounts = new Map();
+                const seriesCounts = new Map();
+
+                for (const row of result) {
+                    const authorKey = String(row.author || '').trim().toLowerCase();
+                    const seriesKey = String(row.series || '').trim().toLowerCase();
+                    if (authorKey && (authorCounts.get(authorKey) || 0) >= 2)
+                        continue;
+                    if (seriesKey && (seriesCounts.get(seriesKey) || 0) >= 2)
+                        continue;
+
+                    filtered.push(row);
+                    if (authorKey)
+                        authorCounts.set(authorKey, (authorCounts.get(authorKey) || 0) + 1);
+                    if (seriesKey)
+                        seriesCounts.set(seriesKey, (seriesCounts.get(seriesKey) || 0) + 1);
+                    if (filtered.length >= limit)
+                        break;
+                }
+
+                return filtered;
+            `
+        });
+
+        return ((rows[0] && rows[0].rawResult) ? rows[0].rawResult : []);
+    }
+
+    async buildLocalDiscoveryShelf(kind = 'newest', limit = 8, options = {}) {
+        const shelfConfig = {
+            newest: {
+                id: `newest-${options.daysWindow || 0}d`,
+                title: 'Новинки библиотеки',
+                subtitle: 'Последние поступления в индекс',
+                mode: 'newest',
+            },
+            popular: {
+                id: 'popular',
+                title: 'Популярное в библиотеке',
+                subtitle: 'Пилот по локальной оценке библиотеки',
+                mode: 'popular',
+            },
+        }[kind];
+
+        if (!shelfConfig)
+            return null;
+
+        const items = await this.selectDiscoveryBooks(shelfConfig.mode, limit);
+        if (!items.length)
+            return null;
+
+        return {
+            id: shelfConfig.id,
+            title: shelfConfig.title,
+            subtitle: shelfConfig.subtitle,
+            source: 'local',
+            items,
+        };
+    }
+
+    async fetchExternalFeedItems(limit = 8, url = '') {
+        const sourceUrl = String(url || '').trim();
+        if (!sourceUrl)
+            throw new Error('Не задан URL внешней витрины');
+
+        const response = await axios.get(sourceUrl, {
+            responseType: 'text',
+            timeout: 20000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.7',
+            },
+        });
+
+        const html = String(response.data || '');
+        const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/i);
+        if (!nextDataMatch)
+            throw new Error('Не удалось прочитать внешнюю витрину');
+
+        const nextData = JSON.parse(nextDataMatch[1]);
+        const initialState = JSON.parse(((((nextData || {}).props || {}).pageProps || {}).initialState || '{}'));
+        const queries = (((initialState || {}).rtkqApi || {}).queries || {});
+        const collectionQuery = Object.values(queries).find((query) => (
+            query
+            && query.endpointName === 'getCollectionFacets'
+            && query.data
+            && Array.isArray(query.data.data)
+        ));
+
+        const items = ((collectionQuery && collectionQuery.data && collectionQuery.data.data) ? collectionQuery.data.data : [])
+            .map((item) => ({
+                title: String(item.title || '').trim(),
+                author: getPrimaryDiscoveryAuthor(item.persons),
+                url: String(item.url || '').trim(),
+                cover: String(item.cover_url || '').trim(),
+                rating: (((item.rating || {}).rated_avg) || 0),
+                isBestseller: !!(((item.labels || {}).is_bestseller) || ((item.labels || {}).is_sales_hit)),
+                isNew: !!((item.labels || {}).is_new),
+            }))
+            .filter(item => item.title)
+            .slice(0, Math.max(limit * 3, limit));
+
+        return {sourceUrl, items};
+    }
+
+    pickDiscoveryBookMatch(item, books = []) {
+        const title = normalizeDiscoveryText(item.title || '');
+        if (!title)
+            return null;
+
+        const authorTokens = extractDiscoveryAuthorTokens(item.author || '');
+        let best = null;
+        let bestScore = -Infinity;
+
+        for (const book of books) {
+            const bookTitle = normalizeDiscoveryText(book.title || '');
+            if (!bookTitle)
+                continue;
+
+            let score = -Infinity;
+            if (bookTitle === title) {
+                score = 1000;
+            } else if (bookTitle.startsWith(title) || title.startsWith(bookTitle)) {
+                score = 700;
+            } else if (bookTitle.includes(title) || title.includes(bookTitle)) {
+                score = 450;
+            } else {
+                continue;
+            }
+
+            const bookAuthor = normalizeDiscoveryText(book.author || '');
+            let authorScore = 0;
+            for (const token of authorTokens) {
+                if (bookAuthor.includes(token))
+                    authorScore += 90;
+            }
+
+            if (authorTokens.length && !authorScore)
+                score -= 180;
+
+            score += authorScore;
+            if (!book.del)
+                score += 15;
+            if (String(book.ext || '').toLowerCase() === 'fb2')
+                score += 12;
+            score += parseInt(book.librate || '0', 10) || 0;
+
+            if (score > bestScore) {
+                bestScore = score;
+                best = book;
+            }
+        }
+
+        return (bestScore >= 450 ? best : null);
+    }
+
+    async matchExternalItemsToLocalBooks(items = [], limit = 8) {
+        const result = [];
+        const seenBookUids = new Set();
+
+        for (const item of items) {
+            let response = await this.dbSearcher.bookSearch({
+                title: `=${item.title}`,
+                limit: 16,
+            });
+            let match = this.pickDiscoveryBookMatch(item, response.found || []);
+
+            if (!match) {
+                response = await this.dbSearcher.bookSearch({
+                    title: `*${String(item.title || '').substring(0, 80)}`,
+                    limit: 24,
+                });
+                match = this.pickDiscoveryBookMatch(item, response.found || []);
+            }
+
+            if (match && !seenBookUids.has(match._uid)) {
+                seenBookUids.add(match._uid);
+                result.push(Object.assign({}, match, {
+                    discoveryUrl: item.url,
+                    discoveryRating: item.rating,
+                    discoveryFlags: {
+                        bestseller: !!item.isBestseller,
+                        isNew: !!item.isNew,
+                    },
+                }));
+            }
+
+            if (result.length >= limit)
+                break;
+
+            await utils.processLoop();
+        }
+
+        return result;
+    }
+
+    async buildExternalDiscoveryShelf(limit = 8) {
+        const discovery = this.getDiscoveryConfig();
+        if (discovery.externalSource === 'none')
+            return null;
+
+        if (discovery.externalSource !== 'web-page')
+            throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
+
+        const feed = await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
+        const items = await this.matchExternalItemsToLocalBooks(feed.items || [], limit);
+        const sourceName = (discovery.externalName || 'Внешняя витрина');
+
+        return {
+            id: 'external-source',
+            title: sourceName,
+            subtitle: `Совпадений ${items.length} из ${feed.items.length}`,
+            source: 'external',
+            sourceName,
+            sourceUrl: feed.sourceUrl,
+            items,
+            emptyMessage: 'Совпадений с локальной библиотекой пока не нашлось.',
+        };
+    }
+
+    async getDiscoveryShelves(options = {}) {
+        this.checkMyState();
+
+        const discovery = this.getDiscoveryConfig();
+        if (!discovery.enabled)
+            return {shelves: []};
+
+        const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
+        const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
+        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 24));
+
+        const dbConfig = await this.dbConfig();
+        const inpxHash = String(dbConfig.inpxHash || '').trim();
+        const shelves = [];
+
+        const newestShelf = await this.rememberDiscovery(
+            `discovery:${inpxHash}:newest:${newestLimit}`,
+            () => this.buildLocalDiscoveryShelf('newest', newestLimit),
+        );
+        if (newestShelf)
+            shelves.push(newestShelf);
+
+        const popularShelf = await this.rememberDiscovery(
+            `discovery:${inpxHash}:popular:${popularLimit}`,
+            () => this.buildLocalDiscoveryShelf('popular', popularLimit),
+        );
+        if (popularShelf)
+            shelves.push(popularShelf);
+
+        if (discovery.externalSource !== 'none') {
+            try {
+                const externalShelf = await this.rememberDiscovery(
+                    `discovery:${inpxHash}:external:${discovery.externalSource}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}`,
+                    () => this.buildExternalDiscoveryShelf(externalShelfLimit),
+                );
+                if (externalShelf)
+                    shelves.push(externalShelf);
+            } catch (e) {
+                shelves.push({
+                    id: 'external-error',
+                    title: (discovery.externalName || 'Внешняя витрина'),
+                    subtitle: 'Внешний источник временно недоступен',
+                    source: 'external',
+                    sourceName: (discovery.externalName || 'Внешняя витрина'),
+                    sourceUrl: (discovery.externalUrl || ''),
+                    items: [],
+                    emptyMessage: e.message,
+                });
+            }
+        }
+
+        return {shelves};
+    }
+
+    async buildLocalDiscoveryShelfV2(kind = 'newest', limit = 8, options = {}) {
+        let shelfConfig = null;
+        if (kind === 'newest') {
+            shelfConfig = {
+                id: `newest-${options.daysWindow || 0}d`,
+                title: `Новинки за ${options.daysWindow || 0} дней`,
+                subtitle: `Книги, добавленные за последние ${options.daysWindow || 0} дней`,
+                mode: 'newest',
+            };
+        } else if (kind === 'popular') {
+            shelfConfig = {
+                id: 'popular',
+                title: 'Популярное в библиотеке',
+                subtitle: 'Локальный рейтинг по чтению, спискам и оценкам',
+                mode: 'popular',
+            };
+        }
+
+        if (!shelfConfig)
+            return null;
+
+        const items = (await this.selectDiscoveryBooks(shelfConfig.mode, limit, options))
+            .map((book) => this.decorateDiscoveryBook(book, {
+                mode: shelfConfig.mode,
+                popularityInfo: ((options.popularityMap || {})[book._uid] || null),
+            }));
+        if (!items.length)
+            return null;
+
+        return {
+            id: shelfConfig.id,
+            title: shelfConfig.title,
+            subtitle: shelfConfig.subtitle,
+            source: 'local',
+            sourceName: 'Локальная библиотека',
+            updatedAt: Date.now(),
+            items,
+        };
+    }
+
+    pickDiscoveryBookMatchV2(item, books = []) {
+        const title = normalizeDiscoveryText(item.title || '');
+        if (!title)
+            return null;
+
+        const authorTokens = extractDiscoveryAuthorTokens(item.author || '');
+        let best = null;
+        let bestKind = '';
+        let bestScore = -Infinity;
+
+        for (const book of books) {
+            const bookTitle = normalizeDiscoveryText(book.title || '');
+            if (!bookTitle)
+                continue;
+
+            let score = -Infinity;
+            if (bookTitle === title) {
+                score = 1000;
+            } else if (bookTitle.startsWith(title) || title.startsWith(bookTitle)) {
+                score = 700;
+            } else if (bookTitle.includes(title) || title.includes(bookTitle)) {
+                score = 450;
+            } else {
+                continue;
+            }
+
+            const bookAuthor = normalizeDiscoveryText(book.author || '');
+            let authorScore = 0;
+            for (const token of authorTokens) {
+                if (bookAuthor.includes(token))
+                    authorScore += 90;
+            }
+
+            if (authorTokens.length && !authorScore)
+                score -= 180;
+
+            score += authorScore;
+            if (!book.del)
+                score += 15;
+            if (String(book.ext || '').toLowerCase() === 'fb2')
+                score += 12;
+            score += parseInt(book.librate || '0', 10) || 0;
+
+            const kind = (
+                bookTitle === title && authorScore > 0 ? 'exact'
+                    : (authorScore > 0 ? 'title-author'
+                        : (bookTitle === title ? 'title' : 'title-partial'))
+            );
+
+            if (score > bestScore) {
+                bestScore = score;
+                best = book;
+                bestKind = kind;
+            }
+        }
+
+        return (bestScore >= 450 ? {book: best, kind: bestKind, score: bestScore} : null);
+    }
+
+    async matchExternalItemsToLocalBooksV2(items = [], limit = 8) {
+        const result = [];
+        const seenBookUids = new Set();
+
+        for (const item of items) {
+            let response = await this.dbSearcher.bookSearch({
+                title: `=${item.title}`,
+                limit: 16,
+            });
+            let match = this.pickDiscoveryBookMatchV2(item, response.found || []);
+
+            if (!match) {
+                response = await this.dbSearcher.bookSearch({
+                    title: `*${String(item.title || '').substring(0, 80)}`,
+                    limit: 24,
+                });
+                match = this.pickDiscoveryBookMatchV2(item, response.found || []);
+            }
+
+            if (match && match.book && !seenBookUids.has(match.book._uid)) {
+                seenBookUids.add(match.book._uid);
+                result.push(Object.assign({}, match.book, {
+                    discoveryUrl: item.url,
+                    discoveryRating: item.rating,
+                    discoveryMatchType: match.kind,
+                    discoveryFlags: {
+                        bestseller: !!item.isBestseller,
+                        isNew: !!item.isNew,
+                    },
+                }));
+            }
+
+            if (result.length >= limit)
+                break;
+
+            await utils.processLoop();
+        }
+
+        return result;
+    }
+
+    async fetchExternalDiscoveryItemsV2(discovery = {}) {
+        try {
+            return await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
+        } catch (e) {
+            throw new Error(`Не удалось обновить источник "${discovery.externalName || 'Внешний источник'}"`);
+        }
+    }
+
+    async buildExternalDiscoveryShelfV2(limit = 8, options = {}) {
+        const discovery = this.getDiscoveryConfig(options);
+        if (discovery.externalSource === 'none')
+            return null;
+
+        if (discovery.externalSource !== 'web-page')
+            throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
+
+        const feed = await this.fetchExternalDiscoveryItemsV2(discovery);
+        const items = (await this.matchExternalItemsToLocalBooksV2(feed.items || [], limit))
+            .map((book) => this.decorateDiscoveryBook(book, {
+                discoverySource: (discovery.externalName || 'Внешний источник'),
+                matchKind: book.discoveryMatchType,
+            }));
+        const sourceName = (discovery.externalName || 'Внешняя витрина');
+
+        return {
+            id: 'external-source',
+            title: sourceName,
+            subtitle: `Совпадений ${items.length} из ${feed.items.length}`,
+            source: 'external',
+            sourceName,
+            sourceUrl: feed.sourceUrl,
+            updatedAt: Date.now(),
+            discoveryStale: false,
+            items,
+            emptyMessage: 'Совпадений с локальной библиотекой пока не нашлось.',
+        };
+    }
+
+    async getDiscoveryShelvesV2(options = {}) {
+        this.checkMyState();
+
+        const discovery = this.getDiscoveryConfig(options);
+        if (!discovery.enabled)
+            return {shelves: []};
+
+        const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
+        const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
+        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 24));
+        const personalShelfLimit = Math.max(1, Math.min(parseInt(options.personalLimit, 10) || discovery.shelfLimit, 24));
+
+        const dbConfig = await this.dbConfig();
+        const inpxHash = String(dbConfig.inpxHash || '').trim();
+        const shelves = [];
+        const popularityMap = await this.buildDiscoveryPopularityMap();
+        const newestSeen = new Set();
+
+        for (const daysWindow of [7, 30, 90]) {
+            const newestShelf = await this.rememberDiscovery(
+                `discovery:${inpxHash}:newest:${daysWindow}:${newestLimit}`,
+                () => this.buildLocalDiscoveryShelfV2('newest', newestLimit, {
+                    daysWindow,
+                    excludedBookUids: Array.from(newestSeen),
+                }),
+            );
+            if (newestShelf) {
+                shelves.push(newestShelf);
+                for (const book of (Array.isArray(newestShelf.items) ? newestShelf.items : [])) {
+                    if (book && book._uid)
+                        newestSeen.add(book._uid);
+                }
+            }
+        }
+
+        const popularShelf = await this.rememberDiscovery(
+            `discovery:${inpxHash}:popular:v2:${popularLimit}`,
+            () => this.buildLocalDiscoveryShelfV2('popular', popularLimit, {popularityMap}),
+        );
+        if (popularShelf)
+            shelves.push(popularShelf);
+
+        for (const shelf of await this.getPersonalDiscoveryShelvesV2(options.userId, options.profileAccessToken, personalShelfLimit, options)) {
+            if (shelf)
+                shelves.push(shelf);
+        }
+
+        if (discovery.externalSource !== 'none') {
+            try {
+                const externalShelf = await this.rememberPersistedDiscovery(
+                    `discovery:${inpxHash}:external:v2:${discovery.externalSource}:${discovery.externalName}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}:${discovery.externalTtlMinutes}`,
+                    () => this.buildExternalDiscoveryShelfV2(externalShelfLimit, options),
+                    discovery.externalTtlMinutes * 60 * 1000,
+                );
+                if (externalShelf)
+                    shelves.push(externalShelf);
+            } catch (e) {
+                shelves.push({
+                    id: 'external-error',
+                    title: (discovery.externalName || 'Внешняя витрина'),
+                    subtitle: 'Внешний источник временно недоступен',
+                    source: 'external',
+                    sourceName: (discovery.externalName || 'Внешняя витрина'),
+                    sourceUrl: (discovery.externalUrl || ''),
+                    items: [],
+                    emptyMessage: e.message,
+                });
+            }
+        }
+
+        return {shelves};
+    }
+
+    formatPersonalDiscoveryDate(value = '') {
+        const time = Date.parse(String(value || ''));
+        if (!Number.isFinite(time))
+            return '';
+
+        return new Date(time).toLocaleString('ru-RU', {
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    }
+
+
+    getHiddenDiscoveryBooks(user = null) {
+        const hiddenBooks = (((user || {}).discoveryPreferences || {}).hiddenBooks || []);
+        return new Set(
+            (Array.isArray(hiddenBooks) ? hiddenBooks : [])
+                .map((bookUid) => String(bookUid || '').trim())
+                .filter(Boolean)
+        );
+    }
+
+    getPersonalReadBookSet(user = null, lists = []) {
+        const readBookUids = new Set();
+        const progressMap = (user && user.readerProgress && typeof(user.readerProgress) === 'object'
+            ? user.readerProgress
+            : {});
+
+        for (const [bookUid, progress] of Object.entries(progressMap)) {
+            if ((Number(progress && progress.percent || 0) || 0) >= 0.999)
+                readBookUids.add(String(bookUid || '').trim());
+        }
+
+        for (const list of (Array.isArray(lists) ? lists : [])) {
+            const entries = this.readingListStore.normalizeEntries(list.books);
+            for (const entry of entries) {
+                if (entry.read)
+                    readBookUids.add(String(entry.bookUid || '').trim());
+            }
+        }
+
+        return readBookUids;
+    }
+
+    async buildContinueReadingShelfV2(user = null, limit = 8, context = null) {
+        const hiddenBookUids = this.getHiddenDiscoveryBooks(user);
+        const progressMap = (context && context.progressMap
+            ? context.progressMap
+            : (user && user.readerProgress && typeof(user.readerProgress) === 'object' ? user.readerProgress : {}));
+        const readBookUids = (context && context.readBookUids ? context.readBookUids : this.getPersonalReadBookSet(user, []));
+
+        const rows = Object.entries(progressMap)
+            .map(([bookUid, progress]) => ({
+                bookUid: String(bookUid || '').trim(),
+                progress: Object.assign({percent: 0, sectionId: '', updatedAt: ''}, progress || {}),
+            }))
+            .filter((item) => item.bookUid && !hiddenBookUids.has(item.bookUid) && Number(item.progress.percent || 0) < 0.999)
+            .sort((a, b) => String(b.progress.updatedAt || '').localeCompare(String(a.progress.updatedAt || '')));
+
+        const items = [];
+        let updatedAt = 0;
+
+        for (const item of rows) {
+            const book = await this.getBookRecordByUid(item.bookUid);
+            if (!book)
+                continue;
+
+            const percent = Math.max(0, Math.min(100, Math.round((Number(item.progress.percent || 0) || 0) * 100)));
+            const updatedLabel = this.formatPersonalDiscoveryDate(item.progress.updatedAt);
+            items.push(Object.assign({}, book, {
+                discoveryReason: `\u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 ${percent}%${updatedLabel ? ` \u00b7 \u041e\u0442\u043a\u0440\u044b\u0432\u0430\u043b\u0438 ${updatedLabel}` : ''}`,
+                discoveryRead: readBookUids.has(item.bookUid),
+            }));
+
+            updatedAt = Math.max(updatedAt, Date.parse(String(item.progress.updatedAt || '')) || 0);
+            if (items.length >= limit)
+                break;
+        }
+
+        return {
+            id: 'continue-reading',
+            title: '\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c \u0447\u0442\u0435\u043d\u0438\u0435',
+            subtitle: '\u041a\u043d\u0438\u0433\u0438, \u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u0432\u044b \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u043b\u0438 \u043d\u0435\u0434\u0430\u0432\u043d\u043e',
+            source: 'personal',
+            sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
+            updatedAt: updatedAt || Date.now(),
+            items,
+            emptyMessage: '\u0417\u0434\u0435\u0441\u044c \u043f\u043e\u044f\u0432\u044f\u0442\u0441\u044f \u043a\u043d\u0438\u0433\u0438, \u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u0432\u044b \u043d\u0430\u0447\u0430\u043b\u0438 \u0447\u0438\u0442\u0430\u0442\u044c.',
+        };
+    }
+
+    async buildFromReadingListsShelfV2(user = null, limit = 8, context = null) {
+        const hiddenBookUids = this.getHiddenDiscoveryBooks(user);
+        if (!user || !user.id) {
+            return {
+                id: 'from-your-lists',
+                title: '\u0418\u0437 \u0432\u0430\u0448\u0438\u0445 \u0441\u043f\u0438\u0441\u043a\u043e\u0432',
+                subtitle: '\u041d\u0435\u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u044b\u0435 \u043a\u043d\u0438\u0433\u0438 \u0438\u0437 \u0432\u0430\u0448\u0438\u0445 \u0441\u043f\u0438\u0441\u043a\u043e\u0432 \u0447\u0442\u0435\u043d\u0438\u044f',
+                source: 'personal',
+                sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
+                updatedAt: Date.now(),
+                items: [],
+                emptyMessage: '\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0440\u043e\u0444\u0438\u043b\u044c \u0447\u0442\u0435\u043d\u0438\u044f.',
+            };
+        }
+
+        const lists = (context && Array.isArray(context.lists) ? context.lists : await this.readingListStore.getLists(user.id, {}));
+        const readBookUids = (context && context.readBookUids ? context.readBookUids : this.getPersonalReadBookSet(user, lists));
+        const candidates = [];
+        let updatedAt = 0;
+
+        for (const list of lists) {
+            const entries = this.readingListStore.normalizeEntries(list.books);
+            const listUpdatedAt = Date.parse(String(list.updatedAt || list.createdAt || '')) || 0;
+            updatedAt = Math.max(updatedAt, listUpdatedAt);
+
+            entries.forEach((entry, index) => {
+                candidates.push({
+                    bookUid: entry.bookUid,
+                    read: !!entry.read,
+                    listName: String(list.name || '').trim() || '\u0421\u043f\u0438\u0441\u043e\u043a \u0447\u0442\u0435\u043d\u0438\u044f',
+                    updatedAt: String(list.updatedAt || list.createdAt || ''),
+                    order: index,
+                });
+            });
+        }
+
+        candidates.sort((a, b) => {
+            if (a.read != b.read)
+                return (a.read ? 1 : -1);
+
+            const updatedCmp = String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+            if (updatedCmp)
+                return updatedCmp;
+
+            return a.order - b.order;
+        });
+
+        const items = [];
+        const seenBookUids = new Set();
+
+        for (const item of candidates) {
+            if (!item.bookUid || hiddenBookUids.has(item.bookUid) || seenBookUids.has(item.bookUid))
+                continue;
+
+            const book = await this.getBookRecordByUid(item.bookUid);
+            if (!book)
+                continue;
+
+            seenBookUids.add(item.bookUid);
+            const updatedLabel = this.formatPersonalDiscoveryDate(item.updatedAt);
+            items.push(Object.assign({}, book, {
+                discoveryReason: `\u0418\u0437 \u0441\u043f\u0438\u0441\u043a\u0430 \u00ab${item.listName}\u00bb${item.read ? ' \u00b7 \u0423\u0436\u0435 \u043e\u0442\u043c\u0435\u0447\u0435\u043d\u0430 \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043d\u043e\u0439' : ' \u00b7 \u0415\u0449\u0451 \u043d\u0435 \u043f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u0430'}${updatedLabel ? ` \u00b7 \u041e\u0431\u043d\u043e\u0432\u043b\u0451\u043d ${updatedLabel}` : ''}`,
+                discoveryRead: (item.read || readBookUids.has(item.bookUid)),
+            }));
+
+            if (items.length >= limit)
+                break;
+        }
+
+        return {
+            id: 'from-your-lists',
+            title: '\u0418\u0437 \u0432\u0430\u0448\u0438\u0445 \u0441\u043f\u0438\u0441\u043a\u043e\u0432',
+            subtitle: '\u041a\u043d\u0438\u0433\u0438 \u0438\u0437 \u0432\u0430\u0448\u0438\u0445 \u043b\u0438\u0447\u043d\u044b\u0445 \u0441\u043f\u0438\u0441\u043a\u043e\u0432 \u0447\u0442\u0435\u043d\u0438\u044f',
+            source: 'personal',
+            sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
+            updatedAt: updatedAt || Date.now(),
+            items,
+            emptyMessage: '\u0414\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u043a\u043d\u0438\u0433\u0438 \u0432 \u043b\u0438\u0447\u043d\u044b\u0435 \u0441\u043f\u0438\u0441\u043a\u0438, \u0438 \u043e\u043d\u0438 \u043f\u043e\u044f\u0432\u044f\u0442\u0441\u044f \u0437\u0434\u0435\u0441\u044c.',
+        };
+    }
+
+    async buildUnfinishedSeriesShelfV2(user = null, limit = 8, context = null) {
+        const hiddenBookUids = this.getHiddenDiscoveryBooks(user);
+        if (!user || !user.id) {
+            return {
+                id: 'unfinished-series',
+                title: '\u041d\u0435\u0437\u0430\u043a\u043e\u043d\u0447\u0435\u043d\u043d\u044b\u0435 \u0441\u0435\u0440\u0438\u0438',
+                subtitle: '\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0435 \u043a\u043d\u0438\u0433\u0438 \u0432 \u0441\u0435\u0440\u0438\u044f\u0445, \u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u0432\u044b \u0443\u0436\u0435 \u043d\u0430\u0447\u0430\u043b\u0438',
+                source: 'personal',
+                sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
+                updatedAt: Date.now(),
+                items: [],
+                emptyMessage: '\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0440\u043e\u0444\u0438\u043b\u044c \u0447\u0442\u0435\u043d\u0438\u044f.',
+            };
+        }
+
+        const progressMap = (context && context.progressMap
+            ? context.progressMap
+            : (user.readerProgress && typeof(user.readerProgress) === 'object' ? user.readerProgress : {}));
+        const lists = (context && Array.isArray(context.lists) ? context.lists : await this.readingListStore.getLists(user.id, {}));
+        const readBookUids = (context && context.readBookUids ? new Set(context.readBookUids) : new Set());
+        const seriesState = new Map();
+
+        for (const [bookUid, progress] of Object.entries(progressMap)) {
+            const book = await this.getBookRecordByUid(bookUid);
+            if (!book || !book.series || !book.serno)
+                continue;
+
+            const key = String(book.series || '').trim().toLowerCase();
+            const current = seriesState.get(key) || {
+                series: book.series,
+                maxSerno: 0,
+                updatedAt: '',
+                lastTitle: '',
+            };
+
+            if (Number(book.serno || 0) >= current.maxSerno) {
+                current.maxSerno = Number(book.serno || 0);
+                current.updatedAt = String(progress && progress.updatedAt || current.updatedAt || '');
+                current.lastTitle = String(book.title || current.lastTitle || '');
+            }
+
+            readBookUids.add(bookUid);
+            seriesState.set(key, current);
+        }
+
+        for (const list of lists) {
+            const entries = this.readingListStore.normalizeEntries(list.books);
+            for (const entry of entries) {
+                if (!entry.read)
+                    continue;
+
+                readBookUids.add(entry.bookUid);
+                const book = await this.getBookRecordByUid(entry.bookUid);
+                if (!book || !book.series || !book.serno)
+                    continue;
+
+                const key = String(book.series || '').trim().toLowerCase();
+                const current = seriesState.get(key) || {
+                    series: book.series,
+                    maxSerno: 0,
+                    updatedAt: '',
+                    lastTitle: '',
+                };
+
+                if (Number(book.serno || 0) >= current.maxSerno) {
+                    current.maxSerno = Number(book.serno || 0);
+                    current.updatedAt = String(list.updatedAt || list.createdAt || current.updatedAt || '');
+                    current.lastTitle = String(book.title || current.lastTitle || '');
+                }
+
+                seriesState.set(key, current);
+            }
+        }
+
+        const candidates = Array.from(seriesState.values())
+            .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+
+        const items = [];
+        const seenBookUids = new Set();
+        let updatedAt = 0;
+
+        for (const state of candidates) {
+            const response = await this.getSeriesBookList(state.series);
+            const books = Array.isArray(response && response.books) ? response.books : [];
+            const nextBook = books
+                .filter((book) => book && book.series && Number(book.serno || 0) > Number(state.maxSerno || 0))
+                .sort((a, b) => {
+                    const sernoCmp = Number(a.serno || 0) - Number(b.serno || 0);
+                    if (sernoCmp)
+                        return sernoCmp;
+                    return String(a.title || '').localeCompare(String(b.title || ''), 'ru');
+                })
+                .find((book) => book && book._uid && !hiddenBookUids.has(book._uid) && !readBookUids.has(book._uid) && !seenBookUids.has(book._uid));
+
+            if (!nextBook)
+                continue;
+
+            seenBookUids.add(nextBook._uid);
+            const updatedLabel = this.formatPersonalDiscoveryDate(state.updatedAt);
+            items.push(Object.assign({}, nextBook, {
+                discoveryReason: `\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u0442\u043e\u043c \u043f\u043e\u0441\u043b\u0435 \u00ab${state.lastTitle || '\u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0435\u0439 \u043a\u043d\u0438\u0433\u0438'}\u00bb${updatedLabel ? ` \u00b7 \u0421\u0435\u0440\u0438\u044f \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0430 ${updatedLabel}` : ''}`,
+                discoveryRead: false,
+            }));
+
+            updatedAt = Math.max(updatedAt, Date.parse(String(state.updatedAt || '')) || 0);
+            if (items.length >= limit)
+                break;
+        }
+
+        return {
+            id: 'unfinished-series',
+            title: '\u041d\u0435\u0437\u0430\u043a\u043e\u043d\u0447\u0435\u043d\u043d\u044b\u0435 \u0441\u0435\u0440\u0438\u0438',
+            subtitle: '\u0421\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0435 \u043a\u043d\u0438\u0433\u0438 \u0432 \u0441\u0435\u0440\u0438\u044f\u0445, \u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u0432\u044b \u0443\u0436\u0435 \u043d\u0430\u0447\u0430\u043b\u0438',
+            source: 'personal',
+            sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
+            updatedAt: updatedAt || Date.now(),
+            items,
+            emptyMessage: '\u041a\u0430\u043a \u0442\u043e\u043b\u044c\u043a\u043e \u0432\u044b \u043d\u0430\u0447\u043d\u0451\u0442\u0435 \u0441\u0435\u0440\u0438\u044e, \u0437\u0434\u0435\u0441\u044c \u043f\u043e\u044f\u0432\u0438\u0442\u0441\u044f \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u0442\u043e\u043c.',
+        };
+    }
+
+    async buildSimilarBooksShelfV2(user = null, limit = 8, context = null) {
+        const hiddenBookUids = this.getHiddenDiscoveryBooks(user);
+        if (!user || !user.id) {
+            return {
+                id: 'similar-books',
+                title: '\u041f\u043e\u0445\u043e\u0436\u0435 \u043d\u0430 \u0442\u043e, \u0447\u0442\u043e \u0432\u044b \u0447\u0438\u0442\u0430\u043b\u0438',
+                subtitle: '\u041a\u043d\u0438\u0433\u0438 \u0441 \u043f\u043e\u0445\u043e\u0436\u0438\u043c\u0438 \u0430\u0432\u0442\u043e\u0440\u0430\u043c\u0438, \u0441\u0435\u0440\u0438\u044f\u043c\u0438 \u0438 \u0436\u0430\u043d\u0440\u0430\u043c\u0438',
+                source: 'personal',
+                sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
+                updatedAt: Date.now(),
+                items: [],
+                emptyMessage: '\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043f\u0440\u043e\u0444\u0438\u043b\u044c \u0447\u0442\u0435\u043d\u0438\u044f.',
+            };
+        }
+
+        const progressMap = (context && context.progressMap
+            ? context.progressMap
+            : (user.readerProgress && typeof(user.readerProgress) === 'object' ? user.readerProgress : {}));
+        const lists = (context && Array.isArray(context.lists) ? context.lists : await this.readingListStore.getLists(user.id, {}));
+        const readBookUids = (context && context.readBookUids ? context.readBookUids : this.getPersonalReadBookSet(user, lists));
+        const authorWeights = new Map();
+        const seriesWeights = new Map();
+        const genreWeights = new Map();
+        const knownBookUids = new Set(hiddenBookUids);
+        let updatedAt = 0;
+
+        const addWeight = (map, key, amount) => {
+            const normalizedKey = String(key || '').trim().toLowerCase();
+            if (!normalizedKey)
+                return;
+            map.set(normalizedKey, (map.get(normalizedKey) || 0) + Number(amount || 0));
+        };
+
+        const applyBookSignals = (book, amount = 1, stamp = '') => {
+            if (!book)
+                return;
+
+            knownBookUids.add(book._uid);
+            addWeight(authorWeights, book.author, 4 * amount);
+            addWeight(seriesWeights, book.series, 6 * amount);
+            String(book.genre || '')
+                .split(',')
+                .map(item => item.trim())
+                .filter(Boolean)
+                .forEach((genre) => addWeight(genreWeights, genre, 2 * amount));
+
+            updatedAt = Math.max(updatedAt, Date.parse(String(stamp || '')) || 0);
+        };
+
+        for (const [bookUid, progress] of Object.entries(progressMap)) {
+            const book = await this.getBookRecordByUid(bookUid);
+            if (!book)
+                continue;
+
+            const percent = Number(progress && progress.percent || 0) || 0;
+            applyBookSignals(book, (percent >= 0.95 ? 3 : (percent >= 0.5 ? 2 : 1)), progress && progress.updatedAt);
+        }
+
+        for (const list of lists) {
+            const entries = this.readingListStore.normalizeEntries(list.books);
+            for (const entry of entries) {
+                const book = await this.getBookRecordByUid(entry.bookUid);
+                if (!book)
+                    continue;
+
+                applyBookSignals(book, (entry.read ? 2 : 1), list.updatedAt || list.createdAt);
+            }
+        }
+
+        const preferredAuthors = Object.fromEntries(authorWeights);
+        const preferredSeries = Object.fromEntries(seriesWeights);
+        const preferredGenres = Object.fromEntries(genreWeights);
+        if (!Object.keys(preferredAuthors).length && !Object.keys(preferredSeries).length && !Object.keys(preferredGenres).length) {
+            return {
+                id: 'similar-books',
+                title: '\u041f\u043e\u0445\u043e\u0436\u0435 \u043d\u0430 \u0442\u043e, \u0447\u0442\u043e \u0432\u044b \u0447\u0438\u0442\u0430\u043b\u0438',
+                subtitle: '\u041a\u043d\u0438\u0433\u0438 \u0441 \u043f\u043e\u0445\u043e\u0436\u0438\u043c\u0438 \u0430\u0432\u0442\u043e\u0440\u0430\u043c\u0438, \u0441\u0435\u0440\u0438\u044f\u043c\u0438 \u0438 \u0436\u0430\u043d\u0440\u0430\u043c\u0438',
+                source: 'personal',
+                sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
+                updatedAt: Date.now(),
+                items: [],
+                emptyMessage: '\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043f\u043e\u0447\u0438\u0442\u0430\u0439\u0442\u0435 \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u043a\u043d\u0438\u0433 \u0438\u043b\u0438 \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u0438\u0445 \u0432 \u0441\u043f\u0438\u0441\u043a\u0438.',
+            };
+        }
+
+        const rows = await this.db.select({
+            table: 'book',
+            rawResult: true,
+            where: `
+                const knownBookUids = new Set(${this.db.esc(Array.from(knownBookUids))});
+                const preferredAuthors = ${this.db.esc(preferredAuthors)};
+                const preferredSeries = ${this.db.esc(preferredSeries)};
+                const preferredGenres = ${this.db.esc(preferredGenres)};
+                const limit = ${this.db.esc(Math.max(limit * 6, 32))};
+
+                const result = [];
+                for (const id of @all()) {
+                    const row = @unsafeRow(id);
+                    if (!row || row.del || !row.title || !row._uid || knownBookUids.has(row._uid))
+                        continue;
+
+                    let score = 0;
+                    const authorKey = String(row.author || '').trim().toLowerCase();
+                    const seriesKey = String(row.series || '').trim().toLowerCase();
+                    const genreKeys = String(row.genre || '').split(',').map(item => item.trim().toLowerCase()).filter(Boolean);
+
+                    if (authorKey && preferredAuthors[authorKey])
+                        score += preferredAuthors[authorKey] * 80;
+                    if (seriesKey && preferredSeries[seriesKey])
+                        score += preferredSeries[seriesKey] * 110;
+                    for (const genreKey of genreKeys) {
+                        if (preferredGenres[genreKey])
+                            score += preferredGenres[genreKey] * 22;
+                    }
+
+                    if (!score)
+                        continue;
+
+                    if (row.librate)
+                        score += row.librate * 6;
+                    if (row.date) {
+                        const ageDays = Math.max(0, Math.floor((Date.now() - Date.parse(row.date)) / 86400000));
+                        score += Math.max(0, 30 - Math.min(ageDays, 30));
+                    }
+                    if (String(row.ext || '').toLowerCase() === 'fb2')
+                        score += 10;
+
+                    result.push(Object.assign({}, row, {_similarityScore: score}));
+                }
+
+                result.sort((a, b) => {
+                    const scoreCmp = Number(b._similarityScore || 0) - Number(a._similarityScore || 0);
+                    if (scoreCmp)
+                        return scoreCmp;
+                    return String(a.title || '').localeCompare(String(b.title || ''), 'ru');
+                });
+
+                return result.slice(0, limit);
+            `
+        });
+
+        const rawItems = ((rows[0] && rows[0].rawResult) ? rows[0].rawResult : []);
+        const items = [];
+        const authorCounts = new Map();
+        const seriesCounts = new Map();
+
+        for (const book of rawItems) {
+            const authorKey = String(book.author || '').trim().toLowerCase();
+            const seriesKey = String(book.series || '').trim().toLowerCase();
+            if (authorKey && (authorCounts.get(authorKey) || 0) >= 2)
+                continue;
+            if (seriesKey && (seriesCounts.get(seriesKey) || 0) >= 2)
+                continue;
+
+            const reasons = [];
+            if (authorKey && authorWeights.has(authorKey))
+                reasons.push(`\u0410\u0432\u0442\u043e\u0440: ${book.author}`);
+            if (seriesKey && seriesWeights.has(seriesKey))
+                reasons.push(`\u0421\u0435\u0440\u0438\u044f: ${book.series}`);
+
+            const matchedGenres = String(book.genre || '')
+                .split(',')
+                .map(item => item.trim())
+                .filter(Boolean)
+                .filter((genre) => genreWeights.has(String(genre || '').trim().toLowerCase()));
+            if (matchedGenres.length)
+                reasons.push(`\u0416\u0430\u043d\u0440\u044b: ${matchedGenres.slice(0, 2).join(', ')}`);
+
+            items.push(Object.assign({}, book, {
+                discoveryReason: (reasons.length ? reasons.join(' \u00b7 ') : '\u041f\u043e\u0445\u043e\u0436\u0435 \u043d\u0430 \u0442\u043e, \u0447\u0442\u043e \u0432\u044b \u0447\u0438\u0442\u0430\u043b\u0438'),
+                discoveryRead: readBookUids.has(String(book._uid || '').trim()),
+            }));
+
+            if (authorKey)
+                authorCounts.set(authorKey, (authorCounts.get(authorKey) || 0) + 1);
+            if (seriesKey)
+                seriesCounts.set(seriesKey, (seriesCounts.get(seriesKey) || 0) + 1);
+            if (items.length >= limit)
+                break;
+        }
+
+        return {
+            id: 'similar-books',
+            title: '\u041f\u043e\u0445\u043e\u0436\u0435 \u043d\u0430 \u0442\u043e, \u0447\u0442\u043e \u0432\u044b \u0447\u0438\u0442\u0430\u043b\u0438',
+            subtitle: '\u041f\u043e\u0434\u0431\u043e\u0440\u043a\u0430 \u043f\u043e \u0430\u0432\u0442\u043e\u0440\u0430\u043c, \u0441\u0435\u0440\u0438\u044f\u043c \u0438 \u0436\u0430\u043d\u0440\u0430\u043c \u0438\u0437 \u0432\u0430\u0448\u0435\u0439 \u0438\u0441\u0442\u043e\u0440\u0438\u0438',
+            source: 'personal',
+            sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
+            updatedAt: updatedAt || Date.now(),
+            items,
+            emptyMessage: '\u041f\u043e\u043a\u0430 \u043c\u0430\u043b\u043e \u0434\u0430\u043d\u043d\u044b\u0445 \u0434\u043b\u044f \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u0439. \u041f\u043e\u0447\u0438\u0442\u0430\u0439\u0442\u0435 \u0435\u0449\u0451 \u043d\u0435\u043c\u043d\u043e\u0433\u043e \u0438\u043b\u0438 \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u043a\u043d\u0438\u0433\u0438 \u0432 \u0441\u043f\u0438\u0441\u043a\u0438.',
+        };
+    }
+
+    async buildHiddenDiscoveryShelfV2(user = null, limit = 8, context = null) {
+        const hiddenBookUids = Array.from(this.getHiddenDiscoveryBooks(user));
+        const readBookUids = (context && context.readBookUids ? context.readBookUids : this.getPersonalReadBookSet(user, []));
+        const items = [];
+
+        for (const bookUid of hiddenBookUids.slice().reverse()) {
+            const book = await this.getBookRecordByUid(bookUid);
+            if (!book)
+                continue;
+
+            items.push(Object.assign({}, book, {
+                discoveryReason: '\u0421\u043a\u0440\u044b\u0442\u043e \u0438\u0437 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0445 \u0432\u0438\u0442\u0440\u0438\u043d',
+                discoveryRead: readBookUids.has(bookUid),
+            }));
+
+            if (items.length >= limit)
+                break;
+        }
+
+        return {
+            id: 'hidden-books',
+            title: '\u0421\u043a\u0440\u044b\u0442\u044b\u0435 \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u0438',
+            subtitle: '\u041a\u043d\u0438\u0433\u0438, \u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u0432\u044b \u0441\u043a\u0440\u044b\u043b\u0438 \u0438\u0437 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0445 \u0432\u0438\u0442\u0440\u0438\u043d',
+            source: 'personal',
+            sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
+            updatedAt: Date.now(),
+            items,
+            emptyMessage: '\u0417\u0434\u0435\u0441\u044c \u0431\u0443\u0434\u0443\u0442 \u043a\u043d\u0438\u0433\u0438, \u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u0432\u044b \u043e\u0442\u043c\u0435\u0442\u0438\u043b\u0438 \u043a\u0430\u043a \u043d\u0435\u0438\u043d\u0442\u0435\u0440\u0435\u0441\u043d\u044b\u0435.',
+        };
+    }
+
+    async getPersonalDiscoveryShelvesV2(userId = '', profileAccessToken = '', limit = 8, options = {}) {
+        const normalizedUserId = String(userId || '').trim();
+        if (!normalizedUserId)
+            return [];
+
+        const user = await this.getEffectiveUser(normalizedUserId, profileAccessToken);
+        if (!user)
+            return [];
+
+        if (user.passwordHash && this.getProfileSessionUser(profileAccessToken) !== user.id)
+            return [];
+
+        const lists = await this.readingListStore.getLists(user.id, {});
+        const context = {
+            lists,
+            progressMap: (user.readerProgress && typeof(user.readerProgress) === 'object' ? user.readerProgress : {}),
+            readBookUids: this.getPersonalReadBookSet(user, lists),
+        };
+
+        const shelves = [
+            await this.buildContinueReadingShelfV2(user, limit, context),
+            await this.buildFromReadingListsShelfV2(user, limit, context),
+            await this.buildUnfinishedSeriesShelfV2(user, limit, context),
+        ];
+
+        if (options && options.personalSimilarEnabled !== false)
+            shelves.push(await this.buildSimilarBooksShelfV2(user, limit, context));
+
+        shelves.push(await this.buildHiddenDiscoveryShelfV2(user, limit, context));
+
+        return shelves;
+    }
+
     async getBookRecordByUid(bookUid) {
         const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
         return (rows.length ? rows[0] : null);
@@ -614,9 +2050,9 @@ class WebWorker {
         const rows = Object.entries(progressMap)
             .map(([bookUid, progress]) => ({
                 bookUid: String(bookUid || '').trim(),
-                progress: Object.assign({percent: 0, sectionId: '', updatedAt: ''}, progress || {}),
+                progress: Object.assign({percent: 0, sectionId: '', updatedAt: '', hidden: false}, progress || {}),
             }))
-            .filter((item) => item.bookUid)
+            .filter((item) => item.bookUid && item.progress.hidden !== true)
             .sort((a, b) => String(b.progress.updatedAt || '').localeCompare(String(a.progress.updatedAt || '')))
             .slice(0, Math.max(0, limit));
 
@@ -658,7 +2094,7 @@ class WebWorker {
                     requiresLogin: !!item.passwordHash,
                     isAdmin: !!item.isAdmin,
                     opdsEnabled: item.opdsEnabled !== false,
-                    currentReadingCount: Object.keys(item.readerProgress || {}).length,
+                    currentReadingCount: Object.values(item.readerProgress || {}).filter(progress => progress && progress.hidden !== true).length,
                     createdAt: item.createdAt,
                     updatedAt: item.updatedAt,
                 }))
@@ -795,6 +2231,13 @@ class WebWorker {
     async updateReaderPreferences(userId = '', patch = {}) {
         this.checkMyState();
         const preferences = await this.readingListStore.updateReaderPreferences(userId, patch);
+        return {preferences};
+    }
+
+    async updateDiscoveryPreferences(userId = '', profileAccessToken = '', patch = {}) {
+        this.checkMyState();
+        const user = await this.requireAuthorizedUser(userId, profileAccessToken);
+        const preferences = await this.readingListStore.updateDiscoveryPreferences(user.id, patch);
         return {preferences};
     }
 

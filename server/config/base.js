@@ -42,7 +42,7 @@ module.exports = {
     lowMemoryMode: false,
     fullOptimization: false,
 
-    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'onlineReaderEnabled', 'updateChannel', 'installMode', 'uiDefaults'],
+    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'onlineReaderEnabled', 'updateChannel', 'installMode', 'uiDefaults', 'discovery'],
 
     allowRemoteLib: false,
     remoteLib: false,
@@ -88,6 +88,15 @@ module.exports = {
     emailFrom: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
     emailTo: process.env.EMAIL_TO || '',
     onlineReaderEnabled: true,
+    discovery: {
+        enabled: true,
+        shelfLimit: parseInt(process.env.INPX_DISCOVERY_LIMIT || '8', 10) || 8,
+        externalSource: String(process.env.INPX_DISCOVERY_EXTERNAL_SOURCE || 'none').trim().toLowerCase(),
+        externalName: String(process.env.INPX_DISCOVERY_EXTERNAL_NAME || '').trim(),
+        externalLimit: parseInt(process.env.INPX_DISCOVERY_EXTERNAL_LIMIT || '8', 10) || 8,
+        externalUrl: String(process.env.INPX_DISCOVERY_EXTERNAL_URL || '').trim(),
+        externalTtlMinutes: parseInt(process.env.INPX_DISCOVERY_EXTERNAL_TTL_MINUTES || '1440', 10) || 1440,
+    },
 
     uiDefaults: {
         limit: 20,
