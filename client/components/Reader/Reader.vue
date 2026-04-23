@@ -355,7 +355,11 @@
             class="reader-mobile-footer"
         >
             <div v-if="showCompactStatusBar" class="reader-status-bar">
-                <span>{{ compactStatusBarText }}</span>
+                <template v-if="showCompactPagedBuildIndicator">
+                    <q-icon class="la la-spinner icon-rotate reader-status-bar-spinner" size="14px" />
+                    <span>{{ compactStatusBarBuildText }}</span>
+                </template>
+                <span v-else>{{ compactStatusBarText }}</span>
             </div>
 
             <div v-if="!compactChromeHidden" class="reader-mobile-bar">
@@ -776,6 +780,7 @@ class Reader {
     loading = false;
     loadingMessage = '';
     bookPreparing = false;
+    pagedBuildProgressPercent = 0;
     error = '';
     bookInfo = null;
     title = '';
@@ -1195,6 +1200,8 @@ class Reader {
             loadingFetch: '\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u043a\u043d\u0438\u0433\u0438...',
             loadingParse: '\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0442\u0435\u043a\u0441\u0442\u0430...',
             loadingPages: '\u0420\u0430\u0437\u0431\u0438\u0432\u043a\u0430 \u043d\u0430 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
+            loadingPagesCompact: '\u0421\u0447\u0438\u0442\u0430\u044e \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
+            refreshingPagesCompact: '\u041f\u0435\u0440\u0435\u0441\u0442\u0440\u0430\u0438\u0432\u0430\u044e \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
             contents: '\u0421\u043e\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u0435',
             show: '\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c',
             hide: '\u0421\u043a\u0440\u044b\u0442\u044c',
@@ -1254,8 +1261,33 @@ class Reader {
             : this.readerProgressLabel;
     }
 
+    get compactStatusBarBuildText() {
+        const sourceMessage = String(this.loadingMessage || '').trim();
+        const hasMeasuredProgress = this.pagedBuildProgressPercent > 0;
+        let pagesMessage = '';
+
+        if (sourceMessage && sourceMessage.startsWith(this.uiText.loadingPages.replace('...', '')))
+            pagesMessage = sourceMessage;
+        else if (hasMeasuredProgress)
+            pagesMessage = `${this.uiText.loadingPagesCompact.replace('...', '')} ${this.pagedBuildProgressPercent}%`;
+        else if (this.isCompactChromeLayoutRefresh)
+            pagesMessage = this.uiText.refreshingPagesCompact;
+        else
+            pagesMessage = this.uiText.loadingPagesCompact;
+
+        return `${this.readerProgressLabel} · ${pagesMessage}`;
+    }
+
     get isPagedBuildPending() {
         return !!(this.isPagedMode && (this.bookPreparing || this.pagedBuildInProgress));
+    }
+
+    get showCompactPagedBuildIndicator() {
+        return !!(
+            this.isCompactLayout
+            && this.showCompactStatusBar
+            && (this.isPagedBuildPending || this.isCompactChromeLayoutRefresh)
+        );
     }
 
     get showPagedPageCounter() {
@@ -3223,12 +3255,14 @@ class Reader {
             if (jobId && jobId !== this.pagedBuildJobId)
                 return;
             const percent = Math.min(99, Math.max(1, Math.round((index / totalUnits) * 100)));
+            this.pagedBuildProgressPercent = percent;
             this.loadingMessage = `${this.uiText.loadingPages} ${percent}%`;
             await this.waitForAnimationFrames(1);
         };
 
         this.pagedBuildInProgress = true;
         this.pagedBuildNeedsRefresh = false;
+        this.pagedBuildProgressPercent = 1;
 
         try {
             applyUnits([]);
@@ -3297,6 +3331,7 @@ class Reader {
             this.rebuildSearchResults(false);
         } finally {
             this.pagedBuildInProgress = false;
+            this.pagedBuildProgressPercent = 0;
             if (this.pagedBuildNeedsRefresh) {
                 this.pagedBuildNeedsRefresh = false;
                 this.updateScrollerViewport();
@@ -4883,26 +4918,72 @@ export default vueComponent(Reader);
 
 .reader-mobile-bar {
     display: flex;
-    gap: 8px;
-    padding: 0;
+    gap: 6px;
+    padding: 4px;
     border: 1px solid var(--reader-border);
-    border-radius: 18px;
-    background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
-    box-shadow: 0 16px 34px rgba(0, 0, 0, 0.2);
+    border-radius: 22px;
+    background: color-mix(in srgb, var(--reader-surface) 88%, var(--reader-bg) 12%);
+    box-shadow:
+        0 16px 34px rgba(0, 0, 0, 0.18),
+        inset 0 1px 0 rgba(255, 255, 255, 0.3);
     backdrop-filter: blur(12px);
 }
 
 .reader-mobile-btn {
     flex: 1 1 0;
-    min-height: 38px;
-    border: 1px solid var(--reader-border);
-    border-radius: 14px;
-    background: var(--reader-surface-2);
+    min-height: 64px;
+    padding: 6px 4px 8px;
+    border: 1px solid color-mix(in srgb, var(--reader-border) 78%, var(--reader-surface) 22%);
+    border-radius: 16px;
+    background:
+        linear-gradient(
+            to bottom,
+            color-mix(in srgb, var(--reader-surface) 92%, white 8%) 0%,
+            color-mix(in srgb, var(--reader-surface-2) 92%, var(--reader-surface) 8%) 100%
+        );
+    color: var(--reader-text);
+    box-shadow:
+        0 6px 14px rgba(0, 0, 0, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.34);
+}
+
+.reader-mobile-btn :deep(.q-btn__content) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 100%;
+    line-height: 1.08;
+}
+
+.reader-mobile-btn :deep(.q-icon) {
+    font-size: 19px;
+}
+
+.reader-mobile-btn :deep(.block) {
+    display: block;
+    max-width: 100%;
+    font-size: 10.5px;
+    font-weight: 760;
+    letter-spacing: 0.01em;
+    text-align: center;
+    text-wrap: balance;
+    white-space: normal;
 }
 
 .reader-mobile-btn.is-active {
-    background: var(--reader-accent-soft);
+    border-color: color-mix(in srgb, var(--reader-accent) 36%, var(--reader-border));
+    background:
+        linear-gradient(
+            to bottom,
+            color-mix(in srgb, var(--reader-accent-soft) 82%, var(--reader-surface) 18%) 0%,
+            color-mix(in srgb, var(--reader-accent-soft) 58%, var(--reader-surface-2) 42%) 100%
+        );
     color: var(--reader-accent);
+    box-shadow:
+        0 8px 18px rgba(0, 0, 0, 0.12),
+        inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
 .reader-status-bar {
@@ -4919,6 +5000,11 @@ export default vueComponent(Reader);
     font-weight: 700;
     box-shadow: 0 8px 16px rgba(0, 0, 0, 0.08);
     backdrop-filter: blur(10px);
+}
+
+.reader-status-bar-spinner {
+    flex: 0 0 auto;
+    opacity: 0.9;
 }
 
 .reader-dialog {
@@ -5238,28 +5324,63 @@ export default vueComponent(Reader);
     background:
         linear-gradient(
             to top,
-            color-mix(in srgb, var(--reader-bg) 98%, var(--reader-surface) 2%) 0%,
-            color-mix(in srgb, var(--reader-bg) 92%, transparent) 42%,
+            color-mix(in srgb, var(--reader-bg) 90%, var(--reader-surface-2) 10%) 0%,
+            color-mix(in srgb, var(--reader-bg) 84%, var(--reader-surface) 16%) 28%,
+            color-mix(in srgb, var(--reader-bg) 90%, transparent) 62%,
             transparent 100%
         );
+    gap: 10px;
+    padding-top: 14px;
+    box-shadow:
+        inset 0 1px 0 color-mix(in srgb, var(--reader-text) 12%, transparent),
+        inset 0 12px 24px color-mix(in srgb, var(--reader-bg) 82%, transparent);
 }
 
 .reader-theme-sepia .reader-status-bar,
 .reader-theme-light .reader-status-bar {
-    border-color: color-mix(in srgb, var(--reader-border) 88%, var(--reader-surface-2));
-    background: color-mix(in srgb, var(--reader-surface) 90%, var(--reader-surface-2) 10%);
+    border-color: color-mix(in srgb, var(--reader-border) 70%, var(--reader-text) 30%);
     box-shadow:
-        0 10px 20px rgba(0, 0, 0, 0.08),
-        inset 0 1px 0 rgba(255, 255, 255, 0.45);
+        0 14px 24px rgba(0, 0, 0, 0.16),
+        0 -2px 8px rgba(255, 255, 255, 0.22),
+        inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 .reader-theme-sepia .reader-mobile-bar,
 .reader-theme-light .reader-mobile-bar {
-    border-color: color-mix(in srgb, var(--reader-border) 90%, var(--reader-surface-2));
-    background: color-mix(in srgb, var(--reader-surface) 96%, transparent);
+    border-color: color-mix(in srgb, var(--reader-border) 82%, var(--reader-text) 18%);
     box-shadow:
-        0 14px 28px rgba(0, 0, 0, 0.12),
-        inset 0 1px 0 rgba(255, 255, 255, 0.4);
+        0 16px 30px rgba(0, 0, 0, 0.16),
+        0 -1px 0 rgba(255, 255, 255, 0.24),
+        inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.reader-theme-sepia .reader-mobile-footer {
+    background:
+        linear-gradient(
+            to top,
+            color-mix(in srgb, var(--reader-bg) 84%, var(--reader-surface-2) 16%) 0%,
+            color-mix(in srgb, var(--reader-bg) 76%, var(--reader-surface) 24%) 28%,
+            color-mix(in srgb, var(--reader-bg) 88%, transparent) 62%,
+            transparent 100%
+        );
+}
+
+.reader-theme-sepia .reader-status-bar {
+    color: color-mix(in srgb, var(--reader-text) 88%, var(--reader-muted));
+    background: color-mix(in srgb, var(--reader-surface-2) 82%, var(--reader-text) 18%);
+}
+
+.reader-theme-sepia .reader-mobile-bar {
+    background: color-mix(in srgb, var(--reader-surface) 84%, var(--reader-bg) 16%);
+}
+
+.reader-theme-light .reader-status-bar {
+    color: color-mix(in srgb, var(--reader-text) 84%, var(--reader-muted));
+    background: color-mix(in srgb, var(--reader-surface-2) 84%, var(--reader-text) 16%);
+}
+
+.reader-theme-light .reader-mobile-bar {
+    background: color-mix(in srgb, var(--reader-surface) 86%, var(--reader-bg) 14%);
 }
 
 .reader-theme-eink .reader-page-slide-x-forward-enter-active,
@@ -5420,9 +5541,16 @@ export default vueComponent(Reader);
     }
 
     .reader-mobile-btn {
-        min-height: 36px;
-        font-size: 11px;
-        border-radius: 12px;
+        min-height: 60px;
+        border-radius: 15px;
+    }
+
+    .reader-mobile-btn :deep(.q-icon) {
+        font-size: 18px;
+    }
+
+    .reader-mobile-btn :deep(.block) {
+        font-size: 10px;
     }
 
     .reader-html :deep(p),

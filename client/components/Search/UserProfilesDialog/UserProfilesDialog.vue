@@ -139,47 +139,64 @@
                         </div>
 
                         <div v-else-if="currentProfileTab === 'reading'" class="reading-progress-box">
-                            <div v-if="currentReadingItems.length" class="reading-progress-list">
-                                <div v-for="book in currentReadingItems" :key="book.bookUid" class="reading-progress-item">
-                                    <div class="reading-progress-head">
-                                        <div class="reading-progress-book">
-                                            {{ book.title }}
+                            <div v-if="currentReadingItems.length">
+                                <div class="reading-progress-actions reading-progress-actions--header">
+                                    <q-btn
+                                        flat
+                                        dense
+                                        no-caps
+                                        color="primary"
+                                        :icon="expandedReadingSection ? 'la la-angle-up' : 'la la-angle-down'"
+                                        @click="toggleReadingSectionExpanded"
+                                    >
+                                        {{ expandedReadingSection ? uiText.collapseList : uiText.expandList }}
+                                    </q-btn>
+                                </div>
+                                <div v-if="expandedReadingSection" class="reading-progress-list">
+                                    <div v-for="book in currentReadingItems" :key="book.bookUid" class="reading-progress-item">
+                                        <div class="reading-progress-head">
+                                            <div class="reading-progress-book">
+                                                {{ book.title }}
+                                            </div>
+                                            <div class="reading-progress-percent">
+                                                {{ formatPercent(book.percent) }}%
+                                            </div>
                                         </div>
-                                        <div class="reading-progress-percent">
-                                            {{ formatPercent(book.percent) }}%
+                                        <div class="reading-progress-bar">
+                                            <div class="reading-progress-bar-fill" :style="{width: `${formatPercent(book.percent)}%`}"></div>
+                                        </div>
+                                        <div v-if="book.author" class="reading-progress-meta">
+                                            {{ book.author }}
+                                        </div>
+                                        <div v-if="book.series" class="reading-progress-meta">
+                                            {{ uiText.series }}: {{ book.series }}<span v-if="book.serno"> #{{ book.serno }}</span>
+                                        </div>
+                                        <div class="reading-progress-actions">
+                                            <q-btn
+                                                flat
+                                                dense
+                                                no-caps
+                                                color="primary"
+                                                icon="la la-book-open"
+                                                @click="openReader(book)"
+                                            >
+                                                Читать
+                                            </q-btn>
+                                            <q-btn
+                                                flat
+                                                dense
+                                                no-caps
+                                                color="negative"
+                                                icon="la la-times"
+                                                @click="removeReadingBook(book)"
+                                            >
+                                                Убрать
+                                            </q-btn>
                                         </div>
                                     </div>
-                                    <div v-if="book.author" class="reading-progress-meta">
-                                        {{ book.author }}
-                                    </div>
-                                    <div v-if="book.series" class="reading-progress-meta">
-                                        {{ uiText.series }}: {{ book.series }}<span v-if="book.serno"> #{{ book.serno }}</span>
-                                    </div>
-                                    <div class="reading-progress-bar">
-                                        <div class="reading-progress-bar-fill" :style="{width: `${formatPercent(book.percent)}%`}"></div>
-                                    </div>
-                                    <div class="reading-progress-actions">
-                                        <q-btn
-                                            flat
-                                            dense
-                                            no-caps
-                                            color="primary"
-                                            icon="la la-book-open"
-                                            @click="openReader(book)"
-                                        >
-                                            Читать
-                                        </q-btn>
-                                        <q-btn
-                                            flat
-                                            dense
-                                            no-caps
-                                            color="negative"
-                                            icon="la la-times"
-                                            @click="removeReadingBook(book)"
-                                        >
-                                            Убрать
-                                        </q-btn>
-                                    </div>
+                                </div>
+                                <div v-else class="reading-progress-meta">
+                                    {{ uiText.listCollapsedHint.replace('{count}', currentReadingItems.length) }}
                                 </div>
                             </div>
                             <div v-else class="reading-empty">
@@ -213,27 +230,17 @@
                                     <div class="reading-progress-meta">
                                         {{ list.visibility === 'opds' ? 'OPDS' : uiText.private }}
                                     </div>
-                                    <div v-if="list.previewBooks && list.previewBooks.length" class="profile-list-preview">
-                                        <div
-                                            v-for="book in list.previewBooks"
-                                            :key="`${list.id}-${book.bookUid}`"
-                                            class="profile-list-preview-item"
+                                    <div class="reading-progress-actions reading-progress-actions--list">
+                                        <q-btn
+                                            flat
+                                            dense
+                                            no-caps
+                                            color="primary"
+                                            :icon="isReadingListExpanded(list.id) ? 'la la-angle-up' : 'la la-angle-down'"
+                                            @click="toggleReadingListExpanded(list.id)"
                                         >
-                                            <div class="profile-list-preview-title">
-                                                {{ book.title || uiText.untitledBook }}
-                                            </div>
-                                            <div v-if="book.author" class="profile-list-preview-meta">
-                                                {{ book.author }}
-                                            </div>
-                                        </div>
-                                        <div v-if="list.hiddenBookCount > 0" class="profile-list-preview-more">
-                                            {{ uiText.moreBooks.replace('{count}', String(list.hiddenBookCount)) }}
-                                        </div>
-                                    </div>
-                                    <div v-else class="reading-progress-meta">
-                                        {{ uiText.listIsEmpty }}
-                                    </div>
-                                    <div class="reading-progress-actions">
+                                            {{ isReadingListExpanded(list.id) ? uiText.collapseList : uiText.expandList }}
+                                        </q-btn>
                                         <q-btn
                                             flat
                                             dense
@@ -254,6 +261,43 @@
                                         >
                                             Удалить
                                         </q-btn>
+                                    </div>
+                                    <div
+                                        v-if="isReadingListExpanded(list.id) && list.books && list.books.length"
+                                        class="profile-list-preview"
+                                    >
+                                        <div
+                                            v-for="book in list.books"
+                                            :key="`${list.id}-${book.bookUid}`"
+                                            class="profile-list-preview-item profile-list-preview-item--row"
+                                        >
+                                            <div class="profile-list-preview-main">
+                                                <div class="profile-list-preview-title">
+                                                    {{ book.title || uiText.untitledBook }}
+                                                </div>
+                                                <div v-if="book.author" class="profile-list-preview-meta">
+                                                    {{ book.author }}
+                                                </div>
+                                            </div>
+                                            <q-btn
+                                                flat
+                                                dense
+                                                round
+                                                color="negative"
+                                                icon="la la-times"
+                                                @click="removeBookFromList(list, book)"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div v-else-if="isReadingListExpanded(list.id)" class="reading-progress-meta">
+                                        {{ uiText.listIsEmpty }}
+                                    </div>
+                                    <div v-else class="profile-list-preview-more">
+                                        {{
+                                            (Number(list.bookCount || 0) > 0)
+                                                ? uiText.listCollapsedHint.replace('{count}', String(list.bookCount || 0))
+                                                : uiText.listIsEmpty
+                                        }}
                                     </div>
                                 </div>
                             </div>
@@ -324,6 +368,8 @@ class UserProfilesDialog {
     profiles = [];
     currentProfileTab = 'reading';
     currentReadingLists = [];
+    expandedReadingSection = false;
+    expandedReadingLists = {};
     readingListsDialogVisible = false;
     showCreateProfileForm = false;
     editableProfile = this.makeEmptyEditable();
@@ -397,11 +443,16 @@ class UserProfilesDialog {
             noReadingLists: '\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0441\u043f\u0438\u0441\u043a\u043e\u0432 \u0447\u0442\u0435\u043d\u0438\u044f.',
             listIsEmpty: '\u0412 \u044d\u0442\u043e\u043c \u0441\u043f\u0438\u0441\u043a\u0435 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u043a\u043d\u0438\u0433.',
             moreBooks: '\u0415\u0449\u0451 {count} \u043a\u043d\u0438\u0433',
+            expandList: '\u0420\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c',
+            collapseList: '\u0421\u0432\u0435\u0440\u043d\u0443\u0442\u044c',
+            listCollapsedHint: '\u0421\u043f\u0438\u0441\u043e\u043a \u0441\u0432\u0435\u0440\u043d\u0443\u0442, \u0432\u043d\u0443\u0442\u0440\u0438 {count} \u043a\u043d\u0438\u0433',
             untitledBook: '\u0411\u0435\u0437 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044f',
             errorTitle: '\u041e\u0448\u0438\u0431\u043a\u0430',
             currentReadingTitle: '\u0422\u0435\u043a\u0443\u0449\u0435\u0435 \u0447\u0442\u0435\u043d\u0438\u0435',
             removeReadingConfirm: '\u0423\u0431\u0440\u0430\u0442\u044c \u043a\u043d\u0438\u0433\u0443 \u00ab{title}\u00bb \u0438\u0437 \u0442\u0435\u043a\u0443\u0449\u0435\u0433\u043e \u0447\u0442\u0435\u043d\u0438\u044f?',
             removeReadingSuccess: '\u041a\u043d\u0438\u0433\u0430 \u0443\u0431\u0440\u0430\u043d\u0430 \u0438\u0437 \u0442\u0435\u043a\u0443\u0449\u0435\u0433\u043e \u0447\u0442\u0435\u043d\u0438\u044f',
+            removeBookFromListConfirm: '\u0423\u0431\u0440\u0430\u0442\u044c \u043a\u043d\u0438\u0433\u0443 \u00ab{title}\u00bb \u0438\u0437 \u0441\u043f\u0438\u0441\u043a\u0430 \u00ab{list}\u00bb?',
+            removeBookFromListSuccess: '\u041a\u043d\u0438\u0433\u0430 \u0443\u0431\u0440\u0430\u043d\u0430 \u0438\u0437 \u0441\u043f\u0438\u0441\u043a\u0430',
             renameListPrompt: '\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u043e\u0432\u043e\u0435 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u0441\u043f\u0438\u0441\u043a\u0430:',
             renameListTitle: '\u041f\u0435\u0440\u0435\u0438\u043c\u0435\u043d\u043e\u0432\u0430\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a',
             nameRequired: '\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u043d\u0435 \u0434\u043e\u043b\u0436\u043d\u043e \u0431\u044b\u0442\u044c \u043f\u0443\u0441\u0442\u044b\u043c',
@@ -475,6 +526,7 @@ class UserProfilesDialog {
             currentReadingCount: Number(item.currentReadingCount || 0) || 0,
         }));
         this.currentProfileTab = 'reading';
+        this.expandedReadingSection = false;
         this.syncEditableProfile();
         await this.loadCurrentReadingLists();
     }
@@ -485,17 +537,25 @@ class UserProfilesDialog {
             return;
 
         try {
+            const expandedState = {...this.expandedReadingLists};
             const result = await this.api.getReadingLists('');
             const lists = (result && Array.isArray(result.lists) ? result.lists : []);
             const detailedLists = await Promise.all(lists.map(async(list) => {
                 const normalized = Object.assign({}, list, {
                     previewBooks: [],
                     hiddenBookCount: 0,
+                    books: [],
                 });
 
                 try {
                     const detail = await this.api.getReadingList(list.id);
                     const books = (detail && Array.isArray(detail.books) ? detail.books : []);
+                    normalized.books = books.map((book) => ({
+                        bookUid: String(book.bookUid || book._uid || '').trim(),
+                        title: String(book.title || '').trim(),
+                        author: String(book.author || '').trim(),
+                        read: !!book.read,
+                    }));
                     normalized.previewBooks = books.slice(0, 4).map((book) => ({
                         bookUid: String(book.bookUid || book._uid || '').trim(),
                         title: String(book.title || '').trim(),
@@ -510,13 +570,35 @@ class UserProfilesDialog {
                 return normalized;
             }));
             this.currentReadingLists = detailedLists;
+            this.expandedReadingLists = detailedLists.reduce((acc, list) => {
+                const key = String(list.id);
+                acc[key] = !!expandedState[key];
+                return acc;
+            }, {});
         } catch (e) {
             this.currentReadingLists = [];
+            this.expandedReadingLists = {};
         }
+    }
+
+    isReadingListExpanded(listId) {
+        return !!this.expandedReadingLists[String(listId)];
+    }
+
+    toggleReadingListExpanded(listId) {
+        const key = String(listId);
+        this.expandedReadingLists = {
+            ...this.expandedReadingLists,
+            [key]: !this.expandedReadingLists[key],
+        };
     }
 
     formatPercent(value) {
         return Math.max(0, Math.min(100, Math.round((Number(value || 0) || 0) * 100)));
+    }
+
+    toggleReadingSectionExpanded() {
+        this.expandedReadingSection = !this.expandedReadingSection;
     }
 
     openReader(book = {}) {
@@ -578,6 +660,34 @@ class UserProfilesDialog {
             await this.api.deleteReadingList(item.id);
             await this.loadCurrentReadingLists();
             this.$root.notify.success(this.uiText.deleteListSuccess);
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
+        }
+    }
+
+    async removeBookFromList(list = {}, book = {}) {
+        const listId = String(list.id || '').trim();
+        const bookUid = String(book.bookUid || '').trim();
+        if (!listId || !bookUid)
+            return;
+
+        const confirmed = await this.$root.stdDialog.confirm(
+            this.uiText.removeBookFromListConfirm
+                .replace('{title}', String(book.title || this.uiText.untitledBook))
+                .replace('{list}', String(list.name || '')),
+            this.uiText.lists,
+        );
+        if (!confirmed)
+            return;
+
+        try {
+            await this.api.updateReadingListBook(listId, bookUid, false);
+            await this.loadCurrentReadingLists();
+            this.expandedReadingLists = {
+                ...this.expandedReadingLists,
+                [listId]: true,
+            };
+            this.$root.notify.success(this.uiText.removeBookFromListSuccess);
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
         }
@@ -951,6 +1061,12 @@ export default vueComponent(UserProfilesDialog);
     display: flex;
     justify-content: flex-end;
     margin-top: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.reading-progress-actions--list {
+    justify-content: flex-start;
 }
 
 .profile-list-preview {
@@ -965,6 +1081,18 @@ export default vueComponent(UserProfilesDialog);
     border: 1px solid var(--app-border);
     border-radius: 10px;
     background: rgba(15, 159, 143, 0.04);
+}
+
+.profile-list-preview-item--row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.profile-list-preview-main {
+    min-width: 0;
+    flex: 1 1 auto;
 }
 
 .profile-list-preview-title {

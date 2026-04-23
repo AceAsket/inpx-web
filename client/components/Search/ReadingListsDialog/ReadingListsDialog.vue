@@ -96,6 +96,15 @@
                     </div>
 
                     <div class="list-actions">
+                        <q-btn
+                            flat
+                            dense
+                            no-caps
+                            :icon="isListExpanded(item.id) ? 'la la-angle-up' : 'la la-angle-down'"
+                            @click="toggleListExpanded(item)"
+                        >
+                            {{ isListExpanded(item.id) ? collapseListLabel : booksLabel }}
+                        </q-btn>
                         <q-select
                             v-model="item.visibility"
                             dense
@@ -115,6 +124,35 @@
                         />
                         <q-btn flat dense round icon="la la-pen" @click="renameList(item)" />
                         <q-btn flat dense round icon="la la-trash" color="negative" @click="deleteList(item)" />
+                    </div>
+
+                    <div v-if="isListExpanded(item.id)" class="list-books">
+                        <div v-if="item.booksLoading" class="list-books-state text-grey-7">
+                            {{ loadingBooksLabel }}
+                        </div>
+                        <div v-else-if="item.books && item.books.length" class="list-books-items">
+                            <div v-for="bookItem in item.books" :key="`${item.id}-${bookItem.bookUid}`" class="list-book-row">
+                                <div class="list-book-main">
+                                    <div class="list-book-title">
+                                        {{ bookItem.title || untitledBookLabel }}
+                                    </div>
+                                    <div v-if="bookItem.author" class="list-book-meta">
+                                        {{ bookItem.author }}
+                                    </div>
+                                </div>
+                                <q-btn
+                                    flat
+                                    dense
+                                    round
+                                    color="negative"
+                                    icon="la la-times"
+                                    @click="removeBookFromList(item, bookItem)"
+                                />
+                            </div>
+                        </div>
+                        <div v-else class="list-books-state text-grey-7">
+                            {{ listEmptyLabel }}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -165,6 +203,7 @@ class ReadingListsDialog {
     lists = [];
     newListName = '';
     newListVisibility = 'private';
+    expandedLists = {};
 
     created() {
         this.api = this.$root.api;
@@ -199,6 +238,30 @@ class ReadingListsDialog {
         ];
     }
 
+    get errorTitle() {
+        return '\u041e\u0448\u0438\u0431\u043a\u0430';
+    }
+
+    get booksLabel() {
+        return '\u041a\u043d\u0438\u0433\u0438';
+    }
+
+    get collapseListLabel() {
+        return '\u0421\u0432\u0435\u0440\u043d\u0443\u0442\u044c';
+    }
+
+    get loadingBooksLabel() {
+        return '\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u043a\u043d\u0438\u0433\u0438...';
+    }
+
+    get listEmptyLabel() {
+        return '\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u0443\u0441\u0442';
+    }
+
+    get untitledBookLabel() {
+        return '\u0411\u0435\u0437 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044f';
+    }
+
     visibilityLabel(value) {
         return (value === 'opds' ? 'OPDS' : 'Личный');
     }
@@ -213,7 +276,22 @@ class ReadingListsDialog {
         this.loading = true;
         try {
             const response = await this.api.getReadingLists(this.book ? this.book._uid : '');
-            this.lists = response.lists || [];
+            const previousLists = new Map((this.lists || []).map((item) => [String(item.id), item]));
+            const nextLists = (response.lists || []).map((item) => {
+                const key = String(item.id);
+                const previous = previousLists.get(key) || {};
+                return Object.assign({}, item, {
+                    books: Array.isArray(previous.books) ? previous.books : [],
+                    booksLoaded: !!previous.booksLoaded,
+                    booksLoading: false,
+                });
+            });
+            this.lists = nextLists;
+            this.expandedLists = nextLists.reduce((acc, item) => {
+                const key = String(item.id);
+                acc[key] = !!this.expandedLists[key];
+                return acc;
+            }, {});
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         } finally {
@@ -317,6 +395,76 @@ class ReadingListsDialog {
             await this.loadLists();
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
+    }
+
+    isListExpanded(listId) {
+        return !!this.expandedLists[String(listId)];
+    }
+
+    async toggleListExpanded(item) {
+        const key = String((item && item.id) || '').trim();
+        if (!key)
+            return;
+
+        const nextValue = !this.expandedLists[key];
+        this.expandedLists = {
+            ...this.expandedLists,
+            [key]: nextValue,
+        };
+
+        if (nextValue && !item.booksLoaded)
+            await this.loadListBooks(item);
+    }
+
+    async loadListBooks(item) {
+        if (!item || !item.id)
+            return;
+
+        item.booksLoading = true;
+        try {
+            const response = await this.api.getReadingList(item.id);
+            const books = (response && Array.isArray(response.books) ? response.books : []);
+            item.books = books.map((book) => ({
+                bookUid: String(book.bookUid || book._uid || '').trim(),
+                title: String(book.title || '').trim(),
+                author: String(book.author || '').trim(),
+                read: !!book.read,
+            }));
+            item.booksLoaded = true;
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.errorTitle);
+        } finally {
+            item.booksLoading = false;
+        }
+    }
+
+    async removeBookFromList(list, bookItem) {
+        const listId = String((list && list.id) || '').trim();
+        const bookUid = String((bookItem && bookItem.bookUid) || '').trim();
+        if (!listId || !bookUid)
+            return;
+
+        const confirmed = await this.$root.stdDialog.confirm(
+            `Убрать книгу «${bookItem.title || this.untitledBookLabel}» из списка «${list.name || ''}»?`,
+            'Удаление книги из списка',
+        );
+        if (!confirmed)
+            return;
+
+        try {
+            await this.api.updateReadingListBook(listId, bookUid, false);
+            if (bookItem.read)
+                list.readCount = Math.max(0, (Number(list.readCount || 0) || 0) - 1);
+            list.books = (list.books || []).filter((item) => String(item.bookUid || '').trim() !== bookUid);
+            list.bookCount = Math.max(0, (Number(list.bookCount || 0) || 0) - 1);
+
+            if (this.book && String(this.book._uid || '').trim() === bookUid) {
+                list.containsBook = false;
+                list.readBook = false;
+            }
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.errorTitle);
         }
     }
 
@@ -471,6 +619,7 @@ export default vueComponent(ReadingListsDialog);
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 10px;
     padding: 10px 12px;
     border: 1px solid var(--app-border);
@@ -516,6 +665,51 @@ export default vueComponent(ReadingListsDialog);
     gap: 6px;
     flex-shrink: 0;
     flex-wrap: wrap;
+}
+
+.list-books {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+.list-books-items {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.list-books-state {
+    padding: 6px 2px 2px;
+    font-size: 13px;
+}
+
+.list-book-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--app-surface) 86%, var(--app-link) 14%);
+}
+
+.list-book-main {
+    min-width: 0;
+}
+
+.list-book-title {
+    font-weight: 600;
+    color: var(--app-text);
+    word-break: break-word;
+}
+
+.list-book-meta {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--app-muted);
 }
 
 @media (max-width: 700px) {
