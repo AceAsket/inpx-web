@@ -104,6 +104,8 @@ class WebSocketController {
                     await this.getDiscoveryShelves(req, ws); break;
                 case 'update-discovery-preferences':
                     await this.updateDiscoveryPreferences(req, ws); break;
+                case 'update-shared-discovery-config':
+                    await this.updateSharedDiscoveryConfig(req, ws); break;
                 case 'get-book-link':
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
@@ -200,6 +202,11 @@ class WebSocketController {
 
     async getConfig(req, ws) {
         const config = _.pick(this.config, this.config.webConfigParams);
+        config.discovery = Object.assign(
+            {},
+            config.discovery || {},
+            await this.webWorker.getSharedDiscoveryConfig(),
+        );
         config.dbConfig = await this.webWorker.dbConfig();
         config.freeAccess = this.webAccess.freeAccess;
         const profiles = await this.webWorker.getUserProfiles(req.userId);
@@ -299,6 +306,16 @@ class WebSocketController {
             req.userId,
             req.profileAccessToken,
             req.preferences || {},
+        );
+
+        this.send(result, req, ws);
+    }
+
+    async updateSharedDiscoveryConfig(req, ws) {
+        const result = await this.webWorker.updateSharedDiscoveryConfig(
+            req.userId,
+            req.profileAccessToken,
+            req.discovery || {},
         );
 
         this.send(result, req, ws);

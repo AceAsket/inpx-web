@@ -33,8 +33,8 @@ const ssDbCreating = 'db_creating';
 
 const stateToText = {
     [ssNormal]: '',
-    [ssDbLoading]: 'Р—Р°РіСЂСѓР·РєР° РїРѕРёСЃРєРѕРІРѕР№ Р±Р°Р·С‹',
-    [ssDbCreating]: 'РЎРѕР·РґР°РЅРёРµ РїРѕРёСЃРєРѕРІРѕР№ Р±Р°Р·С‹',
+    [ssDbLoading]: 'Загрузка поисковой базы',
+    [ssDbCreating]: 'Создание поисковой базы',
 };
 
 const cleanDirInterval = 60*60*1000;//РєР°Р¶РґС‹Р№ С‡Р°СЃ
@@ -328,6 +328,7 @@ class WebWorker {
             this.inpxFileHash = '';
             this.authorInfoCache = new Map();
             this.discoveryCache = new Map();
+            this.sharedDiscoveryConfig = null;
             this.authorInfoArchives = null;
             this.authorPictureArchives = null;
             this.authorToArchive = null;
@@ -684,7 +685,7 @@ class WebWorker {
             externalUrl: '',
             externalName: '',
             externalTtlMinutes: 1440,
-        }, this.config.discovery || {}, options || {});
+        }, this.config.discovery || {}, this.sharedDiscoveryConfig || {}, options || {});
 
         discovery.enabled = (discovery.enabled !== false);
         discovery.shelfLimit = Math.max(1, Math.min(parseInt(discovery.shelfLimit, 10) || 8, 24));
@@ -699,7 +700,13 @@ class WebWorker {
         return discovery;
     }
 
+    async getSharedDiscoveryConfig() {
+        this.sharedDiscoveryConfig = await this.readingListStore.getSharedDiscoveryConfig();
+        return _.cloneDeep(this.sharedDiscoveryConfig);
+    }
+
     async getDiscoveryConfigForRequest(options = {}) {
+        await this.getSharedDiscoveryConfig();
         const requestOptions = Object.assign({}, options || {});
         const hasExternalOverrides = (
             Object.prototype.hasOwnProperty.call(requestOptions, 'externalSource')
@@ -742,28 +749,28 @@ class WebWorker {
 
         const diffDays = Math.max(0, Math.floor((Date.now() - time) / 86400000));
         if (diffDays <= 0)
-            return 'Р”РѕР±Р°РІР»РµРЅР° СЃРµРіРѕРґРЅСЏ';
+            return 'Добавлена сегодня';
         if (diffDays === 1)
-            return 'Р”РѕР±Р°РІР»РµРЅР° 1 РґРµРЅСЊ РЅР°Р·Р°Рґ';
+            return 'Добавлена 1 день назад';
         if (diffDays < 5)
-            return `Р”РѕР±Р°РІР»РµРЅР° ${diffDays} РґРЅСЏ РЅР°Р·Р°Рґ`;
-        return `Р”РѕР±Р°РІР»РµРЅР° ${diffDays} РґРЅРµР№ РЅР°Р·Р°Рґ`;
+            return `Добавлена ${diffDays} дня назад`;
+        return `Добавлена ${diffDays} дней назад`;
     }
 
     getDiscoveryMatchLabel(kind = '') {
         switch (String(kind || '').trim()) {
             case 'exact':
-                return '?????? ??????????';
+                return 'Точное совпадение';
             case 'title-author':
-                return '?????????? ?? ???????? ? ??????';
+                return 'Совпадение по названию и автору';
             case 'title':
-                return '?????????? ?? ????????';
+                return 'Совпадение по названию';
             case 'title-partial':
-                return '??????? ?????????? ?? ????????';
+                return 'Частичное совпадение по названию';
             case 'missing-local':
-                return '??? ? ????????? ??????????';
+                return 'Нет в локальной библиотеке';
             default:
-                return '?????????? ? ??????? ????????';
+                return 'Совпадение с внешней витриной';
         }
     }
 
@@ -780,25 +787,25 @@ class WebWorker {
         } else if (mode === 'popular') {
             if (popularityInfo) {
                 if (popularityInfo.progressCount > 0)
-                    reasons.push(`? ??????: ${popularityInfo.progressCount}`);
+                    reasons.push(`В чтении: ${popularityInfo.progressCount}`);
                 if (popularityInfo.listCount > 0)
-                    reasons.push(`? ???????: ${popularityInfo.listCount}`);
+                    reasons.push(`В списках: ${popularityInfo.listCount}`);
                 if (popularityInfo.finishedCount > 0)
-                    reasons.push(`?????????: ${popularityInfo.finishedCount}`);
+                    reasons.push(`Прочитано: ${popularityInfo.finishedCount}`);
             }
             if (book.librate)
-                reasons.push(`?????? ?????????? ${book.librate}/5`);
+                reasons.push(`Оценка библиотеки ${book.librate}/5`);
         }
 
         if (options.discoverySource) {
             const matchLabel = this.getDiscoveryMatchLabel(options.matchKind);
             if (options.matchKind === 'missing-local')
-                reasons.unshift(`${options.discoverySource} ? ${matchLabel}`);
+                reasons.unshift(`${options.discoverySource} · ${matchLabel}`);
             else
-                reasons.unshift(`??????? ? ${options.discoverySource} ? ${matchLabel}`);
+                reasons.unshift(`Источник ${options.discoverySource} · ${matchLabel}`);
         }
 
-        result.discoveryReason = reasons.join(' ? ');
+        result.discoveryReason = reasons.join(' · ');
         return result;
     }
     async getDiscoveryDiskCache() {
@@ -1068,14 +1075,14 @@ class WebWorker {
         const shelfConfig = {
             newest: {
                 id: `newest-${options.daysWindow || 0}d`,
-                title: 'РќРѕРІРёРЅРєРё Р±РёР±Р»РёРѕС‚РµРєРё',
-                subtitle: 'РџРѕСЃР»РµРґРЅРёРµ РїРѕСЃС‚СѓРїР»РµРЅРёСЏ РІ РёРЅРґРµРєСЃ',
+                title: 'Новинки библиотеки',
+                subtitle: 'Последние поступления в индекс',
                 mode: 'newest',
             },
             popular: {
                 id: 'popular',
-                title: 'РџРѕРїСѓР»СЏСЂРЅРѕРµ РІ Р±РёР±Р»РёРѕС‚РµРєРµ',
-                subtitle: 'РџРёР»РѕС‚ РїРѕ Р»РѕРєР°Р»СЊРЅРѕР№ РѕС†РµРЅРєРµ Р±РёР±Р»РёРѕС‚РµРєРё',
+                title: 'Популярное в библиотеке',
+                subtitle: 'Пилот по локальной оценке библиотеки',
                 mode: 'popular',
             },
         }[kind];
@@ -1520,21 +1527,21 @@ class WebWorker {
             return null;
 
         if (discovery.externalSource !== 'web-page')
-            throw new Error(`РќРµРёР·РІРµСЃС‚РЅС‹Р№ РёСЃС‚РѕС‡РЅРёРє РІРёС‚СЂРёРЅС‹: ${discovery.externalSource}`);
+            throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
 
         const feed = await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
         const items = await this.matchExternalItemsToLocalBooks(feed.items || [], limit);
-        const sourceName = (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє');
+        const sourceName = (discovery.externalName || 'Внешний источник');
 
         return {
             id: 'external-source',
             title: sourceName,
-            subtitle: `РЎРѕРІРїР°РґРµРЅРёР№ ${items.length} РёР· ${feed.items.length}`,
+            subtitle: `Совпадений ${items.length} из ${feed.items.length}`,
             source: 'external',
             sourceName,
             sourceUrl: feed.sourceUrl,
             items,
-            emptyMessage: 'РЎРѕРІРїР°РґРµРЅРёР№ СЃ Р»РѕРєР°Р»СЊРЅРѕР№ Р±РёР±Р»РёРѕС‚РµРєРѕР№ РїРѕРєР° РЅРµ РЅР°С€Р»РѕСЃСЊ.',
+            emptyMessage: 'Совпадений с локальной библиотекой пока не нашлось.',
         };
     }
 
@@ -1578,10 +1585,10 @@ class WebWorker {
             } catch (e) {
                 shelves.push({
                     id: 'external-error',
-                    title: (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє'),
-                    subtitle: 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ',
+                    title: (discovery.externalName || 'Внешний источник'),
+                    subtitle: 'Внешний источник временно недоступен',
                     source: 'external',
-                    sourceName: (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє'),
+                    sourceName: (discovery.externalName || 'Внешний источник'),
                     sourceUrl: (discovery.externalUrl || ''),
                     items: [],
                     emptyMessage: e.message,
@@ -1597,15 +1604,15 @@ class WebWorker {
         if (kind === 'newest') {
             shelfConfig = {
                 id: `newest-${options.daysWindow || 0}d`,
-                title: `РќРѕРІРёРЅРєРё Р·Р° ${options.daysWindow || 0} РґРЅРµР№`,
-                subtitle: `РљРЅРёРіРё, РґРѕР±Р°РІР»РµРЅРЅС‹Рµ Р·Р° РїРѕСЃР»РµРґРЅРёРµ ${options.daysWindow || 0} РґРЅРµР№`,
+                title: `Новинки за ${options.daysWindow || 0} дней`,
+                subtitle: `Книги, добавленные за последние ${options.daysWindow || 0} дней`,
                 mode: 'newest',
             };
         } else if (kind === 'popular') {
             shelfConfig = {
                 id: 'popular',
-                title: 'РџРѕРїСѓР»СЏСЂРЅРѕРµ РІ Р±РёР±Р»РёРѕС‚РµРєРµ',
-                subtitle: 'Р›РѕРєР°Р»СЊРЅС‹Р№ СЂРµР№С‚РёРЅРі РїРѕ С‡С‚РµРЅРёСЋ, СЃРїРёСЃРєР°Рј Рё РѕС†РµРЅРєР°Рј',
+                title: 'Популярное в библиотеке',
+                subtitle: 'Локальный рейтинг по чтению, спискам и оценкам',
                 mode: 'popular',
             };
         }
@@ -1626,7 +1633,7 @@ class WebWorker {
             title: shelfConfig.title,
             subtitle: shelfConfig.subtitle,
             source: 'local',
-            sourceName: 'Р›РѕРєР°Р»СЊРЅР°СЏ Р±РёР±Р»РёРѕС‚РµРєР°',
+            sourceName: 'Локальная библиотека',
             updatedAt: Date.now(),
             items,
         };
@@ -1781,7 +1788,7 @@ class WebWorker {
         try {
             return await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
         } catch (e) {
-            throw new Error(`?? ??????? ???????? ???????? "${discovery.externalName || '??????? ????????'}"`);
+            throw new Error(`Не удалось обновить внешний источник "${discovery.externalName || 'Внешний источник'}"`);
         }
     }
 
@@ -1791,28 +1798,28 @@ class WebWorker {
             return null;
 
         if (discovery.externalSource !== 'web-page')
-            throw new Error(`??????????? ???????? ???????: ${discovery.externalSource}`);
+            throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
 
         const feed = await this.fetchExternalDiscoveryItemsV2(discovery);
         const matched = await this.matchExternalItemsToLocalBooksV2(feed.items || [], limit);
         const items = matched.items
             .map((book) => this.decorateDiscoveryBook(book, {
-                discoverySource: (discovery.externalName || '??????? ????????'),
+                discoverySource: (discovery.externalName || 'Внешний источник'),
                 matchKind: book.discoveryMatchType,
             }));
-        const sourceName = (discovery.externalName || '??????? ????????');
+        const sourceName = (discovery.externalName || 'Внешний источник');
 
         return {
             id: 'external-source',
             title: sourceName,
-            subtitle: `? ?????????? ${matched.matchedCount} ? ??? ?????????? ${matched.missingCount}` ,
+            subtitle: `В библиотеке ${matched.matchedCount} · вне библиотеки ${matched.missingCount}`,
             source: 'external',
             sourceName,
             sourceUrl: feed.sourceUrl,
             updatedAt: Date.now(),
             discoveryStale: false,
             items,
-            emptyMessage: '?? ??????? ????????? ???? ?????? ?? ???????.',
+            emptyMessage: 'Во внешнем источнике пока ничего не найдено.',
         };
     }
     async getDiscoveryShelvesV2(options = {}) {
@@ -1874,10 +1881,10 @@ class WebWorker {
             } catch (e) {
                 shelves.push({
                     id: 'external-error',
-                    title: (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє'),
-                    subtitle: 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ',
+                    title: (discovery.externalName || 'Внешний источник'),
+                    subtitle: 'Внешний источник временно недоступен',
                     source: 'external',
-                    sourceName: (discovery.externalName || 'Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє'),
+                    sourceName: (discovery.externalName || 'Внешний источник'),
                     sourceUrl: (discovery.externalUrl || ''),
                     items: [],
                     emptyMessage: e.message,
@@ -2571,7 +2578,7 @@ class WebWorker {
     async requireAdmin(userId = '', profileAccessToken = '') {
         const user = await this.requireAuthorizedUser(userId, profileAccessToken);
         if (!user.isAdmin)
-            throw new Error('РўРѕР»СЊРєРѕ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ РјРѕР¶РµС‚ СѓРїСЂР°РІР»СЏС‚СЊ РїСЂРѕС„РёР»СЏРјРё');
+            throw new Error('Только администратор может управлять профилями');
         return user;
     }
 
@@ -2605,11 +2612,11 @@ class WebWorker {
 
         const user = await this.readingListStore.findUserByLogin(login);
         if (!user || !user.passwordHash)
-            throw new Error('РќРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ РёР»Рё РїР°СЂРѕР»СЊ');
+            throw new Error('Неверный логин или пароль');
 
         const passwordHash = this.hashProfilePassword(user.login, password);
         if (passwordHash !== user.passwordHash)
-            throw new Error('РќРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ РёР»Рё РїР°СЂРѕР»СЊ');
+            throw new Error('Неверный логин или пароль');
 
         return {
             userId: user.id,
@@ -2653,6 +2660,14 @@ class WebWorker {
         const user = await this.requireAuthorizedUser(userId, profileAccessToken);
         const preferences = await this.readingListStore.updateDiscoveryPreferences(user.id, patch);
         return {preferences};
+    }
+
+    async updateSharedDiscoveryConfig(userId = '', profileAccessToken = '', patch = {}) {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
+        const discovery = await this.readingListStore.updateSharedDiscoveryConfig(patch || {});
+        this.sharedDiscoveryConfig = _.cloneDeep(discovery);
+        return {discovery};
     }
 
     async updateReaderProgress(userId = '', bookUid = '', patch = {}) {

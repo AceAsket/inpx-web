@@ -36,7 +36,11 @@
             </div>
 
             <div class="book-content">
-                <div v-if="(mode == 'series' || mode == 'title' || mode == 'extended') && bookAuthor" class="book-author clickable2" @click.stop.prevent="emit('authorClick')">
+                <div
+                    v-if="(mode == 'series' || mode == 'title' || mode == 'extended') && bookAuthor"
+                    class="book-author clickable2"
+                    @click.stop.prevent="handleAuthorActivate"
+                >
                     {{ bookAuthor }}
                 </div>
 
@@ -94,9 +98,10 @@
                     </span>
                 </div>
 
-                <div class="book-actions">
+                <div class="book-actions" :class="{'book-actions--external-only': isExternalOnlyDiscoveryBook && !isCompactDiscoveryMode}">
                     <q-btn
                         class="primary-action"
+                        :class="{'primary-action--external-only': isExternalOnlyDiscoveryBook && !isCompactDiscoveryMode}"
                         color="primary"
                         unelevated
                         no-caps
@@ -650,6 +655,15 @@ class BookView {
         this.emit('bookInfo');
     }
 
+    handleAuthorActivate() {
+        if (this.isExternalOnlyDiscoveryBook) {
+            this.openExternalSource();
+            return;
+        }
+
+        this.emit('authorClick');
+    }
+
     openExternalSource() {
         if (this.book && this.book.discoveryUrl)
             window.open(this.book.discoveryUrl, '_blank');
@@ -1092,6 +1106,11 @@ export default vueComponent(BookView);
     min-height: 84px;
 }
 
+.book-actions--external-only {
+    grid-template-columns: minmax(0, max-content);
+    min-height: auto;
+}
+
 .book-actions > * {
     min-width: 0;
     align-self: stretch;
@@ -1213,6 +1232,22 @@ export default vueComponent(BookView);
 
 .primary-action {
     border-radius: 12px;
+}
+
+.primary-action--external-only {
+    justify-self: start;
+}
+
+.primary-action--external-only:deep(.q-btn) {
+    width: auto;
+    min-width: 0;
+    padding-left: 12px;
+    padding-right: 12px;
+}
+
+.primary-action--external-only:deep(.q-btn__content) {
+    justify-content: center;
+    width: auto;
 }
 
 .copy-action {

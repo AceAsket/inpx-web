@@ -46,24 +46,6 @@
                 />
             </div>
 
-            <div v-if="externalDiscoveryEnabled" class="q-mt-sm">
-                <div class="dialog-label q-mb-xs">Готовые варианты</div>
-                <div class="preset-list">
-                    <q-btn
-                        v-for="preset in externalSourcePresets"
-                        :key="preset.name"
-                        class="preset-btn"
-                        color="primary"
-                        flat
-                        dense
-                        no-caps
-                        @click="applyPreset(preset)"
-                    >
-                        {{ preset.name }}
-                    </q-btn>
-                </div>
-            </div>
-
             <div v-if="externalDiscoveryEnabled" class="row items-center q-mt-sm">
                 <div class="q-mr-sm dialog-label">Лимит</div>
                 <q-select
@@ -209,6 +191,7 @@ class DiscoverySourceDialog {
 
     created() {
         this.commit = this.$store.commit;
+        this.api = this.$root.api;
         this.loadSettings();
     }
 
@@ -228,41 +211,6 @@ class DiscoverySourceDialog {
         return [
             {label: 'Нет', value: 'none'},
             {label: 'Веб-витрина', value: 'web-page'},
-        ];
-    }
-
-    get externalSourcePresets() {
-        return [
-            {
-                name: 'Литрес · Новинки',
-                source: 'web-page',
-                externalName: 'Литрес · Новинки',
-                externalUrl: 'https://www.litres.ru/showroom/new/',
-            },
-            {
-                name: 'Литрес · Популярное',
-                source: 'web-page',
-                externalName: 'Литрес · Популярное',
-                externalUrl: 'https://www.litres.ru/popular/',
-            },
-            {
-                name: 'МИФ · Новинки',
-                source: 'web-page',
-                externalName: 'МИФ · Новинки',
-                externalUrl: 'https://www.mann-ivanov-ferber.ru/catalog/new/',
-            },
-            {
-                name: 'МИФ · Бестселлеры',
-                source: 'web-page',
-                externalName: 'МИФ · Бестселлеры',
-                externalUrl: 'https://www.mann-ivanov-ferber.ru/books/bestsellers/',
-            },
-            {
-                name: 'Альпина · Бестселлеры',
-                source: 'web-page',
-                externalName: 'Альпина · Бестселлеры',
-                externalUrl: 'https://alpinabook.ru/catalog/filter/best_seller-is-bestseller-books-only/apply/',
-            },
         ];
     }
 
@@ -288,14 +236,21 @@ class DiscoverySourceDialog {
         this.discoveryExternalSource = 'none';
     }
 
-    applyPreset(preset = {}) {
-        this.discoveryExternalSource = String(preset.source || 'web-page').trim().toLowerCase() || 'web-page';
-        this.discoveryExternalName = String(preset.externalName || preset.name || '').trim();
-        this.discoveryExternalUrl = String(preset.externalUrl || '').trim();
-    }
-
-    okClick() {
-        this.dialogVisible = false;
+    async okClick() {
+        try {
+            await this.api.updateSharedDiscoveryConfig({
+                externalSource: this.discoveryExternalSource,
+                externalName: this.discoveryExternalName,
+                externalUrl: this.discoveryExternalUrl,
+                externalLimit: this.discoveryExternalLimit,
+                externalTtlMinutes: this.discoveryExternalTtlMinutes,
+            });
+            await this.api.updateConfig();
+            this.loadSettings();
+            this.dialogVisible = false;
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
     }
 }
 
@@ -308,14 +263,4 @@ export default vueComponent(DiscoverySourceDialog);
     min-width: 128px;
 }
 
-.preset-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.preset-btn {
-    border-radius: 999px;
-    background: rgba(25, 118, 210, 0.08);
-}
 </style>

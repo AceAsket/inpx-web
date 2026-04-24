@@ -27,9 +27,10 @@
 
         <div class="discovery-toolbar">
             <q-btn
-                flat
+                unelevated
                 no-caps
                 class="discovery-toolbar-btn"
+                :class="{'discovery-toolbar-btn--active': compactMode}"
                 :icon="compactMode ? 'la la-compress-arrows-alt' : 'la la-expand-arrows-alt'"
                 @click.stop.prevent="$emit('toggle-compact')"
             >
@@ -38,9 +39,10 @@
 
             <q-btn
                 v-if="personalMode"
-                flat
+                unelevated
                 no-caps
                 class="discovery-toolbar-btn"
+                :class="{'discovery-toolbar-btn--active': unreadOnly}"
                 :icon="unreadOnly ? 'la la-filter' : 'la la-book-open'"
                 @click.stop.prevent="$emit('toggle-unread-only')"
             >
@@ -80,8 +82,8 @@
                 <div class="discovery-head-actions">
                     <q-btn
                         v-if="shelf.canHide"
-                        class="discovery-source-btn"
-                        flat
+                        class="discovery-source-btn discovery-source-btn--hide"
+                        unelevated
                         no-caps
                         icon="la la-eye-slash"
                         @click.stop.prevent="$emit('hide-shelf', shelf.id)"
@@ -92,7 +94,7 @@
                     <q-btn
                         v-if="shelf.sourceUrl"
                         class="discovery-source-btn"
-                        flat
+                        unelevated
                         no-caps
                         icon="la la-external-link-alt"
                         @click.stop.prevent="openSource(shelf)"
@@ -242,10 +244,28 @@ export default vueComponent(DiscoveryShelves);
 }
 
 .discovery-toolbar-btn {
-    color: var(--app-muted);
-    border: 1px solid var(--app-border);
+    color: var(--app-text);
+    border: 1px solid color-mix(in srgb, var(--app-border) 78%, transparent);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.58);
+    background: color-mix(in srgb, var(--app-surface) 88%, var(--app-surface-2) 12%);
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--app-surface-3) 30%, white 70%) inset;
+    font-weight: 600;
+}
+
+.discovery-toolbar-btn:hover {
+    background: color-mix(in srgb, var(--app-surface) 72%, var(--app-surface-2) 28%);
+    border-color: color-mix(in srgb, var(--app-border) 92%, var(--app-primary) 8%);
+}
+
+.discovery-toolbar-btn--active {
+    color: color-mix(in srgb, var(--app-text) 82%, var(--app-primary) 18%);
+    border-color: color-mix(in srgb, var(--app-border) 58%, var(--app-primary) 42%);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--app-surface-2) 84%, var(--app-primary) 16%) 0%,
+        color-mix(in srgb, var(--app-surface) 82%, var(--app-primary) 18%) 100%
+    );
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--app-primary) 22%, transparent) inset;
 }
 
 .discovery-error {
@@ -327,10 +347,35 @@ export default vueComponent(DiscoveryShelves);
 
 .discovery-source-btn {
     flex-shrink: 0;
-    color: var(--app-muted);
-    border: 1px solid var(--app-border);
+    color: var(--app-text);
+    border: 1px solid color-mix(in srgb, var(--app-border) 78%, transparent);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.58);
+    background: color-mix(in srgb, var(--app-surface) 88%, var(--app-surface-2) 12%);
+    font-weight: 600;
+}
+
+.discovery-source-btn:hover {
+    border-color: color-mix(in srgb, var(--app-border) 92%, var(--app-primary) 8%);
+    background: color-mix(in srgb, var(--app-surface) 72%, var(--app-surface-2) 28%);
+}
+
+.discovery-source-btn--hide {
+    color: color-mix(in srgb, var(--app-text) 74%, var(--app-danger) 26%);
+    border-color: color-mix(in srgb, var(--app-border) 66%, var(--app-danger) 34%);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--app-surface-2) 84%, var(--app-danger) 16%) 0%,
+        color-mix(in srgb, var(--app-surface) 86%, var(--app-danger) 14%) 100%
+    );
+}
+
+.discovery-source-btn--hide:hover {
+    border-color: color-mix(in srgb, var(--app-border) 54%, var(--app-danger) 46%);
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--app-surface-2) 74%, var(--app-danger) 26%) 0%,
+        color-mix(in srgb, var(--app-surface) 78%, var(--app-danger) 22%) 100%
+    );
 }
 
 .discovery-grid {

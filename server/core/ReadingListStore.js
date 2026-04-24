@@ -16,6 +16,7 @@ class ReadingListStore {
                 version: 5,
                 users: [this.makeDefaultUser()],
                 lists: [],
+                sharedDiscoveryConfig: this.normalizeSharedDiscoveryConfig(),
             });
         }
     }
@@ -166,6 +167,17 @@ class ReadingListStore {
         };
     }
 
+    normalizeSharedDiscoveryConfig(value = {}) {
+        const sourceValue = String(value.externalSource || 'none').trim().toLowerCase();
+        return {
+            externalSource: (sourceValue && sourceValue !== 'none' ? 'web-page' : 'none'),
+            externalName: String(value.externalName || '').trim(),
+            externalUrl: String(value.externalUrl || '').trim(),
+            externalLimit: Math.max(1, Math.min(parseInt(value.externalLimit, 10) || 8, 24)),
+            externalTtlMinutes: Math.max(1440, Math.min(parseInt(value.externalTtlMinutes, 10) || 1440, 10080)),
+        };
+    }
+
     normalizeReaderProgress(value = {}) {
         const result = {};
         for (const [bookUid, row] of Object.entries(value || {})) {
@@ -297,7 +309,7 @@ class ReadingListStore {
 
     normalizeData(data) {
         const defaultUser = this.makeDefaultUser();
-        const source = Object.assign({version: 5, users: [], lists: []}, data || {});
+        const source = Object.assign({version: 5, users: [], lists: [], sharedDiscoveryConfig: {}}, data || {});
         let users = [];
 
         if (Array.isArray(source.users) && source.users.length) {
@@ -339,6 +351,7 @@ class ReadingListStore {
             version: 5,
             users,
             lists,
+            sharedDiscoveryConfig: this.normalizeSharedDiscoveryConfig(source.sharedDiscoveryConfig),
         };
     }
 
@@ -393,6 +406,7 @@ class ReadingListStore {
                 version: 5,
                 users,
                 lists: source.lists,
+                sharedDiscoveryConfig: source.sharedDiscoveryConfig,
             },
             changed,
         };
@@ -410,6 +424,18 @@ class ReadingListStore {
     async save(data) {
         const out = this.normalizeData(data);
         await fs.writeFile(this.file, JSON.stringify(out, null, 2));
+    }
+
+    async getSharedDiscoveryConfig() {
+        const data = await this.load();
+        return this.normalizeSharedDiscoveryConfig(data.sharedDiscoveryConfig);
+    }
+
+    async updateSharedDiscoveryConfig(patch = {}) {
+        const data = await this.load();
+        data.sharedDiscoveryConfig = this.normalizeSharedDiscoveryConfig(Object.assign({}, data.sharedDiscoveryConfig || {}, patch || {}));
+        await this.save(data);
+        return data.sharedDiscoveryConfig;
     }
 
     async resolveUser(userId = '') {

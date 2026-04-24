@@ -1,16 +1,16 @@
-﻿<template>
+<template>
     <Dialog ref="dialog" v-model="dialogVisible">
         <template #header>
             <div class="row items-center" style="font-size: 110%">
                 <q-icon class="q-mr-sm text-green" name="la la-cog" size="28px"></q-icon>
-                РќР°СЃС‚СЂРѕР№РєРё
+                Настройки
             </div>
         </template>
 
         <div class="q-mx-md column" style="min-width: 300px; font-size: 120%;">
             <div class="row items-center q-ml-sm">
                 <div class="q-mr-sm">
-                    Р РµР·СѓР»СЊС‚Р°С‚РѕРІ РЅР° СЃС‚СЂР°РЅРёС†Рµ
+                    Результатов на странице
                 </div>
                 <q-select
                     v-model="limit"
@@ -24,32 +24,32 @@
                 />
             </div>
 
-            <q-checkbox v-show="config.latestVersion" v-model="showNewReleaseAvailable" size="36px" label="РЈРІРµРґРѕРјР»СЏС‚СЊ Рѕ РІС‹С…РѕРґРµ РЅРѕРІРѕР№ РІРµСЂСЃРёРё" />
-            <q-checkbox v-model="downloadAsZip" size="36px" label="РЎРєР°С‡РёРІР°С‚СЊ РєРЅРёРіРё РІ РІРёРґРµ zip-Р°СЂС…РёРІР°" />
-            <q-checkbox v-model="showCounts" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РєРѕР»РёС‡РµСЃС‚РІРѕ" />
-            <q-checkbox v-model="showRates" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РѕС†РµРЅРєРё" />
-            <q-checkbox v-model="showInfo" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РєРЅРѕРїРєСѓ В«РРЅС„РѕВ»" />
-            <q-checkbox v-model="showGenres" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ Р¶Р°РЅСЂС‹" />
-            <q-checkbox v-model="showDates" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РґР°С‚С‹ РїРѕСЃС‚СѓРїР»РµРЅРёСЏ" />
-            <q-checkbox v-model="showDeleted" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ СѓРґР°Р»С‘РЅРЅС‹Рµ" />
-            <q-checkbox v-model="abCacheEnabled" size="36px" label="РљРµС€РёСЂРѕРІР°С‚СЊ Р·Р°РїСЂРѕСЃС‹" />
-            <q-checkbox v-model="darkTheme" size="36px" label="РќРѕС‡РЅР°СЏ С‚РµРјР°" />
+            <q-checkbox v-show="config.latestVersion" v-model="showNewReleaseAvailable" size="36px" label="Уведомлять о выходе новой версии" />
+            <q-checkbox v-model="downloadAsZip" size="36px" label="Скачивать книги в виде zip-архива" />
+            <q-checkbox v-model="showCounts" size="36px" label="Показывать количество" />
+            <q-checkbox v-model="showRates" size="36px" label="Показывать оценки" />
+            <q-checkbox v-model="showInfo" size="36px" label="Показывать кнопку «Инфо»" />
+            <q-checkbox v-model="showGenres" size="36px" label="Показывать жанры" />
+            <q-checkbox v-model="showDates" size="36px" label="Показывать даты поступления" />
+            <q-checkbox v-model="showDeleted" size="36px" label="Показывать удалённые" />
+            <q-checkbox v-model="abCacheEnabled" size="36px" label="Кешировать запросы" />
+            <q-checkbox v-model="darkTheme" size="36px" label="Ночная тема" />
 
             <div v-if="discoveryEnabled" class="q-mt-sm q-ml-sm text-weight-medium" style="font-size: 92%;">
-                Р’РёС‚СЂРёРЅС‹
+                Витрины
             </div>
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryNewest" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РІРєР»Р°РґРєСѓ В«РќРѕРІРёРЅРєРёВ»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryPopular" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РІРєР»Р°РґРєСѓ В«РџРѕРїСѓР»СЏСЂРЅРѕРµВ»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryContinueReading" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РїРѕР»РєСѓ В«РџСЂРѕРґРѕР»Р¶РёС‚СЊ С‡С‚РµРЅРёРµВ»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryFromLists" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РїРѕР»РєСѓ В«РР· РІР°С€РёС… СЃРїРёСЃРєРѕРІВ»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnfinishedSeries" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РїРѕР»РєСѓ В«РќРµР·Р°РєРѕРЅС‡РµРЅРЅС‹Рµ СЃРµСЂРёРёВ»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoverySimilar" size="36px" label="РџРѕРєР°Р·С‹РІР°С‚СЊ РїРѕР»РєСѓ В«РџРѕС…РѕР¶Рµ РЅР° С‚Рѕ, С‡С‚Рѕ РІС‹ С‡РёС‚Р°Р»РёВ»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnreadOnly" size="36px" label="Р’Рѕ РІРєР»Р°РґРєРµ В«Р”Р»СЏ РІР°СЃВ» РїРѕРєР°Р·С‹РІР°С‚СЊ С‚РѕР»СЊРєРѕ РЅРµРїСЂРѕС‡РёС‚Р°РЅРЅРѕРµ" />
-            <q-checkbox v-if="discoveryEnabled" v-model="compactDiscoveryCards" size="36px" label="РСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РєРѕРјРїР°РєС‚РЅС‹Рµ РєР°СЂС‚РѕС‡РєРё РІ РІРёС‚СЂРёРЅР°С…" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryNewest" size="36px" label="Показывать вкладку «Новинки»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryPopular" size="36px" label="Показывать вкладку «Популярное»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryContinueReading" size="36px" label="Показывать полку «Продолжить чтение»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryFromLists" size="36px" label="Показывать полку «Из ваших списков»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnfinishedSeries" size="36px" label="Показывать полку «Незаконченные серии»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoverySimilar" size="36px" label="Показывать полку «Похоже на то, что вы читали»" />
+            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnreadOnly" size="36px" label="Во вкладке «Для вас» показывать только непрочитанное" />
+            <q-checkbox v-if="discoveryEnabled" v-model="compactDiscoveryCards" size="36px" label="Использовать компактные карточки в витринах" />
             <q-checkbox v-if="effectiveExternalDiscoveryAvailable" v-model="showDiscoveryExternal" size="36px" label="Показывать вкладку внешнего источника" />
 
             <div v-if="discoveryEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Р›РёРјРёС‚ В«РќРѕРІРёРЅРєРёВ»</div>
+                <div class="q-mr-sm">Лимит «Новинки»</div>
                 <q-select
                     v-model="discoveryNewestLimit"
                     :options="discoveryLimitOptions"
@@ -63,7 +63,7 @@
             </div>
 
             <div v-if="discoveryEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Р›РёРјРёС‚ В«РџРѕРїСѓР»СЏСЂРЅРѕРµВ»</div>
+                <div class="q-mr-sm">Лимит «Популярное»</div>
                 <q-select
                     v-model="discoveryPopularLimit"
                     :options="discoveryLimitOptions"
@@ -77,7 +77,7 @@
             </div>
 
             <div v-if="discoveryEnabled && canEditExternalDiscovery" class="row items-center q-ml-sm q-mt-sm settings-inline-row">
-                <div class="q-mr-sm settings-inline-label">Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє</div>
+                <div class="q-mr-sm settings-inline-label">Внешний источник</div>
                 <div class="settings-inline-summary text-grey-8">
                     {{ externalDiscoverySummary }}
                 </div>
@@ -90,12 +90,12 @@
                     icon="la la-sliders-h"
                     @click="discoverySourceDialogVisible = true"
                 >
-                    РЈРїСЂР°РІР»СЏС‚СЊ
+                    Управлять
                 </q-btn>
             </div>
 
             <div v-if="effectiveExternalDiscoveryAvailable && !canEditExternalDiscovery" class="q-ml-sm q-mt-sm text-grey-7" style="font-size: 85%;">
-                Р’РЅРµС€РЅРёР№ РёСЃС‚РѕС‡РЅРёРє РЅР°СЃС‚СЂР°РёРІР°РµС‚ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ РїСЂРѕС„РёР»СЏ.
+                Внешний источник настраивает администратор профиля.
             </div>
         </div>
 
@@ -387,5 +387,3 @@ export default vueComponent(SettingsDialog);
     min-width: 180px;
 }
 </style>
-
-
