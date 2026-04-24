@@ -1,6 +1,7 @@
 const _ = require('lodash');
 const path = require('path');
 const fs = require('fs-extra');
+const os = require('os');
 
 const branchFilename = __dirname + '/application_env';
 
@@ -72,6 +73,19 @@ async function resolveInstallMode(config = {}) {
 
 let instance = null;
 
+function resolveFallbackDataDir(config = {}) {
+    const appDataDir = process.env.LOCALAPPDATA || process.env.APPDATA;
+    if (appDataDir)
+        return path.join(appDataDir, config.name);
+
+    return path.join(os.homedir(), `.${config.name}`);
+}
+
+async function ensureWritableDir(dirPath) {
+    await fs.ensureDir(dirPath);
+    await fs.access(dirPath, fs.constants.W_OK);
+}
+
 //singleton
 class ConfigManager {
     constructor() {    
@@ -100,16 +114,33 @@ class ConfigManager {
 
         this.branchConfigFile = __dirname + `/${this.branch}.js`;
         const config = require(this.branchConfigFile);
+        const defaultExecDataDir = `${config.execDir}/.${config.name}`;
+        const canUseWindowsFallback = !defaultDataDir && !configFile && process.pkg && process.platform === 'win32';
 
-        if (!defaultDataDir) {
-            defaultDataDir = `${config.execDir}/.${config.name}`;
-        }
+        if (!defaultDataDir)
+            defaultDataDir = defaultExecDataDir;
 
         if (configFile) {
             config.configFile = path.resolve(configFile);
         } else {
-            await fs.ensureDir(defaultDataDir);
-            config.configFile = `${defaultDataDir}/config.json`;
+            let resolvedDataDir = defaultDataDir;
+
+            try {
+                await ensureWritableDir(resolvedDataDir);
+            } catch (err) {
+                if (!canUseWindowsFallback)
+                    throw err;
+
+                const fallbackDataDir = resolveFallbackDataDir(config);
+                if (path.resolve(fallbackDataDir) === path.resolve(resolvedDataDir))
+                    throw err;
+
+                await ensureWritableDir(fallbackDataDir);
+                resolvedDataDir = fallbackDataDir;
+            }
+
+            config.dataDir = config.dataDir || resolvedDataDir;
+            config.configFile = `${resolvedDataDir}/config.json`;
         }
 
         this._config = config;
