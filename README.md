@@ -29,8 +29,6 @@
 * Docker-ориентированные доработки для `.7z`-библиотек и конвертации через Calibre
 * отдельный маршрут `/#/reader-lab` для локальной проверки FB2 и рендеринга читалки
 
-Форк проекта [`bookpauk/inpx-web`](https://github.com/bookpauk/inpx-web) с доработками для больших `.7z` / `fLibrary` библиотек, Docker-развёртывания и обновлённой встроенной FB2-читалки.
-
 ## Что это
 
 Форк [`bookpauk/inpx-web`](https://github.com/bookpauk/inpx-web) для self-hosted библиотек с акцентом на:
