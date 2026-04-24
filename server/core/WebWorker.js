@@ -40,6 +40,7 @@ const stateToText = {
 const cleanDirInterval = 60*60*1000;//РєР°Р¶РґС‹Р№ С‡Р°СЃ
 const checkReleaseInterval = 7*60*60*1000;//РєР°Р¶РґС‹Рµ 7 С‡Р°СЃРѕРІ
 const discoveryCacheTtl = 15*60*1000;//15 minutes
+const externalDiscoveryCacheVersion = 'v3';
 const bookAssetVersion = 'fblibrary-assets-v1';
 const bookInfoVersion = 'fb2-binaries-v6';
 
@@ -144,6 +145,19 @@ function buildExternalFlagsByUrl(sourceUrl = '') {
     };
 }
 
+function buildExternalFeedIdentity(item = {}) {
+    const title = normalizeDiscoveryText(item.title || '');
+    if (!title)
+        return '';
+
+    const author = normalizeAuthorText(item.author || '');
+    if (author)
+        return `${title}|${author}`;
+
+    const url = String(item.url || '').trim().toLowerCase();
+    return `${title}|${url}`;
+}
+
 function dedupeExternalFeedItems(items = [], limit = 8) {
     const result = [];
     const seen = new Set();
@@ -154,7 +168,8 @@ function dedupeExternalFeedItems(items = [], limit = 8) {
         if (!title || !url)
             continue;
 
-        const key = `${title.toLowerCase()}|${url.toLowerCase()}`;
+        const key = buildExternalFeedIdentity(Object.assign({}, item, {title}))
+            || `${title.toLowerCase()}|${url.toLowerCase()}`;
         if (seen.has(key))
             continue;
         seen.add(key);
@@ -832,14 +847,15 @@ class WebWorker {
         await fs.writeFile(this.discoveryDiskCacheFile, JSON.stringify(this.discoveryDiskCache || {}, null, 2));
     }
 
-    async rememberPersistedDiscovery(key, loader, ttl = discoveryCacheTtl) {
+    async rememberPersistedDiscovery(key, loader, ttl = discoveryCacheTtl, options = {}) {
+        const forceRefresh = !!(options && options.forceRefresh);
         const cached = this.discoveryCache.get(key);
-        if (cached && Date.now() - cached.time < ttl)
+        if (!forceRefresh && cached && Date.now() - cached.time < ttl)
             return _.cloneDeep(cached.value);
 
         const diskCache = await this.getDiscoveryDiskCache();
         const persisted = diskCache[key];
-        if (persisted && Date.now() - persisted.time < ttl) {
+        if (!forceRefresh && persisted && Date.now() - persisted.time < ttl) {
             this.discoveryCache.set(key, {time: persisted.time, value: _.cloneDeep(persisted.value)});
             return _.cloneDeep(persisted.value);
         }
@@ -1484,8 +1500,15 @@ class WebWorker {
     async matchExternalItemsToLocalBooks(items = [], limit = 8) {
         const result = [];
         const seenBookUids = new Set();
+        const seenExternalItems = new Set();
 
         for (const item of items) {
+            const externalKey = buildExternalFeedIdentity(item);
+            if (externalKey && seenExternalItems.has(externalKey))
+                continue;
+            if (externalKey)
+                seenExternalItems.add(externalKey);
+
             let response = await this.dbSearcher.bookSearch({
                 title: `=${item.title}`,
                 limit: 16,
@@ -1732,11 +1755,18 @@ class WebWorker {
     async matchExternalItemsToLocalBooksV2(items = [], limit = 8) {
         const result = [];
         const seenBookUids = new Set();
+        const seenExternalItems = new Set();
         let matchedCount = 0;
         let missingCount = 0;
 
         for (let index = 0; index < items.length; index++) {
             const item = items[index];
+            const externalKey = buildExternalFeedIdentity(item);
+            if (externalKey && seenExternalItems.has(externalKey))
+                continue;
+            if (externalKey)
+                seenExternalItems.add(externalKey);
+
             let response = await this.dbSearcher.bookSearch({
                 title: `=${item.title}`,
                 limit: 16,
@@ -1872,9 +1902,10 @@ class WebWorker {
         if (discovery.externalSource !== 'none') {
             try {
                 const externalShelf = await this.rememberPersistedDiscovery(
-                    `discovery:${inpxHash}:external:v2:${discovery.externalSource}:${discovery.externalName}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}:${discovery.externalTtlMinutes}`,
+                    `discovery:${inpxHash}:external:${externalDiscoveryCacheVersion}:${discovery.externalSource}:${discovery.externalName}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}:${discovery.externalTtlMinutes}`,
                     () => this.buildExternalDiscoveryShelfV2(externalShelfLimit, options),
                     discovery.externalTtlMinutes * 60 * 1000,
+                    {forceRefresh: options.forceRefresh === true},
                 );
                 if (externalShelf)
                     shelves.push(externalShelf);

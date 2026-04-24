@@ -1920,6 +1920,7 @@ class Search {
         this.discoveryShelvesError = '';
         try {
             const response = await this.api.getDiscoveryShelves({
+                forceRefresh: force === true,
                 personalLimit: this.discoveryPopularLimit,
                 personalSimilarEnabled: this.showDiscoverySimilar,
                 newestLimit: this.discoveryNewestLimit,

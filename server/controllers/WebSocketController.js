@@ -288,6 +288,7 @@ class WebSocketController {
         const result = await this.webWorker.getDiscoveryShelvesV2({
             userId: req.userId,
             profileAccessToken: req.profileAccessToken,
+            forceRefresh: req.forceRefresh === true,
             personalSimilarEnabled: req.personalSimilarEnabled,
             newestLimit: req.newestLimit,
             popularLimit: req.popularLimit,

@@ -2,7 +2,7 @@
     <div class="book-view q-my-sm">
         <div
             class="book-card"
-            :class="{'is-poster-mode': isPosterMode, 'is-compact-discovery': compactDiscovery}"
+            :class="{'is-poster-mode': isPosterMode, 'is-compact-discovery': compactDiscovery, 'has-inline-actions': hasInlineActionsLayout}"
             role="button"
             tabindex="0"
             @click="handleCardActivate"
@@ -559,6 +559,10 @@ class BookView {
 
     get isPosterMode() {
         return this.mode == 'title' || this.mode == 'extended';
+    }
+
+    get hasInlineActionsLayout() {
+        return this.mode == 'author' || this.mode == 'series';
     }
 
     get extraFormats() {
@@ -1248,6 +1252,71 @@ export default vueComponent(BookView);
 .primary-action--external-only:deep(.q-btn__content) {
     justify-content: center;
     width: auto;
+}
+
+@media (min-width: 721px) {
+    .book-card.has-inline-actions {
+        grid-template-columns: 136px minmax(0, 1fr);
+        gap: 22px;
+    }
+
+    .book-card.has-inline-actions .cover-box {
+        height: 196px;
+        padding: 12px;
+    }
+
+    .book-card.has-inline-actions .book-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        gap: 8px;
+        min-height: auto;
+    }
+
+    .book-card.has-inline-actions .book-actions > * {
+        flex: 0 0 auto;
+        align-self: auto;
+    }
+
+    .book-card.has-inline-actions .book-actions :deep(.q-btn) {
+        width: auto;
+        min-width: 0;
+    }
+
+    .book-card.has-inline-actions .book-actions :deep(.q-btn__content) {
+        width: auto;
+        justify-content: center;
+    }
+
+    .book-card.has-inline-actions .action-split {
+        width: auto;
+        align-self: auto;
+        flex: 0 0 auto;
+    }
+
+    .book-card.has-inline-actions .action-split :deep(.q-btn) {
+        flex: 0 0 auto;
+        width: auto;
+        min-width: 0;
+    }
+
+    .book-card.has-inline-actions .action-split :deep(.q-btn__content) {
+        width: auto;
+        justify-content: center;
+    }
+
+    .book-card.has-inline-actions .action-split-toggle {
+        flex: 0 0 auto;
+    }
+
+    .book-card.has-inline-actions .primary-action {
+        justify-self: start;
+    }
+
+    .book-card.has-inline-actions .primary-action:deep(.q-btn) {
+        padding-left: 14px;
+        padding-right: 14px;
+    }
 }
 
 .copy-action {
