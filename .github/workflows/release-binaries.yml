@@ -122,9 +122,9 @@ jobs:
     needs: build
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v6
-        with:
-          path: release-assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download ${{ github.run_id }} --dir release-assets
 
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v3
