@@ -1,6 +1,6 @@
 const fs = require('fs-extra');
 const path = require('path');
-const { execSync } = require('child_process');
+const yazl = require('yazl');
 
 const showdown = require('showdown');
 
@@ -10,6 +10,39 @@ const distDir = path.resolve(__dirname, '../dist');
 const tmpDir = `${distDir}/tmp`;
 const publicDir = `${tmpDir}/public`;
 const outDir = `${distDir}/${platform}`;
+
+async function zipDirectoryToFile(sourceDir, targetFile) {
+    const zipFile = new yazl.ZipFile();
+    const entries = await fs.readdir(sourceDir, {withFileTypes: true});
+
+    async function addDir(baseDir, relativeDir = '') {
+        const dirPath = (relativeDir ? path.join(baseDir, relativeDir) : baseDir);
+        const dirEntries = await fs.readdir(dirPath, {withFileTypes: true});
+
+        for (const entry of dirEntries) {
+            const entryRelativePath = (relativeDir ? path.join(relativeDir, entry.name) : entry.name);
+            const entryFullPath = path.join(baseDir, entryRelativePath);
+
+            if (entry.isDirectory()) {
+                await addDir(baseDir, entryRelativePath);
+            } else if (entry.isFile()) {
+                zipFile.addFile(entryFullPath, entryRelativePath.replace(/\\/g, '/'));
+            }
+        }
+    }
+
+    if (entries.length)
+        await addDir(sourceDir);
+
+    await fs.ensureDir(path.dirname(targetFile));
+    await new Promise((resolve, reject) => {
+        zipFile.outputStream
+            .pipe(fs.createWriteStream(targetFile))
+            .on('close', resolve)
+            .on('error', reject);
+        zipFile.end();
+    });
+}
 
 async function build() {
     if (!platform)
@@ -30,7 +63,7 @@ async function build() {
         const jsonFile = `${distDir}/public.json`;//distDir !!!
 
         await fs.remove(zipFile);
-        execSync(`zip -r ${zipFile} .`, {cwd: publicDir, stdio: 'inherit'});
+        await zipDirectoryToFile(publicDir, zipFile);
 
         const data = (await fs.readFile(zipFile)).toString('base64');
         await fs.writeFile(jsonFile, JSON.stringify({data}));
