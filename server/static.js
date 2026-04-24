@@ -8,9 +8,19 @@ const ZipReader = require('./core/ZipReader');
 const imageUtils = require('./core/ImageUtils');
 const bookConverter = require('./core/BookConverter');
 const webAppDir = require('../build/appdir');
+const externalTools = require('./core/ExternalTools');
 
 const log = new (require('./core/AppLogger'))().log;//singleton
 let coverArchives = null;
+const runtimeWarnings = new Set();
+
+function logRuntimeWarningOnce(message) {
+    if (!message || runtimeWarnings.has(message))
+        return;
+
+    runtimeWarnings.add(message);
+    log(LM_ERR, message);
+}
 
 function generateZip(zipFile, dataFile, dataFileInZip) {
     return new Promise((resolve, reject) => {
@@ -149,6 +159,10 @@ module.exports = (app, config) => {
                     res.send(cover);
                     return;
                 } catch(e) {
+                    if (externalTools.isMissingToolError(e)) {
+                        throw e;
+                    }
+
                     // try next matching archive
                 } finally {
                     await zipReader.close();
@@ -157,6 +171,12 @@ module.exports = (app, config) => {
 
             res.sendStatus(404);
         } catch(e) {
+            if (externalTools.isMissingToolError(e)) {
+                logRuntimeWarningOnce(e.message);
+                res.status(503).type('text/plain; charset=utf-8').send(e.message);
+                return;
+            }
+
             res.sendStatus(404);
         }
     });

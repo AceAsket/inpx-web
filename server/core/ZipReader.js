@@ -2,18 +2,9 @@ const path = require('path');
 const fs = require('fs-extra');
 const {spawn} = require('child_process');
 const StreamUnzip = require('node-stream-zip');
+const externalTools = require('./ExternalTools');
 
-const sevenZipCommands = (process.platform === 'win32' ? [
-    '7z',
-    '7za',
-    '7zr',
-    'C:\\Program Files\\7-Zip\\7z.exe',
-    'C:\\Program Files (x86)\\7-Zip\\7z.exe',
-] : [
-    '7z',
-    '7za',
-    '7zr',
-]);
+const sevenZipCommands = externalTools.sevenZipCommandCandidates();
 
 class ZipReader {
     constructor() {
@@ -50,7 +41,7 @@ class ZipReader {
                     if (err && err.code === 'ENOENT' && index < sevenZipCommands.length) {
                         tryRun();
                     } else if (err && err.code === 'ENOENT') {
-                        reject(new Error('7z executable not found. Install 7-Zip and make 7z/7za available in PATH.'));
+                        reject(externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage()));
                     } else {
                         reject(err);
                     }
@@ -122,7 +113,7 @@ class ZipReader {
                     if (err && err.code === 'ENOENT' && index < sevenZipCommands.length) {
                         tryRun();
                     } else if (err && err.code === 'ENOENT') {
-                        reject(new Error('7z executable not found. Install 7-Zip and make 7z/7za available in PATH.'));
+                        reject(externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage()));
                     } else {
                         reject(err);
                     }
