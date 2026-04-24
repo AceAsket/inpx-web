@@ -16,6 +16,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  WINDOWS_7ZR_URL: https://github.com/ip7z/7zip/releases/latest/download/7zr.exe
+  WINDOWS_JXL_URL: https://github.com/libjxl/libjxl/releases/latest/download/jxl-x64-windows-static.zip
 
 jobs:
   build:
@@ -63,6 +65,31 @@ jobs:
 
       - name: Build binary
         run: npm run ${{ matrix.build_script }}
+
+      - name: Bundle Windows cover tools
+        if: matrix.target == 'win'
+        shell: pwsh
+        run: |
+          $binDir = Join-Path $PWD 'dist/win/bin'
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+
+          $sevenZipTarget = Join-Path $binDir '7zr.exe'
+          Invoke-WebRequest -Uri $env:WINDOWS_7ZR_URL -OutFile $sevenZipTarget
+
+          $jxlArchive = Join-Path $env:RUNNER_TEMP 'jxl-x64-windows-static.zip'
+          $jxlExtract = Join-Path $env:RUNNER_TEMP 'jxl-x64-windows-static'
+          if (Test-Path $jxlExtract) {
+            Remove-Item $jxlExtract -Recurse -Force
+          }
+
+          Invoke-WebRequest -Uri $env:WINDOWS_JXL_URL -OutFile $jxlArchive
+          Expand-Archive -Path $jxlArchive -DestinationPath $jxlExtract -Force
+
+          Get-ChildItem -Path $jxlExtract -Recurse -File |
+            Where-Object { $_.Extension -in @('.exe', '.dll') } |
+            ForEach-Object {
+              Copy-Item $_.FullName -Destination (Join-Path $binDir $_.Name) -Force
+            }
 
       - name: Archive release payload
         shell: pwsh

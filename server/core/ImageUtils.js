@@ -2,6 +2,7 @@ const fs = require('fs-extra');
 const {spawn} = require('child_process');
 
 const utils = require('./utils');
+const externalTools = require('./ExternalTools');
 
 function contentType(buf) {
     if (buf.length >= 2 && buf[0] == 0xff && buf[1] == 0x0a)
@@ -25,7 +26,7 @@ function contentType(buf) {
     return 'application/octet-stream';
 }
 
-function run(command, args) {
+function run(command, args, toolCode = '', helpMessage = '') {
     return new Promise((resolve, reject) => {
         const child = spawn(command, args, {stdio: ['ignore', 'ignore', 'pipe']});
         let stderr = '';
@@ -34,7 +35,14 @@ function run(command, args) {
             stderr += data.toString();
         });
 
-        child.on('error', reject);
+        child.on('error', (err) => {
+            if (err && err.code === 'ENOENT' && toolCode && helpMessage) {
+                reject(externalTools.createMissingToolError(toolCode, helpMessage));
+                return;
+            }
+
+            reject(err);
+        });
         child.on('close', code => {
             if (code === 0)
                 resolve();
@@ -51,8 +59,23 @@ async function jxlToPng(buf, tempDir) {
 
     try {
         await fs.writeFile(inputFile, buf);
-        await run('djxl', [inputFile, outputFile]);
-        return await fs.readFile(outputFile);
+        const commands = externalTools.djxlCommandCandidates();
+        let lastError = null;
+
+        for (const command of commands) {
+            try {
+                await run(command, [inputFile, outputFile], 'INPX_MISSING_DJXL', externalTools.missingDjxlMessage());
+                return await fs.readFile(outputFile);
+            } catch (err) {
+                lastError = err;
+                if (externalTools.isMissingToolError(err, 'INPX_MISSING_DJXL'))
+                    continue;
+
+                throw err;
+            }
+        }
+
+        throw (lastError || externalTools.createMissingToolError('INPX_MISSING_DJXL', externalTools.missingDjxlMessage()));
     } finally {
         await fs.remove(inputFile);
         await fs.remove(outputFile);
