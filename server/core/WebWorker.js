@@ -40,7 +40,7 @@ const stateToText = {
 const cleanDirInterval = 60*60*1000;//РєР°Р¶РґС‹Р№ С‡Р°СЃ
 const checkReleaseInterval = 7*60*60*1000;//РєР°Р¶РґС‹Рµ 7 С‡Р°СЃРѕРІ
 const discoveryCacheTtl = 15*60*1000;//15 minutes
-const externalDiscoveryCacheVersion = 'v3';
+const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v1';
 const bookInfoVersion = 'fb2-binaries-v6';
 
@@ -137,6 +137,69 @@ function toAbsoluteExternalUrl(baseUrl = '', value = '') {
     }
 }
 
+function getExternalItemKind(sourceUrl = '', itemUrl = '') {
+    const absoluteUrl = String(itemUrl || '').trim();
+    if (!absoluteUrl)
+        return '';
+
+    try {
+        const source = new URL(String(sourceUrl || '').trim() || absoluteUrl);
+        const target = new URL(absoluteUrl, source);
+        const hostname = String(target.hostname || '').toLowerCase();
+        const pathname = String(target.pathname || '').toLowerCase();
+
+        if (hostname.endsWith('litres.ru')) {
+            if (/\/book\//.test(pathname))
+                return 'book';
+            if (/\/genre\//.test(pathname))
+                return 'genre';
+            return '';
+        }
+
+        return 'book';
+    } catch (e) {
+        return 'book';
+    }
+}
+
+function sanitizeExternalBrowseUrl(baseUrl = '', browseUrl = '') {
+    const rawBaseUrl = String(baseUrl || '').trim();
+    const rawBrowseUrl = String(browseUrl || '').trim();
+    if (!rawBaseUrl || !rawBrowseUrl)
+        return '';
+
+    try {
+        const base = new URL(rawBaseUrl);
+        const target = new URL(rawBrowseUrl, base);
+        if (String(base.hostname || '').toLowerCase() !== String(target.hostname || '').toLowerCase())
+            return '';
+
+        target.hash = '';
+        return target.toString();
+    } catch (e) {
+        return '';
+    }
+}
+
+function buildExternalPageUrl(sourceUrl = '', page = 1) {
+    const normalizedPage = Math.max(1, parseInt(page, 10) || 1);
+    const rawSourceUrl = String(sourceUrl || '').trim();
+    if (!rawSourceUrl || normalizedPage <= 1)
+        return rawSourceUrl;
+
+    try {
+        const url = new URL(rawSourceUrl);
+        const hostname = String(url.hostname || '').toLowerCase();
+        if (hostname.endsWith('litres.ru'))
+            url.searchParams.set('page', String(normalizedPage));
+        else
+            url.searchParams.set('page', String(normalizedPage));
+        return url.toString();
+    } catch (e) {
+        return rawSourceUrl;
+    }
+}
+
 function buildExternalFlagsByUrl(sourceUrl = '') {
     const normalized = String(sourceUrl || '').trim().toLowerCase();
     return {
@@ -150,12 +213,13 @@ function buildExternalFeedIdentity(item = {}) {
     if (!title)
         return '';
 
+    const kind = String(item.kind || 'book').trim().toLowerCase() || 'book';
     const author = normalizeAuthorText(item.author || '');
     if (author)
-        return `${title}|${author}`;
+        return `${kind}|${title}|${author}`;
 
     const url = String(item.url || '').trim().toLowerCase();
-    return `${title}|${url}`;
+    return `${kind}|${title}|${url}`;
 }
 
 function dedupeExternalFeedItems(items = [], limit = 8) {
@@ -179,6 +243,51 @@ function dedupeExternalFeedItems(items = [], limit = 8) {
     }
 
     return result;
+}
+
+function buildExternalGenreOptions(items = [], sourceUrl = '') {
+    const result = [];
+    const seen = new Set();
+
+    for (const item of (Array.isArray(items) ? items : [])) {
+        if (String(item && item.kind || '').trim().toLowerCase() !== 'genre')
+            continue;
+
+        const label = decodeExternalText(item.title || item.name || '');
+        const url = sanitizeExternalBrowseUrl(sourceUrl, item.url || item.link || '');
+        if (!label || !url || seen.has(url))
+            continue;
+
+        seen.add(url);
+        result.push({
+            label,
+            value: url,
+        });
+    }
+
+    return result;
+}
+
+function limitExternalFeedItemsByBooks(items = [], bookLimit = 8) {
+    const result = [];
+    const maxBooks = Math.max(1, parseInt(bookLimit, 10) || 8);
+    let bookCount = 0;
+    let hasMore = false;
+
+    for (const item of (Array.isArray(items) ? items : [])) {
+        const kind = String(item && item.kind || 'book').trim().toLowerCase() || 'book';
+        if (kind !== 'genre') {
+            if (bookCount >= maxBooks) {
+                hasMore = true;
+                break;
+            }
+            bookCount++;
+        }
+
+        result.push(item);
+    }
+
+    return {items: result, hasMore};
 }
 
 function buildReleaseCheckRequest(checkReleaseLink = '', channel = 'stable') {
@@ -700,17 +809,21 @@ class WebWorker {
             externalUrl: '',
             externalName: '',
             externalTtlMinutes: 1440,
+            externalBrowseUrl: '',
+            externalBrowseName: '',
         }, this.config.discovery || {}, this.sharedDiscoveryConfig || {}, options || {});
 
         discovery.enabled = (discovery.enabled !== false);
         discovery.shelfLimit = Math.max(1, Math.min(parseInt(discovery.shelfLimit, 10) || 8, 24));
-        discovery.externalLimit = Math.max(1, Math.min(parseInt(discovery.externalLimit, 10) || discovery.shelfLimit, 24));
+        discovery.externalLimit = Math.max(1, Math.min(parseInt(discovery.externalLimit, 10) || discovery.shelfLimit, 120));
         discovery.externalSource = String(discovery.externalSource || 'none').trim().toLowerCase();
         if (discovery.externalSource && discovery.externalSource !== 'none')
             discovery.externalSource = 'web-page';
         discovery.externalUrl = String(discovery.externalUrl || '').trim();
         discovery.externalName = String(discovery.externalName || '').trim();
         discovery.externalTtlMinutes = Math.max(1440, Math.min(parseInt(discovery.externalTtlMinutes, 10) || 1440, 10080));
+        discovery.externalBrowseUrl = sanitizeExternalBrowseUrl(discovery.externalUrl, discovery.externalBrowseUrl || '');
+        discovery.externalBrowseName = (discovery.externalBrowseUrl ? String(discovery.externalBrowseName || '').trim() : '');
 
         return discovery;
     }
@@ -723,15 +836,14 @@ class WebWorker {
     async getDiscoveryConfigForRequest(options = {}) {
         await this.getSharedDiscoveryConfig();
         const requestOptions = Object.assign({}, options || {});
-        const hasExternalOverrides = (
+        const hasAdminExternalOverrides = (
             Object.prototype.hasOwnProperty.call(requestOptions, 'externalSource')
             || Object.prototype.hasOwnProperty.call(requestOptions, 'externalName')
             || Object.prototype.hasOwnProperty.call(requestOptions, 'externalUrl')
-            || Object.prototype.hasOwnProperty.call(requestOptions, 'externalLimit')
             || Object.prototype.hasOwnProperty.call(requestOptions, 'externalTtlMinutes')
         );
 
-        if (!hasExternalOverrides)
+        if (!hasAdminExternalOverrides)
             return this.getDiscoveryConfig(requestOptions);
 
         try {
@@ -740,7 +852,6 @@ class WebWorker {
             delete requestOptions.externalSource;
             delete requestOptions.externalName;
             delete requestOptions.externalUrl;
-            delete requestOptions.externalLimit;
             delete requestOptions.externalTtlMinutes;
         }
 
@@ -784,6 +895,8 @@ class WebWorker {
                 return 'Частичное совпадение по названию';
             case 'missing-local':
                 return 'Нет в локальной библиотеке';
+            case 'genre':
+                return 'Жанр внешнего каталога';
             default:
                 return 'Совпадение с внешней витриной';
         }
@@ -1173,6 +1286,11 @@ class WebWorker {
                     if (!item || (!item.title && !item.name) || (!item.url && !item.link))
                         continue;
 
+                    const itemUrl = toAbsoluteExternalUrl(sourceUrl, item.url || item.link);
+                    const itemKind = getExternalItemKind(sourceUrl, itemUrl);
+                    if (!itemKind)
+                        continue;
+
                     const authors = Array.isArray(item.authors)
                         ? item.authors
                             .map(author => decodeExternalText(author && typeof author === 'object' ? author.name : author))
@@ -1187,9 +1305,10 @@ class WebWorker {
                         || '';
 
                     candidates.push({
+                        kind: itemKind,
                         title: decodeExternalText(item.title || item.name),
                         author: decodeExternalText(authors.join(', ') || getPrimaryDiscoveryAuthor(item.persons)),
-                        url: toAbsoluteExternalUrl(sourceUrl, item.url || item.link),
+                        url: itemUrl,
                         cover: toAbsoluteExternalUrl(sourceUrl, cover),
                         rating: (((item.rating || {}).rated_avg) || item.rating || 0),
                         isBestseller: !!(
@@ -1238,6 +1357,7 @@ class WebWorker {
                     continue;
 
                 const item = {
+                    kind: 'book',
                     title: text,
                     author: '',
                     url: href,
@@ -1292,6 +1412,7 @@ class WebWorker {
                     const image = Array.isArray(node.image) ? node.image[0] : node.image;
                     if (title && url) {
                         items.push({
+                            kind: 'book',
                             title,
                             author: decodeExternalText(((node.author || {}).name) || node.author || ''),
                             url,
@@ -1393,17 +1514,21 @@ class WebWorker {
         if (!sourceUrl)
             throw new Error('РќРµ Р·Р°РґР°РЅ URL РІРЅРµС€РЅРµР№ РІРёС‚СЂРёРЅС‹');
 
-        const response = await axios.get(sourceUrl, {
-            responseType: 'text',
-            timeout: 20000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.7',
-            },
-        });
+        const requestPageHtml = async(pageUrl = '') => {
+            const response = await axios.get(pageUrl, {
+                responseType: 'text',
+                timeout: 20000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+                    'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.7',
+                },
+            });
 
-        const html = String(response.data || '');
-        const maxItems = Math.max(limit * 3, limit);
+            return String(response.data || '');
+        };
+
+        const requestedItems = Math.max(1, parseInt(limit, 10) || 8);
+        const parserLimit = Math.max(requestedItems + 24, requestedItems);
         const host = (() => {
             try {
                 return new URL(sourceUrl).hostname.toLowerCase();
@@ -1412,38 +1537,97 @@ class WebWorker {
             }
         })();
 
-        const parserChain = [
-            () => this.parseExternalFeedItemsFromNextData(html, sourceUrl, limit),
-        ];
+        const parseItemsFromHtml = (html = '', pageUrl = sourceUrl) => {
+            const parserChain = [
+                () => this.parseExternalFeedItemsFromNextData(html, pageUrl, parserLimit),
+            ];
 
-        if (host.includes('litres.ru'))
-            parserChain.push(() => this.parseLitresFeedItemsFromHtml(html, sourceUrl, limit));
-        if (host.includes('mann-ivanov-ferber.ru'))
+            if (host.includes('litres.ru'))
+                parserChain.push(() => this.parseLitresFeedItemsFromHtml(html, pageUrl, parserLimit));
+            if (host.includes('mann-ivanov-ferber.ru'))
+                parserChain.push(
+                    () => this.parseMifFeedItemsFromHtml(html, pageUrl, parserLimit),
+                    () => this.parseJsonLdProductFeedItems(html, pageUrl, parserLimit),
+                );
+            if (host.includes('alpinabook.ru'))
+                parserChain.push(() => this.parseAlpinaFeedItemsFromHtml(html, pageUrl, parserLimit));
+
             parserChain.push(
-                () => this.parseMifFeedItemsFromHtml(html, sourceUrl, limit),
-                () => this.parseJsonLdProductFeedItems(html, sourceUrl, limit),
+                () => this.parseJsonLdProductFeedItems(html, pageUrl, parserLimit),
+                () => this.parseMifFeedItemsFromHtml(html, pageUrl, parserLimit),
+                () => this.parseLitresFeedItemsFromHtml(html, pageUrl, parserLimit),
+                () => this.parseAlpinaFeedItemsFromHtml(html, pageUrl, parserLimit),
             );
-        if (host.includes('alpinabook.ru'))
-            parserChain.push(() => this.parseAlpinaFeedItemsFromHtml(html, sourceUrl, limit));
 
-        parserChain.push(
-            () => this.parseJsonLdProductFeedItems(html, sourceUrl, limit),
-            () => this.parseMifFeedItemsFromHtml(html, sourceUrl, limit),
-            () => this.parseLitresFeedItemsFromHtml(html, sourceUrl, limit),
-            () => this.parseAlpinaFeedItemsFromHtml(html, sourceUrl, limit),
-        );
+            for (const parseItems of parserChain) {
+                const items = dedupeExternalFeedItems(parseItems(), parserLimit);
+                if (items.length)
+                    return items;
+            }
+
+            return [];
+        };
 
         let items = [];
-        for (const parseItems of parserChain) {
-            items = dedupeExternalFeedItems(parseItems(), maxItems);
-            if (items.length)
-                break;
+        let hasMore = false;
+        let genreOptions = [];
+
+        if (host.includes('litres.ru')) {
+            const merged = [];
+            const seen = new Set();
+            const wantedBooks = requestedItems + 1;
+            let bookCount = 0;
+
+            for (let page = 1; page <= 8 && bookCount < wantedBooks; page++) {
+                const pageUrl = buildExternalPageUrl(sourceUrl, page);
+                const html = await requestPageHtml(pageUrl);
+                const pageItems = parseItemsFromHtml(html, pageUrl);
+
+                if (page === 1)
+                    genreOptions = buildExternalGenreOptions(pageItems, sourceUrl);
+                if (!pageItems.length)
+                    break;
+
+                let added = 0;
+                for (const item of pageItems) {
+                    const key = buildExternalFeedIdentity(item) || `${item.title || ''}|${item.url || ''}`;
+                    if (seen.has(key))
+                        continue;
+                    seen.add(key);
+                    merged.push(item);
+                    added++;
+                    if (String(item && item.kind || 'book').trim().toLowerCase() !== 'genre')
+                        bookCount++;
+                    if (bookCount >= wantedBooks)
+                        break;
+                }
+
+                if (!added)
+                    break;
+                if (bookCount >= wantedBooks) {
+                    hasMore = true;
+                    break;
+                }
+                if (pageItems.length < 12)
+                    break;
+            }
+
+            const limited = limitExternalFeedItemsByBooks(merged, requestedItems);
+            items = limited.items;
+            hasMore = hasMore || limited.hasMore;
+        } else {
+            const html = await requestPageHtml(sourceUrl);
+            const parsedItems = parseItemsFromHtml(html, sourceUrl);
+            const limited = limitExternalFeedItemsByBooks(parsedItems, requestedItems);
+            items = limited.items;
+            hasMore = limited.hasMore;
+            genreOptions = buildExternalGenreOptions(parsedItems, sourceUrl);
         }
 
         if (!items.length)
             throw new Error('Не удалось прочитать внешнюю витрину');
 
-        return {sourceUrl, items};
+        return {sourceUrl, items, hasMore, genreOptions};
     }
 
     pickDiscoveryBookMatch(item, books = []) {
@@ -1577,7 +1761,7 @@ class WebWorker {
 
         const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
         const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
-        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 24));
+        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 120));
 
         const dbConfig = await this.dbConfig();
         const inpxHash = String(dbConfig.inpxHash || '').trim();
@@ -1743,8 +1927,9 @@ class WebWorker {
             discoveryUrl: String(item.url || '').trim(),
             discoveryCoverUrl: String(item.cover || '').trim(),
             discoveryRating: item.rating,
-            discoveryMatchType: 'missing-local',
+            discoveryMatchType: (item.kind === 'genre' ? 'genre' : 'missing-local'),
             discoveryMissingLocal: true,
+            discoveryItemKind: String(item.kind || 'book').trim().toLowerCase() || 'book',
             discoveryFlags: {
                 bestseller: !!item.isBestseller,
                 isNew: !!item.isNew,
@@ -1789,6 +1974,7 @@ class WebWorker {
                         discoveryCoverUrl: item.cover,
                         discoveryRating: item.rating,
                         discoveryMatchType: match.kind,
+                        discoveryItemKind: String(item.kind || 'book').trim().toLowerCase() || 'book',
                         discoveryFlags: {
                             bestseller: !!item.isBestseller,
                             isNew: !!item.isNew,
@@ -1816,7 +2002,15 @@ class WebWorker {
 
     async fetchExternalDiscoveryItemsV2(discovery = {}) {
         try {
-            return await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
+            const targetUrl = (discovery.externalBrowseUrl || discovery.externalUrl);
+            const feed = await this.fetchExternalFeedItems(discovery.externalLimit, targetUrl);
+
+            if (discovery.externalBrowseUrl && discovery.externalBrowseUrl !== discovery.externalUrl) {
+                const rootFeed = await this.fetchExternalFeedItems(Math.min(discovery.externalLimit, 48), discovery.externalUrl);
+                feed.genreOptions = (rootFeed.genreOptions || []);
+            }
+
+            return feed;
         } catch (e) {
             throw new Error(`Не удалось обновить внешний источник "${discovery.externalName || 'Внешний источник'}"`);
         }
@@ -1831,23 +2025,31 @@ class WebWorker {
             throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
 
         const feed = await this.fetchExternalDiscoveryItemsV2(discovery);
-        const matched = await this.matchExternalItemsToLocalBooksV2(feed.items || [], limit);
+        const feedBooks = (Array.isArray(feed.items) ? feed.items : [])
+            .filter(item => String(item && item.kind || 'book').trim().toLowerCase() !== 'genre');
+        const matched = await this.matchExternalItemsToLocalBooksV2(feedBooks, limit);
         const items = matched.items
             .map((book) => this.decorateDiscoveryBook(book, {
                 discoverySource: (discovery.externalName || 'Внешний источник'),
                 matchKind: book.discoveryMatchType,
             }));
         const sourceName = (discovery.externalName || 'Внешний источник');
+        const activeGenreName = String(discovery.externalBrowseName || '').trim();
+        const genrePrefix = (activeGenreName ? `Жанр: ${activeGenreName} · ` : '');
 
         return {
             id: 'external-source',
             title: sourceName,
-            subtitle: `В библиотеке ${matched.matchedCount} · вне библиотеки ${matched.missingCount}`,
+            subtitle: `${genrePrefix}В библиотеке ${matched.matchedCount} · вне библиотеки ${matched.missingCount}`,
             source: 'external',
             sourceName,
             sourceUrl: feed.sourceUrl,
             updatedAt: Date.now(),
             discoveryStale: false,
+            discoveryHasMore: !!feed.hasMore,
+            genreOptions: (feed.genreOptions || []),
+            activeGenreUrl: (discovery.externalBrowseUrl || ''),
+            activeGenreName,
             items,
             emptyMessage: 'Во внешнем источнике пока ничего не найдено.',
         };
@@ -1861,8 +2063,9 @@ class WebWorker {
 
         const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
         const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
-        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 24));
+        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 120));
         const personalShelfLimit = Math.max(1, Math.min(parseInt(options.personalLimit, 10) || discovery.shelfLimit, 24));
+        const personalSimilarLimit = Math.max(personalShelfLimit, Math.min(parseInt(options.personalSimilarLimit, 10) || Math.max(personalShelfLimit, 16), 96));
 
         const dbConfig = await this.dbConfig();
         const inpxHash = String(dbConfig.inpxHash || '').trim();
@@ -1894,7 +2097,7 @@ class WebWorker {
         if (popularShelf)
             shelves.push(popularShelf);
 
-        for (const shelf of await this.getPersonalDiscoveryShelvesV2(options.userId, options.profileAccessToken, personalShelfLimit, options)) {
+        for (const shelf of await this.getPersonalDiscoveryShelvesV2(options.userId, options.profileAccessToken, personalShelfLimit, Object.assign({}, options, {personalSimilarLimit}))) {
             if (shelf)
                 shelves.push(shelf);
         }
@@ -1902,7 +2105,7 @@ class WebWorker {
         if (discovery.externalSource !== 'none') {
             try {
                 const externalShelf = await this.rememberPersistedDiscovery(
-                    `discovery:${inpxHash}:external:${externalDiscoveryCacheVersion}:${discovery.externalSource}:${discovery.externalName}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}:${discovery.externalTtlMinutes}`,
+                    `discovery:${inpxHash}:external:${externalDiscoveryCacheVersion}:${discovery.externalSource}:${discovery.externalName}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}:${discovery.externalBrowseUrl}:${discovery.externalBrowseName}:${discovery.externalTtlMinutes}`,
                     () => this.buildExternalDiscoveryShelfV2(externalShelfLimit, options),
                     discovery.externalTtlMinutes * 60 * 1000,
                     {forceRefresh: options.forceRefresh === true},
@@ -2253,18 +2456,35 @@ class WebWorker {
             map.set(normalizedKey, (map.get(normalizedKey) || 0) + Number(amount || 0));
         };
 
+        const getRecencyMultiplier = (stamp = '') => {
+            const time = Date.parse(String(stamp || '')) || 0;
+            if (!time)
+                return 1;
+
+            const ageDays = Math.max(0, Math.floor((Date.now() - time) / 86400000));
+            if (ageDays <= 7)
+                return 1.45;
+            if (ageDays <= 30)
+                return 1.25;
+            if (ageDays <= 90)
+                return 1.1;
+            return 1;
+        };
+
         const applyBookSignals = (book, amount = 1, stamp = '') => {
             if (!book)
                 return;
 
+            const recencyMultiplier = getRecencyMultiplier(stamp);
+            const weightedAmount = Number(amount || 0) * recencyMultiplier;
             knownBookUids.add(book._uid);
-            addWeight(authorWeights, book.author, 4 * amount);
-            addWeight(seriesWeights, book.series, 6 * amount);
+            addWeight(authorWeights, book.author, 4 * weightedAmount);
+            addWeight(seriesWeights, book.series, 6 * weightedAmount);
             String(book.genre || '')
                 .split(',')
                 .map(item => item.trim())
                 .filter(Boolean)
-                .forEach((genre) => addWeight(genreWeights, genre, 2 * amount));
+                .forEach((genre) => addWeight(genreWeights, genre, 2 * weightedAmount));
 
             updatedAt = Math.max(updatedAt, Date.parse(String(stamp || '')) || 0);
         };
@@ -2292,6 +2512,8 @@ class WebWorker {
         const preferredAuthors = Object.fromEntries(authorWeights);
         const preferredSeries = Object.fromEntries(seriesWeights);
         const preferredGenres = Object.fromEntries(genreWeights);
+        const displayLimit = Math.max(1, Math.min(parseInt(limit, 10) || 8, 96));
+        const probeLimit = displayLimit + 1;
         if (!Object.keys(preferredAuthors).length && !Object.keys(preferredSeries).length && !Object.keys(preferredGenres).length) {
             return {
                 id: 'similar-books',
@@ -2305,6 +2527,10 @@ class WebWorker {
             };
         }
 
+        const rotationSeed = String(user.id || '')
+            .split('')
+            .reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) % 9973, Math.floor(Date.now() / 86400000));
+
         const rows = await this.db.select({
             table: 'book',
             rawResult: true,
@@ -2313,7 +2539,8 @@ class WebWorker {
                 const preferredAuthors = ${this.db.esc(preferredAuthors)};
                 const preferredSeries = ${this.db.esc(preferredSeries)};
                 const preferredGenres = ${this.db.esc(preferredGenres)};
-                const limit = ${this.db.esc(Math.max(limit * 6, 32))};
+                const limit = ${this.db.esc(Math.max(probeLimit * 8 + 24, 48))};
+                const rotationSeed = ${this.db.esc(rotationSeed)};
 
                 const result = [];
                 for (const id of @all()) {
@@ -2346,6 +2573,11 @@ class WebWorker {
                     }
                     if (String(row.ext || '').toLowerCase() === 'fb2')
                         score += 10;
+
+                    const stableHash = String(row._uid || row.id || '')
+                        .split('')
+                        .reduce((sum, char) => ((sum * 33) + char.charCodeAt(0) + rotationSeed) % 9973, rotationSeed);
+                    score += (stableHash / 9973) * 12;
 
                     result.push(Object.assign({}, row, {_similarityScore: score}));
                 }
@@ -2397,9 +2629,12 @@ class WebWorker {
                 authorCounts.set(authorKey, (authorCounts.get(authorKey) || 0) + 1);
             if (seriesKey)
                 seriesCounts.set(seriesKey, (seriesCounts.get(seriesKey) || 0) + 1);
-            if (items.length >= limit)
+            if (items.length >= probeLimit)
                 break;
         }
+
+        const hasMore = items.length > displayLimit;
+        const visibleItems = items.slice(0, displayLimit);
 
         return {
             id: 'similar-books',
@@ -2408,7 +2643,8 @@ class WebWorker {
             source: 'personal',
             sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
             updatedAt: updatedAt || Date.now(),
-            items,
+            discoveryHasMore: hasMore,
+            items: visibleItems,
             emptyMessage: '\u041f\u043e\u043a\u0430 \u043c\u0430\u043b\u043e \u0434\u0430\u043d\u043d\u044b\u0445 \u0434\u043b\u044f \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u0439. \u041f\u043e\u0447\u0438\u0442\u0430\u0439\u0442\u0435 \u0435\u0449\u0451 \u043d\u0435\u043c\u043d\u043e\u0433\u043e \u0438\u043b\u0438 \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u043a\u043d\u0438\u0433\u0438 \u0432 \u0441\u043f\u0438\u0441\u043a\u0438.',
         };
     }
@@ -2469,8 +2705,10 @@ class WebWorker {
             await this.buildUnfinishedSeriesShelfV2(user, limit, context),
         ];
 
-        if (options && options.personalSimilarEnabled !== false)
-            shelves.push(await this.buildSimilarBooksShelfV2(user, limit, context));
+        if (options && options.personalSimilarEnabled !== false) {
+            const similarLimit = Math.max(limit, Math.min(parseInt(options.personalSimilarLimit, 10) || Math.max(limit, 16), 96));
+            shelves.push(await this.buildSimilarBooksShelfV2(user, similarLimit, context));
+        }
 
         shelves.push(await this.buildHiddenDiscoveryShelfV2(user, limit, context));
 

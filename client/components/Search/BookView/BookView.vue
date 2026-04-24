@@ -903,6 +903,7 @@ export default vueComponent(BookView);
     align-items: center;
     justify-content: center;
     background: rgba(255, 255, 255, 0.8);
+    color: rgba(18, 24, 28, 0.92);
     font-size: 24px;
     font-weight: 800;
     box-shadow: 0 8px 20px rgba(23, 32, 38, 0.12);
@@ -924,9 +925,29 @@ export default vueComponent(BookView);
     padding: 4px 10px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.7);
+    color: rgba(18, 24, 28, 0.86);
     font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.03em;
+}
+
+:global(body.body--dark) .cover-letter {
+    background: rgba(255, 255, 255, 0.9);
+    color: rgba(12, 18, 24, 0.94);
+    box-shadow:
+        0 10px 24px rgba(0, 0, 0, 0.32),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+}
+
+:global(body.body--dark) .cover-placeholder-title {
+    color: rgba(248, 250, 252, 0.96);
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+
+:global(body.body--dark) .cover-placeholder-ext {
+    background: rgba(255, 255, 255, 0.86);
+    color: rgba(12, 18, 24, 0.9);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
 }
 
 .cover-badge {

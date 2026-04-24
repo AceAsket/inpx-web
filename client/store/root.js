@@ -36,11 +36,14 @@ const state = {
         compactDiscoveryCards: false,
         discoveryNewestLimit: 8,
         discoveryPopularLimit: 8,
-        discoveryExternalLimit: 8,
+        discoveryExternalLimit: 12,
         discoveryExternalSource: '',
         discoveryExternalName: '',
         discoveryExternalUrl: '',
         discoveryExternalTtlMinutes: 1440,
+        discoveryExternalFilter: 'books',
+        discoveryExternalGenreUrl: '',
+        discoveryExternalGenreName: '',
     },    
 };
 

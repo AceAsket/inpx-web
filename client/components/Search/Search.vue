@@ -416,6 +416,12 @@
                     :section-title="getRouteLabel(selectedList)"
                     :compact-mode="compactDiscoveryCards"
                     :personal-mode="selectedList === 'for-you'"
+                    :external-filter="discoveryExternalFilter"
+                    :show-external-filter="selectedList === 'bestsellers'"
+                    :external-genre-options="externalDiscoveryGenreOptions"
+                    :external-genre-url="discoveryExternalGenreUrl"
+                    :external-pagination="externalDiscoveryPagination"
+                    :show-external-pagination="selectedList === 'bestsellers'"
                     :unread-only="showDiscoveryUnreadOnly"
                     :shelves="selectedDiscoveryShelves"
                     :loading="discoveryShelvesLoading"
@@ -431,6 +437,12 @@
                     @restore-book="restoreDiscoveryBook"
                     @toggle-unread-only="toggleDiscoveryUnreadOnly"
                     @toggle-compact="toggleCompactDiscoveryCards"
+                    @set-external-filter="setDiscoveryExternalFilter"
+                    @set-external-genre="setDiscoveryExternalGenre"
+                    @set-external-limit="setDiscoveryExternalLimit"
+                    @change-external-page="changeDiscoveryExternalPage"
+                    @load-more-external="loadMoreExternalDiscovery"
+                    @load-more-recommendations="loadMoreSimilarRecommendations"
                 />
                 <component
                     :is="selectedListComponent"
@@ -701,11 +713,16 @@ class Search {
     compactDiscoveryCards = false;
     discoveryNewestLimit = 8;
     discoveryPopularLimit = 8;
-    discoveryExternalLimit = 8;
+    discoverySimilarLimit = 16;
+    discoveryExternalLimit = 12;
     discoveryExternalSource = '';
     discoveryExternalName = '';
     discoveryExternalUrl = '';
     discoveryExternalTtlMinutes = 1440;
+    discoveryExternalFilter = 'books';
+    discoveryExternalGenreUrl = '';
+    discoveryExternalGenreName = '';
+    discoveryExternalPage = 1;
     //stuff
     prevList = {};
     list = {
@@ -728,6 +745,7 @@ class Search {
     discoveryShelvesLoading = false;
     discoveryShelvesError = '';
     discoveryShelvesCacheKey = '';
+    discoverySimilarExhausted = false;
 
     searchDateOptions = [
         {label: 'сегодня', value: 'today'},
@@ -825,7 +843,7 @@ class Search {
         this.compactDiscoveryCards = (settings.compactDiscoveryCards === true);
         this.discoveryNewestLimit = parseInt(settings.discoveryNewestLimit, 10) || 8;
         this.discoveryPopularLimit = parseInt(settings.discoveryPopularLimit, 10) || 8;
-        this.discoveryExternalLimit = parseInt(settings.discoveryExternalLimit, 10) || 8;
+        this.discoveryExternalLimit = Math.max(12, Math.min(parseInt(settings.discoveryExternalLimit, 10) || 12, 120));
         this.discoveryExternalSource = String(settings.discoveryExternalSource || ((this.config.discovery || {}).externalSource || '')).trim().toLowerCase();
         this.discoveryExternalName = String(settings.discoveryExternalName || ((this.config.discovery || {}).externalName || '')).trim();
         this.discoveryExternalUrl = String(settings.discoveryExternalUrl || ((this.config.discovery || {}).externalUrl || '')).trim();
@@ -833,6 +851,13 @@ class Search {
             1440,
             parseInt(settings.discoveryExternalTtlMinutes, 10) || parseInt(((this.config.discovery || {}).externalTtlMinutes), 10) || 1440,
         );
+        this.discoveryExternalFilter = (
+            ['all', 'books', 'genres'].includes(String(settings.discoveryExternalFilter || '').trim().toLowerCase())
+                ? String(settings.discoveryExternalFilter || '').trim().toLowerCase()
+                : 'books'
+        );
+        this.discoveryExternalGenreUrl = String(settings.discoveryExternalGenreUrl || '').trim();
+        this.discoveryExternalGenreName = String(settings.discoveryExternalGenreName || '').trim();
     }
 
     recvMessage(d) {
@@ -1113,6 +1138,11 @@ class Search {
                     ...shelf,
                     dismissible: (String(shelf.id || '') !== 'hidden-books'),
                     canHide: (String(shelf.id || '') !== 'hidden-books'),
+                    discoveryHasMore: (
+                        String(shelf.id || '') === 'similar-books' && this.discoverySimilarExhausted === true
+                            ? false
+                            : shelf.discoveryHasMore
+                    ),
                     items: (Array.isArray(shelf.items) ? shelf.items : [])
                         .filter((book) => !(this.showDiscoveryUnreadOnly === true && book && book.discoveryRead === true && String(shelf.id || '') !== 'hidden-books'))
                         .map((book) => ({
@@ -1129,8 +1159,111 @@ class Search {
         if (this.selectedList === 'popular')
             return shelves.filter(item => item && item.id === 'popular');
         if (this.selectedList === 'bestsellers')
-            return shelves.filter(item => item && item.source === 'external');
+            return shelves
+                .filter(item => item && item.source === 'external')
+                .map((shelf) => ({
+                    ...shelf,
+                    items: ((Array.isArray(shelf.items) ? shelf.items : []).filter((book) => {
+                        const kind = String((book && book.discoveryItemKind) || 'book').trim().toLowerCase() || 'book';
+                        return kind !== 'genre';
+                    })).slice(this.externalDiscoveryPageStart, this.externalDiscoveryPageEnd),
+                }));
         return shelves;
+    }
+
+    get externalDiscoverySourceShelves() {
+        return (Array.isArray(this.discoveryShelves) ? this.discoveryShelves : [])
+            .filter(item => item && item.source === 'external');
+    }
+
+    get externalDiscoverySourceShelf() {
+        return (this.externalDiscoverySourceShelves[0] || null);
+    }
+
+    get externalDiscoveryFilteredItems() {
+        const shelf = this.externalDiscoverySourceShelf;
+        const items = (shelf && Array.isArray(shelf.items) ? shelf.items : []);
+        return items.filter((book) => {
+            const kind = String((book && book.discoveryItemKind) || 'book').trim().toLowerCase() || 'book';
+            return kind !== 'genre';
+        });
+    }
+
+    get externalDiscoveryGenreOptions() {
+        const shelf = this.externalDiscoverySourceShelf;
+        const options = (shelf && Array.isArray(shelf.genreOptions) ? shelf.genreOptions : []);
+        const selectedUrl = String(this.discoveryExternalGenreUrl || '').trim();
+        const selectedName = String(this.discoveryExternalGenreName || '').trim();
+        const result = [{label: 'Все жанры', value: ''}];
+        const seen = new Set(['']);
+
+        for (const option of options) {
+            const label = String(option && option.label || '').trim();
+            const value = String(option && option.value || '').trim();
+            if (!label || !value || seen.has(value))
+                continue;
+            seen.add(value);
+            result.push({label, value});
+        }
+
+        if (selectedUrl && !seen.has(selectedUrl))
+            result.push({label: (selectedName || 'Выбранный жанр'), value: selectedUrl});
+
+        return result;
+    }
+
+    get externalDiscoveryHasMore() {
+        return !!(this.externalDiscoverySourceShelf && this.externalDiscoverySourceShelf.discoveryHasMore);
+    }
+
+    get externalDiscoveryPageSize() {
+        const limit = Math.max(12, Math.min(parseInt(this.discoveryExternalLimit, 10) || 12, 120));
+        if (limit <= 12)
+            return 12;
+        if (limit <= 24)
+            return 24;
+        return 48;
+    }
+
+    get externalDiscoveryPageStart() {
+        return Math.max(0, (this.externalDiscoveryCurrentPage - 1) * this.externalDiscoveryPageSize);
+    }
+
+    get externalDiscoveryPageEnd() {
+        return Math.max(this.externalDiscoveryPageStart + this.externalDiscoveryPageSize, parseInt(this.discoveryExternalLimit, 10) || 12);
+    }
+
+    get externalDiscoveryCurrentPage() {
+        return Math.max(1, parseInt(this.discoveryExternalPage, 10) || 1);
+    }
+
+    get externalDiscoveryTotalPages() {
+        const totalItems = this.externalDiscoveryFilteredItems.length;
+        let totalPages = Math.max(1, Math.ceil(totalItems / this.externalDiscoveryPageSize));
+        if (this.externalDiscoveryHasMore && totalItems >= this.externalDiscoveryPageSize * totalPages)
+            totalPages++;
+        return totalPages;
+    }
+
+    get externalDiscoveryEffectiveFetchLimit() {
+        return Math.max(
+            parseInt(this.discoveryExternalLimit, 10) || this.externalDiscoveryPageSize,
+            Math.min(this.externalDiscoveryCurrentPage * this.externalDiscoveryPageSize, 120),
+        );
+    }
+
+    get externalDiscoveryPagination() {
+        const totalItems = this.externalDiscoveryFilteredItems.length;
+        const currentPage = this.externalDiscoveryCurrentPage;
+        const totalPages = this.externalDiscoveryTotalPages;
+        return {
+            page: currentPage,
+            perPage: this.externalDiscoveryPageSize,
+            totalItems,
+            totalPages,
+            canPrev: currentPage > 1,
+            canNext: (currentPage < totalPages),
+        };
     }
 
     get discoveryShelvesRequestKey() {
@@ -1153,9 +1286,13 @@ class Search {
             sourceName: this.activeDiscoveryExternalName || '',
             sourceUrl: this.activeDiscoveryExternalUrl || '',
             sourceTtl: this.activeDiscoveryExternalTtlMinutes || 1440,
+            browseUrl: this.discoveryExternalGenreUrl || '',
+            browseName: this.discoveryExternalGenreName || '',
+            filter: this.discoveryExternalFilter || 'books',
             newestLimit: this.discoveryNewestLimit || 8,
             popularLimit: this.discoveryPopularLimit || 8,
-            externalLimit: this.discoveryExternalLimit || 8,
+            similarLimit: this.discoverySimilarLimit || 16,
+            externalLimit: this.externalDiscoveryEffectiveFetchLimit,
         });
     }
 
@@ -1612,6 +1749,103 @@ class Search {
         this.setSetting('compactDiscoveryCards', !(this.compactDiscoveryCards === true));
     }
 
+    setDiscoveryExternalFilter(value = 'books') {
+        const normalized = String(value || '').trim().toLowerCase();
+        this.discoveryExternalPage = 1;
+        this.discoveryExternalFilter = (['all', 'books', 'genres'].includes(normalized) ? normalized : 'books');
+        this.setSetting('discoveryExternalFilter', this.discoveryExternalFilter);
+    }
+
+    async setDiscoveryExternalGenre(value = '') {
+        const nextUrl = String(value || '').trim();
+        const selected = this.externalDiscoveryGenreOptions.find(option => String(option.value || '') === nextUrl);
+
+        this.discoveryExternalPage = 1;
+        this.discoveryExternalGenreUrl = nextUrl;
+        this.discoveryExternalGenreName = (selected ? selected.label : '');
+        this.discoveryExternalFilter = 'books';
+        this.setSetting('discoveryExternalGenreUrl', this.discoveryExternalGenreUrl);
+        this.setSetting('discoveryExternalGenreName', this.discoveryExternalGenreName);
+        this.setSetting('discoveryExternalFilter', this.discoveryExternalFilter);
+
+        this.discoveryShelvesCacheKey = '';
+        if (this.selectedList === 'bestsellers') {
+            this.discoveryShelvesLoading = true;
+            await this.refreshDiscoveryShelves(true);
+        }
+    }
+
+    async setDiscoveryExternalLimit(value = 12) {
+        const raw = parseInt(value, 10) || 12;
+        const normalized = ([12, 24, 48].includes(raw) ? raw : 12);
+        this.discoveryExternalPage = 1;
+        this.discoveryExternalLimit = normalized;
+        this.setSetting('discoveryExternalLimit', this.discoveryExternalLimit);
+        this.discoveryShelvesCacheKey = '';
+        if (this.selectedList === 'bestsellers') {
+            this.discoveryShelvesLoading = true;
+            await this.refreshDiscoveryShelves(true);
+        }
+    }
+
+    async changeDiscoveryExternalPage(delta = 0) {
+        const nextPage = Math.max(1, (this.externalDiscoveryCurrentPage + (parseInt(delta, 10) || 0)));
+        if (nextPage === this.externalDiscoveryCurrentPage && !(delta > 0 && this.externalDiscoveryPagination.canNext))
+            return;
+
+        this.discoveryExternalPage = nextPage;
+        if (this.selectedList === 'bestsellers' && this.externalDiscoveryEffectiveFetchLimit > this.externalDiscoveryFilteredItems.length)
+            await this.refreshDiscoveryShelves(true);
+    }
+
+    async loadMoreExternalDiscovery() {
+        const current = Math.max(12, Math.min(parseInt(this.discoveryExternalLimit, 10) || 12, 120));
+        const step = this.externalDiscoveryPageSize;
+        const next = Math.min(120, current + step);
+        if (next <= current)
+            return;
+
+        this.discoveryExternalLimit = next;
+        this.setSetting('discoveryExternalLimit', this.discoveryExternalLimit);
+        this.discoveryShelvesCacheKey = '';
+        if (this.selectedList === 'bestsellers') {
+            this.discoveryShelvesLoading = true;
+            await this.refreshDiscoveryShelves(true);
+        }
+    }
+
+    async loadMoreSimilarRecommendations() {
+        const current = Math.max(8, Math.min(parseInt(this.discoverySimilarLimit, 10) || 16, 96));
+        const next = Math.min(current + 8, 96);
+        if (next === current) {
+            this.discoverySimilarExhausted = true;
+            this.$root.notify.info('Новых рекомендаций пока нет.');
+            return;
+        }
+
+        const beforeShelf = (Array.isArray(this.selectedDiscoveryShelves) ? this.selectedDiscoveryShelves : [])
+            .find(item => item && String(item.id || '') === 'similar-books');
+        const beforeCount = beforeShelf && Array.isArray(beforeShelf.items) ? beforeShelf.items.length : 0;
+
+        this.discoverySimilarLimit = next;
+        this.discoveryShelvesCacheKey = '';
+        if (this.selectedList === 'for-you') {
+            this.discoveryShelvesLoading = true;
+            await this.refreshDiscoveryShelves(true);
+        }
+
+        const afterShelf = (Array.isArray(this.selectedDiscoveryShelves) ? this.selectedDiscoveryShelves : [])
+            .find(item => item && String(item.id || '') === 'similar-books');
+        const afterCount = afterShelf && Array.isArray(afterShelf.items) ? afterShelf.items.length : 0;
+
+        if (afterCount <= beforeCount) {
+            this.discoverySimilarExhausted = true;
+            this.$root.notify.info('Новых рекомендаций пока нет.');
+        } else {
+            this.discoverySimilarExhausted = !(afterShelf && afterShelf.discoveryHasMore === true);
+        }
+    }
+
     async dismissDiscoveryBook(book = {}) {
         const bookUid = String(book._uid || book.bookUid || '').trim();
         if (!bookUid)
@@ -1619,6 +1853,7 @@ class Search {
 
         try {
             await this.api.updateDiscoveryPreferences({hiddenBooksAdd: [bookUid]});
+            this.discoverySimilarExhausted = false;
             this.discoveryShelvesCacheKey = '';
             await this.refreshDiscoveryShelves(true);
             this.$root.notify.success('Книга скрыта из персональных витрин.');
@@ -1634,6 +1869,7 @@ class Search {
 
         try {
             await this.api.updateDiscoveryPreferences({hiddenBooksRemove: [bookUid]});
+            this.discoverySimilarExhausted = false;
             this.discoveryShelvesCacheKey = '';
             await this.refreshDiscoveryShelves(true);
             this.$root.notify.success('Книга возвращена в персональные витрины.');
@@ -1922,14 +2158,17 @@ class Search {
             const response = await this.api.getDiscoveryShelves({
                 forceRefresh: force === true,
                 personalLimit: this.discoveryPopularLimit,
+                personalSimilarLimit: this.discoverySimilarLimit,
                 personalSimilarEnabled: this.showDiscoverySimilar,
                 newestLimit: this.discoveryNewestLimit,
                 popularLimit: this.discoveryPopularLimit,
-                externalLimit: this.discoveryExternalLimit,
+                externalLimit: this.externalDiscoveryEffectiveFetchLimit,
                 externalSource: this.activeDiscoveryExternalSource,
                 externalName: this.activeDiscoveryExternalName,
                 externalUrl: this.activeDiscoveryExternalUrl,
                 externalTtlMinutes: this.activeDiscoveryExternalTtlMinutes,
+                externalBrowseUrl: this.discoveryExternalGenreUrl,
+                externalBrowseName: this.discoveryExternalGenreName,
             });
             this.discoveryShelves = (response && Array.isArray(response.shelves) ? response.shelves : []);
             this.discoveryShelvesCacheKey = cacheKey;
