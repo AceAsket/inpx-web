@@ -60,15 +60,14 @@ README ниже в первую очередь описывает сценари
 * [Пользователи, личные списки и OPDS](#пользователи-личные-списки-и-opds)
 * [Читалка и отладка FB2](#читалка-и-отладка-fb2)
 * [Витрины и внешние источники](#витрины-и-внешние-источники)
-* [Standalone-режим](#standalone)
-* [Техническая документация и ручная настройка](#техническая-документация-и-ручная-настройка)
+* [Standalone и ручная настройка](#standalone)
+* [Сборка standalone-бинарников](#build)
+* [Локальный запуск через Node.js без Docker](#native_run)
 * [Параметры командной строки](#cli)
 * [Конфигурация](#config)
 * [Удаленная библиотека](#remotelib)
 * [Фильтр по авторам и книгам](#filter)
 * [Настройка https с помощью nginx](#https)
-* [Сборка standalone-бинарников](#build)
-* [Локальный запуск через Node.js без Docker](#native_run)
 * [Разработка](#development)
 * [Proxmox LXC](#proxmox-lxc)
 * [Обратная связь](#обратная-связь)
@@ -416,11 +415,95 @@ http://127.0.0.1:12380/#/reader-lab?sample=night-watch.fb2&debugReader=1&debugRe
 * если книга не найдена в локальной библиотеке, она всё равно показывается в витрине с пометкой, что её нет в библиотеке
 * если внешний источник временно недоступен, используется последний успешный кеш витрины
 
-## Техническая документация и ручная настройка
+<a id="standalone" />
+<a id="техническая-документация-и-ручная-настройка" />
 
-Ниже идут низкоуровневые справочные разделы для ручного запуска и совместимости со старой документацией: CLI, конфиг, режим удалённой библиотеки, фильтрация `.inpx`, reverse proxy и dev-режим.
+## Standalone и ручная настройка
 
-Если нужен быстрый старт, используйте верхние разделы README: для сервера — Docker, для локального `.exe` — standalone, для запуска из исходников — Node.js.
+Этот блок нужен для локального запуска без Docker и ручной настройки. Здесь собраны готовый standalone-бинарник, запуск из исходников через Node.js и низкоуровневые справочные разделы: CLI, конфиг, режим удалённой библиотеки, фильтрация `.inpx`, reverse proxy и dev-режим.
+
+Для серверного сценария по-прежнему удобнее использовать Docker-разделы выше.
+
+Что важно для standalone-запуска:
+
+* рабочие данные приложения хранятся в каталоге `.inpx-web`
+* по умолчанию standalone пытается создать этот каталог рядом с исполняемым файлом
+* для Windows, если рядом с `.exe` запись недоступна, приложение автоматически переключается на `%LOCALAPPDATA%\\inpx-web`
+* если библиотека лежит на сетевом или внешнем диске, а запись туда ограничена, лучше сразу указать `--data-dir`
+
+Быстрые переходы:
+
+* [Сборка standalone-бинарников](#build)
+* [Локальный запуск через Node.js без Docker](#native_run)
+* [Параметры командной строки](#cli)
+* [Конфигурация](#config)
+
+<a id="build" />
+
+### Сборка standalone-бинарников
+
+Этот раздел нужен только для ручной сборки standalone-бинарников. Если нужен готовый локальный запуск без сборки, проще взять assets из GitHub Releases. Сборка выполняется в Linux-среде и требует Node.js не ниже 16.
+
+Для сборки linux-arm64 необходимо предварительно установить [QEMU](https://wiki.debian.org/QemuUserEmulation).
+
+```sh
+git clone https://github.com/AceAsket/inpx-web
+cd inpx-web
+npm i
+npm run release
+```
+
+Результат сборки будет доступен в каталоге `dist/release`
+
+<a id="native_run" />
+
+### Локальный запуск через Node.js без Docker
+
+Этот режим подходит для локальной отладки и ручного запуска из исходников без Docker.
+
+Если вы используете уже готовый standalone-бинарник из GitHub Releases:
+
+* распакуйте архив в отдельную папку
+* положите рядом с ним `.inpx` и файлы библиотеки или укажите их через параметры
+* при необходимости задайте отдельный каталог данных через `--data-dir`
+
+Примеры для готового Windows-бинарника:
+
+```bat
+inpx-web.exe
+```
+
+Если `.inpx` и библиотека лежат не рядом с `.exe`:
+
+```bat
+inpx-web.exe --lib-dir="Z:\Books" --inpx="Z:\Books\library.inpx"
+```
+
+Если библиотека находится на сетевом/внешнем диске и вы не хотите хранить рабочие данные рядом с ней:
+
+```bat
+inpx-web.exe --data-dir="%LOCALAPPDATA%\inpx-web" --lib-dir="Z:\Books" --inpx="Z:\Books\library.inpx"
+```
+
+Ниже пример для Ubuntu; для других Linux-систем различия минимальны:
+
+```sh
+# установка nodejs v16 и выше:
+curl -s https://deb.nodesource.com/setup_16.x | sudo bash
+sudo apt install nodejs -y
+
+# подготовка
+git clone https://github.com/AceAsket/inpx-web
+cd inpx-web
+npm i
+npm run build:client && node build/prepkg.js linux
+
+# удалим файл development-среды, чтобы запускался в production-режиме
+rm ./server/config/application_env
+
+# запуск inpx-web, тут же будет создан каталог .inpx-web
+node server --app-dir=.inpx-web
+```
 
 <a id="cli" />
 
@@ -724,91 +807,6 @@ server {
 sudo service nginx reload
 ```
 Далее следовать инструкции установки https://certbot.eff.org/instructions?ws=nginx&os=debianbuster
-
-<a id="standalone" />
-
-## Standalone-режим
-
-Этот раздел нужен только для локального запуска без Docker. Внутри него есть два варианта: готовый бинарник из GitHub Releases или запуск из исходников через Node.js. Для серверного сценария удобнее использовать Docker-инструкции выше.
-
-Что важно для standalone-запуска:
-
-* рабочие данные приложения хранятся в каталоге `.inpx-web`
-* по умолчанию standalone пытается создать этот каталог рядом с исполняемым файлом
-* для Windows, если рядом с `.exe` запись недоступна, приложение автоматически переключается на `%LOCALAPPDATA%\\inpx-web`
-* если библиотека лежит на сетевом или внешнем диске, а запись туда ограничена, лучше сразу указать `--data-dir`
-
-Быстрые переходы:
-
-* [Сборка standalone-бинарников](#build)
-* [Локальный standalone-запуск без Docker](#native_run)
-
-<a id="build" />
-
-### Сборка standalone-бинарников
-
-Этот раздел нужен только для ручной сборки standalone-бинарников. Если нужен готовый локальный запуск без сборки, проще взять assets из GitHub Releases. Сборка выполняется в Linux-среде и требует Node.js не ниже 16.
-
-Для сборки linux-arm64 необходимо предварительно установить [QEMU](https://wiki.debian.org/QemuUserEmulation).
-
-```sh
-git clone https://github.com/AceAsket/inpx-web
-cd inpx-web
-npm i
-npm run release
-```
-
-Результат сборки будет доступен в каталоге `dist/release`
-
-<a id="native_run" />
-
-### Локальный запуск через Node.js без Docker
-
-Этот режим подходит для локальной отладки и ручного запуска из исходников без Docker.
-
-Если вы используете уже готовый standalone-бинарник из GitHub Releases:
-
-* распакуйте архив в отдельную папку
-* положите рядом с ним `.inpx` и файлы библиотеки или укажите их через параметры
-* при необходимости задайте отдельный каталог данных через `--data-dir`
-
-Примеры для готового Windows-бинарника:
-
-```bat
-inpx-web.exe
-```
-
-Если `.inpx` и библиотека лежат не рядом с `.exe`:
-
-```bat
-inpx-web.exe --lib-dir="Z:\Books" --inpx="Z:\Books\library.inpx"
-```
-
-Если библиотека находится на сетевом/внешнем диске и вы не хотите хранить рабочие данные рядом с ней:
-
-```bat
-inpx-web.exe --data-dir="%LOCALAPPDATA%\inpx-web" --lib-dir="Z:\Books" --inpx="Z:\Books\library.inpx"
-```
-
-Ниже пример для Ubuntu; для других Linux-систем различия минимальны:
-
-```sh
-# установка nodejs v16 и выше:
-curl -s https://deb.nodesource.com/setup_16.x | sudo bash
-sudo apt install nodejs -y
-
-# подготовка
-git clone https://github.com/AceAsket/inpx-web
-cd inpx-web
-npm i
-npm run build:client && node build/prepkg.js linux
-
-# удалим файл development-среды, чтобы запускался в production-режиме
-rm ./server/config/application_env
-
-# запуск inpx-web, тут же будет создан каталог .inpx-web
-node server --app-dir=.inpx-web
-```
 
 <a id="development" />
 
