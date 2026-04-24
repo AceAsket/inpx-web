@@ -12,6 +12,7 @@ on:
         default: 'v1.6.0'
 
 permissions:
+  actions: read
   contents: write
 
 env:
