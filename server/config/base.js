@@ -29,6 +29,12 @@ module.exports = {
     logQueries: false,
     loginRateLimitWindowMs: 15*60*1000,
     loginRateLimitMaxAttempts: 8,
+    requireAuth: process.env.INPX_REQUIRE_AUTH === 'true',
+    authMode: String(process.env.INPX_AUTH_MODE || 'local').trim().toLowerCase(),
+    trustProxy: process.env.INPX_TRUST_PROXY === 'true',
+    proxyAuthHeader: process.env.INPX_PROXY_AUTH_HEADER || 'Remote-User',
+    trustedProxyCidrs: String(process.env.INPX_TRUSTED_PROXY_CIDRS || '').split(',').map(item => item.trim()).filter(Boolean),
+    authExemptHealth: process.env.INPX_AUTH_EXEMPT_HEALTH !== 'false',
 
     //поправить в случае, если были критические изменения в DbCreator или InpxParser
     //иначе будет рассинхронизация по кешу между сервером и клиентом на уровне БД

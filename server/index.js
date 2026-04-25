@@ -17,6 +17,21 @@ let argv;
 let branch = '';
 const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'library-sources', 'admin-login', 'admin-password'];
 
+function applyEnvSecurityOverrides(targetConfig) {
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_REQUIRE_AUTH'))
+        targetConfig.requireAuth = process.env.INPX_REQUIRE_AUTH === 'true';
+    if (process.env.INPX_AUTH_MODE)
+        targetConfig.authMode = String(process.env.INPX_AUTH_MODE || '').trim().toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_TRUST_PROXY'))
+        targetConfig.trustProxy = process.env.INPX_TRUST_PROXY === 'true';
+    if (process.env.INPX_PROXY_AUTH_HEADER)
+        targetConfig.proxyAuthHeader = process.env.INPX_PROXY_AUTH_HEADER;
+    if (process.env.INPX_TRUSTED_PROXY_CIDRS)
+        targetConfig.trustedProxyCidrs = String(process.env.INPX_TRUSTED_PROXY_CIDRS || '').split(',').map(item => item.trim()).filter(Boolean);
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_AUTH_EXEMPT_HEALTH'))
+        targetConfig.authExemptHealth = process.env.INPX_AUTH_EXEMPT_HEALTH !== 'false';
+}
+
 function showHelp(defaultConfig) {
     console.log(utils.versionText(defaultConfig));
     console.log(
@@ -52,6 +67,7 @@ async function init() {
 
     await configManager.load();
     config = configManager.config;
+    applyEnvSecurityOverrides(config);
     branch = config.branch;
 
     //dirs
@@ -162,7 +178,10 @@ async function main() {
     const app = express();
     const security = new (require('./core/Security'))(config);
     await security.init();
+    if (config.trustProxy)
+        app.set('trust proxy', (address) => security.isTrustedProxyAddress(address));
     app.use(security.middleware());
+    app.use(security.requiredAuthMiddleware());
 
     const server = http.createServer(app);
     const wss = new WebSocket.Server({
