@@ -7,6 +7,7 @@ const secretFields = [
     'telegramBotToken',
     'smtpPass',
     'opds.password',
+    'metricsToken',
 ];
 
 function getPath(obj = {}, field = '') {

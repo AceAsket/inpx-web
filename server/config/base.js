@@ -35,6 +35,10 @@ module.exports = {
     proxyAuthHeader: process.env.INPX_PROXY_AUTH_HEADER || 'Remote-User',
     trustedProxyCidrs: String(process.env.INPX_TRUSTED_PROXY_CIDRS || '').split(',').map(item => item.trim()).filter(Boolean),
     authExemptHealth: process.env.INPX_AUTH_EXEMPT_HEALTH !== 'false',
+    metricsEnabled: process.env.INPX_METRICS_ENABLED === 'true',
+    metricsPath: process.env.INPX_METRICS_PATH || '/metrics',
+    metricsToken: process.env.INPX_METRICS_TOKEN || '',
+    metricsExemptAuth: process.env.INPX_METRICS_EXEMPT_AUTH === 'true',
 
     //поправить в случае, если были критические изменения в DbCreator или InpxParser
     //иначе будет рассинхронизация по кешу между сервером и клиентом на уровне БД

@@ -189,6 +189,12 @@ class Security {
         return ['/health', '/ready', '/api/index-status'].includes(pathname);
     }
 
+    isMetricsPath(req) {
+        const pathname = String((req && req.path) || '').replace(/\/+$/, '') || '/';
+        const metricsPath = String(this.config.metricsPath || '/metrics').replace(/\/+$/, '') || '/metrics';
+        return pathname === metricsPath;
+    }
+
     isTrustedProxy(req) {
         if (!this.config.trustProxy)
             return false;
@@ -262,11 +268,37 @@ class Security {
         return !!this.unpackProxyAuthCookie(cookies[proxyAuthCookieName] || '');
     }
 
+    bearerToken(req) {
+        const match = String(req.headers.authorization || '').match(/^Bearer\s+(.+)$/i);
+        return match ? match[1].trim() : '';
+    }
+
+    metricsRequestToken(req) {
+        return this.bearerToken(req) || String((req.query && req.query.token) || '').trim();
+    }
+
+    hasValidMetricsToken(req) {
+        const expected = String(this.config.metricsToken || '').trim();
+        const supplied = this.metricsRequestToken(req);
+        return !!(expected && supplied && timingSafeStringEqual(supplied, expected));
+    }
+
+    isMetricsAuthExempt(req) {
+        return !!(
+            this.config.metricsEnabled
+            && this.isMetricsPath(req)
+            && (this.config.metricsExemptAuth === true || this.hasValidMetricsToken(req))
+        );
+    }
+
     verifyRequiredAuth(req) {
         if (!this.config.requireAuth)
             return {ok: true};
 
         if (this.config.authExemptHealth !== false && this.isHealthPath(req))
+            return {ok: true};
+
+        if (this.isMetricsAuthExempt(req))
             return {ok: true};
 
         const mode = String(this.config.authMode || 'local').trim().toLowerCase();

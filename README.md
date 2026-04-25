@@ -167,6 +167,19 @@ docker run -d \
 
 В этом режиме приложение отдаёт UI, API, WebSocket, OPDS, книги и обложки только если запрос пришёл от доверенного proxy и proxy передал заголовок авторизованного пользователя. Прямой заход из LAN на случайно открытый порт получит `403 Direct access is forbidden`. `/health`, `/ready` и `/api/index-status` по умолчанию остаются открытыми для Docker/Unraid health-check; если нужно закрыть и их, задайте `INPX_AUTH_EXEMPT_HEALTH=false`.
 
+### Метрики Prometheus
+
+Экспорт Prometheus по умолчанию выключен. Включить его можно так:
+
+```sh
+-e INPX_METRICS_ENABLED=true \
+-e INPX_METRICS_TOKEN=strong-random-token
+```
+
+После этого метрики доступны на `/metrics` в формате Prometheus text exposition. Если задан `INPX_METRICS_TOKEN`, Prometheus должен передавать его как `Authorization: Bearer strong-random-token` или query-параметр `?token=strong-random-token`. Путь можно изменить через `INPX_METRICS_PATH=/internal/metrics`.
+
+Если включён `INPX_REQUIRE_AUTH=true`, `/metrics` подчиняется общей proxy-auth защите. Валидный `INPX_METRICS_TOKEN` разрешает scrape без `Remote-User`, что удобно для отдельного контейнера Prometheus. Если нужно полностью вывести `/metrics` из общей auth-защиты, задайте `INPX_METRICS_EXEMPT_AUTH=true`; при этом токен всё равно проверяется, если он задан.
+
 ### Несколько INPX-источников
 
 По умолчанию приложение работает как раньше: один `INPX` и один `LIBDIR`. Если нужно объединить несколько библиотек в один каталог, можно задать `INPX_LIBRARY_SOURCES`.

@@ -30,6 +30,14 @@ function applyEnvSecurityOverrides(targetConfig) {
         targetConfig.trustedProxyCidrs = String(process.env.INPX_TRUSTED_PROXY_CIDRS || '').split(',').map(item => item.trim()).filter(Boolean);
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_AUTH_EXEMPT_HEALTH'))
         targetConfig.authExemptHealth = process.env.INPX_AUTH_EXEMPT_HEALTH !== 'false';
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_METRICS_ENABLED'))
+        targetConfig.metricsEnabled = process.env.INPX_METRICS_ENABLED === 'true';
+    if (process.env.INPX_METRICS_PATH)
+        targetConfig.metricsPath = process.env.INPX_METRICS_PATH;
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_METRICS_TOKEN'))
+        targetConfig.metricsToken = process.env.INPX_METRICS_TOKEN || '';
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_METRICS_EXEMPT_AUTH'))
+        targetConfig.metricsExemptAuth = process.env.INPX_METRICS_EXEMPT_AUTH === 'true';
 }
 
 function showHelp(defaultConfig) {
@@ -212,7 +220,7 @@ async function main() {
     const webSocketController = new WebSocketController(wss, webAccess, config, security);
 
     const initHealthRoutes = require('./core/HealthRoutes');
-    initHealthRoutes(app, config, webSocketController.webWorker);
+    initHealthRoutes(app, config, webSocketController.webWorker, security);
 
     const initStatic = require('./static');
     initStatic(app, config);
