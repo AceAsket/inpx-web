@@ -248,6 +248,12 @@
                         <div class="reader-home-subtitle">{{ readerHomeSubtitle }}</div>
                     </div>
                     <div class="reader-home-actions">
+                        <div class="reader-theme-switch reader-home-theme">
+                            <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'dark'}" @click="setTheme('dark')">{{ uiText.themeDark }}</q-btn>
+                            <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'sepia'}" @click="setTheme('sepia')">{{ uiText.themeSepia }}</q-btn>
+                            <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'light'}" @click="setTheme('light')">{{ uiText.themeLight }}</q-btn>
+                            <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'eink'}" @click="setTheme('eink')">{{ uiText.themeEink }}</q-btn>
+                        </div>
                         <q-btn
                             v-if="readerHomeCanLogin"
                             color="primary"
@@ -5055,6 +5061,12 @@ class Reader {
     }
 
     async setTheme(theme) {
+        if (!this.bookUid) {
+            this.preferences = Object.assign({}, this.preferences, {theme});
+            this.savePreferencesDebounced();
+            return;
+        }
+
         const previousSignature = this.layoutSignatureForPreferences(this.activePreferences);
         this.beginLayoutRefresh();
         await this.afterLayoutRefreshPaint();
@@ -5397,6 +5409,11 @@ export default vueComponent(Reader);
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
+}
+
+.reader-home-theme {
+    flex: 1 1 100%;
+    justify-content: flex-end;
 }
 
 .reader-home-tools {
@@ -6681,6 +6698,10 @@ export default vueComponent(Reader);
     .reader-home-actions .q-btn,
     .reader-home-book-actions .q-btn {
         flex: 1 1 150px;
+    }
+
+    .reader-home-theme :deep(.q-btn) {
+        flex: 0 0 auto;
     }
 
     .reader-icon-btn {
