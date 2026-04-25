@@ -27,6 +27,7 @@ module.exports = {
     loggingEnabled: true,
     logServerStats: false,
     logQueries: false,
+    loginRateLimitEnabled: process.env.INPX_LOGIN_RATE_LIMIT_ENABLED !== 'false',
     loginRateLimitWindowMs: 15*60*1000,
     loginRateLimitMaxAttempts: 8,
     requireAuth: process.env.INPX_REQUIRE_AUTH === 'true',

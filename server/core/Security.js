@@ -57,6 +57,7 @@ class Security {
         this.config = config;
         this.sessions = new Map();
         this.loginAttempts = new Map();
+        this.loginAttemptTotals = new Map();
         this.secret = '';
         this.trustedProxyRanges = (config.trustedProxyCidrs || [])
             .map(parseCidr)
@@ -368,7 +369,19 @@ class Security {
             || '';
     }
 
-    checkLoginRate(req) {
+    normalizeLoginKind(kind = 'access') {
+        return String(kind || 'access').trim().toLowerCase() === 'profile' ? 'profile' : 'access';
+    }
+
+    incrementLoginMetric(kind = 'access', result = 'failure') {
+        const key = `${this.normalizeLoginKind(kind)}\t${String(result || 'failure').toLowerCase()}`;
+        this.loginAttemptTotals.set(key, (this.loginAttemptTotals.get(key) || 0) + 1);
+    }
+
+    checkLoginRate(req, kind = 'access') {
+        if (this.config.loginRateLimitEnabled === false)
+            return;
+
         const ip = this.clientIp(req) || 'unknown';
         const now = Date.now();
         const windowMs = Math.max(60*1000, Number(this.config.loginRateLimitWindowMs || defaultLoginWindowMs));
@@ -380,12 +393,18 @@ class Security {
             rec.resetAt = now + windowMs;
         }
 
-        if (rec.count >= maxAttempts)
+        if (rec.count >= maxAttempts) {
+            this.incrementLoginMetric(kind, 'blocked');
             throw new Error('Too many login attempts. Try again later.');
+        }
     }
 
-    recordLoginAttempt(req, success = false) {
+    recordLoginAttempt(req, success = false, kind = 'access') {
         const ip = this.clientIp(req) || 'unknown';
+        this.incrementLoginMetric(kind, success ? 'success' : 'failure');
+        if (this.config.loginRateLimitEnabled === false)
+            return;
+
         if (success) {
             this.loginAttempts.delete(ip);
             return;
@@ -400,6 +419,41 @@ class Security {
         }
         rec.count++;
         this.loginAttempts.set(ip, rec);
+    }
+
+    getLoginMetrics() {
+        const now = Date.now();
+        let activeFailedAttempts = 0;
+        let rateLimitedIps = 0;
+        const maxAttempts = Math.max(1, Number(this.config.loginRateLimitMaxAttempts || defaultLoginMaxAttempts));
+
+        for (const [ip, rec] of this.loginAttempts.entries()) {
+            if (!rec || now > rec.resetAt) {
+                this.loginAttempts.delete(ip);
+                continue;
+            }
+
+            activeFailedAttempts += rec.count || 0;
+            if ((rec.count || 0) >= maxAttempts)
+                rateLimitedIps++;
+        }
+
+        const attempts = [];
+        for (const kind of ['access', 'profile']) {
+            for (const result of ['success', 'failure', 'blocked']) {
+                attempts.push({
+                    labels: {kind, result},
+                    value: this.loginAttemptTotals.get(`${kind}\t${result}`) || 0,
+                });
+            }
+        }
+
+        return {
+            enabled: this.config.loginRateLimitEnabled !== false,
+            attempts,
+            activeFailedAttempts,
+            rateLimitedIps,
+        };
     }
 }
 

@@ -47,7 +47,7 @@ function adminEventCounts(webWorker) {
     });
 }
 
-async function buildMetrics(config, webWorker) {
+async function buildMetrics(config, webWorker, security = null, webSocketController = null) {
     const index = await webWorker.getIndexStatus();
     const stats = index.stats || {};
     const memory = process.memoryUsage();
@@ -56,6 +56,10 @@ async function buildMetrics(config, webWorker) {
     const coverCacheSize = await webWorker.dirSize(config.coverDir || `${config.publicFilesDir}/cover`);
     const sources = Array.isArray(config.librarySources) ? config.librarySources : [];
     const enabledSources = sources.filter(source => source.enabled !== false);
+    const loginMetrics = security && security.getLoginMetrics ? security.getLoginMetrics() : null;
+    const onlineMetrics = webSocketController && webSocketController.getOnlineMetrics
+        ? webSocketController.getOnlineMetrics()
+        : {clients: 0, users: 0, anonymousClients: 0};
     const lines = [];
 
     addMetric(lines, 'inpx_web_build_info', 'Application build information.', 'gauge', [{
@@ -81,6 +85,13 @@ async function buildMetrics(config, webWorker) {
         {labels: {enabled: 'false'}, value: sources.length - enabledSources.length},
     ]);
     addMetric(lines, 'inpx_web_admin_events_total', 'Admin event log entries by level and category.', 'gauge', adminEventCounts(webWorker));
+    addMetric(lines, 'inpx_web_ws_clients', 'Active WebSocket clients.', 'gauge', [{value: onlineMetrics.clients}]);
+    addMetric(lines, 'inpx_web_users_online', 'Distinct authorized user profiles with active WebSocket sessions.', 'gauge', [{value: onlineMetrics.users}]);
+    addMetric(lines, 'inpx_web_ws_anonymous_clients', 'Active WebSocket clients without an authorized user profile.', 'gauge', [{value: onlineMetrics.anonymousClients}]);
+    addMetric(lines, 'inpx_web_login_attempts_total', 'Login and access attempts by kind and result.', 'counter', loginMetrics ? loginMetrics.attempts : []);
+    addMetric(lines, 'inpx_web_login_rate_limit_enabled', 'Whether internal login rate limiting is enabled.', 'gauge', [{value: !loginMetrics || loginMetrics.enabled ? 1 : 0}]);
+    addMetric(lines, 'inpx_web_login_failed_attempts_active', 'Failed login/access attempts currently kept in the rate-limit window.', 'gauge', [{value: loginMetrics ? loginMetrics.activeFailedAttempts : 0}]);
+    addMetric(lines, 'inpx_web_login_rate_limited_ips', 'Client IP buckets currently blocked by login rate limiting.', 'gauge', [{value: loginMetrics ? loginMetrics.rateLimitedIps : 0}]);
 
     lines.push('');
     return lines.join('\n');
@@ -99,7 +110,7 @@ function metricsAuthorized(req, config, security) {
     return true;
 }
 
-module.exports = function initHealthRoutes(app, config, webWorker, security = null) {
+module.exports = function initHealthRoutes(app, config, webWorker, security = null, webSocketController = null) {
     app.get('/health', (req, res) => {
         noStore(res);
         res.status(statusCode(config.server.ready)).json({
@@ -151,6 +162,6 @@ module.exports = function initHealthRoutes(app, config, webWorker, security = nu
         }
 
         res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-        res.send(await buildMetrics(config, webWorker));
+        res.send(await buildMetrics(config, webWorker, security, webSocketController));
     });
 };

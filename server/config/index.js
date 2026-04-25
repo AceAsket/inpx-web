@@ -23,6 +23,7 @@ const propsToSave = [
     'loggingEnabled',
     'logServerStats',
     'logQueries',
+    'loginRateLimitEnabled',
     'loginRateLimitWindowMs',
     'loginRateLimitMaxAttempts',
     'requireAuth',

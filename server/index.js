@@ -38,6 +38,8 @@ function applyEnvSecurityOverrides(targetConfig) {
         targetConfig.metricsToken = process.env.INPX_METRICS_TOKEN || '';
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_METRICS_EXEMPT_AUTH'))
         targetConfig.metricsExemptAuth = process.env.INPX_METRICS_EXEMPT_AUTH === 'true';
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_LOGIN_RATE_LIMIT_ENABLED'))
+        targetConfig.loginRateLimitEnabled = process.env.INPX_LOGIN_RATE_LIMIT_ENABLED !== 'false';
 }
 
 function showHelp(defaultConfig) {
@@ -220,7 +222,7 @@ async function main() {
     const webSocketController = new WebSocketController(wss, webAccess, config, security);
 
     const initHealthRoutes = require('./core/HealthRoutes');
-    initHealthRoutes(app, config, webSocketController.webWorker, security);
+    initHealthRoutes(app, config, webSocketController.webWorker, security, webSocketController);
 
     const initStatic = require('./static');
     initStatic(app, config);

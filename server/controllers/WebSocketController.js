@@ -283,6 +283,35 @@ class WebSocketController {
         ]).has(action);
     }
 
+    getOnlineMetrics() {
+        const now = Date.now();
+        const users = new Set();
+        let clients = 0;
+        let anonymousClients = 0;
+
+        this.wss.clients.forEach((ws) => {
+            if (ws.readyState !== WebSocket.OPEN)
+                return;
+
+            const lastActivity = ws.lastActivity || 0;
+            if (!lastActivity || now - lastActivity > closeSocketOnIdle)
+                return;
+
+            clients++;
+            if (ws.userId) {
+                users.add(ws.userId);
+            } else {
+                anonymousClients++;
+            }
+        });
+
+        return {
+            clients,
+            users: users.size,
+            anonymousClients,
+        };
+    }
+
     //Actions ------------------------------------------------------------------
     async test(req, ws) {
         this.send({message: `${this.config.name} project is awesome`}, req, ws);
@@ -311,6 +340,13 @@ class WebSocketController {
         config.currentUserProfile = currentProfile.currentUserProfile;
         config.profileAuthorized = currentProfile.profileAuthorized;
         config.opdsRoot = this.config.opdsRoot || ((this.config.opds && this.config.opds.root) ? this.config.opds.root : '/opds');
+        if (config.profileAuthorized && config.currentUserId) {
+            ws.userId = String(config.currentUserId || '').trim();
+            ws.userLastActivity = Date.now();
+        } else {
+            delete ws.userId;
+            delete ws.userLastActivity;
+        }
 
         const currentUser = currentProfile.currentUserProfile || null;
         config.telegramShareEnabled = !!(
@@ -607,18 +643,20 @@ class WebSocketController {
 
     async loginUserProfile(req, ws) {
         if (this.security)
-            this.security.checkLoginRate(ws.req);
+            this.security.checkLoginRate(ws.req, 'profile');
 
         try {
             const result = await this.webWorker.loginUserProfile(req.login, req.password);
             if (this.security && ws.req && ws.req.securitySession)
                 ws.req.securitySession.profileAccessToken = result.profileAccessToken;
+            ws.userId = String(result.userId || '').trim();
+            ws.userLastActivity = Date.now();
             if (this.security)
-                this.security.recordLoginAttempt(ws.req, true);
+                this.security.recordLoginAttempt(ws.req, true, 'profile');
             this.send(result, req, ws);
         } catch (e) {
             if (this.security)
-                this.security.recordLoginAttempt(ws.req, false);
+                this.security.recordLoginAttempt(ws.req, false, 'profile');
             throw e;
         }
     }
@@ -627,6 +665,8 @@ class WebSocketController {
         const result = await this.webWorker.closeProfileSession(req.profileAccessToken);
         if (this.security && ws.req && ws.req.securitySession)
             delete ws.req.securitySession.profileAccessToken;
+        delete ws.userId;
+        delete ws.userLastActivity;
         this.send(result, req, ws);
     }
 
