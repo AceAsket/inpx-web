@@ -48,6 +48,38 @@
             >
                 {{ unreadOnly ? 'Показывать все' : 'Только непрочитанное' }}
             </q-btn>
+
+            <q-select
+                v-if="showExternalFilter && externalGenreOptions && externalGenreOptions.length > 1"
+                :model-value="externalGenreUrl"
+                class="discovery-genre-select"
+                dense
+                outlined
+                emit-value
+                map-options
+                options-dense
+                no-error-icon
+                :loading="loading"
+                :disable="loading"
+                label="Жанр внешней витрины"
+                :options="externalGenreOptions"
+                @update:model-value="$emit('set-external-genre', $event || '')"
+            />
+
+            <div v-if="showExternalPagination && externalPagination" class="discovery-filter-group">
+                <q-btn
+                    v-for="pageSize in [12, 24, 48]"
+                    :key="pageSize"
+                    unelevated
+                    no-caps
+                    class="discovery-toolbar-btn"
+                    :class="{'discovery-toolbar-btn--active': externalPagination.perPage === pageSize}"
+                    @click.stop.prevent="$emit('set-external-limit', pageSize)"
+                >
+                    {{ pageSize }}
+                </q-btn>
+
+            </div>
         </div>
 
         <div v-if="errorMessage" class="discovery-error">
@@ -121,7 +153,21 @@
                 />
             </div>
 
-            <div v-else class="discovery-empty">
+            <div v-if="showLoadMore(shelf)" class="discovery-load-more">
+                <q-btn
+                    class="discovery-source-btn"
+                    unelevated
+                    no-caps
+                    icon="la la-plus-circle"
+                    :loading="loading"
+                    :disable="loading"
+                    @click.stop.prevent="loadMore(shelf)"
+                >
+                    {{ loadMoreLabel(shelf) }}
+                </q-btn>
+            </div>
+
+            <div v-if="!shelf.items || !shelf.items.length" class="discovery-empty">
                 {{ shelf.emptyMessage || 'Пока пусто.' }}
             </div>
         </section>
@@ -139,6 +185,12 @@ class DiscoveryShelves extends BaseList {
         sectionTitle: String,
         compactMode: Boolean,
         personalMode: Boolean,
+        externalFilter: { type: String, default: 'books'},
+        externalGenreOptions: { type: Array, default: () => []},
+        externalGenreUrl: { type: String, default: ''},
+        showExternalFilter: Boolean,
+        externalPagination: Object,
+        showExternalPagination: Boolean,
         unreadOnly: Boolean,
         list: Object,
         search: Object,
@@ -166,8 +218,46 @@ class DiscoveryShelves extends BaseList {
         super.bookEvent(event);
     }
 
+    loadMore(shelf = {}) {
+        if (String(shelf.id || '') === 'similar-books') {
+            this.$emit('load-more-recommendations');
+            return;
+        }
+
+        this.$emit('load-more-external');
+    }
+
     get safeShelves() {
         return (Array.isArray(this.shelves) ? this.shelves : []);
+    }
+
+    showLoadMore(shelf = {}) {
+        const isExternalMore = !!(
+            this.showExternalPagination
+            && this.externalPagination
+            && this.externalPagination.canNext
+            && shelf
+            && shelf.source === 'external'
+            && Array.isArray(shelf.items)
+            && shelf.items.length
+        );
+
+        const isSimilarMore = !!(
+            this.personalMode
+            && shelf
+            && String(shelf.id || '') === 'similar-books'
+            && shelf.discoveryHasMore === true
+            && Array.isArray(shelf.items)
+            && shelf.items.length
+        );
+
+        return isExternalMore || isSimilarMore;
+    }
+
+    loadMoreLabel(shelf = {}) {
+        if (String(shelf.id || '') === 'similar-books')
+            return 'Ещё рекомендации';
+        return 'Загрузить ещё';
     }
 
     shelfSourceLabel(shelf = {}) {
@@ -243,6 +333,12 @@ export default vueComponent(DiscoveryShelves);
     margin-bottom: 14px;
 }
 
+.discovery-filter-group {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .discovery-toolbar-btn {
     color: var(--app-text);
     border: 1px solid color-mix(in srgb, var(--app-border) 78%, transparent);
@@ -266,6 +362,15 @@ export default vueComponent(DiscoveryShelves);
         color-mix(in srgb, var(--app-surface) 82%, var(--app-primary) 18%) 100%
     );
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--app-primary) 22%, transparent) inset;
+}
+
+.discovery-genre-select {
+    min-width: 220px;
+}
+
+.discovery-genre-select :deep(.q-field__control) {
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--app-surface) 90%, var(--app-surface-2) 10%);
 }
 
 .discovery-error {
@@ -383,6 +488,12 @@ export default vueComponent(DiscoveryShelves);
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 18px;
     align-items: stretch;
+}
+
+.discovery-load-more {
+    display: flex;
+    justify-content: center;
+    margin-top: 18px;
 }
 
 .discovery-empty {

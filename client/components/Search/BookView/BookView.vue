@@ -10,6 +10,15 @@
             @keydown.space.prevent="handleCardActivate"
         >
             <div class="cover-box">
+                <q-checkbox
+                    v-if="selectable && !isExternalOnlyDiscoveryBook"
+                    :model-value="selected"
+                    class="book-select-checkbox"
+                    dense
+                    color="primary"
+                    @click.stop
+                    @update:model-value="emitSelection"
+                />
                 <img
                     v-if="coverSrc"
                     :src="coverSrc"
@@ -153,6 +162,26 @@
                     </q-btn>
 
                     <q-btn
+                        v-if="!isExternalOnlyDiscoveryBook"
+                        flat
+                        no-caps
+                        icon="la la-check-circle"
+                        @click.stop.prevent="emit('markRead')"
+                    >
+                        {{ markReadLabel }}
+                    </q-btn>
+
+                    <q-btn
+                        v-if="!isCompactDiscoveryMode && !isExternalOnlyDiscoveryBook"
+                        flat
+                        no-caps
+                        icon="la la-undo"
+                        @click.stop.prevent="emit('markUnread')"
+                    >
+                        {{ markUnreadLabel }}
+                    </q-btn>
+
+                    <q-btn
                         v-if="showDiscoveryDismiss"
                         flat
                         no-caps
@@ -249,19 +278,39 @@
                     </q-btn>
                 </div>
 
-                <div v-if="!isCompactDiscoveryMode && !isExternalOnlyDiscoveryBook" class="format-actions">
-                    <q-btn
-                        v-for="format in extraFormats"
-                        :key="format"
-                        class="format-chip"
-                        outline
-                        dense
-                        no-caps
-                        color="primary"
-                        @click.stop.prevent="emit('download', format)"
-                    >
-                        {{ format.toUpperCase() }}
-                    </q-btn>
+                <div v-if="!isCompactDiscoveryMode && !isExternalOnlyDiscoveryBook && extraFormats.length" class="format-actions">
+                    <div class="action-split format-split" @click.stop>
+                        <q-btn
+                            flat
+                            no-caps
+                            icon="la la-file-export"
+                            @click.stop.prevent="toggleShareMenu('format')"
+                        >
+                            {{ formatDropdownLabel }}
+                        </q-btn>
+
+                        <button
+                            type="button"
+                            class="action-split-toggle"
+                            :aria-expanded="formatMenuOpen ? 'true' : 'false'"
+                            aria-label="Выбрать формат"
+                            @click.stop.prevent="toggleShareMenu('format')"
+                        >
+                            <i :class="formatMenuOpen ? 'la la-angle-up' : 'la la-angle-up'"></i>
+                        </button>
+
+                        <div v-if="formatMenuOpen" class="action-split-menu">
+                            <button
+                                v-for="format in extraFormats"
+                                :key="format"
+                                type="button"
+                                class="action-split-item"
+                                @click.stop.prevent="selectDownloadFormat(format)"
+                            >
+                                {{ format.toUpperCase() }}
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <div v-show="showJson && mode == 'extended'" class="book-json">
@@ -303,6 +352,8 @@ class BookView {
         discoveryRestoreLabel: { type: String, default: 'Вернуть'},
         compactDiscovery: { type: Boolean, default: false},
         titleColor: { type: String, default: 'text-blue-10'},
+        selectable: { type: Boolean, default: false},
+        selected: { type: Boolean, default: false},
     };
 
     showRates = true;
@@ -314,6 +365,7 @@ class BookView {
     coverError = false;
     telegramMenuOpen = false;
     emailMenuOpen = false;
+    formatMenuOpen = false;
 
     created() {
         this.loadSettings();
@@ -348,6 +400,23 @@ class BookView {
 
     get conversionEnabled() {
         return this.config.conversionEnabled !== false;
+    }
+
+    get conversionFormats() {
+        const formats = Array.isArray(this.config.conversionFormats) ? this.config.conversionFormats : ['epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf'];
+        return formats.map(format => String(format || '').toLowerCase()).filter(Boolean);
+    }
+
+    get availableConversionFormats() {
+        const currentExt = (this.book.ext || '').toLowerCase();
+        const formats = this.conversionFormats;
+
+        if (currentExt === 'fb2')
+            return formats;
+        if (currentExt === 'epub')
+            return formats.filter(format => format === 'pdf');
+
+        return [];
     }
 
     get telegramShareEnabled() {
@@ -412,7 +481,10 @@ class BookView {
             return '';
 
         const root = this.config.rootPathStatic || '';
-        return `${root}/cover/${this.book.libid}`;
+        const sourceId = String(this.book.sourceId || '').trim();
+        return sourceId
+            ? `${root}/cover/${encodeURIComponent(sourceId)}/${this.book.libid}`
+            : `${root}/cover/${this.book.libid}`;
     }
 
     get rateBadgeColor() {
@@ -525,6 +597,14 @@ class BookView {
         return '\u0412\u0020\u0441\u043f\u0438\u0441\u043e\u043a';
     }
 
+    get markReadLabel() {
+        return '\u041f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043e';
+    }
+
+    get markUnreadLabel() {
+        return '\u0421\u043d\u044f\u0442\u044c';
+    }
+
     get effectiveReadingListLabel() {
         return (this.isCompactDiscoveryMode ? '\u0421\u043f\u0438\u0441\u043e\u043a' : this.readingListLabel);
     }
@@ -570,7 +650,11 @@ class BookView {
         if (!this.conversionEnabled)
             return [];
 
-        return ['epub', 'mobi', 'pdf'].filter(format => format !== currentExt);
+        return this.availableConversionFormats.filter(format => format !== currentExt);
+    }
+
+    get formatDropdownLabel() {
+        return `Форматы (${this.extraFormats.length})`;
     }
 
     get telegramFormats() {
@@ -581,7 +665,7 @@ class BookView {
             result.push(currentExt);
 
         if (this.conversionEnabled) {
-            for (const format of ['epub', 'mobi', 'pdf']) {
+            for (const format of this.availableConversionFormats) {
                 if (!result.includes(format))
                     result.push(format);
             }
@@ -597,17 +681,28 @@ class BookView {
     handleOutsideClick() {
         this.telegramMenuOpen = false;
         this.emailMenuOpen = false;
+        this.formatMenuOpen = false;
     }
 
     toggleShareMenu(type) {
         if (type == 'telegram') {
             this.telegramMenuOpen = !this.telegramMenuOpen;
-            if (this.telegramMenuOpen)
+            if (this.telegramMenuOpen) {
                 this.emailMenuOpen = false;
+                this.formatMenuOpen = false;
+            }
         } else if (type == 'email') {
             this.emailMenuOpen = !this.emailMenuOpen;
-            if (this.emailMenuOpen)
+            if (this.emailMenuOpen) {
                 this.telegramMenuOpen = false;
+                this.formatMenuOpen = false;
+            }
+        } else if (type == 'format') {
+            this.formatMenuOpen = !this.formatMenuOpen;
+            if (this.formatMenuOpen) {
+                this.telegramMenuOpen = false;
+                this.emailMenuOpen = false;
+            }
         }
     }
 
@@ -619,6 +714,11 @@ class BookView {
             this.emit('sendTelegram', format);
         else if (type == 'email')
             this.emit('sendEmail', format);
+    }
+
+    selectDownloadFormat(format) {
+        this.formatMenuOpen = false;
+        this.emit('download', format);
     }
 
     get placeholderStyle() {
@@ -675,6 +775,10 @@ class BookView {
 
     emit(action, format = '') {
         this.$emit('bookEvent', {action, format, book: this.book});
+    }
+
+    emitSelection(selected) {
+        this.$emit('bookEvent', {action: 'selectionChange', selected: !!selected, book: this.book});
     }
 }
 
@@ -903,6 +1007,7 @@ export default vueComponent(BookView);
     align-items: center;
     justify-content: center;
     background: rgba(255, 255, 255, 0.8);
+    color: rgba(18, 24, 28, 0.92);
     font-size: 24px;
     font-weight: 800;
     box-shadow: 0 8px 20px rgba(23, 32, 38, 0.12);
@@ -924,9 +1029,29 @@ export default vueComponent(BookView);
     padding: 4px 10px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.7);
+    color: rgba(18, 24, 28, 0.86);
     font-size: 11px;
     font-weight: 800;
     letter-spacing: 0.03em;
+}
+
+:global(body.body--dark) .cover-letter {
+    background: rgba(255, 255, 255, 0.9);
+    color: rgba(12, 18, 24, 0.94);
+    box-shadow:
+        0 10px 24px rgba(0, 0, 0, 0.32),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+}
+
+:global(body.body--dark) .cover-placeholder-title {
+    color: rgba(248, 250, 252, 0.96);
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+}
+
+:global(body.body--dark) .cover-placeholder-ext {
+    background: rgba(255, 255, 255, 0.86);
+    color: rgba(12, 18, 24, 0.9);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
 }
 
 .cover-badge {
@@ -1230,8 +1355,26 @@ export default vueComponent(BookView);
     align-content: flex-start;
 }
 
-.format-chip {
+.format-split {
     border-radius: 999px;
+    background: color-mix(in srgb, var(--app-primary) 7%, transparent);
+    color: var(--app-primary);
+}
+
+.book-select-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 3;
+    padding: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--app-surface) 84%, transparent);
+    box-shadow: 0 6px 14px rgba(23, 32, 38, 0.16);
+}
+
+.format-split :deep(.q-btn__content) {
+    color: var(--app-primary);
+    font-weight: 800;
 }
 
 .primary-action {

@@ -210,6 +210,14 @@ class Logger {
             msgType = LM_INFO;
         }
 
+        if (this.eventListener && msgType >= LM_WARN) {
+            try {
+                this.eventListener(msgType, String(message || ''));
+            } catch(e) {
+                //
+            }
+        }
+
         const mes = this.prepareMessage(msgType, message);
 
         if (!this.closed) {

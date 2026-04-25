@@ -224,6 +224,9 @@
     </div>
 
         <template #footer>
+            <q-btn v-if="canEditMetadata" class="q-px-md q-ml-sm" color="secondary" dense no-caps icon="la la-edit" @click="openMetadataEditor">
+                Редактировать
+            </q-btn>
             <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps @click="okClick">
                 OK
             </q-btn>
@@ -240,6 +243,33 @@
 
             <img :src="coverSrc" class="fit q-pb-sm" style="height: 100%; max-height: calc(100vh - 140px); object-fit: contain" />
         </Dialog>
+
+        <q-dialog v-model="metadataDialogVisible">
+            <q-card class="metadata-edit-card">
+                <q-card-section>
+                    <div class="metadata-edit-title">
+                        Редактирование метаданных
+                    </div>
+                    <div class="metadata-edit-note">
+                        Сохраняется локальное переопределение поверх INPX. Исходный архив книги не меняется.
+                    </div>
+                </q-card-section>
+                <q-card-section class="q-gutter-sm">
+                    <q-input v-model="metadataForm.title" outlined dense label="Название" />
+                    <q-input v-model="metadataForm.author" outlined dense label="Авторы" />
+                    <q-input v-model="metadataForm.series" outlined dense label="Серия" />
+                    <q-input v-model.number="metadataForm.serno" outlined dense type="number" label="Номер в серии" />
+                </q-card-section>
+                <q-card-actions align="right">
+                    <q-btn flat no-caps @click="metadataDialogVisible = false">
+                        Отмена
+                    </q-btn>
+                    <q-btn color="primary" no-caps :loading="metadataSaving" @click="saveMetadata">
+                        Сохранить
+                    </q-btn>
+                </q-card-actions>
+            </q-card>
+        </q-dialog>
     </Dialog>
 </template>
 
@@ -279,7 +309,10 @@ class BookInfoDialog {
 
     dialogVisible = false;
     posterDialogVisible = false;
+    metadataDialogVisible = false;
+    metadataSaving = false;
     selectedTab = 'fb2';
+    metadataForm = this.makeMetadataForm();
 
     coverSrc = '';
     coverError = false;
@@ -295,6 +328,7 @@ class BookInfoDialog {
 
     created() {
         this.commit = this.$store.commit;
+        this.api = this.$root.api;
     }
 
     init() {
@@ -309,6 +343,8 @@ class BookInfoDialog {
         this.book = {};
         this.authorInfo = null;
         this.authorInfoLoading = false;
+        this.metadataDialogVisible = false;
+        this.metadataForm = this.makeMetadataForm();
 
         this.parseBookInfo();
         this.selectedTab = this.resolveInitialTab();
@@ -316,6 +352,56 @@ class BookInfoDialog {
 
         if (!this.fb2.length && this.selectedTab == 'fb2')
             this.selectedTab = 'inpx';
+    }
+
+    get config() {
+        return this.$store.state.config || {};
+    }
+
+    get canEditMetadata() {
+        const profile = this.config.currentUserProfile || {};
+        return !!(this.config.profileAuthorized && profile.isAdmin && this.bookUid);
+    }
+
+    get bookUid() {
+        return String((this.book && (this.book._uid || this.book.uid || this.book.bookUid)) || '').trim();
+    }
+
+    makeMetadataForm(book = {}) {
+        return {
+            title: String(book.title || ''),
+            author: String(book.author || ''),
+            series: String(book.series || ''),
+            serno: book.serno || '',
+        };
+    }
+
+    openMetadataEditor() {
+        this.metadataForm = this.makeMetadataForm(this.book || {});
+        this.metadataDialogVisible = true;
+    }
+
+    async saveMetadata() {
+        if (!this.bookUid)
+            return;
+
+        this.metadataSaving = true;
+        try {
+            await this.api.updateBookMetadata(this.bookUid, this.metadataForm);
+            Object.assign(this.book, {
+                title: String(this.metadataForm.title || '').trim(),
+                author: String(this.metadataForm.author || '').trim(),
+                series: String(this.metadataForm.series || '').trim(),
+                serno: this.metadataForm.serno || '',
+                metadataOverridden: true,
+            });
+            this.metadataDialogVisible = false;
+            this.$root.notify.success('Метаданные сохранены');
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, 'Ошибка');
+        } finally {
+            this.metadataSaving = false;
+        }
     }
 
     get config() {
@@ -364,7 +450,10 @@ class BookInfoDialog {
             return '';
 
         const root = this.config.rootPathStatic || '';
-        return `${root}/cover/${this.book.libid}`;
+        const sourceId = String(this.book.sourceId || '').trim();
+        return sourceId
+            ? `${root}/cover/${encodeURIComponent(sourceId)}/${this.book.libid}`
+            : `${root}/cover/${this.book.libid}`;
     }
 
     get hasAnnotationMeta() {
@@ -1245,5 +1334,21 @@ export default vueComponent(BookInfoDialog);
     margin: 12px 0;
     border-radius: 12px;
     box-shadow: 0 10px 24px rgba(23, 32, 38, 0.12);
+}
+
+.metadata-edit-card {
+    width: min(520px, calc(100vw - 32px));
+}
+
+.metadata-edit-title {
+    font-size: 18px;
+    font-weight: 800;
+}
+
+.metadata-edit-note {
+    margin-top: 4px;
+    color: #6f6258;
+    font-size: 13px;
+    line-height: 1.35;
 }
 </style>

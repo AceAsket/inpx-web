@@ -36,6 +36,7 @@ function run(command, args, toolCode = '', helpMessage = '') {
         });
 
         child.on('error', (err) => {
+            err.command = command;
             if (err && err.code === 'ENOENT' && toolCode && helpMessage) {
                 reject(externalTools.createMissingToolError(toolCode, helpMessage));
                 return;
@@ -46,29 +47,51 @@ function run(command, args, toolCode = '', helpMessage = '') {
         child.on('close', code => {
             if (code === 0)
                 resolve();
-            else
-                reject(new Error(`${command} failed with exit code ${code}: ${stderr.trim()}`));
+            else {
+                const err = new Error(`${command} failed with exit code ${code}: ${stderr.trim()}`);
+                err.command = command;
+                err.stderr = stderr;
+                reject(err);
+            }
         });
     });
 }
 
-async function jxlToPng(buf, tempDir) {
+function shouldSkipToolError(err, command) {
+    if (externalTools.isMissingToolError(err))
+        return true;
+
+    if (process.platform === 'win32')
+        return false;
+
+    const commandText = String(command || (err && err.command) || '');
+    const stderr = String((err && (err.stderr || err.message)) || '');
+    if (/\.exe$/i.test(commandText))
+        return true;
+
+    return /MZ[\s\S]*(?:not found|Syntax error)/i.test(stderr);
+}
+
+async function jxlToPng(buf, tempDir, toolDirs = []) {
     const id = utils.randomHexString(30);
     const inputFile = `${tempDir}/${id}.jxl`;
     const outputFile = `${tempDir}/${id}.png`;
 
     try {
         await fs.writeFile(inputFile, buf);
-        const commands = externalTools.djxlCommandCandidates();
+        const commands = externalTools.djxlCommandCandidates(toolDirs);
         let lastError = null;
 
         for (const command of commands) {
             try {
+                if (shouldSkipToolError(null, command))
+                    continue;
+
                 await run(command, [inputFile, outputFile], 'INPX_MISSING_DJXL', externalTools.missingDjxlMessage());
                 return await fs.readFile(outputFile);
             } catch (err) {
                 lastError = err;
-                if (externalTools.isMissingToolError(err, 'INPX_MISSING_DJXL'))
+                if (shouldSkipToolError(err, command))
                     continue;
 
                 throw err;
@@ -82,10 +105,45 @@ async function jxlToPng(buf, tempDir) {
     }
 }
 
-async function normalizeForFb2(buf, tempDir) {
+async function webpToPng(buf, tempDir, toolDirs = []) {
+    const id = utils.randomHexString(30);
+    const inputFile = `${tempDir}/${id}.webp`;
+    const outputFile = `${tempDir}/${id}.png`;
+
+    try {
+        await fs.writeFile(inputFile, buf);
+        const commands = externalTools.dwebpCommandCandidates(toolDirs);
+        let lastError = null;
+
+        for (const command of commands) {
+            try {
+                if (shouldSkipToolError(null, command))
+                    continue;
+
+                await run(command, [inputFile, '-o', outputFile], 'INPX_MISSING_DWEBP', externalTools.missingDwebpMessage());
+                return await fs.readFile(outputFile);
+            } catch (err) {
+                lastError = err;
+                if (shouldSkipToolError(err, command))
+                    continue;
+
+                throw err;
+            }
+        }
+
+        throw (lastError || externalTools.createMissingToolError('INPX_MISSING_DWEBP', externalTools.missingDwebpMessage()));
+    } finally {
+        await fs.remove(inputFile);
+        await fs.remove(outputFile);
+    }
+}
+
+async function normalizeForFb2(buf, tempDir, toolDirs = []) {
     const type = contentType(buf);
     if (type === 'image/jxl')
-        return {data: await jxlToPng(buf, tempDir), contentType: 'image/png'};
+        return {data: await jxlToPng(buf, tempDir, toolDirs), contentType: 'image/png'};
+    if (type === 'image/webp')
+        return {data: await webpToPng(buf, tempDir, toolDirs), contentType: 'image/png'};
 
     return {data: buf, contentType: type};
 }
@@ -93,5 +151,6 @@ async function normalizeForFb2(buf, tempDir) {
 module.exports = {
     contentType,
     jxlToPng,
+    webpToPng,
     normalizeForFb2,
 };

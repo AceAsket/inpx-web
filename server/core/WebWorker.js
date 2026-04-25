@@ -7,6 +7,7 @@ const iconv = require('iconv-lite');
 const axios = require('axios');
 const FormData = require('form-data');
 const nodemailer = require('nodemailer');
+const yazl = require('yazl');
 
 const ZipReader = require('./ZipReader');
 const WorkerState = require('./WorkerState');//singleton
@@ -21,10 +22,13 @@ const imageUtils = require('./ImageUtils');
 const bookConverter = require('./BookConverter');
 
 const asyncExit = new (require('./AsyncExit'))();
-const log = new (require('./AppLogger'))().log;//singleton
+const appLogger = new (require('./AppLogger'))();//singleton
+const log = appLogger.log;
 const utils = require('./utils');
 const genreTree = require('./genres');
 const Fb2Helper = require('./fb2/Fb2Helper');
+const ConfigManager = require('../config');
+const {getEnabledLibrarySources} = require('./LibrarySources');
 
 //server states
 const ssNormal = 'normal';
@@ -37,12 +41,24 @@ const stateToText = {
     [ssDbCreating]: 'Создание поисковой базы',
 };
 
-const cleanDirInterval = 60*60*1000;//РєР°Р¶РґС‹Р№ С‡Р°СЃ
-const checkReleaseInterval = 7*60*60*1000;//РєР°Р¶РґС‹Рµ 7 С‡Р°СЃРѕРІ
+const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const discoveryCacheTtl = 15*60*1000;//15 minutes
-const externalDiscoveryCacheVersion = 'v3';
-const bookAssetVersion = 'fblibrary-assets-v1';
+const externalDiscoveryCacheVersion = 'v4';
+const bookAssetVersion = 'fblibrary-assets-v2';
 const bookInfoVersion = 'fb2-binaries-v6';
+
+function cleanDirInterval(config) {
+    const minutes = parseFloat(config.cacheCleanInterval);
+    if (!Number.isFinite(minutes) || minutes <= 0)
+        return 0;
+
+    return minutes*60*1000;
+}
+
+function cleanDirMaxSize(value) {
+    const maxSize = Number(value);
+    return (Number.isFinite(maxSize) && maxSize >= 0 ? maxSize : null);
+}
 
 function normalizeVersionTag(value = '') {
     return String(value || '').trim().replace(/^v/i, '');
@@ -137,6 +153,69 @@ function toAbsoluteExternalUrl(baseUrl = '', value = '') {
     }
 }
 
+function getExternalItemKind(sourceUrl = '', itemUrl = '') {
+    const absoluteUrl = String(itemUrl || '').trim();
+    if (!absoluteUrl)
+        return '';
+
+    try {
+        const source = new URL(String(sourceUrl || '').trim() || absoluteUrl);
+        const target = new URL(absoluteUrl, source);
+        const hostname = String(target.hostname || '').toLowerCase();
+        const pathname = String(target.pathname || '').toLowerCase();
+
+        if (hostname.endsWith('litres.ru')) {
+            if (/\/book\//.test(pathname))
+                return 'book';
+            if (/\/genre\//.test(pathname))
+                return 'genre';
+            return '';
+        }
+
+        return 'book';
+    } catch (e) {
+        return 'book';
+    }
+}
+
+function sanitizeExternalBrowseUrl(baseUrl = '', browseUrl = '') {
+    const rawBaseUrl = String(baseUrl || '').trim();
+    const rawBrowseUrl = String(browseUrl || '').trim();
+    if (!rawBaseUrl || !rawBrowseUrl)
+        return '';
+
+    try {
+        const base = new URL(rawBaseUrl);
+        const target = new URL(rawBrowseUrl, base);
+        if (String(base.hostname || '').toLowerCase() !== String(target.hostname || '').toLowerCase())
+            return '';
+
+        target.hash = '';
+        return target.toString();
+    } catch (e) {
+        return '';
+    }
+}
+
+function buildExternalPageUrl(sourceUrl = '', page = 1) {
+    const normalizedPage = Math.max(1, parseInt(page, 10) || 1);
+    const rawSourceUrl = String(sourceUrl || '').trim();
+    if (!rawSourceUrl || normalizedPage <= 1)
+        return rawSourceUrl;
+
+    try {
+        const url = new URL(rawSourceUrl);
+        const hostname = String(url.hostname || '').toLowerCase();
+        if (hostname.endsWith('litres.ru'))
+            url.searchParams.set('page', String(normalizedPage));
+        else
+            url.searchParams.set('page', String(normalizedPage));
+        return url.toString();
+    } catch (e) {
+        return rawSourceUrl;
+    }
+}
+
 function buildExternalFlagsByUrl(sourceUrl = '') {
     const normalized = String(sourceUrl || '').trim().toLowerCase();
     return {
@@ -150,12 +229,13 @@ function buildExternalFeedIdentity(item = {}) {
     if (!title)
         return '';
 
+    const kind = String(item.kind || 'book').trim().toLowerCase() || 'book';
     const author = normalizeAuthorText(item.author || '');
     if (author)
-        return `${title}|${author}`;
+        return `${kind}|${title}|${author}`;
 
     const url = String(item.url || '').trim().toLowerCase();
-    return `${title}|${url}`;
+    return `${kind}|${title}|${url}`;
 }
 
 function dedupeExternalFeedItems(items = [], limit = 8) {
@@ -179,6 +259,51 @@ function dedupeExternalFeedItems(items = [], limit = 8) {
     }
 
     return result;
+}
+
+function buildExternalGenreOptions(items = [], sourceUrl = '') {
+    const result = [];
+    const seen = new Set();
+
+    for (const item of (Array.isArray(items) ? items : [])) {
+        if (String(item && item.kind || '').trim().toLowerCase() !== 'genre')
+            continue;
+
+        const label = decodeExternalText(item.title || item.name || '');
+        const url = sanitizeExternalBrowseUrl(sourceUrl, item.url || item.link || '');
+        if (!label || !url || seen.has(url))
+            continue;
+
+        seen.add(url);
+        result.push({
+            label,
+            value: url,
+        });
+    }
+
+    return result;
+}
+
+function limitExternalFeedItemsByBooks(items = [], bookLimit = 8) {
+    const result = [];
+    const maxBooks = Math.max(1, parseInt(bookLimit, 10) || 8);
+    let bookCount = 0;
+    let hasMore = false;
+
+    for (const item of (Array.isArray(items) ? items : [])) {
+        const kind = String(item && item.kind || 'book').trim().toLowerCase() || 'book';
+        if (kind !== 'genre') {
+            if (bookCount >= maxBooks) {
+                hasMore = true;
+                break;
+            }
+            bookCount++;
+        }
+
+        result.push(item);
+    }
+
+    return {items: result, hasMore};
 }
 
 function buildReleaseCheckRequest(checkReleaseLink = '', channel = 'stable') {
@@ -244,8 +369,8 @@ function stripHtml(html) {
 function normalizeAuthorText(value) {
     return stripHtml(value)
         .toLowerCase()
-        .replace(/С‘/g, 'Рµ')
-        .replace(/[()[\]{}.,;:!?'"`В«В»]/g, ' ')
+        .replace(/ё/g, 'е')
+        .replace(/[()[\]{}.,;:!?'"`«»]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 }
@@ -291,9 +416,9 @@ function buildAuthorVariants(author) {
 function normalizeDiscoveryText(value) {
     return stripHtml(value)
         .toLowerCase()
-        .replace(/С‘/g, 'Рµ')
+        .replace(/ё/g, 'е')
         .replace(/&[a-z0-9#]+;/gi, ' ')
-        .replace(/[^a-zР°-СЏ0-9]+/gi, ' ')
+        .replace(/[^a-zа-я0-9]+/gi, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 }
@@ -320,6 +445,12 @@ function flibraryAuthorHash(author) {
     return crypto.createHash('md5')
         .update((author || '').split(/\s+/).filter(Boolean).join(' ').toLowerCase().trim(), 'utf8')
         .digest('hex');
+}
+
+function getAuthorArchiveEntryHash(entryName = '') {
+    const normalized = String(entryName || '').replace(/\\/g, '/');
+    const baseName = path.basename(normalized, path.extname(normalized)).toLowerCase();
+    return /^[a-f0-9]{32}$/.test(baseName) ? baseName : '';
 }
 
 //singleton
@@ -354,6 +485,11 @@ class WebWorker {
             this.myState = '';
             this.db = null;
             this.dbSearcher = null;
+            this.adminEvents = [];
+            appLogger.setEventListener((level, message) => {
+                const eventLevel = (level >= LM_ERR ? 'error' : 'warn');
+                this.addAdminEvent(eventLevel, 'system', message);
+            });
 
             asyncExit.add(this.closeDb.bind(this));
 
@@ -366,6 +502,12 @@ class WebWorker {
                     maxSize: config.maxFilesDirSize,
                 },
             ];
+            if (config.coverCacheSize > 0) {
+                dirConfig.push({
+                    dir: config.coverDir || `${config.publicFilesDir}/cover`,
+                    maxSize: config.coverCacheSize,
+                });
+            }
 
             this.periodicCleanDir(dirConfig);//no await
             this.periodicCheckInpx();//no await
@@ -380,6 +522,45 @@ class WebWorker {
     checkMyState() {
         if (this.myState != ssNormal)
             throw new Error('server_busy');
+    }
+
+    async getIndexStatus() {
+        const workerState = this.wState.get() || {};
+        const ready = this.myState === ssNormal && !!this.db && !!this.dbSearcher;
+        const result = {
+            ready,
+            state: this.myState || workerState.state || '',
+            serverMessage: workerState.serverMessage || '',
+            job: workerState.job || '',
+            jobMessage: workerState.jobMessage || '',
+            jobStep: workerState.jobStep || 0,
+            jobStepCount: workerState.jobStepCount || 0,
+            progress: workerState.progress || 0,
+            recsLoaded: workerState.recsLoaded || 0,
+            inpxFileHash: this.inpxFileHash || '',
+            dbLoaded: !!this.db,
+            searchReady: !!this.dbSearcher,
+            version: this.config.version,
+            sources: (Array.isArray(this.config.librarySources) ? this.config.librarySources : []).map(source => ({
+                id: source.id,
+                name: source.name,
+                enabled: source.enabled !== false,
+            })),
+        };
+
+        if (ready) {
+            try {
+                const dbConfig = await this.dbConfig();
+                result.inpxHash = dbConfig.inpxHash || '';
+                result.stats = dbConfig.stats || {};
+                result.inpxInfo = dbConfig.inpxInfo || {};
+            } catch (e) {
+                result.ready = false;
+                result.error = e.message;
+            }
+        }
+
+        return result;
     }
 
     setMyState(newState, workerState = {}) {
@@ -446,8 +627,8 @@ class WebWorker {
 
             this.inpxFileHash = await this.inpxHashCreator.getInpxFileHash();
 
-            //РїСЂРѕРІРµСЂРёРј РїРѕР»РЅС‹Р№ InxpHash (РІРєР»СЋС‡Р°СЏ С„РёР»СЊС‚СЂ Рё РІРµСЂСЃРёСЋ Р‘Р”)
-            //РґР»СЏ СЌС‚РѕРіРѕ Р·Р°РіР»СЏРЅРµРј РІ РєРѕРЅС„РёРі РІРЅСѓС‚СЂРё Р‘Р”, РµСЃР»Рё РѕРЅ РµСЃС‚СЊ
+            //проверим полный InxpHash (включая фильтр и версию БД)
+            //для этого заглянем в конфиг внутри БД, если он есть
             if (!(config.recreateDb || recreate) && await fs.pathExists(dbPath)) {
                 const newInpxHash = await this.inpxHashCreator.getHash();
 
@@ -468,21 +649,21 @@ class WebWorker {
                 }
             }
 
-            //СѓРґР°Р»РёРј Р‘Р” РµСЃР»Рё РЅСѓР¶РЅРѕ
+            //удалим БД если нужно
             if (config.recreateDb || recreate)
                 await fs.remove(dbPath);
 
-            //РїРµСЂРµСЃРѕР·РґР°РµРј Р‘Р” РёР· INPX РµСЃР»Рё РЅСѓР¶РЅРѕ
+            //пересоздаем БД из INPX если нужно
             if (!await fs.pathExists(dbPath)) {
                 await this.createDb(dbPath);
                 utils.freeMemory();
             }
 
-            //Р·Р°РіСЂСѓР¶Р°РµРј Р‘Р”
+            //загружаем БД
             this.setMyState(ssDbLoading);
             log('Searcher DB loading');
 
-            const db = new JembaDbThread();//РІ РѕС‚РґРµР»СЊРЅРѕРј РїРѕС‚РѕРєРµ
+            const db = new JembaDbThread();//в отдельном потоке
             await db.lock({
                 dbPath,
                 softLock: true,
@@ -493,7 +674,7 @@ class WebWorker {
             });
 
             try {
-                //РѕС‚РєСЂС‹РІР°РµРј С‚Р°Р±Р»РёС†С‹
+                //открываем таблицы
                 await db.openAll({exclude: ['author_id', 'series_id', 'title_id', 'book']});
 
                 const bookCacheSize = 500;
@@ -511,7 +692,7 @@ class WebWorker {
                 return;
             }
 
-            //РїРѕРёСЃРєРѕРІС‹Р№ РґРІРёР¶РѕРє
+            //поисковый движок
             this.dbSearcher = new DbSearcher(config, db);
             await this.dbSearcher.init();
 
@@ -564,6 +745,7 @@ class WebWorker {
         this.checkMyState();
 
         const result = await this.dbSearcher.search(from, query);
+        await this.applyMetadataOverridesToSearchResult(result);
 
         const config = await this.dbConfig();
         result.inpxHash = (config.inpxHash ? config.inpxHash : '');
@@ -575,6 +757,7 @@ class WebWorker {
         this.checkMyState();
 
         const result = await this.dbSearcher.bookSearch(query);
+        await this.applyMetadataOverridesToSearchResult(result);
 
         const config = await this.dbConfig();
         result.inpxHash = (config.inpxHash ? config.inpxHash : '');
@@ -591,7 +774,9 @@ class WebWorker {
     async getAuthorBookList(authorId, author) {
         this.checkMyState();
 
-        return await this.dbSearcher.getAuthorBookList(authorId, author);
+        const result = await this.dbSearcher.getAuthorBookList(authorId, author);
+        await this.applyMetadataOverridesToSearchResult(result);
+        return result;
     }
 
     async getAuthorSeriesList(authorId) {
@@ -603,7 +788,9 @@ class WebWorker {
     async getSeriesBookList(series) {
         this.checkMyState();
 
-        return await this.dbSearcher.getSeriesBookList(series);
+        const result = await this.dbSearcher.getSeriesBookList(series);
+        await this.applyMetadataOverridesToSearchResult(result);
+        return result;
     }
 
     async getGenreTree() {
@@ -623,7 +810,7 @@ class WebWorker {
                     genreValues.add(g.value);
             }
 
-            //РґРѕР±Р°РІРёРј Рє Р¶Р°РЅСЂР°Рј С‚Рµ, С‡С‚Рѕ РЅР°С€Р»РёСЃСЊ РїСЂРё РїР°СЂСЃРёРЅРіРµ
+            //добавим к жанрам те, что нашлись при парсинге
             const genreParsed = new Set();
             let rows = await db.select({table: 'genre', map: `(r) => ({value: r.value})`});
             for (const row of rows) {
@@ -633,7 +820,7 @@ class WebWorker {
                     last.value.push({name: row.value, value: row.value});
             }
 
-            //СѓР±РµСЂРµРј С‚Рµ, РєРѕС‚РѕСЂС‹Рµ РЅРµ РЅР°С€Р»РёСЃСЊ РїСЂРё РїР°СЂСЃРёРЅРіРµ
+            //уберем те, которые не нашлись при парсинге
             for (let j = 0; j < genres.length; j++) {
                 const section = genres[j];
                 for (let i = 0; i < section.value.length; i++) {
@@ -700,17 +887,21 @@ class WebWorker {
             externalUrl: '',
             externalName: '',
             externalTtlMinutes: 1440,
+            externalBrowseUrl: '',
+            externalBrowseName: '',
         }, this.config.discovery || {}, this.sharedDiscoveryConfig || {}, options || {});
 
         discovery.enabled = (discovery.enabled !== false);
         discovery.shelfLimit = Math.max(1, Math.min(parseInt(discovery.shelfLimit, 10) || 8, 24));
-        discovery.externalLimit = Math.max(1, Math.min(parseInt(discovery.externalLimit, 10) || discovery.shelfLimit, 24));
+        discovery.externalLimit = Math.max(1, Math.min(parseInt(discovery.externalLimit, 10) || discovery.shelfLimit, 120));
         discovery.externalSource = String(discovery.externalSource || 'none').trim().toLowerCase();
         if (discovery.externalSource && discovery.externalSource !== 'none')
             discovery.externalSource = 'web-page';
         discovery.externalUrl = String(discovery.externalUrl || '').trim();
         discovery.externalName = String(discovery.externalName || '').trim();
         discovery.externalTtlMinutes = Math.max(1440, Math.min(parseInt(discovery.externalTtlMinutes, 10) || 1440, 10080));
+        discovery.externalBrowseUrl = sanitizeExternalBrowseUrl(discovery.externalUrl, discovery.externalBrowseUrl || '');
+        discovery.externalBrowseName = (discovery.externalBrowseUrl ? String(discovery.externalBrowseName || '').trim() : '');
 
         return discovery;
     }
@@ -723,15 +914,14 @@ class WebWorker {
     async getDiscoveryConfigForRequest(options = {}) {
         await this.getSharedDiscoveryConfig();
         const requestOptions = Object.assign({}, options || {});
-        const hasExternalOverrides = (
+        const hasAdminExternalOverrides = (
             Object.prototype.hasOwnProperty.call(requestOptions, 'externalSource')
             || Object.prototype.hasOwnProperty.call(requestOptions, 'externalName')
             || Object.prototype.hasOwnProperty.call(requestOptions, 'externalUrl')
-            || Object.prototype.hasOwnProperty.call(requestOptions, 'externalLimit')
             || Object.prototype.hasOwnProperty.call(requestOptions, 'externalTtlMinutes')
         );
 
-        if (!hasExternalOverrides)
+        if (!hasAdminExternalOverrides)
             return this.getDiscoveryConfig(requestOptions);
 
         try {
@@ -740,7 +930,6 @@ class WebWorker {
             delete requestOptions.externalSource;
             delete requestOptions.externalName;
             delete requestOptions.externalUrl;
-            delete requestOptions.externalLimit;
             delete requestOptions.externalTtlMinutes;
         }
 
@@ -784,6 +973,8 @@ class WebWorker {
                 return 'Частичное совпадение по названию';
             case 'missing-local':
                 return 'Нет в локальной библиотеке';
+            case 'genre':
+                return 'Жанр внешнего каталога';
             default:
                 return 'Совпадение с внешней витриной';
         }
@@ -960,10 +1151,12 @@ class WebWorker {
                 const excludedBookUids = new Set(${db.esc(excludedBookUids)});
                 const popularityMap = ${db.esc(popularityMap)};
                 const dedupeKey = (row) => {
+                    const sourceKey = row.sourceId || '';
                     if (row.libid)
-                        return 'libid:' + row.libid;
+                        return 'libid:' + sourceKey + ':' + row.libid;
 
                     const parts = [
+                        sourceKey,
                         row.folder || '',
                         row.file || '',
                         row.ext || '',
@@ -974,6 +1167,7 @@ class WebWorker {
 
                     return [
                         'meta',
+                        sourceKey,
                         row.author || '',
                         row.series || '',
                         String(row.serno || 0),
@@ -1173,6 +1367,11 @@ class WebWorker {
                     if (!item || (!item.title && !item.name) || (!item.url && !item.link))
                         continue;
 
+                    const itemUrl = toAbsoluteExternalUrl(sourceUrl, item.url || item.link);
+                    const itemKind = getExternalItemKind(sourceUrl, itemUrl);
+                    if (!itemKind)
+                        continue;
+
                     const authors = Array.isArray(item.authors)
                         ? item.authors
                             .map(author => decodeExternalText(author && typeof author === 'object' ? author.name : author))
@@ -1187,9 +1386,10 @@ class WebWorker {
                         || '';
 
                     candidates.push({
+                        kind: itemKind,
                         title: decodeExternalText(item.title || item.name),
                         author: decodeExternalText(authors.join(', ') || getPrimaryDiscoveryAuthor(item.persons)),
-                        url: toAbsoluteExternalUrl(sourceUrl, item.url || item.link),
+                        url: itemUrl,
                         cover: toAbsoluteExternalUrl(sourceUrl, cover),
                         rating: (((item.rating || {}).rated_avg) || item.rating || 0),
                         isBestseller: !!(
@@ -1238,6 +1438,7 @@ class WebWorker {
                     continue;
 
                 const item = {
+                    kind: 'book',
                     title: text,
                     author: '',
                     url: href,
@@ -1292,6 +1493,7 @@ class WebWorker {
                     const image = Array.isArray(node.image) ? node.image[0] : node.image;
                     if (title && url) {
                         items.push({
+                            kind: 'book',
                             title,
                             author: decodeExternalText(((node.author || {}).name) || node.author || ''),
                             url,
@@ -1340,7 +1542,7 @@ class WebWorker {
                 cover,
                 rating: 0,
                 isBestseller: flags.isBestseller,
-                isNew: flags.isNew || /РќРѕРІРёРЅРєР°/.test(titleBlock),
+                isNew: flags.isNew || /Новинка/.test(titleBlock),
             });
 
             if (items.length >= Math.max(limit * 3, limit))
@@ -1391,19 +1593,23 @@ class WebWorker {
     async fetchExternalFeedItems(limit = 8, url = '') {
         const sourceUrl = String(url || '').trim();
         if (!sourceUrl)
-            throw new Error('РќРµ Р·Р°РґР°РЅ URL РІРЅРµС€РЅРµР№ РІРёС‚СЂРёРЅС‹');
+            throw new Error('Не задан URL внешней витрины');
 
-        const response = await axios.get(sourceUrl, {
-            responseType: 'text',
-            timeout: 20000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
-                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.7',
-            },
-        });
+        const requestPageHtml = async(pageUrl = '') => {
+            const response = await axios.get(pageUrl, {
+                responseType: 'text',
+                timeout: 20000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+                    'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.7',
+                },
+            });
 
-        const html = String(response.data || '');
-        const maxItems = Math.max(limit * 3, limit);
+            return String(response.data || '');
+        };
+
+        const requestedItems = Math.max(1, parseInt(limit, 10) || 8);
+        const parserLimit = Math.max(requestedItems + 24, requestedItems);
         const host = (() => {
             try {
                 return new URL(sourceUrl).hostname.toLowerCase();
@@ -1412,38 +1618,97 @@ class WebWorker {
             }
         })();
 
-        const parserChain = [
-            () => this.parseExternalFeedItemsFromNextData(html, sourceUrl, limit),
-        ];
+        const parseItemsFromHtml = (html = '', pageUrl = sourceUrl) => {
+            const parserChain = [
+                () => this.parseExternalFeedItemsFromNextData(html, pageUrl, parserLimit),
+            ];
 
-        if (host.includes('litres.ru'))
-            parserChain.push(() => this.parseLitresFeedItemsFromHtml(html, sourceUrl, limit));
-        if (host.includes('mann-ivanov-ferber.ru'))
+            if (host.includes('litres.ru'))
+                parserChain.push(() => this.parseLitresFeedItemsFromHtml(html, pageUrl, parserLimit));
+            if (host.includes('mann-ivanov-ferber.ru'))
+                parserChain.push(
+                    () => this.parseMifFeedItemsFromHtml(html, pageUrl, parserLimit),
+                    () => this.parseJsonLdProductFeedItems(html, pageUrl, parserLimit),
+                );
+            if (host.includes('alpinabook.ru'))
+                parserChain.push(() => this.parseAlpinaFeedItemsFromHtml(html, pageUrl, parserLimit));
+
             parserChain.push(
-                () => this.parseMifFeedItemsFromHtml(html, sourceUrl, limit),
-                () => this.parseJsonLdProductFeedItems(html, sourceUrl, limit),
+                () => this.parseJsonLdProductFeedItems(html, pageUrl, parserLimit),
+                () => this.parseMifFeedItemsFromHtml(html, pageUrl, parserLimit),
+                () => this.parseLitresFeedItemsFromHtml(html, pageUrl, parserLimit),
+                () => this.parseAlpinaFeedItemsFromHtml(html, pageUrl, parserLimit),
             );
-        if (host.includes('alpinabook.ru'))
-            parserChain.push(() => this.parseAlpinaFeedItemsFromHtml(html, sourceUrl, limit));
 
-        parserChain.push(
-            () => this.parseJsonLdProductFeedItems(html, sourceUrl, limit),
-            () => this.parseMifFeedItemsFromHtml(html, sourceUrl, limit),
-            () => this.parseLitresFeedItemsFromHtml(html, sourceUrl, limit),
-            () => this.parseAlpinaFeedItemsFromHtml(html, sourceUrl, limit),
-        );
+            for (const parseItems of parserChain) {
+                const items = dedupeExternalFeedItems(parseItems(), parserLimit);
+                if (items.length)
+                    return items;
+            }
+
+            return [];
+        };
 
         let items = [];
-        for (const parseItems of parserChain) {
-            items = dedupeExternalFeedItems(parseItems(), maxItems);
-            if (items.length)
-                break;
+        let hasMore = false;
+        let genreOptions = [];
+
+        if (host.includes('litres.ru')) {
+            const merged = [];
+            const seen = new Set();
+            const wantedBooks = requestedItems + 1;
+            let bookCount = 0;
+
+            for (let page = 1; page <= 8 && bookCount < wantedBooks; page++) {
+                const pageUrl = buildExternalPageUrl(sourceUrl, page);
+                const html = await requestPageHtml(pageUrl);
+                const pageItems = parseItemsFromHtml(html, pageUrl);
+
+                if (page === 1)
+                    genreOptions = buildExternalGenreOptions(pageItems, sourceUrl);
+                if (!pageItems.length)
+                    break;
+
+                let added = 0;
+                for (const item of pageItems) {
+                    const key = buildExternalFeedIdentity(item) || `${item.title || ''}|${item.url || ''}`;
+                    if (seen.has(key))
+                        continue;
+                    seen.add(key);
+                    merged.push(item);
+                    added++;
+                    if (String(item && item.kind || 'book').trim().toLowerCase() !== 'genre')
+                        bookCount++;
+                    if (bookCount >= wantedBooks)
+                        break;
+                }
+
+                if (!added)
+                    break;
+                if (bookCount >= wantedBooks) {
+                    hasMore = true;
+                    break;
+                }
+                if (pageItems.length < 12)
+                    break;
+            }
+
+            const limited = limitExternalFeedItemsByBooks(merged, requestedItems);
+            items = limited.items;
+            hasMore = hasMore || limited.hasMore;
+        } else {
+            const html = await requestPageHtml(sourceUrl);
+            const parsedItems = parseItemsFromHtml(html, sourceUrl);
+            const limited = limitExternalFeedItemsByBooks(parsedItems, requestedItems);
+            items = limited.items;
+            hasMore = limited.hasMore;
+            genreOptions = buildExternalGenreOptions(parsedItems, sourceUrl);
         }
 
         if (!items.length)
             throw new Error('Не удалось прочитать внешнюю витрину');
 
-        return {sourceUrl, items};
+        return {sourceUrl, items, hasMore, genreOptions};
     }
 
     pickDiscoveryBookMatch(item, books = []) {
@@ -1577,7 +1842,7 @@ class WebWorker {
 
         const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
         const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
-        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 24));
+        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 120));
 
         const dbConfig = await this.dbConfig();
         const inpxHash = String(dbConfig.inpxHash || '').trim();
@@ -1743,8 +2008,9 @@ class WebWorker {
             discoveryUrl: String(item.url || '').trim(),
             discoveryCoverUrl: String(item.cover || '').trim(),
             discoveryRating: item.rating,
-            discoveryMatchType: 'missing-local',
+            discoveryMatchType: (item.kind === 'genre' ? 'genre' : 'missing-local'),
             discoveryMissingLocal: true,
+            discoveryItemKind: String(item.kind || 'book').trim().toLowerCase() || 'book',
             discoveryFlags: {
                 bestseller: !!item.isBestseller,
                 isNew: !!item.isNew,
@@ -1789,6 +2055,7 @@ class WebWorker {
                         discoveryCoverUrl: item.cover,
                         discoveryRating: item.rating,
                         discoveryMatchType: match.kind,
+                        discoveryItemKind: String(item.kind || 'book').trim().toLowerCase() || 'book',
                         discoveryFlags: {
                             bestseller: !!item.isBestseller,
                             isNew: !!item.isNew,
@@ -1816,7 +2083,15 @@ class WebWorker {
 
     async fetchExternalDiscoveryItemsV2(discovery = {}) {
         try {
-            return await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
+            const targetUrl = (discovery.externalBrowseUrl || discovery.externalUrl);
+            const feed = await this.fetchExternalFeedItems(discovery.externalLimit, targetUrl);
+
+            if (discovery.externalBrowseUrl && discovery.externalBrowseUrl !== discovery.externalUrl) {
+                const rootFeed = await this.fetchExternalFeedItems(Math.min(discovery.externalLimit, 48), discovery.externalUrl);
+                feed.genreOptions = (rootFeed.genreOptions || []);
+            }
+
+            return feed;
         } catch (e) {
             throw new Error(`Не удалось обновить внешний источник "${discovery.externalName || 'Внешний источник'}"`);
         }
@@ -1831,23 +2106,31 @@ class WebWorker {
             throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
 
         const feed = await this.fetchExternalDiscoveryItemsV2(discovery);
-        const matched = await this.matchExternalItemsToLocalBooksV2(feed.items || [], limit);
+        const feedBooks = (Array.isArray(feed.items) ? feed.items : [])
+            .filter(item => String(item && item.kind || 'book').trim().toLowerCase() !== 'genre');
+        const matched = await this.matchExternalItemsToLocalBooksV2(feedBooks, limit);
         const items = matched.items
             .map((book) => this.decorateDiscoveryBook(book, {
                 discoverySource: (discovery.externalName || 'Внешний источник'),
                 matchKind: book.discoveryMatchType,
             }));
         const sourceName = (discovery.externalName || 'Внешний источник');
+        const activeGenreName = String(discovery.externalBrowseName || '').trim();
+        const genrePrefix = (activeGenreName ? `Жанр: ${activeGenreName} · ` : '');
 
         return {
             id: 'external-source',
             title: sourceName,
-            subtitle: `В библиотеке ${matched.matchedCount} · вне библиотеки ${matched.missingCount}`,
+            subtitle: `${genrePrefix}В библиотеке ${matched.matchedCount} · вне библиотеки ${matched.missingCount}`,
             source: 'external',
             sourceName,
             sourceUrl: feed.sourceUrl,
             updatedAt: Date.now(),
             discoveryStale: false,
+            discoveryHasMore: !!feed.hasMore,
+            genreOptions: (feed.genreOptions || []),
+            activeGenreUrl: (discovery.externalBrowseUrl || ''),
+            activeGenreName,
             items,
             emptyMessage: 'Во внешнем источнике пока ничего не найдено.',
         };
@@ -1861,8 +2144,9 @@ class WebWorker {
 
         const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
         const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
-        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 24));
+        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 120));
         const personalShelfLimit = Math.max(1, Math.min(parseInt(options.personalLimit, 10) || discovery.shelfLimit, 24));
+        const personalSimilarLimit = Math.max(personalShelfLimit, Math.min(parseInt(options.personalSimilarLimit, 10) || Math.max(personalShelfLimit, 16), 96));
 
         const dbConfig = await this.dbConfig();
         const inpxHash = String(dbConfig.inpxHash || '').trim();
@@ -1894,7 +2178,7 @@ class WebWorker {
         if (popularShelf)
             shelves.push(popularShelf);
 
-        for (const shelf of await this.getPersonalDiscoveryShelvesV2(options.userId, options.profileAccessToken, personalShelfLimit, options)) {
+        for (const shelf of await this.getPersonalDiscoveryShelvesV2(options.userId, options.profileAccessToken, personalShelfLimit, Object.assign({}, options, {personalSimilarLimit}))) {
             if (shelf)
                 shelves.push(shelf);
         }
@@ -1902,7 +2186,7 @@ class WebWorker {
         if (discovery.externalSource !== 'none') {
             try {
                 const externalShelf = await this.rememberPersistedDiscovery(
-                    `discovery:${inpxHash}:external:${externalDiscoveryCacheVersion}:${discovery.externalSource}:${discovery.externalName}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}:${discovery.externalTtlMinutes}`,
+                    `discovery:${inpxHash}:external:${externalDiscoveryCacheVersion}:${discovery.externalSource}:${discovery.externalName}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}:${discovery.externalBrowseUrl}:${discovery.externalBrowseName}:${discovery.externalTtlMinutes}`,
                     () => this.buildExternalDiscoveryShelfV2(externalShelfLimit, options),
                     discovery.externalTtlMinutes * 60 * 1000,
                     {forceRefresh: options.forceRefresh === true},
@@ -1983,7 +2267,7 @@ class WebWorker {
                 bookUid: String(bookUid || '').trim(),
                 progress: Object.assign({percent: 0, sectionId: '', updatedAt: ''}, progress || {}),
             }))
-            .filter((item) => item.bookUid && !hiddenBookUids.has(item.bookUid) && Number(item.progress.percent || 0) < 0.999)
+            .filter((item) => item.bookUid && item.progress.hidden !== true && !hiddenBookUids.has(item.bookUid) && Number(item.progress.percent || 0) < 0.999)
             .sort((a, b) => String(b.progress.updatedAt || '').localeCompare(String(a.progress.updatedAt || '')));
 
         const items = [];
@@ -2253,18 +2537,35 @@ class WebWorker {
             map.set(normalizedKey, (map.get(normalizedKey) || 0) + Number(amount || 0));
         };
 
+        const getRecencyMultiplier = (stamp = '') => {
+            const time = Date.parse(String(stamp || '')) || 0;
+            if (!time)
+                return 1;
+
+            const ageDays = Math.max(0, Math.floor((Date.now() - time) / 86400000));
+            if (ageDays <= 7)
+                return 1.45;
+            if (ageDays <= 30)
+                return 1.25;
+            if (ageDays <= 90)
+                return 1.1;
+            return 1;
+        };
+
         const applyBookSignals = (book, amount = 1, stamp = '') => {
             if (!book)
                 return;
 
+            const recencyMultiplier = getRecencyMultiplier(stamp);
+            const weightedAmount = Number(amount || 0) * recencyMultiplier;
             knownBookUids.add(book._uid);
-            addWeight(authorWeights, book.author, 4 * amount);
-            addWeight(seriesWeights, book.series, 6 * amount);
+            addWeight(authorWeights, book.author, 4 * weightedAmount);
+            addWeight(seriesWeights, book.series, 6 * weightedAmount);
             String(book.genre || '')
                 .split(',')
                 .map(item => item.trim())
                 .filter(Boolean)
-                .forEach((genre) => addWeight(genreWeights, genre, 2 * amount));
+                .forEach((genre) => addWeight(genreWeights, genre, 2 * weightedAmount));
 
             updatedAt = Math.max(updatedAt, Date.parse(String(stamp || '')) || 0);
         };
@@ -2292,6 +2593,8 @@ class WebWorker {
         const preferredAuthors = Object.fromEntries(authorWeights);
         const preferredSeries = Object.fromEntries(seriesWeights);
         const preferredGenres = Object.fromEntries(genreWeights);
+        const displayLimit = Math.max(1, Math.min(parseInt(limit, 10) || 8, 96));
+        const probeLimit = displayLimit + 1;
         if (!Object.keys(preferredAuthors).length && !Object.keys(preferredSeries).length && !Object.keys(preferredGenres).length) {
             return {
                 id: 'similar-books',
@@ -2305,6 +2608,10 @@ class WebWorker {
             };
         }
 
+        const rotationSeed = String(user.id || '')
+            .split('')
+            .reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) % 9973, Math.floor(Date.now() / 86400000));
+
         const rows = await this.db.select({
             table: 'book',
             rawResult: true,
@@ -2313,7 +2620,8 @@ class WebWorker {
                 const preferredAuthors = ${this.db.esc(preferredAuthors)};
                 const preferredSeries = ${this.db.esc(preferredSeries)};
                 const preferredGenres = ${this.db.esc(preferredGenres)};
-                const limit = ${this.db.esc(Math.max(limit * 6, 32))};
+                const limit = ${this.db.esc(Math.max(probeLimit * 8 + 24, 48))};
+                const rotationSeed = ${this.db.esc(rotationSeed)};
 
                 const result = [];
                 for (const id of @all()) {
@@ -2346,6 +2654,11 @@ class WebWorker {
                     }
                     if (String(row.ext || '').toLowerCase() === 'fb2')
                         score += 10;
+
+                    const stableHash = String(row._uid || row.id || '')
+                        .split('')
+                        .reduce((sum, char) => ((sum * 33) + char.charCodeAt(0) + rotationSeed) % 9973, rotationSeed);
+                    score += (stableHash / 9973) * 12;
 
                     result.push(Object.assign({}, row, {_similarityScore: score}));
                 }
@@ -2397,9 +2710,12 @@ class WebWorker {
                 authorCounts.set(authorKey, (authorCounts.get(authorKey) || 0) + 1);
             if (seriesKey)
                 seriesCounts.set(seriesKey, (seriesCounts.get(seriesKey) || 0) + 1);
-            if (items.length >= limit)
+            if (items.length >= probeLimit)
                 break;
         }
+
+        const hasMore = items.length > displayLimit;
+        const visibleItems = items.slice(0, displayLimit);
 
         return {
             id: 'similar-books',
@@ -2408,7 +2724,8 @@ class WebWorker {
             source: 'personal',
             sourceName: '\u0414\u043b\u044f \u0432\u0430\u0441',
             updatedAt: updatedAt || Date.now(),
-            items,
+            discoveryHasMore: hasMore,
+            items: visibleItems,
             emptyMessage: '\u041f\u043e\u043a\u0430 \u043c\u0430\u043b\u043e \u0434\u0430\u043d\u043d\u044b\u0445 \u0434\u043b\u044f \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u0439. \u041f\u043e\u0447\u0438\u0442\u0430\u0439\u0442\u0435 \u0435\u0449\u0451 \u043d\u0435\u043c\u043d\u043e\u0433\u043e \u0438\u043b\u0438 \u0434\u043e\u0431\u0430\u0432\u044c\u0442\u0435 \u043a\u043d\u0438\u0433\u0438 \u0432 \u0441\u043f\u0438\u0441\u043a\u0438.',
         };
     }
@@ -2469,8 +2786,10 @@ class WebWorker {
             await this.buildUnfinishedSeriesShelfV2(user, limit, context),
         ];
 
-        if (options && options.personalSimilarEnabled !== false)
-            shelves.push(await this.buildSimilarBooksShelfV2(user, limit, context));
+        if (options && options.personalSimilarEnabled !== false) {
+            const similarLimit = Math.max(limit, Math.min(parseInt(options.personalSimilarLimit, 10) || Math.max(limit, 16), 96));
+            shelves.push(await this.buildSimilarBooksShelfV2(user, similarLimit, context));
+        }
 
         shelves.push(await this.buildHiddenDiscoveryShelfV2(user, limit, context));
 
@@ -2516,7 +2835,7 @@ class WebWorker {
 
             result.push({
                 bookUid: item.bookUid,
-                title: book.title || 'Р‘РµР· РЅР°Р·РІР°РЅРёСЏ',
+                title: book.title || 'Без названия',
                 author: book.author || '',
                 series: book.series || '',
                 serno: book.serno || '',
@@ -2528,8 +2847,99 @@ class WebWorker {
         }
 
         return {
-            count: Object.keys(progressMap).length,
+            count: Object.values(progressMap).filter(progress => progress && progress.hidden !== true).length,
             items: result,
+        };
+    }
+
+    async getUserReadingLibrary(user = null, options = {}) {
+        this.checkMyState();
+
+        const progressMap = (user && user.readerProgress && typeof(user.readerProgress) === 'object'
+            ? user.readerProgress
+            : {});
+        const state = ['reading', 'read', 'hidden', 'all'].includes(String(options.state || '').trim())
+            ? String(options.state || '').trim()
+            : 'reading';
+        const query = String(options.query || '').trim().toLowerCase();
+        const sort = String(options.sort || 'updatedDesc').trim();
+        const limit = Math.max(1, Math.min(500, Number(options.limit || 200) || 200));
+
+        const counters = {
+            all: 0,
+            reading: 0,
+            read: 0,
+            hidden: 0,
+        };
+        const rows = Object.entries(progressMap)
+            .map(([bookUid, progress]) => {
+                const normalizedProgress = Object.assign({percent: 0, sectionId: '', updatedAt: '', hidden: false}, progress || {});
+                const percent = Math.max(0, Math.min(1, Number(normalizedProgress.percent || 0) || 0));
+                const hidden = normalizedProgress.hidden === true;
+                const rowState = hidden ? 'hidden' : (percent >= 0.999 ? 'read' : 'reading');
+                counters.all++;
+                counters[rowState]++;
+                return {
+                    bookUid: String(bookUid || '').trim(),
+                    progress: Object.assign(normalizedProgress, {percent, hidden}),
+                    state: rowState,
+                };
+            })
+            .filter((item) => item.bookUid && (state === 'all' || item.state === state));
+
+        const items = [];
+        for (const item of rows) {
+            const book = await this.getBookRecordByUid(item.bookUid);
+            if (!book)
+                continue;
+
+            const resultItem = {
+                bookUid: item.bookUid,
+                title: book.title || 'Без названия',
+                author: book.author || '',
+                series: book.series || '',
+                serno: book.serno || '',
+                ext: book.ext || '',
+                percent: item.progress.percent,
+                hidden: item.progress.hidden === true,
+                state: item.state,
+                sectionId: String(item.progress.sectionId || '').trim(),
+                updatedAt: String(item.progress.updatedAt || '').trim(),
+            };
+            if (query) {
+                const haystack = `${resultItem.title} ${resultItem.author} ${resultItem.series}`.toLowerCase();
+                if (!haystack.includes(query))
+                    continue;
+            }
+            items.push(resultItem);
+        }
+
+        const compareText = (a, b, field) => String(a[field] || '').localeCompare(String(b[field] || ''), 'ru');
+        items.sort((a, b) => {
+            switch (sort) {
+                case 'updatedAsc':
+                    return String(a.updatedAt || '').localeCompare(String(b.updatedAt || ''));
+                case 'titleAsc':
+                    return compareText(a, b, 'title');
+                case 'authorAsc':
+                    return compareText(a, b, 'author') || compareText(a, b, 'title');
+                case 'progressDesc':
+                    return (Number(b.percent || 0) - Number(a.percent || 0)) || String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+                case 'progressAsc':
+                    return (Number(a.percent || 0) - Number(b.percent || 0)) || String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+                case 'updatedDesc':
+                default:
+                    return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+            }
+        });
+
+        return {
+            state,
+            query,
+            sort,
+            counters,
+            count: items.length,
+            items: items.slice(0, limit),
         };
     }
 
@@ -2546,6 +2956,7 @@ class WebWorker {
                     requiresLogin: !!item.passwordHash,
                     isAdmin: !!item.isAdmin,
                     opdsEnabled: item.opdsEnabled !== false,
+                    opdsAuthEnabled: item.opdsAuthEnabled === true,
                     currentReadingCount: Object.values(item.readerProgress || {}).filter(progress => progress && progress.hidden !== true).length,
                     createdAt: item.createdAt,
                     updatedAt: item.updatedAt,
@@ -2618,7 +3029,7 @@ class WebWorker {
 
         const user = await this.getEffectiveUser(userId, profileAccessToken);
         const profileAuthorized = (!user.passwordHash || this.getProfileSessionUser(profileAccessToken) === user.id);
-        const readingSummary = (profileAuthorized ? await this.buildUserReadingSummary(user) : {count: 0, items: []});
+        const readingSummary = (profileAuthorized ? await this.buildUserReadingSummary(user, 48) : {count: 0, items: []});
         return {
             currentUserId: user.id,
             profileAuthorized,
@@ -2631,6 +3042,7 @@ class WebWorker {
                 emailTo: (profileAuthorized ? user.emailTo || '' : ''),
                 telegramChatId: (profileAuthorized ? user.telegramChatId || '' : ''),
                 opdsEnabled: user.opdsEnabled !== false,
+                opdsAuthEnabled: user.opdsAuthEnabled === true,
                 readerPreferences: (profileAuthorized ? this.readingListStore.normalizeReaderPreferences(user.readerPreferences) : null),
                 currentReading: readingSummary.items,
                 currentReadingCount: readingSummary.count,
@@ -2675,6 +3087,20 @@ class WebWorker {
         return await this.readingListStore.getOpdsUsers();
     }
 
+    async getOpdsUserReadingLibrary(publicId = '', options = {}) {
+        this.checkMyState();
+        const user = await this.readingListStore.getOpdsUser(publicId);
+        if (!user)
+            throw new Error('Профиль OPDS не найден');
+
+        return await this.getUserReadingLibrary(user, options);
+    }
+
+    async verifyOpdsPassword(publicId = '', login = '', password = '') {
+        this.checkMyState();
+        return await this.readingListStore.verifyOpdsPassword(publicId, login, password);
+    }
+
     async getReaderState(userId = '', bookUid = '') {
         this.checkMyState();
         return await this.readingListStore.getReaderState(userId, bookUid);
@@ -2699,6 +3125,724 @@ class WebWorker {
         const discovery = await this.readingListStore.updateSharedDiscoveryConfig(patch || {});
         this.sharedDiscoveryConfig = _.cloneDeep(discovery);
         return {discovery};
+    }
+
+    getAdminIntegrationConfig() {
+        const hasTelegramToken = !!String(this.config.telegramBotToken || '').trim();
+        const hasSmtpPassword = !!String(this.config.smtpPass || '').trim();
+
+        return {
+            telegramShareEnabled: !!this.config.telegramShareEnabled,
+            telegramBotToken: hasTelegramToken ? '__KEEP__' : '',
+            telegramBotTokenSet: hasTelegramToken,
+            telegramChatId: String(this.config.telegramChatId || ''),
+            telegramCaptionTemplate: String(this.config.telegramCaptionTemplate || '${AUTHOR} - ${TITLE}'),
+            emailShareEnabled: !!this.config.emailShareEnabled,
+            smtpHost: String(this.config.smtpHost || ''),
+            smtpPort: parseInt(this.config.smtpPort, 10) || 587,
+            smtpSecure: !!this.config.smtpSecure,
+            smtpUser: String(this.config.smtpUser || ''),
+            smtpPass: hasSmtpPassword ? '__KEEP__' : '',
+            smtpPassSet: hasSmtpPassword,
+            emailFrom: String(this.config.emailFrom || ''),
+            emailTo: String(this.config.emailTo || ''),
+        };
+    }
+
+    getAdminOpdsConfig() {
+        const opds = this.config.opds || {};
+        const hasPassword = !!String(opds.password || '').trim();
+        return {
+            enabled: opds.enabled !== false,
+            root: String(opds.root || '/opds'),
+            user: String(opds.user || ''),
+            password: hasPassword ? '__KEEP__' : '',
+            passwordSet: hasPassword,
+        };
+    }
+
+    addAdminEvent(level = 'info', category = 'system', message = '', details = {}) {
+        if (this.config.adminEventLogEnabled === false)
+            return null;
+
+        const maxEvents = Math.max(1, Math.min(2000, parseInt(this.config.adminEventLogSize, 10) || 300));
+        const event = {
+            id: `${Date.now()}-${utils.randomHexString(6)}`,
+            time: new Date().toISOString(),
+            level: String(level || 'info'),
+            category: String(category || 'system'),
+            message: String(message || ''),
+            details: details || {},
+        };
+
+        this.adminEvents.push(event);
+        if (this.adminEvents.length > maxEvents)
+            this.adminEvents.splice(0, this.adminEvents.length - maxEvents);
+
+        return event;
+    }
+
+    async dirSize(dir = '', maxFiles = 20000) {
+        const result = {path: dir, exists: false, size: 0, files: 0, truncated: false};
+        if (!dir || !await fs.pathExists(dir))
+            return result;
+
+        result.exists = true;
+        const stack = [dir];
+        while (stack.length) {
+            const current = stack.pop();
+            let list = [];
+            try {
+                list = await fs.readdir(current);
+            } catch (e) {
+                continue;
+            }
+
+            for (const name of list) {
+                const filePath = path.join(current, name);
+                let stat = null;
+                try {
+                    stat = await fs.stat(filePath);
+                } catch (e) {
+                    continue;
+                }
+
+                if (stat.isDirectory()) {
+                    stack.push(filePath);
+                } else {
+                    result.files++;
+                    result.size += stat.size;
+                    if (result.files >= maxFiles) {
+                        result.truncated = true;
+                        return result;
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    async findFilesByExt(dir = '', exts = [], maxFiles = 200) {
+        const result = [];
+        const normalizedExts = new Set(exts.map(ext => String(ext || '').toLowerCase()));
+        if (!dir || !await fs.pathExists(dir))
+            return result;
+
+        const stack = [dir];
+        while (stack.length && result.length < maxFiles) {
+            const current = stack.pop();
+            let list = [];
+            try {
+                list = await fs.readdir(current, {withFileTypes: true});
+            } catch (e) {
+                continue;
+            }
+
+            for (const entry of list) {
+                const filePath = path.join(current, entry.name);
+                if (entry.isDirectory()) {
+                    stack.push(filePath);
+                    continue;
+                }
+
+                if (normalizedExts.has(path.extname(entry.name).toLowerCase()))
+                    result.push(filePath);
+
+                if (result.length >= maxFiles)
+                    break;
+            }
+        }
+
+        return result;
+    }
+
+    async countArchives(dir = '', maxFiles = 20000) {
+        const result = {count: 0, truncated: false};
+        if (!dir || !await fs.pathExists(dir))
+            return result;
+
+        const stack = [dir];
+        while (stack.length) {
+            const current = stack.pop();
+            let list = [];
+            try {
+                list = await fs.readdir(current, {withFileTypes: true});
+            } catch (e) {
+                continue;
+            }
+
+            for (const entry of list) {
+                const filePath = path.join(current, entry.name);
+                if (entry.isDirectory()) {
+                    stack.push(filePath);
+                    continue;
+                }
+
+                if (['.zip', '.7z', '.fb2', '.epub'].includes(path.extname(entry.name).toLowerCase()))
+                    result.count++;
+
+                if (result.count >= maxFiles) {
+                    result.truncated = true;
+                    return result;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    async getLibrarySourceDiagnostics(source = {}) {
+        const libDir = String(source.libDir || '').trim();
+        const inpx = String(source.inpx || source.inpxFile || '').trim();
+        const foundInpx = libDir ? await this.findFilesByExt(libDir, ['.inpx'], 20) : [];
+        const archiveInfo = libDir ? await this.countArchives(libDir) : {count: 0, truncated: false};
+        const exists = async(name) => !!(libDir && await fs.pathExists(path.join(libDir, name)));
+
+        return {
+            inpxExists: !!inpx && await fs.pathExists(inpx),
+            libDirExists: !!libDir && await fs.pathExists(libDir),
+            foundInpx,
+            archiveCount: archiveInfo.count,
+            archiveCountTruncated: archiveInfo.truncated,
+            hasCovers: await exists('covers'),
+            hasEtc: await exists('etc'),
+            hasImages: await exists('images'),
+            hasBin: await exists('bin'),
+        };
+    }
+
+    async cleanBrokenCoverCacheFiles(dir = '') {
+        const result = {dir, removed: 0, checked: 0};
+        if (!dir || !await fs.pathExists(dir))
+            return result;
+
+        const allowed = new Set(['.png', '.jpg', '.gif']);
+        const list = await fs.readdir(dir);
+        for (const name of list) {
+            const filePath = path.join(dir, name);
+            let stat = null;
+            try {
+                stat = await fs.stat(filePath);
+            } catch (e) {
+                continue;
+            }
+
+            if (stat.isDirectory())
+                continue;
+
+            result.checked++;
+            const broken = stat.size <= 0 || !allowed.has(path.extname(name).toLowerCase());
+            if (!broken)
+                continue;
+
+            await fs.remove(filePath);
+            result.removed++;
+        }
+
+        return result;
+    }
+
+    async getAdminDashboard(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const index = await this.getIndexStatus();
+        const dbConfig = (index.ready ? await this.dbConfig() : {});
+        const sources = await Promise.all((this.config.librarySources || []).map(async(source) => Object.assign({
+            id: source.id || '',
+            name: source.name || '',
+            enabled: source.enabled !== false,
+            inpx: source.inpx || source.inpxFile || '',
+            libDir: source.libDir || '',
+        }, await this.getLibrarySourceDiagnostics(source))));
+        const coverDir = this.config.coverDir || `${this.config.publicFilesDir}/cover`;
+        const coverSize = await this.dirSize(coverDir);
+        const coverErrors = (this.config.adminEventLogEnabled === false ? [] : this.adminEvents.slice().reverse())
+            .filter(event => {
+                const text = `${event.category || ''} ${event.message || ''}`.toLowerCase();
+                return text.includes('cover') || text.includes('облож');
+            })
+            .slice(0, 8);
+        const state = this.getState();
+
+        return {
+            generatedAt: new Date().toISOString(),
+            uptime: process.uptime(),
+            memory: process.memoryUsage(),
+            index,
+            stats: (dbConfig && dbConfig.stats) || (index && index.stats) || {},
+            paths: {
+                dataDir: this.config.dataDir,
+                db: `${this.config.dataDir}/db`,
+                bookCache: this.config.bookDir,
+                coverCache: coverDir,
+                tempDir: this.config.tempDir,
+            },
+            sizes: {
+                db: await this.dirSize(`${this.config.dataDir}/db`),
+                bookCache: await this.dirSize(this.config.bookDir),
+                coverCache: coverSize,
+                tempDir: await this.dirSize(this.config.tempDir, 5000),
+            },
+            limits: {
+                maxFilesDirSize: this.config.maxFilesDirSize,
+                coverCacheSize: this.config.coverCacheSize,
+                cacheCleanInterval: this.config.cacheCleanInterval,
+            },
+            sources,
+            covers: {
+                dir: coverDir,
+                size: coverSize.size,
+                files: coverSize.files,
+                limit: this.config.coverCacheSize,
+                latestErrors: coverErrors,
+            },
+            tasks: [
+                {
+                    id: 'index',
+                    title: 'Индексация',
+                    active: state.state === 'db_creating' || state.state === 'db_loading',
+                    state: state.state,
+                    message: state.jobMessage || state.serverMessage || '',
+                    progress: state.progress || 0,
+                    lastError: (this.adminEvents.slice().reverse().find(event => event.category === 'index' && event.level === 'error') || {}).message || '',
+                    cancellable: false,
+                },
+                {
+                    id: 'cache',
+                    title: 'Чистка кэша',
+                    active: false,
+                    state: 'idle',
+                    message: 'Ручная чистка выполняется синхронно',
+                    progress: 0,
+                    lastError: (this.adminEvents.slice().reverse().find(event => event.category === 'cache' && event.level === 'error') || {}).message || '',
+                    cancellable: false,
+                },
+                {
+                    id: 'delivery',
+                    title: 'Конвертации и отправки',
+                    active: false,
+                    state: 'events',
+                    message: 'Смотрите последние события отправки и конвертации ниже',
+                    progress: 0,
+                    lastError: (this.adminEvents.slice().reverse().find(event => ['delivery', 'conversion'].includes(event.category) && event.level === 'error') || {}).message || '',
+                    cancellable: false,
+                },
+            ],
+        };
+    }
+
+    async getAdminEvents(userId = '', profileAccessToken = '', options = {}) {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const level = String(options.level || 'all').trim();
+        const category = String(options.category || 'all').trim();
+        const limit = Math.max(1, Math.min(200, parseInt(options.limit, 10) || 80));
+        let events = (this.config.adminEventLogEnabled === false ? [] : this.adminEvents.slice().reverse());
+        if (level !== 'all')
+            events = events.filter(event => event.level === level);
+        if (category !== 'all')
+            events = events.filter(event => event.category === category);
+
+        return {
+            enabled: this.config.adminEventLogEnabled !== false,
+            maxSize: Math.max(1, Math.min(2000, parseInt(this.config.adminEventLogSize, 10) || 300)),
+            events: events.slice(0, limit),
+        };
+    }
+
+    async addAdminTestEvent(userId = '', profileAccessToken = '', level = 'warn') {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const normalized = String(level || 'warn').toLowerCase() === 'error' ? 'error' : 'warn';
+        log(normalized === 'error' ? LM_ERR : LM_WARN, `Admin event log test: ${normalized}`);
+        return {success: true};
+    }
+
+    async updateAdminEventLog(userId = '', profileAccessToken = '', options = {}) {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const patch = {
+            adminEventLogEnabled: options.enabled !== false,
+            adminEventLogSize: Math.max(20, Math.min(2000, parseInt(options.maxSize, 10) || 300)),
+        };
+        await this.saveRuntimeConfigPatch(patch);
+        if (this.adminEvents.length > patch.adminEventLogSize)
+            this.adminEvents.splice(0, this.adminEvents.length - patch.adminEventLogSize);
+        this.addAdminEvent('info', 'settings', patch.adminEventLogEnabled ? 'Журнал событий включен' : 'Журнал событий выключен');
+        return {
+            enabled: this.config.adminEventLogEnabled !== false,
+            maxSize: patch.adminEventLogSize,
+        };
+    }
+
+    normalizeAdminLibrarySources(sources = []) {
+        return (Array.isArray(sources) ? sources : [])
+            .map((source, index) => {
+                const inpx = String(source.inpx || source.inpxFile || '').trim();
+                const libDir = String(source.libDir || '').trim();
+                const name = String(source.name || '').trim() || path.basename(inpx, path.extname(inpx)) || `Library ${index + 1}`;
+                const idBase = String(source.id || name || `source-${index + 1}`)
+                    .toLowerCase()
+                    .replace(/[^a-z0-9_-]+/gi, '-')
+                    .replace(/^-+|-+$/g, '')
+                    .substring(0, 40) || `source-${index + 1}`;
+
+                return {
+                    id: idBase,
+                    name,
+                    inpx,
+                    inpxFile: inpx,
+                    libDir,
+                    enabled: source.enabled !== false,
+                };
+            })
+            .filter(source => source.inpx || source.libDir);
+    }
+
+    async updateAdminLibrarySources(userId = '', profileAccessToken = '', sources = []) {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const normalized = this.normalizeAdminLibrarySources(sources);
+        if (!normalized.length)
+            throw new Error('Нужно указать хотя бы один источник библиотеки');
+        if (!normalized.some(source => source.enabled !== false))
+            throw new Error('Должен быть включен хотя бы один источник библиотеки');
+
+        this.config.librarySources = normalized;
+        await this.saveRuntimeConfigPatch({librarySources: normalized});
+        this.addAdminEvent('info', 'sources', `Обновлены источники библиотек: ${normalized.length}`);
+        return {sources: normalized};
+    }
+
+    async diagnoseLibrarySource(userId = '', profileAccessToken = '', source = {}) {
+        await this.requireAdmin(userId, profileAccessToken);
+        return await this.getLibrarySourceDiagnostics(source);
+    }
+
+    async runAdminCacheClean(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const result = [];
+        result.push(await this.cleanDir({dir: this.config.bookDir, maxSize: this.config.maxFilesDirSize}));
+        if (this.config.coverCacheSize > 0)
+            result.push(await this.cleanDir({dir: this.config.coverDir || `${this.config.publicFilesDir}/cover`, maxSize: this.config.coverCacheSize}));
+
+        this.addAdminEvent('info', 'cache', 'Запущена ручная чистка кэша', {result});
+        return {cleaned: result};
+    }
+
+    async cleanBrokenCoverCache(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const result = await this.cleanBrokenCoverCacheFiles(this.config.coverDir || `${this.config.publicFilesDir}/cover`);
+        this.addAdminEvent('info', 'cover', `Очищены битые файлы обложек: ${result.removed}`, result);
+        return result;
+    }
+
+    async rebuildCoverCacheForBook(userId = '', profileAccessToken = '', bookUid = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+        this.checkMyState();
+
+        const book = await this.getBookRecordByUid(bookUid);
+        if (!book)
+            throw new Error('Книга не найдена');
+
+        const libid = parseInt(book.libid, 10);
+        if (!libid)
+            throw new Error('У книги нет LibId для обложки');
+
+        const sourceId = String(book.sourceId || '').trim();
+        const sourceKey = sourceId.replace(/[^a-z0-9._-]+/gi, '_');
+        const cacheBase = sourceKey ? `${sourceKey}-${libid}` : String(libid);
+        const coverDir = this.config.coverDir || `${this.config.publicFilesDir}/cover`;
+        const removed = [];
+        for (const ext of ['.png', '.jpg', '.gif']) {
+            const filePath = path.join(coverDir, `${cacheBase}${ext}`);
+            if (await fs.pathExists(filePath)) {
+                await fs.remove(filePath);
+                removed.push(filePath);
+            }
+        }
+
+        const coverUrl = `${this.config.rootPathStatic || ''}/cover/${sourceId ? `${encodeURIComponent(sourceId)}/` : ''}${libid}`;
+        this.addAdminEvent('info', 'cover', `Сброшен кэш обложки для ${book.title || bookUid}`, {bookUid, libid, sourceId, removed});
+        return {
+            success: true,
+            bookUid,
+            libid,
+            sourceId,
+            removed: removed.length,
+            coverUrl,
+        };
+    }
+
+    async startAdminReindex(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+        this.checkMyState();
+
+        this.addAdminEvent('warn', 'index', 'Запущено переиндексирование библиотеки');
+        this.recreateDb();//no await
+        return {started: true};
+    }
+
+    async saveRuntimeConfigPatch(patch = {}) {
+        Object.assign(this.config, patch);
+        const configManager = new ConfigManager();
+        configManager.config = this.config;
+        await configManager.save();
+    }
+
+    normalizeIntegrationPatch(patch = {}) {
+        const normalized = {};
+
+        if (utils.hasProp(patch, 'telegramShareEnabled'))
+            normalized.telegramShareEnabled = !!patch.telegramShareEnabled;
+        if (utils.hasProp(patch, 'telegramBotToken')) {
+            const token = String(patch.telegramBotToken || '').trim();
+            if (token !== '__KEEP__')
+                normalized.telegramBotToken = token;
+        }
+        if (utils.hasProp(patch, 'telegramChatId'))
+            normalized.telegramChatId = String(patch.telegramChatId || '').trim();
+        if (utils.hasProp(patch, 'telegramCaptionTemplate'))
+            normalized.telegramCaptionTemplate = String(patch.telegramCaptionTemplate || '').trim() || '${AUTHOR} - ${TITLE}';
+
+        if (utils.hasProp(patch, 'emailShareEnabled'))
+            normalized.emailShareEnabled = !!patch.emailShareEnabled;
+        if (utils.hasProp(patch, 'smtpHost'))
+            normalized.smtpHost = String(patch.smtpHost || '').trim();
+        if (utils.hasProp(patch, 'smtpPort'))
+            normalized.smtpPort = Math.max(1, Math.min(parseInt(patch.smtpPort, 10) || 587, 65535));
+        if (utils.hasProp(patch, 'smtpSecure'))
+            normalized.smtpSecure = !!patch.smtpSecure;
+        if (utils.hasProp(patch, 'smtpUser'))
+            normalized.smtpUser = String(patch.smtpUser || '').trim();
+        if (utils.hasProp(patch, 'smtpPass')) {
+            const pass = String(patch.smtpPass || '');
+            if (pass !== '__KEEP__')
+                normalized.smtpPass = pass;
+        }
+        if (utils.hasProp(patch, 'emailFrom'))
+            normalized.emailFrom = String(patch.emailFrom || '').trim();
+        if (utils.hasProp(patch, 'emailTo'))
+            normalized.emailTo = String(patch.emailTo || '').trim();
+
+        return normalized;
+    }
+
+    normalizeAdminOpdsPatch(patch = {}) {
+        const current = this.config.opds || {};
+        const normalized = Object.assign({}, current);
+
+        if (utils.hasProp(patch, 'enabled'))
+            normalized.enabled = (patch.enabled !== false);
+        if (utils.hasProp(patch, 'root')) {
+            let root = String(patch.root || '/opds').trim() || '/opds';
+            if (!root.startsWith('/'))
+                root = `/${root}`;
+            normalized.root = root.replace(/\/+$/g, '') || '/opds';
+        }
+        if (utils.hasProp(patch, 'user'))
+            normalized.user = String(patch.user || '').trim();
+        if (utils.hasProp(patch, 'password')) {
+            const password = String(patch.password || '');
+            if (password !== '__KEEP__')
+                normalized.password = password;
+        }
+
+        if (normalized.password && !normalized.user)
+            throw new Error('Для общего OPDS-пароля нужно указать логин');
+
+        return normalized;
+    }
+
+    async updateAdminIntegrationConfig(userId = '', profileAccessToken = '', patch = {}) {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const normalized = this.normalizeIntegrationPatch(patch || {});
+        await this.saveRuntimeConfigPatch(normalized);
+        this.addAdminEvent('info', 'settings', 'Обновлены настройки отправки книг');
+
+        return {integrations: this.getAdminIntegrationConfig()};
+    }
+
+    async updateAdminOpdsConfig(userId = '', profileAccessToken = '', patch = {}) {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const opds = this.normalizeAdminOpdsPatch(patch || {});
+        await this.saveRuntimeConfigPatch({opds});
+        this.addAdminEvent('info', 'settings', 'Обновлены настройки общего OPDS');
+
+        return {opds: this.getAdminOpdsConfig()};
+    }
+
+    async updateBookMetadata(userId = '', profileAccessToken = '', bookUid = '', patch = {}) {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
+        const override = await this.readingListStore.updateMetadataOverride(bookUid, patch);
+        return {bookUid, override};
+    }
+
+    buildSmtpTransportOptions() {
+        return {
+            host: this.config.smtpHost,
+            port: parseInt(this.config.smtpPort, 10) || 587,
+            secure: !!this.config.smtpSecure,
+            auth: (this.config.smtpUser ? {
+                user: this.config.smtpUser,
+                pass: this.config.smtpPass,
+            } : undefined),
+        };
+    }
+
+    async testAdminIntegrationConfig(userId = '', profileAccessToken = '', kind = '') {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const normalizedKind = String(kind || '').trim().toLowerCase();
+        if (normalizedKind === 'smtp') {
+            if (!this.config.smtpHost)
+                throw new Error('SMTP host не указан');
+
+            const transporter = nodemailer.createTransport(this.buildSmtpTransportOptions());
+            await transporter.verify();
+            return {success: true, message: 'SMTP подключение проверено'};
+        }
+
+        if (normalizedKind === 'telegram') {
+            if (!this.config.telegramBotToken)
+                throw new Error('Telegram bot token не указан');
+
+            const response = await axios.get(`https://api.telegram.org/bot${this.config.telegramBotToken}/getMe`, {
+                timeout: 15000,
+            });
+
+            if (!response.data || response.data.ok !== true)
+                throw new Error('Telegram API не принял токен');
+
+            return {
+                success: true,
+                message: `Telegram бот доступен: ${((response.data.result || {}).username || (response.data.result || {}).first_name || 'ok')}`,
+            };
+        }
+
+        throw new Error('Неизвестный тип проверки');
+    }
+
+    async exportAdminSettings(userId = '', profileAccessToken = '') {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const data = _.cloneDeep(this.config);
+        const opdsSettings = Object.assign({}, data.opds || {});
+        opdsSettings.passwordSet = !!String(opdsSettings.password || '').trim();
+        delete opdsSettings.password;
+        delete data.adminPassword;
+        delete data.webConfigParams;
+        delete data.inpxFileHash;
+
+        const result = {
+            exportedAt: new Date().toISOString(),
+            settings: _.pick(data, [
+                'libDir',
+                'inpx',
+                'librarySources',
+                'inpxFilterFile',
+                'extendedSearch',
+                'bookReadLink',
+                'loggingEnabled',
+                'logServerStats',
+                'logQueries',
+                'dbCacheSize',
+                'queryCacheEnabled',
+                'queryCacheMemSize',
+                'queryCacheDiskSize',
+                'cacheCleanInterval',
+                'adminEventLogEnabled',
+                'adminEventLogSize',
+                'inpxCheckInterval',
+                'lowMemoryMode',
+                'fullOptimization',
+                'server',
+                'opds',
+                'telegramShareEnabled',
+                'telegramChatId',
+                'telegramCaptionTemplate',
+                'emailShareEnabled',
+                'smtpHost',
+                'smtpPort',
+                'smtpSecure',
+                'smtpUser',
+                'emailFrom',
+                'emailTo',
+                'discovery',
+                'uiDefaults',
+            ]),
+        };
+        result.settings.opds = opdsSettings;
+        return result;
+    }
+
+    async addBackupPath(zipFile, sourcePath, zipPath) {
+        if (!sourcePath || !await fs.pathExists(sourcePath))
+            return;
+
+        const stat = await fs.stat(sourcePath);
+        if (stat.isDirectory()) {
+            const entries = await fs.readdir(sourcePath);
+            for (const entry of entries)
+                await this.addBackupPath(zipFile, path.join(sourcePath, entry), `${zipPath}/${entry}`);
+            return;
+        }
+
+        zipFile.addFile(sourcePath, zipPath);
+    }
+
+    async createAdminBackup(userId = '', profileAccessToken = '') {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const backupDir = path.join(this.config.bookDir, 'backup');
+        await fs.ensureDir(backupDir);
+
+        const createdAt = new Date();
+        const stamp = createdAt.toISOString().replace(/[:.]/g, '-');
+        const fileName = `inpx-web-backup-${stamp}-${utils.randomHexString(4)}.zip`;
+        const outFile = path.join(backupDir, fileName);
+        const zipFile = new yazl.ZipFile();
+        const output = fs.createWriteStream(outFile);
+        const done = new Promise((resolve, reject) => {
+            output.on('finish', resolve);
+            output.on('error', reject);
+            zipFile.outputStream.on('error', reject);
+        });
+        zipFile.outputStream.pipe(output);
+
+        zipFile.addBuffer(Buffer.from(JSON.stringify({
+            app: this.config.name,
+            version: this.config.version,
+            createdAt: createdAt.toISOString(),
+            note: 'Backup includes runtime config, user profiles, reading lists and search DB. It does not include source book archives.',
+        }, null, 4)), 'backup-info.json');
+
+        await this.addBackupPath(zipFile, this.config.configFile, 'config.json');
+        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'secret.key'), 'secret.key');
+        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'reading-lists.json'), 'reading-lists.json');
+        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'discovery-cache.json'), 'discovery-cache.json');
+        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'db'), 'db');
+
+        zipFile.end();
+        await done;
+
+        return {
+            success: true,
+            fileName,
+            link: `${this.config.bookPathStatic}/backup/${encodeURIComponent(fileName)}`,
+            createdAt: createdAt.toISOString(),
+        };
     }
 
     async updateReaderProgress(userId = '', bookUid = '', patch = {}) {
@@ -2740,7 +3884,7 @@ class WebWorker {
 
         const item = await this.readingListStore.getList(userId, listId, options);
         if (!item)
-            throw new Error('РЎРїРёСЃРѕРє РЅРµ РЅР°Р№РґРµРЅ');
+            throw new Error('Список не найден');
 
         const listEntries = this.readingListStore.normalizeEntries(item.books);
         const books = [];
@@ -2811,7 +3955,7 @@ class WebWorker {
 
         const book = await this.getBookRecordByUid(bookUid);
         if (!book)
-            throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+            throw new Error('404 Файл не найден');
 
         const item = await this.readingListStore.setBookMembership(userId, listId, bookUid, enabled);
         return {
@@ -2826,14 +3970,49 @@ class WebWorker {
 
         const book = await this.getBookRecordByUid(bookUid);
         if (!book)
-            throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+            throw new Error('404 Файл не найден');
 
         const item = await this.readingListStore.setBookRead(userId, listId, bookUid, read);
+        await this.readingListStore.setBooksRead(userId, [bookUid], read, {listIds: [listId]});
         return {
             list: this.readingListStore.listStats(item),
             bookUid,
             read: !!read,
         };
+    }
+
+    async markReaderBooksRead(userId = '', bookUids = [], read = true, options = {}) {
+        this.checkMyState();
+
+        const normalized = Array.from(new Set((Array.isArray(bookUids) ? bookUids : [bookUids])
+            .map((bookUid) => String(bookUid || '').trim())
+            .filter(Boolean)));
+        if (!normalized.length)
+            throw new Error('bookUids is empty');
+
+        for (const bookUid of normalized) {
+            const book = await this.getBookRecordByUid(bookUid);
+            if (!book)
+                throw new Error('404 Файл не найден');
+        }
+
+        return await this.readingListStore.setBooksRead(userId, normalized, read, options);
+    }
+
+    async markSeriesRead(userId = '', series = '', read = true) {
+        this.checkMyState();
+
+        const seriesName = String(series || '').trim();
+        if (!seriesName)
+            throw new Error('series is empty');
+
+        const result = await this.dbSearcher.getSeriesBookList(seriesName);
+        const bookUids = (result.books || []).map((book) => book._uid).filter(Boolean);
+        const markResult = await this.readingListStore.setBooksRead(userId, bookUids, read);
+
+        return Object.assign({}, markResult, {
+            series: seriesName,
+        });
     }
 
     async addSeriesToReadingList(userId = '', listId, series) {
@@ -2854,36 +4033,31 @@ class WebWorker {
         };
     }
 
-    async extractBook(libFolder, libFile) {
+    async extractBook(libFolder, libFile, sourceLibDir = '') {
         const outFile = `${this.config.tempDir}/${utils.randomHexString(30)}`;
 
         libFolder = libFolder.replace(/\\/g, '/').replace(/\/\//g, '/');
+        const libDir = sourceLibDir || this.config.libDir;
 
         const file = libFile;
         const resolveFolder = async() => {
-            const folder = `${this.config.libDir}/${libFolder}`;
+            const folder = `${libDir}/${libFolder}`;
 
-            if (await fs.pathExists(folder))
-                return folder;
-
-            if (path.extname(folder).toLowerCase() === '.zip') {
-                const sevenZipFolder = `${folder.substring(0, folder.length - 4)}.7z`;
-                if (await fs.pathExists(sevenZipFolder))
-                    return sevenZipFolder;
-            }
-
-            return folder;
+            return await this.resolveLibraryArchivePath(folder, libDir);
         };
 
         const folder = await resolveFolder();
         
         const fullPath = `${folder}/${file}`;
 
-        if (!file || await fs.pathExists(fullPath)) {// С„Р°Р№Р» РµСЃС‚СЊ РЅР° РґРёСЃРєРµ
+        if (!file || await fs.pathExists(fullPath)) {// файл есть на диске
             
             await fs.copy(fullPath, outFile);
             return outFile;
-        } else {// С„Р°Р№Р» РІ zip-Р°СЂС…РёРІРµ
+        } else {// файл в zip-архиве
+            if (!await fs.pathExists(folder))
+                throw new Error(`archive not found: ${folder}`);
+
             const zipReader = new ZipReader();
             await zipReader.open(folder, false);
 
@@ -2899,7 +4073,7 @@ class WebWorker {
 
                 await extract(file);
 
-                if (!await fs.pathExists(outFile)) {//РЅРµ СѓРґР°Р»РѕСЃСЊ РЅР°Р№С‚Рё РІ Р°СЂС…РёРІРµ, РїРѕРїСЂРѕР±СѓРµРј РёРјСЏ С„Р°Р№Р»Р° РІ РєРѕРґРёСЂРѕРІРєРµ cp866
+                if (!await fs.pathExists(outFile)) {//не удалось найти в архиве, попробуем имя файла в кодировке cp866
                     await extract(iconv.encode(file, 'cp866').toString());
                 }
 
@@ -2913,18 +4087,165 @@ class WebWorker {
         }
     }
 
-    async ensureFblibraryArchives(subDir) {
+    async resolveLibraryArchivePath(folder = '', libDir = '') {
+        const candidates = [folder];
+        const ext = path.extname(folder).toLowerCase();
+        if (ext === '.zip')
+            candidates.push(`${folder.substring(0, folder.length - 4)}.7z`);
+        else if (ext === '.7z')
+            candidates.push(`${folder.substring(0, folder.length - 3)}.zip`);
+
+        for (const candidate of candidates) {
+            const resolved = await this.resolveExistingPath(candidate);
+            if (resolved)
+                return resolved;
+        }
+
+        const baseName = path.basename(folder);
+        const relativeFolder = String(folder || '').startsWith(`${libDir}/`)
+            ? String(folder || '').substring(String(libDir || '').length + 1)
+            : baseName;
+        const directRoots = [
+            libDir,
+            `${libDir}/fb2`,
+            `${libDir}/books`,
+            `${libDir}/archives`,
+        ].filter(Boolean);
+
+        for (const root of directRoots) {
+            for (const name of Array.from(new Set([relativeFolder, baseName]))) {
+                const resolved = await this.resolveArchiveNameInDir(root, name);
+                if (resolved)
+                    return resolved;
+            }
+        }
+
+        const scanned = new Set(directRoots.map(item => path.resolve(item)));
+        try {
+            if (libDir && await fs.pathExists(libDir)) {
+                const entries = await fs.readdir(libDir, {withFileTypes: true});
+                for (const entry of entries) {
+                    if (!entry.isDirectory())
+                        continue;
+
+                    const dir = path.join(libDir, entry.name);
+                    const key = path.resolve(dir);
+                    if (scanned.has(key))
+                        continue;
+
+                    scanned.add(key);
+                    const resolved = await this.resolveArchiveNameInDir(dir, baseName);
+                    if (resolved)
+                        return resolved;
+                }
+            }
+        } catch(e) {
+            // keep the original missing archive error
+        }
+
+        return folder;
+    }
+
+    async resolveArchiveNameInDir(dir = '', name = '') {
+        const candidate = path.join(dir, name);
+        const candidates = [candidate];
+        const ext = path.extname(candidate).toLowerCase();
+        if (ext === '.zip')
+            candidates.push(`${candidate.substring(0, candidate.length - 4)}.7z`);
+        else if (ext === '.7z')
+            candidates.push(`${candidate.substring(0, candidate.length - 3)}.zip`);
+
+        for (const item of candidates) {
+            const resolved = await this.resolveExistingPath(item);
+            if (resolved)
+                return resolved;
+        }
+
+        return '';
+    }
+
+    async resolveExistingPath(filePath = '') {
+        if (!filePath)
+            return '';
+        if (await fs.pathExists(filePath))
+            return filePath;
+
+        const dir = path.dirname(filePath);
+        const baseName = path.basename(filePath).toLowerCase();
+        if (!dir || !baseName || !await fs.pathExists(dir))
+            return '';
+
+        try {
+            const entries = await fs.readdir(dir);
+            const match = entries.find(item => item.toLowerCase() === baseName);
+            return match ? path.join(dir, match) : '';
+        } catch(e) {
+            return '';
+        }
+    }
+
+    async resolveLibraryAssetDir(subDir = '', sourceLibDir = '') {
+        const normalizedSubDir = String(subDir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        const libDir = String(sourceLibDir || this.config.libDir || '').replace(/\\/g, '/').replace(/\/+$/g, '');
+        const candidates = [
+            `${libDir}/${normalizedSubDir}`,
+            `${path.dirname(libDir)}/${normalizedSubDir}`,
+        ];
+
+        for (const dir of Array.from(new Set(candidates))) {
+            if (await fs.pathExists(dir))
+                return dir;
+        }
+
+        return candidates[0];
+    }
+
+    async resolveLibraryAssetDirs(subDir = '', sourceLibDir = '') {
+        const normalizedSubDir = String(subDir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        const libDir = String(sourceLibDir || this.config.libDir || '').replace(/\\/g, '/').replace(/\/+$/g, '');
+        const candidates = [
+            `${libDir}/${normalizedSubDir}`,
+            `${path.dirname(libDir)}/${normalizedSubDir}`,
+        ].filter(item => item && !item.startsWith('./'));
+
+        const result = [];
+        const seen = new Set();
+        for (const dir of candidates) {
+            const key = path.resolve(dir).toLowerCase();
+            if (seen.has(key))
+                continue;
+
+            seen.add(key);
+            if (await fs.pathExists(dir))
+                result.push(dir);
+        }
+
+        return result;
+    }
+
+    libraryToolDirs(sourceLibDir = '') {
+        const libDir = String(sourceLibDir || this.config.libDir || '').replace(/\\/g, '/').replace(/\/+$/g, '');
+        return Array.from(new Set([
+            `${libDir}/bin`,
+            `${path.dirname(libDir)}/bin`,
+        ]));
+    }
+
+    async ensureFblibraryArchives(subDir, sourceLibDir = '') {
         if (!this.fblibraryArchives)
             this.fblibraryArchives = {};
 
-        if (!this.fblibraryArchives[subDir] || !this.fblibraryArchives[subDir].length) {
+        const libDir = sourceLibDir || this.config.libDir;
+        const cacheKey = `${libDir}::${subDir}`;
+
+        if (!this.fblibraryArchives[cacheKey] || !this.fblibraryArchives[cacheKey].length) {
             const result = [];
-            const dir = `${this.config.libDir}/${subDir}`;
+            const dir = await this.resolveLibraryAssetDir(subDir, libDir);
 
             if (await fs.pathExists(dir)) {
                 const files = await fs.readdir(dir);
                 for (const file of files) {
-                    const match = file.match(/(\d+)-(\d+)\.(zip|7z)$/i);
+                    const match = file.match(/(\d{4,})-(\d{4,})\.(zip|7z)$/i);
                     if (!match)
                         continue;
 
@@ -2937,18 +4258,20 @@ class WebWorker {
             }
 
             result.sort((a, b) => a.from - b.from);
-            this.fblibraryArchives[subDir] = result;
+            this.fblibraryArchives[cacheKey] = result;
         }
     }
 
-    async getFblibraryArchive(subDir, libid) {
-        return (await this.getFblibraryArchives(subDir, libid))[0];
+    async getFblibraryArchive(subDir, libid, sourceLibDir = '') {
+        return (await this.getFblibraryArchives(subDir, libid, sourceLibDir))[0];
     }
 
-    async getFblibraryArchives(subDir, libid) {
-        await this.ensureFblibraryArchives(subDir);
+    async getFblibraryArchives(subDir, libid, sourceLibDir = '') {
+        const libDir = sourceLibDir || this.config.libDir;
+        const cacheKey = `${libDir}::${subDir}`;
+        await this.ensureFblibraryArchives(subDir, libDir);
 
-        return this.fblibraryArchives[subDir]
+        return this.fblibraryArchives[cacheKey]
             .filter(item => libid >= item.from && libid <= item.to)
             .sort((a, b) => {
                 const aspan = a.to - a.from;
@@ -2960,8 +4283,8 @@ class WebWorker {
             });
     }
 
-    async getFblibraryImages(libid) {
-        const archives = await this.getFblibraryArchives('images', libid);
+    async getFblibraryImages(libid, sourceLibDir = '') {
+        const archives = await this.getFblibraryArchives('images', libid, sourceLibDir);
         for (const archive of archives) {
             const zipReader = new ZipReader();
             await zipReader.open(archive.file);
@@ -2986,7 +4309,7 @@ class WebWorker {
 
                     try {
                         const data = await zipReader.extractToBuf(entryName);
-                        result.push(Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir)));
+                        result.push(Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir))));
                     } catch(e) {
                         log(LM_ERR, `image ${entryName}: ${e.message}`);
                     }
@@ -3002,15 +4325,15 @@ class WebWorker {
         return [];
     }
 
-    async getFblibraryCover(libid) {
-        const archives = await this.getFblibraryArchives('covers', libid);
+    async getFblibraryCover(libid, sourceLibDir = '') {
+        const archives = await this.getFblibraryArchives('covers', libid, sourceLibDir);
         for (const archive of archives) {
             const zipReader = new ZipReader();
             await zipReader.open(archive.file, false);
 
             try {
                 const data = await zipReader.extractToBuf(String(libid));
-                return Object.assign({id: '0'}, await imageUtils.normalizeForFb2(data, this.config.tempDir));
+                return Object.assign({id: '0'}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir)));
             } catch(e) {
                 // try next matching archive
             } finally {
@@ -3025,43 +4348,69 @@ class WebWorker {
         if (this.authorInfoArchives && this.authorPictureArchives && this.authorToArchive)
             return;
 
-        const authorsDir = `${this.config.libDir}/etc/authors`;
         this.authorInfoArchives = [];
         this.authorPictureArchives = [];
         this.authorToArchive = new Map();
 
-        if (!await fs.pathExists(authorsDir))
-            return;
+        const sources = getEnabledLibrarySources(this.config);
+        const scannedAuthorDirs = new Set();
 
-        const files = await fs.readdir(authorsDir);
-        for (const file of files) {
-            if (!/^\d+\.7z$/i.test(file))
-                continue;
-
-            const id = path.basename(file, path.extname(file));
-            this.authorInfoArchives.push({
-                id,
-                file: `${authorsDir}/${file}`,
-            });
-        }
-
-        const picturesDir = `${authorsDir}/pictures`;
-        if (await fs.pathExists(picturesDir)) {
-            const pictureFiles = await fs.readdir(picturesDir);
-            for (const file of pictureFiles) {
-                if (!/^\d+\.zip$/i.test(file))
+        for (const source of sources) {
+            const authorDirs = [
+                ...await this.resolveLibraryAssetDirs('etc/authors', source.libDir),
+                ...await this.resolveLibraryAssetDirs('authors', source.libDir),
+            ];
+            for (const authorsDir of authorDirs) {
+                const dirKey = path.resolve(authorsDir).toLowerCase();
+                if (scannedAuthorDirs.has(dirKey))
                     continue;
 
-                const id = path.basename(file, path.extname(file));
-                this.authorPictureArchives.push({
-                    id,
-                    file: `${picturesDir}/${file}`,
-                });
+                scannedAuthorDirs.add(dirKey);
+
+                const files = await fs.readdir(authorsDir);
+                for (const file of files) {
+                    if (!/^\d+\.(7z|zip)$/i.test(file))
+                        continue;
+
+                    const id = path.basename(file, path.extname(file));
+                    this.authorInfoArchives.push({
+                        id,
+                        sourceId: source.id || '',
+                        sourceLibDir: source.libDir || '',
+                        file: `${authorsDir}/${file}`,
+                    });
+                }
+
+                const picturesDir = `${authorsDir}/pictures`;
+                if (!await fs.pathExists(picturesDir))
+                    continue;
+
+                const pictureFiles = await fs.readdir(picturesDir);
+                for (const file of pictureFiles) {
+                    if (!/^\d+\.(zip|7z)$/i.test(file))
+                        continue;
+
+                    const id = path.basename(file, path.extname(file));
+                    this.authorPictureArchives.push({
+                        id,
+                        sourceId: source.id || '',
+                        sourceLibDir: source.libDir || '',
+                        file: `${picturesDir}/${file}`,
+                    });
+                }
             }
         }
 
-        this.authorInfoArchives.sort((a, b) => parseInt(a.id, 10) - parseInt(b.id, 10));
-        this.authorPictureArchives.sort((a, b) => parseInt(a.id, 10) - parseInt(b.id, 10));
+        const bySourceAndId = (a, b) => {
+            const sourceCompare = String(a.sourceId || '').localeCompare(String(b.sourceId || ''));
+            if (sourceCompare)
+                return sourceCompare;
+
+            return parseInt(a.id, 10) - parseInt(b.id, 10);
+        };
+
+        this.authorInfoArchives.sort(bySourceAndId);
+        this.authorPictureArchives.sort(bySourceAndId);
 
         for (const archive of this.authorInfoArchives) {
             const zipReader = new ZipReader();
@@ -3073,7 +4422,17 @@ class WebWorker {
                     if (!name || entry.isDirectory)
                         continue;
 
-                    this.authorToArchive.set(name, archive.id);
+                    const hash = getAuthorArchiveEntryHash(name);
+                    if (!hash)
+                        continue;
+
+                    if (!this.authorToArchive.has(hash))
+                        this.authorToArchive.set(hash, []);
+
+                    this.authorToArchive.get(hash).push({
+                        archive,
+                        entryName: name,
+                    });
                 }
             } finally {
                 await zipReader.close();
@@ -3081,17 +4440,23 @@ class WebWorker {
         }
     }
 
-    async getAuthorPictureByKey(authorKey, archiveId = '') {
+    async getAuthorPictureByKey(authorKey, archiveId = '', sourceId = '') {
         await this.ensureAuthorInfoArchives();
 
         const archives = [];
         if (archiveId) {
-            const exactArchive = this.authorPictureArchives.find(item => item.id === String(archiveId));
+            const exactArchive = this.authorPictureArchives.find(item => item.id === String(archiveId) && (!sourceId || item.sourceId === sourceId));
             if (exactArchive)
                 archives.push(exactArchive);
         }
 
-        archives.push(...this.authorPictureArchives.filter(item => item.id !== String(archiveId)));
+        archives.push(...this.authorPictureArchives.filter(item => {
+            if (archives.includes(item))
+                return false;
+
+            return sourceId && item.sourceId === sourceId;
+        }));
+        archives.push(...this.authorPictureArchives.filter(item => !archives.includes(item)));
 
         for (const archive of archives) {
             const zipReader = new ZipReader();
@@ -3107,7 +4472,7 @@ class WebWorker {
                 for (const entryName of entryNames) {
                     try {
                         const data = await zipReader.extractToBuf(entryName);
-                        const image = await imageUtils.normalizeForFb2(data, this.config.tempDir);
+                        const image = await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(archive.sourceLibDir));
                         return `data:${image.contentType};base64,${image.data.toString('base64')}`;
                     } catch(e) {
                         log(LM_WARN, `author picture ${entryName}: ${e.message}`);
@@ -3125,33 +4490,35 @@ class WebWorker {
         await this.ensureAuthorInfoArchives();
 
         const hashed = flibraryAuthorHash(author);
-        const archiveId = this.authorToArchive.get(hashed);
-        if (!hashed || archiveId === undefined)
+        const matches = this.authorToArchive.get(hashed) || [];
+        if (!hashed || !matches.length)
             return null;
 
-        const archive = this.authorInfoArchives.find(item => item.id === String(archiveId));
-        if (!archive)
-            return null;
+        for (const match of matches) {
+            const archive = match.archive;
+            const entryName = match.entryName || hashed;
+            const zipReader = new ZipReader();
+            await zipReader.open(archive.file, false);
 
-        const zipReader = new ZipReader();
-        await zipReader.open(archive.file, false);
+            let html = '';
+            try {
+                html = decodeHtmlBuffer(await zipReader.extractToBuf(entryName));
+            } catch(e) {
+                log(LM_WARN, `author info ${archive.file}:${entryName}: ${e.message}`);
+                continue;
+            } finally {
+                await zipReader.close();
+            }
 
-        let html = '';
-        try {
-            html = decodeHtmlBuffer(await zipReader.extractToBuf(hashed));
-        } catch(e) {
-            log(LM_WARN, `author info ${archive.file}:${hashed}: ${e.message}`);
-            return null;
-        } finally {
-            await zipReader.close();
+            return {
+                key: hashed,
+                html,
+                text: stripHtml(html),
+                photo: await this.getAuthorPictureByKey(hashed, archive.id, archive.sourceId),
+            };
         }
 
-        return {
-            key: hashed,
-            html,
-            text: stripHtml(html),
-            photo: await this.getAuthorPictureByKey(hashed, archive.id),
-        };
+        return null;
     }
 
     async getAuthorInfo(authorId, author) {
@@ -3175,9 +4542,9 @@ class WebWorker {
         return {authorInfo};
     }
 
-    async injectFblibraryImages(bookFile, libid) {
-        const images = await this.getFblibraryImages(libid);
-        const cover = await this.getFblibraryCover(libid);
+    async injectFblibraryImages(bookFile, libid, sourceLibDir = '') {
+        const images = await this.getFblibraryImages(libid, sourceLibDir);
+        const cover = await this.getFblibraryCover(libid, sourceLibDir);
         if (!images.length && !cover)
             return false;
 
@@ -3192,8 +4559,16 @@ class WebWorker {
         for (const match of text.matchAll(/<binary\b[^>]*\bid=(['"])(.*?)\1/gi))
             existingBinaryIds.add(match[2]);
 
+        let coverHrefId = '';
+        const coverHrefMatch = text.match(/<coverpage\b[\s\S]*?<image\b[^>]*?(?:l:href|xlink:href|href)=["']#?([^"']+)["'][^>]*\/?>[\s\S]*?<\/coverpage>/i);
+        if (coverHrefMatch)
+            coverHrefId = String(coverHrefMatch[1] || '').trim();
+
         const binaries = [];
-        const assets = (cover && !images.some(image => image.id === cover.id) ? [cover, ...images] : images);
+        const effectiveCover = (cover && coverHrefId && !existingBinaryIds.has(coverHrefId))
+            ? Object.assign({}, cover, {id: coverHrefId})
+            : cover;
+        const assets = (effectiveCover && !images.some(image => image.id === effectiveCover.id) ? [effectiveCover, ...images] : images);
         for (const image of assets) {
             if (existingBinaryIds.has(image.id))
                 continue;
@@ -3203,14 +4578,14 @@ class WebWorker {
         }
 
         let coverLinked = false;
-        if (cover) {
+        if (effectiveCover) {
             coverLinked = /<coverpage\b[\s\S]*?<image\b[^>]*?(?:l:href|xlink:href|href)=["']#?[^"']+["'][^>]*\/?>[\s\S]*?<\/coverpage>/i.test(text);
             if (!coverLinked) {
                 const titleInfoRe = /<title-info\b[^>]*>/i;
                 const titleInfoMatch = text.match(titleInfoRe);
                 if (titleInfoMatch) {
                     const hrefAttr = 'xlink:href';
-                    const coverpage = `\n<coverpage><image ${hrefAttr}="#${cover.id}"/></coverpage>`;
+                    const coverpage = `\n<coverpage><image ${hrefAttr}="#${effectiveCover.id}"/></coverpage>`;
                     const insertAt = titleInfoMatch.index + titleInfoMatch[0].length;
                     text = `${text.slice(0, insertAt)}${coverpage}${text.slice(insertAt)}`;
                     coverLinked = true;
@@ -3227,18 +4602,29 @@ class WebWorker {
         return (binaries.length > 0 || coverLinked);
     }
 
-    async restoreBook(bookUid, libFolder, libFile, downFileName) {
+    async shouldInjectFblibraryImages(bookFile, libFolder = '') {
+        if (path.extname(String(libFolder || '')).toLowerCase() === '.7z')
+            return true;
+
+        let data = await fs.readFile(bookFile);
+        data = this.fb2Helper.checkEncoding(data);
+        const text = data.toString();
+
+        return !/<binary\b/i.test(text);
+    }
+
+    async restoreBook(bookUid, libFolder, libFile, downFileName, sourceLibDir = '') {
         const db = this.db;
 
         let extractedFile = '';
         let hash = '';
 
         if (!this.remoteLib) {
-            extractedFile = await this.extractBook(libFolder, libFile);
+            extractedFile = await this.extractBook(libFolder, libFile, sourceLibDir);
             if (path.extname(libFile).toLowerCase() === '.fb2') {
                 const libid = parseInt(path.basename(libFile, path.extname(libFile)), 10);
-                if (libid)
-                    await this.injectFblibraryImages(extractedFile, libid);
+                if (libid && await this.shouldInjectFblibraryImages(extractedFile, libFolder))
+                    await this.injectFblibraryImages(extractedFile, libid, sourceLibDir);
             }
             hash = await utils.getFileHash(extractedFile, 'sha256', 'hex');
         } else {
@@ -3266,7 +4652,7 @@ class WebWorker {
             await utils.touchFile(bookFileDesc);
         }
 
-        await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, downFileName, assetVersion: bookAssetVersion}));
+        await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, sourceLibDir, downFileName, assetVersion: bookAssetVersion}));
 
         await db.insert({
             table: 'file_hash',
@@ -3286,10 +4672,10 @@ class WebWorker {
             const db = this.db;
             let link = '';
 
-            //РЅР°Р№РґРµРј downFileName, libFolder, libFile
+            //найдем downFileName, libFolder, libFile
             let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
             if (!rows.length)
-                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+                throw new Error('404 Файл не найден');
 
             const book = rows[0];
             let downFileName = book.file;
@@ -3299,7 +4685,7 @@ class WebWorker {
             for (let i = 1; i < author.length; i++)
                 author[i] = `${(i === 1 ? ' ' : '')}${author[i][0]}.`;
             if (authors.length > 1)
-                author.push(' Рё РґСЂ.');
+                author.push(' и др.');
 
             const at = [author.join(''), (book.title ? `_${book.title}` : '')];
             downFileName = utils.makeValidFileNameOrEmpty(at.filter(r => r).join(''))
@@ -3315,10 +4701,11 @@ class WebWorker {
 
             const libFolder = book.folder;
             const libFile = `${book.file}${ext}`;
+            const sourceLibDir = book.sourceLibDir || this.config.libDir;
 
-            //РЅР°Р№РґРµРј С…РµС€
+            //найдем хеш
             rows = await db.select({table: 'file_hash', where: `@@id(${db.esc(bookUid)})`});
-            if (rows.length) {//С…РµС€ РЅР°Р№РґРµРЅ РїРѕ bookUid
+            if (rows.length) {//хеш найден по bookUid
                 const hash = rows[0].hash;
                 const bookFile = `${this.config.bookDir}/${hash}`;
                 const bookFileDesc = `${bookFile}.d.json`;
@@ -3335,17 +4722,17 @@ class WebWorker {
             }
 
             if (!link) {
-                link = await this.restoreBook(bookUid, libFolder, libFile, downFileName);
+                link = await this.restoreBook(bookUid, libFolder, libFile, downFileName, sourceLibDir);
             }
 
             if (!link)
-                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+                throw new Error('404 Файл не найден');
 
             return {link, libFolder, libFile, downFileName};
         } catch(e) {
             log(LM_ERR, `getBookLink error: ${e.message}`);
             if (e.message.indexOf('ENOENT') >= 0)
-                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+                throw new Error('404 Файл не найден');
             throw e;
         }
     }
@@ -3364,7 +4751,7 @@ class WebWorker {
 
         let rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
         if (!rows.length)
-            throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+            throw new Error('404 Файл не найден');
 
         let preparedFile = rawFile;
         let preparedFileName = downFileName;
@@ -3372,11 +4759,11 @@ class WebWorker {
         const sourceFormat = String(rows[0].ext || '').toLowerCase();
 
         if (targetFormat && targetFormat !== sourceFormat) {
-            if (!bookConverter.canConvertTo(targetFormat))
-                throw new Error(`РќРµРїРѕРґРґРµСЂР¶РёРІР°РµРјС‹Р№ С„РѕСЂРјР°С‚ РѕС‚РїСЂР°РІРєРё: ${targetFormat}`);
+            if (!bookConverter.canConvertSourceTo(sourceFormat, targetFormat))
+                throw new Error(`Неподдерживаемый формат отправки: ${targetFormat}`);
 
             if (!this.config.conversionEnabled)
-                throw new Error('РљРѕРЅРІРµСЂС‚Р°С†РёСЏ РєРЅРёРі РѕС‚РєР»СЋС‡РµРЅР° РІ С‚РµРєСѓС‰РµРј РѕР±СЂР°Р·Рµ.');
+                throw new Error('Конвертация книг отключена в текущем образе.');
 
             preparedFile = `${gzipFile}.${targetFormat}`;
             if (!await fs.pathExists(preparedFile)) {
@@ -3400,11 +4787,16 @@ class WebWorker {
 
     async sendBookToTelegram(bookUid, format = '', userId = '') {
         const {currentUser} = await this.readingListStore.getUsers(userId);
-        const chatId = String((currentUser && currentUser.telegramChatId) || this.config.telegramChatId || '').trim();
-        if (!this.config.telegramBotToken || !chatId)
-            throw new Error('РћС‚РїСЂР°РІРєР° РІ Telegram РЅРµ РЅР°СЃС‚СЂРѕРµРЅР°');
+        const chatId = String((currentUser && currentUser.telegramChatId) || '').trim();
+        if (!this.config.telegramShareEnabled)
+            throw new Error('Отправка в Telegram отключена в настройках');
+        if (!this.config.telegramBotToken)
+            throw new Error('Telegram bot token не указан');
+        if (!chatId)
+            throw new Error('Telegram chat id не указан в текущем профиле пользователя');
 
         const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
+        this.addAdminEvent('info', 'delivery', `Отправка книги в Telegram: ${book.title || downFileName}`);
         const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
         const form = new FormData();
 
@@ -3420,18 +4812,20 @@ class WebWorker {
         });
 
         if (!response.data || response.data.ok !== true)
-            throw new Error('Telegram API РЅРµ РїСЂРёРЅСЏР» С„Р°Р№Р»');
+            throw new Error('Telegram API не принял файл');
 
+        this.addAdminEvent('info', 'delivery', `Книга отправлена в Telegram: ${book.title || downFileName}`);
         return {success: true};
     }
 
     async sendBookToEmail(bookUid, format = '', userId = '') {
         const {currentUser} = await this.readingListStore.getUsers(userId);
-        const emailTo = String((currentUser && currentUser.emailTo) || this.config.emailTo || '').trim();
-        if (!this.config.smtpHost || !emailTo)
-            throw new Error('РћС‚РїСЂР°РІРєР° РЅР° email РЅРµ РЅР°СЃС‚СЂРѕРµРЅР°');
+        const emailTo = String((currentUser && currentUser.emailTo) || '').trim();
+        if (!this.config.emailShareEnabled || !this.config.smtpHost || !emailTo)
+            throw new Error('Отправка на email не настроена');
 
         const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
+        this.addAdminEvent('info', 'delivery', `Отправка книги на email: ${book.title || downFileName}`);
         const transporter = nodemailer.createTransport({
             host: this.config.smtpHost,
             port: this.config.smtpPort,
@@ -3446,8 +4840,8 @@ class WebWorker {
         await transporter.sendMail({
             from: this.config.emailFrom || this.config.smtpUser || 'inpx-web@localhost',
             to: emailTo,
-            subject: `РљРЅРёРіР°: ${subject}`,
-            text: `Р’Рѕ РІР»РѕР¶РµРЅРёРё РєРЅРёРіР° "${book.title || downFileName}".`,
+            subject: `Книга: ${subject}`,
+            text: `Во вложении книга "${book.title || downFileName}".`,
             attachments: [
                 {
                     filename: downFileName,
@@ -3456,6 +4850,7 @@ class WebWorker {
             ],
         });
 
+        this.addAdminEvent('info', 'delivery', `Книга отправлена на email: ${book.title || downFileName}`);
         return {success: true};
     }
 
@@ -3568,15 +4963,19 @@ class WebWorker {
         return result;
     }
 
-    async getReviewArchives() {
-        if (this.reviewArchives !== null)
-            return this.reviewArchives;
+    async getReviewArchives(sourceLibDir = '') {
+        const libDir = sourceLibDir || this.config.libDir;
+        if (!this.reviewArchives)
+            this.reviewArchives = {};
 
-        const reviewsDir = `${this.config.libDir}/reviews`;
+        if (this.reviewArchives[libDir] !== undefined)
+            return this.reviewArchives[libDir];
+
+        const reviewsDir = await this.resolveLibraryAssetDir('reviews', libDir);
         const result = [];
 
         if (!await fs.pathExists(reviewsDir)) {
-            this.reviewArchives = result;
+            this.reviewArchives[libDir] = result;
             return result;
         }
 
@@ -3591,16 +4990,54 @@ class WebWorker {
             });
         }
 
-        this.reviewArchives = result;
+        this.reviewArchives[libDir] = result;
         return result;
     }
 
-    async ensureReviewIndex() {
-        if (this.reviewToArchives !== null)
-            return this.reviewToArchives;
+    metadataBookUid(book = {}) {
+        return String(book._uid || book.uid || book.bookUid || '').trim();
+    }
 
-        this.reviewToArchives = new Map();
-        const archives = await this.getReviewArchives();
+    applyMetadataOverrideToBook(book = {}, overrides = {}) {
+        const uid = this.metadataBookUid(book);
+        const override = uid ? overrides[uid] : null;
+        if (!override)
+            return book;
+
+        for (const field of ['title', 'author', 'series', 'serno']) {
+            if (utils.hasProp(override, field))
+                book[field] = override[field];
+        }
+        book.metadataOverridden = true;
+        book.metadataOverrideUpdatedAt = override.updatedAt || '';
+        return book;
+    }
+
+    applyMetadataOverridesToRows(rows = [], overrides = {}) {
+        for (const row of (Array.isArray(rows) ? rows : [])) {
+            this.applyMetadataOverrideToBook(row, overrides);
+            if (Array.isArray(row.books))
+                row.books.forEach((book) => this.applyMetadataOverrideToBook(book, overrides));
+        }
+    }
+
+    async applyMetadataOverridesToSearchResult(result = {}) {
+        const overrides = await this.readingListStore.getMetadataOverrides();
+        this.applyMetadataOverridesToRows(result.found || [], overrides);
+        this.applyMetadataOverridesToRows(result.books || [], overrides);
+        return result;
+    }
+
+    async ensureReviewIndex(sourceLibDir = '') {
+        const libDir = sourceLibDir || this.config.libDir;
+        if (!this.reviewToArchives)
+            this.reviewToArchives = {};
+
+        if (this.reviewToArchives[libDir])
+            return this.reviewToArchives[libDir];
+
+        const reviewToArchives = new Map();
+        const archives = await this.getReviewArchives(libDir);
 
         for (const archive of archives) {
             const zipReader = new ZipReader();
@@ -3611,9 +5048,9 @@ class WebWorker {
                     if (!entryName || item.isDirectory)
                         continue;
 
-                    const list = this.reviewToArchives.get(entryName) || [];
+                    const list = reviewToArchives.get(entryName) || [];
                     list.push({archive: archive.file, entryName});
-                    this.reviewToArchives.set(entryName, list);
+                    reviewToArchives.set(entryName, list);
                 }
             } catch(e) {
                 log(LM_WARN, `review archive ${archive.file}: ${e.message}`);
@@ -3622,12 +5059,13 @@ class WebWorker {
             }
         }
 
-        return this.reviewToArchives;
+        this.reviewToArchives[libDir] = reviewToArchives;
+        return reviewToArchives;
     }
 
     async getBookReviews(book) {
         const entryKey = `${book.folder}#${book.file}.${book.ext}`;
-        const reviewIndex = await this.ensureReviewIndex();
+        const reviewIndex = await this.ensureReviewIndex(book.sourceLibDir);
         const matches = reviewIndex.get(entryKey) || [];
         const reviews = [];
 
@@ -3645,7 +5083,7 @@ class WebWorker {
                         continue;
 
                     reviews.push({
-                        name: String(item.name || '').trim() || 'РђРЅРѕРЅРёРј',
+                        name: String(item.name || '').trim() || 'Аноним',
                         time: String(item.time || '').trim(),
                         text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
                     });
@@ -3673,7 +5111,7 @@ class WebWorker {
 
             let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
             if (!rows.length)
-                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+                throw new Error('404 Файл не найден');
             const book = rows[0];
 
             const restoreBookInfo = async(info) => {
@@ -3719,7 +5157,7 @@ class WebWorker {
                 const info = await fs.readFile(bookFileInfo, 'utf-8');
                 const tmpInfo = JSON.parse(info);
 
-                //РїСЂРѕРІРµСЂРёРј СЃСѓС‰РµСЃС‚РІРѕРІР°РЅРёРµ С„Р°Р№Р»Р° РѕР±Р»РѕР¶РєРё, РІРѕСЃСЃС‚Р°РЅРѕРІРёРј РµСЃР»Рё РЅРµС‚Сѓ
+                //проверим существование файла обложки, восстановим если нету
                 let coverFile = '';
                 if (tmpInfo.cover)
                     coverFile = `${this.config.publicFilesDir}${tmpInfo.cover}`;
@@ -3731,11 +5169,15 @@ class WebWorker {
                 }
             }
 
+            const overrides = await this.readingListStore.getMetadataOverrides();
+            if (bookInfo && bookInfo.book)
+                this.applyMetadataOverrideToBook(bookInfo.book, overrides);
+
             return {bookInfo};
         } catch(e) {
             log(LM_ERR, `getBookInfo error: ${e.message}`);
             if (e.message.indexOf('ENOENT') >= 0)
-                throw new Error('404 Р¤Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ');
+                throw new Error('404 Файл не найден');
             throw e;
         }
     }
@@ -3775,13 +5217,21 @@ class WebWorker {
     }
 
     async cleanDir(config) {
-        const {dir, maxSize} = config;
+        const {dir} = config;
+        const maxSize = cleanDirMaxSize(config.maxSize);
+        const result = {dir, maxSize, exists: false, found: 0, removed: 0, size: 0, after: 0};
+        if (!dir || maxSize === null)
+            return result;
 
+        if (!await fs.pathExists(dir))
+            return result;
+
+        result.exists = true;
         const list = await fs.readdir(dir);
 
         let size = 0;
         let files = [];
-        //С„РѕСЂРјРёСЂСѓРµРј СЃРїРёСЃРѕРє
+        //формируем список
         for (const filename of list) {
             const filePath = `${dir}/${filename}`;
             const stat = await fs.stat(filePath);
@@ -3793,20 +5243,31 @@ class WebWorker {
 
         files.sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs);
 
+        const initialSize = size;
+        result.found = files.length;
+        result.size = initialSize;
         let i = 0;
-        //СѓРґР°Р»СЏРµРј
+        //удаляем
         while (i < files.length && size > maxSize) {
             const file = files[i];
             const oldFile = file.name;
-            await fs.remove(oldFile);
+            try {
+                await fs.remove(oldFile);
+            } catch (e) {
+                log(LM_ERR, `clean dir ${dir}, remove ${oldFile}: ${e.message}`);
+            }
             size -= file.stat.size;
             i++;
         }
 
         if (i) {
-            log(LM_WARN, `clean dir ${dir}, maxSize=${maxSize}, found ${files.length} files, total size=${size}`);
+            log(LM_WARN, `clean dir ${dir}, maxSize=${maxSize}, found ${files.length} files, total size=${initialSize}, after=${size}`);
             log(LM_WARN, `removed ${i} files`);
         }
+
+        result.removed = i;
+        result.after = size;
+        return result;
     }
 
     async periodicCleanDir(dirConfig) {
@@ -3814,10 +5275,14 @@ class WebWorker {
             for (const config of dirConfig) 
                 await fs.ensureDir(config.dir);
 
+            const interval = cleanDirInterval(this.config);
+            if (!interval)
+                return;
+
             let lastCleanDirTime = 0;
             while (1) {// eslint-disable-line no-constant-condition
-                //С‡РёСЃС‚РєР° РїР°РїРѕРє
-                if (Date.now() - lastCleanDirTime >= cleanDirInterval) {
+                //чистка папок
+                if (Date.now() - lastCleanDirTime >= interval) {
                     for (const config of dirConfig) {
                         try {
                             await this.cleanDir(config);
@@ -3829,7 +5294,7 @@ class WebWorker {
                     lastCleanDirTime = Date.now();
                 }
 
-                await utils.sleep(60*1000);//РёРЅС‚РµСЂРІР°Р» РїСЂРѕРІРµСЂРєРё 1 РјРёРЅСѓС‚Р°
+                await utils.sleep(Math.min(interval, 60*1000));//интервал проверки не чаще 1 минуты
             }
         } catch (e) {
             log(LM_FATAL, e.message);

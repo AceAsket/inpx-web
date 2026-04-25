@@ -13,6 +13,6 @@ services:
       CACHE_DIR: /usr/local/bin/.inpx-web/cache
     volumes:
       - /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web
-      # Левая часть — путь на хосте, правая часть — путь внутри контейнера.
+      # Левая часть - путь на хосте, правая часть - путь внутри контейнера.
       # Поэтому INPX=/library/... и LIBDIR=/library должны совпадать с /library справа.
       - /mnt/user/books/my-library:/library:ro

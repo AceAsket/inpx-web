@@ -16,7 +16,7 @@
                 <slot></slot>
             </div>
 
-            <div class="row justify-end q-pa-md">
+            <div v-if="$slots.footer" class="row justify-end q-pa-md">
                 <slot name="footer"></slot>
             </div>
         </div>

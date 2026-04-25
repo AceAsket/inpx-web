@@ -15,6 +15,7 @@ module.exports = {
     logDir: '',
     libDir: '',
     inpx: '',
+    librarySources: [],
     inpxFilterFile: '',
 
     allowConfigRewrite: false,
@@ -26,23 +27,29 @@ module.exports = {
     loggingEnabled: true,
     logServerStats: false,
     logQueries: false,
+    loginRateLimitWindowMs: 15*60*1000,
+    loginRateLimitMaxAttempts: 8,
 
     //поправить в случае, если были критические изменения в DbCreator или InpxParser
     //иначе будет рассинхронизация по кешу между сервером и клиентом на уровне БД
-    dbVersion: '12',
+    dbVersion: '13',
     dbCacheSize: 5,
 
     maxPayloadSize: 500,//in MB
     maxFilesDirSize: 1024*1024*1024,//1Gb
+    coverCacheSize: parseInt(process.env.INPX_COVER_CACHE_SIZE || '', 10)
+        || ((parseInt(process.env.INPX_COVER_CACHE_SIZE_MB || '', 10) || 512) * 1024*1024),
     queryCacheEnabled: true,
     queryCacheMemSize: 50,
     queryCacheDiskSize: 500,
-    cacheCleanInterval: 60,//minutes
+    cacheCleanInterval: 7*24*60,//minutes
+    adminEventLogEnabled: true,
+    adminEventLogSize: 300,
     inpxCheckInterval: 60,//minutes
     lowMemoryMode: false,
     fullOptimization: false,
 
-    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'telegramShareEnabled', 'emailShareEnabled', 'onlineReaderEnabled', 'updateChannel', 'installMode', 'uiDefaults', 'discovery'],
+    webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'conversionFormats', 'telegramShareEnabled', 'emailShareEnabled', 'onlineReaderEnabled', 'updateChannel', 'installMode', 'uiDefaults', 'discovery'],
 
     allowRemoteLib: false,
     remoteLib: false,
@@ -75,7 +82,8 @@ module.exports = {
     adminPassword: process.env.INPX_ADMIN_PASSWORD || 'admin',
     resetAdminPassword: process.env.INPX_RESET_ADMIN_PASSWORD === 'true',
     conversionEnabled: process.env.INPX_ENABLE_CONVERSION !== 'false',
-    telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+    conversionFormats: String(process.env.INPX_CONVERSION_FORMATS || 'epub,epub3,kepub,kfx,azw8,pdf').split(',').map(item => item.trim().toLowerCase()).filter(Boolean),
+    telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN),
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
     telegramCaptionTemplate: process.env.TELEGRAM_CAPTION_TEMPLATE || '${AUTHOR} - ${TITLE}',

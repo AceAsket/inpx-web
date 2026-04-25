@@ -140,6 +140,12 @@
                                         {{ bookItem.author }}
                                     </div>
                                 </div>
+                                <q-checkbox
+                                    :model-value="bookItem.read"
+                                    dense
+                                    :label="readBookLabel"
+                                    @update:model-value="toggleBookItemRead(item, bookItem, $event)"
+                                />
                                 <q-btn
                                     flat
                                     dense
@@ -262,6 +268,10 @@ class ReadingListsDialog {
         return '\u0411\u0435\u0437 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044f';
     }
 
+    get readBookLabel() {
+        return '\u041f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043e';
+    }
+
     visibilityLabel(value) {
         return (value === 'opds' ? 'OPDS' : 'Личный');
     }
@@ -359,6 +369,10 @@ class ReadingListsDialog {
             if (!!item.readBook !== !!read)
                 item.readCount = Math.max(0, (item.readCount || 0) + (read ? 1 : -1));
             item.readBook = !!read;
+            const bookUid = String(this.book._uid || '').trim();
+            const bookItem = (item.books || []).find((row) => String(row.bookUid || '').trim() === bookUid);
+            if (bookItem)
+                bookItem.read = !!read;
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
             await this.loadLists();
@@ -429,7 +443,7 @@ class ReadingListsDialog {
                 bookUid: String(book.bookUid || book._uid || '').trim(),
                 title: String(book.title || '').trim(),
                 author: String(book.author || '').trim(),
-                read: !!book.read,
+                read: !!(book._readingListRead || book.read),
             }));
             item.booksLoaded = true;
         } catch (e) {
@@ -465,6 +479,26 @@ class ReadingListsDialog {
             }
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.errorTitle);
+        }
+    }
+
+    async toggleBookItemRead(list, bookItem, read) {
+        const listId = String((list && list.id) || '').trim();
+        const bookUid = String((bookItem && bookItem.bookUid) || '').trim();
+        if (!listId || !bookUid)
+            return;
+
+        try {
+            await this.api.setReadingListBookRead(listId, bookUid, read);
+            if (!!bookItem.read !== !!read)
+                list.readCount = Math.max(0, (Number(list.readCount || 0) || 0) + (read ? 1 : -1));
+            bookItem.read = !!read;
+
+            if (this.book && String(this.book._uid || '').trim() === bookUid)
+                list.readBook = !!read;
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.errorTitle);
+            await this.loadListBooks(list);
         }
     }
 

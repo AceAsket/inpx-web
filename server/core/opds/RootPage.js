@@ -5,6 +5,7 @@ const TitlePage = require('./TitlePage');
 const GenrePage = require('./GenrePage');
 const ReadingListsPage = require('./ReadingListsPage');
 const ReadingProfilesPage = require('./ReadingProfilesPage');
+const ReadingProgressPage = require('./ReadingProgressPage');
 
 class RootPage extends BasePage {
     constructor(config) {
@@ -19,6 +20,7 @@ class RootPage extends BasePage {
         this.genrePage = new GenrePage(config);
         this.readingListsPage = new ReadingListsPage(config);
         this.readingProfilesPage = new ReadingProfilesPage(config);
+        this.readingProgressPage = new ReadingProgressPage(config);
     }
 
     async body(req) {
@@ -41,6 +43,12 @@ class RootPage extends BasePage {
 
         const userId = this.getScopeUserId(req);
         if (userId) {
+            const readingLibrary = await this.webWorker.getOpdsUserReadingLibrary(userId, {state: 'all', limit: 1});
+            resultEntry.push(
+                this.readingProgressPage.myEntry(req, 'reading', readingLibrary.counters.reading || 0),
+                this.readingProgressPage.myEntry(req, 'read', readingLibrary.counters.read || 0),
+                this.readingProgressPage.myEntry(req, 'hidden', readingLibrary.counters.hidden || 0),
+            );
             resultEntry.push(this.readingListsPage.myEntry(req));
         } else {
             const publicUsers = await this.webWorker.getOpdsUsers();

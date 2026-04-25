@@ -7,6 +7,7 @@ const http = require('http');
 const WebSocket = require ('ws');
 
 const utils = require('./core/utils');
+const {resolveLibrarySources} = require('./core/LibrarySources');
 
 const ayncExit = new (require('./core/AsyncExit'))();
 
@@ -14,7 +15,7 @@ let log;
 let config;
 let argv;
 let branch = '';
-const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'admin-login', 'admin-password'];
+const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'library-sources', 'admin-login', 'admin-password'];
 
 function showHelp(defaultConfig) {
     console.log(utils.versionText(defaultConfig));
@@ -29,6 +30,7 @@ Options:
   --data-dir=<dirpath> (or --app-dir) Set application working directory, default: <execDir>/.${defaultConfig.name}
   --lib-dir=<dirpath>  Set library directory, default: the same as ${defaultConfig.name} executable's
   --inpx=<filepath>    Set INPX collection file, default: the one that found in library dir
+  --library-sources=<json> Set multiple INPX sources, JSON array or "name|inpx|libDir;..."
   --admin-login=<str>  Set admin profile login, default: ${defaultConfig.adminLogin}
   --admin-password=<str> Set admin profile password, default: ${defaultConfig.adminPassword}
   --reset-admin-password Force reset of admin login/password on start
@@ -64,11 +66,13 @@ async function init() {
     config.rootPathStatic = config.server.root || '';
     config.bookPathStatic = `${config.rootPathStatic}/book`;
     config.bookDir = `${config.publicFilesDir}/book`;
+    config.coverDir = `${config.publicFilesDir}/cover`;
 
     configManager.config = config;
 
     await fs.ensureDir(config.dataDir);
     await fs.ensureDir(config.bookDir);
+    await fs.ensureDir(config.coverDir);
     await fs.ensureDir(config.tempDir);
     await fs.emptyDir(config.tempDir);
 
@@ -106,48 +110,19 @@ async function init() {
         config.resetAdminPassword = true;
     }
 
-    if (!config.remoteLib) {
-        const libDir = argv['lib-dir'] || config.libDir;
-        if (libDir) {
-            if (await fs.pathExists(libDir)) {
-                config.libDir = libDir;
-            } else {
-                throw new Error(`Directory "${libDir}" not exists`);
-            }
-        } else {
-            config.libDir = config.execDir;
-        }
+    if (argv['library-sources']) {
+        const {parseSourcesFromString} = require('./core/LibrarySources');
+        config.librarySources = parseSourcesFromString(argv['library-sources']);
+    }
 
-        const inpxFile = argv.inpx || config.inpx;
-        if (inpxFile) {
-            if (await fs.pathExists(inpxFile)) {
-                config.inpxFile = inpxFile;
-            } else {
-                throw new Error(`File "${inpxFile}" not found`);
-            }
-        } else {
-            const inpxFiles = [];
-            await utils.findFiles((file) => {
-                if (path.extname(file) == '.inpx')
-                    inpxFiles.push(file);
-            }, config.libDir, false);
-
-            if (inpxFiles.length) {
-                if (inpxFiles.length == 1) {
-                    config.inpxFile = inpxFiles[0];
-                } else {
-                    throw new Error(`Found more than one .inpx files: \n${inpxFiles.join('\n')}`);
-                }
-            } else {
-                throw new Error(`No .inpx files found here: ${config.libDir}`);
-            }
-        }
-    } else {
+    if (config.remoteLib) {
         config.inpxFile = `${config.dataDir}/remote.inpx`;
         const RemoteLib = require('./core/RemoteLib');//singleton
         const remoteLib = new RemoteLib(config);
         await remoteLib.downloadInpxFile();
     }
+
+    await resolveLibrarySources(config, argv);
 
     config.recreateDb = argv.recreate || false;
     config.inpxFilterFile = config.inpxFilterFile || `${path.dirname(config.configFile)}/filter.json`;
@@ -185,9 +160,18 @@ async function main() {
 
     //server
     const app = express();
+    const security = new (require('./core/Security'))(config);
+    await security.init();
+    app.use(security.middleware());
 
     const server = http.createServer(app);
-    const wss = new WebSocket.Server({ server, maxPayload: config.maxPayloadSize*1024*1024 });
+    const wss = new WebSocket.Server({
+        server,
+        maxPayload: config.maxPayloadSize*1024*1024,
+        verifyClient: (info, done) => {
+            done(security.verifyWebSocket(info.req), 403, 'Forbidden');
+        },
+    });
 
     let devModule = undefined;
     if (branch == 'development') {
@@ -202,14 +186,17 @@ async function main() {
     const opds = require('./core/opds');
     opds(app, config);
 
-    const initStatic = require('./static');
-    initStatic(app, config);
-    
     const webAccess = new (require('./core/WebAccess'))(config);
     await webAccess.init();
 
     const { WebSocketController } = require('./controllers');
-    new WebSocketController(wss, webAccess, config);
+    const webSocketController = new WebSocketController(wss, webAccess, config, security);
+
+    const initHealthRoutes = require('./core/HealthRoutes');
+    initHealthRoutes(app, config, webSocketController.webWorker);
+
+    const initStatic = require('./static');
+    initStatic(app, config);
 
     if (config.logQueries) {
         logQueries(app);

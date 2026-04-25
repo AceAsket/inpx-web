@@ -1,0 +1,32 @@
+{
+  "name": "INPX Web",
+  "short_name": "INPX",
+  "description": "Self-hosted INPX library catalog and reader",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
+  "background_color": "#112f2d",
+  "theme_color": "#112f2d",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Каталог",
+      "short_name": "Каталог",
+      "url": "."
+    },
+    {
+      "name": "Читалка",
+      "short_name": "Читалка",
+      "url": "#/reader"
+    }
+  ]
+}

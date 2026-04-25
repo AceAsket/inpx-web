@@ -2,6 +2,7 @@ const _ = require('lodash');
 const path = require('path');
 const fs = require('fs-extra');
 const os = require('os');
+const SecretStore = require('../core/SecretStore');
 
 const branchFilename = __dirname + '/application_env';
 
@@ -11,6 +12,7 @@ const propsToSave = [
     'logDir',
     'libDir',
     'inpx',
+    'librarySources',
     'inpxFilterFile',
     'allowConfigRewrite',
     'allowUnsafeFilter',
@@ -21,12 +23,17 @@ const propsToSave = [
     'loggingEnabled',
     'logServerStats',
     'logQueries',
+    'loginRateLimitWindowMs',
+    'loginRateLimitMaxAttempts',
     'dbCacheSize',
     'maxFilesDirSize',
+    'coverCacheSize',
     'queryCacheEnabled',
     'queryCacheMemSize',
     'queryCacheDiskSize',
     'cacheCleanInterval',
+    'adminEventLogEnabled',
+    'adminEventLogSize',
     'inpxCheckInterval',
     'lowMemoryMode',
     'fullOptimization',
@@ -36,6 +43,18 @@ const propsToSave = [
     'opds',
     'latestReleaseLink',
     'checkReleaseLink',
+    'telegramShareEnabled',
+    'telegramBotToken',
+    'telegramChatId',
+    'telegramCaptionTemplate',
+    'emailShareEnabled',
+    'smtpHost',
+    'smtpPort',
+    'smtpSecure',
+    'smtpUser',
+    'smtpPass',
+    'emailFrom',
+    'emailTo',
     'discovery',
     'uiDefaults',
 ];
@@ -165,7 +184,10 @@ class ConfigManager {
 
             if (await fs.pathExists(this._config.configFile)) {
                 const data = JSON.parse(await fs.readFile(this._config.configFile, 'utf8'));
-                const config = _.pick(data, propsToSave);
+                const rawConfig = _.pick(data, propsToSave);
+                const secretStore = new SecretStore(this._config);
+                const secretResult = await secretStore.unprotectConfig(rawConfig);
+                const config = secretResult.config;
                 let needsSave = false;
 
                 if (!config.latestReleaseLink || config.latestReleaseLink === 'https://github.com/bookpauk/inpx-web/releases/latest') {
@@ -177,6 +199,9 @@ class ConfigManager {
                     config.checkReleaseLink = 'https://api.github.com/repos/AceAsket/inpx-web/releases/latest';
                     needsSave = true;
                 }
+
+                if (secretResult.needsSave)
+                    needsSave = true;
 
                 const discovery = Object.assign({}, this._config.discovery || {}, config.discovery || {});
 
@@ -210,7 +235,8 @@ class ConfigManager {
         if (!this.inited)
             throw new Error('not inited');
 
-        const dataToSave = _.pick(this._config, propsToSave);
+        const secretStore = new SecretStore(this._config);
+        const dataToSave = await secretStore.protectConfig(_.pick(this._config, propsToSave));
         await fs.writeFile(this._config.configFile, JSON.stringify(dataToSave, null, 4));
     }
 }

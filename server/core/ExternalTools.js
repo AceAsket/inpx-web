@@ -3,6 +3,7 @@ const path = require('path');
 
 const SEVEN_ZIP_DOWNLOAD_URL = 'https://www.7-zip.org/download.html';
 const DJXL_DOWNLOAD_URL = 'https://github.com/libjxl/libjxl/releases/latest';
+const DWEBP_DOWNLOAD_URL = 'https://developers.google.com/speed/webp/docs/precompiled';
 
 function bundledBinDir() {
     if (!process.pkg)
@@ -41,9 +42,24 @@ function sevenZipCommandCandidates() {
     return [...local, ...system];
 }
 
-function djxlCommandCandidates() {
+function toolCandidatesFromDirs(extraDirs = [], fileNames = []) {
+    const result = [];
+    for (const dir of (Array.isArray(extraDirs) ? extraDirs : [])) {
+        const baseDir = String(dir || '').trim();
+        if (!baseDir)
+            continue;
+
+        for (const fileName of fileNames)
+            result.push(path.join(baseDir, fileName));
+    }
+
+    return result;
+}
+
+function djxlCommandCandidates(extraDirs = []) {
+    const extra = toolCandidatesFromDirs(extraDirs, process.platform === 'win32' ? ['djxl.exe', 'djxl'] : ['djxl']);
     const local = [
-        resolveBundledPath('djxl.exe'),
+        process.platform === 'win32' ? resolveBundledPath('djxl.exe') : '',
         resolveBundledPath('djxl'),
     ].filter(Boolean);
 
@@ -54,7 +70,24 @@ function djxlCommandCandidates() {
         'djxl',
     ]);
 
-    return [...local, ...system];
+    return [...extra, ...local, ...system];
+}
+
+function dwebpCommandCandidates(extraDirs = []) {
+    const extra = toolCandidatesFromDirs(extraDirs, process.platform === 'win32' ? ['dwebp.exe', 'dwebp'] : ['dwebp']);
+    const local = [
+        process.platform === 'win32' ? resolveBundledPath('dwebp.exe') : '',
+        resolveBundledPath('dwebp'),
+    ].filter(Boolean);
+
+    const system = (process.platform === 'win32' ? [
+        'dwebp',
+        'dwebp.exe',
+    ] : [
+        'dwebp',
+    ]);
+
+    return [...extra, ...local, ...system];
 }
 
 function missingSevenZipMessage() {
@@ -71,6 +104,14 @@ function missingDjxlMessage() {
     }
 
     return `Не найден djxl для декодирования JXL-обложек. Установите libjxl-tools или аналогичный пакет вашей системы. Ссылка: ${DJXL_DOWNLOAD_URL}`;
+}
+
+function missingDwebpMessage() {
+    if (process.platform === 'win32') {
+        return `Не найден dwebp для декодирования WebP-обложек. Установите libwebp или положите dwebp.exe и его DLL в каталог bin рядом с inpx-web.exe. Ссылка: ${DWEBP_DOWNLOAD_URL}`;
+    }
+
+    return `Не найден dwebp для декодирования WebP-обложек. Установите webp/libwebp-tools или аналогичный пакет вашей системы. Ссылка: ${DWEBP_DOWNLOAD_URL}`;
 }
 
 function createMissingToolError(code, message) {
@@ -97,11 +138,14 @@ async function pathExistsSafe(filePath) {
 module.exports = {
     SEVEN_ZIP_DOWNLOAD_URL,
     DJXL_DOWNLOAD_URL,
+    DWEBP_DOWNLOAD_URL,
     bundledBinDir,
     sevenZipCommandCandidates,
     djxlCommandCandidates,
+    dwebpCommandCandidates,
     missingSevenZipMessage,
     missingDjxlMessage,
+    missingDwebpMessage,
     createMissingToolError,
     isMissingToolError,
     pathExistsSafe,

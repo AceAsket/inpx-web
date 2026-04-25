@@ -10,9 +10,10 @@ const cleanPeriod = 1*60*1000;//1 минута
 const closeSocketOnIdle = 5*60*1000;//5 минут
 
 class WebSocketController {
-    constructor(wss, webAccess, config) {
+    constructor(wss, webAccess, config, security = null) {
         this.config = config;
         this.isDevelopment = (config.branch == 'development');
+        this.security = security;
 
         this.webAccess = webAccess;
 
@@ -21,7 +22,8 @@ class WebSocketController {
 
         this.wss = wss;
 
-        wss.on('connection', (ws) => {
+        wss.on('connection', (ws, req) => {
+            ws.req = req;
             ws.on('message', (message) => {
                 this.onMessage(ws, message.toString());
             });
@@ -62,6 +64,8 @@ class WebSocketController {
 
             req = JSON.parse(message);
             req.__startTime = Date.now();
+            if (!req.profileAccessToken && this.security && ws.req && ws.req.securitySession && ws.req.securitySession.profileAccessToken)
+                req.profileAccessToken = ws.req.securitySession.profileAccessToken;
 
             ws.lastActivity = Date.now();
             
@@ -70,9 +74,20 @@ class WebSocketController {
 
             //access
             if (!await this.webAccess.hasAccess(req.accessToken)) {
+                if (this.security && req.accessToken) {
+                    this.security.checkLoginRate(ws.req);
+                    this.security.recordLoginAttempt(ws.req, false);
+                }
                 await utils.sleep(500);
                 const salt = this.webAccess.newToken();
                 this.send({error: 'need_access_token', salt}, req, ws);
+                return;
+            } else if (this.security && req.accessToken) {
+                this.security.recordLoginAttempt(ws.req, true);
+            }
+
+            if (this.security && this.isCsrfProtectedAction(req.action) && !this.security.hasValidCsrf(ws.req, req.csrfToken)) {
+                this.send({error: 'bad_csrf_token'}, req, ws);
                 return;
             }
 
@@ -106,12 +121,46 @@ class WebSocketController {
                     await this.updateDiscoveryPreferences(req, ws); break;
                 case 'update-shared-discovery-config':
                     await this.updateSharedDiscoveryConfig(req, ws); break;
+                case 'update-admin-integrations':
+                    await this.updateAdminIntegrations(req, ws); break;
+                case 'test-admin-integration':
+                    await this.testAdminIntegration(req, ws); break;
+                case 'update-admin-opds':
+                    await this.updateAdminOpds(req, ws); break;
+                case 'get-admin-dashboard':
+                    await this.getAdminDashboard(req, ws); break;
+                case 'get-admin-events':
+                    await this.getAdminEvents(req, ws); break;
+                case 'update-admin-event-log':
+                    await this.updateAdminEventLog(req, ws); break;
+                case 'add-admin-test-event':
+                    await this.addAdminTestEvent(req, ws); break;
+                case 'update-admin-library-sources':
+                    await this.updateAdminLibrarySources(req, ws); break;
+                case 'admin-diagnose-library-source':
+                    await this.adminDiagnoseLibrarySource(req, ws); break;
+                case 'admin-clean-cache':
+                    await this.adminCleanCache(req, ws); break;
+                case 'admin-clean-broken-covers':
+                    await this.adminCleanBrokenCovers(req, ws); break;
+                case 'admin-rebuild-cover':
+                    await this.adminRebuildCover(req, ws); break;
+                case 'admin-reindex':
+                    await this.adminReindex(req, ws); break;
+                case 'export-admin-settings':
+                    await this.exportAdminSettings(req, ws); break;
+                case 'create-admin-backup':
+                    await this.createAdminBackup(req, ws); break;
+                case 'update-book-metadata':
+                    await this.updateBookMetadata(req, ws); break;
                 case 'get-book-link':
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
                     await this.getBookInfo(req, ws); break;
                 case 'get-reader-state':
                     await this.getReaderState(req, ws); break;
+                case 'get-user-reading-library':
+                    await this.getUserReadingLibrary(req, ws); break;
                 case 'update-reader-progress':
                     await this.updateReaderProgress(req, ws); break;
                 case 'delete-reader-progress':
@@ -154,6 +203,10 @@ class WebSocketController {
                     await this.updateReadingListBook(req, ws); break;
                 case 'set-reading-list-book-read':
                     await this.setReadingListBookRead(req, ws); break;
+                case 'mark-reader-books-read':
+                    await this.markReaderBooksRead(req, ws); break;
+                case 'mark-series-read':
+                    await this.markSeriesRead(req, ws); break;
                 case 'add-series-to-reading-list':
                     await this.addSeriesToReadingList(req, ws); break;
                 case 'send-book-telegram':
@@ -190,6 +243,46 @@ class WebSocketController {
         }
     }
 
+    isCsrfProtectedAction(action = '') {
+        return new Set([
+            'logout',
+            'login-user-profile',
+            'logout-user-profile',
+            'create-user-profile',
+            'update-user-profile',
+            'delete-user-profile',
+            'update-discovery-preferences',
+            'update-shared-discovery-config',
+            'update-admin-integrations',
+            'update-admin-opds',
+            'update-admin-event-log',
+            'add-admin-test-event',
+            'update-admin-library-sources',
+            'admin-diagnose-library-source',
+            'admin-clean-cache',
+            'admin-clean-broken-covers',
+            'admin-rebuild-cover',
+            'admin-reindex',
+            'update-reader-progress',
+            'delete-reader-progress',
+            'update-reader-preferences',
+            'add-reader-bookmark',
+            'delete-reader-bookmark',
+            'create-reading-list',
+            'rename-reading-list',
+            'set-reading-list-visibility',
+            'delete-reading-list',
+            'import-reading-lists',
+            'update-reading-list-book',
+            'set-reading-list-book-read',
+            'mark-reader-books-read',
+            'mark-series-read',
+            'add-series-to-reading-list',
+            'send-book-telegram',
+            'send-book-email',
+        ]).has(action);
+    }
+
     //Actions ------------------------------------------------------------------
     async test(req, ws) {
         this.send({message: `${this.config.name} project is awesome`}, req, ws);
@@ -202,6 +295,8 @@ class WebSocketController {
 
     async getConfig(req, ws) {
         const config = _.pick(this.config, this.config.webConfigParams);
+        if (this.security)
+            config.csrfToken = this.security.getCsrfToken(ws.req);
         config.discovery = Object.assign(
             {},
             config.discovery || {},
@@ -218,8 +313,20 @@ class WebSocketController {
         config.opdsRoot = this.config.opdsRoot || ((this.config.opds && this.config.opds.root) ? this.config.opds.root : '/opds');
 
         const currentUser = currentProfile.currentUserProfile || null;
-        config.telegramShareEnabled = !!(this.config.telegramBotToken && currentUser && currentUser.telegramChatId);
-        config.emailShareEnabled = !!(this.config.smtpHost && currentUser && currentUser.emailTo);
+        config.telegramShareEnabled = !!(
+            this.config.telegramShareEnabled
+            && this.config.telegramBotToken
+            && ((currentUser && currentUser.telegramChatId) || this.config.telegramChatId)
+        );
+        config.emailShareEnabled = !!(
+            this.config.emailShareEnabled
+            && this.config.smtpHost
+            && ((currentUser && currentUser.emailTo) || this.config.emailTo)
+        );
+        if (currentUser && currentUser.isAdmin && config.profileAuthorized) {
+            config.adminIntegrations = this.webWorker.getAdminIntegrationConfig();
+            config.adminOpds = this.webWorker.getAdminOpdsConfig();
+        }
 
         this.send(config, req, ws);
     }
@@ -297,6 +404,8 @@ class WebSocketController {
             externalName: req.externalName,
             externalUrl: req.externalUrl,
             externalTtlMinutes: req.externalTtlMinutes,
+            externalBrowseUrl: req.externalBrowseUrl,
+            externalBrowseName: req.externalBrowseName,
         });
 
         this.send(result, req, ws);
@@ -319,6 +428,92 @@ class WebSocketController {
             req.discovery || {},
         );
 
+        this.send(result, req, ws);
+    }
+
+    async updateAdminIntegrations(req, ws) {
+        const result = await this.webWorker.updateAdminIntegrationConfig(
+            req.userId,
+            req.profileAccessToken,
+            req.integrations || {},
+        );
+
+        this.send(result, req, ws);
+    }
+
+    async testAdminIntegration(req, ws) {
+        const result = await this.webWorker.testAdminIntegrationConfig(
+            req.userId,
+            req.profileAccessToken,
+            req.kind,
+        );
+
+        this.send(result, req, ws);
+    }
+
+    async updateAdminOpds(req, ws) {
+        const result = await this.webWorker.updateAdminOpdsConfig(
+            req.userId,
+            req.profileAccessToken,
+            req.opds || {},
+        );
+        this.send(result, req, ws);
+    }
+
+    async getAdminDashboard(req, ws) {
+        const result = await this.webWorker.getAdminDashboard(req.userId, req.profileAccessToken);
+        this.send(result, req, ws);
+    }
+
+    async getAdminEvents(req, ws) {
+        const result = await this.webWorker.getAdminEvents(req.userId, req.profileAccessToken, req.options || {});
+        this.send(result, req, ws);
+    }
+
+    async updateAdminEventLog(req, ws) {
+        const result = await this.webWorker.updateAdminEventLog(req.userId, req.profileAccessToken, req.options || {});
+        this.send(result, req, ws);
+    }
+
+    async addAdminTestEvent(req, ws) {
+        const result = await this.webWorker.addAdminTestEvent(req.userId, req.profileAccessToken, req.level);
+        this.send(result, req, ws);
+    }
+
+    async updateAdminLibrarySources(req, ws) {
+        const result = await this.webWorker.updateAdminLibrarySources(
+            req.userId,
+            req.profileAccessToken,
+            req.sources || [],
+        );
+        this.send(result, req, ws);
+    }
+
+    async adminDiagnoseLibrarySource(req, ws) {
+        const result = await this.webWorker.diagnoseLibrarySource(req.userId, req.profileAccessToken, req.source || {});
+        this.send(result, req, ws);
+    }
+
+    async adminCleanCache(req, ws) {
+        const result = await this.webWorker.runAdminCacheClean(req.userId, req.profileAccessToken);
+        this.send(result, req, ws);
+    }
+
+    async adminCleanBrokenCovers(req, ws) {
+        const result = await this.webWorker.cleanBrokenCoverCache(req.userId, req.profileAccessToken);
+        this.send(result, req, ws);
+    }
+
+    async adminRebuildCover(req, ws) {
+        if (!utils.hasProp(req, 'bookUid'))
+            throw new Error(`bookUid is empty`);
+
+        const result = await this.webWorker.rebuildCoverCacheForBook(req.userId, req.profileAccessToken, req.bookUid);
+        this.send(result, req, ws);
+    }
+
+    async adminReindex(req, ws) {
+        const result = await this.webWorker.startAdminReindex(req.userId, req.profileAccessToken);
         this.send(result, req, ws);
     }
 
@@ -352,6 +547,12 @@ class WebSocketController {
 
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
         const result = await this.webWorker.getReaderState(user.id, req.bookUid);
+        this.send(result, req, ws);
+    }
+
+    async getUserReadingLibrary(req, ws) {
+        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        const result = await this.webWorker.getUserReadingLibrary(user, req.options || {});
         this.send(result, req, ws);
     }
 
@@ -405,12 +606,27 @@ class WebSocketController {
     }
 
     async loginUserProfile(req, ws) {
-        const result = await this.webWorker.loginUserProfile(req.login, req.password);
-        this.send(result, req, ws);
+        if (this.security)
+            this.security.checkLoginRate(ws.req);
+
+        try {
+            const result = await this.webWorker.loginUserProfile(req.login, req.password);
+            if (this.security && ws.req && ws.req.securitySession)
+                ws.req.securitySession.profileAccessToken = result.profileAccessToken;
+            if (this.security)
+                this.security.recordLoginAttempt(ws.req, true);
+            this.send(result, req, ws);
+        } catch (e) {
+            if (this.security)
+                this.security.recordLoginAttempt(ws.req, false);
+            throw e;
+        }
     }
 
     async logoutUserProfile(req, ws) {
         const result = await this.webWorker.closeProfileSession(req.profileAccessToken);
+        if (this.security && ws.req && ws.req.securitySession)
+            delete ws.req.securitySession.profileAccessToken;
         this.send(result, req, ws);
     }
 
@@ -441,10 +657,11 @@ class WebSocketController {
         }
 
         const profile = Object.assign({}, req.profile || {});
-        if (profile.password && !String(profile.login || '').trim())
+        const passwordLogin = String(profile.login || target.login || '').trim();
+        if (profile.password && !passwordLogin)
             throw new Error('Для пароля нужно указать логин');
         if (profile.password)
-            profile.passwordHash = this.webWorker.hashProfilePassword(profile.login, profile.password);
+            profile.passwordHash = this.webWorker.hashProfilePassword(passwordLogin, profile.password);
         delete profile.password;
         delete profile.isAdmin;
 
@@ -510,6 +727,21 @@ class WebSocketController {
         this.send(result, req, ws);
     }
 
+    async exportAdminSettings(req, ws) {
+        const result = await this.webWorker.exportAdminSettings(req.userId, req.profileAccessToken);
+        this.send(result, req, ws);
+    }
+
+    async createAdminBackup(req, ws) {
+        const result = await this.webWorker.createAdminBackup(req.userId, req.profileAccessToken);
+        this.send(result, req, ws);
+    }
+
+    async updateBookMetadata(req, ws) {
+        const result = await this.webWorker.updateBookMetadata(req.userId, req.profileAccessToken, req.bookUid, req.metadata);
+        this.send(result, req, ws);
+    }
+
     async importReadingLists(req, ws) {
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
         const result = await this.webWorker.importReadingLists(user.id, req.data);
@@ -535,6 +767,24 @@ class WebSocketController {
 
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
         const result = await this.webWorker.setReadingListBookRead(user.id, req.listId, req.bookUid, req.read);
+        this.send(result, req, ws);
+    }
+
+    async markReaderBooksRead(req, ws) {
+        if (!utils.hasProp(req, 'bookUids'))
+            throw new Error('bookUids is empty');
+
+        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        const result = await this.webWorker.markReaderBooksRead(user.id, req.bookUids, req.read, req.options || {});
+        this.send(result, req, ws);
+    }
+
+    async markSeriesRead(req, ws) {
+        if (!utils.hasProp(req, 'series'))
+            throw new Error('series is empty');
+
+        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        const result = await this.webWorker.markSeriesRead(user.id, req.series, req.read);
         this.send(result, req, ws);
     }
 

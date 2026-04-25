@@ -9,9 +9,11 @@ class OpensearchPage extends BasePage {
         this.title = 'opensearch';
     }
 
-    async body() {
+    async body(req) {
         const xml = new XmlParser();
         const xmlObject = {};        
+        const scopeUser = this.getScopeUserId(req);
+        const scopedTemplate = (type) => `${this.opdsRoot}/search?type=${type}&term={searchTerms}${scopeUser ? `&user=${encodeURIComponent(scopeUser)}` : ''}`;
 /*
 <?xml version="1.0" encoding="utf-8"?>
 <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
@@ -28,12 +30,26 @@ class OpensearchPage extends BasePage {
             Description: 'Поиск по каталогу',
             InputEncoding: 'UTF-8',
             OutputEncoding: 'UTF-8',
-            Url: {
-                '*ATTRS': {
-                    type: 'application/atom+xml;profile=opds-catalog;kind=navigation',
-                    template: `${this.opdsRoot}/search?type=title&term={searchTerms}`,
+            Url: [
+                {
+                    '*ATTRS': {
+                        type: 'application/atom+xml;profile=opds-catalog;kind=navigation',
+                        template: scopedTemplate('title'),
+                    },
                 },
-            },
+                {
+                    '*ATTRS': {
+                        type: 'application/atom+xml;profile=opds-catalog;kind=navigation',
+                        template: scopedTemplate('author'),
+                    },
+                },
+                {
+                    '*ATTRS': {
+                        type: 'application/atom+xml;profile=opds-catalog;kind=navigation',
+                        template: scopedTemplate('series'),
+                    },
+                },
+            ],
         }
 
         xml.fromObject(xmlObject);

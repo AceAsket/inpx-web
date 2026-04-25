@@ -662,14 +662,16 @@ class DbSearcher {
                         return ${checks.join(' && ')};
                     };
 
-                    const dedupeKey = (row) => {
-                        if (row.libid)
-                            return 'libid:' + row.libid;
+                const dedupeKey = (row) => {
+                    const sourceKey = row.sourceId || '';
+                    if (row.libid)
+                        return 'libid:' + sourceKey + ':' + row.libid;
 
-                        const parts = [
-                            row.folder || '',
-                            row.file || '',
-                            row.ext || '',
+                    const parts = [
+                        sourceKey,
+                        row.folder || '',
+                        row.file || '',
+                        row.ext || '',
                             String(row.insno || 0),
                         ];
 
@@ -677,8 +679,9 @@ class DbSearcher {
                             return 'file:' + parts.join('|');
 
                         return [
-                            'meta',
-                            row.author || '',
+                        'meta',
+                        sourceKey,
+                        row.author || '',
                             row.series || '',
                             String(row.serno || 0),
                             row.title || '',

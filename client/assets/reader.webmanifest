@@ -1,0 +1,32 @@
+{
+  "name": "INPX Reader",
+  "short_name": "Reader",
+  "description": "Standalone INPX reading app",
+  "start_url": "#/reader",
+  "scope": ".",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
+  "background_color": "#12171b",
+  "theme_color": "#12171b",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Читалка",
+      "short_name": "Читалка",
+      "url": "#/reader"
+    },
+    {
+      "name": "Каталог",
+      "short_name": "Каталог",
+      "url": "."
+    }
+  ]
+}

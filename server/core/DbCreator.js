@@ -2,6 +2,7 @@ const fs = require('fs-extra');
 
 const InpxParser = require('./InpxParser');
 const InpxHashCreator = require('./InpxHashCreator');
+const {getEnabledLibrarySources} = require('./LibrarySources');
 const utils = require('./utils');
 
 const emptyFieldValue = '?';
@@ -69,6 +70,8 @@ class DbCreator {
 
         let uidSet = new Set();//уникальные идентификаторы
 
+        const librarySources = getEnabledLibrarySources(config);
+
         //stats
         let authorCount = 0;
         let bookCount = 0;
@@ -131,9 +134,13 @@ class DbCreator {
             return result;
         }
 
+        let currentSource = librarySources[0];
         let totalFiles = 0;
         const readFileCallback = async(readState) => {
-            callback(readState);
+            callback(Object.assign({
+                sourceId: currentSource.id,
+                sourceName: currentSource.name,
+            }, readState));
 
             if (readState.totalFiles)
                 totalFiles = readState.totalFiles;
@@ -227,6 +234,10 @@ class DbCreator {
         const parsedCallback = async(chunk) => {
             let filtered = false;
             for (const rec of chunk) {
+                rec.sourceId = currentSource.id;
+                rec.sourceName = currentSource.name;
+                rec.sourceLibDir = currentSource.libDir;
+
                 //сначала фильтр
                 if (!filter(rec) || uidSet.has(rec._uid)) {
                     rec.id = 0;
@@ -265,8 +276,29 @@ class DbCreator {
         };
 
         //парсинг
-        const parser = new InpxParser();
-        await parser.parse(config.inpxFile, readFileCallback, parsedCallback);        
+        const parserInfos = [];
+        for (const source of librarySources) {
+            currentSource = source;
+            totalFiles = 0;
+            callback({
+                job: 'load inpx',
+                jobMessage: `Loading INPX: ${source.name}`,
+                jobStep: 1,
+                progress: 0,
+                sourceId: source.id,
+                sourceName: source.name,
+            });
+
+            const parser = new InpxParser();
+            await parser.parse(source.inpxFile || source.inpx, readFileCallback, parsedCallback);
+            parserInfos.push({
+                id: source.id,
+                name: source.name,
+                inpx: source.inpxFile || source.inpx,
+                libDir: source.libDir,
+                info: parser.info,
+            });
+        }
 
         //чистка памяти, ибо жрет как не в себя
         authorMap = null;
@@ -463,7 +495,22 @@ class DbCreator {
             table: 'config'
         });
 
-        const inpxInfo = parser.info;
+        const inpxInfo = parserInfos.length === 1
+            ? parserInfos[0].info
+            : {
+                collection: parserInfos.map(source => source.name).join(' + '),
+                version: parserInfos.map(source => source.info && source.info.version).filter(Boolean).join(' + '),
+                structure: (parserInfos[0].info || {}).structure,
+                recStruct: (parserInfos[0].info || {}).recStruct,
+                sources: parserInfos.map(source => ({
+                    id: source.id,
+                    name: source.name,
+                    inpx: source.inpx,
+                    libDir: source.libDir,
+                    collection: source.info && source.info.collection,
+                    version: source.info && source.info.version,
+                })),
+            };
         if (inpxFilter && inpxFilter.info) {
             if (inpxFilter.info.collection)
                 inpxInfo.collection = inpxFilter.info.collection;

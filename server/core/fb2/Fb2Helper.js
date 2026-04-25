@@ -6,6 +6,13 @@ const Fb2Parser = require('../fb2/Fb2Parser');
 const utils = require('../utils');
 
 class Fb2Helper {
+    async decompressIfNeeded(data) {
+        if (data && data.length >= 2 && data[0] === 0x1f && data[1] === 0x8b)
+            return await utils.gunzipBuffer(data);
+
+        return data;
+    }
+
     checkEncoding(data) {
         //Корректируем кодировку UTF-16
         let encoding = textUtils.getEncoding(data);
@@ -52,7 +59,7 @@ class Fb2Helper {
 
     async getDescAndCover(bookFile) {
         let data = await fs.readFile(bookFile);
-        data = await utils.gunzipBuffer(data);
+        data = await this.decompressIfNeeded(data);
 
         data = this.checkEncoding(data);
 

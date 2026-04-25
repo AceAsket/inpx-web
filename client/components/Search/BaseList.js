@@ -339,6 +339,26 @@ export default class BaseList {
         }
     }
 
+    getBookUid(book = {}) {
+        return String(book._uid || book.bookUid || '').trim();
+    }
+
+    async markBooksRead(bookUids = [], read = true) {
+        const normalized = Array.from(new Set((Array.isArray(bookUids) ? bookUids : [bookUids])
+            .map((bookUid) => String(bookUid || '').trim())
+            .filter(Boolean)));
+        if (!normalized.length)
+            return;
+
+        try {
+            const result = await this.api.markReaderBooksRead(normalized, read);
+            const count = (result && result.changedBooks) || normalized.length;
+            this.$root.notify.success(read ? `Помечено прочитанными: ${count}` : `Отметка снята: ${count}`);
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
+    }
+
     bookEvent(event) {
         switch (event.action) {
             case 'authorClick':
@@ -356,6 +376,12 @@ export default class BaseList {
                 break;
             case 'readingList':
                 this.$emit('listEvent', {action: 'manageReadingLists', book: event.book});
+                break;
+            case 'markRead':
+                this.markBooksRead([this.getBookUid(event.book)], true);//no await
+                break;
+            case 'markUnread':
+                this.markBooksRead([this.getBookUid(event.book)], false);//no await
                 break;
             case 'download':
             case 'copyLink':

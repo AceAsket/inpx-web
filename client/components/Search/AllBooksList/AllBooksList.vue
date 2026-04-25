@@ -34,6 +34,32 @@
             </q-chip>
         </div>
 
+        <div class="bulk-read-toolbar q-mx-md q-mb-sm">
+            <q-btn
+                flat
+                dense
+                no-caps
+                :icon="selectionMode ? 'la la-times' : 'la la-check-square'"
+                @click="toggleSelectionMode"
+            >
+                {{ selectionMode ? 'Закрыть выбор' : 'Выбрать книги' }}
+            </q-btn>
+            <template v-if="selectionMode">
+                <q-btn flat dense no-caps icon="la la-check-double" @click="selectVisibleBooks">
+                    Выбрать видимые
+                </q-btn>
+                <q-btn flat dense no-caps icon="la la-eraser" @click="clearSelection">
+                    Снять выбор
+                </q-btn>
+                <q-btn color="primary" dense no-caps icon="la la-check-circle" :disable="!selectedBookCount" @click="markSelectedRead(true)">
+                    Прочитаны ({{ selectedBookCount }})
+                </q-btn>
+                <q-btn outline color="primary" dense no-caps icon="la la-undo" :disable="!selectedBookCount" @click="markSelectedRead(false)">
+                    Снять отметку
+                </q-btn>
+            </template>
+        </div>
+
         <div class="books-grid q-mx-md">
             <BookView
                 v-for="item in tableData"
@@ -42,6 +68,8 @@
                 mode="extended"
                 :genre-map="genreMap"
                 :show-read-link="showReadLink"
+                :selectable="selectionMode"
+                :selected="isSelectedBook(item.book)"
                 @book-event="bookEvent"
             />
         </div>
@@ -64,6 +92,9 @@ import * as utils from '../../../share/utils';
 import _ from 'lodash';
 
 class AllBooksList extends BaseList {
+    selectionMode = false;
+    selectedBookUids = [];
+
     get foundCountMessage() {
         const count = this.list.totalFound;
         const mod10 = count % 10;
@@ -76,6 +107,65 @@ class AllBooksList extends BaseList {
             noun = 'книги';
 
         return `${count} ${noun}`;
+    }
+
+    get selectedBookCount() {
+        return this.selectedBookUids.length;
+    }
+
+    toggleSelectionMode() {
+        this.selectionMode = !this.selectionMode;
+        if (!this.selectionMode)
+            this.clearSelection();
+    }
+
+    isSelectedBook(book = {}) {
+        return this.selectedBookUids.includes(this.getBookUid(book));
+    }
+
+    setBookSelected(book = {}, selected = true) {
+        const bookUid = this.getBookUid(book);
+        if (!bookUid)
+            return;
+
+        const set = new Set(this.selectedBookUids);
+        if (selected)
+            set.add(bookUid);
+        else
+            set.delete(bookUid);
+        this.selectedBookUids = Array.from(set);
+    }
+
+    selectVisibleBooks() {
+        const set = new Set(this.selectedBookUids);
+        for (const item of this.tableData) {
+            const bookUid = this.getBookUid(item.book);
+            if (bookUid)
+                set.add(bookUid);
+        }
+        this.selectedBookUids = Array.from(set);
+    }
+
+    clearSelection() {
+        this.selectedBookUids = [];
+    }
+
+    async markSelectedRead(read = true) {
+        const bookUids = this.selectedBookUids.slice();
+        if (!bookUids.length)
+            return;
+
+        await this.markBooksRead(bookUids, read);
+        this.clearSelection();
+    }
+
+    bookEvent(event) {
+        if (event.action === 'selectionChange') {
+            this.setBookSelected(event.book, event.selected);
+            return;
+        }
+
+        super.bookEvent(event);
     }
 
     async updateTableData() {
@@ -199,6 +289,13 @@ export default vueComponent(AllBooksList);
 
 .rating-chip-reset {
     background: rgba(23, 32, 38, 0.04);
+}
+
+.bulk-read-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .books-grid {

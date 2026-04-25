@@ -17,6 +17,7 @@ class ReadingListStore {
                 users: [this.makeDefaultUser()],
                 lists: [],
                 sharedDiscoveryConfig: this.normalizeSharedDiscoveryConfig(),
+                metadataOverrides: {},
             });
         }
     }
@@ -89,6 +90,7 @@ class ReadingListStore {
             emailTo: '',
             telegramChatId: '',
             opdsEnabled: false,
+            opdsAuthEnabled: false,
             isAdmin: true,
             createdAt: now,
             updatedAt: now,
@@ -109,11 +111,13 @@ class ReadingListStore {
     }
 
     normalizeReaderRuntimeSettings(value = {}, defaults = {}) {
+        const fontFamily = String(value.fontFamily || defaults.fontFamily || 'serif').trim().toLowerCase();
         return {
             readMode: (String(value.readMode || defaults.readMode || '').trim().toLowerCase() === 'paged' ? 'paged' : 'scroll'),
             pagedNavigation: (String(value.pagedNavigation || defaults.pagedNavigation || '').trim().toLowerCase() === 'wheel' ? 'wheel' : 'tap'),
             pagedDirection: (String(value.pagedDirection || defaults.pagedDirection || '').trim().toLowerCase() === 'horizontal' ? 'horizontal' : 'vertical'),
             showStatusBar: (value.showStatusBar !== false),
+            fontFamily: (['serif', 'sans', 'mono', 'system'].includes(fontFamily) ? fontFamily : 'serif'),
             fontSize: Math.max(14, Math.min(30, parseInt(value.fontSize || defaults.fontSize || 18, 10) || 18)),
             lineHeight: Math.max(1.35, Math.min(2.2, Number(value.lineHeight || defaults.lineHeight || 1.7) || 1.7)),
             contentWidth: Math.max(560, Math.min(1200, parseInt(value.contentWidth || defaults.contentWidth || 820, 10) || 820)),
@@ -129,6 +133,7 @@ class ReadingListStore {
             pagedNavigation: 'tap',
             pagedDirection: 'vertical',
             showStatusBar: true,
+            fontFamily: 'serif',
             fontSize: 18,
             lineHeight: 1.7,
             contentWidth: 820,
@@ -141,6 +146,7 @@ class ReadingListStore {
             pagedNavigation: 'tap',
             pagedDirection: 'vertical',
             showStatusBar: true,
+            fontFamily: 'serif',
             fontSize: 19,
             lineHeight: 1.8,
             contentWidth: 760,
@@ -227,6 +233,44 @@ class ReadingListStore {
         return result;
     }
 
+    normalizeMetadataPatch(value = {}) {
+        const result = {};
+        if (Object.prototype.hasOwnProperty.call(value, 'title')) {
+            result.title = this.normalizeName(value.title);
+            if (!result.title)
+                throw new Error('Название книги не должно быть пустым');
+        }
+        if (Object.prototype.hasOwnProperty.call(value, 'author')) {
+            result.author = this.normalizeName(value.author);
+            if (!result.author)
+                throw new Error('Автор книги не должен быть пустым');
+        }
+        if (Object.prototype.hasOwnProperty.call(value, 'series'))
+            result.series = this.normalizeName(value.series);
+        if (Object.prototype.hasOwnProperty.call(value, 'serno')) {
+            const serno = parseInt(value.serno, 10);
+            result.serno = Number.isFinite(serno) && serno > 0 ? serno : '';
+        }
+        return result;
+    }
+
+    normalizeMetadataOverrides(value = {}) {
+        const result = {};
+        for (const [bookUid, row] of Object.entries(value || {})) {
+            const uid = this.normalizeBookUid(bookUid);
+            if (!uid || !row || typeof(row) !== 'object')
+                continue;
+
+            const patch = this.normalizeMetadataPatch(row);
+            if (Object.keys(patch).length) {
+                result[uid] = Object.assign(patch, {
+                    updatedAt: String(row.updatedAt || '').trim() || this.nowIso(),
+                });
+            }
+        }
+        return result;
+    }
+
     makeDefaultUser() {
         const now = this.nowIso();
         return {
@@ -234,9 +278,10 @@ class ReadingListStore {
             name: 'Основной',
             login: '',
             passwordHash: '',
-            emailTo: String(this.config.emailTo || '').trim(),
-            telegramChatId: String(this.config.telegramChatId || '').trim(),
+            emailTo: '',
+            telegramChatId: '',
             opdsEnabled: true,
+            opdsAuthEnabled: false,
             readerPreferences: this.normalizeReaderPreferences(),
             readerProgress: {},
             readerBookmarks: {},
@@ -284,6 +329,7 @@ class ReadingListStore {
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
+        normalized.opdsAuthEnabled = (normalized.opdsAuthEnabled === true);
         normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
         normalized.readerProgress = this.normalizeReaderProgress(normalized.readerProgress);
         normalized.readerBookmarks = this.normalizeReaderBookmarks(normalized.readerBookmarks);
@@ -309,7 +355,7 @@ class ReadingListStore {
 
     normalizeData(data) {
         const defaultUser = this.makeDefaultUser();
-        const source = Object.assign({version: 5, users: [], lists: [], sharedDiscoveryConfig: {}}, data || {});
+        const source = Object.assign({version: 5, users: [], lists: [], sharedDiscoveryConfig: {}, metadataOverrides: {}}, data || {});
         let users = [];
 
         if (Array.isArray(source.users) && source.users.length) {
@@ -352,6 +398,7 @@ class ReadingListStore {
             users,
             lists,
             sharedDiscoveryConfig: this.normalizeSharedDiscoveryConfig(source.sharedDiscoveryConfig),
+            metadataOverrides: this.normalizeMetadataOverrides(source.metadataOverrides),
         };
     }
 
@@ -392,6 +439,11 @@ class ReadingListStore {
                 admin.opdsEnabled = false;
                 changed = true;
             }
+
+            if (admin.opdsAuthEnabled !== false) {
+                admin.opdsAuthEnabled = false;
+                changed = true;
+            }
         }
 
         const adminIndex = users.findIndex((item) => item.id === adminTemplate.id || item.isAdmin);
@@ -407,6 +459,7 @@ class ReadingListStore {
                 users,
                 lists: source.lists,
                 sharedDiscoveryConfig: source.sharedDiscoveryConfig,
+                metadataOverrides: source.metadataOverrides,
             },
             changed,
         };
@@ -436,6 +489,29 @@ class ReadingListStore {
         data.sharedDiscoveryConfig = this.normalizeSharedDiscoveryConfig(Object.assign({}, data.sharedDiscoveryConfig || {}, patch || {}));
         await this.save(data);
         return data.sharedDiscoveryConfig;
+    }
+
+    async getMetadataOverrides() {
+        const data = await this.load();
+        return this.normalizeMetadataOverrides(data.metadataOverrides);
+    }
+
+    async updateMetadataOverride(bookUid = '', patch = {}) {
+        const uid = this.normalizeBookUid(bookUid);
+        if (!uid)
+            throw new Error('Не указан идентификатор книги');
+
+        const data = await this.load();
+        const normalized = this.normalizeMetadataPatch(patch || {});
+        if (!Object.keys(normalized).length)
+            throw new Error('Не указаны данные для сохранения');
+
+        data.metadataOverrides = this.normalizeMetadataOverrides(data.metadataOverrides);
+        data.metadataOverrides[uid] = Object.assign({}, data.metadataOverrides[uid] || {}, normalized, {
+            updatedAt: this.nowIso(),
+        });
+        await this.save(data);
+        return data.metadataOverrides[uid];
     }
 
     async resolveUser(userId = '') {
@@ -502,15 +578,54 @@ class ReadingListStore {
             stats.set(item.userId, count + 1);
         }
 
+        const progressCounts = new Map();
+        for (const item of data.users) {
+            const progressMap = (item && item.readerProgress && typeof(item.readerProgress) === 'object' ? item.readerProgress : {});
+            const count = Object.values(progressMap).filter((progress) => progress && progress.hidden !== true).length;
+            if (count)
+                progressCounts.set(item.id, count);
+        }
+
         return data.users
-            .filter((item) => item.opdsEnabled && stats.has(item.id))
+            .filter((item) => item.opdsEnabled && (stats.has(item.id) || progressCounts.has(item.id)))
             .map((item) => ({
                 id: item.id,
                 publicId: item.login || item.id,
                 name: item.name,
+                opdsAuthEnabled: item.opdsAuthEnabled === true,
                 opdsListCount: stats.get(item.id) || 0,
+                opdsProgressCount: progressCounts.get(item.id) || 0,
             }))
             .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    }
+
+    async getOpdsUser(publicId = '') {
+        const normalized = String(publicId || '').trim();
+        if (!normalized)
+            return null;
+
+        const data = await this.load();
+        const user = data.users.find((item) => item.id === normalized || item.login === normalized);
+        if (!user || user.opdsEnabled === false)
+            return null;
+
+        return user;
+    }
+
+    async verifyOpdsPassword(publicId = '', login = '', password = '') {
+        const user = await this.getOpdsUser(publicId);
+        if (!user || user.opdsAuthEnabled !== true)
+            return {user, authorized: true};
+
+        if (!user.login || !user.passwordHash)
+            return {user, authorized: false};
+
+        const normalizedLogin = this.normalizeLogin(login);
+        const passwordHash = this.hashProfilePassword(user.login, password);
+        return {
+            user,
+            authorized: normalizedLogin === user.login && passwordHash === user.passwordHash,
+        };
     }
 
     async createUser(profile = {}) {
@@ -527,8 +642,11 @@ class ReadingListStore {
             emailTo: profile.emailTo,
             telegramChatId: profile.telegramChatId,
             opdsEnabled: profile.opdsEnabled,
+            opdsAuthEnabled: profile.opdsAuthEnabled,
             isAdmin: false,
         });
+        if (user.opdsAuthEnabled && (!user.login || !user.passwordHash))
+            throw new Error('Для OPDS-авторизации у профиля должен быть логин и пароль');
 
         data.users.push(user);
         await this.save(data);
@@ -556,8 +674,12 @@ class ReadingListStore {
             target.telegramChatId = String(patch.telegramChatId || '').trim();
         if (utilsHasProp(patch, 'opdsEnabled'))
             target.opdsEnabled = (patch.opdsEnabled !== false);
+        if (utilsHasProp(patch, 'opdsAuthEnabled'))
+            target.opdsAuthEnabled = (patch.opdsAuthEnabled === true);
         if (utilsHasProp(patch, 'readerPreferences'))
             target.readerPreferences = this.normalizeReaderPreferences(patch.readerPreferences);
+        if (target.opdsAuthEnabled && (!target.login || !target.passwordHash))
+            throw new Error('Для OPDS-авторизации у профиля должен быть логин и пароль');
         target.updatedAt = this.nowIso();
 
         await this.save(data);
@@ -912,6 +1034,73 @@ class ReadingListStore {
         return item;
     }
 
+    async setBooksRead(userId = '', bookUids = [], read = true, options = {}) {
+        const {data, user} = await this.resolveUser(userId);
+        const target = data.users.find((item) => item.id === user.id);
+        if (!target)
+            throw new Error('Пользователь не найден');
+
+        const normalizedBookUids = Array.from(new Set((Array.isArray(bookUids) ? bookUids : [bookUids])
+            .map((bookUid) => this.normalizeBookUid(bookUid))
+            .filter(Boolean)));
+        if (!normalizedBookUids.length)
+            throw new Error('bookUids is empty');
+
+        const bookUidSet = new Set(normalizedBookUids);
+        const listIds = Array.isArray(options.listIds)
+            ? new Set(options.listIds.map((id) => String(id || '').trim()).filter(Boolean))
+            : null;
+
+        if (!target.readerProgress || typeof(target.readerProgress) !== 'object')
+            target.readerProgress = {};
+
+        const updatedAt = this.nowIso();
+        for (const bookUid of normalizedBookUids) {
+            if (read) {
+                target.readerProgress[bookUid] = {
+                    percent: 1,
+                    sectionId: '',
+                    updatedAt,
+                    hidden: false,
+                };
+            } else {
+                delete target.readerProgress[bookUid];
+            }
+        }
+
+        const updatedLists = [];
+        for (const item of data.lists) {
+            if (item.userId !== user.id)
+                continue;
+            if (listIds && !listIds.has(String(item.id || '').trim()))
+                continue;
+
+            let changed = false;
+            item.books = this.normalizeEntries(item.books);
+            for (const entry of item.books) {
+                if (bookUidSet.has(entry.bookUid) && entry.read !== !!read) {
+                    entry.read = !!read;
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                item.updatedAt = updatedAt;
+                updatedLists.push(this.listStats(item));
+            }
+        }
+
+        target.updatedAt = updatedAt;
+        await this.save(data);
+        return {
+            success: true,
+            read: !!read,
+            bookUids: normalizedBookUids,
+            changedBooks: normalizedBookUids.length,
+            updatedLists,
+        };
+    }
+
     async addBooks(userId = '', listId, bookUids = []) {
         const {data, user} = await this.resolveUser(userId);
         const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
@@ -950,6 +1139,7 @@ class ReadingListStore {
                 emailTo: user.emailTo,
                 telegramChatId: user.telegramChatId,
                 opdsEnabled: user.opdsEnabled,
+                opdsAuthEnabled: user.opdsAuthEnabled,
             },
             lists: lists.map((item) => ({
                 name: item.name,

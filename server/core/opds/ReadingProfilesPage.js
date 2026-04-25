@@ -21,7 +21,7 @@ class ReadingProfilesPage extends BasePage {
                     link: this.navLink({href: '/root', req, query: {user: item.publicId || item.id}}),
                     content: {
                         '*ATTRS': {type: 'text'},
-                        '*TEXT': `OPDS-подборок: ${item.opdsListCount}`,
+                        '*TEXT': `Списков: ${item.opdsListCount}, в чтении: ${item.opdsProgressCount || 0}`,
                     },
                 }),
             );

@@ -3,8 +3,34 @@ const path = require('path');
 const {spawn} = require('child_process');
 
 const pending = new Map();
-const targetFormats = new Set(['epub', 'mobi', 'pdf']);
-const commands = [
+const targetFormats = new Set(['epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf']);
+const fb2cngFormats = new Map([
+    ['epub', 'epub2'],
+    ['epub3', 'epub3'],
+    ['kepub', 'kepub'],
+    ['kfx', 'kfx'],
+    ['azw8', 'azw8'],
+]);
+const fb2cngOutputExtensions = new Map([
+    ['epub', ['.epub']],
+    ['epub3', ['.epub']],
+    ['kepub', ['.kepub.epub', '.epub']],
+    ['kfx', ['.kfx']],
+    ['azw8', ['.azw8']],
+]);
+const fb2cngCommands = [
+    'fbc',
+    '/usr/local/bin/fbc',
+    '/usr/bin/fbc',
+    path.join(process.cwd(), 'bin', process.platform === 'win32' ? 'fbc.exe' : 'fbc'),
+];
+const mutoolCommands = [
+    'mutool',
+    '/usr/bin/mutool',
+    '/usr/local/bin/mutool',
+    path.join(process.cwd(), 'bin', process.platform === 'win32' ? 'mutool.exe' : 'mutool'),
+];
+const calibreCommands = [
     'ebook-convert',
     '/usr/bin/ebook-convert',
     '/usr/local/bin/ebook-convert',
@@ -15,7 +41,19 @@ function canConvertTo(format) {
     return targetFormats.has((format || '').toLowerCase());
 }
 
-async function buildConvertEnv() {
+function canConvertSourceTo(sourceExt, format) {
+    sourceExt = String(sourceExt || '').toLowerCase().replace(/^\./, '');
+    format = String(format || '').toLowerCase();
+
+    if (!canConvertTo(format))
+        return false;
+    if (sourceExt === 'fb2')
+        return true;
+
+    return sourceExt === 'epub' && format === 'pdf';
+}
+
+async function buildCalibreEnv() {
     const runtimeDir = path.join(require('os').tmpdir(), 'ebook-convert-runtime');
     await fs.ensureDir(runtimeDir);
     await fs.chmod(runtimeDir, 0o700);
@@ -36,13 +74,12 @@ async function buildConvertEnv() {
     };
 }
 
-async function run(command, args) {
-    const env = await buildConvertEnv();
-
+async function run(command, args, options = {}) {
     return new Promise((resolve, reject) => {
         const child = spawn(command, args, {
             stdio: ['ignore', 'ignore', 'pipe'],
-            env,
+            env: (options.env || process.env),
+            cwd: options.cwd,
         });
         let stderr = '';
 
@@ -52,7 +89,7 @@ async function run(command, args) {
 
         child.on('error', err => {
             if (err && err.code === 'ENOENT') {
-                reject(new Error('ebook-convert not found'));
+                reject(new Error(`${command} not found`));
                 return;
             }
 
@@ -69,12 +106,12 @@ async function run(command, args) {
     });
 }
 
-async function runCommand(args) {
+async function runFirst(commands, args, options = {}) {
     let lastError = null;
 
     for (const command of commands) {
         try {
-            await run(command, args);
+            await run(command, args, options);
             return;
         } catch(e) {
             lastError = e;
@@ -83,12 +120,73 @@ async function runCommand(args) {
         }
     }
 
-    throw (lastError || new Error('ebook-convert not found'));
+    throw (lastError || new Error('converter not found'));
+}
+
+async function runCalibre(args) {
+    await runFirst(calibreCommands, args, {env: await buildCalibreEnv()});
+}
+
+async function convertWithFb2cng(inputFile, outputFile, format) {
+    const outputDir = `${outputFile}.fb2cng`;
+    const fb2cngFormat = fb2cngFormats.get(format);
+
+    await fs.remove(outputDir);
+    await fs.ensureDir(outputDir);
+    await runFirst(fb2cngCommands, ['convert', '--to', fb2cngFormat, '--overwrite', inputFile, outputDir]);
+
+    const outputExtensions = fb2cngOutputExtensions.get(format) || [`.${format}`];
+    const converted = (await fs.readdir(outputDir))
+        .filter(file => outputExtensions.some(ext => file.toLowerCase().endsWith(ext)))
+        .map(file => path.join(outputDir, file))[0];
+
+    if (!converted)
+        throw new Error(`fb2cng did not produce ${format}`);
+
+    await fs.move(converted, outputFile, {overwrite: true});
+    await fs.remove(outputDir);
+}
+
+async function convertWithMutool(inputFile, outputFile) {
+    await runFirst(mutoolCommands, ['convert', '-o', outputFile, inputFile]);
+}
+
+async function convertWithCalibre(inputFile, outputFile, format) {
+    let tempIntermediate = '';
+
+    try {
+        if (format === 'pdf' && path.extname(inputFile).toLowerCase() !== '.epub') {
+            tempIntermediate = `${outputFile}.intermediate.epub`;
+            await runCalibre([inputFile, tempIntermediate]);
+            await runCalibre([tempIntermediate, outputFile]);
+        } else {
+            await runCalibre([inputFile, outputFile]);
+        }
+    } finally {
+        if (tempIntermediate)
+            await fs.remove(tempIntermediate);
+    }
+}
+
+async function convertPrepared(convertInput, outputFile, format) {
+    if (fb2cngFormats.has(format) && path.extname(convertInput).toLowerCase() === '.fb2') {
+        await convertWithFb2cng(convertInput, outputFile, format);
+        return;
+    }
+
+    if (format === 'pdf' && ['.fb2', '.epub'].includes(path.extname(convertInput).toLowerCase())) {
+        await convertWithMutool(convertInput, outputFile);
+        return;
+    }
+
+    await convertWithCalibre(convertInput, outputFile, format);
 }
 
 async function convert({inputFile, outputFile, format, sourceFileName = ''}) {
-    if (!canConvertTo(format))
-        throw new Error(`Unsupported convert format: ${format}`);
+    format = String(format || '').toLowerCase();
+    const sourceExt = path.extname(sourceFileName || inputFile).toLowerCase();
+    if (!canConvertSourceTo(sourceExt, format))
+        throw new Error(`Unsupported convert format: ${sourceExt || 'unknown'} -> ${format}`);
 
     const key = `${inputFile}=>${outputFile}`;
     if (pending.has(key))
@@ -98,7 +196,6 @@ async function convert({inputFile, outputFile, format, sourceFileName = ''}) {
         await fs.ensureDir(path.dirname(outputFile));
         let convertInput = inputFile;
         let tempInput = '';
-        let tempIntermediate = '';
         const sourceExt = path.extname(sourceFileName || '').toLowerCase();
 
         if (sourceExt && sourceExt !== path.extname(inputFile).toLowerCase()) {
@@ -109,18 +206,10 @@ async function convert({inputFile, outputFile, format, sourceFileName = ''}) {
         }
 
         try {
-            if (format === 'pdf' && path.extname(convertInput).toLowerCase() !== '.epub') {
-                tempIntermediate = `${outputFile}.intermediate.epub`;
-                await runCommand([convertInput, tempIntermediate]);
-                await runCommand([tempIntermediate, outputFile]);
-            } else {
-                await runCommand([convertInput, outputFile]);
-            }
+            await convertPrepared(convertInput, outputFile, format);
         } finally {
             if (tempInput)
                 await fs.remove(tempInput);
-            if (tempIntermediate)
-                await fs.remove(tempIntermediate);
         }
     })();
 
@@ -134,5 +223,6 @@ async function convert({inputFile, outputFile, format, sourceFileName = ''}) {
 
 module.exports = {
     canConvertTo,
+    canConvertSourceTo,
     convert,
 };

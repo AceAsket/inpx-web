@@ -25,7 +25,16 @@
 
                 <div class="q-ml-sm text-bold" style="color: #555">
                     {{ getBookCount(item) }}
-                </div>                    
+                </div>
+
+                <div class="series-read-actions">
+                    <q-btn flat dense no-caps icon="la la-check-circle" @click.stop="markSeriesRead(item, true)">
+                        Прочитана
+                    </q-btn>
+                    <q-btn flat dense no-caps icon="la la-undo" @click.stop="markSeriesRead(item, false)">
+                        Снять
+                    </q-btn>
+                </div>
             </div>
 
             <div v-if="item.bookLoading" class="book-row row items-center">
@@ -175,6 +184,25 @@ class SeriesList extends BaseList {
         }
     }
 
+    async markSeriesRead(item, read = true) {
+        const count = Number(item.count || 0) || 0;
+        const confirmed = await this.$root.stdDialog.confirm(
+            read
+                ? `Пометить всю серию «${item.series}» прочитанной${count ? ` (${count} книг)` : ''}?`
+                : `Снять отметку прочитано со всей серии «${item.series}»${count ? ` (${count} книг)` : ''}?`,
+            read ? 'Серия прочитана' : 'Снять отметку',
+        );
+        if (!confirmed)
+            return;
+
+        try {
+            const result = await this.api.markSeriesRead(item.series, read);
+            this.$root.notify.success(read ? `Серия помечена прочитанной: ${result.changedBooks}` : `Отметка снята: ${result.changedBooks}`);
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, 'Ошибка');
+        }
+    }
+
     async updateTableData() {
         let result = [];
 
@@ -297,9 +325,21 @@ export default vueComponent(SeriesList);
     border-bottom: 1px solid var(--app-border);
 }
 
+.series-read-actions {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
 @media (max-width: 720px) {
     .book-row {
         margin-left: 16px;
+    }
+
+    .series-read-actions {
+        margin-left: 8px;
     }
 }
 </style>

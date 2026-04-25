@@ -35,6 +35,9 @@ const componentOptions = {
         darkTheme(newValue) {
             this.applyTheme(newValue);
         },
+        rootRoute() {
+            this.applyPwaManifest();
+        },
     },
 
 };
@@ -95,6 +98,7 @@ class App {
         this.$root.stdDialog = this.$refs.stdDialog;
 
         this.applyTheme(this.darkTheme);
+        this.applyPwaManifest();
         this.setAppTitle();
     }
 
@@ -116,6 +120,17 @@ class App {
 
     applyTheme(value) {
         this.$q.dark.set(!!value);
+    }
+
+    applyPwaManifest() {
+        const manifest = document.querySelector('link[rel="manifest"]');
+        if (!manifest)
+            return;
+
+        manifest.setAttribute('href', this.rootRoute === '/reader' ? 'reader.webmanifest' : 'manifest.webmanifest');
+        const appleTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+        if (appleTitle)
+            appleTitle.setAttribute('content', this.rootRoute === '/reader' ? 'INPX Reader' : 'INPX Web');
     }
 
     setAppTitle(title) {

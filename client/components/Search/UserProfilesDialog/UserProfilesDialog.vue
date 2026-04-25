@@ -44,8 +44,9 @@
                         </template>
                     </q-input>
                     <q-input v-model="newProfile.emailTo" outlined dense clearable :label="uiText.emailTo" />
-                    <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Telegram chat id" />
+                    <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
                     <q-toggle class="profile-toggle" v-model="newProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
+                    <q-toggle class="profile-toggle" v-model="newProfile.opdsAuthEnabled" :disable="!newProfile.login || !newProfile.password" :label="uiText.requireOpdsAuth" />
                     <div class="profile-submit-row">
                         <q-btn flat dense no-caps @click="showCreateProfileForm = false">
                             {{ uiText.cancel }}
@@ -299,6 +300,12 @@
                                                     {{ book.author }}
                                                 </div>
                                             </div>
+                                            <q-checkbox
+                                                :model-value="book.read"
+                                                dense
+                                                :label="uiText.readStatus"
+                                                @update:model-value="toggleListBookRead(list, book, $event)"
+                                            />
                                             <q-btn
                                                 flat
                                                 dense
@@ -339,13 +346,17 @@
                                 </template>
                             </q-input>
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
-                            <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Telegram chat id" />
+                            <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
                             <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
+                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
                         </div>
                     </div>
 
                     <div v-if="item.id === currentUserId" class="opds-link">
                         OPDS: <code>{{ opdsUrl(item.publicId || item.id) }}</code>
+                        <div v-if="item.opdsAuthEnabled" class="opds-link-hint">
+                            {{ uiText.opdsAuthHint }}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -448,6 +459,8 @@ class UserProfilesDialog {
             newPassword: '\u041d\u043e\u0432\u044b\u0439 \u043f\u0430\u0440\u043e\u043b\u044c',
             emailTo: 'Email \u0434\u043b\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0438',
             showProfileInOpds: '\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044c \u0432 OPDS',
+            requireOpdsAuth: '\u0422\u0440\u0435\u0431\u043e\u0432\u0430\u0442\u044c \u043f\u0430\u0440\u043e\u043b\u044c \u0434\u043b\u044f OPDS',
+            opdsAuthHint: '\u0412 OPDS-\u0447\u0438\u0442\u0430\u043b\u043a\u0435 \u0443\u043a\u0430\u0436\u0438\u0442\u0435 \u043b\u043e\u0433\u0438\u043d \u0438 \u043f\u0430\u0440\u043e\u043b\u044c \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u043e\u0444\u0438\u043b\u044f.',
             create: '\u0421\u043e\u0437\u0434\u0430\u0442\u044c',
             adminOnly: '\u0421\u043e\u0437\u0434\u0430\u0432\u0430\u0442\u044c \u0438 \u0443\u0434\u0430\u043b\u044f\u0442\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u0438 \u043c\u043e\u0436\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440.',
             availableProfiles: '\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u0440\u043e\u0444\u0438\u043b\u0438',
@@ -483,6 +496,7 @@ class UserProfilesDialog {
             removeReadingSuccess: '\u041a\u043d\u0438\u0433\u0430 \u0443\u0431\u0440\u0430\u043d\u0430 \u0438\u0437 \u0442\u0435\u043a\u0443\u0449\u0435\u0433\u043e \u0447\u0442\u0435\u043d\u0438\u044f',
             removeBookFromListConfirm: '\u0423\u0431\u0440\u0430\u0442\u044c \u043a\u043d\u0438\u0433\u0443 \u00ab{title}\u00bb \u0438\u0437 \u0441\u043f\u0438\u0441\u043a\u0430 \u00ab{list}\u00bb?',
             removeBookFromListSuccess: '\u041a\u043d\u0438\u0433\u0430 \u0443\u0431\u0440\u0430\u043d\u0430 \u0438\u0437 \u0441\u043f\u0438\u0441\u043a\u0430',
+            readStatus: '\u041f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043e',
             renameListPrompt: '\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043d\u043e\u0432\u043e\u0435 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u0441\u043f\u0438\u0441\u043a\u0430:',
             renameListTitle: '\u041f\u0435\u0440\u0435\u0438\u043c\u0435\u043d\u043e\u0432\u0430\u0442\u044c \u0441\u043f\u0438\u0441\u043e\u043a',
             nameRequired: '\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u043d\u0435 \u0434\u043e\u043b\u0436\u043d\u043e \u0431\u044b\u0442\u044c \u043f\u0443\u0441\u0442\u044b\u043c',
@@ -510,6 +524,7 @@ class UserProfilesDialog {
             emailTo: '',
             telegramChatId: '',
             opdsEnabled: true,
+            opdsAuthEnabled: false,
         };
     }
 
@@ -521,6 +536,7 @@ class UserProfilesDialog {
             emailTo: '',
             telegramChatId: '',
             opdsEnabled: true,
+            opdsAuthEnabled: false,
         };
     }
 
@@ -538,6 +554,7 @@ class UserProfilesDialog {
             emailTo: current.emailTo || '',
             telegramChatId: current.telegramChatId || '',
             opdsEnabled: current.opdsEnabled !== false,
+            opdsAuthEnabled: current.opdsAuthEnabled === true,
         };
     }
 
@@ -555,6 +572,7 @@ class UserProfilesDialog {
             publicId: item.login || item.id,
             requiresLogin: !!item.requiresLogin,
             isAdmin: !!item.isAdmin,
+            opdsAuthEnabled: item.opdsAuthEnabled === true,
             currentReadingCount: Number(item.currentReadingCount || 0) || 0,
         }));
         if (!preserveState) {
@@ -589,7 +607,7 @@ class UserProfilesDialog {
                         bookUid: String(book.bookUid || book._uid || '').trim(),
                         title: String(book.title || '').trim(),
                         author: String(book.author || '').trim(),
-                        read: !!book.read,
+                        read: !!(book._readingListRead || book.read),
                     }));
                     normalized.previewBooks = books.slice(0, 4).map((book) => ({
                         bookUid: String(book.bookUid || book._uid || '').trim(),
@@ -717,6 +735,27 @@ class UserProfilesDialog {
         }
     }
 
+    async toggleListBookRead(list = {}, book = {}, read = false) {
+        const listId = String(list.id || '').trim();
+        const bookUid = String(book.bookUid || '').trim();
+        if (!listId || !bookUid)
+            return;
+
+        try {
+            await this.api.setReadingListBookRead(listId, bookUid, read);
+            if (!!book.read !== !!read)
+                list.readCount = Math.max(0, (Number(list.readCount || 0) || 0) + (read ? 1 : -1));
+            book.read = !!read;
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
+            await this.loadCurrentReadingLists();
+            this.expandedReadingLists = {
+                ...this.expandedReadingLists,
+                [listId]: true,
+            };
+        }
+    }
+
     async removeBookFromList(list = {}, book = {}) {
         const listId = String(list.id || '').trim();
         const bookUid = String(book.bookUid || '').trim();
@@ -818,8 +857,7 @@ class UserProfilesDialog {
     }
 
     async selectProfile(item) {
-        const currentToken = this.$store.state.settings.profileAccessToken;
-        if (currentToken) {
+        if (this.config.profileAuthorized) {
             try {
                 await this.api.logoutUserProfile();
             } catch (e) {
@@ -851,7 +889,6 @@ class UserProfilesDialog {
         } catch (e) {
             if (e.message !== 'Вход в профиль отменён')
                 this.$root.stdDialog.alert(e.message, 'Ошибка');
-                this.$root.stdDialog.alert(e.message, 'ÐÑÐ¸Ð±ÐºÐ°');
         }
     }
 
@@ -862,7 +899,6 @@ class UserProfilesDialog {
         } catch (e) {
             if (e.message !== 'Вход в профиль отменён')
                 this.$root.stdDialog.alert(e.message, 'Ошибка');
-                this.$root.stdDialog.alert(e.message, 'ÐÑÐ¸Ð±ÐºÐ°');
         }
     }
 
@@ -1249,6 +1285,12 @@ export default vueComponent(UserProfilesDialog);
     font-size: 12px;
     color: var(--app-muted);
     word-break: break-all;
+}
+
+.opds-link-hint {
+    margin-top: 4px;
+    color: var(--app-text);
+    word-break: normal;
 }
 
 .state-box {

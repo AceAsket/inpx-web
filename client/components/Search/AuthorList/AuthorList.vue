@@ -53,7 +53,23 @@
                             <div class="author-info-title">
                                 Об авторе
                             </div>
-                            <div class="author-info-html" v-html="item.authorInfo.html"></div>
+                            <div
+                                class="author-info-html"
+                                :class="{'author-info-html--collapsed': isLongAuthorInfo(item) && !item.authorInfoExpanded}"
+                                v-html="getAuthorInfoHtml(item)"
+                            ></div>
+                            <div v-if="isLongAuthorInfo(item)" class="author-info-actions">
+                                <q-btn
+                                    flat
+                                    dense
+                                    no-caps
+                                    class="author-info-toggle"
+                                    :icon="item.authorInfoExpanded ? 'la la-angle-up' : 'la la-angle-down'"
+                                    @click.stop.prevent="toggleAuthorInfo(item)"
+                                >
+                                    {{ item.authorInfoExpanded ? 'Свернуть описание' : 'Показать полностью' }}
+                                </q-btn>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -280,6 +296,37 @@ class AuthorList extends BaseList {
         }
     }
 
+    getAuthorInfoTextLength(item) {
+        return this.getAuthorInfoHtml(item)
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/&nbsp;|&#160;/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .length;
+    }
+
+    isLongAuthorInfo(item) {
+        return this.getAuthorInfoTextLength(item) > 700;
+    }
+
+    getAuthorInfoHtml(item) {
+        const rawHtml = String((item && item.authorInfo && item.authorInfo.html) || '');
+        return rawHtml
+            .replace(/\[(h[1-6])\]([\s\S]*?)\[\/\1\]/gi, '<$1>$2</$1>')
+            .replace(/\[b\]([\s\S]*?)\[\/b\]/gi, '<b>$1</b>')
+            .replace(/\[i\]([\s\S]*?)\[\/i\]/gi, '<i>$1</i>')
+            .replace(/\[u\]([\s\S]*?)\[\/u\]/gi, '<u>$1</u>')
+            .replace(/\r?\n{2,}/g, '<br><br>')
+            .replace(/\r?\n/g, '<br>');
+    }
+
+    toggleAuthorInfo(item) {
+        if (!item)
+            return;
+
+        item.authorInfoExpanded = !(item.authorInfoExpanded === true);
+    }
+
     async getAuthorSeries(item) {
         if (item.seriesLoaded)
             return;
@@ -427,6 +474,7 @@ class AuthorList extends BaseList {
                 name: rec.author.replace(/,/g, ', '),
                 count,
                 authorInfo: (Object.prototype.hasOwnProperty.call(this.cachedAuthorInfo, rec.author) ? this.cachedAuthorInfo[rec.author] : null),
+                authorInfoExpanded: false,
                 authorInfoLoading: false,
                 booksLoaded: false,
                 seriesLoaded: false,
@@ -591,8 +639,38 @@ export default vueComponent(AuthorList);
 }
 
 .author-info-html {
+    position: relative;
     line-height: 1.55;
     word-break: break-word;
+}
+
+.author-info-html--collapsed {
+    max-height: 168px;
+    overflow: hidden;
+}
+
+.author-info-html--collapsed::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 48px;
+    pointer-events: none;
+    background: linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--app-surface) 0%, transparent) 0%,
+        var(--app-surface) 86%
+    );
+}
+
+.author-info-actions {
+    margin-top: 10px;
+}
+
+.author-info-toggle {
+    color: var(--app-link);
+    border-radius: 999px;
 }
 
 .author-info-html :deep(a) {
@@ -601,6 +679,30 @@ export default vueComponent(AuthorList);
 
 .author-info-html :deep(b) {
     color: var(--app-text);
+}
+
+.author-info-html :deep(h1),
+.author-info-html :deep(h2),
+.author-info-html :deep(h3),
+.author-info-html :deep(h4),
+.author-info-html :deep(h5),
+.author-info-html :deep(h6) {
+    margin: 14px 0 8px;
+    color: var(--app-text);
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.author-info-html :deep(h1) {
+    font-size: 22px;
+}
+
+.author-info-html :deep(h2) {
+    font-size: 20px;
+}
+
+.author-info-html :deep(h3) {
+    font-size: 18px;
 }
 
 @media (max-width: 720px) {

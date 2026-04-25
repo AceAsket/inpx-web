@@ -11,6 +11,7 @@ class AppLogger {
             this.logFileName = '';
             this.errLogFileName = '';
             this.fatalLogFileName = '';
+            this.eventListener = null;
 
             instance = this;
         }
@@ -44,6 +45,7 @@ class AppLogger {
         }
 
         this._logger = new Logger(loggerParams);
+        this._logger.eventListener = this.eventListener;
 
         this.inited = true;
         return this.logger;
@@ -58,6 +60,12 @@ class AppLogger {
     get log() {
         const l = this.logger;
         return l.log.bind(l);
+    }
+
+    setEventListener(listener = null) {
+        this.eventListener = (typeof listener === 'function' ? listener : null);
+        if (this._logger)
+            this._logger.eventListener = this.eventListener;
     }
 }
 
