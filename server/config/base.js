@@ -41,8 +41,8 @@ module.exports = {
     metricsToken: process.env.INPX_METRICS_TOKEN || '',
     metricsExemptAuth: process.env.INPX_METRICS_EXEMPT_AUTH === 'true',
 
-    //поправить в случае, если были критические изменения в DbCreator или InpxParser
-    //иначе будет рассинхронизация по кешу между сервером и клиентом на уровне БД
+    // Поправить в случае, если были критические изменения в DbCreator или InpxParser,
+    // иначе будет рассинхронизация по кэшу между сервером и клиентом на уровне БД.
     dbVersion: '13',
     dbCacheSize: 5,
 
@@ -98,7 +98,7 @@ module.exports = {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
     telegramCaptionTemplate: process.env.TELEGRAM_CAPTION_TEMPLATE || '${AUTHOR} - ${TITLE}',
-    emailShareEnabled: Boolean(process.env.SMTP_HOST && process.env.EMAIL_TO),
+    emailShareEnabled: Boolean(process.env.SMTP_HOST),
     smtpHost: process.env.SMTP_HOST || '',
     smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
     smtpSecure: process.env.SMTP_SECURE === 'true',

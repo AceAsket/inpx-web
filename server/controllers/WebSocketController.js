@@ -352,12 +352,14 @@ class WebSocketController {
         config.telegramShareEnabled = !!(
             this.config.telegramShareEnabled
             && this.config.telegramBotToken
-            && ((currentUser && currentUser.telegramChatId) || this.config.telegramChatId)
+            && currentUser
+            && currentUser.telegramChatId
         );
         config.emailShareEnabled = !!(
             this.config.emailShareEnabled
             && this.config.smtpHost
-            && ((currentUser && currentUser.emailTo) || this.config.emailTo)
+            && currentUser
+            && currentUser.emailTo
         );
         if (currentUser && currentUser.isAdmin && config.profileAuthorized) {
             config.adminIntegrations = this.webWorker.getAdminIntegrationConfig();
