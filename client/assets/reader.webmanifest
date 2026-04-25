@@ -11,7 +11,7 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "pwa-icon.svg",
+      "src": "reader-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

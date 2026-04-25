@@ -4,6 +4,7 @@ const withBase = (path) => `${BASE_PATH}${path}`;
 const APP_SHELL = [
   '/index.html',
   '/pwa-icon.svg',
+  '/reader-icon.svg',
   '/favicon.ico'
 ].map(withBase);
 

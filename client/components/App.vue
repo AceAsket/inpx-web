@@ -131,6 +131,10 @@ class App {
         const appleTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
         if (appleTitle)
             appleTitle.setAttribute('content', this.rootRoute === '/reader' ? 'INPX Reader' : 'INPX Web');
+
+        const appleIcon = document.querySelector('link[rel="apple-touch-icon"]');
+        if (appleIcon)
+            appleIcon.setAttribute('href', this.rootRoute === '/reader' ? 'reader-icon.svg' : 'pwa-icon.svg');
     }
 
     setAppTitle(title) {
