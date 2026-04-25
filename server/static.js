@@ -523,7 +523,7 @@ module.exports = (app, config) => {
     const webAppStaticOptions = {
         setHeaders(res, filePath) {
             const fileName = path.basename(filePath).toLowerCase();
-            if (['index.html', 'sw.js', 'manifest.webmanifest', 'version.txt'].includes(fileName)) {
+            if (['index.html', 'sw.js', 'manifest.webmanifest', 'reader.webmanifest', 'version.txt'].includes(fileName)) {
                 res.set('Cache-Control', 'no-store');
                 return;
             }

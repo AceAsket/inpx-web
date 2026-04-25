@@ -2,7 +2,7 @@
   "name": "INPX Web",
   "short_name": "INPX",
   "description": "Self-hosted INPX library catalog and reader",
-  "start_url": ".",
+  "start_url": "./",
   "scope": ".",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "browser"],
@@ -21,12 +21,12 @@
     {
       "name": "Каталог",
       "short_name": "Каталог",
-      "url": "."
+      "url": "./"
     },
     {
       "name": "Читалка",
       "short_name": "Читалка",
-      "url": "#/reader"
+      "url": "./#/reader"
     }
   ]
 }
