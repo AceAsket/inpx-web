@@ -230,25 +230,6 @@
             </div>
         </div>
 
-        <div v-if="readerProfileWarningVisible && !compactChromeHidden" class="reader-profile-warning">
-            <q-icon name="la la-user-lock" class="reader-profile-warning-icon" />
-            <div class="reader-profile-warning-text">
-                <div class="reader-profile-warning-title">{{ readerProfileWarningTitle }}</div>
-                <div class="reader-profile-warning-caption">{{ readerProfileWarningCaption }}</div>
-            </div>
-            <q-btn
-                v-if="readerProfileCanLogin"
-                flat
-                dense
-                no-caps
-                icon="la la-sign-in-alt"
-                class="reader-profile-warning-action"
-                @click="promptReaderProfileLogin"
-            >
-                {{ uiText.profileLoginAction }}
-            </q-btn>
-        </div>
-
         <div v-if="loading" class="reader-loading">
             <q-icon class="la la-spinner icon-rotate text-green-8" size="28px" />
             <div class="q-ml-sm">{{ loadingMessage || uiText.loadingBook }}</div>
@@ -5228,52 +5209,6 @@ export default vueComponent(Reader);
     contain: layout paint;
 }
 
-.reader-profile-warning {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 0 16px 10px;
-    padding: 10px 12px;
-    border: 1px solid color-mix(in srgb, var(--reader-accent) 42%, var(--reader-border));
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--reader-accent-soft) 76%, var(--reader-surface));
-    color: var(--reader-text);
-}
-
-.reader-profile-warning-icon {
-    flex: 0 0 auto;
-    color: var(--reader-accent);
-    font-size: 22px;
-}
-
-.reader-profile-warning-text {
-    min-width: 0;
-    flex: 1 1 auto;
-}
-
-.reader-profile-warning-title {
-    font-size: 13px;
-    font-weight: 800;
-    line-height: 1.25;
-}
-
-.reader-profile-warning-caption {
-    margin-top: 2px;
-    color: var(--reader-muted);
-    font-size: 12px;
-    line-height: 1.35;
-}
-
-.reader-profile-warning-action {
-    flex: 0 0 auto;
-    color: var(--reader-accent);
-    background: var(--reader-surface-2);
-    border: 1px solid var(--reader-border);
-    border-radius: 999px;
-    padding: 0 10px;
-    min-height: 32px;
-}
-
 .reader-profile-chip {
     display: inline-flex;
     align-items: center;
@@ -6756,20 +6691,6 @@ export default vueComponent(Reader);
     .reader-toolbar-actions {
         gap: 8px;
         padding-top: 2px;
-    }
-
-    .reader-profile-warning {
-        align-items: flex-start;
-        margin: 0 10px 8px;
-        border-radius: 12px;
-    }
-
-    .reader-profile-warning-action {
-        padding: 0 8px;
-    }
-
-    .reader-profile-warning-action :deep(.block) {
-        display: none;
     }
 
     .reader-theme-switch,
