@@ -8,6 +8,7 @@ services:
     environment:
       # Эти пути должны указывать на каталог внутри контейнера,
       # куда библиотека примонтирована через volumes ниже.
+      DATA_DIR: /usr/local/bin/.inpx-web
       INPX: /library/my-library.inpx
       LIBDIR: /library
       CACHE_DIR: /usr/local/bin/.inpx-web/cache
