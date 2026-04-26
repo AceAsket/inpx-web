@@ -5431,8 +5431,8 @@ export default vueComponent(Reader);
 }
 
 .reader-home-panel {
-    width: 100%;
-    margin: 0;
+    width: min(980px, 100%);
+    margin: 0 auto;
 }
 
 .reader-home-head {
