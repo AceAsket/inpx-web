@@ -292,11 +292,12 @@
                                 label="Источник" stack-label
                                 outlined dense emit-value map-options
                             />
-                            <q-toggle
+                            <q-checkbox
                                 v-model="search.hideCopies"
                                 class="q-mt-xs source-copy-toggle"
                                 color="primary"
                                 label="Скрыть копии"
+                                dense
                             />
                         </div>
 
@@ -2430,12 +2431,22 @@ export default vueComponent(Search);
 }
 
 .source-copy-toggle {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
     min-height: 40px;
+    min-width: 150px;
     padding: 0 10px;
     border: 1px solid var(--app-border);
     border-radius: 8px;
     background: var(--app-surface);
     color: var(--app-text);
+    font-weight: 700;
+}
+
+.source-copy-toggle :deep(.q-checkbox__label) {
+    color: var(--app-text);
+    white-space: nowrap;
 }
 
 .profile-select {
