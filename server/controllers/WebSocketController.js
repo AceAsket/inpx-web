@@ -324,6 +324,11 @@ class WebSocketController {
 
     async getConfig(req, ws) {
         const config = _.pick(this.config, this.config.webConfigParams);
+        config.librarySources = (Array.isArray(this.config.librarySources) ? this.config.librarySources : []).map(source => ({
+            id: source.id || '',
+            name: source.name || source.id || '',
+            enabled: source.enabled !== false,
+        }));
         if (this.security)
             config.csrfToken = this.security.getCsrfToken(ws.req);
         config.discovery = Object.assign(

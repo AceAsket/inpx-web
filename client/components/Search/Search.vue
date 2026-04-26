@@ -281,6 +281,25 @@
                             +{{ extendedParamsMessage }}
                         </div>
 
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && showLibrarySourceFilters" class="search-fields source-filter-row row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                            <q-select
+                                v-model="search.sourceId"
+                                class="q-mt-xs col"
+                                :options="librarySourceOptions"
+                                :bg-color="inputBgColor('sourceId')"
+                                dropdown-icon="la la-angle-down la-sm"
+                                style="min-width: 220px; max-width: 360px;"
+                                label="Источник" stack-label
+                                outlined dense emit-value map-options
+                            />
+                            <q-toggle
+                                v-model="search.hideCopies"
+                                class="q-mt-xs source-copy-toggle"
+                                color="primary"
+                                label="Скрыть копии"
+                            />
+                        </div>
+
                         <div v-show="showMobileFiltersBody && isExtendedSearch" class="search-fields row q-mx-md q-mb-xs items-center">
                             <q-input
                                 v-model="extSearchNames"
@@ -785,7 +804,7 @@ class Search {
         this.commit = this.$store.commit;
         this.api = this.$root.api;
 
-        this.generateDefaults(this.search, ['author', 'series', 'title', 'keywords', 'genre', 'lang', 'date', 'librate', 'ext']);
+        this.generateDefaults(this.search, ['author', 'series', 'title', 'keywords', 'genre', 'lang', 'date', 'librate', 'ext', 'sourceId', 'hideCopies']);
         this.search.setDefaults(this.search);
 
         this.loadSettings();
@@ -1067,6 +1086,26 @@ class Search {
         }));
     }
 
+    get enabledLibrarySources() {
+        return (Array.isArray(this.config.librarySources) ? this.config.librarySources : [])
+            .filter(source => source && source.enabled !== false && source.id);
+    }
+
+    get showLibrarySourceFilters() {
+        return this.enabledLibrarySources.length > 1;
+    }
+
+    get librarySourceOptions() {
+        const result = [{label: 'Все источники', value: ''}];
+        for (const source of this.enabledLibrarySources) {
+            result.push({
+                label: source.name || source.id,
+                value: source.id,
+            });
+        }
+        return result;
+    }
+
     getSelectedListComponent(route) {
         return (route2component[route] ? route2component[route].component : null);
     }
@@ -1090,6 +1129,8 @@ class Search {
         result.push(s.date ? 'Дата поступления' : '');
         result.push(s.librate ? 'Оценка' : '');
         result.push(s.ext ? 'Тип файла' : '');
+        result.push(s.sourceId ? 'Источник' : '');
+        result.push(s.hideCopies ? 'Скрыты копии' : '');
 
         return result.filter(s => s).join(', ');
     }
@@ -1172,6 +1213,8 @@ class Search {
             || search.date
             || search.librate
             || search.ext
+            || search.sourceId
+            || search.hideCopies
         );
     }
 
@@ -2109,6 +2152,8 @@ class Search {
             date: query.date,
             librate: query.librate,
             ext: query.ext,
+            sourceId: query.sourceId,
+            hideCopies: query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1',
 
             page: parseInt(query.page, 10),
             limit: parseInt(query.limit, 10) || this.search.limit,
@@ -2152,6 +2197,11 @@ class Search {
             } else {
                 query.lang = this.search.lang;
             }
+
+            if (this.search.hideCopies)
+                query.hideCopies = '1';
+            else
+                delete query.hideCopies;
 
             for (const f of this.recStruct) {
                 const field = `ex_${f.field}`;
@@ -2373,6 +2423,19 @@ export default vueComponent(Search);
 
 .search-fields {
     gap: 2px;
+}
+
+.source-filter-row {
+    gap: 12px;
+}
+
+.source-copy-toggle {
+    min-height: 40px;
+    padding: 0 10px;
+    border: 1px solid var(--app-border);
+    border-radius: 8px;
+    background: var(--app-surface);
+    color: var(--app-text);
 }
 
 .profile-select {

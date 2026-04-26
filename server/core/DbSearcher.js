@@ -325,6 +325,36 @@ class DbSearcher {
             idsArr.push(ids);
         }
 
+        //источник библиотеки
+        if (query.sourceId) {
+            const sourceId = String(query.sourceId || '').trim();
+            const key = `book-ids-source-${sourceId}`;
+            let ids = await this.getCached(key);
+
+            if (ids === null) {
+                const sourceRows = await db.select({
+                    table: 'book',
+                    rawResult: true,
+                    where: `
+                        const sourceId = ${db.esc(sourceId)};
+                        const result = [];
+                        for (const id of @all()) {
+                            const row = @unsafeRow(id);
+                            if ((row.sourceId || '') === sourceId)
+                                result.push(id);
+                        }
+
+                        return new Uint32Array(result);
+                    `
+                });
+
+                ids = sourceRows[0].rawResult;
+                await this.putCached(key, ids);
+            }
+
+            idsArr.push(ids);
+        }
+
         if (idsArr.length > 1) {
             //ищем пересечение множеств
             let proc = 0;
@@ -626,6 +656,10 @@ class DbSearcher {
             };
 
             const checks = ['true'];
+            if (query.sourceId) {
+                const sourceId = String(query.sourceId || '').trim();
+                checks.push(`(row.sourceId || '') === ${db.esc(sourceId)}`);
+            }
             for (const f of this.recStruct) {
                 if (query[f.field]) {
                     let searchValue = query[f.field];
@@ -652,42 +686,59 @@ class DbSearcher {
                 }
             }
 
+            const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
             const rows = await db.select({
                 table: 'book',
                 rawResult: true,
                 where: `
                     const enru = new Set(${db.esc(enruArr)});
+                    const hideCopies = ${hideCopies ? 'true' : 'false'};
 
                     const checkBook = (row) => {
                         return ${checks.join(' && ')};
                     };
 
-                const dedupeKey = (row) => {
-                    const sourceKey = row.sourceId || '';
-                    if (row.libid)
-                        return 'libid:' + sourceKey + ':' + row.libid;
+                    const normalizeKeyPart = (value) => String(value || '').trim().toLowerCase();
 
-                    const parts = [
-                        sourceKey,
-                        row.folder || '',
-                        row.file || '',
-                        row.ext || '',
+                    const dedupeKey = (row) => {
+                        const sourceKey = hideCopies ? '' : (row.sourceId || '');
+
+                        if (hideCopies) {
+                            const metaParts = [
+                                row.author || '',
+                                row.series || '',
+                                String(row.serno || 0),
+                                row.title || '',
+                            ].map(normalizeKeyPart);
+
+                            if (metaParts[0] || metaParts[3])
+                                return 'meta:' + metaParts.join('|');
+                        }
+
+                        if (row.libid)
+                            return 'libid:' + sourceKey + ':' + row.libid;
+
+                        const parts = [
+                            sourceKey,
+                            row.folder || '',
+                            row.file || '',
+                            row.ext || '',
                             String(row.insno || 0),
-                        ];
+                        ].map(normalizeKeyPart);
 
                         if (parts.some(Boolean))
                             return 'file:' + parts.join('|');
 
                         return [
-                        'meta',
-                        sourceKey,
-                        row.author || '',
+                            'meta',
+                            sourceKey,
+                            row.author || '',
                             row.series || '',
                             String(row.serno || 0),
                             row.title || '',
                             String(row.size || 0),
                             row.ext || '',
-                        ].join('|');
+                        ].map(normalizeKeyPart).join('|');
                     };
 
                     const rowScore = (row) => {
