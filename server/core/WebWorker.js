@@ -3848,14 +3848,13 @@ class WebWorker {
             app: this.config.name,
             version: this.config.version,
             createdAt: createdAt.toISOString(),
-            note: 'Backup includes runtime config, user profiles, reading lists and search DB. It does not include source book archives.',
+            note: 'Backup includes runtime config, secrets, user profiles, reading lists, reader progress and bookmarks. It does not include source book archives, generated search DB or caches.',
         }, null, 4)), 'backup-info.json');
 
         await this.addBackupPath(zipFile, this.config.configFile, 'config.json');
         await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'secret.key'), 'secret.key');
         await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'reading-lists.json'), 'reading-lists.json');
         await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'discovery-cache.json'), 'discovery-cache.json');
-        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'db'), 'db');
 
         zipFile.end();
         await done;

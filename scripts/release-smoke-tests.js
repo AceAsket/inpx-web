@@ -124,6 +124,8 @@ async function testAdminBackupArchiveAndDownload() {
             }],
             lists: [{id: 'list-1', userId: 'reader', name: 'Reading', books: [{bookUid: 'book:1', read: false}]}],
         });
+        await fs.writeJson(path.join(dataDir, 'discovery-cache.json'), {items: []});
+        await fs.writeFile(path.join(dataDir, 'secret.key'), 'secret');
         await fs.ensureDir(path.join(dataDir, 'db'));
         await fs.writeFile(path.join(dataDir, 'db', 'index.json'), '{}');
 
@@ -149,12 +151,18 @@ async function testAdminBackupArchiveAndDownload() {
             assert.ok(entries['backup-info.json']);
             assert.ok(entries['config.json']);
             assert.ok(entries['reading-lists.json']);
-            assert.ok(entries['db/index.json']);
+            assert.ok(entries['secret.key']);
+            assert.ok(entries['discovery-cache.json']);
+            assert.strictEqual(entries['db/index.json'], undefined);
 
             const readingLists = JSON.parse((await zip.entryData('reading-lists.json')).toString('utf8'));
             assert.strictEqual(readingLists.users[0].readerProgress['book:1'].percent, 0.5);
             assert.strictEqual(readingLists.users[0].readerBookmarks['book:1'][0].id, 'bookmark-1');
             assert.strictEqual(readingLists.lists[0].books[0].bookUid, 'book:1');
+
+            const info = JSON.parse((await zip.entryData('backup-info.json')).toString('utf8'));
+            assert.match(info.note, /reader progress and bookmarks/);
+            assert.match(info.note, /does not include .*search DB/i);
         } finally {
             await zip.close();
         }
