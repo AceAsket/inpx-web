@@ -256,10 +256,10 @@
                         </div>
                         <q-btn
                             v-if="readerHomeCanLogin"
-                            color="primary"
-                            unelevated
+                            flat
                             no-caps
                             icon="la la-sign-in-alt"
+                            class="reader-home-action-btn reader-home-action-btn--primary"
                             @click="promptReaderProfileLogin"
                         >
                             {{ uiText.profileLoginAction }}
