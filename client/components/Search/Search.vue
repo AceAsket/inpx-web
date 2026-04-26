@@ -1846,9 +1846,11 @@ class Search {
         this.discoveryExternalGenreUrl = nextUrl;
         this.discoveryExternalGenreName = (selected ? selected.label : '');
         this.discoveryExternalFilter = 'books';
+        this.discoveryExternalLimit = 12;
         this.setSetting('discoveryExternalGenreUrl', this.discoveryExternalGenreUrl);
         this.setSetting('discoveryExternalGenreName', this.discoveryExternalGenreName);
         this.setSetting('discoveryExternalFilter', this.discoveryExternalFilter);
+        this.setSetting('discoveryExternalLimit', this.discoveryExternalLimit);
 
         this.discoveryShelvesCacheKey = '';
         if (this.selectedList === 'bestsellers') {
@@ -2271,7 +2273,8 @@ class Search {
             this.discoveryShelves = (response && Array.isArray(response.shelves) ? response.shelves : []);
             this.discoveryShelvesCacheKey = cacheKey;
         } catch (e) {
-            this.discoveryShelvesError = `Ошибка витрины: ${e.message}`;
+            const message = String(e && e.message || '').trim() || 'нет ответа от сервера';
+            this.discoveryShelvesError = `Ошибка витрины: ${message}`;
         } finally {
             this.discoveryShelvesLoading = false;
         }

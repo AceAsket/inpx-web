@@ -379,7 +379,7 @@ class Api {
     }
 
     async getDiscoveryShelves(options = {}) {
-        return await this.request(Object.assign({action: 'get-discovery-shelves'}, options || {}), 120);
+        return await this.request(Object.assign({action: 'get-discovery-shelves'}, options || {}), 300);
     }
 
     async updateDiscoveryPreferences(preferences = {}) {

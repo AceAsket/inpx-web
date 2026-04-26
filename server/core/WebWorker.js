@@ -2050,7 +2050,9 @@ class WebWorker {
             const targetUrl = (discovery.externalBrowseUrl || discovery.externalUrl);
             return await this.fetchExternalFeedItems(discovery.externalLimit, targetUrl);
         } catch (e) {
-            throw new Error(`Не удалось обновить внешний источник "${discovery.externalName || 'Внешний источник'}"`);
+            const details = String(e && e.message || '').trim();
+            const suffix = details ? `: ${details}` : '';
+            throw new Error(`Не удалось обновить внешний источник "${discovery.externalName || 'Внешний источник'}"${suffix}`);
         }
     }
 

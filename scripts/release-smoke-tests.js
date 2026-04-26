@@ -359,6 +359,19 @@ async function testExternalDiscoverySingleFetch() {
 
     assert.strictEqual(result.sourceUrl, 'https://example.test/genre');
     assert.deepStrictEqual(calls, [{limit: 12, url: 'https://example.test/genre'}]);
+
+    worker.fetchExternalFeedItems = async() => {
+        throw new Error('HTTP 404');
+    };
+    await assert.rejects(
+        () => worker.fetchExternalDiscoveryItemsV2({
+            externalLimit: 12,
+            externalUrl: 'https://example.test/root',
+            externalBrowseUrl: 'https://example.test/missing-genre',
+            externalName: 'Example',
+        }),
+        /Example.+HTTP 404/
+    );
 }
 
 const tests = [
