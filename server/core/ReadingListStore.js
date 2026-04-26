@@ -758,7 +758,7 @@ class ReadingListStore {
         const {data, user} = await this.resolveUser(userId);
         const target = data.users.find((item) => item.id === user.id);
         if (!target)
-            throw new Error('???????????? ?? ??????');
+            throw new Error('Пользователь не найден');
 
         const current = this.normalizeDiscoveryPreferences(target.discoveryPreferences);
         let hiddenBooks = Array.from(current.hiddenBooks || []);

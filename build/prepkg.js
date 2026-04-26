@@ -50,13 +50,13 @@ async function build() {
 
     await fs.emptyDir(outDir);
 
-    //добавляем readme в релиз
+    // Добавляем README в релиз.
     let readme = await fs.readFile(path.resolve(__dirname, '../README.md'), 'utf-8');
     const converter = new showdown.Converter();
     readme = converter.makeHtml(readme);
     await fs.writeFile(`${outDir}/readme.html`, readme);
 
-    // перемещаем public на место
+    // Упаковываем public в public.json для pkg.
     if (await fs.pathExists(publicDir)) {
 
         const zipFile = `${tmpDir}/public.zip`;
