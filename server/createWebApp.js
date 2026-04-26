@@ -21,7 +21,7 @@ module.exports = async(config) => {
 
     await fs.remove(config.publicDir);
 
-    //извлекаем новый webApp
+    // Extract the new web app bundle.
     await fs.writeFile(zipFile, webApp.data, {encoding: 'base64'});
     const zipReader = new ZipReader();
     await zipReader.open(zipFile);

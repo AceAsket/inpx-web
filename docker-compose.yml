@@ -6,9 +6,11 @@ services:
     ports:
       - "12380:12380"
     environment:
+      DATA_DIR: /usr/local/bin/.inpx-web
       INPX: /library/fb2.flibusta.lib.rus.ec.7z.inpx
       LIBDIR: /library
       CACHE_DIR: /usr/local/bin/.inpx-web/cache
+      INPX_COVER_CACHE_SIZE_MB: "512"
     volumes:
       - ./library:/library:ro
       - ./data:/usr/local/bin/.inpx-web

@@ -2,7 +2,14 @@
 set -e
 
 if [ "$#" -gt 0 ]; then
-    exec "$@"
+    case "$1" in
+        -*)
+            exec inpx-web "$@"
+            ;;
+        *)
+            exec "$@"
+            ;;
+    esac
 fi
 
 DATA_DIR_VALUE="${DATA_DIR:-${APP_DIR:-}}"

@@ -41,7 +41,7 @@ Examples:
     --inpx-file fb2.flibusta.lib.rus.ec.7z.inpx
 
   sudo ./scripts/proxmox-lxc-install.sh \
-    --source 'lib-rus-ec-official|Lib.rus.ec официальная|/mnt/books/_Lib.rus.ec - Официальная|librusec_local_fb2.inpx' \
+    --source 'lib-rus-ec-official|Lib.rus.ec official|/mnt/books/_Lib.rus.ec - Official|librusec_local_fb2.inpx' \
     --source 'flibusta-rus-ec|Flibusta lib.rus.ec|/mnt/books/fb2.flibusta.lib.rus.ec.7z|fb2.flibusta.lib.rus.ec.7z.inpx' \
     --source 'flibusta-net|Fb2.Flibusta.Net|/mnt/books/fb2.Flibusta.Net|flibusta_fb2_local.inpx' \
     --metrics
@@ -407,9 +407,9 @@ EOF
 }
 
 main() {
-    require_root
     detect_repo_root
     parse_args "$@"
+    require_root
     validate_paths
     ensure_runtime_tools
     install_docker_if_needed

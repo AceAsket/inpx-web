@@ -1,4 +1,4 @@
-﻿inpx-web-7z
+inpx-web-7z
 ===========
 
 <a id="ключевые-отличия" />
@@ -55,7 +55,7 @@
 
 ## Сборка Docker-контейнера
 
-Для этого форка основной способ запуска рассчитан на Docker.
+Для этого форка основной способ запуска рассчитан на Docker. Готовый образ публикуется как `aceasket/inpx-web-7z`.
 
 Готовые YAML-примеры:
 
@@ -103,7 +103,7 @@ docker build --no-cache -t inpx-web-7z:latest .
 docker compose up -d
 ```
 
-или напрямую через `docker run` с тегом `inpx-web-7z:latest`.
+или напрямую через `docker run` с тегом `aceasket/inpx-web-7z:latest`.
 
 ### Обновление контейнера
 
@@ -111,7 +111,7 @@ docker compose up -d
 
 ```sh
 docker rm -f inpx-web 2>/dev/null || true
-docker build -t inpx-web-7z:latest .
+docker pull aceasket/inpx-web-7z:latest
 
 docker run -d \
   --name=inpx-web \
@@ -122,7 +122,7 @@ docker run -d \
   -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  inpx-web-7z:latest
+  aceasket/inpx-web-7z:latest
 ```
 
 Если образ уже собран и нужно только перезапустить контейнер на новой версии, достаточно удалить старый контейнер и запустить ту же команду `docker run` снова.
@@ -141,7 +141,7 @@ docker run -d \
   -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  inpx-web-7z:latest
+  aceasket/inpx-web-7z:latest
 ```
 
 Важно:
@@ -312,7 +312,7 @@ docker run -d \
   -e EMAIL_FROM=user@example.com \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  inpx-web-7z:latest
+  aceasket/inpx-web-7z:latest
 ```
 
 Переменные для Telegram:

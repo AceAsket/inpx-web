@@ -1,22 +1,24 @@
 services:
   inpx-web:
-    image: inpx-web-7z:latest
+    image: aceasket/inpx-web-7z:latest
     container_name: inpx-web
     restart: unless-stopped
     ports:
       - "12380:12380"
     environment:
-      # Эти пути должны указывать на каталог внутри контейнера,
-      # куда библиотека примонтирована через volumes ниже.
+      # These paths point to directories inside the container.
+      # They must match the right side of the volume mounts below.
       DATA_DIR: /usr/local/bin/.inpx-web
       INPX: /library/my-library.inpx
       LIBDIR: /library
       CACHE_DIR: /usr/local/bin/.inpx-web/cache
+      INPX_COVER_CACHE_SIZE_MB: "512"
 
+      # Telegram can also be configured later in the admin UI.
       TELEGRAM_BOT_TOKEN: "PUT_YOUR_BOT_TOKEN_HERE"
-      TELEGRAM_CHAT_ID: "PUT_YOUR_CHAT_ID_HERE"
       TELEGRAM_CAPTION_TEMPLATE: "$${AUTHOR} - $${TITLE}"
 
+      # Email can also be configured later in the admin UI.
       SMTP_HOST: "smtp.example.com"
       SMTP_PORT: 587
       SMTP_SECURE: "false"
@@ -26,6 +28,6 @@ services:
       EMAIL_TO: "reader@example.com"
     volumes:
       - /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web
-      # Левая часть - путь на хосте, правая часть - путь внутри контейнера.
-      # Поэтому INPX=/library/... и LIBDIR=/library должны совпадать с /library справа.
+      # Left side is a host path, right side is a path inside the container.
+      # INPX=/library/... and LIBDIR=/library must point to this mounted path.
       - /mnt/user/books/my-library:/library:ro
