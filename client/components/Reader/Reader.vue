@@ -346,20 +346,20 @@
                         <div class="reader-home-book-actions">
                             <q-btn
                                 v-if="!book.hidden"
-                                color="primary"
-                                unelevated
+                                flat
                                 no-caps
                                 icon="la la-book-open"
+                                class="reader-home-action-btn reader-home-action-btn--primary"
                                 @click="openReaderHomeBook(book)"
                             >
                                 {{ book.state === 'read' ? uiText.openBook : uiText.continueReading }}
                             </q-btn>
                             <q-btn
                                 v-if="book.hidden"
-                                color="primary"
-                                unelevated
+                                flat
                                 no-caps
                                 icon="la la-undo"
+                                class="reader-home-action-btn reader-home-action-btn--primary"
                                 @click="restoreReaderHomeBook(book)"
                             >
                                 {{ uiText.restoreToReading }}
@@ -368,8 +368,8 @@
                                 v-if="!book.hidden"
                                 flat
                                 no-caps
-                                color="negative"
                                 icon="la la-times"
+                                class="reader-home-action-btn reader-home-action-btn--muted"
                                 @click="removeReaderHomeBook(book)"
                             >
                                 {{ uiText.removeFromReading }}
@@ -5551,6 +5551,32 @@ export default vueComponent(Reader);
     height: 100%;
     border-radius: inherit;
     background: var(--reader-accent);
+}
+
+.reader-home-action-btn {
+    min-height: 38px;
+    padding: 6px 12px;
+    border: 1px solid var(--reader-border);
+    border-radius: 8px;
+    background: var(--reader-surface-2);
+    color: var(--reader-text);
+    font-weight: 800;
+}
+
+.reader-home-action-btn--primary {
+    border-color: color-mix(in srgb, var(--reader-accent) 34%, var(--reader-border));
+    background: var(--reader-accent-soft);
+    color: var(--reader-accent);
+}
+
+.reader-home-action-btn--muted {
+    background: transparent;
+    color: var(--reader-muted);
+}
+
+.reader-home-action-btn:hover,
+.reader-home-action-btn:focus {
+    color: var(--reader-accent);
 }
 
 .reader-home-state {
