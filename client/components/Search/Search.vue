@@ -277,8 +277,8 @@
                                 </q-tooltip>
                             </q-input>                            
                         </div>
-                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && !extendedParams && extendedParamsMessage" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
-                            +{{ extendedParamsMessage }}
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && !extendedParams" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
+                            +{{ collapsedExtendedParamsLabel }}
                         </div>
 
                         <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && showLibrarySourceFilters" class="search-fields source-filter-row row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
@@ -410,7 +410,7 @@
                 <!-- 2 -->
                 <div class="column">
                     <DivBtn
-                        v-show="!isExtendedSearch && !isDiscoveryList && (extendedParams || !extendedParamsMessage)"
+                        v-show="!isExtendedSearch && !isDiscoveryList"
                         class="text-grey-6" :size="16" :icon-size="14"
                         :icon="(extendedParams ? 'la la-angle-double-up' : 'la la-angle-double-down')"
                         no-shadow
@@ -1130,10 +1130,12 @@ class Search {
         result.push(s.date ? 'Дата поступления' : '');
         result.push(s.librate ? 'Оценка' : '');
         result.push(s.ext ? 'Тип файла' : '');
-        result.push(s.sourceId ? 'Источник' : '');
-        result.push(s.hideCopies ? 'Скрыты копии' : '');
 
         return result.filter(s => s).join(', ');
+    }
+
+    get collapsedExtendedParamsLabel() {
+        return (this.extendedParamsMessage ? `Доп. фильтры: ${this.extendedParamsMessage}` : 'Доп. фильтры');
     }
 
     get isExtendedSearch() {
