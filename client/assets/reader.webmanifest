@@ -7,8 +7,8 @@
   "scope": ".",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "browser"],
-  "background_color": "#12171b",
-  "theme_color": "#12171b",
+  "background_color": "#3b2a1f",
+  "theme_color": "#3b2a1f",
   "orientation": "any",
   "icons": [
     {
