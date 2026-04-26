@@ -209,25 +209,6 @@ function sanitizeExternalBrowseUrl(baseUrl = '', browseUrl = '') {
     }
 }
 
-function buildExternalPageUrl(sourceUrl = '', page = 1) {
-    const normalizedPage = Math.max(1, parseInt(page, 10) || 1);
-    const rawSourceUrl = String(sourceUrl || '').trim();
-    if (!rawSourceUrl || normalizedPage <= 1)
-        return rawSourceUrl;
-
-    try {
-        const url = new URL(rawSourceUrl);
-        const hostname = String(url.hostname || '').toLowerCase();
-        if (hostname.endsWith('litres.ru'))
-            url.searchParams.set('page', String(normalizedPage));
-        else
-            url.searchParams.set('page', String(normalizedPage));
-        return url.toString();
-    } catch (e) {
-        return rawSourceUrl;
-    }
-}
-
 function buildExternalFlagsByUrl(sourceUrl = '') {
     const normalized = String(sourceUrl || '').trim().toLowerCase();
     return {
@@ -1665,57 +1646,12 @@ class WebWorker {
         let hasMore = false;
         let genreOptions = [];
 
-        if (host.includes('litres.ru')) {
-            const merged = [];
-            const seen = new Set();
-            const wantedBooks = requestedItems + 1;
-            let bookCount = 0;
-
-            for (let page = 1; page <= 8 && bookCount < wantedBooks; page++) {
-                const pageUrl = buildExternalPageUrl(sourceUrl, page);
-                const html = await requestPageHtml(pageUrl);
-                const pageItems = parseItemsFromHtml(html, pageUrl);
-
-                if (page === 1)
-                    genreOptions = buildExternalGenreOptions(pageItems, sourceUrl);
-                if (!pageItems.length)
-                    break;
-
-                let added = 0;
-                for (const item of pageItems) {
-                    const key = buildExternalFeedIdentity(item) || `${item.title || ''}|${item.url || ''}`;
-                    if (seen.has(key))
-                        continue;
-                    seen.add(key);
-                    merged.push(item);
-                    added++;
-                    if (String(item && item.kind || 'book').trim().toLowerCase() !== 'genre')
-                        bookCount++;
-                    if (bookCount >= wantedBooks)
-                        break;
-                }
-
-                if (!added)
-                    break;
-                if (bookCount >= wantedBooks) {
-                    hasMore = true;
-                    break;
-                }
-                if (pageItems.length < 12)
-                    break;
-            }
-
-            const limited = limitExternalFeedItemsByBooks(merged, requestedItems);
-            items = limited.items;
-            hasMore = hasMore || limited.hasMore;
-        } else {
-            const html = await requestPageHtml(sourceUrl);
-            const parsedItems = parseItemsFromHtml(html, sourceUrl);
-            const limited = limitExternalFeedItemsByBooks(parsedItems, requestedItems);
-            items = limited.items;
-            hasMore = limited.hasMore;
-            genreOptions = buildExternalGenreOptions(parsedItems, sourceUrl);
-        }
+        const html = await requestPageHtml(sourceUrl);
+        const parsedItems = parseItemsFromHtml(html, sourceUrl);
+        const limited = limitExternalFeedItemsByBooks(parsedItems, requestedItems);
+        items = limited.items;
+        hasMore = limited.hasMore;
+        genreOptions = buildExternalGenreOptions(parsedItems, sourceUrl);
 
         if (!items.length)
             throw new Error('Не удалось прочитать внешнюю витрину');
@@ -2112,14 +2048,7 @@ class WebWorker {
     async fetchExternalDiscoveryItemsV2(discovery = {}) {
         try {
             const targetUrl = (discovery.externalBrowseUrl || discovery.externalUrl);
-            const feed = await this.fetchExternalFeedItems(discovery.externalLimit, targetUrl);
-
-            if (discovery.externalBrowseUrl && discovery.externalBrowseUrl !== discovery.externalUrl) {
-                const rootFeed = await this.fetchExternalFeedItems(Math.min(discovery.externalLimit, 48), discovery.externalUrl);
-                feed.genreOptions = (rootFeed.genreOptions || []);
-            }
-
-            return feed;
+            return await this.fetchExternalFeedItems(discovery.externalLimit, targetUrl);
         } catch (e) {
             throw new Error(`Не удалось обновить внешний источник "${discovery.externalName || 'Внешний источник'}"`);
         }
