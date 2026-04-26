@@ -5186,7 +5186,8 @@ export default vueComponent(Reader);
 }
 
 .reader-toolbar-main {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(300px, 430px) minmax(96px, max-content) auto;
     align-items: center;
     flex: 1 1 auto;
     gap: 12px;
@@ -5202,15 +5203,15 @@ export default vueComponent(Reader);
 }
 
 .reader-toolbar--home .reader-toolbar-main {
+    display: flex;
     width: 100%;
     max-width: none;
     margin: 0;
 }
 
 .reader-book-meta {
-    flex: 1 1 320px;
     min-width: 0;
-    max-width: 430px;
+    width: 100%;
 }
 
 .reader-book-title {
@@ -5236,6 +5237,10 @@ export default vueComponent(Reader);
     color: var(--reader-muted);
     font-size: 12px;
     font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .reader-book-progress.is-clickable {
@@ -5252,7 +5257,6 @@ export default vueComponent(Reader);
     align-items: center;
     flex: 0 0 auto;
     gap: 6px;
-    margin-left: auto;
 }
 
 .reader-icon-btn {
@@ -6768,6 +6772,7 @@ export default vueComponent(Reader);
     }
 
     .reader-toolbar-main {
+        display: flex;
         align-items: center;
         gap: 8px;
     }
