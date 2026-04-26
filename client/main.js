@@ -15,10 +15,39 @@ q.init();
 
 app.mount('#app');
 
+async function clearBrowserAppCache() {
+    try {
+        if ('caches' in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.filter(key => key.startsWith('inpx-web-')).map(key => caches.delete(key)));
+        }
+
+        if ('serviceWorker' in navigator) {
+            const registrations = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registrations.map(registration => registration.unregister()));
+        }
+    } catch (e) {
+        //
+    }
+}
+
 function appBasePath() {
     const base = document.querySelector('base');
     const basePath = base ? new URL(base.getAttribute('href') || '/', window.location.href).pathname : '/';
     return basePath.replace(/\/?$/, '/');
+}
+
+function consumeClearAppCacheFlag() {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('clearAppCache'))
+        return false;
+
+    url.searchParams.delete('clearAppCache');
+    clearBrowserAppCache().finally(() => {
+        window.history.replaceState({}, '', url.toString());
+        window.location.reload();
+    });
+    return true;
 }
 
 function startAppVersionMonitor() {
@@ -49,6 +78,7 @@ function startAppVersionMonitor() {
             if (previous !== version) {
                 reloading = true;
                 localStorage.setItem(storageKey, version);
+                await clearBrowserAppCache();
                 window.location.reload();
             }
         } catch (e) {
@@ -65,7 +95,8 @@ function startAppVersionMonitor() {
     window.setInterval(checkVersion, 60*1000);
 }
 
-startAppVersionMonitor();
+if (!consumeClearAppCacheFlag())
+    startAppVersionMonitor();
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
