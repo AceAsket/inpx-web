@@ -114,7 +114,16 @@ async function testAdminBackupArchiveAndDownload() {
         const configFile = path.join(dataDir, 'config.json');
         await fs.ensureDir(dataDir);
         await fs.writeJson(configFile, {name: 'inpx-web'});
-        await fs.writeFile(path.join(dataDir, 'reading-lists.json'), '{"items":[]}');
+        await fs.writeJson(path.join(dataDir, 'reading-lists.json'), {
+            version: 5,
+            users: [{
+                id: 'reader',
+                name: 'Reader',
+                readerProgress: {'book:1': {percent: 0.5}},
+                readerBookmarks: {'book:1': [{id: 'bookmark-1', title: 'Chapter'}]},
+            }],
+            lists: [{id: 'list-1', userId: 'reader', name: 'Reading', books: [{bookUid: 'book:1', read: false}]}],
+        });
         await fs.ensureDir(path.join(dataDir, 'db'));
         await fs.writeFile(path.join(dataDir, 'db', 'index.json'), '{}');
 
@@ -141,6 +150,11 @@ async function testAdminBackupArchiveAndDownload() {
             assert.ok(entries['config.json']);
             assert.ok(entries['reading-lists.json']);
             assert.ok(entries['db/index.json']);
+
+            const readingLists = JSON.parse((await zip.entryData('reading-lists.json')).toString('utf8'));
+            assert.strictEqual(readingLists.users[0].readerProgress['book:1'].percent, 0.5);
+            assert.strictEqual(readingLists.users[0].readerBookmarks['book:1'][0].id, 'bookmark-1');
+            assert.strictEqual(readingLists.lists[0].books[0].bookUid, 'book:1');
         } finally {
             await zip.close();
         }
@@ -162,6 +176,85 @@ async function testAdminBackupArchiveAndDownload() {
             const notZip = await request(server, '/book/backup/readme.txt');
             assert.strictEqual(notZip.status, 404);
         });
+    });
+}
+
+async function testUserBackupExportsAndRestoresReaderState() {
+    await withTempDir(async(dir) => {
+        const ReadingListStore = require('../server/core/ReadingListStore');
+        const store = new ReadingListStore({
+            dataDir: dir,
+            adminLogin: 'admin',
+            adminPassword: 'admin',
+        });
+        await store.save({
+            version: 5,
+            users: [{
+                id: 'reader-a',
+                name: 'Reader A',
+                emailTo: 'reader@example.test',
+                telegramChatId: '12345',
+                opdsEnabled: true,
+                opdsAuthEnabled: true,
+                readerPreferences: {
+                    theme: 'sepia',
+                    fontFamily: 'sans',
+                    fontSize: 21,
+                },
+                readerProgress: {
+                    'source:book:1': {
+                        percent: 0.75,
+                        sectionId: 'chapter-3',
+                        hidden: false,
+                    },
+                },
+                readerBookmarks: {
+                    'source:book:1': [{
+                        id: 'bookmark-a',
+                        title: 'Chapter 3',
+                        excerpt: 'Text',
+                        note: 'Note',
+                        percent: 0.75,
+                    }],
+                },
+                discoveryPreferences: {
+                    hiddenBooks: ['source:book:2'],
+                },
+            }, {
+                id: 'reader-b',
+                name: 'Reader B',
+            }],
+            lists: [{
+                id: 'list-a',
+                userId: 'reader-a',
+                name: 'Reading',
+                visibility: 'private',
+                books: [{bookUid: 'source:book:1', read: true}],
+            }],
+        });
+
+        const exported = await store.exportData('reader-a');
+        assert.strictEqual(exported.version, 4);
+        assert.strictEqual(exported.user.emailTo, 'reader@example.test');
+        assert.strictEqual(exported.user.readerPreferences.theme, 'sepia');
+        assert.strictEqual(exported.user.readerProgress['source:book:1'].percent, 0.75);
+        assert.strictEqual(exported.user.readerBookmarks['source:book:1'][0].id, 'bookmark-a');
+        assert.deepStrictEqual(exported.user.discoveryPreferences.hiddenBooks, ['source:book:2']);
+        assert.strictEqual(exported.lists[0].books[0].read, true);
+
+        const imported = await store.importData('reader-b', exported);
+        assert.strictEqual(imported.importedLists, 1);
+        assert.strictEqual(imported.importedBooks, 1);
+        assert.strictEqual(imported.importedProgress, 1);
+        assert.strictEqual(imported.importedBookmarks, 1);
+
+        const restored = await store.exportData('reader-b');
+        assert.strictEqual(restored.user.name, 'Reader B');
+        assert.strictEqual(restored.user.telegramChatId, '12345');
+        assert.strictEqual(restored.user.readerPreferences.fontFamily, 'sans');
+        assert.strictEqual(restored.user.readerProgress['source:book:1'].sectionId, 'chapter-3');
+        assert.strictEqual(restored.user.readerBookmarks['source:book:1'][0].note, 'Note');
+        assert.deepStrictEqual(restored.user.discoveryPreferences.hiddenBooks, ['source:book:2']);
     });
 }
 
@@ -263,6 +356,7 @@ async function testExternalDiscoverySingleFetch() {
 const tests = [
     testAdminSettingsRestoreKeepsSecrets,
     testAdminBackupArchiveAndDownload,
+    testUserBackupExportsAndRestoresReaderState,
     testCoverCacheRoutesAndCleaner,
     testExternalDiscoveryMultiSourceSearch,
     testExternalDiscoverySingleFetch,

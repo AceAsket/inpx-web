@@ -1174,7 +1174,7 @@ class ReadingListStore {
         const lists = await this.getLists(user.id);
 
         return {
-            version: 3,
+            version: 4,
             exportedAt: this.nowIso(),
             user: {
                 id: user.id,
@@ -1183,6 +1183,10 @@ class ReadingListStore {
                 telegramChatId: user.telegramChatId,
                 opdsEnabled: user.opdsEnabled,
                 opdsAuthEnabled: user.opdsAuthEnabled,
+                readerPreferences: this.normalizeReaderPreferences(user.readerPreferences),
+                readerProgress: this.normalizeReaderProgress(user.readerProgress),
+                readerBookmarks: this.normalizeReaderBookmarks(user.readerBookmarks),
+                discoveryPreferences: this.normalizeDiscoveryPreferences(user.discoveryPreferences),
             },
             lists: lists.map((item) => ({
                 name: item.name,
@@ -1199,8 +1203,60 @@ class ReadingListStore {
             throw new Error('Некорректный файл импорта списков');
 
         const {data, user} = await this.resolveUser(userId);
+        const target = data.users.find((item) => item.id === user.id);
+        const incomingUser = (payload.user && typeof(payload.user) === 'object') ? payload.user : {};
         let importedLists = 0;
         let importedBooks = 0;
+        let importedProgress = 0;
+        let importedBookmarks = 0;
+
+        if (target) {
+            if (utilsHasProp(incomingUser, 'name')) {
+                const normalizedName = this.validateUserName(incomingUser.name);
+                const duplicateName = data.users.find((item) => item.id !== target.id && item.name.toLowerCase() === normalizedName.toLowerCase());
+                if (!duplicateName)
+                    target.name = normalizedName;
+            }
+            if (utilsHasProp(incomingUser, 'emailTo'))
+                target.emailTo = String(incomingUser.emailTo || '').trim();
+            if (utilsHasProp(incomingUser, 'telegramChatId'))
+                target.telegramChatId = String(incomingUser.telegramChatId || '').trim();
+            if (utilsHasProp(incomingUser, 'opdsEnabled'))
+                target.opdsEnabled = (incomingUser.opdsEnabled !== false);
+            if (utilsHasProp(incomingUser, 'opdsAuthEnabled'))
+                target.opdsAuthEnabled = (incomingUser.opdsAuthEnabled === true);
+            if (utilsHasProp(incomingUser, 'readerPreferences'))
+                target.readerPreferences = this.normalizeReaderPreferences(incomingUser.readerPreferences);
+            if (utilsHasProp(incomingUser, 'discoveryPreferences'))
+                target.discoveryPreferences = this.normalizeDiscoveryPreferences(incomingUser.discoveryPreferences);
+
+            if (utilsHasProp(incomingUser, 'readerProgress')) {
+                const progress = this.normalizeReaderProgress(incomingUser.readerProgress);
+                target.readerProgress = Object.assign({}, target.readerProgress || {}, progress);
+                importedProgress = Object.keys(progress).length;
+            }
+
+            if (utilsHasProp(incomingUser, 'readerBookmarks')) {
+                const bookmarks = this.normalizeReaderBookmarks(incomingUser.readerBookmarks);
+                target.readerBookmarks = Object.assign({}, target.readerBookmarks || {});
+                for (const [bookUid, incomingRows] of Object.entries(bookmarks)) {
+                    const current = Array.isArray(target.readerBookmarks[bookUid]) ? target.readerBookmarks[bookUid] : [];
+                    const seenIds = new Set(current.map((item) => String(item.id || '').trim()).filter(Boolean));
+                    const merged = current.slice();
+                    for (const bookmark of incomingRows) {
+                        if (seenIds.has(bookmark.id))
+                            continue;
+
+                        seenIds.add(bookmark.id);
+                        merged.push(bookmark);
+                        importedBookmarks++;
+                    }
+                    target.readerBookmarks[bookUid] = this.normalizeReaderBookmarks({[bookUid]: merged})[bookUid] || [];
+                }
+            }
+
+            target.updatedAt = this.nowIso();
+        }
 
         for (const incoming of payload.lists) {
             const normalizedIncoming = this.normalizeList({
@@ -1246,7 +1302,7 @@ class ReadingListStore {
         }
 
         await this.save(data);
-        return {importedLists, importedBooks};
+        return {importedLists, importedBooks, importedProgress, importedBookmarks};
     }
 }
 
