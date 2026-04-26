@@ -120,6 +120,28 @@
                     </div>
 
                     <div v-if="item.id === currentUserId && !item.anonymousProfile" class="profile-body">
+                        <div v-if="config.profileAuthorized || !item.requiresLogin" class="profile-backup-panel">
+                            <div class="profile-backup-copy">
+                                <div class="profile-backup-title">{{ uiText.profileBackupTitle }}</div>
+                                <div class="profile-backup-hint">{{ uiText.profileBackupHint }}</div>
+                            </div>
+                            <div class="profile-backup-actions">
+                                <q-btn outline dense no-caps color="primary" icon="la la-file-export" :loading="profileBackupLoading" @click="exportProfileBackup">
+                                    {{ uiText.exportProfileBackup }}
+                                </q-btn>
+                                <q-btn outline dense no-caps color="primary" icon="la la-file-import" :loading="profileBackupLoading" @click="openProfileBackupImport">
+                                    {{ uiText.importProfileBackup }}
+                                </q-btn>
+                                <input
+                                    ref="profileBackupImportInput"
+                                    type="file"
+                                    accept="application/json,.json"
+                                    style="display: none"
+                                    @change="onProfileBackupImportSelected"
+                                />
+                            </div>
+                        </div>
+
                         <div v-if="config.profileAuthorized || !item.requiresLogin" class="profile-tabs">
                             <button
                                 type="button"
@@ -409,6 +431,7 @@ class UserProfilesDialog {
     currentReadingLists = [];
     expandedReadingSection = false;
     expandedReadingLists = {};
+    profileBackupLoading = false;
     readingListsDialogVisible = false;
     showCreateProfileForm = false;
     newProfilePasswordVisible = false;
@@ -477,6 +500,13 @@ class UserProfilesDialog {
             reading: '\u0427\u0442\u0435\u043d\u0438\u0435',
             lists: '\u0421\u043f\u0438\u0441\u043a\u0438',
             settings: '\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438',
+            profileBackupTitle: '\u0411\u044d\u043a\u0430\u043f \u043f\u0440\u043e\u0444\u0438\u043b\u044f',
+            profileBackupHint: '\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u0442 \u043b\u0438\u0447\u043d\u044b\u0435 \u0441\u043f\u0438\u0441\u043a\u0438, \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u0447\u0442\u0435\u043d\u0438\u044f, \u0437\u0430\u043a\u043b\u0430\u0434\u043a\u0438, \u0441\u043a\u0440\u044b\u0442\u044b\u0435 \u043a\u043d\u0438\u0433\u0438 \u0438 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0447\u0438\u0442\u0430\u043b\u043a\u0438. \u041f\u0430\u0440\u043e\u043b\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u043d\u0435 \u044d\u043a\u0441\u043f\u043e\u0440\u0442\u0438\u0440\u0443\u0435\u0442\u0441\u044f.',
+            exportProfileBackup: '\u0421\u043a\u0430\u0447\u0430\u0442\u044c JSON',
+            importProfileBackup: '\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c JSON',
+            profileBackupReady: '\u0411\u044d\u043a\u0430\u043f \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u0441\u043a\u0430\u0447\u0430\u043d',
+            profileBackupImportConfirm: '\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c JSON-\u0431\u044d\u043a\u0430\u043f \u0432 \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u043f\u0440\u043e\u0444\u0438\u043b\u044c? \u0421\u043f\u0438\u0441\u043a\u0438, \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441, \u0437\u0430\u043a\u043b\u0430\u0434\u043a\u0438 \u0438 \u043b\u0438\u0447\u043d\u044b\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0431\u0443\u0434\u0443\u0442 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u044b \u0438\u043b\u0438 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u044b.',
+            profileBackupImported: '\u0411\u044d\u043a\u0430\u043f \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u0432\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d',
             loginToEdit: '\u0414\u043b\u044f \u0440\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u0432\u043e\u0439\u0434\u0438\u0442\u0435 \u043f\u043e \u043b\u043e\u0433\u0438\u043d\u0443 \u0438 \u043f\u0430\u0440\u043e\u043b\u044e.',
             loginAction: '\u0412\u043e\u0439\u0442\u0438',
             series: '\u0421\u0435\u0440\u0438\u044f',
@@ -672,6 +702,78 @@ class UserProfilesDialog {
 
     toggleReadingSectionExpanded() {
         this.expandedReadingSection = !this.expandedReadingSection;
+    }
+
+    downloadJson(data, fileName) {
+        const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json;charset=utf-8'});
+        const href = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = href;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+
+        setTimeout(() => {
+            window.URL.revokeObjectURL(href);
+        }, 1000);
+    }
+
+    async exportProfileBackup() {
+        this.profileBackupLoading = true;
+        try {
+            const data = await this.api.exportReadingLists();
+            const stamp = new Date().toISOString().substring(0, 10);
+            const login = String((this.currentProfile && (this.currentProfile.login || this.currentProfile.id)) || 'profile')
+                .replace(/[^a-z0-9._-]+/gi, '-')
+                .replace(/^-+|-+$/g, '') || 'profile';
+            this.downloadJson(data, `inpx-web-profile-${login}-${stamp}.json`);
+            this.$root.notify.success(this.uiText.profileBackupReady);
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
+        } finally {
+            this.profileBackupLoading = false;
+        }
+    }
+
+    openProfileBackupImport() {
+        const inputRef = this.$refs.profileBackupImportInput;
+        const input = Array.isArray(inputRef) ? inputRef[0] : inputRef;
+        if (!input)
+            return;
+
+        input.value = '';
+        input.click();
+    }
+
+    async onProfileBackupImportSelected(event) {
+        const input = event && event.target;
+        const file = input && input.files && input.files[0];
+        if (!file)
+            return;
+
+        const confirmed = await this.$root.stdDialog.confirm(
+            this.uiText.profileBackupImportConfirm,
+            this.uiText.profileBackupTitle,
+        );
+        if (!confirmed) {
+            input.value = '';
+            return;
+        }
+
+        this.profileBackupLoading = true;
+        try {
+            const data = JSON.parse(await file.text());
+            await this.api.importReadingLists(data);
+            await this.loadProfiles({preserveState: true});
+            this.$root.notify.success(this.uiText.profileBackupImported);
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
+        } finally {
+            this.profileBackupLoading = false;
+            if (input)
+                input.value = '';
+        }
     }
 
     openReader(book = {}) {
@@ -1067,6 +1169,42 @@ export default vueComponent(UserProfilesDialog);
 
 .profile-body {
     margin-bottom: 8px;
+}
+
+.profile-backup-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--app-border);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--app-surface) 86%, var(--app-surface-2) 14%);
+}
+
+.profile-backup-copy {
+    min-width: 220px;
+    flex: 1 1 260px;
+}
+
+.profile-backup-title {
+    font-weight: 800;
+}
+
+.profile-backup-hint {
+    margin-top: 3px;
+    color: var(--app-muted);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.profile-backup-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 .profile-tabs {
