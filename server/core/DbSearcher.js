@@ -9,6 +9,7 @@ const maxUtf8Char = String.fromCodePoint(0xFFFFF);
 const ruAlphabet = 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя';
 const enAlphabet = 'abcdefghijklmnopqrstuvwxyz';
 const enruArr = (ruAlphabet + enAlphabet).split('');
+const copyDedupeVersion = 'copy-dedupe-v2';
 
 class DbSearcher {
     constructor(config, db) {
@@ -44,6 +45,7 @@ class DbSearcher {
         }
         result.push(String(q.sourceId || '').trim());
         result.push(q.hideCopies === true || q.hideCopies === 'true' || q.hideCopies === '1' ? '1' : '');
+        result.push(copyDedupeVersion);
 
         return JSON.stringify(result);
     }
@@ -514,11 +516,17 @@ class DbSearcher {
             .replace(/\s+/g, ' ');
     }
 
+    authorCopyKey(value) {
+        return this.normalizeCopyKeyPart(value)
+            .split(/[;,\n]/)
+            .map(author => author.trim().split(/\s+/).slice(0, 2).join(' '))
+            .filter(Boolean)
+            .join('|');
+    }
+
     copyKey(book = {}) {
         const title = this.normalizeCopyKeyPart(book.title);
-        const author = this.normalizeCopyKeyPart(book.author)
-            .split(/[;,\n]/)[0]
-            .split(/\s+/)[0];
+        const author = this.authorCopyKey(book.author);
 
         if (title && author)
             return `copy:${author}|${title}`;
@@ -760,7 +768,11 @@ class DbSearcher {
 
                     const normalizeKeyPart = (value) => String(value || '').trim().toLowerCase().replace(/\\s+/g, ' ');
 
-                    const authorKey = (value) => normalizeKeyPart(value).split(/[;,\\n]/)[0].split(/\\s+/)[0] || '';
+                    const authorKey = (value) => normalizeKeyPart(value)
+                        .split(/[;,\\n]/)
+                        .map(author => author.trim().split(/\\s+/).slice(0, 2).join(' '))
+                        .filter(Boolean)
+                        .join('|');
 
                     const dedupeKey = (row) => {
                         const sourceKey = hideCopies ? '' : (row.sourceId || '');
