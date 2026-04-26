@@ -264,14 +264,6 @@
                         >
                             {{ uiText.profileLoginAction }}
                         </q-btn>
-                        <q-btn
-                            flat
-                            no-caps
-                            icon="la la-sync"
-                            @click="loadReaderHome"
-                        >
-                            {{ uiText.refresh }}
-                        </q-btn>
                     </div>
                 </div>
 
@@ -282,16 +274,28 @@
 
                 <div v-if="!readerHomeLoading" class="reader-home-tools">
                     <div class="reader-home-tabs">
-                        <button
-                            v-for="item in readerHomeFilterOptions"
-                            :key="item.value"
-                            type="button"
-                            class="reader-home-tab"
-                            :class="{'is-active': readerHomeFilter === item.value}"
-                            @click="setReaderHomeFilter(item.value)"
+                        <div class="reader-home-tab-list">
+                            <button
+                                v-for="item in readerHomeFilterOptions"
+                                :key="item.value"
+                                type="button"
+                                class="reader-home-tab"
+                                :class="{'is-active': readerHomeFilter === item.value}"
+                                @click="setReaderHomeFilter(item.value)"
+                            >
+                                {{ item.label }} <span>{{ readerHomeCounters[item.value] || 0 }}</span>
+                            </button>
+                        </div>
+                        <q-btn
+                            flat
+                            dense
+                            round
+                            icon="la la-sync"
+                            class="reader-home-refresh-btn reader-home-action-btn"
+                            @click="loadReaderHome"
                         >
-                            {{ item.label }} <span>{{ readerHomeCounters[item.value] || 0 }}</span>
-                        </button>
+                            <q-tooltip :delay="600">{{ uiText.refresh }}</q-tooltip>
+                        </q-btn>
                     </div>
 
                     <div class="reader-home-search-row">
@@ -5458,8 +5462,16 @@ export default vueComponent(Reader);
 
 .reader-home-tabs {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.reader-home-tab-list {
+    display: flex;
     flex-wrap: wrap;
     gap: 8px;
+    min-width: 0;
 }
 
 .reader-home-tab {
@@ -5489,6 +5501,14 @@ export default vueComponent(Reader);
 .reader-home-tab.is-active {
     border-color: var(--reader-accent);
     color: var(--reader-accent);
+}
+
+.reader-home-refresh-btn {
+    flex: 0 0 auto;
+    width: 42px;
+    height: 42px;
+    min-height: 42px;
+    padding: 0;
 }
 
 .reader-home-search-row {
