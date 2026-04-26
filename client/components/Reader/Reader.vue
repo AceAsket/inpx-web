@@ -5506,6 +5506,49 @@ export default vueComponent(Reader);
     color: var(--reader-text);
 }
 
+.reader-home-search :deep(.q-field__native),
+.reader-home-search :deep(.q-field__input),
+.reader-home-search :deep(.q-field__prepend),
+.reader-home-search :deep(.q-field__append),
+.reader-home-search :deep(.q-icon),
+.reader-home-sort :deep(.q-field__native),
+.reader-home-sort :deep(.q-field__input),
+.reader-home-sort :deep(.q-field__append),
+.reader-home-sort :deep(.q-select__dropdown-icon),
+.reader-home-sort :deep(.q-icon) {
+    color: var(--reader-muted);
+}
+
+.reader-home-search :deep(.q-field__native),
+.reader-home-search :deep(.q-field__input),
+.reader-home-sort :deep(.q-field__native),
+.reader-home-sort :deep(.q-field__input) {
+    color: var(--reader-text);
+}
+
+.reader-home-search :deep(.q-field__control:hover .q-icon),
+.reader-home-search :deep(.q-field--focused .q-icon),
+.reader-home-sort :deep(.q-field__control:hover .q-icon),
+.reader-home-sort :deep(.q-field--focused .q-icon) {
+    color: var(--reader-accent);
+}
+
+.reader-home-search :deep(.q-field--outlined .q-field__control::before),
+.reader-home-sort :deep(.q-field--outlined .q-field__control::before) {
+    border-color: var(--reader-border);
+}
+
+.reader-home-search :deep(.q-field--outlined.q-field--focused .q-field__control::after),
+.reader-home-sort :deep(.q-field--outlined.q-field--focused .q-field__control::after) {
+    border-color: var(--reader-accent);
+}
+
+.reader-home-search :deep(.q-field__native::placeholder),
+.reader-home-search :deep(.q-field__input::placeholder) {
+    color: var(--reader-muted);
+    opacity: 0.86;
+}
+
 .reader-home-list {
     display: grid;
     gap: 10px;
