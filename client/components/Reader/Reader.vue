@@ -44,7 +44,7 @@
                 </div>
 
                 <button
-                    v-if="!isStandaloneMode"
+                    v-if="bookUid && !isStandaloneMode"
                     type="button"
                     class="reader-profile-chip"
                     :class="readerProfileChipClass"
@@ -255,7 +255,7 @@
                             <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'eink'}" @click="setTheme('eink')">{{ uiText.themeEink }}</q-btn>
                         </div>
                         <q-btn
-                            v-if="readerHomeCanLogin && !isCompactLayout"
+                            v-if="readerHomeCanLogin"
                             color="primary"
                             unelevated
                             no-caps
