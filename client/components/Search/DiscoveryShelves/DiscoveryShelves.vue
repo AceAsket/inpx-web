@@ -1,7 +1,5 @@
 <template>
     <div class="discovery-wrap q-mx-md q-mt-md q-mb-lg">
-        <LoadingMessage :message="loading ? 'Собираю витрину...' : ''" z-index="2" />
-
         <div class="discovery-page-head">
             <div class="discovery-page-copy">
                 <div class="discovery-page-title">
@@ -80,6 +78,11 @@
                 </q-btn>
 
             </div>
+        </div>
+
+        <div v-if="loading" class="discovery-loading-line">
+            <q-icon class="la la-spinner icon-rotate" size="20px" />
+            <span>Собираю витрину...</span>
         </div>
 
         <div v-if="errorMessage" class="discovery-error">
@@ -381,6 +384,15 @@ export default vueComponent(DiscoveryShelves);
     background: rgba(194, 88, 62, 0.08);
     color: var(--app-text);
     font-weight: 600;
+}
+
+.discovery-loading-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    color: var(--app-muted);
+    font-weight: 700;
 }
 
 .discovery-shelf + .discovery-shelf {

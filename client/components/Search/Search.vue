@@ -657,6 +657,11 @@ const componentOptions = {
             }
 
             this.makeTitle();
+            if (!this.isDiscoveryList) {
+                this.discoveryShelvesRequestSeq++;
+                this.discoveryShelvesLoading = false;
+                this.discoveryShelvesError = '';
+            }
             this.refreshDiscoveryShelves();
         },
         searchDate() {
@@ -753,6 +758,7 @@ class Search {
     discoveryShelvesLoading = false;
     discoveryShelvesError = '';
     discoveryShelvesCacheKey = '';
+    discoveryShelvesRequestSeq = 0;
     discoverySimilarExhausted = false;
 
     searchDateOptions = [
@@ -2252,6 +2258,7 @@ class Search {
         if (!force && this.discoveryShelvesCacheKey === cacheKey)
             return;
 
+        const requestSeq = ++this.discoveryShelvesRequestSeq;
         this.discoveryShelvesLoading = true;
         this.discoveryShelvesError = '';
         try {
@@ -2270,13 +2277,18 @@ class Search {
                 externalBrowseUrl: this.discoveryExternalGenreUrl,
                 externalBrowseName: this.discoveryExternalGenreName,
             });
-            this.discoveryShelves = (response && Array.isArray(response.shelves) ? response.shelves : []);
-            this.discoveryShelvesCacheKey = cacheKey;
+            if (requestSeq === this.discoveryShelvesRequestSeq && this.showDiscoveryShelves) {
+                this.discoveryShelves = (response && Array.isArray(response.shelves) ? response.shelves : []);
+                this.discoveryShelvesCacheKey = cacheKey;
+            }
         } catch (e) {
-            const message = String(e && e.message || '').trim() || 'нет ответа от сервера';
-            this.discoveryShelvesError = `Ошибка витрины: ${message}`;
+            if (requestSeq === this.discoveryShelvesRequestSeq && this.showDiscoveryShelves) {
+                const message = String(e && e.message || '').trim() || 'нет ответа от сервера';
+                this.discoveryShelvesError = `Ошибка витрины: ${message}`;
+            }
         } finally {
-            this.discoveryShelvesLoading = false;
+            if (requestSeq === this.discoveryShelvesRequestSeq)
+                this.discoveryShelvesLoading = false;
         }
     }
 
