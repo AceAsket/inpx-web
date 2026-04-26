@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-title" content="INPX Web">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.webmanifest">
-    <link rel="apple-touch-icon" href="pwa-icon.svg">
+    <link rel="apple-touch-icon" href="pwa-icon-192.png">
   </head>
   <body>
     <div id="app"></div>

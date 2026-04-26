@@ -5,6 +5,8 @@ const withBase = (path) => `${BASE_PATH}${path}`;
 const APP_SHELL = [
   '/index.html',
   '/pwa-icon.svg',
+  '/pwa-icon-192.png',
+  '/pwa-icon-512.png',
   '/reader-icon.svg',
   '/reader-icon-192.png',
   '/reader-icon-512.png',

@@ -134,7 +134,7 @@ class App {
 
         const appleIcon = document.querySelector('link[rel="apple-touch-icon"]');
         if (appleIcon)
-            appleIcon.setAttribute('href', this.rootRoute === '/reader' ? 'reader-icon-192.png' : 'pwa-icon.svg');
+            appleIcon.setAttribute('href', this.rootRoute === '/reader' ? 'reader-icon-192.png' : 'pwa-icon-192.png');
     }
 
     setAppTitle(title) {
