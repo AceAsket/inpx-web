@@ -383,7 +383,7 @@
                     </div><!-- 1-2 -->
                 </div><!-- 1 -->
                 <!-- 2 -->
-                <div class="column">
+                <div v-show="showMobileFiltersBody" class="column">
                     <DivBtn
                         v-show="!isExtendedSearch && !isDiscoveryList"
                         class="text-grey-6" :size="16" :icon-size="14"
