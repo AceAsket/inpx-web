@@ -120,28 +120,6 @@
                     </div>
 
                     <div v-if="item.id === currentUserId && !item.anonymousProfile" class="profile-body">
-                        <div v-if="config.profileAuthorized || !item.requiresLogin" class="profile-backup-panel">
-                            <div class="profile-backup-copy">
-                                <div class="profile-backup-title">{{ uiText.profileBackupTitle }}</div>
-                                <div class="profile-backup-hint">{{ uiText.profileBackupHint }}</div>
-                            </div>
-                            <div class="profile-backup-actions">
-                                <q-btn outline dense no-caps color="primary" icon="la la-file-export" :loading="profileBackupLoading" @click="exportProfileBackup">
-                                    {{ uiText.exportProfileBackup }}
-                                </q-btn>
-                                <q-btn outline dense no-caps color="primary" icon="la la-file-import" :loading="profileBackupLoading" @click="openProfileBackupImport">
-                                    {{ uiText.importProfileBackup }}
-                                </q-btn>
-                                <input
-                                    ref="profileBackupImportInput"
-                                    type="file"
-                                    accept="application/json,.json"
-                                    style="display: none"
-                                    @change="onProfileBackupImportSelected"
-                                />
-                            </div>
-                        </div>
-
                         <div v-if="config.profileAuthorized || !item.requiresLogin" class="profile-tabs">
                             <button
                                 type="button"
@@ -166,6 +144,14 @@
                                 @click="currentProfileTab = 'settings'"
                             >
                                 {{ uiText.settings }}
+                            </button>
+                            <button
+                                type="button"
+                                class="profile-tab-btn"
+                                :class="{'is-active': currentProfileTab === 'backup'}"
+                                @click="currentProfileTab = 'backup'"
+                            >
+                                {{ uiText.backup }}
                             </button>
                         </div>
 
@@ -348,7 +334,7 @@
                             </div>
                         </div>
 
-                        <div v-else class="profile-grid profile-edit-grid">
+                        <div v-else-if="currentProfileTab === 'settings'" class="profile-grid profile-edit-grid">
                             <q-input v-model="editableProfile.name" outlined dense :label="uiText.name" />
                             <q-input v-model="editableProfile.login" outlined dense clearable :label="uiText.login" />
                             <q-input
@@ -371,6 +357,28 @@
                             <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
                             <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
                             <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
+                        </div>
+
+                        <div v-else-if="currentProfileTab === 'backup'" class="profile-backup-panel">
+                            <div class="profile-backup-copy">
+                                <div class="profile-backup-title">{{ uiText.profileBackupTitle }}</div>
+                                <div class="profile-backup-hint">{{ uiText.profileBackupHint }}</div>
+                            </div>
+                            <div class="profile-backup-actions">
+                                <q-btn outline dense no-caps color="primary" icon="la la-file-export" :loading="profileBackupLoading" @click="exportProfileBackup">
+                                    {{ uiText.exportProfileBackup }}
+                                </q-btn>
+                                <q-btn outline dense no-caps color="primary" icon="la la-file-import" :loading="profileBackupLoading" @click="openProfileBackupImport">
+                                    {{ uiText.importProfileBackup }}
+                                </q-btn>
+                                <input
+                                    ref="profileBackupImportInput"
+                                    type="file"
+                                    accept="application/json,.json"
+                                    style="display: none"
+                                    @change="onProfileBackupImportSelected"
+                                />
+                            </div>
                         </div>
                     </div>
 
@@ -500,6 +508,7 @@ class UserProfilesDialog {
             reading: '\u0427\u0442\u0435\u043d\u0438\u0435',
             lists: '\u0421\u043f\u0438\u0441\u043a\u0438',
             settings: '\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438',
+            backup: '\u0411\u044d\u043a\u0430\u043f',
             profileBackupTitle: '\u0411\u044d\u043a\u0430\u043f \u043f\u0440\u043e\u0444\u0438\u043b\u044f',
             profileBackupHint: '\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u0442 \u043b\u0438\u0447\u043d\u044b\u0435 \u0441\u043f\u0438\u0441\u043a\u0438, \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u0447\u0442\u0435\u043d\u0438\u044f, \u0437\u0430\u043a\u043b\u0430\u0434\u043a\u0438, \u0441\u043a\u0440\u044b\u0442\u044b\u0435 \u043a\u043d\u0438\u0433\u0438 \u0438 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0447\u0438\u0442\u0430\u043b\u043a\u0438. \u041f\u0430\u0440\u043e\u043b\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u043d\u0435 \u044d\u043a\u0441\u043f\u043e\u0440\u0442\u0438\u0440\u0443\u0435\u0442\u0441\u044f.',
             exportProfileBackup: '\u0421\u043a\u0430\u0447\u0430\u0442\u044c JSON',
