@@ -12,7 +12,7 @@
         <slot></slot>
 
         <!--------------------------------------------------->
-        <div v-show="type == 'alert'" class="bg-white no-wrap">
+        <div v-show="type == 'alert'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
@@ -37,7 +37,7 @@
         </div>
 
         <!--------------------------------------------------->
-        <div v-show="type == 'confirm'" class="bg-white no-wrap">
+        <div v-show="type == 'confirm'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
@@ -65,7 +65,7 @@
         </div>
 
         <!--------------------------------------------------->
-        <div v-show="type == 'prompt'" class="bg-white no-wrap">
+        <div v-show="type == 'prompt'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
@@ -97,7 +97,7 @@
         </div>
 
         <!--------------------------------------------------->
-        <div v-show="type == 'password'" class="bg-white no-wrap">
+        <div v-show="type == 'password'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
@@ -146,7 +146,7 @@
         </div>
 
         <!--------------------------------------------------->
-        <div v-show="type == 'hotKey'" class="bg-white no-wrap">
+        <div v-show="type == 'hotKey'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
@@ -209,6 +209,16 @@ class StdDialog {
     noEscDismiss = false;
     noBackdropDismiss = false;
     noCancel = false;
+    dialogClass = '';
+    dialogStyle = null;
+
+    get dialogContentClass() {
+        return ['std-dialog-card', 'bg-white', 'no-wrap', this.dialogClass].filter(Boolean);
+    }
+
+    get dialogContentStyle() {
+        return this.dialogStyle || null;
+    }
 
     get isCompactLayout() {
         return !!(this.$q && this.$q.screen && this.$q.screen.lt && this.$q.screen.lt.md);
@@ -239,6 +249,8 @@ class StdDialog {
         this.noEscDismiss = (opts && opts.noEscDismiss) || false;
         this.noBackdropDismiss = (opts && opts.noBackdropDismiss) || false;
         this.noCancel = (opts && opts.noCancel) || false;
+        this.dialogClass = (opts && opts.dialogClass) || '';
+        this.dialogStyle = (opts && opts.dialogStyle) || null;
 
         this.iconColor = 'text-warning';
         if (opts && opts.color) {
@@ -441,6 +453,67 @@ export default vueComponent(StdDialog);
 <style scoped>
 .password-visibility-toggle {
     cursor: pointer;
+}
+
+.std-dialog-card--reader {
+    border: 1px solid var(--reader-border);
+    border-radius: 12px;
+    background: var(--reader-surface) !important;
+    color: var(--reader-text);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+}
+
+.std-dialog-card--reader .caption,
+.std-dialog-card--reader .close-icon {
+    color: var(--reader-text);
+}
+
+.std-dialog-card--reader .caption :deep(.q-icon) {
+    color: var(--reader-accent) !important;
+}
+
+.std-dialog-card--reader .header {
+    border-bottom: 1px solid color-mix(in srgb, var(--reader-border) 70%, transparent);
+}
+
+.std-dialog-card--reader .error {
+    color: color-mix(in srgb, #ef4444 82%, var(--reader-text));
+}
+
+.std-dialog-card--reader :deep(.q-field__control) {
+    border-radius: 8px;
+    background: var(--reader-surface-2);
+    color: var(--reader-text);
+}
+
+.std-dialog-card--reader :deep(.q-field__native),
+.std-dialog-card--reader :deep(.q-field__input),
+.std-dialog-card--reader :deep(.q-field__append),
+.std-dialog-card--reader :deep(.q-icon) {
+    color: var(--reader-text);
+}
+
+.std-dialog-card--reader :deep(.q-field--outlined .q-field__control::before) {
+    border-color: var(--reader-border);
+}
+
+.std-dialog-card--reader :deep(.q-field--outlined.q-field--focused .q-field__control::after) {
+    border-color: var(--reader-accent);
+}
+
+.std-dialog-card--reader :deep(.q-btn) {
+    min-height: 38px;
+    border: 1px solid var(--reader-border);
+    border-radius: 8px;
+    background: var(--reader-surface-2);
+    color: var(--reader-text);
+    font-weight: 800;
+}
+
+.std-dialog-card--reader :deep(.q-btn.bg-primary) {
+    border-color: color-mix(in srgb, var(--reader-accent) 34%, var(--reader-border));
+    background: var(--reader-accent-soft) !important;
+    color: var(--reader-accent) !important;
 }
 </style>
 

@@ -600,30 +600,36 @@ class Api {
         await this.request({action: 'test'});
     }
 
-    async showProfileLoginDialog(prefillLogin = '') {
+    async showProfileLoginDialog(prefillLogin = '', opts = {}) {
         const current = this.$store.state.config.currentUserProfile || {};
+        const dialogOpts = {
+            dialogClass: opts.dialogClass || '',
+            dialogStyle: opts.dialogStyle || null,
+        };
         const loginPrompt = await this.$root.stdDialog.prompt(
             'Введите логин профиля:',
             'Вход в профиль',
-            {
+            Object.assign({}, dialogOpts, {
                 inputValue: prefillLogin || current.login || '',
                 inputValidator: (value) => (String(value || '').trim() ? true : 'Логин не должен быть пустым'),
-            },
+            }),
         );
         if (!loginPrompt || loginPrompt === false)
             throw new Error('Вход в профиль отменён');
 
+        const login = String(loginPrompt.value || '').trim();
         const passwordPrompt = await this.$root.stdDialog.password(
             'Введите пароль профиля:',
             'Вход в профиль',
-            {
+            Object.assign({}, dialogOpts, {
                 inputValidator: (value) => (String(value || '') ? true : 'Пароль не должен быть пустым'),
-            },
+                userName: login,
+            }),
         );
         if (!passwordPrompt || passwordPrompt === false)
             throw new Error('Вход в профиль отменён');
 
-        const result = await this.loginUserProfile(String(loginPrompt.value || '').trim(), String(passwordPrompt.value || ''));
+        const result = await this.loginUserProfile(login, String(passwordPrompt.value || ''));
         this.commit('setSettings', {
             currentUserId: result.userId,
             profileAccessToken: '',

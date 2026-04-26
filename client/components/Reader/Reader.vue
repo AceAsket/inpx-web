@@ -5045,7 +5045,13 @@ class Reader {
             return false;
 
         try {
-            await api.showProfileLoginDialog(target && !this.config.profileAuthorized && !target.anonymousProfile ? target.login || '' : '');
+            await api.showProfileLoginDialog(
+                target && !this.config.profileAuthorized && !target.anonymousProfile ? target.login || '' : '',
+                {
+                    dialogClass: 'std-dialog-card--reader',
+                    dialogStyle: this.readerDialogStyle,
+                },
+            );
             this.profileWarningNotifiedKey = '';
             if (!this.bookUid && !this.isStandaloneMode)
                 await this.loadReaderHome();
