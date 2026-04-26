@@ -108,7 +108,7 @@
                         {{ backupUi.settings }}
                     </q-btn>
                     <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="settingsImportLoading" @click="openSettingsImport">
-                        Восстановить настройки
+                        {{ backupUi.settingsImport }}
                     </q-btn>
                     <input
                         ref="settingsImportInput"
@@ -650,9 +650,10 @@ class SettingsDialog {
     ];
     backupUi = {
         title: 'Резервная копия',
-        subtitle: 'Администратор может скачать поисковую БД, профили, списки чтения и текущие настройки. Исходные архивы книг в бэкап не входят.',
-        backup: 'Скачать бэкап',
-        settings: 'Экспорт настроек',
+        subtitle: 'Бэкап сохраняет состояние сервиса: config, secret.key, профили пользователей, списки, прогресс чтения, закладки и кэш витрины. Архивы книг, обложки, кэши и поисковая БД не входят. Экспорт настроек ниже сохраняет только конфигурацию без пользователей и прогресса.',
+        backup: 'Скачать полный бэкап',
+        settings: 'Экспорт настроек JSON',
+        settingsImport: 'Восстановить настройки JSON',
         ready: 'Резервная копия готова',
     };
     mailUi = {
