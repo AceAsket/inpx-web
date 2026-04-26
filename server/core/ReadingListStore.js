@@ -8,17 +8,21 @@ class ReadingListStore {
         this.file = path.join(config.dataDir, 'reading-lists.json');
     }
 
+    makeDefaultData() {
+        return {
+            version: 5,
+            users: [this.makeDefaultUser()],
+            lists: [],
+            sharedDiscoveryConfig: this.normalizeSharedDiscoveryConfig(),
+            metadataOverrides: {},
+        };
+    }
+
     async ensureData() {
         await fs.ensureDir(path.dirname(this.file));
 
         if (!await fs.pathExists(this.file)) {
-            await this.save({
-                version: 5,
-                users: [this.makeDefaultUser()],
-                lists: [],
-                sharedDiscoveryConfig: this.normalizeSharedDiscoveryConfig(),
-                metadataOverrides: {},
-            });
+            await this.save(this.makeDefaultData());
         }
     }
 
@@ -467,16 +471,55 @@ class ReadingListStore {
 
     async load() {
         await this.ensureData();
-        const raw = JSON.parse(await fs.readFile(this.file, 'utf8'));
+        let raw = null;
+        try {
+            const text = await fs.readFile(this.file, 'utf8');
+            const normalized = String(text || '').trim();
+            if (!normalized)
+                throw new Error('reading-lists.json is empty');
+            raw = JSON.parse(normalized);
+        } catch (e) {
+            await this.backupBrokenStore(e);
+            raw = this.makeDefaultData();
+            await this.save(raw);
+        }
+
         const {data, changed} = this.applyAdminBootstrap(raw);
         if (changed)
-            await fs.writeFile(this.file, JSON.stringify(data, null, 2));
+            await this.writeData(data);
         return data;
+    }
+
+    async backupBrokenStore(error = null) {
+        if (!await fs.pathExists(this.file))
+            return;
+
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupFile = `${this.file}.broken-${stamp}`;
+        try {
+            await fs.copy(this.file, backupFile, {overwrite: false});
+        } catch (copyError) {
+            try {
+                await fs.copy(this.file, `${backupFile}-${crypto.randomBytes(3).toString('hex')}`, {overwrite: false});
+            } catch (e) {
+                // Keep loading usable even if the broken file cannot be backed up.
+            }
+        }
+
+        if (error && error.message)
+            await fs.writeFile(`${backupFile}.error.txt`, String(error.stack || error.message));
     }
 
     async save(data) {
         const out = this.normalizeData(data);
-        await fs.writeFile(this.file, JSON.stringify(out, null, 2));
+        await this.writeData(out);
+    }
+
+    async writeData(data) {
+        await fs.ensureDir(path.dirname(this.file));
+        const tmpFile = `${this.file}.tmp-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+        await fs.writeFile(tmpFile, JSON.stringify(data, null, 2));
+        await fs.rename(tmpFile, this.file);
     }
 
     async getSharedDiscoveryConfig() {
