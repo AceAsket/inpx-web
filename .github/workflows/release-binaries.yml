@@ -22,8 +22,34 @@ env:
   WINDOWS_WEBP_URL: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0-windows-x64.zip
 
 jobs:
+  release-smoke-tests:
+    name: Release smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Checkout requested tag
+        if: github.event_name == 'workflow_dispatch'
+        run: git checkout ${{ github.event.inputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run release smoke tests
+        run: npm run test:release
+
   build:
     name: Build ${{ matrix.label }}
+    needs: release-smoke-tests
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
