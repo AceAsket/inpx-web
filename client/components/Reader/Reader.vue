@@ -953,6 +953,8 @@ import vueComponent from '../vueComponent.js';
 import Fb2Parser from '../../../server/core/fb2/Fb2Parser';
 import _ from 'lodash';
 
+const readerPreferencesStorageKey = 'inpx.reader.preferences.v1';
+
 const componentOptions = {
     watch: {
         readerSourceKey: {
@@ -965,6 +967,15 @@ const componentOptions = {
             immediate: true,
             handler() {
                 this.$nextTick(() => this.notifyReaderProfileWarning());
+            },
+        },
+        currentProfileReaderPreferences: {
+            immediate: true,
+            handler(newValue) {
+                if (newValue) {
+                    this.profileReaderPreferencesApplied = true;
+                    this.applyReaderPreferences(newValue, {persistLocal: true});
+                }
             },
         },
     },
@@ -1061,6 +1072,7 @@ class Reader {
     restorePending = false;
     saveProgressDebounced = null;
     savePreferencesDebounced = null;
+    profileReaderPreferencesApplied = false;
     snapTimer = null;
     pageTurnTimer = null;
     pageTurnAnimating = false;
@@ -1124,6 +1136,9 @@ class Reader {
     };
 
     created() {
+        if (!this.profileReaderPreferencesApplied)
+            this.applyStoredReaderPreferences();
+
         this.handleBeforeUnload = () => {
             this.flushProgress();
         };
@@ -1260,6 +1275,15 @@ class Reader {
     get currentSelectedProfile() {
         const users = this.config.userProfiles || [];
         return users.find((item) => item.id === this.currentUserId) || this.config.currentUserProfile || null;
+    }
+
+    get currentProfileReaderPreferences() {
+        const current = this.currentSelectedProfile || null;
+        if (!current || current.anonymousProfile)
+            return null;
+        if (current.requiresLogin && !this.config.profileAuthorized)
+            return null;
+        return current.readerPreferences || null;
     }
 
     get readerProfileNeedsLogin() {
@@ -4401,7 +4425,7 @@ class Reader {
         this.readerHtml = this.buildReaderHtml(parser);
 
         if (stateResponse && stateResponse.preferences)
-            this.preferences = Object.assign({}, this.preferences, stateResponse.preferences || {});
+            this.applyReaderPreferences(stateResponse.preferences || {}, {persistLocal: true});
         this.progress = Object.assign({percent: 0, sectionId: '', updatedAt: ''}, (stateResponse && stateResponse.progress) || {});
         this.bookmarks = Array.isArray(stateResponse && stateResponse.bookmarks) ? stateResponse.bookmarks : [];
         this.currentSectionId = String(this.progress.sectionId || '').trim();
@@ -5020,11 +5044,71 @@ class Reader {
     }
 
     async persistPreferences() {
+        this.writeStoredReaderPreferences();
+
         const api = this.$root.api;
         if (!api)
             return;
 
         await api.updateReaderPreferences(this.preferences);
+    }
+
+    mergeReaderPreferences(preferences = {}) {
+        if (!preferences || typeof preferences !== 'object')
+            return this.preferences;
+
+        return Object.assign({}, this.preferences, preferences, {
+            einkProfile: Object.assign({}, this.preferences.einkProfile || {}, preferences.einkProfile || {}),
+        });
+    }
+
+    applyReaderPreferences(preferences = {}, options = {}) {
+        this.preferences = this.mergeReaderPreferences(preferences);
+        if (options.persistLocal)
+            this.writeStoredReaderPreferences();
+    }
+
+    applyStoredReaderPreferences() {
+        const preferences = this.readStoredReaderPreferences();
+        if (preferences)
+            this.applyReaderPreferences(preferences);
+    }
+
+    readStoredReaderPreferences() {
+        if (typeof localStorage === 'undefined')
+            return null;
+
+        try {
+            const parsed = JSON.parse(localStorage.getItem(readerPreferencesStorageKey) || '{}');
+            const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
+            const userId = String(this.currentUserId || '').trim();
+            return (userId && byUser[userId]) || parsed.preferences || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    writeStoredReaderPreferences() {
+        if (typeof localStorage === 'undefined')
+            return;
+
+        try {
+            const raw = localStorage.getItem(readerPreferencesStorageKey);
+            const parsed = raw ? JSON.parse(raw) : {};
+            const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
+            const userId = String(this.currentUserId || '').trim();
+            const preferences = _.cloneDeep(this.preferences);
+
+            if (userId)
+                byUser[userId] = preferences;
+
+            localStorage.setItem(readerPreferencesStorageKey, JSON.stringify({
+                preferences,
+                byUser,
+            }));
+        } catch (e) {
+            // ignore storage failures
+        }
     }
 
     notifyReaderProfileWarning() {
