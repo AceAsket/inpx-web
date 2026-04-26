@@ -741,10 +741,12 @@ class DbSearcher {
             }
 
             const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
-            const candidateIds = hideCopies
+            const hasNarrowingFilter = !!String(query.sourceId || '').trim()
+                || this.recStruct.some(f => f.field !== 'del' && !!query[f.field]);
+            const candidateIds = hideCopies && hasNarrowingFilter
                 ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}))
                 : null;
-            const iterator = hideCopies ? `@@id(${db.esc(Array.from(candidateIds))})` : '@all()';
+            const iterator = candidateIds ? `@@id(${db.esc(Array.from(candidateIds))})` : '@all()';
             const rows = await db.select({
                 table: 'book',
                 rawResult: true,
