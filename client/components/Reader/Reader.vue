@@ -1853,6 +1853,7 @@ class Reader {
         return !!(
             this.layoutRefreshing
             && !this.bookPreparing
+            && !(this.isCompactLayout && this.layoutRefreshReason === 'compact-chrome')
             && (!this.pagedBuildInProgress || this.layoutRefreshReason === 'compact-chrome')
         );
     }
@@ -2199,7 +2200,7 @@ class Reader {
     toggleControls() {
         const willOpen = !this.controlsOpen;
         this.controlsOpen = willOpen;
-        if (!willOpen && this.bookUid)
+        if (!willOpen && this.bookUid && !this.isCompactLayout)
             this.$nextTick(() => this.reflowReaderLayout());
     }
 
@@ -2218,7 +2219,7 @@ class Reader {
             this.compactChromeAwaitingCalibration = true;
             this.compactChromeInitialTotalPages = Math.max(1, this.totalPages || 1);
             this.compactChromeLatestTotalPages = this.compactChromeInitialTotalPages;
-            this.beginCompactChromeStatusHold();
+            this.beginCompactChromeStatusHold(2600);
         }
         this.touchCompactChromeBuildActivity();
         this.cancelCompactChromeBuildPendingClear();
@@ -2603,7 +2604,7 @@ class Reader {
         this.compactChromeStatusHoldUntil = 0;
     }
 
-    beginCompactChromeStatusHold(delayMs = 9000) {
+    beginCompactChromeStatusHold(delayMs = 2600) {
         const safeDelay = Math.max(1200, Math.round(Number(delayMs || 0) || 0));
         const nextUntil = Date.now() + safeDelay;
         this.compactChromeStatusHoldUntil = Math.max(this.compactChromeStatusHoldUntil || 0, nextUntil);
@@ -3190,7 +3191,7 @@ class Reader {
     reflowReaderLayout() {
         if (this.isPagedMode && this.isCompactLayout && this.compactChromeHidden) {
             this.compactChromePagedBuildPending = true;
-            this.beginCompactChromeStatusHold(5200);
+            this.beginCompactChromeStatusHold(2600);
             this.touchCompactChromeBuildActivity();
         }
         this.beginLayoutRefresh();
@@ -5183,6 +5184,7 @@ export default vueComponent(Reader);
     border-bottom: 1px solid var(--reader-border);
     background: color-mix(in srgb, var(--reader-surface) 92%, transparent);
     backdrop-filter: blur(10px);
+    overflow: visible;
 }
 
 .reader-toolbar-main {
@@ -6769,6 +6771,7 @@ export default vueComponent(Reader);
     .reader-toolbar {
         padding: 8px 8px 10px;
         gap: 8px;
+        z-index: 40;
     }
 
     .reader-toolbar-main {
@@ -6890,8 +6893,28 @@ export default vueComponent(Reader);
     }
 
     .reader-toolbar-actions {
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        top: calc(100% + 6px);
+        z-index: 45;
+        align-items: stretch;
+        flex-direction: column;
+        justify-content: flex-start;
         gap: 8px;
-        padding-top: 2px;
+        width: auto;
+        max-height: min(62vh, 460px);
+        margin: 0;
+        padding: 10px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        contain: none;
+        border: 1px solid var(--reader-border);
+        border-radius: 18px;
+        background: color-mix(in srgb, var(--reader-surface) 96%, var(--reader-bg) 4%);
+        box-shadow: 0 18px 38px rgba(0, 0, 0, 0.22);
+        backdrop-filter: blur(14px);
     }
 
     .reader-theme-switch,
