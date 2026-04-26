@@ -1774,6 +1774,44 @@ class WebWorker {
         return (bestScore >= 450 ? best : null);
     }
 
+    externalDiscoverySearchQueries(item = {}, limit = 32) {
+        const title = String(item.title || '').trim();
+        if (!title)
+            return [];
+
+        const baseQueries = [
+            {title: `=${title}`, limit},
+            {title: `*${title.substring(0, 80)}`, limit},
+        ];
+        const sources = getEnabledLibrarySources(this.config);
+        if (sources.length <= 1)
+            return baseQueries;
+
+        return sources.flatMap((source) => baseQueries.map(query => Object.assign({}, query, {
+            sourceId: source.id,
+        })));
+    }
+
+    async findExternalDiscoveryCandidates(item = {}, limit = 32) {
+        const found = [];
+        const seen = new Set();
+        for (const query of this.externalDiscoverySearchQueries(item, limit)) {
+            const response = await this.dbSearcher.bookSearch(query);
+            for (const book of (response.found || [])) {
+                const key = String(book._uid || book.id || '').trim();
+                if (key && seen.has(key))
+                    continue;
+                if (key)
+                    seen.add(key);
+                found.push(book);
+            }
+
+            await utils.processLoop();
+        }
+
+        return found;
+    }
+
     async matchExternalItemsToLocalBooks(items = [], limit = 8) {
         const result = [];
         const seenBookUids = new Set();
@@ -1786,19 +1824,8 @@ class WebWorker {
             if (externalKey)
                 seenExternalItems.add(externalKey);
 
-            let response = await this.dbSearcher.bookSearch({
-                title: `=${item.title}`,
-                limit: 16,
-            });
-            let match = this.pickDiscoveryBookMatch(item, response.found || []);
-
-            if (!match) {
-                response = await this.dbSearcher.bookSearch({
-                    title: `*${String(item.title || '').substring(0, 80)}`,
-                    limit: 24,
-                });
-                match = this.pickDiscoveryBookMatch(item, response.found || []);
-            }
+            const candidates = await this.findExternalDiscoveryCandidates(item, 32);
+            const match = this.pickDiscoveryBookMatch(item, candidates);
 
             if (match && !seenBookUids.has(match._uid)) {
                 seenBookUids.add(match._uid);
@@ -2045,19 +2072,8 @@ class WebWorker {
             if (externalKey)
                 seenExternalItems.add(externalKey);
 
-            let response = await this.dbSearcher.bookSearch({
-                title: `=${item.title}`,
-                limit: 16,
-            });
-            let match = this.pickDiscoveryBookMatchV2(item, response.found || []);
-
-            if (!match) {
-                response = await this.dbSearcher.bookSearch({
-                    title: `*${String(item.title || '').substring(0, 80)}`,
-                    limit: 24,
-                });
-                match = this.pickDiscoveryBookMatchV2(item, response.found || []);
-            }
+            const candidates = await this.findExternalDiscoveryCandidates(item, 32);
+            const match = this.pickDiscoveryBookMatchV2(item, candidates);
 
             if (match && match.book) {
                 if (!seenBookUids.has(match.book._uid)) {
