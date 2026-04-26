@@ -507,18 +507,38 @@ class DbSearcher {
         return tableIds;
     }
 
+    normalizeCopyKeyPart(value) {
+        return String(value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, ' ');
+    }
+
+    copyKey(book = {}) {
+        const title = this.normalizeCopyKeyPart(book.title);
+        const author = this.normalizeCopyKeyPart(book.author)
+            .split(/[;,\n]/)[0]
+            .split(/\s+/)[0];
+
+        if (title && author)
+            return `copy:${author}|${title}`;
+        if (title)
+            return `copy-title:${title}`;
+
+        return [
+            'fallback',
+            book.author || '',
+            book.series || '',
+            String(book.serno || 0),
+            book.title || '',
+        ].map(value => this.normalizeCopyKeyPart(value)).join('|');
+    }
+
     filterRestoredRows(rows, query = {}) {
         const sourceId = String(query.sourceId || '').trim();
         const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
         if (!sourceId && !hideCopies)
             return rows;
-
-        const makeCopyKey = (book = {}) => [
-            book.author || '',
-            book.series || '',
-            String(book.serno || 0),
-            book.title || '',
-        ].map(value => String(value || '').trim().toLowerCase()).join('|');
 
         return rows.map((row) => {
             let books = Array.isArray(row.books) ? row.books : [];
@@ -528,7 +548,7 @@ class DbSearcher {
             if (hideCopies) {
                 const deduped = new Map();
                 for (const book of books) {
-                    const key = makeCopyKey(book);
+                    const key = this.copyKey(book);
                     if (!deduped.has(key))
                         deduped.set(key, book);
                 }
@@ -721,6 +741,10 @@ class DbSearcher {
             }
 
             const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
+            const candidateIds = hideCopies
+                ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}))
+                : null;
+            const iterator = hideCopies ? `@@id(${db.esc(Array.from(candidateIds))})` : '@all()';
             const rows = await db.select({
                 table: 'book',
                 rawResult: true,
@@ -732,21 +756,21 @@ class DbSearcher {
                         return ${checks.join(' && ')};
                     };
 
-                    const normalizeKeyPart = (value) => String(value || '').trim().toLowerCase();
+                    const normalizeKeyPart = (value) => String(value || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+
+                    const authorKey = (value) => normalizeKeyPart(value).split(/[;,\\n]/)[0].split(/\\s+/)[0] || '';
 
                     const dedupeKey = (row) => {
                         const sourceKey = hideCopies ? '' : (row.sourceId || '');
 
                         if (hideCopies) {
-                            const metaParts = [
-                                row.author || '',
-                                row.series || '',
-                                String(row.serno || 0),
-                                row.title || '',
-                            ].map(normalizeKeyPart);
+                            const titleKey = normalizeKeyPart(row.title);
+                            const mainAuthorKey = authorKey(row.author);
 
-                            if (metaParts[0] || metaParts[3])
-                                return 'meta:' + metaParts.join('|');
+                            if (titleKey && mainAuthorKey)
+                                return 'copy:' + mainAuthorKey + '|' + titleKey;
+                            if (titleKey)
+                                return 'copy-title:' + titleKey;
                         }
 
                         if (row.libid)
@@ -800,7 +824,7 @@ class DbSearcher {
                     };
 
                     const deduped = new Map();
-                    for (const id of @all()) {
+                    for (const id of ${iterator}) {
                         const row = @unsafeRow(id);
                         if (!checkBook(row))
                             continue;
@@ -929,7 +953,7 @@ class DbSearcher {
         }
     }
 
-    async getAuthorBookList(authorId, author) {
+    async getAuthorBookList(authorId, author, query = {}) {
         if (this.closed)
             throw new Error('DbSearcher closed');
 
@@ -957,7 +981,7 @@ class DbSearcher {
             }
 
             //выборка книг автора по authorId
-            const rows = await this.restoreBooks('author', [authorId]);
+            const rows = await this.restoreBooks('author', [authorId], query);
 
             let authorName = '';
             let books = [];
@@ -973,7 +997,7 @@ class DbSearcher {
         }
     }
 
-    async getAuthorSeriesList(authorId) {
+    async getAuthorSeriesList(authorId, query = {}) {
         if (this.closed)
             throw new Error('DbSearcher closed');
 
@@ -986,7 +1010,7 @@ class DbSearcher {
             const db = this.db;
 
             //выборка книг автора по authorId
-            const bookList = await this.getAuthorBookList(authorId);
+            const bookList = await this.getAuthorBookList(authorId, undefined, query);
             const books = bookList.books;
             const seriesSet = new Set();
             for (const book of books) {
@@ -1019,7 +1043,7 @@ class DbSearcher {
         }
     }
 
-    async getSeriesBookList(series) {
+    async getSeriesBookList(series, query = {}) {
         if (this.closed)
             throw new Error('DbSearcher closed');
 
@@ -1043,7 +1067,7 @@ class DbSearcher {
             let books = [];
             if (rows.length && rows[0].rawResult.length) {
                 //выборка книг серии
-                const bookRows = await this.restoreBooks('series', [rows[0].rawResult[0]])
+                const bookRows = await this.restoreBooks('series', [rows[0].rawResult[0]], query)
 
                 if (bookRows.length)
                     books = bookRows[0].books;

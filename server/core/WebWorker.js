@@ -783,24 +783,24 @@ class WebWorker {
         return await this.dbSearcher.opdsQuery(from, query);
     }
 
-    async getAuthorBookList(authorId, author) {
+    async getAuthorBookList(authorId, author, query = {}) {
         this.checkMyState();
 
-        const result = await this.dbSearcher.getAuthorBookList(authorId, author);
+        const result = await this.dbSearcher.getAuthorBookList(authorId, author, query);
         await this.applyMetadataOverridesToSearchResult(result);
         return result;
     }
 
-    async getAuthorSeriesList(authorId) {
+    async getAuthorSeriesList(authorId, query = {}) {
         this.checkMyState();
 
-        return await this.dbSearcher.getAuthorSeriesList(authorId);
+        return await this.dbSearcher.getAuthorSeriesList(authorId, query);
     }
 
-    async getSeriesBookList(series) {
+    async getSeriesBookList(series, query = {}) {
         this.checkMyState();
 
-        const result = await this.dbSearcher.getSeriesBookList(series);
+        const result = await this.dbSearcher.getSeriesBookList(series, query);
         await this.applyMetadataOverridesToSearchResult(result);
         return result;
     }

@@ -174,18 +174,6 @@
                                     {{ search.lang }}
                                 </q-tooltip>
                             </q-input>
-                            <div class="q-mx-xs" />
-                            <DivBtn
-                                class="text-grey-8 bg-yellow-1 q-mt-xs" :size="30" :icon-size="24" round
-                                icon="la la-level-up-alt"
-                                @click.stop.prevent="cloneSearch"
-                            >
-                                <template #tooltip>
-                                    <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
-                                        Клонировать поиск
-                                    </q-tooltip>
-                                </template>
-                            </DivBtn>
                         </div>
                         <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
@@ -361,19 +349,6 @@
                                 <template #tooltip>
                                     <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                         В раздел "Названия" с переносом значения title={{ extSearch.title }}
-                                    </q-tooltip>
-                                </template>
-                            </DivBtn>
-
-                            <div class="q-mx-xs" />
-                            <DivBtn
-                                class="text-grey-8 bg-yellow-1 q-mt-xs" :size="30" :icon-size="24" round
-                                icon="la la-level-up-alt"
-                                @click.stop.prevent="cloneSearch"
-                            >
-                                <template #tooltip>
-                                    <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
-                                        Клонировать поиск
                                     </q-tooltip>
                                 </template>
                             </DivBtn>
@@ -2342,10 +2317,6 @@ class Search {
             }
             this.selectDateDialogVisible = true
         }
-    }
-
-    cloneSearch() {
-        window.open(window.location.href, '_blank');
     }
 
     extToList(list) {

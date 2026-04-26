@@ -405,13 +405,13 @@ class WebSocketController {
     }
 
     async getAuthorBookList(req, ws) {
-        const result = await this.webWorker.getAuthorBookList(req.authorId);
+        const result = await this.webWorker.getAuthorBookList(req.authorId, undefined, req.query);
 
         this.send(result, req, ws);
     }
 
     async getAuthorSeriesList(req, ws) {
-        const result = await this.webWorker.getAuthorSeriesList(req.authorId);
+        const result = await this.webWorker.getAuthorSeriesList(req.authorId, req.query);
 
         this.send(result, req, ws);
     }
@@ -423,7 +423,7 @@ class WebSocketController {
     }
 
     async getSeriesBookList(req, ws) {
-        const result = await this.webWorker.getSeriesBookList(req.series);
+        const result = await this.webWorker.getSeriesBookList(req.series, req.query);
 
         this.send(result, req, ws);
     }

@@ -125,6 +125,14 @@ export default class BaseList {
         return this.currentSearch.librate || '';
     }
 
+    get sourceFilterCacheSuffix() {
+        const query = this.getQuery();
+        return [
+            query.sourceId ? `source=${query.sourceId}` : '',
+            query.hideCopies ? 'hideCopies=1' : '',
+        ].filter(Boolean).join('|');
+    }
+
     scrollToTop() {
         this.$emit('listEvent', {action: 'scrollToTop'});
     }
@@ -441,16 +449,16 @@ export default class BaseList {
             let result;
 
             if (this.abCacheEnabled) {
-                const key = `author-${authorId}-${this.list.inpxHash}`;
+                const key = `author-${authorId}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
                     result = JSON.parse(data);
                 } else {
-                    result = await this.api.getAuthorBookList(authorId);
+                    result = await this.api.getAuthorBookList(authorId, this.getQuery());
                     await authorBooksStorage.setData(key, JSON.stringify(result));
                 }
             } else {
-                result = await this.api.getAuthorBookList(authorId);
+                result = await this.api.getAuthorBookList(authorId, this.getQuery());
             }
 
             return result.books;
@@ -464,16 +472,16 @@ export default class BaseList {
             let result;
 
             if (this.abCacheEnabled) {
-                const key = `author-${authorId}-series-${this.list.inpxHash}`;
+                const key = `author-${authorId}-series-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
                     result = JSON.parse(data);
                 } else {
-                    result = await this.api.getAuthorSeriesList(authorId);
+                    result = await this.api.getAuthorSeriesList(authorId, this.getQuery());
                     await authorBooksStorage.setData(key, JSON.stringify(result));
                 }
             } else {
-                result = await this.api.getAuthorSeriesList(authorId);
+                result = await this.api.getAuthorSeriesList(authorId, this.getQuery());
             }
 
             return result.series;
@@ -487,16 +495,16 @@ export default class BaseList {
             let result;
 
             if (this.abCacheEnabled) {
-                const key = `series-${series}-${this.list.inpxHash}`;
+                const key = `series-${series}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
                     result = JSON.parse(data);
                 } else {
-                    result = await this.api.getSeriesBookList(series);
+                    result = await this.api.getSeriesBookList(series, this.getQuery());
                     await authorBooksStorage.setData(key, JSON.stringify(result));
                 }
             } else {
-                result = await this.api.getSeriesBookList(series);
+                result = await this.api.getSeriesBookList(series, this.getQuery());
             }
 
             return result.books;

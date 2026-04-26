@@ -358,20 +358,20 @@ class Api {
         return await this.request({action: 'bookSearch', query}, 30);
     }
 
-    async getAuthorBookList(authorId) {
-        return await this.request({action: 'get-author-book-list', authorId});
+    async getAuthorBookList(authorId, query = {}) {
+        return await this.request({action: 'get-author-book-list', authorId, query});
     }
 
-    async getAuthorSeriesList(authorId) {
-        return await this.request({action: 'get-author-series-list', authorId});
+    async getAuthorSeriesList(authorId, query = {}) {
+        return await this.request({action: 'get-author-series-list', authorId, query});
     }
 
     async getAuthorInfo(authorId, author) {
         return await this.request({action: 'get-author-info', authorId, author}, 120);
     }
 
-    async getSeriesBookList(series) {
-        return await this.request({action: 'get-series-book-list', series});
+    async getSeriesBookList(series, query = {}) {
+        return await this.request({action: 'get-series-book-list', series, query});
     }
 
     async getGenreTree() {
