@@ -131,14 +131,14 @@ class App {
         if (!manifest)
             return;
 
-        manifest.setAttribute('href', this.isReaderRoute ? 'reader.webmanifest?v=reader-icon-3' : 'manifest.webmanifest?v=catalog-icon-3');
+        manifest.setAttribute('href', this.isReaderRoute ? 'reader.webmanifest?v=reader-icon-4' : 'manifest.webmanifest?v=catalog-icon-4');
         const appleTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
         if (appleTitle)
             appleTitle.setAttribute('content', this.isReaderRoute ? 'INPX Reader' : 'INPX Web');
 
         const appleIcon = document.querySelector('link[rel="apple-touch-icon"]');
         if (appleIcon)
-            appleIcon.setAttribute('href', this.isReaderRoute ? 'reader-icon-192.png?v=reader-icon-3' : 'pwa-icon-192.png?v=catalog-icon-3');
+            appleIcon.setAttribute('href', this.isReaderRoute ? 'reader-icon-192.png?v=reader-icon-4' : 'pwa-icon-192.png?v=catalog-icon-4');
 
         let favicon = document.querySelector('link[rel="icon"]');
         if (!favicon) {
@@ -147,7 +147,7 @@ class App {
             document.head.appendChild(favicon);
         }
         favicon.setAttribute('type', 'image/x-icon');
-        favicon.setAttribute('href', this.isReaderRoute ? 'reader-favicon.ico?v=reader-icon-3' : 'favicon.ico?v=catalog-icon-3');
+        favicon.setAttribute('href', this.isReaderRoute ? 'reader-favicon.ico?v=reader-icon-4' : 'favicon.ico?v=catalog-icon-4');
     }
 
     setAppTitle(title) {

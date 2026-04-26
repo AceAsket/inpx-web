@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect x="44" y="24" width="424" height="464" rx="50" fill="#f7fffc"/>
-  <rect x="84" y="72" width="344" height="84" rx="20" fill="#c8f5ee"/>
-  <rect x="84" y="214" width="344" height="84" rx="20" fill="#c8f5ee"/>
-  <rect x="84" y="356" width="276" height="84" rx="20" fill="#c8f5ee"/>
-  <rect x="124" y="104" width="164" height="26" rx="13" fill="#149484"/>
-  <rect x="124" y="246" width="204" height="26" rx="13" fill="#149484"/>
-  <rect x="124" y="388" width="132" height="26" rx="13" fill="#149484"/>
-  <path d="M322 112l36 36 64-82 22 17-85 109-58-58z" fill="#149484"/>
-  <rect x="364" y="246" width="50" height="26" rx="13" fill="#149484"/>
-  <rect x="294" y="388" width="50" height="26" rx="13" fill="#149484"/>
+  <rect x="18" y="8" width="476" height="496" rx="52" fill="#f7fffc"/>
+  <rect x="62" y="58" width="388" height="92" rx="20" fill="#c8f5ee"/>
+  <rect x="62" y="212" width="388" height="92" rx="20" fill="#c8f5ee"/>
+  <rect x="62" y="366" width="322" height="92" rx="20" fill="#c8f5ee"/>
+  <rect x="108" y="94" width="184" height="28" rx="14" fill="#149484"/>
+  <rect x="108" y="248" width="230" height="28" rx="14" fill="#149484"/>
+  <rect x="108" y="402" width="150" height="28" rx="14" fill="#149484"/>
+  <path d="M326 103l43 43 79-100 25 20-102 130-68-68z" fill="#149484"/>
+  <rect x="360" y="248" width="62" height="28" rx="14" fill="#149484"/>
+  <rect x="300" y="402" width="62" height="28" rx="14" fill="#149484"/>
 </svg>
