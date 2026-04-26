@@ -3764,44 +3764,104 @@ class WebWorker {
 
         const result = {
             exportedAt: new Date().toISOString(),
-            settings: _.pick(data, [
-                'libDir',
-                'inpx',
-                'librarySources',
-                'inpxFilterFile',
-                'extendedSearch',
-                'bookReadLink',
-                'loggingEnabled',
-                'logServerStats',
-                'logQueries',
-                'dbCacheSize',
-                'queryCacheEnabled',
-                'queryCacheMemSize',
-                'queryCacheDiskSize',
-                'cacheCleanInterval',
-                'adminEventLogEnabled',
-                'adminEventLogSize',
-                'inpxCheckInterval',
-                'lowMemoryMode',
-                'fullOptimization',
-                'server',
-                'opds',
-                'telegramShareEnabled',
-                'telegramChatId',
-                'telegramCaptionTemplate',
-                'emailShareEnabled',
-                'smtpHost',
-                'smtpPort',
-                'smtpSecure',
-                'smtpUser',
-                'emailFrom',
-                'emailTo',
-                'discovery',
-                'uiDefaults',
-            ]),
+            settings: _.pick(data, this.adminSettingsExportKeys()),
         };
         result.settings.opds = opdsSettings;
         return result;
+    }
+
+    adminSettingsExportKeys() {
+        return [
+            'libDir',
+            'inpx',
+            'librarySources',
+            'inpxFilterFile',
+            'extendedSearch',
+            'bookReadLink',
+            'loggingEnabled',
+            'logServerStats',
+            'logQueries',
+            'loginRateLimitEnabled',
+            'loginRateLimitWindowMs',
+            'loginRateLimitMaxAttempts',
+            'requireAuth',
+            'authMode',
+            'trustProxy',
+            'proxyAuthHeader',
+            'trustedProxyCidrs',
+            'authExemptHealth',
+            'metricsEnabled',
+            'metricsPath',
+            'metricsExemptAuth',
+            'dbCacheSize',
+            'maxFilesDirSize',
+            'coverCacheSize',
+            'queryCacheEnabled',
+            'queryCacheMemSize',
+            'queryCacheDiskSize',
+            'cacheCleanInterval',
+            'adminEventLogEnabled',
+            'adminEventLogSize',
+            'inpxCheckInterval',
+            'lowMemoryMode',
+            'fullOptimization',
+            'server',
+            'opds',
+            'telegramShareEnabled',
+            'telegramChatId',
+            'telegramCaptionTemplate',
+            'emailShareEnabled',
+            'smtpHost',
+            'smtpPort',
+            'smtpSecure',
+            'smtpUser',
+            'emailFrom',
+            'emailTo',
+            'discovery',
+            'uiDefaults',
+        ];
+    }
+
+    normalizeImportedAdminSettings(payload = {}) {
+        const source = (payload && payload.settings && typeof payload.settings === 'object')
+            ? payload.settings
+            : payload;
+        if (!source || typeof source !== 'object' || Array.isArray(source))
+            throw new Error('Файл настроек имеет неверный формат');
+
+        const patch = _.pick(_.cloneDeep(source), this.adminSettingsExportKeys());
+        if (!Object.keys(patch).length)
+            throw new Error('В файле не найдены настройки для восстановления');
+
+        if (patch.opds && typeof patch.opds === 'object') {
+            const currentOpds = this.config.opds || {};
+            const opds = Object.assign({}, currentOpds, patch.opds);
+            if (utils.hasProp(opds, 'passwordSet'))
+                delete opds.passwordSet;
+            if (!utils.hasProp(patch.opds, 'password'))
+                opds.password = currentOpds.password || '';
+            patch.opds = opds;
+        }
+
+        if (utils.hasProp(patch, 'librarySources') && !Array.isArray(patch.librarySources))
+            throw new Error('librarySources должен быть массивом');
+
+        return patch;
+    }
+
+    async importAdminSettings(userId = '', profileAccessToken = '', payload = {}) {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const patch = this.normalizeImportedAdminSettings(payload);
+        await this.saveRuntimeConfigPatch(patch);
+        this.addAdminEvent('info', 'settings', 'Восстановлены настройки администратора из файла');
+
+        return {
+            success: true,
+            importedKeys: Object.keys(patch),
+            settings: (await this.exportAdminSettings(userId, profileAccessToken)).settings,
+        };
     }
 
     async addBackupPath(zipFile, sourcePath, zipPath) {

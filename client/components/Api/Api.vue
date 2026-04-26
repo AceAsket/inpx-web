@@ -446,6 +446,10 @@ class Api {
         return await this.request({action: 'export-admin-settings'}, 120);
     }
 
+    async importAdminSettings(data) {
+        return await this.request({action: 'import-admin-settings', data}, 120);
+    }
+
     async createAdminBackup() {
         return await this.request({action: 'create-admin-backup'}, 300);
     }

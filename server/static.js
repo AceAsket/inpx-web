@@ -410,6 +410,23 @@ module.exports = (app, config) => {
     });
 
     //загрузка или восстановление файлов в /public-files, при необходимости
+    app.get(`${config.bookPathStatic}/backup/:fileName`, async(req, res) => {
+        const fileName = path.basename(String(req.params.fileName || '').trim());
+        if (!fileName || path.extname(fileName).toLowerCase() !== '.zip') {
+            res.sendStatus(404);
+            return;
+        }
+
+        const backupFile = path.join(config.bookDir, 'backup', fileName);
+        if (!await fs.pathExists(backupFile)) {
+            res.sendStatus(404);
+            return;
+        }
+
+        res.set('Cache-Control', 'no-store');
+        res.download(backupFile, fileName);
+    });
+
     app.use([`${config.bookPathStatic}/:fileName/:fileType/:downloadName`, `${config.bookPathStatic}/:fileName/:fileType`, `${config.bookPathStatic}/:fileName`], async(req, res, next) => {
         if (req.method !== 'GET' && req.method !== 'HEAD') {
             return next();

@@ -107,6 +107,16 @@
                     <q-btn outline color="primary" dense no-caps icon="la la-file-export" :loading="settingsExportLoading" @click="exportSettings">
                         {{ backupUi.settings }}
                     </q-btn>
+                    <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="settingsImportLoading" @click="openSettingsImport">
+                        Восстановить настройки
+                    </q-btn>
+                    <input
+                        ref="settingsImportInput"
+                        type="file"
+                        accept="application/json,.json"
+                        style="display: none"
+                        @change="onSettingsImportSelected"
+                    />
                 </div>
             </div>
 
@@ -532,6 +542,7 @@ class SettingsDialog {
     telegramTestLoading = false;
     backupLoading = false;
     settingsExportLoading = false;
+    settingsImportLoading = false;
     opdsSaveLoading = false;
     smtpPassVisible = false;
     telegramTokenVisible = false;
@@ -1327,6 +1338,37 @@ class SettingsDialog {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
             this.settingsExportLoading = false;
+        }
+    }
+
+    openSettingsImport() {
+        const input = this.$refs.settingsImportInput;
+        if (!input)
+            return;
+
+        input.value = '';
+        input.click();
+    }
+
+    async onSettingsImportSelected(event) {
+        const input = event && event.target;
+        const file = input && input.files && input.files[0];
+        if (!file)
+            return;
+
+        this.settingsImportLoading = true;
+        try {
+            const data = JSON.parse(await file.text());
+            await this.api.importAdminSettings(data);
+            await this.api.updateConfig();
+            this.loadSettings();
+            this.$root.notify.success('Настройки восстановлены');
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
+        } finally {
+            this.settingsImportLoading = false;
+            if (input)
+                input.value = '';
         }
     }
 

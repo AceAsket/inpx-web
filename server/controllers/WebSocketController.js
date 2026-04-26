@@ -149,6 +149,8 @@ class WebSocketController {
                     await this.adminReindex(req, ws); break;
                 case 'export-admin-settings':
                     await this.exportAdminSettings(req, ws); break;
+                case 'import-admin-settings':
+                    await this.importAdminSettings(req, ws); break;
                 case 'create-admin-backup':
                     await this.createAdminBackup(req, ws); break;
                 case 'update-book-metadata':
@@ -263,6 +265,7 @@ class WebSocketController {
             'admin-clean-broken-covers',
             'admin-rebuild-cover',
             'admin-reindex',
+            'import-admin-settings',
             'update-reader-progress',
             'delete-reader-progress',
             'update-reader-preferences',
@@ -776,6 +779,11 @@ class WebSocketController {
 
     async exportAdminSettings(req, ws) {
         const result = await this.webWorker.exportAdminSettings(req.userId, req.profileAccessToken);
+        this.send(result, req, ws);
+    }
+
+    async importAdminSettings(req, ws) {
+        const result = await this.webWorker.importAdminSettings(req.userId, req.profileAccessToken, req.data);
         this.send(result, req, ws);
     }
 
