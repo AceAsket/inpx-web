@@ -70,29 +70,17 @@
                                     </q-select>
 
                                     <div
+                                        v-if="showProfileStatusChip"
                                         class="profile-status-chip"
-                                        :class="profileStatusClass"
-                                        @click.stop.prevent="currentProfileNeedsLogin ? promptCurrentProfileLogin() : openUserProfilesDialog()"
+                                        :class="[profileStatusClass, {'profile-status-chip--icon-only': currentAnonymousProfile}]"
+                                        @click.stop.prevent="handleProfileStatusClick"
                                     >
                                         <q-icon :name="profileStatusIcon" />
-                                        <span>{{ profileStatusLabel }}</span>
-                                    </div>
-
-                                    <q-btn
-                                        v-if="currentProfileCanLogin"
-                                        class="q-ml-xs profile-login-btn"
-                                        dense
-                                        no-caps
-                                        unelevated
-                                        color="primary"
-                                        icon="la la-sign-in-alt"
-                                        label="Войти"
-                                        @click.stop.prevent="promptCurrentProfileLogin"
-                                    >
-                                        <q-tooltip :delay="600" anchor="bottom middle" content-style="font-size: 80%">
-                                            Войти в выбранный профиль
+                                        <span v-if="!currentAnonymousProfile">{{ profileStatusLabel }}</span>
+                                        <q-tooltip v-if="currentAnonymousProfile" :delay="800" anchor="bottom middle" content-style="font-size: 80%">
+                                            Войти в профиль
                                         </q-tooltip>
-                                    </q-btn>
+                                    </div>
 
                                     <DivBtn
                                         class="q-ml-xs user-profiles-btn"
@@ -1011,10 +999,13 @@ class Search {
         return !!(current && current.requiresLogin && !this.config.profileAuthorized);
     }
 
-    get currentProfileCanLogin() {
+    get currentAnonymousProfile() {
         const current = this.currentSelectedProfile;
-        const wasUsed = !!(this.api && typeof(this.api.hasStoredProfileLogin) === 'function' && this.api.hasStoredProfileLogin(current && current.id));
-        return !!(current && current.login && !this.config.profileAuthorized && !wasUsed);
+        return !!(current && current.anonymousProfile);
+    }
+
+    get showProfileStatusChip() {
+        return !!(this.currentAnonymousProfile || this.currentProfileNeedsLogin);
     }
 
     get profileStatusLabel() {
@@ -1023,6 +1014,8 @@ class Search {
             return 'Профиль не выбран';
 
         const name = current.name || 'Профиль';
+        if (this.currentAnonymousProfile)
+            return name;
         if (this.currentProfileNeedsLogin)
             return `${name}: нужен вход`;
         if (this.config.profileAuthorized)
@@ -1033,6 +1026,8 @@ class Search {
     get profileStatusClass() {
         if (!this.currentSelectedProfile)
             return 'profile-status-chip--missing';
+        if (this.currentAnonymousProfile)
+            return 'profile-status-chip--missing';
         if (this.currentProfileNeedsLogin)
             return 'profile-status-chip--locked';
         if (this.config.profileAuthorized)
@@ -1042,6 +1037,8 @@ class Search {
 
     get profileStatusIcon() {
         if (!this.currentSelectedProfile)
+            return 'la la-user-slash';
+        if (this.currentAnonymousProfile)
             return 'la la-user-slash';
         if (this.currentProfileNeedsLogin)
             return 'la la-user-lock';
@@ -1958,15 +1955,24 @@ class Search {
 
     async promptCurrentProfileLogin() {
         const target = this.currentSelectedProfile;
-        if (!(target && target.login && !this.config.profileAuthorized))
+        if (!target || this.config.profileAuthorized)
             return;
 
         try {
-            await this.api.showProfileLoginDialog(target.login || '');
+            await this.api.showProfileLoginDialog(target.anonymousProfile ? '' : target.login || '');
         } catch (e) {
             if (e.message !== 'Вход в профиль отменён')
                 this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
+    }
+
+    async handleProfileStatusClick() {
+        if (this.currentAnonymousProfile || this.currentProfileNeedsLogin) {
+            await this.promptCurrentProfileLogin();
+            return;
+        }
+
+        await this.openUserProfilesDialog();
     }
 
     toggleMobileFilters() {
@@ -2393,11 +2399,6 @@ export default vueComponent(Search);
     color: #a66c00;
 }
 
-.profile-login-btn {
-    flex: 0 0 auto;
-    min-height: 32px;
-}
-
 .profile-status-chip {
     display: inline-flex;
     align-items: center;
@@ -2420,6 +2421,14 @@ export default vueComponent(Search);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.profile-status-chip--icon-only {
+    justify-content: center;
+    width: 34px;
+    min-width: 34px;
+    max-width: 34px;
+    padding: 5px;
 }
 
 .profile-status-chip--authorized {

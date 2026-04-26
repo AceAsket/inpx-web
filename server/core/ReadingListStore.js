@@ -275,7 +275,7 @@ class ReadingListStore {
         const now = this.nowIso();
         return {
             id: 'default',
-            name: 'Основной',
+            name: 'Без профиля',
             login: '',
             passwordHash: '',
             emailTo: '',

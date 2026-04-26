@@ -1,10 +1,13 @@
-const CACHE_NAME = 'inpx-web-shell-v2';
+const BUILD_ID = '__INPX_WEB_BUILD_ID__';
+const CACHE_NAME = `inpx-web-shell-${BUILD_ID}`;
 const BASE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, '');
 const withBase = (path) => `${BASE_PATH}${path}`;
 const APP_SHELL = [
   '/index.html',
   '/pwa-icon.svg',
   '/reader-icon.svg',
+  '/reader-icon-192.png',
+  '/reader-icon-512.png',
   '/favicon.ico'
 ].map(withBase);
 

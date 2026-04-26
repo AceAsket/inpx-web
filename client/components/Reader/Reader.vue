@@ -48,7 +48,7 @@
                     type="button"
                     class="reader-profile-chip"
                     :class="readerProfileChipClass"
-                    @click="readerProfileCanLogin ? promptReaderProfileLogin() : null"
+                    @click="handleReaderProfileChipClick"
                 >
                     <q-icon :name="readerProfileChipIcon" />
                     <span>{{ readerProfileChipLabel }}</span>
@@ -255,7 +255,7 @@
                             <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'eink'}" @click="setTheme('eink')">{{ uiText.themeEink }}</q-btn>
                         </div>
                         <q-btn
-                            v-if="readerHomeCanLogin"
+                            v-if="readerHomeCanLogin && !isCompactLayout"
                             color="primary"
                             unelevated
                             no-caps
@@ -546,7 +546,11 @@
                 <span v-else>{{ compactStatusBarText }}</span>
             </div>
 
-            <div v-if="!compactChromeHidden" class="reader-mobile-bar">
+            <div
+                v-if="!compactChromeHidden"
+                class="reader-mobile-bar"
+                :class="{'reader-mobile-bar--with-contents': hasContents}"
+            >
                 <q-btn
                     flat
                     no-caps
@@ -555,15 +559,6 @@
                     @click="openPlacesDialog(defaultPlacesTab)"
                 >
                     {{ uiText.myPlaces }}
-                </q-btn>
-                <q-btn
-                    flat
-                    no-caps
-                    :icon="isBookMarkedRead ? 'la la-undo' : 'la la-check-circle'"
-                    class="reader-mobile-btn"
-                    @click="toggleCurrentBookRead"
-                >
-                    {{ isBookMarkedRead ? uiText.unreadShort : uiText.readShort }}
                 </q-btn>
                 <q-btn
                     v-if="hasContents"
@@ -1264,8 +1259,13 @@ class Reader {
         return !!(this.currentUserId && current && current.requiresLogin && !this.config.profileAuthorized);
     }
 
+    get readerAnonymousProfile() {
+        const current = this.currentSelectedProfile;
+        return !!(current && current.anonymousProfile);
+    }
+
     get readerProfileMissing() {
-        return !!(!this.currentUserId && Array.isArray(this.config.userProfiles) && this.config.userProfiles.length);
+        return !!((!this.currentUserId || this.readerAnonymousProfile) && Array.isArray(this.config.userProfiles) && this.config.userProfiles.length);
     }
 
     get readerProfileWarningVisible() {
@@ -1273,25 +1273,32 @@ class Reader {
     }
 
     get readerProfileCanLogin() {
-        const current = this.currentSelectedProfile;
-        return !!(this.readerProfileNeedsLogin && current && current.login);
+        return !!(this.readerProfileNeedsLogin || this.readerAnonymousProfile || (!this.currentUserId && Array.isArray(this.config.userProfiles) && this.config.userProfiles.length));
     }
 
     get readerProfileChipLabel() {
         const current = this.currentSelectedProfile;
         if (!current)
             return this.uiText.profileNotSelected;
-        if (this.readerProfileNeedsLogin)
+        const profileName = current.name || this.uiText.profile;
+        if (this.isCompactLayout) {
+            if (this.readerProfileCanLogin)
+                return this.uiText.profileLoginAction;
+            return profileName;
+        }
+        if (this.readerAnonymousProfile)
+            return `${profileName}: ${this.uiText.profileLoginAction}`;
+        if (this.readerProfileCanLogin)
             return `${current.name || this.uiText.profile}: ${this.uiText.profileNeedsLoginShort}`;
         if (this.config.profileAuthorized)
-            return `${current.name || this.uiText.profile}: ${this.uiText.profileLoggedInShort}`;
+            return profileName;
         return `${current.name || this.uiText.profile}: ${this.uiText.profileOpenShort}`;
     }
 
     get readerProfileChipClass() {
         if (!this.currentSelectedProfile)
             return 'reader-profile-chip--missing';
-        if (this.readerProfileNeedsLogin)
+        if (this.readerProfileCanLogin)
             return 'reader-profile-chip--locked';
         if (this.config.profileAuthorized)
             return 'reader-profile-chip--authorized';
@@ -1301,7 +1308,7 @@ class Reader {
     get readerProfileChipIcon() {
         if (!this.currentSelectedProfile)
             return 'la la-user-slash';
-        if (this.readerProfileNeedsLogin)
+        if (this.readerProfileCanLogin)
             return 'la la-user-lock';
         if (this.config.profileAuthorized)
             return 'la la-user-check';
@@ -1309,7 +1316,7 @@ class Reader {
     }
 
     get readerHomeCanLogin() {
-        return !!(this.readerProfileCanLogin || (!this.currentUserId && Array.isArray(this.config.userProfiles) && this.config.userProfiles.length));
+        return !!this.readerProfileCanLogin;
     }
 
     get readerProfileWarningKey() {
@@ -1349,12 +1356,14 @@ class Reader {
 
     get readerHomeAuthorized() {
         const current = this.currentSelectedProfile;
-        return !!(current && (!current.requiresLogin || this.config.profileAuthorized));
+        return !!(current && !this.readerAnonymousProfile && (!current.requiresLogin || this.config.profileAuthorized));
     }
 
     get readerHomeSubtitle() {
         const current = this.currentSelectedProfile;
         if (!current)
+            return this.uiText.profileSelectReaderHint;
+        if (this.readerAnonymousProfile)
             return this.uiText.profileSelectReaderHint;
         if (this.readerProfileNeedsLogin)
             return this.uiText.profileLoginReaderHint;
@@ -1362,7 +1371,7 @@ class Reader {
     }
 
     get readerHomeEmptyText() {
-        if (!this.currentUserId)
+        if (!this.currentUserId || this.readerAnonymousProfile)
             return this.uiText.profileSelectReaderHint;
         if (this.readerProfileNeedsLogin)
             return this.uiText.profileLoginReaderHint;
@@ -2186,7 +2195,10 @@ class Reader {
     }
 
     toggleControls() {
-        this.controlsOpen = !this.controlsOpen;
+        const willOpen = !this.controlsOpen;
+        this.controlsOpen = willOpen;
+        if (!willOpen && this.bookUid)
+            this.$nextTick(() => this.reflowReaderLayout());
     }
 
     toggleContentsDialog() {
@@ -2479,6 +2491,8 @@ class Reader {
             return;
 
         this.resizeObserver = new ResizeObserver(() => {
+            if (this.controlsOpen)
+                return;
             this.scheduleViewportRefresh({calibrate: false});
         });
         this.resizeObserver.observe(this.$refs.scroller);
@@ -5031,7 +5045,7 @@ class Reader {
             return false;
 
         try {
-            await api.showProfileLoginDialog(target && !this.config.profileAuthorized ? target.login || '' : '');
+            await api.showProfileLoginDialog(target && !this.config.profileAuthorized && !target.anonymousProfile ? target.login || '' : '');
             this.profileWarningNotifiedKey = '';
             if (!this.bookUid && !this.isStandaloneMode)
                 await this.loadReaderHome();
@@ -5042,6 +5056,11 @@ class Reader {
                 this.$root.stdDialog.alert(message, this.uiText.error);
             return false;
         }
+    }
+
+    async handleReaderProfileChipClick() {
+        if (this.readerProfileCanLogin)
+            await this.promptReaderProfileLogin();
     }
 
     async ensureReaderProfileReady() {
@@ -5248,8 +5267,9 @@ export default vueComponent(Reader);
 }
 
 .reader-profile-chip--authorized {
-    border-color: color-mix(in srgb, #22c55e 34%, var(--reader-border));
-    color: color-mix(in srgb, #22c55e 72%, var(--reader-text));
+    border-color: color-mix(in srgb, var(--reader-text) 18%, var(--reader-border));
+    color: var(--reader-muted);
+    background: color-mix(in srgb, var(--reader-surface) 86%, var(--reader-surface-2) 14%);
 }
 
 .reader-profile-chip--open {
@@ -5412,8 +5432,16 @@ export default vueComponent(Reader);
 }
 
 .reader-home-theme {
-    flex: 1 1 100%;
-    justify-content: flex-end;
+    flex: 0 0 auto;
+    justify-content: center;
+    margin-left: auto;
+}
+
+.reader-home-theme :deep(.q-btn) {
+    min-height: 28px;
+    padding: 4px 9px;
+    font-size: 13px;
+    line-height: 1.15;
 }
 
 .reader-home-tools {
@@ -6613,7 +6641,7 @@ export default vueComponent(Reader);
     }
 
     .reader-toolbar-main {
-        align-items: flex-start;
+        align-items: center;
         gap: 8px;
     }
 
@@ -6628,6 +6656,7 @@ export default vueComponent(Reader);
 
     .reader-book-meta {
         flex: 1 1 auto;
+        min-width: 0;
         display: flex;
         flex-direction: column;
         gap: 2px;
@@ -6672,8 +6701,25 @@ export default vueComponent(Reader);
     }
 
     .reader-toolbar-quick-actions {
-        gap: 4px;
-        flex-shrink: 0;
+        display: none;
+    }
+
+    .reader-profile-chip {
+        flex: 0 0 auto;
+        max-width: 94px;
+        min-height: 32px;
+        padding: 5px 8px;
+        gap: 5px;
+        font-size: 11px;
+        border-radius: 12px;
+    }
+
+    .reader-profile-chip :deep(.q-icon) {
+        font-size: 16px;
+    }
+
+    .reader-profile-chip span {
+        max-width: 58px;
     }
 
     .reader-home {
@@ -6772,7 +6818,11 @@ export default vueComponent(Reader);
 
     .reader-mobile-bar {
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .reader-mobile-bar--with-contents {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
     }
 
     .reader-mobile-btn {

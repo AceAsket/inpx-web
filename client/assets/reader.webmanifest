@@ -1,7 +1,8 @@
 {
   "name": "INPX Reader",
-  "short_name": "Reader",
+  "short_name": "INPX Reader",
   "description": "Standalone INPX reading app",
+  "id": "./#/reader",
   "start_url": "./#/reader",
   "scope": ".",
   "display": "standalone",
@@ -10,6 +11,18 @@
   "theme_color": "#12171b",
   "orientation": "any",
   "icons": [
+    {
+      "src": "reader-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "reader-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
     {
       "src": "reader-icon.svg",
       "sizes": "any",

@@ -115,6 +115,18 @@ function compareReleaseVersions(left = '', right = '') {
     return 0;
 }
 
+function getUserDisplayName(user = {}) {
+    const name = String(user.name || '').trim();
+    if (isAnonymousDefaultUser(user))
+        return 'Без профиля';
+    return name;
+}
+
+function isAnonymousDefaultUser(user = {}) {
+    const name = String(user.name || '').trim();
+    return user.id === 'default' && (name === 'Основной' || name === 'Без профиля') && !user.login && !user.passwordHash;
+}
+
 function isRcReleaseTag(value = '') {
     return /-rc(?:[.\-]?\d+)?$/i.test(normalizeVersionTag(value));
 }
@@ -2951,9 +2963,10 @@ class WebWorker {
             users: users
                 .map((item) => ({
                     id: item.id,
-                    name: item.name,
+                    name: getUserDisplayName(item),
                     login: item.login || '',
                     requiresLogin: !!item.passwordHash,
+                    anonymousProfile: isAnonymousDefaultUser(item),
                     isAdmin: !!item.isAdmin,
                     opdsEnabled: item.opdsEnabled !== false,
                     opdsAuthEnabled: item.opdsAuthEnabled === true,
@@ -3028,16 +3041,18 @@ class WebWorker {
         this.checkMyState();
 
         const user = await this.getEffectiveUser(userId, profileAccessToken);
-        const profileAuthorized = (!user.passwordHash || this.getProfileSessionUser(profileAccessToken) === user.id);
+        const anonymousProfile = isAnonymousDefaultUser(user);
+        const profileAuthorized = (!anonymousProfile && (!user.passwordHash || this.getProfileSessionUser(profileAccessToken) === user.id));
         const readingSummary = (profileAuthorized ? await this.buildUserReadingSummary(user, 48) : {count: 0, items: []});
         return {
             currentUserId: user.id,
             profileAuthorized,
             currentUserProfile: {
                 id: user.id,
-                name: user.name,
+                name: getUserDisplayName(user),
                 login: user.login || '',
                 hasPassword: !!user.passwordHash,
+                anonymousProfile,
                 isAdmin: !!user.isAdmin,
                 emailTo: (profileAuthorized ? user.emailTo || '' : ''),
                 telegramChatId: (profileAuthorized ? user.telegramChatId || '' : ''),
@@ -3348,7 +3363,7 @@ class WebWorker {
 
         const index = await this.getIndexStatus();
         const dbConfig = (index.ready ? await this.dbConfig() : {});
-        const sources = await Promise.all((this.config.librarySources || []).map(async(source) => Object.assign({
+        const sources = await Promise.all(getEnabledLibrarySources(this.config).map(async(source) => Object.assign({
             id: source.id || '',
             name: source.name || '',
             enabled: source.enabled !== false,
@@ -3363,7 +3378,7 @@ class WebWorker {
                 return text.includes('cover') || text.includes('облож');
             })
             .slice(0, 8);
-        const state = this.getState();
+        const state = this.wState.get() || {};
 
         return {
             generatedAt: new Date().toISOString(),

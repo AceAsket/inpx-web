@@ -102,24 +102,24 @@
                                 {{ uiText.select }}
                             </q-btn>
                             <q-btn
-                                v-if="canManageProfiles && !item.isAdmin"
+                                v-if="canManageProfiles && !item.isAdmin && !item.anonymousProfile"
                                 flat dense round icon="la la-key" color="warning"
                                 @click="resetPassword(item)"
                             />
                             <q-btn
-                                v-if="item.id === currentUserId && config.profileAuthorized"
+                                v-if="item.id === currentUserId && config.profileAuthorized && !item.anonymousProfile"
                                 flat dense round icon="la la-save" color="primary"
                                 @click="saveCurrentProfile"
                             />
                             <q-btn
-                                v-if="canManageProfiles && !item.isAdmin"
+                                v-if="canManageProfiles && !item.isAdmin && !item.anonymousProfile"
                                 flat dense round icon="la la-trash" color="negative"
                                 @click="deleteProfile(item)"
                             />
                         </div>
                     </div>
 
-                    <div v-if="item.id === currentUserId" class="profile-body">
+                    <div v-if="item.id === currentUserId && !item.anonymousProfile" class="profile-body">
                         <div v-if="config.profileAuthorized || !item.requiresLogin" class="profile-tabs">
                             <button
                                 type="button"
@@ -441,6 +441,10 @@ class UserProfilesDialog {
         return !!(this.config.profileAuthorized && this.currentProfile.isAdmin);
     }
 
+    get currentAnonymousProfile() {
+        return !!this.currentProfile.anonymousProfile;
+    }
+
     get currentReadingItems() {
         const rows = this.currentProfile.currentReading;
         return (Array.isArray(rows) ? rows : []);
@@ -573,6 +577,7 @@ class UserProfilesDialog {
             requiresLogin: !!item.requiresLogin,
             isAdmin: !!item.isAdmin,
             opdsAuthEnabled: item.opdsAuthEnabled === true,
+            anonymousProfile: !!item.anonymousProfile,
             currentReadingCount: Number(item.currentReadingCount || 0) || 0,
         }));
         if (!preserveState) {
@@ -586,6 +591,8 @@ class UserProfilesDialog {
 
     async loadCurrentReadingLists() {
         this.currentReadingLists = [];
+        if (this.currentAnonymousProfile)
+            return;
         if (!(this.config.profileAuthorized || !this.currentProfile.hasPassword))
             return;
 

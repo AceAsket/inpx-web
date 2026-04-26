@@ -42,6 +42,13 @@ function applyEnvSecurityOverrides(targetConfig) {
         targetConfig.loginRateLimitEnabled = process.env.INPX_LOGIN_RATE_LIMIT_ENABLED !== 'false';
 }
 
+function applyEnvLibraryOverrides(targetConfig, argv = {}) {
+    if (!argv['lib-dir'] && process.env.LIBDIR)
+        targetConfig.libDir = process.env.LIBDIR;
+    if (!argv.inpx && process.env.INPX)
+        targetConfig.inpx = process.env.INPX;
+}
+
 function showHelp(defaultConfig) {
     console.log(utils.versionText(defaultConfig));
     console.log(
@@ -78,6 +85,7 @@ async function init() {
     await configManager.load();
     config = configManager.config;
     applyEnvSecurityOverrides(config);
+    applyEnvLibraryOverrides(config, argv);
     branch = config.branch;
 
     //dirs

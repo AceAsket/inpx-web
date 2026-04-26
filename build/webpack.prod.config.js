@@ -9,9 +9,11 @@ const CssMinimizerWebpackPlugin = require('css-minimizer-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const CopyWebpackPlugin = require('copy-webpack-plugin');
+const pckg = require('../package.json');
 
 const publicDir = path.resolve(__dirname, '../dist/tmp/public');
 const clientDir = path.resolve(__dirname, '../client');
+const buildId = `${pckg.version}-${Date.now()}`;
 
 fs.emptyDirSync(publicDir);
 
@@ -60,6 +62,12 @@ module.exports = merge(baseWpConfig, {
                     from: '**/*',
                     to: `${publicDir}/`,
                     noErrorOnMissing: true,
+                    transform(content, absoluteFrom) {
+                        if (path.basename(absoluteFrom) !== 'sw.js')
+                            return content;
+
+                        return content.toString('utf8').replace(/__INPX_WEB_BUILD_ID__/g, buildId);
+                    },
                 },
             ],
         }),
