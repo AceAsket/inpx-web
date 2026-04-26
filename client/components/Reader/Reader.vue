@@ -5274,7 +5274,7 @@ export default vueComponent(Reader);
     align-items: center;
     gap: 10px;
     flex-wrap: nowrap;
-    justify-content: flex-start;
+    justify-content: center;
     width: 100%;
     max-width: none;
     margin: 0 auto;
