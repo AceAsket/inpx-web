@@ -42,6 +42,8 @@ class DbSearcher {
         for (const f of this.recStruct) {
             result.push(q[f.field]);
         }
+        result.push(String(q.sourceId || '').trim());
+        result.push(q.hideCopies === true || q.hideCopies === 'true' || q.hideCopies === '1' ? '1' : '');
 
         return JSON.stringify(result);
     }
