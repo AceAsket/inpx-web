@@ -1024,7 +1024,7 @@ class Search {
     }
 
     get showProfileStatusChip() {
-        return !!(this.currentAnonymousProfile || this.currentProfileNeedsLogin);
+        return !!this.currentAnonymousProfile;
     }
 
     get profileStatusLabel() {
