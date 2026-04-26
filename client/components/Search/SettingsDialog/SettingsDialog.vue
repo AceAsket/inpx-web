@@ -97,37 +97,49 @@
             <div v-if="effectiveExternalDiscoveryAvailable && !canEditExternalDiscovery" class="q-ml-sm q-mt-sm text-grey-7" style="font-size: 85%;">
                 Внешний источник настраивает администратор профиля.
             </div>
-            <div v-if="canEditExternalDiscovery" class="admin-mail-box">
-                <div class="admin-mail-title">{{ backupUi.title }}</div>
-                <div class="admin-mail-subtitle">{{ backupUi.subtitle }}</div>
-                <div class="admin-backup-note">{{ backupUi.restoreNote }}</div>
-                <div class="admin-backup-actions">
-                    <q-btn color="primary" dense no-caps icon="la la-download" :loading="backupLoading" @click="createBackup">
-                        {{ backupUi.backup }}
-                    </q-btn>
-                    <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="backupImportLoading" @click="openBackupImport">
-                        {{ backupUi.backupImport }}
-                    </q-btn>
-                    <q-btn outline color="primary" dense no-caps icon="la la-file-export" :loading="settingsExportLoading" @click="exportSettings">
-                        {{ backupUi.settings }}
-                    </q-btn>
-                    <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="settingsImportLoading" @click="openSettingsImport">
-                        {{ backupUi.settingsImport }}
-                    </q-btn>
-                    <input
-                        ref="settingsImportInput"
-                        type="file"
-                        accept="application/json,.json"
-                        style="display: none"
-                        @change="onSettingsImportSelected"
-                    />
-                    <input
-                        ref="backupImportInput"
-                        type="file"
-                        accept="application/zip,.zip"
-                        style="display: none"
-                        @change="onBackupImportSelected"
-                    />
+            <div v-if="canEditExternalDiscovery" class="admin-mail-box admin-collapse-box">
+                <button class="admin-collapse-head" type="button" @click="backupExpanded = !backupExpanded">
+                    <div class="admin-collapse-copy">
+                        <div class="admin-mail-title">{{ backupUi.title }}</div>
+                        <div class="admin-mail-subtitle">{{ backupUi.subtitle }}</div>
+                    </div>
+                    <q-icon class="admin-collapse-icon" :name="backupExpanded ? 'la la-angle-up' : 'la la-angle-down'" size="20px" />
+                </button>
+
+                <div v-show="backupExpanded" class="admin-collapse-body">
+                    <div class="admin-backup-note">
+                        <div>{{ backupUi.fullBackupInfo }}</div>
+                        <div>{{ backupUi.settingsBackupInfo }}</div>
+                        <div>{{ backupUi.restoreNote }}</div>
+                    </div>
+                    <div class="admin-backup-actions">
+                        <q-btn color="primary" dense no-caps icon="la la-download" :loading="backupLoading" @click="createBackup">
+                            {{ backupUi.backup }}
+                        </q-btn>
+                        <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="backupImportLoading" @click="openBackupImport">
+                            {{ backupUi.backupImport }}
+                        </q-btn>
+                        <q-btn outline color="primary" dense no-caps icon="la la-file-export" :loading="settingsExportLoading" @click="exportSettings">
+                            {{ backupUi.settings }}
+                        </q-btn>
+                        <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="settingsImportLoading" @click="openSettingsImport">
+                            {{ backupUi.settingsImport }}
+                        </q-btn>
+                        <input
+                            ref="settingsImportInput"
+                            type="file"
+                            accept="application/json,.json"
+                            style="display: none"
+                            @change="onSettingsImportSelected"
+                        />
+                        <input
+                            ref="backupImportInput"
+                            type="file"
+                            accept="application/zip,.zip"
+                            style="display: none"
+                            @change="onBackupImportSelected"
+                        />
+                    </div>
                 </div>
             </div>
 
@@ -555,6 +567,7 @@ class SettingsDialog {
     backupImportLoading = false;
     settingsExportLoading = false;
     settingsImportLoading = false;
+    backupExpanded = false;
     opdsSaveLoading = false;
     smtpPassVisible = false;
     telegramTokenVisible = false;
@@ -662,12 +675,14 @@ class SettingsDialog {
     ];
     backupUi = {
         title: 'Резервная копия',
-        subtitle: 'Бэкап сохраняет состояние сервиса: config, secret.key, профили пользователей, списки, прогресс чтения, закладки и кэш витрины. Архивы книг, обложки, кэши и поисковая БД не входят. Экспорт настроек ниже сохраняет только конфигурацию без пользователей и прогресса.',
+        subtitle: 'Полный бэкап и отдельный экспорт конфигурации.',
+        fullBackupInfo: 'Полный ZIP сохраняет состояние сервиса: настройки, secret.key, профили, списки, прогресс чтения, закладки и кэш витрины. Архивы книг, обложки, временные кэши и поисковая БД не входят.',
+        settingsBackupInfo: 'JSON настроек нужен только для переноса конфигурации. Пользователи, списки, прогресс и закладки в него не входят.',
         backup: 'Скачать полный бэкап',
         backupImport: 'Восстановить полный ZIP',
         settings: 'Экспорт настроек JSON',
         settingsImport: 'Восстановить настройки JSON',
-        restoreNote: 'Восстановление полного ZIP заменяет настройки, secret.key, профили, списки, прогресс чтения, закладки и кэш витрины. После успешного восстановления перезапустите контейнер или приложение, чтобы все настройки и ключи точно перечитались; если менялись источники библиотек, выполните переиндексацию.',
+        restoreNote: 'Восстановление полного ZIP заменяет текущее состояние данными из архива. После восстановления перезапустите контейнер или приложение; если в бэкапе другие источники библиотек, выполните переиндексацию.',
         restoreConfirm: 'Восстановить полный ZIP-бэкап? Текущие настройки, профили, списки, прогресс чтения и закладки будут заменены данными из архива.',
         restored: 'Полный бэкап восстановлен. Перезапустите приложение; если менялись источники библиотек, выполните переиндексацию.',
         ready: 'Резервная копия готова',
@@ -1534,13 +1549,16 @@ export default vueComponent(SettingsDialog);
 }
 
 .admin-backup-note {
-    margin-top: 8px;
     padding: 8px 10px;
     border: 1px solid var(--app-border);
     border-radius: 8px;
     color: var(--app-muted);
     font-size: 12px;
     line-height: 1.4;
+}
+
+.admin-backup-note > div + div {
+    margin-top: 6px;
 }
 
 .admin-mail-section {
