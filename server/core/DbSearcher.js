@@ -746,7 +746,7 @@ class DbSearcher {
             const candidateIds = hideCopies && hasNarrowingFilter
                 ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}))
                 : null;
-            const iterator = candidateIds ? `@@id(${db.esc(Array.from(candidateIds))})` : '@all()';
+            const iterator = candidateIds ? db.esc(Array.from(candidateIds)) : '@all()';
             const rows = await db.select({
                 table: 'book',
                 rawResult: true,
