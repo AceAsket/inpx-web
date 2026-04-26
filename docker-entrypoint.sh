@@ -16,7 +16,7 @@ INPX_VALUE="${INPX:-}"
 HOST_VALUE="${HOST:-0.0.0.0}"
 PORT_VALUE="${PORT:-12380}"
 
-set -- node server \
+set -- inpx-web \
     "--host=$HOST_VALUE" \
     "--port=$PORT_VALUE" \
     "--data-dir=$DATA_DIR_VALUE" \

@@ -94,7 +94,7 @@ docker build --no-cache -t inpx-web-7z:latest .
 * основной образ умеет `fb2 -> epub`, `epub3`, `kepub`, `kfx`, `azw8` через fb2cng и `fb2` / `epub -> pdf` через MuPDF
 * `runtime-calibre` тяжелее и собирается дольше из-за установки Calibre, но оставлен как совместимый fallback для редких ручных экспериментов
 * `runtime-lite` заметно легче и быстрее собирается, не умеет конвертацию книг и автоматически скрывает кнопки `EPUB` / `EPUB3` / `KEPUB` / `KFX` / `AZW8` / `PDF` в интерфейсе
-* Dockerfile использует multi-stage сборку и удаляет клиентские npm-пакеты из runtime, чтобы не тянуть dev/UI-зависимости в контейнер
+* Dockerfile использует multi-stage сборку: приложение упаковывается в `pkg`-бинарник, а runtime-слой не тянет Node.js, `node_modules` и dev/UI-зависимости
 * при включённом BuildKit повторные сборки идут быстрее за счёт кэша `apt` и `npm`
 
 После сборки контейнер можно запустить через `docker compose`:

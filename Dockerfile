@@ -1,18 +1,13 @@
 # syntax=docker/dockerfile:1.7
 
 ARG NODE_IMAGE=node:18-bookworm-slim
+ARG RUNTIME_IMAGE=debian:bookworm-slim
 ARG FB2CNG_VERSION=v1.2.3
 ARG FB2CNG_ARCH=linux-amd64
 
 FROM ${NODE_IMAGE} AS build-deps
 
 WORKDIR /app
-
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update \
-    && apt-get install -y --no-install-recommends zip \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
@@ -21,26 +16,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 FROM build-deps AS build
 
 COPY . .
-RUN npm run build:client && node build/prepkg.js linux
-
-FROM ${NODE_IMAGE} AS prod-deps
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
-    && rm -rf \
-        node_modules/@quasar \
-        node_modules/@vue \
-        node_modules/quasar \
-        node_modules/vue \
-        node_modules/vue-router \
-        node_modules/vuex \
-        node_modules/vuex-persist \
-        node_modules/localforage \
-        node_modules/csstype \
-    && npm cache clean --force
+RUN npm run build:linux
 
 FROM ${NODE_IMAGE} AS webp-tools
 
@@ -70,29 +46,24 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && chmod +x /fb2cng-runtime/fbc \
     && rm -rf /tmp/fbc.zip /var/lib/apt/lists/*
 
-FROM ${NODE_IMAGE} AS runtime-base
+FROM ${RUNTIME_IMAGE} AS runtime-base
 
-ENV NODE_ENV=production
 ENV LD_LIBRARY_PATH=/usr/local/lib
 WORKDIR /app
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
-    && apt-get install -y --no-install-recommends p7zip-full libjxl-tools tini \
+    && apt-get install -y --no-install-recommends ca-certificates p7zip-full libjxl-tools tini \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=webp-tools /webp-runtime/bin/dwebp /usr/local/bin/dwebp
 COPY --from=webp-tools /webp-runtime/lib/ /usr/local/lib/
-COPY --from=prod-deps /app/node_modules ./node_modules
-COPY package*.json ./
-COPY server ./server
-COPY build/appdir.js ./build/appdir.js
-COPY --from=build /app/dist/public.json ./dist/public.json
+COPY --from=build /app/dist/linux/inpx-web /usr/local/bin/inpx-web
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN rm -f server/config/application_env \
-    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/inpx-web \
     && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 12380
