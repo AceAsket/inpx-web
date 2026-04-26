@@ -3374,8 +3374,11 @@ class WebWorker {
         const coverSize = await this.dirSize(coverDir);
         const coverErrors = (this.config.adminEventLogEnabled === false ? [] : this.adminEvents.slice().reverse())
             .filter(event => {
+                if (event.level !== 'error')
+                    return false;
+
                 const text = `${event.category || ''} ${event.message || ''}`.toLowerCase();
-                return text.includes('cover') || text.includes('облож');
+                return text.includes('cover') || text.includes('облож') || /\bimage\s+\S+:/i.test(text);
             })
             .slice(0, 8);
         const state = this.wState.get() || {};
