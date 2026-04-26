@@ -135,6 +135,15 @@ class App {
         const appleIcon = document.querySelector('link[rel="apple-touch-icon"]');
         if (appleIcon)
             appleIcon.setAttribute('href', this.rootRoute === '/reader' ? 'reader-icon-192.png' : 'pwa-icon-192.png');
+
+        let favicon = document.querySelector('link[rel="icon"]');
+        if (!favicon) {
+            favicon = document.createElement('link');
+            favicon.setAttribute('rel', 'icon');
+            document.head.appendChild(favicon);
+        }
+        favicon.setAttribute('type', 'image/x-icon');
+        favicon.setAttribute('href', this.rootRoute === '/reader' ? 'reader-favicon.ico' : 'favicon.ico');
     }
 
     setAppTitle(title) {

@@ -10,7 +10,8 @@ const APP_SHELL = [
   '/reader-icon.svg',
   '/reader-icon-192.png',
   '/reader-icon-512.png',
-  '/favicon.ico'
+  '/favicon.ico',
+  '/reader-favicon.ico'
 ].map(withBase);
 
 function noStoreRequest(request) {
