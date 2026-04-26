@@ -5286,8 +5286,8 @@ export default vueComponent(Reader);
     gap: 6px;
     flex: 0 1 auto;
     width: fit-content;
-    min-width: 0;
-    max-width: 180px;
+    min-width: 96px;
+    max-width: 220px;
     min-height: 34px;
     padding: 6px 10px;
     border: 1px solid var(--reader-border);
@@ -5302,6 +5302,7 @@ export default vueComponent(Reader);
 
 .reader-profile-chip span {
     min-width: 0;
+    max-width: 170px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
