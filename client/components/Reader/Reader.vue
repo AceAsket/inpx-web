@@ -1903,12 +1903,6 @@ class Reader {
     }
 
     get readerPageMeta() {
-        const sectionMeta = this.shouldUseStableReaderStatus
-            ? (this.stableReaderStatus.sectionMeta || '')
-            : (this.isCompactLayout ? '' : this.currentSectionTitle);
-        if (sectionMeta)
-            return '';
-
         if (this.shouldUseStableReaderStatus)
             return this.stableReaderStatus.pageMeta || '';
 
@@ -5177,7 +5171,7 @@ export default vueComponent(Reader);
     top: 0;
     z-index: 12;
     display: flex;
-    justify-content: space-between;
+    justify-content: center;
     gap: 12px;
     padding: 12px 16px;
     border-bottom: 1px solid var(--reader-border);
@@ -5188,24 +5182,36 @@ export default vueComponent(Reader);
 .reader-toolbar-main {
     display: flex;
     align-items: center;
+    flex: 1 1 auto;
     gap: 12px;
+    width: min(100%, calc(var(--reader-content-width) + 420px));
+    max-width: 1280px;
+    margin: 0 auto;
     min-width: 0;
 }
 
 .reader-book-meta {
+    flex: 1 1 320px;
     min-width: 0;
+    max-width: 430px;
 }
 
 .reader-book-title {
     font-size: 18px;
     font-weight: 750;
     line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .reader-book-author {
     margin-top: 2px;
     color: var(--reader-muted);
     font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .reader-book-progress {
@@ -5227,6 +5233,7 @@ export default vueComponent(Reader);
 .reader-toolbar-quick-actions {
     display: inline-flex;
     align-items: center;
+    flex: 0 0 auto;
     gap: 6px;
     margin-left: auto;
 }
@@ -6763,6 +6770,7 @@ export default vueComponent(Reader);
         display: -webkit-box;
         -webkit-line-clamp: 2;
         -webkit-box-orient: vertical;
+        white-space: normal;
         overflow: hidden;
     }
 
@@ -6778,6 +6786,7 @@ export default vueComponent(Reader);
         display: -webkit-box;
         -webkit-line-clamp: 1;
         -webkit-box-orient: vertical;
+        white-space: normal;
         overflow: hidden;
     }
 
