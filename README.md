@@ -1047,9 +1047,41 @@ sudo service nginx reload
 <a id="development" />
 
 ### Разработка
+
 ```sh
 npm run dev
 ```
+
+Основная структура проекта:
+
+- `client/components/App.vue` - корневой интерфейс, общая тема, переключение PWA-манифеста каталога и читалки.
+- `client/components/Api/Api.vue` - WebSocket-клиент, сессии профилей, общие диалоги входа и запросы к серверу.
+- `client/components/Search/` - каталог, карточки книг, диалоги информации, настроек, профилей, источников и админские панели.
+- `client/components/Reader/Reader.vue` - читалка, стартовый экран чтения, темы, шрифты, Wake Lock и отдельный PWA-режим.
+- `client/components/Reader/ReaderLab.vue` - локальная отладка поведения читалки без полного пользовательского сценария.
+- `client/store/` - Vuex-хранилище и сохраняемые UI-настройки клиента.
+- `client/assets/` - иконки, PWA-манифесты и статические ресурсы клиента.
+- `server/index.js` и `server/static.js` - запуск HTTP/WebSocket-сервера и раздача статических файлов.
+- `server/controllers/WebSocketController.js` - маршрутизация WebSocket-команд между клиентом и серверным ядром.
+- `server/core/WebWorker.js` - основной серверный оркестратор: индекс, поиск, книги, обложки, конвертация, отправка, админские действия.
+- `server/core/ReadingListStore.js` - профили, прогресс чтения, закладки, списки и отметки прочитанного.
+- `server/core/LibrarySources.js` - нормализация одного или нескольких источников библиотек.
+- `server/core/DbCreator.js` и `server/core/DbSearcher.js` - создание и чтение локальной базы индекса.
+- `server/core/HealthRoutes.js` и `server/core/Security.js` - health/ready/index-status, Prometheus-метрики, авторизация и прокси-защита.
+- `server/core/opds/`, `server/core/fb2/`, `server/core/xml/` - OPDS, разбор FB2 и XML-вспомогательная логика.
+- `server/config/` - дефолтная конфигурация и runtime-настройки, сохраняемые в data-dir.
+- `build/` - сборка клиента, pkg/Windows-артефактов и релизных архивов.
+- `scripts/proxmox-lxc-install.sh` - установка и обновление сервиса в Proxmox LXC.
+
+Полезные точки отладки:
+
+- `npm run build:client` - быстрая проверка клиентской сборки после UI-правок.
+- `node server --data-dir=.inpx-web --lib-dir=/path/to/library --inpx=/path/to/file.inpx` - локальный запуск сервера без Docker.
+- `/#/reader` - отдельный старт читалки и PWA-режим INPX Reader.
+- `/#/reader-lab` - отладочный экран читалки.
+- `/health`, `/ready`, `/api/index-status` - проверки состояния контейнера и индекса.
+- `/metrics` - Prometheus-метрики, если включено `INPX_METRICS_ENABLED=true`.
+- В Docker/Proxmox все постоянные данные должны лежать в volume/data-dir: `config.json`, `reading-lists.json`, `secret.key`, `db/`, `public-files/cover/`.
 
 ### Proxmox LXC
 
