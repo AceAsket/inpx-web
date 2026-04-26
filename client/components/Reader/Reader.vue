@@ -5175,6 +5175,8 @@ export default vueComponent(Reader);
     top: 0;
     z-index: 12;
     display: flex;
+    flex-direction: column;
+    align-items: center;
     justify-content: center;
     gap: 12px;
     padding: 12px 16px;
@@ -5195,6 +5197,7 @@ export default vueComponent(Reader);
 }
 
 .reader-toolbar--home {
+    align-items: stretch;
     justify-content: flex-start;
 }
 
@@ -5266,8 +5269,14 @@ export default vueComponent(Reader);
     display: flex;
     align-items: center;
     gap: 10px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    width: min(100%, calc(var(--reader-content-width) + 420px));
+    max-width: 1280px;
+    margin: 0 auto;
+    padding-bottom: 4px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
     contain: layout paint;
 }
 
