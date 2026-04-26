@@ -507,7 +507,39 @@ class DbSearcher {
         return tableIds;
     }
 
-    async restoreBooks(from, ids) {
+    filterRestoredRows(rows, query = {}) {
+        const sourceId = String(query.sourceId || '').trim();
+        const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
+        if (!sourceId && !hideCopies)
+            return rows;
+
+        const makeCopyKey = (book = {}) => [
+            book.author || '',
+            book.series || '',
+            String(book.serno || 0),
+            book.title || '',
+        ].map(value => String(value || '').trim().toLowerCase()).join('|');
+
+        return rows.map((row) => {
+            let books = Array.isArray(row.books) ? row.books : [];
+            if (sourceId)
+                books = books.filter(book => String((book && book.sourceId) || '').trim() === sourceId);
+
+            if (hideCopies) {
+                const deduped = new Map();
+                for (const book of books) {
+                    const key = makeCopyKey(book);
+                    if (!deduped.has(key))
+                        deduped.set(key, book);
+                }
+                books = Array.from(deduped.values());
+            }
+
+            return Object.assign({}, row, {books});
+        });
+    }
+
+    async restoreBooks(from, ids, query = {}) {
         const db = this.db;
         const bookTable = `${from}_book`;
 
@@ -517,7 +549,7 @@ class DbSearcher {
         });
 
         if (rows.length == ids.length)
-            return rows;
+            return this.filterRestoredRows(rows, query);
 
         //далее восстановим книги из book в <from>_book
         const idsSet = new Set(rows.map(r => r.id));
@@ -565,7 +597,7 @@ class DbSearcher {
 
         await db.insert({table: bookTable, ignore: true, rows});
 
-        return rows;
+        return this.filterRestoredRows(rows, query);
     }
 
     async search(from, query) {
@@ -599,7 +631,7 @@ class DbSearcher {
             //для title восстановим books
             if (from == 'title') {
                 const bookIds = found.map(r => r.id);
-                const rows = await this.restoreBooks(from, bookIds);
+                const rows = await this.restoreBooks(from, bookIds, query);
                 const rowsMap = new Map();
                 for (const row of rows)
                     rowsMap.set(row.id, row);
