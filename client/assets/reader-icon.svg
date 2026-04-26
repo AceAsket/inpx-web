@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <path d="M92 132c0-24 20-44 44-44h88c32 0 61 12 82 33 21-21 50-33 82-33h32c24 0 44 20 44 44v264c0 17-14 31-31 31h-54c-26 0-52 8-73 24-21-16-47-24-73-24H123c-17 0-31-14-31-31V132z" fill="#b86b2d"/>
-  <path d="M130 137c0-13 11-24 24-24h66c32 0 61 14 81 37v250c-25-17-55-26-86-26h-85V137z" fill="#fff8eb"/>
-  <path d="M320 150c20-23 49-37 81-37h10c13 0 24 11 24 24v237h-85c-31 0-61 9-86 26V150z" fill="#f8ecd5"/>
-  <rect x="298" y="136" width="18" height="280" rx="9" fill="#9d6a45"/>
-  <rect x="164" y="172" width="82" height="18" rx="9" fill="#9d6a45"/>
-  <rect x="164" y="216" width="88" height="18" rx="9" fill="#9d6a45"/>
-  <rect x="164" y="260" width="70" height="18" rx="9" fill="#9d6a45"/>
-  <rect x="356" y="172" width="42" height="18" rx="9" fill="#9d6a45"/>
-  <rect x="356" y="216" width="42" height="18" rx="9" fill="#9d6a45"/>
-  <rect x="356" y="260" width="42" height="18" rx="9" fill="#9d6a45"/>
+  <path d="M40 112c46-46 133-74 216-4 83-70 170-42 216 4v332c-72-40-150-42-216 14-66-56-144-54-216-14V112z" fill="#b86b2d"/>
+  <path d="M78 124c45-37 108-45 168 0v286c-56-32-116-36-168-10V124z" fill="#fff8eb"/>
+  <path d="M266 124c60-45 123-37 168 0v276c-52-26-112-22-168 10V124z" fill="#f8ecd5"/>
+  <rect x="248" y="112" width="18" height="320" rx="9" fill="#9d6a45"/>
+  <rect x="126" y="160" width="96" height="24" rx="12" fill="#9d6a45"/>
+  <rect x="126" y="218" width="108" height="24" rx="12" fill="#9d6a45"/>
+  <rect x="126" y="276" width="84" height="24" rx="12" fill="#9d6a45"/>
+  <rect x="314" y="160" width="72" height="24" rx="12" fill="#9d6a45"/>
+  <rect x="314" y="218" width="72" height="24" rx="12" fill="#9d6a45"/>
+  <rect x="314" y="276" width="72" height="24" rx="12" fill="#9d6a45"/>
 </svg>
