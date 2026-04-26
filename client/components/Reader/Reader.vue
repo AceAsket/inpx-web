@@ -5,7 +5,11 @@
         :class="[readerThemeClass, {'reader-page--immersive': compactChromeHidden}]"
         :style="readerThemeStyle"
     >
-        <div v-show="!compactChromeHidden" class="reader-toolbar">
+        <div
+            v-show="!compactChromeHidden"
+            class="reader-toolbar"
+            :class="{'reader-toolbar--home': !bookUid}"
+        >
             <div class="reader-toolbar-main">
                 <q-btn
                     flat
@@ -5190,6 +5194,16 @@ export default vueComponent(Reader);
     min-width: 0;
 }
 
+.reader-toolbar--home {
+    justify-content: flex-start;
+}
+
+.reader-toolbar--home .reader-toolbar-main {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+}
+
 .reader-book-meta {
     flex: 1 1 320px;
     min-width: 0;
@@ -5407,8 +5421,8 @@ export default vueComponent(Reader);
 }
 
 .reader-home-panel {
-    width: min(980px, 100%);
-    margin: 0 auto;
+    width: 100%;
+    margin: 0;
 }
 
 .reader-home-head {
