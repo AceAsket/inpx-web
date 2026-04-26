@@ -100,9 +100,13 @@
             <div v-if="canEditExternalDiscovery" class="admin-mail-box">
                 <div class="admin-mail-title">{{ backupUi.title }}</div>
                 <div class="admin-mail-subtitle">{{ backupUi.subtitle }}</div>
+                <div class="admin-backup-note">{{ backupUi.restoreNote }}</div>
                 <div class="admin-backup-actions">
                     <q-btn color="primary" dense no-caps icon="la la-download" :loading="backupLoading" @click="createBackup">
                         {{ backupUi.backup }}
+                    </q-btn>
+                    <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="backupImportLoading" @click="openBackupImport">
+                        {{ backupUi.backupImport }}
                     </q-btn>
                     <q-btn outline color="primary" dense no-caps icon="la la-file-export" :loading="settingsExportLoading" @click="exportSettings">
                         {{ backupUi.settings }}
@@ -116,6 +120,13 @@
                         accept="application/json,.json"
                         style="display: none"
                         @change="onSettingsImportSelected"
+                    />
+                    <input
+                        ref="backupImportInput"
+                        type="file"
+                        accept="application/zip,.zip"
+                        style="display: none"
+                        @change="onBackupImportSelected"
                     />
                 </div>
             </div>
@@ -541,6 +552,7 @@ class SettingsDialog {
     smtpTestLoading = false;
     telegramTestLoading = false;
     backupLoading = false;
+    backupImportLoading = false;
     settingsExportLoading = false;
     settingsImportLoading = false;
     opdsSaveLoading = false;
@@ -652,8 +664,12 @@ class SettingsDialog {
         title: 'Резервная копия',
         subtitle: 'Бэкап сохраняет состояние сервиса: config, secret.key, профили пользователей, списки, прогресс чтения, закладки и кэш витрины. Архивы книг, обложки, кэши и поисковая БД не входят. Экспорт настроек ниже сохраняет только конфигурацию без пользователей и прогресса.',
         backup: 'Скачать полный бэкап',
+        backupImport: 'Восстановить полный ZIP',
         settings: 'Экспорт настроек JSON',
         settingsImport: 'Восстановить настройки JSON',
+        restoreNote: 'Восстановление полного ZIP заменяет настройки, secret.key, профили, списки, прогресс чтения, закладки и кэш витрины. После успешного восстановления перезапустите контейнер или приложение, чтобы все настройки и ключи точно перечитались; если менялись источники библиотек, выполните переиндексацию.',
+        restoreConfirm: 'Восстановить полный ZIP-бэкап? Текущие настройки, профили, списки, прогресс чтения и закладки будут заменены данными из архива.',
+        restored: 'Полный бэкап восстановлен. Перезапустите приложение; если менялись источники библиотек, выполните переиндексацию.',
         ready: 'Резервная копия готова',
     };
     mailUi = {
@@ -1351,6 +1367,24 @@ class SettingsDialog {
         input.click();
     }
 
+    openBackupImport() {
+        const input = this.$refs.backupImportInput;
+        if (!input)
+            return;
+
+        input.value = '';
+        input.click();
+    }
+
+    arrayBufferToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        const chunkSize = 0x8000;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += chunkSize)
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+        return btoa(binary);
+    }
+
     async onSettingsImportSelected(event) {
         const input = event && event.target;
         const file = input && input.files && input.files[0];
@@ -1368,6 +1402,37 @@ class SettingsDialog {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
             this.settingsImportLoading = false;
+            if (input)
+                input.value = '';
+        }
+    }
+
+    async onBackupImportSelected(event) {
+        const input = event && event.target;
+        const file = input && input.files && input.files[0];
+        if (!file)
+            return;
+
+        const confirmed = await this.$root.stdDialog.confirm(
+            this.backupUi.restoreConfirm,
+            this.backupUi.backupImport,
+        );
+        if (!confirmed) {
+            input.value = '';
+            return;
+        }
+
+        this.backupImportLoading = true;
+        try {
+            const contentBase64 = this.arrayBufferToBase64(await file.arrayBuffer());
+            await this.api.importAdminBackup({fileName: file.name, contentBase64});
+            await this.api.updateConfig();
+            this.loadSettings();
+            this.$root.notify.success(this.backupUi.restored);
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
+        } finally {
+            this.backupImportLoading = false;
             if (input)
                 input.value = '';
         }
@@ -1466,6 +1531,16 @@ export default vueComponent(SettingsDialog);
     margin-top: 3px;
     font-size: 12px;
     color: var(--app-muted);
+}
+
+.admin-backup-note {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--app-border);
+    border-radius: 8px;
+    color: var(--app-muted);
+    font-size: 12px;
+    line-height: 1.4;
 }
 
 .admin-mail-section {

@@ -153,6 +153,8 @@ class WebSocketController {
                     await this.importAdminSettings(req, ws); break;
                 case 'create-admin-backup':
                     await this.createAdminBackup(req, ws); break;
+                case 'import-admin-backup':
+                    await this.importAdminBackup(req, ws); break;
                 case 'update-book-metadata':
                     await this.updateBookMetadata(req, ws); break;
                 case 'get-book-link':
@@ -266,6 +268,7 @@ class WebSocketController {
             'admin-rebuild-cover',
             'admin-reindex',
             'import-admin-settings',
+            'import-admin-backup',
             'update-reader-progress',
             'delete-reader-progress',
             'update-reader-preferences',
@@ -789,6 +792,11 @@ class WebSocketController {
 
     async createAdminBackup(req, ws) {
         const result = await this.webWorker.createAdminBackup(req.userId, req.profileAccessToken);
+        this.send(result, req, ws);
+    }
+
+    async importAdminBackup(req, ws) {
+        const result = await this.webWorker.importAdminBackup(req.userId, req.profileAccessToken, req.data);
         this.send(result, req, ws);
     }
 

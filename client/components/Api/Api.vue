@@ -454,6 +454,10 @@ class Api {
         return await this.request({action: 'create-admin-backup'}, 300);
     }
 
+    async importAdminBackup(data) {
+        return await this.request({action: 'import-admin-backup', data}, 300);
+    }
+
     async updateBookMetadata(bookUid, metadata = {}) {
         return await this.request({action: 'update-book-metadata', bookUid, metadata}, 120);
     }

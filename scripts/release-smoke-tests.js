@@ -113,7 +113,13 @@ async function testAdminBackupArchiveAndDownload() {
         const dataDir = path.join(dir, 'data');
         const configFile = path.join(dataDir, 'config.json');
         await fs.ensureDir(dataDir);
-        await fs.writeJson(configFile, {name: 'inpx-web'});
+        await fs.writeJson(configFile, {
+            coverCacheSize: 256,
+            opds: {
+                enabled: true,
+                password: 'full-backup-secret',
+            },
+        });
         await fs.writeJson(path.join(dataDir, 'reading-lists.json'), {
             version: 5,
             users: [{
@@ -184,6 +190,44 @@ async function testAdminBackupArchiveAndDownload() {
             const notZip = await request(server, '/book/backup/readme.txt');
             assert.strictEqual(notZip.status, 404);
         });
+
+        const ReadingListStore = require('../server/core/ReadingListStore');
+        const restoreDataDir = path.join(dir, 'restore-data');
+        const restoreConfigFile = path.join(restoreDataDir, 'config.json');
+        const restoreWorker = makeWorker({
+            dataDir: restoreDataDir,
+            tempDir: path.join(dir, 'restore-tmp'),
+            configFile: restoreConfigFile,
+            bookDir: path.join(dir, 'restore-book'),
+            bookPathStatic: '/book',
+            opds: {
+                enabled: false,
+                password: 'old-secret',
+            },
+        });
+        restoreWorker.readingListStore = new ReadingListStore({
+            dataDir: restoreDataDir,
+            adminLogin: 'admin',
+            adminPassword: 'admin',
+        });
+
+        const restored = await restoreWorker.importAdminBackup('admin', 'token', {
+            fileName: result.fileName,
+            contentBase64: (await fs.readFile(path.join(bookDir, 'backup', result.fileName))).toString('base64'),
+        });
+        assert.strictEqual(restored.success, true);
+        assert.strictEqual(restored.restartRecommended, true);
+        assert.ok(restored.restored.includes('config.json'));
+        assert.ok(restored.restored.includes('secret.key'));
+        assert.ok(restored.restored.includes('reading-lists.json'));
+        assert.strictEqual((await fs.readJson(restoreConfigFile)).opds.password, 'full-backup-secret');
+        assert.strictEqual((await fs.readFile(path.join(restoreDataDir, 'secret.key'), 'utf8')), 'secret');
+
+        const restoredLists = await restoreWorker.readingListStore.load();
+        const restoredReader = restoredLists.users.find(user => user.id === 'reader');
+        assert.ok(restoredReader);
+        assert.strictEqual(restoredReader.readerProgress['book:1'].percent, 0.5);
+        assert.strictEqual(restoredReader.readerBookmarks['book:1'][0].id, 'bookmark-1');
     });
 }
 

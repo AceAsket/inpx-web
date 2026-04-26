@@ -3869,6 +3869,93 @@ class WebWorker {
         };
     }
 
+    async importAdminBackup(userId = '', profileAccessToken = '', payload = {}) {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const rawBase64 = String((payload && (payload.contentBase64 || payload.data)) || '').trim()
+            .replace(/^data:[^,]+,/, '');
+        if (!rawBase64)
+            throw new Error('Файл бэкапа не передан');
+
+        const backupBuffer = Buffer.from(rawBase64, 'base64');
+        if (!backupBuffer.length)
+            throw new Error('Файл бэкапа пустой');
+
+        const tempDir = this.config.tempDir || os.tmpdir();
+        await fs.ensureDir(tempDir);
+        const tempFile = path.join(tempDir, `admin-backup-${utils.randomHexString(12)}.zip`);
+        const zipReader = new ZipReader();
+
+        try {
+            await fs.writeFile(tempFile, backupBuffer);
+            await zipReader.open(tempFile, true);
+
+            const entryByName = new Map();
+            for (const entry of Object.values(zipReader.entries || {})) {
+                if (!entry || entry.isDirectory)
+                    continue;
+                entryByName.set(String(entry.name || '').replace(/\\/g, '/').replace(/^\/+/, ''), entry.name);
+            }
+
+            if (!entryByName.has('backup-info.json') || (!entryByName.has('config.json') && !entryByName.has('reading-lists.json')))
+                throw new Error('Файл не похож на полный бэкап inpx-web');
+
+            const readEntry = async(name) => {
+                const entryName = entryByName.get(name);
+                return entryName ? await zipReader.extractToBuf(entryName) : null;
+            };
+            const readJsonEntry = async(name) => {
+                const data = await readEntry(name);
+                return data ? JSON.parse(data.toString('utf8')) : null;
+            };
+
+            const restored = [];
+            const configData = await readJsonEntry('config.json');
+            if (configData && typeof configData === 'object' && !Array.isArray(configData)) {
+                await fs.ensureDir(path.dirname(this.config.configFile));
+                await fs.writeFile(this.config.configFile, JSON.stringify(configData, null, 4));
+                Object.assign(this.config, this.normalizeImportedAdminSettings(configData));
+                restored.push('config.json');
+            }
+
+            const secretKey = await readEntry('secret.key');
+            if (secretKey) {
+                await fs.ensureDir(this.config.dataDir);
+                await fs.writeFile(path.join(this.config.dataDir, 'secret.key'), secretKey);
+                restored.push('secret.key');
+            }
+
+            const readingLists = await readJsonEntry('reading-lists.json');
+            if (readingLists && typeof readingLists === 'object') {
+                await this.readingListStore.save(readingLists);
+                restored.push('reading-lists.json');
+            }
+
+            const discoveryCache = await readJsonEntry('discovery-cache.json');
+            if (discoveryCache && typeof discoveryCache === 'object') {
+                await fs.ensureDir(this.config.dataDir);
+                await fs.writeFile(path.join(this.config.dataDir, 'discovery-cache.json'), JSON.stringify(discoveryCache, null, 2));
+                this.discoveryCache = null;
+                restored.push('discovery-cache.json');
+            }
+
+            if (!restored.length)
+                throw new Error('В бэкапе не найдено данных для восстановления');
+
+            this.addAdminEvent('warn', 'settings', `Восстановлен полный бэкап: ${restored.join(', ')}`);
+            return {
+                success: true,
+                restored,
+                restartRecommended: true,
+                message: 'Полный бэкап восстановлен. Перезапустите приложение, чтобы настройки и ключи точно перечитались. Если менялись источники библиотек, выполните переиндексацию.',
+            };
+        } finally {
+            await zipReader.close().catch(() => {});
+            await fs.remove(tempFile);
+        }
+    }
+
     async updateReaderProgress(userId = '', bookUid = '', patch = {}) {
         this.checkMyState();
         const progress = await this.readingListStore.updateReaderProgress(userId, bookUid, patch);
