@@ -24,19 +24,16 @@ function sevenZipCommandCandidates() {
     const local = [
         resolveBundledPath('7z.exe'),
         resolveBundledPath('7za.exe'),
-        resolveBundledPath('7zr.exe'),
     ].filter(Boolean);
 
     const system = (process.platform === 'win32' ? [
         '7z',
         '7za',
-        '7zr',
         'C:\\Program Files\\7-Zip\\7z.exe',
         'C:\\Program Files (x86)\\7-Zip\\7z.exe',
     ] : [
         '7z',
         '7za',
-        '7zr',
     ]);
 
     return [...local, ...system];
@@ -92,10 +89,10 @@ function dwebpCommandCandidates(extraDirs = []) {
 
 function missingSevenZipMessage() {
     if (process.platform === 'win32') {
-        return `Не найден 7-Zip CLI для чтения 7z-архивов с обложками. Установите 7-Zip или положите 7zr.exe/7z.exe в каталог bin рядом с inpx-web.exe. Ссылка: ${SEVEN_ZIP_DOWNLOAD_URL}`;
+        return `Не найден 7-Zip CLI для чтения 7z-архивов с обложками. Установите 7-Zip или положите 7za.exe/7z.exe в каталог bin рядом с inpx-web.exe. Ссылка: ${SEVEN_ZIP_DOWNLOAD_URL}`;
     }
 
-    return `Не найден 7-Zip CLI для чтения 7z-архивов с обложками. Установите 7z/7za/7zr через пакетный менеджер вашей системы. Ссылка: ${SEVEN_ZIP_DOWNLOAD_URL}`;
+    return `Не найден 7-Zip CLI для чтения 7z-архивов с обложками. Установите 7z/7za через пакетный менеджер вашей системы. Ссылка: ${SEVEN_ZIP_DOWNLOAD_URL}`;
 }
 
 function missingDjxlMessage() {

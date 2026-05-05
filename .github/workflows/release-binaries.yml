@@ -17,9 +17,10 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  WINDOWS_7ZR_URL: https://github.com/ip7z/7zip/releases/latest/download/7zr.exe
+  WINDOWS_7ZIP_RELEASE_API: https://api.github.com/repos/ip7z/7zip/releases/latest
   WINDOWS_JXL_URL: https://github.com/libjxl/libjxl/releases/latest/download/jxl-x64-windows-static.zip
   WINDOWS_WEBP_URL: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0-windows-x64.zip
+  FB2CNG_RELEASE_API: https://api.github.com/repos/rupor-github/fb2cng/releases/latest
 
 jobs:
   release-smoke-tests:
@@ -59,18 +60,22 @@ jobs:
             label: Linux x64
             target: linux
             build_script: build:linux
+            fbc_asset: fbc-linux-amd64.zip
           - os: ubuntu-latest
             label: Linux arm64
             target: linux-arm64
             build_script: build:linux-arm64
+            fbc_asset: fbc-linux-arm64.zip
           - os: windows-latest
             label: Windows x64
             target: win
             build_script: build:win
+            fbc_asset: fbc-windows-amd64.zip
           - os: macos-latest
             label: macOS x64
             target: macos
             build_script: build:macos
+            fbc_asset: fbc-darwin-amd64.zip
 
     steps:
       - name: Checkout
@@ -101,8 +106,37 @@ jobs:
           $binDir = Join-Path $PWD 'dist/win/bin'
           New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-          $sevenZipTarget = Join-Path $binDir '7zr.exe'
-          Invoke-WebRequest -Uri $env:WINDOWS_7ZR_URL -OutFile $sevenZipTarget
+          $sevenZipRelease = Invoke-RestMethod -Uri $env:WINDOWS_7ZIP_RELEASE_API
+          $sevenZipAsset = $sevenZipRelease.assets |
+            Where-Object { $_.name -like '7z*-extra.7z' } |
+            Select-Object -First 1
+          $sevenZipBootstrapAsset = $sevenZipRelease.assets |
+            Where-Object { $_.name -eq '7zr.exe' } |
+            Select-Object -First 1
+          if (-not $sevenZipAsset) {
+            throw 'Unable to find 7-Zip extra package in the latest release'
+          }
+          if (-not $sevenZipBootstrapAsset) {
+            throw 'Unable to find 7-Zip bootstrap extractor in the latest release'
+          }
+
+          $sevenZipArchive = Join-Path $env:RUNNER_TEMP $sevenZipAsset.name
+          $sevenZipBootstrap = Join-Path $env:RUNNER_TEMP '7zr-bootstrap.exe'
+          $sevenZipExtract = Join-Path $env:RUNNER_TEMP '7zip-extra'
+          if (Test-Path $sevenZipExtract) {
+            Remove-Item $sevenZipExtract -Recurse -Force
+          }
+
+          # Use 7zr only as a temporary extractor for the official extra package;
+          # the Windows release payload gets the full 7za.exe with PPMD support.
+          Invoke-WebRequest -Uri $sevenZipAsset.browser_download_url -OutFile $sevenZipArchive
+          Invoke-WebRequest -Uri $sevenZipBootstrapAsset.browser_download_url -OutFile $sevenZipBootstrap
+          & $sevenZipBootstrap x $sevenZipArchive "-o$sevenZipExtract" -y
+          $sevenZipSource = Get-ChildItem -Path $sevenZipExtract -Recurse -File -Filter '7za.exe' | Select-Object -First 1
+          if (-not $sevenZipSource) {
+            throw 'Unable to find 7za.exe in the 7-Zip extra package'
+          }
+          Copy-Item $sevenZipSource.FullName -Destination (Join-Path $binDir '7za.exe') -Force
 
           $jxlArchive = Join-Path $env:RUNNER_TEMP 'jxl-x64-windows-static.zip'
           $jxlExtract = Join-Path $env:RUNNER_TEMP 'jxl-x64-windows-static'
@@ -133,6 +167,43 @@ jobs:
             ForEach-Object {
               Copy-Item $_.FullName -Destination (Join-Path $binDir $_.Name) -Force
             }
+
+      - name: Bundle fb2cng converter
+        shell: pwsh
+        run: |
+          $binDir = Join-Path $PWD "dist/${{ matrix.target }}/bin"
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+
+          $fb2cngRelease = Invoke-RestMethod -Uri $env:FB2CNG_RELEASE_API
+          $fb2cngAsset = $fb2cngRelease.assets |
+            Where-Object { $_.name -eq '${{ matrix.fbc_asset }}' } |
+            Select-Object -First 1
+          if (-not $fb2cngAsset) {
+            throw 'Unable to find fb2cng asset ${{ matrix.fbc_asset }} in the latest release'
+          }
+
+          $fbcArchive = Join-Path $env:RUNNER_TEMP $fb2cngAsset.name
+          $fbcExtract = Join-Path $env:RUNNER_TEMP "fb2cng-${{ matrix.target }}"
+          if (Test-Path $fbcExtract) {
+            Remove-Item $fbcExtract -Recurse -Force
+          }
+
+          Invoke-WebRequest -Uri $fb2cngAsset.browser_download_url -OutFile $fbcArchive
+          Expand-Archive -Path $fbcArchive -DestinationPath $fbcExtract -Force
+
+          $fbcFileName = if ('${{ matrix.target }}' -eq 'win') { 'fbc.exe' } else { 'fbc' }
+          $fbcSource = Get-ChildItem -Path $fbcExtract -Recurse -File |
+            Where-Object { $_.Name -eq $fbcFileName } |
+            Select-Object -First 1
+          if (-not $fbcSource) {
+            throw "Unable to find $fbcFileName in $($fb2cngAsset.name)"
+          }
+
+          $fbcTarget = Join-Path $binDir $fbcFileName
+          Copy-Item $fbcSource.FullName -Destination $fbcTarget -Force
+          if ('${{ matrix.target }}' -ne 'win') {
+            chmod +x $fbcTarget
+          }
 
       - name: Archive release payload
         shell: pwsh

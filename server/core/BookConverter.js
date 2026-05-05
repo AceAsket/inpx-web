@@ -1,6 +1,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const {spawn} = require('child_process');
+const {bundledBinDir} = require('./ExternalTools');
 
 const pending = new Map();
 const targetFormats = new Set(['epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf']);
@@ -18,18 +19,31 @@ const fb2cngOutputExtensions = new Map([
     ['kfx', ['.kfx']],
     ['azw8', ['.azw8']],
 ]);
+function bundledToolPath(fileName) {
+    const dir = bundledBinDir();
+    return dir ? path.join(dir, fileName) : '';
+}
+
+function localToolPath(fileName) {
+    return path.join(process.cwd(), 'bin', fileName);
+}
+
+const fbcFileName = process.platform === 'win32' ? 'fbc.exe' : 'fbc';
+const mutoolFileName = process.platform === 'win32' ? 'mutool.exe' : 'mutool';
 const fb2cngCommands = [
+    bundledToolPath(fbcFileName),
+    localToolPath(fbcFileName),
     'fbc',
     '/usr/local/bin/fbc',
     '/usr/bin/fbc',
-    path.join(process.cwd(), 'bin', process.platform === 'win32' ? 'fbc.exe' : 'fbc'),
-];
+].filter(Boolean);
 const mutoolCommands = [
+    bundledToolPath(mutoolFileName),
+    localToolPath(mutoolFileName),
     'mutool',
     '/usr/bin/mutool',
     '/usr/local/bin/mutool',
-    path.join(process.cwd(), 'bin', process.platform === 'win32' ? 'mutool.exe' : 'mutool'),
-];
+].filter(Boolean);
 const calibreCommands = [
     'ebook-convert',
     '/usr/bin/ebook-convert',

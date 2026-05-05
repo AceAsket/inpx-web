@@ -116,6 +116,8 @@ class ReadingListStore {
 
     normalizeReaderRuntimeSettings(value = {}, defaults = {}) {
         const fontFamily = String(value.fontFamily || defaults.fontFamily || 'serif').trim().toLowerCase();
+        const contentWidthMode = String(value.contentWidthMode || defaults.contentWidthMode || 'fixed').trim().toLowerCase();
+        const pagedSpreadMode = String(value.pagedSpreadMode || defaults.pagedSpreadMode || 'single').trim().toLowerCase();
         return {
             readMode: (String(value.readMode || defaults.readMode || '').trim().toLowerCase() === 'paged' ? 'paged' : 'scroll'),
             pagedNavigation: (String(value.pagedNavigation || defaults.pagedNavigation || '').trim().toLowerCase() === 'wheel' ? 'wheel' : 'tap'),
@@ -123,8 +125,10 @@ class ReadingListStore {
             showStatusBar: (value.showStatusBar !== false),
             fontFamily: (['serif', 'sans', 'mono', 'system'].includes(fontFamily) ? fontFamily : 'serif'),
             fontSize: Math.max(14, Math.min(30, parseInt(value.fontSize || defaults.fontSize || 18, 10) || 18)),
-            lineHeight: Math.max(1.35, Math.min(2.2, Number(value.lineHeight || defaults.lineHeight || 1.7) || 1.7)),
-            contentWidth: Math.max(560, Math.min(1200, parseInt(value.contentWidth || defaults.contentWidth || 820, 10) || 820)),
+            lineHeight: Math.max(1.15, Math.min(2.2, Number(value.lineHeight || defaults.lineHeight || 1.7) || 1.7)),
+            contentWidth: Math.max(480, Math.min(2200, parseInt(value.contentWidth || defaults.contentWidth || 1040, 10) || 1040)),
+            contentWidthMode: (contentWidthMode === 'viewport' ? 'viewport' : 'fixed'),
+            pagedSpreadMode: (pagedSpreadMode === 'dual' ? 'dual' : 'single'),
             einkContrast: Math.max(72, Math.min(100, parseInt(value.einkContrast || defaults.einkContrast || 92, 10) || 92)),
             einkPaperTone: Math.max(84, Math.min(99, parseInt(value.einkPaperTone || defaults.einkPaperTone || 94, 10) || 94)),
             einkInkTone: Math.max(4, Math.min(26, parseInt(value.einkInkTone || defaults.einkInkTone || 10, 10) || 10)),
@@ -140,7 +144,9 @@ class ReadingListStore {
             fontFamily: 'serif',
             fontSize: 18,
             lineHeight: 1.7,
-            contentWidth: 820,
+            contentWidth: 1040,
+            contentWidthMode: 'fixed',
+            pagedSpreadMode: 'single',
             einkContrast: 92,
             einkPaperTone: 94,
             einkInkTone: 10,
@@ -153,7 +159,9 @@ class ReadingListStore {
             fontFamily: 'serif',
             fontSize: 19,
             lineHeight: 1.8,
-            contentWidth: 760,
+            contentWidth: 920,
+            contentWidthMode: 'fixed',
+            pagedSpreadMode: 'single',
             einkContrast: 92,
             einkPaperTone: 94,
             einkInkTone: 10,

@@ -115,13 +115,14 @@ class Api {
             const parsed = JSON.parse(raw);
             return {
                 currentUserId: String(parsed.currentUserId || '').trim(),
+                profileAccessToken: String(parsed.profileAccessToken || '').trim(),
             };
         } catch (e) {
             return {};
         }
     }
 
-    writeStoredProfileSession(currentUserId = '') {
+    writeStoredProfileSession(currentUserId = '', profileAccessToken = '') {
         try {
             if (!currentUserId) {
                 localStorage.removeItem(profileSessionStorageKey);
@@ -131,6 +132,7 @@ class Api {
             this.rememberStoredProfileLogin(currentUserId);
             localStorage.setItem(profileSessionStorageKey, JSON.stringify({
                 currentUserId: String(currentUserId || '').trim(),
+                profileAccessToken: String(profileAccessToken || '').trim(),
             }));
         } catch (e) {
             // ignore storage failures
@@ -182,7 +184,7 @@ class Api {
         const resolvedSettings = this.$store.state.settings;
         this.accessToken = resolvedSettings.accessToken;
         this.currentUserId = resolvedSettings.currentUserId;
-        this.profileAccessToken = '';
+        this.profileAccessToken = resolvedSettings.profileAccessToken;
     }
 
     async updateConfig() {
@@ -194,7 +196,7 @@ class Api {
             if (config.currentUserId && this.settings.currentUserId !== config.currentUserId)
                 this.commit('setSettings', {currentUserId: config.currentUserId});
             if (config.profileAuthorized && this.$store.state.settings.currentUserId)
-                this.writeStoredProfileSession(this.$store.state.settings.currentUserId);
+                this.writeStoredProfileSession(this.$store.state.settings.currentUserId, this.$store.state.settings.profileAccessToken || this.profileAccessToken);
             else if (!config.profileAuthorized)
                 this.writeStoredProfileSession('', '');
         } catch (e) {
@@ -305,6 +307,9 @@ class Api {
                     params.accessToken = accessToken;
                 if (currentUserId)
                     params.userId = currentUserId;
+                const profileAccessToken = settings.profileAccessToken || this.profileAccessToken;
+                if (profileAccessToken)
+                    params.profileAccessToken = profileAccessToken;
                 if (csrfToken)
                     params.csrfToken = csrfToken;
 
@@ -640,12 +645,12 @@ class Api {
         const result = await this.loginUserProfile(login, String(passwordPrompt.value || ''));
         this.commit('setSettings', {
             currentUserId: result.userId,
-            profileAccessToken: '',
+            profileAccessToken: result.profileAccessToken || '',
         });
         this.currentUserId = result.userId;
-        this.profileAccessToken = '';
+        this.profileAccessToken = result.profileAccessToken || '';
         this.rememberStoredProfileLogin(result.userId);
-        this.writeStoredProfileSession(result.userId);
+        this.writeStoredProfileSession(result.userId, result.profileAccessToken || '');
         await this.updateConfig();
         return result;
     }
