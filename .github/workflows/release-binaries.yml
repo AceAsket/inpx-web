@@ -17,6 +17,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GITHUB_TOKEN: ${{ github.token }}
   WINDOWS_7ZIP_RELEASE_API: https://api.github.com/repos/ip7z/7zip/releases/latest
   WINDOWS_JXL_URL: https://github.com/libjxl/libjxl/releases/latest/download/jxl-x64-windows-static.zip
   WINDOWS_WEBP_URL: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0-windows-x64.zip
@@ -106,7 +107,8 @@ jobs:
           $binDir = Join-Path $PWD 'dist/win/bin'
           New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-          $sevenZipRelease = Invoke-RestMethod -Uri $env:WINDOWS_7ZIP_RELEASE_API
+          $githubHeaders = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; 'X-GitHub-Api-Version' = '2022-11-28' }
+          $sevenZipRelease = Invoke-RestMethod -Uri $env:WINDOWS_7ZIP_RELEASE_API -Headers $githubHeaders
           $sevenZipAsset = $sevenZipRelease.assets |
             Where-Object { $_.name -like '7z*-extra.7z' } |
             Select-Object -First 1
@@ -174,7 +176,8 @@ jobs:
           $binDir = Join-Path $PWD "dist/${{ matrix.target }}/bin"
           New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-          $fb2cngRelease = Invoke-RestMethod -Uri $env:FB2CNG_RELEASE_API
+          $githubHeaders = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; 'X-GitHub-Api-Version' = '2022-11-28' }
+          $fb2cngRelease = Invoke-RestMethod -Uri $env:FB2CNG_RELEASE_API -Headers $githubHeaders
           $fb2cngAsset = $fb2cngRelease.assets |
             Where-Object { $_.name -eq '${{ matrix.fbc_asset }}' } |
             Select-Object -First 1
