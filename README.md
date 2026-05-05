@@ -888,6 +888,14 @@ Options:
     // конвертация книг; основной Docker-образ поддерживает epub, epub3, kepub, kfx, azw8, pdf
     "conversionEnabled": true,
     "conversionFormats": ["epub", "epub3", "kepub", "kfx", "azw8", "pdf"],
+    "converterPaths": {
+        "fb2cng": "",
+        "mutool": "",
+        "calibre": "",
+        "sevenZip": "",
+        "djxl": "",
+        "dwebp": ""
+    },
 
     // отправка книг; получатель всегда берётся из текущего профиля пользователя
     "telegramShareEnabled": false,

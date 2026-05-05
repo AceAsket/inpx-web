@@ -72,14 +72,14 @@ function shouldSkipToolError(err, command) {
     return /MZ[\s\S]*(?:not found|Syntax error)/i.test(stderr);
 }
 
-async function jxlToPng(buf, tempDir, toolDirs = []) {
+async function jxlToPng(buf, tempDir, toolDirs = [], converterPaths = null) {
     const id = utils.randomHexString(30);
     const inputFile = `${tempDir}/${id}.jxl`;
     const outputFile = `${tempDir}/${id}.png`;
 
     try {
         await fs.writeFile(inputFile, buf);
-        const commands = externalTools.djxlCommandCandidates(toolDirs);
+        const commands = externalTools.djxlCommandCandidates(toolDirs, converterPaths);
         let lastError = null;
 
         for (const command of commands) {
@@ -105,14 +105,14 @@ async function jxlToPng(buf, tempDir, toolDirs = []) {
     }
 }
 
-async function webpToPng(buf, tempDir, toolDirs = []) {
+async function webpToPng(buf, tempDir, toolDirs = [], converterPaths = null) {
     const id = utils.randomHexString(30);
     const inputFile = `${tempDir}/${id}.webp`;
     const outputFile = `${tempDir}/${id}.png`;
 
     try {
         await fs.writeFile(inputFile, buf);
-        const commands = externalTools.dwebpCommandCandidates(toolDirs);
+        const commands = externalTools.dwebpCommandCandidates(toolDirs, converterPaths);
         let lastError = null;
 
         for (const command of commands) {
@@ -138,12 +138,12 @@ async function webpToPng(buf, tempDir, toolDirs = []) {
     }
 }
 
-async function normalizeForFb2(buf, tempDir, toolDirs = []) {
+async function normalizeForFb2(buf, tempDir, toolDirs = [], converterPaths = null) {
     const type = contentType(buf);
     if (type === 'image/jxl')
-        return {data: await jxlToPng(buf, tempDir, toolDirs), contentType: 'image/png'};
+        return {data: await jxlToPng(buf, tempDir, toolDirs, converterPaths), contentType: 'image/png'};
     if (type === 'image/webp')
-        return {data: await webpToPng(buf, tempDir, toolDirs), contentType: 'image/png'};
+        return {data: await webpToPng(buf, tempDir, toolDirs, converterPaths), contentType: 'image/png'};
 
     return {data: buf, contentType: type};
 }

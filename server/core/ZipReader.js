@@ -4,13 +4,16 @@ const {spawn} = require('child_process');
 const StreamUnzip = require('node-stream-zip');
 const externalTools = require('./ExternalTools');
 
-const sevenZipCommands = externalTools.sevenZipCommandCandidates();
-
 class ZipReader {
-    constructor() {
+    constructor(config = {}) {
         this.zip = null;
         this.archiveFile = '';
         this.archiveType = '';
+        this.converterPaths = config.converterPaths || null;
+    }
+
+    get sevenZipCommands() {
+        return externalTools.sevenZipCommandCandidates(this.converterPaths);
     }
 
     checkState() {
@@ -23,7 +26,8 @@ class ZipReader {
             let index = 0;
 
             const tryRun = () => {
-                const command = sevenZipCommands[index++];
+                const commands = this.sevenZipCommands;
+                const command = commands[index++];
                 const child = spawn(command, args, {stdio: ['ignore', 'pipe', 'pipe']});
                 let stderr = '';
                 let output = null;
@@ -38,7 +42,7 @@ class ZipReader {
                     if (output)
                         output.destroy();
 
-                    if (err && err.code === 'ENOENT' && index < sevenZipCommands.length) {
+                    if (err && err.code === 'ENOENT' && index < commands.length) {
                         tryRun();
                     } else if (err && err.code === 'ENOENT') {
                         reject(externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage()));
@@ -99,7 +103,8 @@ class ZipReader {
             let index = 0;
 
             const tryRun = () => {
-                const command = sevenZipCommands[index++];
+                const commands = this.sevenZipCommands;
+                const command = commands[index++];
                 const child = spawn(command, args, {stdio: ['ignore', 'pipe', 'pipe']});
                 const stdout = [];
                 let stderr = '';
@@ -110,7 +115,7 @@ class ZipReader {
                         return;
                     settled = true;
 
-                    if (err && err.code === 'ENOENT' && index < sevenZipCommands.length) {
+                    if (err && err.code === 'ENOENT' && index < commands.length) {
                         tryRun();
                     } else if (err && err.code === 'ENOENT') {
                         reject(externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage()));

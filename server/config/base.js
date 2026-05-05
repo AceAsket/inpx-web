@@ -94,6 +94,7 @@ module.exports = {
     resetAdminPassword: process.env.INPX_RESET_ADMIN_PASSWORD === 'true',
     conversionEnabled: process.env.INPX_ENABLE_CONVERSION !== 'false',
     conversionFormats: String(process.env.INPX_CONVERSION_FORMATS || 'epub,epub3,kepub,kfx,azw8,pdf').split(',').map(item => item.trim().toLowerCase()).filter(Boolean),
+    converterPaths: {},
     telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN),
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramChatId: process.env.TELEGRAM_CHAT_ID || '',

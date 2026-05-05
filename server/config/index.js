@@ -48,6 +48,7 @@ const propsToSave = [
     'inpxCheckInterval',
     'lowMemoryMode',
     'fullOptimization',
+    'converterPaths',
     'allowRemoteLib',
     'remoteLib',
     'server',

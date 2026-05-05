@@ -3752,6 +3752,7 @@ class WebWorker {
             'inpxCheckInterval',
             'lowMemoryMode',
             'fullOptimization',
+            'converterPaths',
             'server',
             'opds',
             'telegramShareEnabled',
@@ -4420,7 +4421,7 @@ class WebWorker {
 
                     try {
                         const data = await zipReader.extractToBuf(entryName);
-                        result.push(Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir))));
+                        result.push(Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir), this.config.converterPaths)));
                     } catch(e) {
                         log(LM_ERR, `image ${entryName}: ${e.message}`);
                     }
@@ -4444,7 +4445,7 @@ class WebWorker {
 
             try {
                 const data = await zipReader.extractToBuf(String(libid));
-                return Object.assign({id: '0'}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir)));
+                return Object.assign({id: '0'}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir), this.config.converterPaths));
             } catch(e) {
                 // try next matching archive
             } finally {
@@ -4583,7 +4584,7 @@ class WebWorker {
                 for (const entryName of entryNames) {
                     try {
                         const data = await zipReader.extractToBuf(entryName);
-                        const image = await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(archive.sourceLibDir));
+                        const image = await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(archive.sourceLibDir), this.config.converterPaths);
                         return `data:${image.contentType};base64,${image.data.toString('base64')}`;
                     } catch(e) {
                         log(LM_WARN, `author picture ${entryName}: ${e.message}`);
@@ -4883,6 +4884,7 @@ class WebWorker {
                     outputFile: preparedFile,
                     format: targetFormat,
                     sourceFileName: downFileName,
+                    converterPaths: this.config.converterPaths,
                 });
             }
             preparedFileName = convertedFileName(downFileName, targetFormat);

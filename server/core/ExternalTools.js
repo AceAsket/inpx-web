@@ -20,7 +20,43 @@ function resolveBundledPath(fileName) {
     return path.join(binDir, fileName);
 }
 
-function sevenZipCommandCandidates() {
+function normalizeConfiguredToolPaths(value) {
+    if (!value)
+        return [];
+
+    const values = Array.isArray(value) ? value : [value];
+    return values
+        .map(item => String(item || '').trim())
+        .filter(Boolean);
+}
+
+function configuredToolCandidates(converterPaths = {}, keys = []) {
+    if (!converterPaths || typeof converterPaths !== 'object')
+        return [];
+
+    const result = [];
+    for (const key of keys)
+        result.push(...normalizeConfiguredToolPaths(converterPaths[key]));
+
+    return Array.from(new Set(result));
+}
+
+function currentConverterPaths() {
+    try {
+        const ConfigManager = require('../config');
+        const configManager = new ConfigManager();
+        return (configManager.config && configManager.config.converterPaths) || {};
+    } catch (err) {
+        return {};
+    }
+}
+
+function resolveConverterPaths(converterPaths = null) {
+    return converterPaths || currentConverterPaths();
+}
+
+function sevenZipCommandCandidates(converterPaths = null) {
+    const configured = configuredToolCandidates(resolveConverterPaths(converterPaths), ['sevenZip', 'sevenzip', '7z', '7za']);
     const local = [
         resolveBundledPath('7z.exe'),
         resolveBundledPath('7za.exe'),
@@ -36,7 +72,7 @@ function sevenZipCommandCandidates() {
         '7za',
     ]);
 
-    return [...local, ...system];
+    return [...configured, ...local, ...system];
 }
 
 function toolCandidatesFromDirs(extraDirs = [], fileNames = []) {
@@ -53,7 +89,8 @@ function toolCandidatesFromDirs(extraDirs = [], fileNames = []) {
     return result;
 }
 
-function djxlCommandCandidates(extraDirs = []) {
+function djxlCommandCandidates(extraDirs = [], converterPaths = null) {
+    const configured = configuredToolCandidates(resolveConverterPaths(converterPaths), ['djxl', 'jxl']);
     const extra = toolCandidatesFromDirs(extraDirs, process.platform === 'win32' ? ['djxl.exe', 'djxl'] : ['djxl']);
     const local = [
         process.platform === 'win32' ? resolveBundledPath('djxl.exe') : '',
@@ -67,10 +104,11 @@ function djxlCommandCandidates(extraDirs = []) {
         'djxl',
     ]);
 
-    return [...extra, ...local, ...system];
+    return [...configured, ...extra, ...local, ...system];
 }
 
-function dwebpCommandCandidates(extraDirs = []) {
+function dwebpCommandCandidates(extraDirs = [], converterPaths = null) {
+    const configured = configuredToolCandidates(resolveConverterPaths(converterPaths), ['dwebp', 'webp']);
     const extra = toolCandidatesFromDirs(extraDirs, process.platform === 'win32' ? ['dwebp.exe', 'dwebp'] : ['dwebp']);
     const local = [
         process.platform === 'win32' ? resolveBundledPath('dwebp.exe') : '',
@@ -84,7 +122,7 @@ function dwebpCommandCandidates(extraDirs = []) {
         'dwebp',
     ]);
 
-    return [...extra, ...local, ...system];
+    return [...configured, ...extra, ...local, ...system];
 }
 
 function missingSevenZipMessage() {
@@ -137,6 +175,9 @@ module.exports = {
     DJXL_DOWNLOAD_URL,
     DWEBP_DOWNLOAD_URL,
     bundledBinDir,
+    configuredToolCandidates,
+    currentConverterPaths,
+    resolveConverterPaths,
     sevenZipCommandCandidates,
     djxlCommandCandidates,
     dwebpCommandCandidates,
