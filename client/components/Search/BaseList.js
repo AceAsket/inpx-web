@@ -60,6 +60,7 @@ export default class BaseList {
     showCounts = true;
     showRates = true;
     showGenres = true;    
+    bookCardView = 'cards';
     showDeleted = false;
     abCacheEnabled = true;
 
@@ -93,8 +94,13 @@ export default class BaseList {
         this.showCounts = settings.showCounts;
         this.showRates = settings.showRates;
         this.showGenres = settings.showGenres;
+        this.bookCardView = (settings.bookCardView === 'list' ? 'list' : 'cards');
         this.showDeleted = settings.showDeleted;
         this.abCacheEnabled = settings.abCacheEnabled;
+    }
+
+    get bookCardListMode() {
+        return this.bookCardView === 'list';
     }
 
     get config() {

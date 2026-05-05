@@ -30,6 +30,20 @@
             <q-checkbox v-model="showRates" size="36px" label="Показывать оценки" />
             <q-checkbox v-model="showInfo" size="36px" label="Показывать кнопку «Инфо»" />
             <q-checkbox v-model="showGenres" size="36px" label="Показывать жанры" />
+            <div class="settings-card-view row items-center q-ml-sm q-my-xs">
+                <div class="q-mr-sm settings-card-view-label">
+                    Вид карточек
+                </div>
+                <q-btn-toggle
+                    v-model="bookCardView"
+                    class="settings-card-view-toggle"
+                    toggle-color="primary"
+                    :options="bookCardViewOptions"
+                    push
+                    no-caps
+                    rounded
+                />
+            </div>
             <q-checkbox v-model="showDates" size="36px" label="Показывать даты поступления" />
             <q-checkbox v-model="showDeleted" size="36px" label="Показывать удалённые" />
             <q-checkbox v-model="abCacheEnabled" size="36px" label="Кешировать запросы" />
@@ -476,6 +490,11 @@ const componentOptions = {
         showGenres(newValue) {
             this.commit('setSettings', {showGenres: newValue});
         },
+        bookCardView(newValue) {
+            this.commit('setSettings', {
+                bookCardView: (newValue === 'list' ? 'list' : 'cards'),
+            });
+        },
         showDates(newValue) {
             this.commit('setSettings', {showDates: newValue});
         },
@@ -540,6 +559,7 @@ class SettingsDialog {
     showRates = true;
     showInfo = true;
     showGenres = true;
+    bookCardView = 'cards';
     showDates = false;
     showDeleted = false;
     abCacheEnabled = true;
@@ -740,6 +760,11 @@ class SettingsDialog {
         {label: '24', value: 24},
     ];
 
+    bookCardViewOptions = [
+        {label: 'Карточки', value: 'cards'},
+        {label: 'Список', value: 'list'},
+    ];
+
     created() {
         this.commit = this.$store.commit;
         this.api = this.$root.api;
@@ -872,6 +897,7 @@ class SettingsDialog {
         this.showRates = settings.showRates;
         this.showInfo = settings.showInfo;
         this.showGenres = settings.showGenres;
+        this.bookCardView = (settings.bookCardView === 'list' ? 'list' : 'cards');
         this.showDates = settings.showDates;
         this.showDeleted = settings.showDeleted;
         this.abCacheEnabled = settings.abCacheEnabled;
@@ -1494,6 +1520,19 @@ export default vueComponent(SettingsDialog);
 .settings-inline-summary {
     flex: 1 1 220px;
     min-width: 180px;
+}
+
+.settings-card-view {
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.settings-card-view-label {
+    min-width: 110px;
+}
+
+.settings-card-view-toggle {
+    background: var(--app-surface);
 }
 
 .admin-mail-box {

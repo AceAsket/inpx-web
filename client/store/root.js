@@ -18,6 +18,7 @@ const state = {
         showRates: true,
         showInfo: true,
         showGenres: true,
+        bookCardView: 'cards',
         showDates: false,
         showDeleted: false,
         abCacheEnabled: true,

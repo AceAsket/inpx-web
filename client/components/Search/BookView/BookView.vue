@@ -1,15 +1,15 @@
 <template>
-    <div class="book-view q-my-sm">
+    <div class="book-view q-my-sm" :class="{'is-list-mode': isListMode}">
         <div
             class="book-card"
-            :class="{'is-poster-mode': isPosterMode, 'is-compact-discovery': compactDiscovery, 'has-inline-actions': hasInlineActionsLayout}"
+            :class="{'is-poster-mode': isPosterMode, 'is-list-mode': isListMode, 'is-compact-discovery': compactDiscovery, 'has-inline-actions': hasInlineActionsLayout, 'has-book-author': showBookAuthor}"
             role="button"
             tabindex="0"
             @click="handleCardActivate"
             @keydown.enter.prevent="handleCardActivate"
             @keydown.space.prevent="handleCardActivate"
         >
-            <div class="cover-box">
+            <div v-if="!isListMode" class="cover-box">
                 <q-checkbox
                     v-if="selectable && !isExternalOnlyDiscoveryBook"
                     :model-value="selected"
@@ -46,7 +46,7 @@
 
             <div class="book-content">
                 <div
-                    v-if="(mode == 'series' || mode == 'title' || mode == 'extended') && bookAuthor"
+                    v-if="showBookAuthor"
                     class="book-author clickable2"
                     @click.stop.prevent="handleAuthorActivate"
                 >
@@ -71,7 +71,7 @@
                     </div>
                 </div>
 
-                <div class="book-title-row">
+                <div class="book-title-row" :class="{'has-serno': book.serno}">
                     <div class="serno-slot">
                         <div v-if="book.serno" class="serno-pill">
                             {{ book.serno }}
@@ -359,6 +359,7 @@ class BookView {
     showRates = true;
     showInfo = true;
     showGenres = true;
+    bookCardView = 'cards';
     showDeleted = false;
     showDates = false;
     showJson = false;
@@ -385,6 +386,7 @@ class BookView {
         this.showRates = settings.showRates;
         this.showInfo = settings.showInfo;
         this.showGenres = settings.showGenres;
+        this.bookCardView = (settings.bookCardView === 'list' ? 'list' : 'cards');
         this.showDates = settings.showDates;
         this.showDeleted = settings.showDeleted;
         this.showJson = settings.showJson;
@@ -638,11 +640,19 @@ class BookView {
     }
 
     get isPosterMode() {
-        return this.mode == 'title' || this.mode == 'extended';
+        return !this.isListMode && (this.mode == 'title' || this.mode == 'extended');
     }
 
     get hasInlineActionsLayout() {
         return this.mode == 'author' || this.mode == 'series';
+    }
+
+    get showBookAuthor() {
+        return (this.mode == 'series' || this.mode == 'title' || this.mode == 'extended') && !!this.bookAuthor;
+    }
+
+    get isListMode() {
+        return this.bookCardView === 'list';
     }
 
     get extraFormats() {
@@ -797,6 +807,12 @@ export default vueComponent(BookView);
     display: flex;
 }
 
+.book-view.is-list-mode {
+    height: auto;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
 .book-card {
     display: grid;
     grid-template-columns: 112px minmax(0, 1fr);
@@ -820,6 +836,21 @@ export default vueComponent(BookView);
     gap: 0;
     overflow: hidden;
     padding: 0;
+}
+
+.book-card.is-list-mode {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+    box-shadow: 0 6px 14px rgba(23, 32, 38, 0.04);
+    background: var(--app-surface);
+    height: auto;
+    min-height: 0;
+}
+
+.book-card.is-list-mode .cover-box {
+    display: none;
 }
 
 .book-card:hover {
@@ -954,6 +985,12 @@ export default vueComponent(BookView);
 .book-card.is-compact-discovery .primary-action {
     grid-column: 1 / -1;
     border-radius: 10px;
+}
+
+.book-card.is-list-mode.is-compact-discovery {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding: 10px 12px;
 }
 
 .book-card.is-compact-discovery .book-actions :deep(.q-btn) {
@@ -1100,6 +1137,162 @@ export default vueComponent(BookView);
         minmax(32px, auto);
     gap: 10px;
     height: 100%;
+}
+
+.book-card.is-list-mode .book-content {
+    grid-template-rows: auto auto auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px;
+    align-items: center;
+    height: auto;
+}
+
+.book-card.is-list-mode .book-author {
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 0;
+    min-width: 0;
+    font-size: 13px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    -webkit-line-clamp: 1;
+}
+
+.book-card.is-list-mode.has-book-author .book-author,
+.book-card.is-list-mode.has-book-author .book-meta-pills {
+    grid-column: 1 / -1;
+}
+
+.book-card.is-list-mode.has-book-author .book-meta-pills {
+    grid-row: 2;
+    justify-content: flex-start;
+    margin-left: 0;
+}
+
+.book-card.is-list-mode.has-book-author .book-title-row {
+    grid-row: 3;
+}
+
+.book-card.is-list-mode.has-book-author .book-series,
+.book-card.is-list-mode.has-book-author .book-discovery-note,
+.book-card.is-list-mode.has-book-author .book-genres {
+    grid-row: 4;
+}
+
+.book-card.is-list-mode .book-meta-pills {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    justify-content: flex-start;
+    height: auto;
+    gap: 6px;
+    min-width: max-content;
+    margin-left: 0;
+}
+
+.book-card.is-list-mode .book-title-row {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: auto minmax(0, 1fr);
+    min-height: 0;
+    gap: 8px;
+    margin: 0;
+}
+
+.book-card.is-list-mode .book-title-row:not(.has-serno) {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.book-card.is-list-mode .book-title-row:not(.has-serno) .serno-slot {
+    display: none;
+}
+
+.book-card.is-list-mode .serno-slot {
+    min-width: 0;
+}
+
+.book-card.is-list-mode .book-title {
+    block-size: auto;
+    min-height: 0;
+    font-size: 18px;
+    line-height: 1.15;
+    -webkit-line-clamp: 1;
+}
+
+.book-card.is-list-mode .book-series,
+.book-card.is-list-mode .book-discovery-note,
+.book-card.is-list-mode .book-genres {
+    grid-column: 1;
+    grid-row: 3;
+    min-height: 0;
+    block-size: auto;
+    padding: 0;
+    font-size: 13px;
+    -webkit-line-clamp: 1;
+}
+
+.book-card.is-list-mode .book-discovery-note,
+.book-card.is-list-mode .book-genres {
+    display: none;
+}
+
+.book-card.is-list-mode .book-actions {
+    grid-column: 1 / -1;
+    grid-row: 4;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 6px;
+    min-height: 0;
+    padding: 0;
+}
+
+.book-card.is-list-mode .format-actions {
+    grid-column: 1 / -1;
+    grid-row: 5;
+    min-height: 0;
+}
+
+.book-card.is-list-mode.has-book-author .book-actions {
+    grid-column: 1 / -1;
+    grid-row: 5;
+    justify-content: flex-start;
+}
+
+.book-card.is-list-mode.has-book-author .format-actions {
+    grid-column: 1 / -1;
+    grid-row: 6;
+}
+
+.book-card.is-list-mode .book-actions :deep(.q-btn),
+.book-card.is-list-mode .format-actions :deep(.q-btn) {
+    width: auto;
+    min-height: 30px;
+    padding-left: 10px;
+    padding-right: 10px;
+    border-radius: 999px;
+    font-size: 12px;
+}
+
+.book-card.is-list-mode .book-actions :deep(.q-btn__content),
+.book-card.is-list-mode .format-actions :deep(.q-btn__content) {
+    width: auto;
+    justify-content: center;
+}
+
+.book-card.is-list-mode .action-split {
+    width: auto;
+    align-self: auto;
+}
+
+.book-card.is-list-mode .action-split-toggle {
+    height: 30px;
+}
+
+.book-card.is-list-mode .meta-pill,
+.book-card.is-list-mode .serno-pill {
+    min-height: 22px;
+    padding: 3px 8px;
+    font-size: 11px;
 }
 
 .book-author {
@@ -1401,19 +1594,82 @@ export default vueComponent(BookView);
     .book-card.has-inline-actions {
         grid-template-columns: 136px minmax(0, 1fr);
         gap: 22px;
+        align-items: start;
+        height: auto;
     }
 
     .book-card.has-inline-actions .cover-box {
-        height: 196px;
+        height: 184px;
         padding: 12px;
     }
 
+    .book-card.has-inline-actions .book-content {
+        grid-template-rows:
+            auto
+            auto
+            auto
+            auto
+            auto
+            auto;
+        gap: 9px;
+        align-content: start;
+        height: auto;
+        min-height: 184px;
+    }
+
+    .book-card.has-inline-actions .book-author {
+        grid-row: 1;
+        min-height: 0;
+        font-size: 14px;
+        -webkit-line-clamp: 1;
+    }
+
+    .book-card.has-inline-actions .book-meta-pills {
+        grid-row: 2;
+        height: auto;
+        min-height: 26px;
+    }
+
+    .book-card.has-inline-actions .book-title-row {
+        grid-row: 3;
+        min-height: 0;
+        margin-bottom: 0;
+        align-items: center;
+    }
+
+    .book-card.has-inline-actions .book-title {
+        block-size: auto;
+        min-height: 0;
+        line-height: 1.12;
+        -webkit-line-clamp: 2;
+    }
+
+    .book-card.has-inline-actions .book-series {
+        grid-row: 4;
+        block-size: auto;
+        min-height: 0;
+        -webkit-line-clamp: 1;
+    }
+
+    .book-card.has-inline-actions .book-genres {
+        grid-row: 5;
+        min-height: 0;
+        align-content: center;
+    }
+
     .book-card.has-inline-actions .book-actions {
+        grid-row: 6;
         display: flex;
         flex-wrap: wrap;
         align-items: flex-start;
         gap: 8px;
         min-height: auto;
+        padding-top: 0;
+    }
+
+    .book-card.has-inline-actions .format-actions {
+        grid-row: 7;
+        min-height: 0;
     }
 
     .book-card.has-inline-actions .book-actions > * {
@@ -1502,6 +1758,53 @@ export default vueComponent(BookView);
 
     .book-title {
         font-size: 18px;
+    }
+
+    .book-card.is-list-mode {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+        padding: 10px;
+    }
+
+    .book-card.is-list-mode .book-content {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto auto auto auto auto;
+    }
+
+    .book-card.is-list-mode .book-author,
+    .book-card.is-list-mode .book-meta-pills,
+    .book-card.is-list-mode .book-actions,
+    .book-card.is-list-mode .book-series,
+    .book-card.is-list-mode .format-actions {
+        grid-column: 1;
+    }
+
+    .book-card.is-list-mode .book-author {
+        grid-row: 1;
+    }
+
+    .book-card.is-list-mode .book-meta-pills {
+        grid-row: 2;
+        justify-content: flex-start;
+        margin-left: 0;
+    }
+
+    .book-card.is-list-mode .book-title-row {
+        grid-row: 3;
+    }
+
+    .book-card.is-list-mode .book-series {
+        grid-row: 4;
+    }
+
+    .book-card.is-list-mode .book-actions {
+        grid-row: 5;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .book-card.is-list-mode .format-actions {
+        grid-row: 6;
     }
 }
 
@@ -1594,6 +1897,89 @@ export default vueComponent(BookView);
         gap: 6px;
         min-height: auto;
     }
+
+    .book-card.is-list-mode {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+        padding: 10px;
+    }
+
+    .book-card.is-list-mode .book-content {
+        grid-template-rows: auto auto auto auto auto auto;
+        gap: 6px;
+    }
+
+    .book-card.is-list-mode .book-title {
+        block-size: auto;
+        font-size: 16px;
+        -webkit-line-clamp: 2;
+    }
+}
+
+.book-card.is-list-mode.has-inline-actions {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    height: auto;
+}
+
+.book-card.is-list-mode.has-inline-actions .book-content {
+    width: 100%;
+    max-width: none;
+    min-height: 0;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+    align-items: center;
+    align-content: start;
+}
+
+.book-card.is-list-mode.has-inline-actions:not(.has-book-author) .book-content {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.book-card.is-list-mode.has-inline-actions .book-title-row,
+.book-card.is-list-mode.has-inline-actions .book-actions,
+.book-card.is-list-mode.has-inline-actions .format-actions {
+    grid-column: 1 / -1;
+}
+
+.book-card.is-list-mode.has-inline-actions .book-author {
+    grid-column: 1;
+    max-width: min(220px, 32vw);
+}
+
+.book-card.is-list-mode.has-inline-actions .book-meta-pills {
+    grid-column: 2;
+    grid-row: 1;
+    justify-content: flex-start;
+}
+
+.book-card.is-list-mode.has-inline-actions:not(.has-book-author) .book-meta-pills {
+    grid-column: 1;
+    margin-left: 0;
+}
+
+.book-card.is-list-mode.has-inline-actions .book-title-row {
+    grid-row: 2;
+}
+
+.book-card.is-list-mode.has-inline-actions .book-actions {
+    grid-row: 3;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    max-width: none;
+}
+
+.book-card.is-list-mode.has-inline-actions .book-actions > * {
+    flex: 0 0 auto;
+    align-self: center;
+}
+
+.book-card.is-list-mode.has-inline-actions .format-actions {
+    grid-row: 4;
 }
 
 </style>

@@ -35,7 +35,7 @@
             </q-chip>
         </div>
 
-        <div class="extended-grid q-mx-md">
+        <div class="extended-grid q-mx-md" :class="{'extended-grid--list': bookCardListMode}">
             <BookView
                 v-for="item in tableData" :key="item.key"
                 :book="item.book" mode="extended" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
@@ -201,6 +201,12 @@ export default vueComponent(ExtendedList);
     gap: 18px;
     align-items: stretch;
     grid-auto-rows: 1fr;
+}
+
+.extended-grid--list {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    grid-auto-rows: auto;
 }
 
 @media (max-width: 760px) {

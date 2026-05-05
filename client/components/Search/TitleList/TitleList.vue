@@ -35,7 +35,7 @@
             </q-chip>
         </div>
 
-        <div class="title-grid q-mx-md">
+        <div class="title-grid q-mx-md" :class="{'title-grid--list': bookCardListMode}">
             <template v-for="item in tableData" :key="item.key">
                 <BookView
                     :book="item.book" mode="title" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
@@ -222,6 +222,12 @@ export default vueComponent(TitleList);
     gap: 18px;
     align-items: stretch;
     grid-auto-rows: 1fr;
+}
+
+.title-grid--list {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    grid-auto-rows: auto;
 }
 
 @media (max-width: 760px) {

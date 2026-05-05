@@ -139,7 +139,7 @@
                 </div>
             </div>
 
-            <div v-if="shelf.items && shelf.items.length" class="discovery-grid">
+            <div v-if="shelf.items && shelf.items.length" class="discovery-grid" :class="{'discovery-grid--list': bookCardListMode}">
                 <BookView
                     v-for="book in shelf.items"
                     :key="book._uid || `${shelf.id}-${book.id}`"
@@ -500,6 +500,11 @@ export default vueComponent(DiscoveryShelves);
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 18px;
     align-items: stretch;
+}
+
+.discovery-grid--list {
+    grid-template-columns: 1fr;
+    gap: 8px;
 }
 
 .discovery-load-more {
