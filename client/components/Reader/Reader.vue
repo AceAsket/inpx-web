@@ -4734,12 +4734,6 @@ class Reader {
             return;
 
         this.capturePendingReflowAnchor();
-        this.$nextTick(() => {
-            this.updateScrollerViewport();
-            this.requestBottomClipCalibration();
-            if (this.pagedPages && this.pagedPages.length)
-                this.setCurrentPagedPage(this.currentPageIndex, false);
-        });
     }
 
     clearSpacingReflowTimer() {
