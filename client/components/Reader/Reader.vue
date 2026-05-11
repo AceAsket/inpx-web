@@ -1387,6 +1387,7 @@ class Reader {
     readerNoteReturnPoint = null;
     pendingReaderAnchorJump = null;
     pendingReflowAnchor = null;
+    reflowAnchorHighlightTimer = null;
     bookmarkDraft = {
         title: '',
         excerpt: '',
@@ -1654,6 +1655,7 @@ class Reader {
         this.detachScrollerObserver();
         this.clearSnapTimer();
         this.clearSpacingReflowTimer();
+        this.clearReaderReflowAnchorHighlight();
         if (this.pagePaddingPreviewTimer) {
             clearTimeout(this.pagePaddingPreviewTimer);
             this.pagePaddingPreviewTimer = null;
@@ -4510,8 +4512,10 @@ class Reader {
             return false;
 
         const restored = this.restoreReaderReflowAnchor(anchor);
-        if (restored)
+        if (restored) {
+            this.scheduleReaderReflowAnchorHighlight(anchor);
             this.pendingReflowAnchor = null;
+        }
         return restored;
     }
 
@@ -4573,6 +4577,90 @@ class Reader {
         scroller.scrollTop = Math.max(0, Number(anchor.scrollTop || 0) || 0);
         this.updateCurrentSectionFromScroll();
         return true;
+    }
+
+    async scheduleReaderReflowAnchorHighlight(anchor = null) {
+        if (!anchor || typeof window === 'undefined')
+            return;
+
+        await this.$nextTick();
+        await this.waitForAnimationFrames(2);
+        this.highlightReaderReflowAnchor(anchor);
+    }
+
+    highlightReaderReflowAnchor(anchor = null) {
+        this.clearReaderReflowAnchorHighlight();
+        if (!anchor || typeof document === 'undefined')
+            return;
+
+        let target = null;
+        if (anchor.mode === 'paged') {
+            const sheet = this.getActiveLivePagedSheet();
+            const anchorSheet = this.getPagedAnchorSheet(sheet);
+            target = this.findReaderReflowHighlightTarget(anchorSheet, anchor) || anchorSheet || sheet;
+        } else {
+            const scroller = (this.$refs ? this.$refs.scroller : null);
+            target = this.findReaderReflowHighlightTarget(scroller, anchor);
+        }
+
+        if (!target || !target.classList)
+            return;
+
+        target.classList.add('reader-reflow-anchor-highlight');
+        this.reflowAnchorHighlightTimer = setTimeout(() => {
+            if (target && target.classList)
+                target.classList.remove('reader-reflow-anchor-highlight');
+            if (this.reflowAnchorHighlightTimer)
+                this.reflowAnchorHighlightTimer = null;
+        }, 2200);
+    }
+
+    clearReaderReflowAnchorHighlight() {
+        if (this.reflowAnchorHighlightTimer) {
+            clearTimeout(this.reflowAnchorHighlightTimer);
+            this.reflowAnchorHighlightTimer = null;
+        }
+
+        if (typeof document === 'undefined')
+            return;
+
+        document.querySelectorAll('.reader-reflow-anchor-highlight').forEach((node) => {
+            if (node && node.classList)
+                node.classList.remove('reader-reflow-anchor-highlight');
+        });
+    }
+
+    findReaderReflowHighlightTarget(root = null, anchor = {}) {
+        if (!root || typeof root.querySelector !== 'function')
+            return null;
+
+        let target = null;
+        if (anchor.id)
+            target = root.querySelector(`#${this.escapeCssId(anchor.id)}`);
+        if (!target && anchor.textSnippet)
+            target = this.findReaderNodeByTextSnippet(root.querySelector('.reader-html') || root, anchor.textSnippet);
+        if (!target && anchor.textSnippet && String(anchor.textSnippet || '').startsWith('image:'))
+            target = this.findReaderNodeByImageAnchor(root, anchor.textSnippet);
+        if (!target && anchor.sectionId)
+            target = root.querySelector(`#${this.escapeCssId(anchor.sectionId)}`);
+
+        return target;
+    }
+
+    findReaderNodeByImageAnchor(root = null, imageAnchor = '') {
+        if (!root || typeof root.querySelectorAll !== 'function')
+            return null;
+
+        const safeAnchor = String(imageAnchor || '').trim();
+        if (!safeAnchor)
+            return null;
+
+        const images = Array.from(root.querySelectorAll('img'));
+        const image = images.find((node) => this.normalizeReaderImageAnchor(node.getAttribute('src') || node.currentSrc || node.src || '') === safeAnchor);
+        if (!image)
+            return null;
+
+        return image.closest('.reader-image-block, .reader-page-content, p, div') || image;
     }
 
     reflowReaderLayout() {
@@ -9533,6 +9621,38 @@ export default vueComponent(Reader);
     width: var(--reader-page-padding-right);
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
+}
+
+.reader-page-sheet.reader-reflow-anchor-highlight,
+.reader-page-column-sheet.reader-reflow-anchor-highlight,
+.reader-html :deep(.reader-reflow-anchor-highlight) {
+    position: relative;
+    border-radius: 10px;
+    animation: reader-reflow-anchor-pulse 2.2s ease-out both;
+}
+
+.reader-html :deep(.reader-reflow-anchor-highlight) {
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+}
+
+@keyframes reader-reflow-anchor-pulse {
+    0% {
+        background-color: color-mix(in srgb, var(--reader-accent) 30%, transparent);
+        box-shadow:
+            0 0 0 4px color-mix(in srgb, var(--reader-accent) 24%, transparent),
+            0 0 22px color-mix(in srgb, var(--reader-accent) 30%, transparent);
+    }
+    55% {
+        background-color: color-mix(in srgb, var(--reader-accent) 16%, transparent);
+        box-shadow:
+            0 0 0 2px color-mix(in srgb, var(--reader-accent) 14%, transparent),
+            0 0 14px color-mix(in srgb, var(--reader-accent) 16%, transparent);
+    }
+    100% {
+        background-color: transparent;
+        box-shadow: none;
+    }
 }
 
 .reader-page-column-sheet--empty {
