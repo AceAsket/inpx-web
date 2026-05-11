@@ -6841,7 +6841,7 @@ class Reader {
             } else {
                 const [bookResponse, stateResponseRaw] = await Promise.all([
                     api.getBookInfo(this.bookUid),
-                    api.getReaderState(this.bookUid).catch(() => ({preferences: {}, progress: {}})),
+                    api.getReaderState(this.bookUid, {suppressProfileLogin: true}).catch(() => ({preferences: {}, progress: {}})),
                 ]);
                 const stateResponse = (stateResponseRaw || {preferences: {}, progress: {}});
 
@@ -7967,7 +7967,7 @@ class Reader {
             textOffset: requestProgress.textOffset,
             textSnippet: requestProgress.textSnippet,
             updatedAt: requestProgress.updatedAt,
-        });
+        }, {suppressProfileLogin: true});
         const currentProgress = this.normalizeReaderProgress(this.progress);
         const requestTime = Date.parse(requestProgress.updatedAt || '');
         const currentTime = Date.parse(currentProgress.updatedAt || '');
@@ -8033,7 +8033,12 @@ class Reader {
         if (!api)
             return;
 
-        await api.updateReaderPreferences(this.preferences);
+        try {
+            await api.updateReaderPreferences(this.preferences, {suppressProfileLogin: true});
+        } catch (e) {
+            if ((e && e.message) !== 'need_profile_login')
+                throw e;
+        }
     }
 
     mergeReaderPreferences(preferences = {}) {

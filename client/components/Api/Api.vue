@@ -311,7 +311,7 @@ class Api {
         }
     }
 
-    async request(params, timeoutSecs = 10) {
+    async request(params, timeoutSecs = 10, options = {}) {
         let errCount = 0;
         while (1) {// eslint-disable-line
             try {
@@ -336,6 +336,8 @@ class Api {
                     this.accessGranted = false;
                     await this.showPasswordDialog();
                 } else if (response && response.error == 'need_profile_login') {
+                    if (options.suppressProfileLogin)
+                        throw new Error('need_profile_login');
                     if (this.profileLoginPromise) {
                         await this.profileLoginPromise;
                     } else {
@@ -492,24 +494,24 @@ class Api {
         return await this.request({action: 'get-book-info', bookUid}, 120);
     }
 
-    async getReaderState(bookUid) {
-        return await this.request({action: 'get-reader-state', bookUid}, 120);
+    async getReaderState(bookUid, options = {}) {
+        return await this.request({action: 'get-reader-state', bookUid}, 120, options);
     }
 
-    async getUserReadingLibrary(options = {}) {
-        return await this.request({action: 'get-user-reading-library', options}, 120);
+    async getUserReadingLibrary(options = {}, requestOptions = {}) {
+        return await this.request({action: 'get-user-reading-library', options}, 120, requestOptions);
     }
 
-    async updateReaderProgress(bookUid, progress = {}) {
-        return await this.request({action: 'update-reader-progress', bookUid, progress}, 120);
+    async updateReaderProgress(bookUid, progress = {}, options = {}) {
+        return await this.request({action: 'update-reader-progress', bookUid, progress}, 120, options);
     }
 
     async deleteReaderProgress(bookUid) {
         return await this.request({action: 'delete-reader-progress', bookUid}, 120);
     }
 
-    async updateReaderPreferences(preferences = {}) {
-        return await this.request({action: 'update-reader-preferences', preferences}, 120);
+    async updateReaderPreferences(preferences = {}, options = {}) {
+        return await this.request({action: 'update-reader-preferences', preferences}, 120, options);
     }
 
     async addReaderBookmark(bookUid, bookmark = {}) {
