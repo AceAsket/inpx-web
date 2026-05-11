@@ -4624,7 +4624,7 @@ class Reader {
                 target.classList.remove('reader-reflow-anchor-highlight');
             if (this.reflowAnchorHighlightTimer)
                 this.reflowAnchorHighlightTimer = null;
-        }, 2200);
+        }, 4200);
         return true;
     }
 
@@ -9655,7 +9655,7 @@ export default vueComponent(Reader);
 .reader-html :deep(.reader-reflow-anchor-highlight) {
     position: relative;
     border-radius: 10px;
-    animation: reader-reflow-anchor-pulse 2.2s ease-out both;
+    animation: reader-reflow-anchor-pulse 4.2s ease-out both;
 }
 
 .reader-html :deep(.reader-reflow-anchor-highlight) {
