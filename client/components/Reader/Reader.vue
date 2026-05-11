@@ -4361,9 +4361,9 @@ class Reader {
         const contentRoot = (anchorSheet && anchorSheet.querySelector('.reader-page-content, .reader-html')) || null;
         const focusNode = this.findTopLeftReaderContentNode(contentRoot);
         const focusId = this.getReaderNodeAnchorId(focusNode);
-        const focusText = this.getPagedVisibleTextSnippet(anchorSheet)
-            || this.getReaderNodeTextSnippet(focusNode)
+        const focusText = this.getReaderNodeTextSnippet(focusNode)
             || this.getReaderNodeImageAnchor(focusNode)
+            || this.getPagedVisibleTextSnippet(anchorSheet)
             || this.getPagedVisibleImageAnchor(anchorSheet);
         const textOffset = this.getPagedTextOffsetForSnippet(focusText, pageIndex);
 
@@ -4410,6 +4410,8 @@ class Reader {
             if (!node || typeof node.getBoundingClientRect !== 'function')
                 continue;
             if (node === root)
+                continue;
+            if (this.isReaderHighlightContainerNode(node))
                 continue;
 
             const rect = node.getBoundingClientRect();
@@ -4603,7 +4605,7 @@ class Reader {
         if (anchor.mode === 'paged') {
             const sheet = this.getActiveLivePagedSheet();
             const anchorSheet = this.getPagedAnchorSheet(sheet);
-            target = this.findReaderReflowHighlightTarget(anchorSheet, anchor) || anchorSheet || sheet;
+            target = this.findReaderReflowHighlightTarget(anchorSheet, anchor);
         } else {
             const scroller = (this.$refs ? this.$refs.scroller : null);
             target = this.findReaderReflowHighlightTarget(scroller, anchor);
@@ -7716,14 +7718,29 @@ class Reader {
         if (!needles.length)
             return null;
 
-        const nodes = [root].concat(Array.from(root.querySelectorAll('*')));
+        const nodes = Array.from(root.querySelectorAll('*')).reverse();
         for (const node of nodes) {
+            if (node === root || this.isReaderHighlightContainerNode(node))
+                continue;
+
             const text = this.normalizeReaderSearchText(node.textContent || '').toLowerCase();
             if (text && needles.some((needle) => text.includes(needle)))
                 return node;
         }
 
         return null;
+    }
+
+    isReaderHighlightContainerNode(node = null) {
+        if (!node || !node.classList)
+            return false;
+
+        return [
+            'reader-html',
+            'reader-page-content',
+            'reader-page-sheet',
+            'reader-page-column-sheet',
+        ].some(className => node.classList.contains(className));
     }
 
     normalizeReaderSearchText(text = '') {
