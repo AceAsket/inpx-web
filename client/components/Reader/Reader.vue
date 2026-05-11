@@ -4592,14 +4592,18 @@ class Reader {
             return;
 
         await this.$nextTick();
-        await this.waitForAnimationFrames(2);
-        this.highlightReaderReflowAnchor(anchor);
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+            await this.waitForAnimationFrames(2);
+            if (this.highlightReaderReflowAnchor(anchor))
+                return;
+            await new Promise(resolve => setTimeout(resolve, 180));
+        }
     }
 
     highlightReaderReflowAnchor(anchor = null) {
         this.clearReaderReflowAnchorHighlight();
         if (!anchor || typeof document === 'undefined')
-            return;
+            return false;
 
         let target = null;
         if (anchor.mode === 'paged') {
@@ -4612,7 +4616,7 @@ class Reader {
         }
 
         if (!target || !target.classList)
-            return;
+            return false;
 
         target.classList.add('reader-reflow-anchor-highlight');
         this.reflowAnchorHighlightTimer = setTimeout(() => {
@@ -4621,6 +4625,7 @@ class Reader {
             if (this.reflowAnchorHighlightTimer)
                 this.reflowAnchorHighlightTimer = null;
         }, 2200);
+        return true;
     }
 
     clearReaderReflowAnchorHighlight() {
