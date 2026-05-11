@@ -4534,9 +4534,9 @@ class Reader {
         if (anchor.mode === 'paged') {
             let pageIndex = -1;
             if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
-                pageIndex = this.findPagedPageIndexByPageStartOffset(anchor.textOffset);
-            if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
                 pageIndex = this.findPagedPageIndexByTextOffset(anchor.textOffset);
+            if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
+                pageIndex = this.findPagedPageIndexByPageStartOffset(anchor.textOffset);
             if (pageIndex < 0 && anchor.textSnippet)
                 pageIndex = this.findPagedPageIndexByTextSnippet(anchor.textSnippet, anchor.pageIndex);
             if (pageIndex < 0 && anchor.id)
@@ -7530,9 +7530,9 @@ class Reader {
         if (String(textSnippet || '').startsWith('image:'))
             pageIndex = this.findPagedPageIndexByAnchor(textSnippet);
         if (pageIndex < 0 && Number(textOffset) >= 0)
-            pageIndex = this.findPagedPageIndexByPageStartOffset(textOffset);
-        if (pageIndex < 0 && Number(textOffset) >= 0)
             pageIndex = this.findPagedPageIndexByTextOffset(textOffset);
+        if (pageIndex < 0 && Number(textOffset) >= 0)
+            pageIndex = this.findPagedPageIndexByPageStartOffset(textOffset);
         if (pageIndex < 0 && textSnippet)
             pageIndex = this.findPagedPageIndexByTextSnippet(textSnippet, preferredIndex);
         return pageIndex;
