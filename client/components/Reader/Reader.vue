@@ -157,8 +157,22 @@
                         <q-btn flat dense no-caps :class="{'is-active': readerControlsTab === 'status'}" @click="setReaderControlsTab('status')">{{ uiText.controlsStatus }}</q-btn>
                     </div>
 
-                    <div class="reader-progress-text">
-                        {{ displayProgressPercent }}%<span v-if="showDisplayPagedPageCounter"> | {{ displayCurrentPage }}/{{ displayTotalPages }}</span>
+                    <div class="reader-controls-state">
+                        <q-btn
+                            v-if="readerSettingsReflowPending"
+                            flat
+                            dense
+                            no-caps
+                            icon="la la-sync-alt"
+                            class="reader-rebuild-btn"
+                            :disable="layoutRefreshing || isPagedBuildPending"
+                            @click="applyPendingReaderSettingsReflow"
+                        >
+                            {{ uiText.rebuildPages }}
+                        </q-btn>
+                        <div class="reader-progress-text">
+                            {{ displayProgressPercent }}%<span v-if="showDisplayPagedPageCounter"> | {{ displayCurrentPage }}/{{ displayTotalPages }}</span>
+                        </div>
                     </div>
                 </div>
 
@@ -1513,6 +1527,7 @@ class Reader {
     layoutRefreshing = false;
     layoutRefreshTimer = null;
     spacingReflowTimer = null;
+    readerSettingsReflowPending = false;
     layoutRefreshStartedAt = 0;
     layoutRefreshReason = '';
     stableReaderStatus = {
@@ -2308,6 +2323,7 @@ class Reader {
             hide: '\u0421\u043a\u0440\u044b\u0442\u044c',
             settings: '\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438',
             screen: '\u042d\u043a\u0440\u0430\u043d',
+            rebuildPages: '\u041f\u0435\u0440\u0435\u0441\u0442\u0440\u043e\u0438\u0442\u044c \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443',
             refreshingLayout: '\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u0432\u0438\u0434\u0430...',
         };
     }
@@ -3012,7 +3028,10 @@ class Reader {
     }
 
     toggleControls() {
-        this.controlsOpen = !this.controlsOpen;
+        const nextOpen = !this.controlsOpen;
+        this.controlsOpen = nextOpen;
+        if (!nextOpen)
+            this.applyPendingReaderSettingsReflow();
     }
 
     toggleContentsDialog() {
@@ -3042,9 +3061,12 @@ class Reader {
 
         this.chromeHidden = nextHidden;
         if (this.chromeHidden) {
+            const hadOpenControls = this.controlsOpen;
             this.controlsOpen = false;
             this.contentsDialogOpen = false;
             this.helpDialogOpen = false;
+            if (hadOpenControls)
+                this.applyPendingReaderSettingsReflow();
         }
 
         this.$nextTick(() => {
@@ -3253,13 +3275,11 @@ class Reader {
     }
 
     async setContentWidthMode(mode = 'fixed') {
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({
             contentWidthMode: (mode === 'viewport' ? 'viewport' : 'fixed'),
         });
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.requestReaderSettingsReflow();
     }
 
     async setPagedSpreadMode(mode = 'single') {
@@ -3276,14 +3296,12 @@ class Reader {
     }
 
     async changeDualPageGap(delta = 0) {
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
         const next = Math.max(0, Math.min(240, this.dualPageGap + (Number(delta || 0) || 0)));
         this.updateActivePreferences({
             dualPageGap: next,
         });
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.requestReaderSettingsReflow({previewSpacing: true});
     }
 
     async changePagePadding(edge = '', delta = 0) {
@@ -3305,8 +3323,7 @@ class Reader {
         });
         this.showPagePaddingPreview(edge);
         this.savePreferencesDebounced();
-        this.applyLiveSpacingPreview();
-        this.scheduleSpacingReflow();
+        this.requestReaderSettingsReflow({previewSpacing: true});
     }
 
     async changePageVerticalPadding(delta = 0) {
@@ -3319,8 +3336,7 @@ class Reader {
             pageVerticalPadding: nextTop,
         });
         this.savePreferencesDebounced();
-        this.applyLiveSpacingPreview();
-        this.scheduleSpacingReflow();
+        this.requestReaderSettingsReflow({previewSpacing: true});
     }
 
     async changePageHorizontalPadding(delta = 0) {
@@ -3333,8 +3349,7 @@ class Reader {
             pageHorizontalPadding: nextLeft,
         });
         this.savePreferencesDebounced();
-        this.applyLiveSpacingPreview();
-        this.scheduleSpacingReflow();
+        this.requestReaderSettingsReflow({previewSpacing: true});
     }
 
     async changePageOuterGap(edge = '', delta = 0) {
@@ -3360,8 +3375,7 @@ class Reader {
             });
         }
         this.savePreferencesDebounced();
-        this.applyLiveSpacingPreview();
-        this.scheduleSpacingReflow();
+        this.requestReaderSettingsReflow({previewSpacing: true});
     }
 
     setPageAnimation(mode = 'soft') {
@@ -4563,6 +4577,7 @@ class Reader {
 
     reflowReaderLayout() {
         this.clearSpacingReflowTimer();
+        this.readerSettingsReflowPending = false;
         this.pagedLayoutSignature = '';
         if (this.isPagedMode && this.isCompactLayout && this.compactChromeHidden) {
             this.compactChromePagedBuildPending = true;
@@ -4582,6 +4597,31 @@ class Reader {
                 this.endLayoutRefresh(220);
             });
         });
+    }
+
+    requestReaderSettingsReflow({previewSpacing = false} = {}) {
+        if (!this.bookUid) {
+            this.readerSettingsReflowPending = false;
+            return;
+        }
+
+        if (!this.controlsOpen) {
+            this.reflowReaderLayout();
+            return;
+        }
+
+        this.clearSpacingReflowTimer();
+        this.readerSettingsReflowPending = true;
+        this.capturePendingReflowAnchor(true);
+        if (previewSpacing)
+            this.applyLiveSpacingPreview();
+    }
+
+    applyPendingReaderSettingsReflow() {
+        if (!this.readerSettingsReflowPending)
+            return;
+
+        this.reflowReaderLayout();
     }
 
     scheduleSpacingReflow() {
@@ -8310,51 +8350,43 @@ class Reader {
         this.savePreferencesDebounced();
     }
 
-    async changeFontSize(delta) {
+    changeFontSize(delta) {
         this.capturePendingReflowAnchor(true);
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({
             fontSize: Math.max(14, Math.min(30, this.activePreferences.fontSize + delta)),
         });
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.requestReaderSettingsReflow();
     }
 
-    async setFontFamily(fontFamily) {
+    setFontFamily(fontFamily) {
         const next = this.normalizeFontFamily(fontFamily);
         if (next === this.selectedFontFamily)
             return;
 
         this.capturePendingReflowAnchor(true);
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({fontFamily: next});
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.requestReaderSettingsReflow();
     }
 
-    async changeContentWidth(delta) {
+    changeContentWidth(delta) {
         this.capturePendingReflowAnchor(true);
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({
             contentWidth: Math.max(480, Math.min(2200, this.activePreferences.contentWidth + delta)),
         });
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.requestReaderSettingsReflow();
     }
 
-    async changeLineHeight(delta) {
+    changeLineHeight(delta) {
         this.capturePendingReflowAnchor(true);
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
         const next = Math.round((this.activePreferences.lineHeight + delta) * 100) / 100;
         this.updateActivePreferences({
             lineHeight: Math.max(1.15, Math.min(2.2, next)),
         });
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.requestReaderSettingsReflow();
     }
 
     setTextShadow(enabled = true) {
@@ -8526,6 +8558,26 @@ export default vueComponent(Reader);
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+}
+
+.reader-controls-state {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+}
+
+.reader-rebuild-btn {
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 4px 10px;
+    border: 1px solid color-mix(in srgb, var(--reader-accent) 36%, var(--reader-border));
+    border-radius: 999px;
+    background: var(--reader-accent-soft);
+    color: var(--reader-accent);
+    font-size: 12px;
+    font-weight: 800;
 }
 
 .reader-controls-body {
@@ -10369,6 +10421,11 @@ export default vueComponent(Reader);
     .reader-controls-header {
         flex-direction: column;
         align-items: stretch;
+    }
+
+    .reader-controls-state {
+        justify-content: space-between;
+        width: 100%;
     }
 
     .reader-progress-text {
