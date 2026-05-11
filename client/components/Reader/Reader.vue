@@ -3257,23 +3257,27 @@ class Reader {
     }
 
     async setReadMode(mode = 'scroll') {
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
+        const nextMode = (mode === 'paged' ? 'paged' : 'scroll');
+        if (this.activePreferences.readMode === nextMode)
+            return;
+
         this.updateActivePreferences({
-            readMode: (mode === 'paged' ? 'paged' : 'scroll'),
+            readMode: nextMode,
         });
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.requestReaderSettingsReflow();
     }
 
     async setPagedDirection(direction = 'vertical') {
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
+        const nextDirection = (direction === 'horizontal' ? 'horizontal' : 'vertical');
+        if (this.activePreferences.pagedDirection === nextDirection)
+            return;
+
         this.updateActivePreferences({
-            pagedDirection: (direction === 'horizontal' ? 'horizontal' : 'vertical'),
+            pagedDirection: nextDirection,
         });
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.requestReaderSettingsReflow();
     }
 
     async setContentWidthMode(mode = 'fixed') {
@@ -3285,16 +3289,18 @@ class Reader {
     }
 
     async setPagedSpreadMode(mode = 'single') {
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
+        const nextMode = (mode === 'dual' ? 'dual' : 'single');
+        if (this.activePreferences.pagedSpreadMode === nextMode)
+            return;
+
         this.updateActivePreferences({
-            pagedSpreadMode: (mode === 'dual' ? 'dual' : 'single'),
+            pagedSpreadMode: nextMode,
         });
         this.currentPageIndex = this.isDualPagedSpread
             ? this.currentPageIndex - (this.currentPageIndex % 2)
             : this.currentPageIndex;
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.requestReaderSettingsReflow();
     }
 
     async changeDualPageGap(delta = 0) {
