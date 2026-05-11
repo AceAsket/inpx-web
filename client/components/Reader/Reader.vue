@@ -4708,7 +4708,7 @@ class Reader {
 
         this.clearSpacingReflowTimer();
         this.readerSettingsReflowPending = true;
-        this.capturePendingReflowAnchor(true);
+        this.capturePendingReflowAnchor(!this.pendingReflowAnchor);
         if (previewSpacing)
             this.applyLiveSpacingPreview();
     }
