@@ -193,12 +193,29 @@ class Api {
             const config = await this.getConfig();
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
-            if (config.currentUserId && this.settings.currentUserId !== config.currentUserId)
+            const selectedUserId = String(this.settings.currentUserId || this.currentUserId || '').trim();
+            const preferredProfile = Array.isArray(config.userProfiles)
+                ? (
+                    config.userProfiles.find((profile) => profile && !profile.anonymousProfile && !profile.isAdmin)
+                    || config.userProfiles.find((profile) => profile && !profile.anonymousProfile)
+                    || null
+                )
+                : null;
+            if (config.profileAuthorized && config.currentUserId && this.settings.currentUserId !== config.currentUserId)
                 this.commit('setSettings', {currentUserId: config.currentUserId});
+            else if (!selectedUserId)
+                this.commit('setSettings', {currentUserId: (preferredProfile && preferredProfile.id) || config.currentUserId || ''});
             if (config.profileAuthorized && this.$store.state.settings.currentUserId)
                 this.writeStoredProfileSession(this.$store.state.settings.currentUserId, this.$store.state.settings.profileAccessToken || this.profileAccessToken);
-            else if (!config.profileAuthorized)
-                this.writeStoredProfileSession('', '');
+            else if (!config.profileAuthorized) {
+                const rememberedUserId = String(this.$store.state.settings.currentUserId || selectedUserId || '').trim();
+                this.commit('setSettings', {
+                    currentUserId: rememberedUserId,
+                    profileAccessToken: '',
+                });
+                this.profileAccessToken = '';
+                this.writeStoredProfileSession(rememberedUserId, '');
+            }
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
@@ -614,7 +631,12 @@ class Api {
     }
 
     async showProfileLoginDialog(prefillLogin = '', opts = {}) {
-        const current = this.$store.state.config.currentUserProfile || {};
+        const config = this.$store.state.config || {};
+        const selectedUserId = String(this.settings.currentUserId || this.currentUserId || '').trim();
+        const selectedProfile = Array.isArray(config.userProfiles)
+            ? config.userProfiles.find((profile) => profile && profile.id === selectedUserId)
+            : null;
+        const current = selectedProfile || config.currentUserProfile || {};
         const dialogOpts = {
             dialogClass: opts.dialogClass || '',
             dialogStyle: opts.dialogStyle || null,

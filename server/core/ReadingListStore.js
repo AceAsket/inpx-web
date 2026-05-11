@@ -122,13 +122,40 @@ class ReadingListStore {
             readMode: (String(value.readMode || defaults.readMode || '').trim().toLowerCase() === 'paged' ? 'paged' : 'scroll'),
             pagedNavigation: (String(value.pagedNavigation || defaults.pagedNavigation || '').trim().toLowerCase() === 'wheel' ? 'wheel' : 'tap'),
             pagedDirection: (String(value.pagedDirection || defaults.pagedDirection || '').trim().toLowerCase() === 'horizontal' ? 'horizontal' : 'vertical'),
+            pageAnimation: (['none', 'soft', 'slide'].includes(String(value.pageAnimation || defaults.pageAnimation || '').trim().toLowerCase())
+                ? String(value.pageAnimation || defaults.pageAnimation || '').trim().toLowerCase()
+                : 'soft'),
+            pageAnimationSpeed: (['fast', 'normal', 'slow'].includes(String(value.pageAnimationSpeed || defaults.pageAnimationSpeed || '').trim().toLowerCase())
+                ? String(value.pageAnimationSpeed || defaults.pageAnimationSpeed || '').trim().toLowerCase()
+                : 'normal'),
             showStatusBar: (value.showStatusBar !== false),
+            statusBarClock: (value.statusBarClock === true),
+            statusBarProgressBar: (value.statusBarProgressBar === true),
+            statusBarProgressPosition: (String(value.statusBarProgressPosition || defaults.statusBarProgressPosition || '').trim().toLowerCase() === 'side' ? 'side' : 'bottom'),
+            statusBarRemaining: (value.statusBarRemaining === true),
+            statusBarAlign: (String(value.statusBarAlign || defaults.statusBarAlign || '').trim().toLowerCase() === 'edge' ? 'edge' : 'center'),
+            statusBarSize: Math.max(10, Math.min(18, parseInt(value.statusBarSize || defaults.statusBarSize || 12, 10) || 12)),
             fontFamily: (['serif', 'sans', 'mono', 'system'].includes(fontFamily) ? fontFamily : 'serif'),
             fontSize: Math.max(14, Math.min(30, parseInt(value.fontSize || defaults.fontSize || 18, 10) || 18)),
             lineHeight: Math.max(1.15, Math.min(2.2, Number(value.lineHeight || defaults.lineHeight || 1.7) || 1.7)),
+            textShadow: (value.textShadow !== false),
             contentWidth: Math.max(480, Math.min(2200, parseInt(value.contentWidth || defaults.contentWidth || 1040, 10) || 1040)),
             contentWidthMode: (contentWidthMode === 'viewport' ? 'viewport' : 'fixed'),
+            backgroundImage: String(value.backgroundImage || defaults.backgroundImage || '').trim(),
+            backgroundImageName: String(value.backgroundImageName || defaults.backgroundImageName || '').trim().slice(0, 160),
+            backgroundTransparentPages: (value.backgroundTransparentPages === true),
+            backgroundTransparentStatus: (value.backgroundTransparentStatus === true),
             pagedSpreadMode: (pagedSpreadMode === 'dual' ? 'dual' : 'single'),
+            dualPageGap: Math.max(0, Math.min(240, parseInt(value.dualPageGap || defaults.dualPageGap || 28, 10) || 28)),
+            pageVerticalPadding: Math.max(0, Math.min(160, parseInt(value.pageVerticalPadding || defaults.pageVerticalPadding || 18, 10) || 18)),
+            pageHorizontalPadding: Math.max(0, Math.min(220, parseInt(value.pageHorizontalPadding || defaults.pageHorizontalPadding || 18, 10) || 18)),
+            pagePaddingTop: Math.max(0, Math.min(160, parseInt(value.pagePaddingTop || defaults.pagePaddingTop || value.pageVerticalPadding || defaults.pageVerticalPadding || 18, 10) || 18)),
+            pagePaddingBottom: Math.max(0, Math.min(160, parseInt(value.pagePaddingBottom || defaults.pagePaddingBottom || value.pageVerticalPadding || defaults.pageVerticalPadding || 22, 10) || 22)),
+            pagePaddingLeft: Math.max(0, Math.min(220, parseInt(value.pagePaddingLeft || defaults.pagePaddingLeft || value.pageHorizontalPadding || defaults.pageHorizontalPadding || 18, 10) || 18)),
+            pagePaddingRight: Math.max(0, Math.min(220, parseInt(value.pagePaddingRight || defaults.pagePaddingRight || value.pageHorizontalPadding || defaults.pageHorizontalPadding || 18, 10) || 18)),
+            pageOuterGap: Math.max(0, Math.min(220, parseInt(value.pageOuterGap || defaults.pageOuterGap || 28, 10) || 28)),
+            pageOuterGapTop: Math.max(0, Math.min(220, parseInt(value.pageOuterGapTop || defaults.pageOuterGapTop || value.pageOuterGap || defaults.pageOuterGap || 28, 10) || 28)),
+            pageOuterGapBottom: Math.max(0, Math.min(220, parseInt(value.pageOuterGapBottom || defaults.pageOuterGapBottom || value.pageOuterGap || defaults.pageOuterGap || 28, 10) || 28)),
             einkContrast: Math.max(72, Math.min(100, parseInt(value.einkContrast || defaults.einkContrast || 92, 10) || 92)),
             einkPaperTone: Math.max(84, Math.min(99, parseInt(value.einkPaperTone || defaults.einkPaperTone || 94, 10) || 94)),
             einkInkTone: Math.max(4, Math.min(26, parseInt(value.einkInkTone || defaults.einkInkTone || 10, 10) || 10)),
@@ -140,13 +167,36 @@ class ReadingListStore {
             readMode: 'scroll',
             pagedNavigation: 'tap',
             pagedDirection: 'vertical',
+            pageAnimation: 'soft',
+            pageAnimationSpeed: 'normal',
             showStatusBar: true,
+            statusBarClock: false,
+            statusBarProgressBar: false,
+            statusBarProgressPosition: 'bottom',
+            statusBarRemaining: false,
+            statusBarAlign: 'center',
+            statusBarSize: 12,
             fontFamily: 'serif',
             fontSize: 18,
             lineHeight: 1.7,
+            textShadow: true,
             contentWidth: 1040,
             contentWidthMode: 'fixed',
+            backgroundImage: '',
+            backgroundImageName: '',
+            backgroundTransparentPages: false,
+            backgroundTransparentStatus: false,
             pagedSpreadMode: 'single',
+            dualPageGap: 28,
+            pageVerticalPadding: 18,
+            pageHorizontalPadding: 18,
+            pagePaddingTop: 18,
+            pagePaddingBottom: 22,
+            pagePaddingLeft: 18,
+            pagePaddingRight: 18,
+            pageOuterGap: 28,
+            pageOuterGapTop: 28,
+            pageOuterGapBottom: 28,
             einkContrast: 92,
             einkPaperTone: 94,
             einkInkTone: 10,
@@ -155,13 +205,36 @@ class ReadingListStore {
             readMode: 'paged',
             pagedNavigation: 'tap',
             pagedDirection: 'vertical',
+            pageAnimation: 'none',
+            pageAnimationSpeed: 'fast',
             showStatusBar: true,
+            statusBarClock: false,
+            statusBarProgressBar: false,
+            statusBarProgressPosition: 'bottom',
+            statusBarRemaining: false,
+            statusBarAlign: 'center',
+            statusBarSize: 12,
             fontFamily: 'serif',
             fontSize: 19,
             lineHeight: 1.8,
+            textShadow: true,
             contentWidth: 920,
             contentWidthMode: 'fixed',
+            backgroundImage: '',
+            backgroundImageName: '',
+            backgroundTransparentPages: false,
+            backgroundTransparentStatus: false,
             pagedSpreadMode: 'single',
+            dualPageGap: 28,
+            pageVerticalPadding: 18,
+            pageHorizontalPadding: 18,
+            pagePaddingTop: 18,
+            pagePaddingBottom: 22,
+            pagePaddingLeft: 18,
+            pagePaddingRight: 18,
+            pageOuterGap: 28,
+            pageOuterGapTop: 28,
+            pageOuterGapBottom: 28,
             einkContrast: 92,
             einkPaperTone: 94,
             einkInkTone: 10,
@@ -204,10 +277,15 @@ class ReadingListStore {
                 continue;
 
             const percent = Number(row.percent);
+            const pageIndex = Number(row.pageIndex);
+            const textOffset = Number(row.textOffset);
             result[normalizedBookUid] = {
                 percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
                 sectionId: String(row.sectionId || '').trim(),
-                updatedAt: String(row.updatedAt || '').trim() || this.nowIso(),
+                pageIndex: Number.isFinite(pageIndex) ? Math.max(0, Math.round(pageIndex)) : 0,
+                textOffset: Number.isFinite(textOffset) ? Math.max(-1, Math.round(textOffset)) : -1,
+                textSnippet: String(row.textSnippet || '').trim().slice(0, 240),
+                updatedAt: String(row.updatedAt || '').trim(),
                 hidden: (row.hidden === true),
             };
         }
@@ -745,7 +823,7 @@ class ReadingListStore {
 
         return {
             preferences: this.normalizeReaderPreferences(user.readerPreferences),
-            progress: Object.assign({percent: 0, sectionId: '', updatedAt: '', hidden: false}, user.readerProgress[normalizedBookUid] || {}),
+            progress: Object.assign({percent: 0, sectionId: '', pageIndex: 0, textOffset: -1, textSnippet: '', updatedAt: '', hidden: false}, user.readerProgress[normalizedBookUid] || {}),
             bookmarks: (user.readerBookmarks && Array.isArray(user.readerBookmarks[normalizedBookUid]) ? user.readerBookmarks[normalizedBookUid] : []),
         };
     }
@@ -806,11 +884,27 @@ class ReadingListStore {
         const current = target.readerProgress[normalizedBookUid] || {};
         const percent = Number(utilsHasProp(patch, 'percent') ? patch.percent : current.percent);
         const sectionId = String(utilsHasProp(patch, 'sectionId') ? patch.sectionId : current.sectionId || '').trim();
+        const pageIndex = Number(utilsHasProp(patch, 'pageIndex') ? patch.pageIndex : current.pageIndex);
+        const textOffset = Number(utilsHasProp(patch, 'textOffset') ? patch.textOffset : current.textOffset);
+        const textSnippet = String(utilsHasProp(patch, 'textSnippet') ? patch.textSnippet : current.textSnippet || '').trim().slice(0, 240);
         const hidden = (utilsHasProp(patch, 'hidden') ? patch.hidden === true : false);
+        const patchUpdatedAt = String(utilsHasProp(patch, 'updatedAt') ? patch.updatedAt : '').trim();
+        const currentUpdatedAt = String(current.updatedAt || '').trim();
+        const patchTime = Date.parse(patchUpdatedAt);
+        const currentTime = Date.parse(currentUpdatedAt);
+        if (
+            Number.isFinite(patchTime)
+            && Number.isFinite(currentTime)
+            && patchTime < currentTime
+        )
+            return current;
         target.readerProgress[normalizedBookUid] = {
             percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
             sectionId,
-            updatedAt: this.nowIso(),
+            pageIndex: Number.isFinite(pageIndex) ? Math.max(0, Math.round(pageIndex)) : 0,
+            textOffset: Number.isFinite(textOffset) ? Math.max(-1, Math.round(textOffset)) : -1,
+            textSnippet,
+            updatedAt: patchUpdatedAt || this.nowIso(),
             hidden,
         };
         target.updatedAt = this.nowIso();

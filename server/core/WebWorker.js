@@ -2801,6 +2801,9 @@ class WebWorker {
                 ext: book.ext || '',
                 percent: Math.max(0, Math.min(1, Number(item.progress.percent || 0) || 0)),
                 sectionId: String(item.progress.sectionId || '').trim(),
+                pageIndex: Math.max(0, Math.round(Number(item.progress.pageIndex || 0) || 0)),
+                textOffset: Math.max(-1, Math.round(Number(item.progress.textOffset || -1) || -1)),
+                textSnippet: String(item.progress.textSnippet || '').trim(),
                 updatedAt: String(item.progress.updatedAt || '').trim(),
             });
         }
@@ -4933,35 +4936,49 @@ class WebWorker {
 
     async sendBookToEmail(bookUid, format = '', userId = '') {
         const {currentUser} = await this.readingListStore.getUsers(userId);
-        const emailTo = String((currentUser && currentUser.emailTo) || '').trim();
+        const emailTo = String((currentUser && currentUser.emailTo) || this.config.emailTo || '').trim();
         if (!this.config.emailShareEnabled || !this.config.smtpHost || !emailTo)
             throw new Error('Отправка на email не настроена');
 
         const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
-        this.addAdminEvent('info', 'delivery', `Отправка книги на email: ${book.title || downFileName}`);
-        const transporter = nodemailer.createTransport({
-            host: this.config.smtpHost,
-            port: this.config.smtpPort,
-            secure: this.config.smtpSecure,
-            auth: (this.config.smtpUser ? {
-                user: this.config.smtpUser,
-                pass: this.config.smtpPass,
-            } : undefined),
+        this.addAdminEvent('info', 'delivery', `Отправка книги на email: ${book.title || downFileName}`, {
+            to: emailTo,
+            format: format || book.ext || '',
         });
+        const transporter = nodemailer.createTransport(this.buildSmtpTransportOptions());
 
         const subject = [book.author, book.title].filter(Boolean).join(' - ') || downFileName;
-        await transporter.sendMail({
-            from: this.config.emailFrom || this.config.smtpUser || 'inpx-web@localhost',
-            to: emailTo,
-            subject: `Книга: ${subject}`,
-            text: `Во вложении книга "${book.title || downFileName}".`,
-            attachments: [
-                {
-                    filename: downFileName,
-                    path: rawFile,
-                },
-            ],
-        });
+        try {
+            await transporter.sendMail({
+                from: this.config.emailFrom || this.config.smtpUser || 'inpx-web@localhost',
+                to: emailTo,
+                subject: `Книга: ${subject}`,
+                text: `Во вложении книга "${book.title || downFileName}".`,
+                attachments: [
+                    {
+                        filename: downFileName,
+                        path: rawFile,
+                    },
+                ],
+            });
+        } catch (err) {
+            const response = String((err && (err.response || err.message)) || 'SMTP error');
+            const code = (err && (err.responseCode || err.code)) || '';
+            const message = `Email не отправлен: ${response}`;
+            this.addAdminEvent('error', 'delivery', message, {
+                to: emailTo,
+                code,
+                command: err && err.command,
+                rejected: err && err.rejected,
+                rejectedErrors: err && err.rejectedErrors ? err.rejectedErrors.map(item => ({
+                    recipient: item.recipient,
+                    response: item.response,
+                    responseCode: item.responseCode,
+                    command: item.command,
+                })) : undefined,
+            });
+            throw new Error(message);
+        }
 
         this.addAdminEvent('info', 'delivery', `Книга отправлена на email: ${book.title || downFileName}`);
         return {success: true};

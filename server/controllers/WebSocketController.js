@@ -370,7 +370,7 @@ class WebSocketController {
             this.config.emailShareEnabled
             && this.config.smtpHost
             && currentUser
-            && currentUser.emailTo
+            && (currentUser.emailTo || this.config.emailTo)
         );
         if (currentUser && currentUser.isAdmin && config.profileAuthorized) {
             config.adminIntegrations = this.webWorker.getAdminIntegrationConfig();

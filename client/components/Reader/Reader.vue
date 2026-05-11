@@ -149,196 +149,357 @@
                     @change="handleReaderBackgroundUpload"
                 />
 
-                <div class="reader-controls-tabs">
-                    <q-btn flat dense no-caps :class="{'is-active': readerControlsTab === 'text'}" @click="setReaderControlsTab('text')">{{ uiText.controlsText }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': readerControlsTab === 'page'}" @click="setReaderControlsTab('page')">{{ uiText.controlsPage }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': readerControlsTab === 'background'}" @click="setReaderControlsTab('background')">{{ uiText.controlsBackground }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': readerControlsTab === 'status'}" @click="setReaderControlsTab('status')">{{ uiText.controlsStatus }}</q-btn>
-                </div>
-
-                <div v-if="readerControlsTab === 'text'" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'dark'}" @click="setTheme('dark')">{{ uiText.themeDark }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'sepia'}" @click="setTheme('sepia')">{{ uiText.themeSepia }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'light'}" @click="setTheme('light')">{{ uiText.themeLight }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'eink'}" @click="setTheme('eink')">{{ uiText.themeEink }}</q-btn>
-                </div>
-
-                <div v-if="readerControlsTab === 'background'" class="reader-background-control">
-                    <q-btn flat dense round icon="la la-image" @click="openReaderBackgroundPicker">
-                        <q-tooltip :delay="600">{{ uiText.backgroundUpload }}</q-tooltip>
-                    </q-btn>
-                    <q-btn v-if="preferences.backgroundImage" flat dense round icon="la la-times" @click="clearReaderBackground">
-                        <q-tooltip :delay="600">{{ uiText.backgroundClear }}</q-tooltip>
-                    </q-btn>
-                </div>
-
-                <template v-if="readerControlsTab === 'background' && preferences.backgroundImage">
-                    <div class="reader-theme-switch">
-                        <q-btn flat dense no-caps :class="{'is-active': !activePreferences.backgroundTransparentPages}" @click="setBackgroundTransparency('backgroundTransparentPages', false)">{{ uiText.backgroundPagesSolid }}</q-btn>
-                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.backgroundTransparentPages}" @click="setBackgroundTransparency('backgroundTransparentPages', true)">{{ uiText.backgroundPagesTransparent }}</q-btn>
+                <div class="reader-controls-header">
+                    <div class="reader-controls-tabs">
+                        <q-btn flat dense no-caps :class="{'is-active': readerControlsTab === 'text'}" @click="setReaderControlsTab('text')">{{ uiText.controlsText }}</q-btn>
+                        <q-btn flat dense no-caps :class="{'is-active': readerControlsTab === 'page'}" @click="setReaderControlsTab('page')">{{ uiText.controlsPage }}</q-btn>
+                        <q-btn flat dense no-caps :class="{'is-active': readerControlsTab === 'background'}" @click="setReaderControlsTab('background')">{{ uiText.controlsBackground }}</q-btn>
+                        <q-btn flat dense no-caps :class="{'is-active': readerControlsTab === 'status'}" @click="setReaderControlsTab('status')">{{ uiText.controlsStatus }}</q-btn>
                     </div>
 
-                    <div class="reader-theme-switch">
-                        <q-btn flat dense no-caps :class="{'is-active': !activePreferences.backgroundTransparentStatus}" @click="setBackgroundTransparency('backgroundTransparentStatus', false)">{{ uiText.backgroundStatusSolid }}</q-btn>
-                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.backgroundTransparentStatus}" @click="setBackgroundTransparency('backgroundTransparentStatus', true)">{{ uiText.backgroundStatusTransparent }}</q-btn>
+                    <div class="reader-progress-text">
+                        {{ displayProgressPercent }}%<span v-if="showDisplayPagedPageCounter"> | {{ displayCurrentPage }}/{{ displayTotalPages }}</span>
                     </div>
-                </template>
-
-                <div v-if="readerControlsTab === 'text'" class="reader-stepper">
-                    <q-btn flat dense round icon="la la-minus" @click="changeFontSize(-1)" />
-                    <div class="reader-stepper-value">{{ activePreferences.fontSize }}px</div>
-                    <q-btn flat dense round icon="la la-plus" @click="changeFontSize(1)" />
                 </div>
 
-                <q-select
-                    v-if="readerControlsTab === 'text'"
-                    :model-value="selectedFontFamily"
-                    :options="fontFamilyOptions"
-                    class="reader-font-select"
-                    popup-content-class="reader-font-menu"
-                    :popup-content-style="readerDialogStyle"
-                    borderless
-                    dense
-                    options-dense
-                    emit-value
-                    map-options
-                    dropdown-icon="la la-angle-down"
-                    @update:model-value="setFontFamily"
-                />
+                <div class="reader-controls-body">
+                    <template v-if="readerControlsTab === 'text'">
+                        <section class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsView }}</div>
 
-                <div v-if="readerControlsTab === 'text'" class="reader-stepper">
-                    <q-btn flat dense round icon="la la-compress" @click="changeContentWidth(-40)" />
-                    <div class="reader-stepper-value">{{ activePreferences.contentWidth }}px</div>
-                    <q-btn flat dense round icon="la la-expand" @click="changeContentWidth(40)" />
-                </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsTheme }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'dark'}" @click="setTheme('dark')">{{ uiText.themeDark }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'sepia'}" @click="setTheme('sepia')">{{ uiText.themeSepia }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'light'}" @click="setTheme('light')">{{ uiText.themeLight }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': preferences.theme === 'eink'}" @click="setTheme('eink')">{{ uiText.themeEink }}</q-btn>
+                                </div>
+                            </div>
 
-                <div v-if="readerControlsTab === 'text'" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.contentWidthMode !== 'viewport'}" @click="setContentWidthMode('fixed')">{{ uiText.widthFixed }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.contentWidthMode === 'viewport'}" @click="setContentWidthMode('viewport')">{{ uiText.widthViewport }}</q-btn>
-                </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsFont }}</div>
+                                <q-select
+                                    :model-value="selectedFontFamily"
+                                    :options="fontFamilyOptions"
+                                    class="reader-font-select"
+                                    popup-content-class="reader-font-menu"
+                                    :popup-content-style="readerDialogStyle"
+                                    borderless
+                                    dense
+                                    options-dense
+                                    emit-value
+                                    map-options
+                                    dropdown-icon="la la-angle-down"
+                                    @update:model-value="setFontFamily"
+                                />
+                            </div>
+                        </section>
 
-                <div v-if="readerControlsTab === 'text'" class="reader-stepper">
-                    <q-btn flat dense round icon="la la-minus" @click="changeLineHeight(-0.05)" />
-                    <div class="reader-stepper-value">{{ activePreferences.lineHeight.toFixed(2) }}</div>
-                    <q-btn flat dense round icon="la la-plus" @click="changeLineHeight(0.05)" />
-                </div>
+                        <section class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsTypography }}</div>
 
-                <div v-if="readerControlsTab === 'text'" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.textShadow}" @click="setTextShadow(true)">{{ uiText.textShadowOn }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': !activePreferences.textShadow}" @click="setTextShadow(false)">{{ uiText.textShadowOff }}</q-btn>
-                </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsFontSize }}</div>
+                                <div class="reader-stepper">
+                                    <q-btn flat dense round icon="la la-minus" @click="changeFontSize(-1)" />
+                                    <div class="reader-stepper-value">{{ activePreferences.fontSize }}px</div>
+                                    <q-btn flat dense round icon="la la-plus" @click="changeFontSize(1)" />
+                                </div>
+                            </div>
 
-                <template v-if="readerControlsTab === 'text' && preferences.theme === 'eink'">
-                    <div class="reader-stepper">
-                        <q-btn flat dense round icon="la la-minus" @click="changeEinkContrast(-4)" />
-                        <div class="reader-stepper-value">{{ uiText.einkContrast }} {{ activePreferences.einkContrast }}%</div>
-                        <q-btn flat dense round icon="la la-plus" @click="changeEinkContrast(4)" />
-                    </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsLineHeight }}</div>
+                                <div class="reader-stepper">
+                                    <q-btn flat dense round icon="la la-minus" @click="changeLineHeight(-0.05)" />
+                                    <div class="reader-stepper-value">{{ activePreferences.lineHeight.toFixed(2) }}</div>
+                                    <q-btn flat dense round icon="la la-plus" @click="changeLineHeight(0.05)" />
+                                </div>
+                            </div>
 
-                    <div class="reader-stepper">
-                        <q-btn flat dense round icon="la la-minus" @click="changeEinkPaperTone(-2)" />
-                        <div class="reader-stepper-value">{{ uiText.einkPaper }} {{ activePreferences.einkPaperTone }}%</div>
-                        <q-btn flat dense round icon="la la-plus" @click="changeEinkPaperTone(2)" />
-                    </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsTextShadow }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.textShadow}" @click="setTextShadow(true)">{{ uiText.textShadowOn }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': !activePreferences.textShadow}" @click="setTextShadow(false)">{{ uiText.textShadowOff }}</q-btn>
+                                </div>
+                            </div>
+                        </section>
 
-                    <div class="reader-stepper">
-                        <q-btn flat dense round icon="la la-minus" @click="changeEinkInkTone(2)" />
-                        <div class="reader-stepper-value">{{ uiText.einkInk }} {{ 100 - activePreferences.einkInkTone }}%</div>
-                        <q-btn flat dense round icon="la la-plus" @click="changeEinkInkTone(-2)" />
-                    </div>
-                </template>
+                        <section class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsWidth }}</div>
 
-                <div v-if="readerControlsTab === 'page'" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.readMode === 'scroll'}" @click="setReadMode('scroll')">{{ uiText.readModeScroll }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.readMode === 'paged'}" @click="setReadMode('paged')">{{ uiText.readModePages }}</q-btn>
-                </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsTextWidth }}</div>
+                                <div class="reader-stepper">
+                                    <q-btn flat dense round icon="la la-compress" @click="changeContentWidth(-40)" />
+                                    <div class="reader-stepper-value">{{ activePreferences.contentWidth }}px</div>
+                                    <q-btn flat dense round icon="la la-expand" @click="changeContentWidth(40)" />
+                                </div>
+                            </div>
 
-                <div v-if="readerControlsTab === 'page' && activePreferences.readMode === 'paged'" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedDirection === 'vertical'}" @click="setPagedDirection('vertical')">{{ uiText.directionVertical }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedDirection === 'horizontal'}" @click="setPagedDirection('horizontal')">{{ uiText.directionHorizontal }}</q-btn>
-                </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsTextWidthMode }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.contentWidthMode !== 'viewport'}" @click="setContentWidthMode('fixed')">{{ uiText.widthFixed }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.contentWidthMode === 'viewport'}" @click="setContentWidthMode('viewport')">{{ uiText.widthViewport }}</q-btn>
+                                </div>
+                            </div>
+                        </section>
 
-                <div v-if="readerControlsTab === 'page' && activePreferences.readMode === 'paged' && !isCompactLayout" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedSpreadMode !== 'dual'}" @click="setPagedSpreadMode('single')">{{ uiText.spreadSingle }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedSpreadMode === 'dual'}" @click="setPagedSpreadMode('dual')">{{ uiText.spreadDual }}</q-btn>
-                </div>
+                        <section v-if="preferences.theme === 'eink'" class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsInk }}</div>
 
-                <div v-if="readerControlsTab === 'page' && activePreferences.readMode === 'paged' && activePreferences.pagedSpreadMode === 'dual' && !isCompactLayout" class="reader-stepper">
-                    <q-btn flat dense round icon="la la-compress-arrows-alt" @click="changeDualPageGap(-8)" />
-                    <div class="reader-stepper-value">{{ uiText.pageGap }} {{ dualPageGap }}px</div>
-                    <q-btn flat dense round icon="la la-expand-arrows-alt" @click="changeDualPageGap(8)" />
-                </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.einkContrast }}</div>
+                                <div class="reader-stepper">
+                                    <q-btn flat dense round icon="la la-minus" @click="changeEinkContrast(-4)" />
+                                    <div class="reader-stepper-value">{{ activePreferences.einkContrast }}%</div>
+                                    <q-btn flat dense round icon="la la-plus" @click="changeEinkContrast(4)" />
+                                </div>
+                            </div>
 
-                <div v-if="readerControlsTab === 'page' && activePreferences.readMode === 'paged'" class="reader-stepper">
-                    <q-btn flat dense round icon="la la-arrow-up" @click="changePageVerticalPadding(-4)" />
-                    <div class="reader-stepper-value">{{ uiText.pageVerticalPadding }} {{ pageVerticalPadding }}px</div>
-                    <q-btn flat dense round icon="la la-arrow-down" @click="changePageVerticalPadding(4)" />
-                </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.einkPaper }}</div>
+                                <div class="reader-stepper">
+                                    <q-btn flat dense round icon="la la-minus" @click="changeEinkPaperTone(-2)" />
+                                    <div class="reader-stepper-value">{{ activePreferences.einkPaperTone }}%</div>
+                                    <q-btn flat dense round icon="la la-plus" @click="changeEinkPaperTone(2)" />
+                                </div>
+                            </div>
 
-                <div v-if="readerControlsTab === 'page' && activePreferences.readMode === 'paged'" class="reader-stepper">
-                    <q-btn flat dense round icon="la la-arrow-left" @click="changePageHorizontalPadding(-4)" />
-                    <div class="reader-stepper-value">{{ uiText.pageHorizontalPadding }} {{ pageHorizontalPadding }}px</div>
-                    <q-btn flat dense round icon="la la-arrow-right" @click="changePageHorizontalPadding(4)" />
-                </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.einkInk }}</div>
+                                <div class="reader-stepper">
+                                    <q-btn flat dense round icon="la la-minus" @click="changeEinkInkTone(2)" />
+                                    <div class="reader-stepper-value">{{ 100 - activePreferences.einkInkTone }}%</div>
+                                    <q-btn flat dense round icon="la la-plus" @click="changeEinkInkTone(-2)" />
+                                </div>
+                            </div>
+                        </section>
+                    </template>
 
-                <div v-if="readerControlsTab === 'page' && activePreferences.readMode === 'paged'" class="reader-stepper">
-                    <q-btn flat dense round icon="la la-arrow-up" @click="changePageOuterGap(-4)" />
-                    <div class="reader-stepper-value">{{ uiText.pageOuterGap }} {{ pageOuterGap }}px</div>
-                    <q-btn flat dense round icon="la la-arrow-down" @click="changePageOuterGap(4)" />
-                </div>
+                    <template v-else-if="readerControlsTab === 'page'">
+                        <section class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsMode }}</div>
 
-                <div v-if="readerControlsTab === 'page' && activePreferences.readMode === 'paged'" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimation === 'none'}" @click="setPageAnimation('none')">{{ uiText.animationNone }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimation === 'soft'}" @click="setPageAnimation('soft')">{{ uiText.animationSoft }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimation === 'slide'}" @click="setPageAnimation('slide')">{{ uiText.animationSlide }}</q-btn>
-                </div>
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsReadMode }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.readMode === 'scroll'}" @click="setReadMode('scroll')">{{ uiText.readModeScroll }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.readMode === 'paged'}" @click="setReadMode('paged')">{{ uiText.readModePages }}</q-btn>
+                                </div>
+                            </div>
 
-                <div v-if="readerControlsTab === 'page' && activePreferences.readMode === 'paged'" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimationSpeed === 'fast'}" @click="setPageAnimationSpeed('fast')">{{ uiText.speedFast }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimationSpeed === 'normal'}" @click="setPageAnimationSpeed('normal')">{{ uiText.speedNormal }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimationSpeed === 'slow'}" @click="setPageAnimationSpeed('slow')">{{ uiText.speedSlow }}</q-btn>
-                </div>
+                            <template v-if="activePreferences.readMode === 'paged'">
+                                <div class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.controlsPageFlow }}</div>
+                                    <div class="reader-theme-switch">
+                                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedDirection === 'vertical'}" @click="setPagedDirection('vertical')">{{ uiText.directionVertical }}</q-btn>
+                                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedDirection === 'horizontal'}" @click="setPagedDirection('horizontal')">{{ uiText.directionHorizontal }}</q-btn>
+                                    </div>
+                                </div>
 
-                <div v-if="readerControlsTab === 'status'" class="reader-theme-switch">
-                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.showStatusBar}" @click="setStatusBarVisible(true)">{{ uiText.statusBarOn }}</q-btn>
-                    <q-btn flat dense no-caps :class="{'is-active': !activePreferences.showStatusBar}" @click="setStatusBarVisible(false)">{{ uiText.statusBarOff }}</q-btn>
-                </div>
+                                <div v-if="!isCompactLayout" class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.controlsSpread }}</div>
+                                    <div class="reader-theme-switch">
+                                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedSpreadMode !== 'dual'}" @click="setPagedSpreadMode('single')">{{ uiText.spreadSingle }}</q-btn>
+                                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedSpreadMode === 'dual'}" @click="setPagedSpreadMode('dual')">{{ uiText.spreadDual }}</q-btn>
+                                    </div>
+                                </div>
+                            </template>
+                        </section>
 
-                <template v-if="readerControlsTab === 'status' && activePreferences.showStatusBar">
-                    <div class="reader-theme-switch">
-                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarClock}" @click="setStatusBarOption('statusBarClock', true)">{{ uiText.statusClockOn }}</q-btn>
-                        <q-btn flat dense no-caps :class="{'is-active': !activePreferences.statusBarClock}" @click="setStatusBarOption('statusBarClock', false)">{{ uiText.statusClockOff }}</q-btn>
-                    </div>
+                        <section v-if="activePreferences.readMode === 'paged'" class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsSpacing }}</div>
 
-                    <div class="reader-theme-switch">
-                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarProgressBar}" @click="setStatusBarOption('statusBarProgressBar', true)">{{ uiText.statusProgressOn }}</q-btn>
-                        <q-btn flat dense no-caps :class="{'is-active': !activePreferences.statusBarProgressBar}" @click="setStatusBarOption('statusBarProgressBar', false)">{{ uiText.statusProgressOff }}</q-btn>
-                    </div>
+                            <div v-if="activePreferences.pagedSpreadMode === 'dual' && !isCompactLayout" class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.pageGap }}</div>
+                                <div class="reader-stepper">
+                                    <q-btn flat dense round icon="la la-compress-arrows-alt" @click="changeDualPageGap(-8)" />
+                                    <div class="reader-stepper-value">{{ dualPageGap }}px</div>
+                                    <q-btn flat dense round icon="la la-expand-arrows-alt" @click="changeDualPageGap(8)" />
+                                </div>
+                            </div>
 
-                    <div v-if="activePreferences.statusBarProgressBar" class="reader-theme-switch">
-                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarProgressPosition !== 'side'}" @click="setStatusBarProgressPosition('bottom')">{{ uiText.statusProgressBottom }}</q-btn>
-                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarProgressPosition === 'side'}" @click="setStatusBarProgressPosition('side')">{{ uiText.statusProgressSide }}</q-btn>
-                    </div>
+                            <div class="reader-spacing-grid">
+                                <div class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.pagePaddingTop }}</div>
+                                    <div class="reader-stepper">
+                                        <q-btn flat dense round icon="la la-minus" @click="changePagePadding('top', -4)" />
+                                        <div class="reader-stepper-value">{{ pagePaddingTop }}px</div>
+                                        <q-btn flat dense round icon="la la-plus" @click="changePagePadding('top', 4)" />
+                                    </div>
+                                </div>
 
-                    <div class="reader-theme-switch">
-                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarRemaining}" @click="setStatusBarOption('statusBarRemaining', true)">{{ uiText.statusRemainingOn }}</q-btn>
-                        <q-btn flat dense no-caps :class="{'is-active': !activePreferences.statusBarRemaining}" @click="setStatusBarOption('statusBarRemaining', false)">{{ uiText.statusRemainingOff }}</q-btn>
-                    </div>
+                                <div class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.pagePaddingBottom }}</div>
+                                    <div class="reader-stepper">
+                                        <q-btn flat dense round icon="la la-minus" @click="changePagePadding('bottom', -4)" />
+                                        <div class="reader-stepper-value">{{ pagePaddingBottom }}px</div>
+                                        <q-btn flat dense round icon="la la-plus" @click="changePagePadding('bottom', 4)" />
+                                    </div>
+                                </div>
 
-                    <div v-if="!isCompactLayout" class="reader-theme-switch">
-                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarAlign !== 'edge'}" @click="setStatusBarAlign('center')">{{ uiText.statusAlignCenter }}</q-btn>
-                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarAlign === 'edge'}" @click="setStatusBarAlign('edge')">{{ uiText.statusAlignEdge }}</q-btn>
-                    </div>
+                                <div class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.pagePaddingLeft }}</div>
+                                    <div class="reader-stepper">
+                                        <q-btn flat dense round icon="la la-minus" @click="changePagePadding('left', -4)" />
+                                        <div class="reader-stepper-value">{{ pagePaddingLeft }}px</div>
+                                        <q-btn flat dense round icon="la la-plus" @click="changePagePadding('left', 4)" />
+                                    </div>
+                                </div>
 
-                    <div class="reader-stepper">
-                        <q-btn flat dense round icon="la la-minus" @click="changeStatusBarSize(-1)" />
-                        <div class="reader-stepper-value">{{ uiText.statusSize }} {{ statusBarSize }}px</div>
-                        <q-btn flat dense round icon="la la-plus" @click="changeStatusBarSize(1)" />
-                    </div>
-                </template>
+                                <div class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.pagePaddingRight }}</div>
+                                    <div class="reader-stepper">
+                                        <q-btn flat dense round icon="la la-minus" @click="changePagePadding('right', -4)" />
+                                        <div class="reader-stepper-value">{{ pagePaddingRight }}px</div>
+                                        <q-btn flat dense round icon="la la-plus" @click="changePagePadding('right', 4)" />
+                                    </div>
+                                </div>
 
-                <div class="reader-progress-text">
-                    {{ displayProgressPercent }}%<span v-if="showDisplayPagedPageCounter"> | {{ displayCurrentPage }}/{{ displayTotalPages }}</span>
+                                <div class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.pageOuterGapTop }}</div>
+                                    <div class="reader-stepper">
+                                        <q-btn flat dense round icon="la la-minus" @click="changePageOuterGap('top', -4)" />
+                                        <div class="reader-stepper-value">{{ pageOuterGapTop }}px</div>
+                                        <q-btn flat dense round icon="la la-plus" @click="changePageOuterGap('top', 4)" />
+                                    </div>
+                                </div>
+
+                                <div class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.pageOuterGapBottom }}</div>
+                                    <div class="reader-stepper">
+                                        <q-btn flat dense round icon="la la-minus" @click="changePageOuterGap('bottom', -4)" />
+                                        <div class="reader-stepper-value">{{ pageOuterGapBottom }}px</div>
+                                        <q-btn flat dense round icon="la la-plus" @click="changePageOuterGap('bottom', 4)" />
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section v-if="activePreferences.readMode === 'paged'" class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsAnimation }}</div>
+
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsAnimationType }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimation === 'none'}" @click="setPageAnimation('none')">{{ uiText.animationNone }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimation === 'soft'}" @click="setPageAnimation('soft')">{{ uiText.animationSoft }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimation === 'slide'}" @click="setPageAnimation('slide')">{{ uiText.animationSlide }}</q-btn>
+                                </div>
+                            </div>
+
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsAnimationSpeed }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimationSpeed === 'fast'}" @click="setPageAnimationSpeed('fast')">{{ uiText.speedFast }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimationSpeed === 'normal'}" @click="setPageAnimationSpeed('normal')">{{ uiText.speedNormal }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.pageAnimationSpeed === 'slow'}" @click="setPageAnimationSpeed('slow')">{{ uiText.speedSlow }}</q-btn>
+                                </div>
+                            </div>
+                        </section>
+                    </template>
+
+                    <template v-else-if="readerControlsTab === 'background'">
+                        <section class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsBackgroundImage }}</div>
+                            <div class="reader-background-control">
+                                <q-btn flat dense no-caps icon="la la-image" @click="openReaderBackgroundPicker">{{ uiText.backgroundUpload }}</q-btn>
+                                <q-btn v-if="preferences.backgroundImage" flat dense no-caps icon="la la-times" @click="clearReaderBackground">{{ uiText.backgroundClear }}</q-btn>
+                            </div>
+                        </section>
+
+                        <section v-if="preferences.backgroundImage" class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsBackgroundLayers }}</div>
+
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsPages }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': !activePreferences.backgroundTransparentPages}" @click="setBackgroundTransparency('backgroundTransparentPages', false)">{{ uiText.backgroundPagesSolid }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.backgroundTransparentPages}" @click="setBackgroundTransparency('backgroundTransparentPages', true)">{{ uiText.backgroundPagesTransparent }}</q-btn>
+                                </div>
+                            </div>
+
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsStatusBar }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': !activePreferences.backgroundTransparentStatus}" @click="setBackgroundTransparency('backgroundTransparentStatus', false)">{{ uiText.backgroundStatusSolid }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.backgroundTransparentStatus}" @click="setBackgroundTransparency('backgroundTransparentStatus', true)">{{ uiText.backgroundStatusTransparent }}</q-btn>
+                                </div>
+                            </div>
+                        </section>
+                    </template>
+
+                    <template v-else-if="readerControlsTab === 'status'">
+                        <section class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsStatusField }}</div>
+
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsStatusVisibility }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.showStatusBar}" @click="setStatusBarVisible(true)">{{ uiText.statusBarOn }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': !activePreferences.showStatusBar}" @click="setStatusBarVisible(false)">{{ uiText.statusBarOff }}</q-btn>
+                                </div>
+                            </div>
+
+                            <template v-if="activePreferences.showStatusBar">
+                                <div class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.statusSize }}</div>
+                                    <div class="reader-stepper">
+                                        <q-btn flat dense round icon="la la-minus" @click="changeStatusBarSize(-1)" />
+                                        <div class="reader-stepper-value">{{ statusBarSize }}px</div>
+                                        <q-btn flat dense round icon="la la-plus" @click="changeStatusBarSize(1)" />
+                                    </div>
+                                </div>
+
+                                <div v-if="!isCompactLayout" class="reader-control-field">
+                                    <div class="reader-control-label">{{ uiText.controlsStatusPosition }}</div>
+                                    <div class="reader-theme-switch">
+                                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarAlign !== 'edge'}" @click="setStatusBarAlign('center')">{{ uiText.statusAlignCenter }}</q-btn>
+                                        <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarAlign === 'edge'}" @click="setStatusBarAlign('edge')">{{ uiText.statusAlignEdge }}</q-btn>
+                                    </div>
+                                </div>
+                            </template>
+                        </section>
+
+                        <section v-if="activePreferences.showStatusBar" class="reader-controls-group">
+                            <div class="reader-controls-group-title">{{ uiText.controlsStatusContent }}</div>
+
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsClock }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarClock}" @click="setStatusBarOption('statusBarClock', true)">{{ uiText.statusClockOn }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': !activePreferences.statusBarClock}" @click="setStatusBarOption('statusBarClock', false)">{{ uiText.statusClockOff }}</q-btn>
+                                </div>
+                            </div>
+
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsProgressBar }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarProgressBar}" @click="setStatusBarOption('statusBarProgressBar', true)">{{ uiText.statusProgressOn }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': !activePreferences.statusBarProgressBar}" @click="setStatusBarOption('statusBarProgressBar', false)">{{ uiText.statusProgressOff }}</q-btn>
+                                </div>
+                            </div>
+
+                            <div v-if="activePreferences.statusBarProgressBar" class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsProgressPosition }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarProgressPosition !== 'side'}" @click="setStatusBarProgressPosition('bottom')">{{ uiText.statusProgressBottom }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarProgressPosition === 'side'}" @click="setStatusBarProgressPosition('side')">{{ uiText.statusProgressSide }}</q-btn>
+                                </div>
+                            </div>
+
+                            <div class="reader-control-field">
+                                <div class="reader-control-label">{{ uiText.controlsRemaining }}</div>
+                                <div class="reader-theme-switch">
+                                    <q-btn flat dense no-caps :class="{'is-active': activePreferences.statusBarRemaining}" @click="setStatusBarOption('statusBarRemaining', true)">{{ uiText.statusRemainingOn }}</q-btn>
+                                    <q-btn flat dense no-caps :class="{'is-active': !activePreferences.statusBarRemaining}" @click="setStatusBarOption('statusBarRemaining', false)">{{ uiText.statusRemainingOff }}</q-btn>
+                                </div>
+                            </div>
+                        </section>
+                    </template>
                 </div>
             </div>
         </div>
@@ -525,6 +686,7 @@
                     :class="{
                         'reader-shell--paged': activePreferences.readMode === 'paged',
                     }"
+                    :style="readerShellStyle"
                 >
                     <div v-if="coverSrc && !isPagedMode" class="reader-cover-box">
                         <img :src="coverSrc" class="reader-cover" :alt="title" />
@@ -580,12 +742,23 @@
                         <template v-else>
                             <div class="reader-pages">
                                 <div ref="pageStage" class="reader-page-stage">
+                                    <article
+                                        v-if="showPagedPreparingSheet"
+                                        class="reader-page-sheet reader-page-sheet--placeholder"
+                                        :class="{'reader-page-sheet--dual': isDualPagedSpread}"
+                                    >
+                                        <div class="reader-page-placeholder">
+                                            <q-icon class="la la-spinner icon-rotate" size="26px" />
+                                            <div class="reader-page-placeholder-title">{{ uiText.loadingPagedPage }}</div>
+                                            <div class="reader-page-placeholder-text">{{ pagedPreparingText }}</div>
+                                        </div>
+                                    </article>
                                     <transition :name="pagedTransitionName">
                                         <article
                                             v-if="activePagedPage"
                                             :key="`page-${currentPageIndex}-${activePagedSpread.length}-${activePagedPage.sectionId || 'page'}`"
                                             class="reader-page-sheet reader-page-sheet--live"
-                                            :class="{'reader-page-sheet--dual': isDualPagedSpread}"
+                                    :class="[{'reader-page-sheet--dual': isDualPagedSpread}, isDualPagedSpread ? '' : pagePaddingPreviewClass]"
                                             :data-page-index="currentPageIndex"
                                         >
                                             <template v-if="isDualPagedSpread">
@@ -594,7 +767,7 @@
                                                         v-for="spreadPage in activePagedSpread"
                                                         :key="spreadPage.index"
                                                         class="reader-page-column-sheet"
-                                                        :class="{'reader-page-column-sheet--empty': spreadPage.empty}"
+                                                        :class="[{'reader-page-column-sheet--empty': spreadPage.empty}, pagePaddingPreviewClass]"
                                                     >
                                                         <div class="reader-html" v-html="spreadPage.html"></div>
                                                     </section>
@@ -1125,6 +1298,7 @@ import _ from 'lodash';
 import he from 'he';
 
 const readerPreferencesStorageKey = 'inpx.reader.preferences.v1';
+const readerProgressStorageKey = 'inpx.reader.progress.v1';
 
 const componentOptions = {
     watch: {
@@ -1166,6 +1340,7 @@ class Reader {
     seriesLine = '';
     coverSrc = '';
     readerHtml = '';
+    readerSearchText = '';
     pagedPages = [];
     currentPageIndex = 0;
     controlsOpen = false;
@@ -1197,6 +1372,7 @@ class Reader {
     currentSectionId = '';
     readerNoteReturnPoint = null;
     pendingReaderAnchorJump = null;
+    pendingReflowAnchor = null;
     bookmarkDraft = {
         title: '',
         excerpt: '',
@@ -1232,7 +1408,13 @@ class Reader {
         dualPageGap: 28,
         pageVerticalPadding: 18,
         pageHorizontalPadding: 18,
+        pagePaddingTop: 18,
+        pagePaddingBottom: 22,
+        pagePaddingLeft: 18,
+        pagePaddingRight: 18,
         pageOuterGap: 28,
+        pageOuterGapTop: 28,
+        pageOuterGapBottom: 28,
         einkProfile: {
             readMode: 'paged',
             pagedNavigation: 'tap',
@@ -1258,7 +1440,13 @@ class Reader {
             dualPageGap: 28,
             pageVerticalPadding: 18,
             pageHorizontalPadding: 18,
+            pagePaddingTop: 18,
+            pagePaddingBottom: 22,
+            pagePaddingLeft: 18,
+            pagePaddingRight: 18,
             pageOuterGap: 28,
+            pageOuterGapTop: 28,
+            pageOuterGapBottom: 28,
             einkContrast: 92,
             einkPaperTone: 94,
             einkInkTone: 10,
@@ -1267,11 +1455,18 @@ class Reader {
     progress = {
         percent: 0,
         sectionId: '',
+        pageIndex: 0,
+        textOffset: -1,
+        textSnippet: '',
         updatedAt: '',
     };
     restorePending = false;
+    restoreFromSavedProgress = false;
     saveProgressDebounced = null;
     savePreferencesDebounced = null;
+    progressSavePromise = null;
+    pendingReaderProgressUpload = false;
+    readerLoadJobId = 0;
     readerBackgroundMaxBytes = 4 * 1024 * 1024;
     statusClockText = '';
     statusClockTimer = null;
@@ -1280,14 +1475,18 @@ class Reader {
     pageTurnTimer = null;
     pageTurnAnimating = false;
     pageTurnDirection = 1;
+    pagePaddingPreviewEdge = '';
+    pagePaddingPreviewTimer = null;
     touchStartPoint = null;
     imageLayoutFrame = 0;
     pagedViewportFrame = 0;
+    pagedViewportBuildQueued = false;
     viewportRefreshFrame = 0;
     pagedBuildInProgress = false;
     pagedBuildNeedsRefresh = false;
     pagedBuildJobId = 0;
     pagedLayoutSignature = '';
+    restoreProgressFrame = 0;
     compactChromePagedBuildPending = false;
     compactChromeAwaitingCalibration = false;
     compactChromeInitialTotalPages = 0;
@@ -1313,6 +1512,7 @@ class Reader {
     boundReaderLinks = new WeakSet();
     layoutRefreshing = false;
     layoutRefreshTimer = null;
+    spacingReflowTimer = null;
     layoutRefreshStartedAt = 0;
     layoutRefreshReason = '';
     stableReaderStatus = {
@@ -1372,12 +1572,19 @@ class Reader {
             this.handleGlobalKeydown(event);
         };
         this.handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') {
+                this.flushProgress();
+                return;
+            }
             if (document.visibilityState === 'visible' && this.wakeLockRequested)
                 this.requestWakeLock();// no await
         };
+        this.handlePageHide = () => {
+            this.flushProgress();
+        };
 
         this.saveProgressDebounced = _.debounce(() => {
-            this.persistProgress();// no await
+            this.queuePersistProgress();// no await
         }, 800);
 
         this.savePreferencesDebounced = _.debounce(() => {
@@ -1391,6 +1598,7 @@ class Reader {
         window.addEventListener('resize', this.handleWindowResize);
         window.addEventListener('keydown', this.handleReaderKeydown);
         document.addEventListener('visibilitychange', this.handleVisibilityChange);
+        window.addEventListener('pagehide', this.handlePageHide);
         this.startStatusClock();
         this.wakeLockSupported = !!(navigator && navigator.wakeLock && navigator.wakeLock.request);
         this.requestWakeLock();// no await
@@ -1412,6 +1620,7 @@ class Reader {
     deactivated() {
         this.flushProgress();
         this.clearSnapTimer();
+        this.clearSpacingReflowTimer();
         clearTimeout(this.pageTurnTimer);
         if (this.savePreferencesDebounced && this.savePreferencesDebounced.flush)
             this.savePreferencesDebounced.flush();
@@ -1423,11 +1632,17 @@ class Reader {
         window.removeEventListener('resize', this.handleWindowResize);
         window.removeEventListener('keydown', this.handleReaderKeydown);
         document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+        window.removeEventListener('pagehide', this.handlePageHide);
         if (window.visualViewport) {
             window.visualViewport.removeEventListener('resize', this.handleVisualViewportResize);
         }
         this.detachScrollerObserver();
         this.clearSnapTimer();
+        this.clearSpacingReflowTimer();
+        if (this.pagePaddingPreviewTimer) {
+            clearTimeout(this.pagePaddingPreviewTimer);
+            this.pagePaddingPreviewTimer = null;
+        }
         clearTimeout(this.pageTurnTimer);
         this.stopStatusClock();
         if (this.imageLayoutFrame) {
@@ -1438,6 +1653,7 @@ class Reader {
             cancelAnimationFrame(this.pagedViewportFrame);
             this.pagedViewportFrame = 0;
         }
+        this.pagedViewportBuildQueued = false;
         if (this.viewportRefreshFrame) {
             cancelAnimationFrame(this.viewportRefreshFrame);
             this.viewportRefreshFrame = 0;
@@ -1478,6 +1694,15 @@ class Reader {
 
     get currentUserId() {
         return this.settings.currentUserId || this.config.currentUserId || '';
+    }
+
+    get hasReaderProfileAccessToken() {
+        const api = this.$root && this.$root.api ? this.$root.api : null;
+        return !!String(
+            this.settings.profileAccessToken
+            || (api && api.profileAccessToken)
+            || '',
+        ).trim();
     }
 
     get currentSelectedProfile() {
@@ -1676,6 +1901,10 @@ class Reader {
     }
 
     layoutSignatureForPreferences(prefs = {}) {
+        const preferenceValue = (key, fallback) => (prefs[key] != null ? prefs[key] : fallback);
+        const verticalPadding = preferenceValue('pageVerticalPadding', 18);
+        const horizontalPadding = preferenceValue('pageHorizontalPadding', 18);
+        const outerGap = preferenceValue('pageOuterGap', 28);
         return [
             prefs.readMode || 'scroll',
             prefs.pagedDirection || 'vertical',
@@ -1685,9 +1914,12 @@ class Reader {
             prefs.contentWidthMode || 'fixed',
             prefs.pagedSpreadMode || 'single',
             prefs.dualPageGap || 28,
-            prefs.pageVerticalPadding || 18,
-            prefs.pageHorizontalPadding || 18,
-            prefs.pageOuterGap || 28,
+            preferenceValue('pagePaddingTop', verticalPadding),
+            preferenceValue('pagePaddingBottom', verticalPadding),
+            preferenceValue('pagePaddingLeft', horizontalPadding),
+            preferenceValue('pagePaddingRight', horizontalPadding),
+            preferenceValue('pageOuterGapTop', outerGap),
+            preferenceValue('pageOuterGapBottom', outerGap),
             prefs.lineHeight || 1.7,
         ].join('|');
     }
@@ -1989,10 +2221,47 @@ class Reader {
             pageVerticalPadding: '\u0412\u0435\u0440\u0445/\u043d\u0438\u0437',
             pageHorizontalPadding: '\u041a\u0440\u0430\u044f',
             pageOuterGap: '\u042d\u043a\u0440\u0430\u043d \u0432\u0435\u0440\u0445/\u043d\u0438\u0437',
+            pagePaddingTop: '\u041b\u0438\u0441\u0442 \u0441\u0432\u0435\u0440\u0445\u0443',
+            pagePaddingBottom: '\u041b\u0438\u0441\u0442 \u0441\u043d\u0438\u0437\u0443',
+            pagePaddingLeft: '\u041b\u0438\u0441\u0442 \u0441\u043b\u0435\u0432\u0430',
+            pagePaddingRight: '\u041b\u0438\u0441\u0442 \u0441\u043f\u0440\u0430\u0432\u0430',
+            pageOuterGapTop: '\u042d\u043a\u0440\u0430\u043d \u0441\u0432\u0435\u0440\u0445\u0443',
+            pageOuterGapBottom: '\u042d\u043a\u0440\u0430\u043d \u0441\u043d\u0438\u0437\u0443',
             controlsText: '\u0422\u0435\u043a\u0441\u0442',
             controlsPage: '\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u0430',
             controlsBackground: '\u0424\u043e\u043d',
             controlsStatus: '\u0421\u0442\u0430\u0442\u0443\u0441',
+            controlsView: '\u0412\u0438\u0434',
+            controlsTheme: '\u0422\u0435\u043c\u0430',
+            controlsFont: '\u0428\u0440\u0438\u0444\u0442',
+            controlsTypography: '\u0422\u0435\u043a\u0441\u0442',
+            controlsFontSize: '\u0420\u0430\u0437\u043c\u0435\u0440 \u0448\u0440\u0438\u0444\u0442\u0430',
+            controlsLineHeight: '\u041c\u0435\u0436\u0434\u0443\u0441\u0442\u0440\u043e\u0447\u0438\u0435',
+            controlsTextShadow: '\u0422\u0435\u043d\u044c',
+            controlsWidth: '\u0428\u0438\u0440\u0438\u043d\u0430',
+            controlsTextWidth: '\u0428\u0438\u0440\u0438\u043d\u0430 \u0442\u0435\u043a\u0441\u0442\u0430',
+            controlsTextWidthMode: '\u0420\u0435\u0436\u0438\u043c \u0448\u0438\u0440\u0438\u043d\u044b',
+            controlsInk: 'E-ink',
+            controlsMode: '\u0420\u0435\u0436\u0438\u043c \u0447\u0442\u0435\u043d\u0438\u044f',
+            controlsReadMode: '\u0424\u043e\u0440\u043c\u0430\u0442',
+            controlsPageFlow: '\u041b\u0438\u0441\u0442\u0430\u043d\u0438\u0435',
+            controlsSpread: '\u0420\u0430\u0437\u0432\u043e\u0440\u043e\u0442',
+            controlsSpacing: '\u041e\u0442\u0441\u0442\u0443\u043f\u044b',
+            controlsAnimation: '\u0410\u043d\u0438\u043c\u0430\u0446\u0438\u044f',
+            controlsAnimationType: '\u042d\u0444\u0444\u0435\u043a\u0442',
+            controlsAnimationSpeed: '\u0421\u043a\u043e\u0440\u043e\u0441\u0442\u044c',
+            controlsBackgroundImage: '\u041a\u0430\u0440\u0442\u0438\u043d\u043a\u0430',
+            controlsBackgroundLayers: '\u041f\u043e\u0432\u0435\u0440\u0445 \u0444\u043e\u043d\u0430',
+            controlsPages: '\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u044b',
+            controlsStatusBar: '\u0421\u0442\u0430\u0442\u0443\u0441-\u0431\u0430\u0440',
+            controlsStatusField: '\u041f\u0430\u043d\u0435\u043b\u044c',
+            controlsStatusVisibility: '\u0412\u0438\u0434\u0438\u043c\u043e\u0441\u0442\u044c',
+            controlsStatusPosition: '\u0420\u0430\u0441\u043f\u043e\u043b\u043e\u0436\u0435\u043d\u0438\u0435',
+            controlsStatusContent: '\u0427\u0442\u043e \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c',
+            controlsClock: '\u0427\u0430\u0441\u044b',
+            controlsProgressBar: '\u0428\u043a\u0430\u043b\u0430',
+            controlsProgressPosition: '\u0413\u0434\u0435 \u0448\u043a\u0430\u043b\u0430',
+            controlsRemaining: '\u041e\u0441\u0442\u0430\u0442\u043e\u043a',
             noteReturn: '\u041d\u0430\u0437\u0430\u0434 \u043a \u0442\u0435\u043a\u0441\u0442\u0443',
             directionVertical: '\u0412\u0435\u0440\u0442\u0438\u043a\u0430\u043b\u044c\u043d\u043e',
             directionHorizontal: '\u0413\u043e\u0440\u0438\u0437\u043e\u043d\u0442\u0430\u043b\u044c\u043d\u043e',
@@ -2031,6 +2300,8 @@ class Reader {
             loadingParse: '\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0442\u0435\u043a\u0441\u0442\u0430...',
             loadingPages: '\u0420\u0430\u0437\u0431\u0438\u0432\u043a\u0430 \u043d\u0430 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
             loadingPagesCompact: '\u0421\u0447\u0438\u0442\u0430\u044e \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
+            loadingPagedPage: '\u0413\u043e\u0442\u043e\u0432\u043b\u044e \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443',
+            restoringPage: '\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u0430\u0432\u043b\u0438\u0432\u0430\u044e \u043c\u0435\u0441\u0442\u043e \u0447\u0442\u0435\u043d\u0438\u044f...',
             refreshingPagesCompact: '\u041f\u0435\u0440\u0435\u0441\u0442\u0440\u0430\u0438\u0432\u0430\u044e \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
             contents: '\u0421\u043e\u0434\u0435\u0440\u0436\u0430\u043d\u0438\u0435',
             show: '\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c',
@@ -2175,6 +2446,36 @@ class Reader {
         );
     }
 
+    get showPagedPreparingSheet() {
+        return !!(
+            this.isPagedMode
+            && !this.activePagedPage
+            && this.readerHtml
+            && (
+                !this.pagedPages.length
+                || this.bookPreparing
+                || this.pagedBuildInProgress
+                || this.pagedViewportBuildQueued
+                || this.restorePending
+                || this.loadingMessage
+            )
+        );
+    }
+
+    get pagedPreparingText() {
+        const sourceMessage = String(this.loadingMessage || '').trim();
+        if (sourceMessage)
+            return sourceMessage;
+
+        if (this.pagedBuildProgressPercent > 0)
+            return `${this.uiText.loadingPagesCompact.replace('...', '')} ${this.pagedBuildProgressPercent}%`;
+
+        if (this.restorePending)
+            return this.uiText.restoringPage;
+
+        return this.uiText.loadingPagesCompact;
+    }
+
     get isCompactChromeBuildPending() {
         return !!(
             this.layoutRefreshReason === 'compact-chrome'
@@ -2240,17 +2541,52 @@ class Reader {
 
     get pageVerticalPadding() {
         const fallback = (this.isCompactLayout ? 6 : 18);
-        return Math.max(0, Math.min(160, Math.round(Number(this.activePreferences.pageVerticalPadding || fallback) || fallback)));
+        return this.normalizePageSpacingValue(this.activePreferences.pageVerticalPadding, fallback, 160);
     }
 
     get pageHorizontalPadding() {
         const fallback = (this.isCompactLayout ? 5 : 18);
-        return Math.max(0, Math.min(200, Math.round(Number(this.activePreferences.pageHorizontalPadding || fallback) || fallback)));
+        return this.normalizePageSpacingValue(this.activePreferences.pageHorizontalPadding, fallback, 200);
     }
 
     get pageOuterGap() {
         const fallback = (this.isCompactLayout ? 10 : 28);
-        return Math.max(0, Math.min(160, Math.round(Number(this.activePreferences.pageOuterGap || fallback) || fallback)));
+        return this.normalizePageSpacingValue(this.activePreferences.pageOuterGap, fallback, 160);
+    }
+
+    get pagePaddingTop() {
+        return this.normalizePageSpacingValue(this.activePreferences.pagePaddingTop, this.pageVerticalPadding, 160);
+    }
+
+    get pagePaddingBottom() {
+        const fallback = this.isCompactLayout ? Math.max(0, this.pageVerticalPadding + 2) : Math.max(0, this.pageVerticalPadding + 4);
+        return this.normalizePageSpacingValue(this.activePreferences.pagePaddingBottom, fallback, 160);
+    }
+
+    get pagePaddingLeft() {
+        return this.normalizePageSpacingValue(this.activePreferences.pagePaddingLeft, this.pageHorizontalPadding, 200);
+    }
+
+    get pagePaddingRight() {
+        return this.normalizePageSpacingValue(this.activePreferences.pagePaddingRight, this.pageHorizontalPadding, 200);
+    }
+
+    get pagePaddingPreviewClass() {
+        const edge = String(this.pagePaddingPreviewEdge || '').trim();
+        return edge ? `reader-page-sheet--padding-preview-${edge}` : '';
+    }
+
+    get pageOuterGapTop() {
+        return this.normalizePageSpacingValue(this.activePreferences.pageOuterGapTop, this.pageOuterGap, 160);
+    }
+
+    get pageOuterGapBottom() {
+        return this.normalizePageSpacingValue(this.activePreferences.pageOuterGapBottom, this.pageOuterGap, 160);
+    }
+
+    normalizePageSpacingValue(value, fallback = 0, max = 160) {
+        const safeFallback = Math.max(0, Math.min(max, Math.round(Number(fallback || 0) || 0)));
+        return Math.max(0, Math.min(max, Math.round(Number(value != null ? value : safeFallback) || safeFallback)));
     }
 
     get activePagedSpread() {
@@ -2498,7 +2834,7 @@ class Reader {
 
     get readerBodyStyle() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
-        const pagePaddingX = Math.max(0, this.pageHorizontalPadding * 2);
+        const pagePaddingX = Math.max(0, this.pagePaddingLeft + this.pagePaddingRight);
         const fallbackHeight = Math.max((this.isCompactLayout ? 120 : 180), scrollerHeight - (this.isCompactLayout ? 16 : 44));
         const pageHeight = Math.max((this.isCompactLayout ? 120 : 180), this.pageMinHeight || fallbackHeight);
         const pageColumnWidth = Math.max(180, this.pageMeasureFrameWidth - pagePaddingX - 2);
@@ -2512,16 +2848,27 @@ class Reader {
             '--reader-page-frame-width': `${this.pageFrameWidth}px`,
             '--reader-page-measure-frame-width': `${this.pageMeasureFrameWidth}px`,
             '--reader-page-column-width': `${pageColumnWidth}px`,
-            '--reader-page-padding': (this.isCompactLayout
-                ? `${this.pageVerticalPadding}px ${this.pageHorizontalPadding}px ${Math.max(0, this.pageVerticalPadding + 2)}px`
-                : `${this.pageVerticalPadding}px ${this.pageHorizontalPadding}px ${Math.max(0, this.pageVerticalPadding + 4)}px`),
-            '--reader-page-outer-gap': `${this.pageOuterGap}px`,
+            '--reader-page-padding': `${this.pagePaddingTop}px ${this.pagePaddingRight}px ${this.pagePaddingBottom}px ${this.pagePaddingLeft}px`,
+            '--reader-page-padding-top': `${this.pagePaddingTop}px`,
+            '--reader-page-padding-right': `${this.pagePaddingRight}px`,
+            '--reader-page-padding-bottom': `${this.pagePaddingBottom}px`,
+            '--reader-page-padding-left': `${this.pagePaddingLeft}px`,
             '--reader-page-media-max-height': `${Math.max(120, pageHeight - (this.isCompactLayout ? 48 : 84))}px`,
             '--reader-page-transition-duration': `${this.pageAnimationDurationMs}ms`,
             '--reader-page-shift-x': `${this.pageAnimationShiftPx}px`,
             '--reader-page-shift-y': `${Math.max(0, Math.round(this.pageAnimationShiftPx * 0.72))}px`,
             '--reader-page-enter-opacity': String(this.pageAnimationOpacityStart),
             '--reader-page-enter-scale': String(this.pageAnimationScaleStart),
+        };
+    }
+
+    get readerShellStyle() {
+        if (!this.isPagedMode)
+            return {};
+
+        return {
+            '--reader-page-outer-gap-top': `${this.pageOuterGapTop}px`,
+            '--reader-page-outer-gap-bottom': `${this.pageOuterGapBottom}px`,
         };
     }
 
@@ -2564,10 +2911,13 @@ class Reader {
             const availableHeight = (visibleScrollerHeight
                 ? Math.min(Math.max(0, scrollerHeight || visibleScrollerHeight), visibleScrollerHeight)
                 : scrollerHeight);
-            return Math.max(120, availableHeight - this.readerShellVerticalPadding);
+            return Math.max(120, availableHeight - this.configuredReaderShellVerticalPadding);
         }
-        const chromeOffset = 58;
-        return Math.max(180, scrollerHeight - chromeOffset);
+        return Math.max(180, scrollerHeight - this.configuredReaderShellVerticalPadding - 2);
+    }
+
+    get configuredReaderShellVerticalPadding() {
+        return Math.max(0, this.pageOuterGapTop + this.pageOuterGapBottom);
     }
 
     get isCompactLayout() {
@@ -2662,10 +3012,7 @@ class Reader {
     }
 
     toggleControls() {
-        const willOpen = !this.controlsOpen;
-        this.controlsOpen = willOpen;
-        if (!willOpen && this.bookUid && !this.isCompactLayout)
-            this.$nextTick(() => this.reflowReaderLayout());
+        this.controlsOpen = !this.controlsOpen;
     }
 
     toggleContentsDialog() {
@@ -2755,6 +3102,7 @@ class Reader {
         this.loading = false;
         this.bookPreparing = false;
         this.readerHtml = '';
+        this.readerSearchText = '';
         this.contents = [];
         this.bookmarks = [];
         this.title = this.uiText.readerHomeTitle;
@@ -2938,37 +3286,82 @@ class Reader {
         this.reflowReaderLayout();
     }
 
-    async changePageVerticalPadding(delta = 0) {
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
-        const next = Math.max(0, Math.min(160, this.pageVerticalPadding + (Number(delta || 0) || 0)));
+    async changePagePadding(edge = '', delta = 0) {
+        const map = {
+            top: ['pagePaddingTop', this.pagePaddingTop, 160],
+            bottom: ['pagePaddingBottom', this.pagePaddingBottom, 160],
+            left: ['pagePaddingLeft', this.pagePaddingLeft, 200],
+            right: ['pagePaddingRight', this.pagePaddingRight, 200],
+        };
+        const target = map[edge];
+        if (!target)
+            return;
+
+        const [key, current, max] = target;
+        const next = Math.max(0, Math.min(max, current + (Number(delta || 0) || 0)));
+        this.capturePendingReflowAnchor(true);
         this.updateActivePreferences({
-            pageVerticalPadding: next,
+            [key]: next,
+        });
+        this.showPagePaddingPreview(edge);
+        this.savePreferencesDebounced();
+        this.applyLiveSpacingPreview();
+        this.scheduleSpacingReflow();
+    }
+
+    async changePageVerticalPadding(delta = 0) {
+        const nextTop = Math.max(0, Math.min(160, this.pagePaddingTop + (Number(delta || 0) || 0)));
+        const nextBottom = Math.max(0, Math.min(160, this.pagePaddingBottom + (Number(delta || 0) || 0)));
+        this.capturePendingReflowAnchor(true);
+        this.updateActivePreferences({
+            pagePaddingTop: nextTop,
+            pagePaddingBottom: nextBottom,
+            pageVerticalPadding: nextTop,
         });
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.applyLiveSpacingPreview();
+        this.scheduleSpacingReflow();
     }
 
     async changePageHorizontalPadding(delta = 0) {
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
-        const next = Math.max(0, Math.min(200, this.pageHorizontalPadding + (Number(delta || 0) || 0)));
+        const nextLeft = Math.max(0, Math.min(200, this.pagePaddingLeft + (Number(delta || 0) || 0)));
+        const nextRight = Math.max(0, Math.min(200, this.pagePaddingRight + (Number(delta || 0) || 0)));
+        this.capturePendingReflowAnchor(true);
         this.updateActivePreferences({
-            pageHorizontalPadding: next,
+            pagePaddingLeft: nextLeft,
+            pagePaddingRight: nextRight,
+            pageHorizontalPadding: nextLeft,
         });
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.applyLiveSpacingPreview();
+        this.scheduleSpacingReflow();
     }
 
-    async changePageOuterGap(delta = 0) {
-        this.beginLayoutRefresh();
-        await this.afterLayoutRefreshPaint();
-        const next = Math.max(0, Math.min(160, this.pageOuterGap + (Number(delta || 0) || 0)));
-        this.updateActivePreferences({
-            pageOuterGap: next,
-        });
+    async changePageOuterGap(edge = '', delta = 0) {
+        const map = {
+            top: ['pageOuterGapTop', this.pageOuterGapTop],
+            bottom: ['pageOuterGapBottom', this.pageOuterGapBottom],
+        };
+        const target = map[edge];
+        this.capturePendingReflowAnchor(true);
+        if (!target) {
+            const nextTop = Math.max(0, Math.min(160, this.pageOuterGapTop + (Number(edge || delta || 0) || 0)));
+            const nextBottom = Math.max(0, Math.min(160, this.pageOuterGapBottom + (Number(edge || delta || 0) || 0)));
+            this.updateActivePreferences({
+                pageOuterGapTop: nextTop,
+                pageOuterGapBottom: nextBottom,
+                pageOuterGap: nextTop,
+            });
+        } else {
+            const [key, current] = target;
+            const next = Math.max(0, Math.min(160, current + (Number(delta || 0) || 0)));
+            this.updateActivePreferences({
+                [key]: next,
+            });
+        }
         this.savePreferencesDebounced();
-        this.reflowReaderLayout();
+        this.applyLiveSpacingPreview();
+        this.scheduleSpacingReflow();
     }
 
     setPageAnimation(mode = 'soft') {
@@ -3133,6 +3526,7 @@ class Reader {
                 return;
             }
 
+            this.capturePendingReflowAnchor();
             if (this.compactChromePagedBuildPending)
                 this.touchCompactChromeBuildActivity();
             if (this.pagedBuildInProgress) {
@@ -3153,6 +3547,9 @@ class Reader {
             return;
         }
 
+        if (this.pagedViewportBuildQueued)
+            return;
+
         if (this.compactChromePagedBuildPending && this.isPagedMode)
             this.cancelCompactChromeBuildPendingClear();
         if (this.compactChromePagedBuildPending)
@@ -3163,22 +3560,32 @@ class Reader {
             this.pagedViewportFrame = 0;
         }
 
+        this.pagedViewportBuildQueued = true;
         this.$nextTick(() => {
             this.pagedViewportFrame = requestAnimationFrame(async() => {
                 this.pagedViewportFrame = 0;
-                if (!this.isPagedMode)
+                if (!this.isPagedMode) {
+                    this.pagedViewportBuildQueued = false;
                     return;
+                }
 
-                await this.waitForStablePagedStage();
-                if (!this.isPagedMode)
-                    return;
+                try {
+                    await this.waitForStablePagedStage();
+                    if (!this.isPagedMode)
+                        return;
 
-                this.pagedBuildJobId += 1;
-                await this.buildPagedPagesChunked(this.pagedBuildJobId);
-                this.pagedLayoutSignature = this.getPagedLayoutSignature();
-                this.syncPagedProgress(false);
-                if (this.bottomClipCalibrationPending)
-                    this.scheduleBottomClipCalibration();
+                    this.pagedBuildJobId += 1;
+                    await this.buildPagedPagesChunked(this.pagedBuildJobId);
+                    this.pagedLayoutSignature = this.getPagedLayoutSignature();
+                    if (this.restorePending)
+                        this.scheduleRestoreProgressRetry();
+                    else
+                        this.syncPagedProgress(false);
+                    if (this.bottomClipCalibrationPending)
+                        this.scheduleBottomClipCalibration();
+                } finally {
+                    this.pagedViewportBuildQueued = false;
+                }
             });
         });
     }
@@ -3398,9 +3805,33 @@ class Reader {
         return Object.assign({}, stageRect, {measureWidth});
     }
 
+    async waitForReaderFontsReady(timeoutMs = 1800) {
+        if (typeof document === 'undefined' || !document.fonts || !document.fonts.ready)
+            return;
+
+        let timeoutId = 0;
+        try {
+            await Promise.race([
+                document.fonts.ready,
+                new Promise(resolve => {
+                    timeoutId = setTimeout(resolve, Math.max(120, Math.round(Number(timeoutMs || 0) || 0)));
+                }),
+            ]);
+        } catch (e) {
+            // Font loading failures should not block reading.
+        } finally {
+            if (timeoutId)
+                clearTimeout(timeoutId);
+        }
+
+        await this.waitForAnimationFrames(1);
+    }
+
     async waitForStablePagedStage(requiredStableFrames = 2, timeoutMs = 480) {
         if (!this.isPagedMode)
             return {width: 0, height: 0};
+
+        await this.waitForReaderFontsReady();
 
         const startedAt = Date.now();
         let stableFrames = 0;
@@ -3576,6 +4007,49 @@ class Reader {
         return (bestSheet || candidates[0] || null);
     }
 
+    getPagedAnchorSheet(sheet = null) {
+        if (!sheet || typeof sheet.querySelectorAll !== 'function' || typeof window === 'undefined')
+            return sheet || null;
+        if (!this.isDualPagedSpread)
+            return sheet;
+
+        const columns = Array.from(sheet.querySelectorAll('.reader-page-column-sheet:not(.reader-page-column-sheet--empty)'));
+        if (!columns.length)
+            return sheet;
+
+        let bestColumn = null;
+        let bestTop = Infinity;
+        let bestLeft = Infinity;
+
+        for (const column of columns) {
+            if (!column || typeof column.getBoundingClientRect !== 'function')
+                continue;
+
+            const rect = column.getBoundingClientRect();
+            if (!rect || rect.width <= 0 || rect.height <= 0)
+                continue;
+
+            const style = window.getComputedStyle(column);
+            if (style.display === 'none' || style.visibility === 'hidden')
+                continue;
+
+            const top = Math.round(rect.top);
+            const left = Math.round(rect.left);
+            if (top < bestTop || (top === bestTop && left < bestLeft)) {
+                bestColumn = column;
+                bestTop = top;
+                bestLeft = left;
+            }
+        }
+
+        return bestColumn || columns[0] || sheet;
+    }
+
+    getPagedAnchorPageIndex() {
+        const rawIndex = Math.max(0, Math.min(this.totalPagedLogicalPages - 1, Math.round(Number(this.currentPageIndex || 0) || 0)));
+        return rawIndex;
+    }
+
     calibrateDynamicBottomClipCompensation() {
         if (!this.isPagedMode || typeof window === 'undefined' || typeof document === 'undefined')
             return;
@@ -3704,6 +4178,14 @@ class Reader {
         return String(host.textContent || host.innerText || '');
     }
 
+    getReaderDocumentSearchText() {
+        if (this.readerSearchText)
+            return this.readerSearchText;
+
+        this.readerSearchText = this.normalizeReaderSearchText(this.stripHtml(this.readerHtml || '')).toLowerCase();
+        return this.readerSearchText;
+    }
+
     isBlankPagedPageUnits(units = []) {
         const html = (Array.isArray(units) ? units : []).join('');
         if (!String(html || '').trim())
@@ -3830,15 +4312,267 @@ class Reader {
         this.goToSearchResult(nextIndex, true);
     }
 
+    capturePendingReflowAnchor(force = false) {
+        if (!this.bookUid)
+            return null;
+        if (!force && this.pendingReflowAnchor)
+            return this.pendingReflowAnchor;
+
+        const anchor = this.captureReaderReflowAnchor();
+        if (anchor)
+            this.pendingReflowAnchor = anchor;
+        return this.pendingReflowAnchor;
+    }
+
+    captureReaderReflowAnchor() {
+        if (this.isPagedMode)
+            return this.capturePagedReflowAnchor();
+
+        return this.captureScrollReflowAnchor();
+    }
+
+    capturePagedReflowAnchor() {
+        const pageIndex = this.getPagedAnchorPageIndex();
+        const page = this.pagedPages[pageIndex] || null;
+        const sheet = this.getActiveLivePagedSheet();
+        const anchorSheet = this.getPagedAnchorSheet(sheet);
+        const contentRoot = (anchorSheet && anchorSheet.querySelector('.reader-page-content, .reader-html')) || null;
+        const focusNode = this.findTopLeftReaderContentNode(contentRoot);
+        const focusId = this.getReaderNodeAnchorId(focusNode);
+        const focusText = this.getPagedVisibleTextSnippet(anchorSheet)
+            || this.getReaderNodeTextSnippet(focusNode)
+            || this.getReaderNodeImageAnchor(focusNode)
+            || this.getPagedVisibleImageAnchor(anchorSheet);
+        const textOffset = this.getPagedTextOffsetForSnippet(focusText, pageIndex);
+
+        return {
+            mode: 'paged',
+            pageIndex,
+            spreadMode: this.isDualPagedSpread ? 'dual' : 'single',
+            sectionId: String((page && page.sectionId) || this.currentSectionId || '').trim(),
+            id: focusId,
+            textSnippet: focusText,
+            textOffset,
+        };
+    }
+
+    captureScrollReflowAnchor() {
+        const scroller = (this.$refs ? this.$refs.scroller : null);
+        if (!scroller)
+            return null;
+
+        const contentRoot = scroller.querySelector('.reader-html');
+        const focusNode = this.findTopLeftReaderContentNode(contentRoot);
+        const focusId = this.getReaderNodeAnchorId(focusNode);
+        const focusText = this.getReaderNodeTextSnippet(focusNode);
+
+        return {
+            mode: 'scroll',
+            sectionId: String(this.currentSectionId || '').trim(),
+            id: focusId,
+            textSnippet: focusText,
+            scrollTop: Math.max(0, Number(scroller.scrollTop || 0) || 0),
+        };
+    }
+
+    findTopLeftReaderContentNode(root = null) {
+        if (!root || typeof root.querySelectorAll !== 'function' || typeof window === 'undefined')
+            return null;
+
+        const nodes = [root].concat(Array.from(root.querySelectorAll('*')));
+        let bestNode = null;
+        let bestTop = Infinity;
+        let bestLeft = Infinity;
+
+        for (const node of nodes) {
+            if (!node || typeof node.getBoundingClientRect !== 'function')
+                continue;
+            if (node === root)
+                continue;
+
+            const rect = node.getBoundingClientRect();
+            if (!rect || rect.width <= 0 || rect.height <= 0)
+                continue;
+
+            const hasId = !!this.getReaderNodeAnchorId(node);
+            const text = this.normalizeReaderSearchText(node.textContent || '');
+            const hasReadableText = text.length >= 12;
+            const hasImage = !!(typeof node.querySelector === 'function' && node.querySelector('img'));
+            if (!hasId && !hasReadableText && !hasImage)
+                continue;
+
+            const top = Math.round(rect.top);
+            const left = Math.round(rect.left);
+            if (top < bestTop || (top === bestTop && left < bestLeft)) {
+                bestNode = node;
+                bestTop = top;
+                bestLeft = left;
+            }
+        }
+
+        return bestNode;
+    }
+
+    getReaderNodeAnchorId(node = null) {
+        if (!node || typeof node.getAttribute !== 'function')
+            return '';
+
+        return String(node.getAttribute('id') || node.getAttribute('name') || '').trim();
+    }
+
+    getReaderNodeTextSnippet(node = null) {
+        if (!node)
+            return '';
+
+        const text = this.normalizeReaderSearchText(node.textContent || '');
+        if (!text)
+            return '';
+
+        return text.slice(0, 180);
+    }
+
+    normalizeReaderImageAnchor(src = '') {
+        const safeSrc = String(src || '').trim();
+        if (!safeSrc)
+            return '';
+
+        let normalized = safeSrc;
+        try {
+            const url = new URL(safeSrc, window.location.href);
+            normalized = `${url.pathname}${url.search || ''}`;
+        } catch(e) {
+            normalized = safeSrc;
+        }
+
+        return `image:${normalized}`.slice(0, 220);
+    }
+
+    getReaderNodeImageAnchor(node = null) {
+        if (!node || typeof node.querySelector !== 'function')
+            return '';
+
+        const image = (String(node.tagName || '').toLowerCase() === 'img')
+            ? node
+            : node.querySelector('img');
+        if (!image)
+            return '';
+
+        return this.normalizeReaderImageAnchor(image.getAttribute('src') || image.currentSrc || image.src || '');
+    }
+
+    getPagedVisibleTextSnippet(sheet = null) {
+        const pageIndex = this.getPagedAnchorPageIndex();
+        const modelText = this.getPagedPageSearchText(pageIndex);
+
+        if (sheet && typeof sheet.querySelector === 'function') {
+            const anchorSheet = this.getPagedAnchorSheet(sheet);
+            const contentRoots = Array.from(anchorSheet.querySelectorAll('.reader-html')).slice(0, 1);
+            const text = this.normalizeReaderSearchText(contentRoots.map(node => (node && (node.innerText || node.textContent)) || '').filter(Boolean).join(' '));
+            if (text && (text.length >= 24 || text.length >= modelText.length))
+                return text.slice(0, 240);
+        }
+
+        if (!modelText)
+            return '';
+
+        return modelText.slice(0, 240);
+    }
+
+    getPagedVisibleImageAnchor(sheet = null) {
+        if (!sheet || typeof sheet.querySelector !== 'function')
+            return '';
+
+        const anchorSheet = this.getPagedAnchorSheet(sheet);
+        const image = anchorSheet.querySelector('.reader-html img, img');
+        if (!image)
+            return '';
+
+        return this.normalizeReaderImageAnchor(image.getAttribute('src') || image.currentSrc || image.src || '');
+    }
+
+    restorePendingReflowAnchor() {
+        const anchor = this.pendingReflowAnchor;
+        if (!anchor)
+            return false;
+
+        const restored = this.restoreReaderReflowAnchor(anchor);
+        if (restored)
+            this.pendingReflowAnchor = null;
+        return restored;
+    }
+
+    restoreReaderReflowAnchor(anchor = null) {
+        if (!anchor)
+            return false;
+
+        if (anchor.mode === 'paged') {
+            let pageIndex = -1;
+            if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
+                pageIndex = this.findPagedPageIndexByPageStartOffset(anchor.textOffset);
+            if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
+                pageIndex = this.findPagedPageIndexByTextOffset(anchor.textOffset);
+            if (pageIndex < 0 && anchor.textSnippet)
+                pageIndex = this.findPagedPageIndexByTextSnippet(anchor.textSnippet, anchor.pageIndex);
+            if (pageIndex < 0 && anchor.id)
+                pageIndex = this.findPagedPageIndexByAnchor(anchor.id);
+            if (pageIndex < 0 && anchor.sectionId)
+                pageIndex = this.getPageIndexForSection(anchor.sectionId);
+            if (pageIndex < 0)
+                pageIndex = Math.max(0, Math.min(this.totalPagedLogicalPages - 1, Number(anchor.pageIndex || 0) || 0));
+
+            if (anchor.spreadMode === 'dual' && this.isDualPagedSpread) {
+                const rawIndex = Math.max(0, Math.min(this.totalPagedLogicalPages - 1, Math.round(Number(pageIndex || 0) || 0)));
+                this.pageTurnDirection = (rawIndex < this.currentPageIndex ? -1 : 1);
+                this.currentPageIndex = rawIndex;
+                this.syncPagedProgress(false);
+            } else {
+                this.setCurrentPagedPage(pageIndex, false);
+            }
+            return true;
+        }
+
+        const scroller = (this.$refs ? this.$refs.scroller : null);
+        if (!scroller)
+            return false;
+
+        let target = null;
+        if (anchor.id)
+            target = scroller.querySelector(`#${this.escapeCssId(anchor.id)}`);
+        if (!target && anchor.textSnippet)
+            target = this.findReaderNodeByTextSnippet(scroller.querySelector('.reader-html'), anchor.textSnippet);
+
+        if (target) {
+            scroller.scrollTop = Math.max(0, target.offsetTop - 18);
+            this.updateCurrentSectionFromScroll();
+            return true;
+        }
+
+        if (anchor.sectionId) {
+            target = scroller.querySelector(`#${this.escapeCssId(anchor.sectionId)}`);
+            if (target) {
+                scroller.scrollTop = Math.max(0, target.offsetTop - 18);
+                this.updateCurrentSectionFromScroll();
+                return true;
+            }
+        }
+
+        scroller.scrollTop = Math.max(0, Number(anchor.scrollTop || 0) || 0);
+        this.updateCurrentSectionFromScroll();
+        return true;
+    }
+
     reflowReaderLayout() {
+        this.clearSpacingReflowTimer();
         this.pagedLayoutSignature = '';
         if (this.isPagedMode && this.isCompactLayout && this.compactChromeHidden) {
             this.compactChromePagedBuildPending = true;
             this.beginCompactChromeStatusHold(2600);
             this.touchCompactChromeBuildActivity();
         }
+        this.capturePendingReflowAnchor(!this.pendingReflowAnchor);
         this.beginLayoutRefresh();
         this.restorePending = true;
+        this.restoreFromSavedProgress = false;
         this.clearSnapTimer();
         this.requestBottomClipCalibration();
         this.runAfterLayoutRefreshPaint(() => {
@@ -3848,6 +4582,51 @@ class Reader {
                 this.endLayoutRefresh(220);
             });
         });
+    }
+
+    scheduleSpacingReflow() {
+        this.clearSpacingReflowTimer();
+        if (!this.bookUid || !this.isPagedMode)
+            return;
+
+        this.spacingReflowTimer = setTimeout(() => {
+            this.spacingReflowTimer = null;
+            this.reflowReaderLayout();
+        }, 900);
+    }
+
+    applyLiveSpacingPreview() {
+        if (!this.bookUid || !this.isPagedMode)
+            return;
+
+        this.capturePendingReflowAnchor();
+        this.$nextTick(() => {
+            this.updateScrollerViewport();
+            this.requestBottomClipCalibration();
+            if (this.pagedPages && this.pagedPages.length)
+                this.setCurrentPagedPage(this.currentPageIndex, false);
+        });
+    }
+
+    clearSpacingReflowTimer() {
+        if (this.spacingReflowTimer) {
+            clearTimeout(this.spacingReflowTimer);
+            this.spacingReflowTimer = null;
+        }
+    }
+
+    showPagePaddingPreview(edge = '') {
+        const safeEdge = ['top', 'bottom', 'left', 'right'].includes(edge) ? edge : '';
+        if (!safeEdge)
+            return;
+
+        this.pagePaddingPreviewEdge = safeEdge;
+        if (this.pagePaddingPreviewTimer)
+            clearTimeout(this.pagePaddingPreviewTimer);
+        this.pagePaddingPreviewTimer = setTimeout(() => {
+            this.pagePaddingPreviewTimer = null;
+            this.pagePaddingPreviewEdge = '';
+        }, 1800);
     }
 
     clearSnapTimer() {
@@ -4116,22 +4895,35 @@ class Reader {
     syncPagedProgress(save = false) {
         if (!this.isPagedMode)
             return;
+        if (!this.pagedPages.length)
+            return;
+        if (!save && this.restorePending)
+            return;
 
         const safeIndex = Math.max(0, Math.min(this.totalPagedLogicalPages - 1, this.currentPageIndex));
         const currentPage = this.pagedPages[safeIndex] || null;
         const sectionId = String((currentPage && currentPage.sectionId) || '').trim()
             || (this.contents[0] ? this.contents[0].id : '');
         const percent = (this.totalPagedLogicalPages > 1 ? safeIndex / (this.totalPagedLogicalPages - 1) : 0);
+        const anchor = this.capturePagedReflowAnchor() || {};
+        const textSnippet = String(anchor.textSnippet || '').trim();
+        const textOffset = Number(anchor.textOffset);
 
         this.currentPageIndex = safeIndex;
         this.currentSectionId = sectionId;
         this.progress = Object.assign({}, this.progress, {
             percent,
             sectionId,
+            pageIndex: safeIndex,
+            textOffset: Number.isFinite(textOffset) ? textOffset : -1,
+            textSnippet,
+            updatedAt: new Date().toISOString(),
         });
 
-        if (save)
-            this.saveProgressDebounced();
+        if (save) {
+            this.writeStoredReaderProgress();
+            this.queuePersistProgress();
+        }
     }
 
     setCurrentPagedPage(index = 0, save = false) {
@@ -4142,7 +4934,17 @@ class Reader {
         const nextIndex = this.isDualPagedSpread ? rawIndex - (rawIndex % this.pagedStep) : rawIndex;
         this.pageTurnDirection = (nextIndex < this.currentPageIndex ? -1 : 1);
         this.currentPageIndex = nextIndex;
-        this.syncPagedProgress(save);
+        if (save) {
+            this.$nextTick(() => {
+                requestAnimationFrame(() => {
+                    if (!this.isPagedMode || this.currentPageIndex !== nextIndex)
+                        return;
+                    this.syncPagedProgress(true);
+                });
+            });
+        } else {
+            this.syncPagedProgress(false);
+        }
     }
 
     getPageIndexForSection(sectionId = '') {
@@ -4323,6 +5125,8 @@ class Reader {
             addId(node.getAttribute('id'));
             addId(node.getAttribute('name'));
         }
+        for (const image of Array.from(host.querySelectorAll('img')))
+            addId(this.normalizeReaderImageAnchor(image.getAttribute('src') || ''));
 
         return Array.from(ids);
     }
@@ -4568,7 +5372,7 @@ class Reader {
     }
 
     getFastPagedColumnWidth() {
-        const paddingX = Math.max(0, Number(this.pageHorizontalPadding || 0) * 2);
+        const paddingX = Math.max(0, Number(this.pagePaddingLeft || 0) + Number(this.pagePaddingRight || 0));
         return Math.max(120, this.pageMeasureFrameWidth - paddingX - 2);
     }
 
@@ -5792,10 +6596,20 @@ class Reader {
         this.coverSrc = cover || '';
         this.contents = this.sanitizeContents(contents || []);
         this.readerHtml = this.buildReaderHtml(parser);
+        this.readerSearchText = this.normalizeReaderSearchText(this.stripHtml(this.readerHtml || '')).toLowerCase();
 
         if (stateResponse && stateResponse.preferences)
             this.applyReaderPreferences(stateResponse.preferences || {}, {persistLocal: true});
-        this.progress = Object.assign({percent: 0, sectionId: '', updatedAt: ''}, (stateResponse && stateResponse.progress) || {});
+        const stateProgress = Object.assign({percent: 0, sectionId: '', pageIndex: 0, textOffset: -1, textSnippet: '', updatedAt: ''}, (stateResponse && stateResponse.progress) || {});
+        const serverProgress = this.normalizeReaderProgress(stateProgress);
+        let restoredProgress = this.hasReaderProgressPlace(stateProgress)
+            ? stateProgress
+            : this.mergeReaderProgress(stateProgress, this.getCurrentProfileBookProgress());
+        restoredProgress = this.mergeReaderProgress(restoredProgress, this.readStoredReaderProgress(), {
+            preferSecondaryRecentForward: true,
+        });
+        this.progress = restoredProgress;
+        this.pendingReaderProgressUpload = this.shouldUploadRestoredReaderProgress(serverProgress, restoredProgress);
         this.bookmarks = Array.isArray(stateResponse && stateResponse.bookmarks) ? stateResponse.bookmarks : [];
         this.currentSectionId = String(this.progress.sectionId || '').trim();
         this.restorePending = true;
@@ -5805,7 +6619,26 @@ class Reader {
         this.$root.setAppTitle(this.title);
     }
 
+    getCurrentProfileBookProgress() {
+        if (!this.bookUid)
+            return null;
+
+        const current = this.config.currentUserProfile || {};
+        const items = Array.isArray(current.currentReading) ? current.currentReading : [];
+        const item = items.find((row) => String(row.bookUid || '').trim() === this.bookUid);
+        if (!item)
+            return null;
+
+        return {
+            percent: Number(item.percent || 0) || 0,
+            sectionId: String(item.sectionId || '').trim(),
+            pageIndex: Number(item.pageIndex || 0) || 0,
+            updatedAt: String(item.updatedAt || '').trim(),
+        };
+    }
+
     async loadReader() {
+        const loadJobId = ++this.readerLoadJobId;
         this.pagedLayoutSignature = '';
         if (!this.bookUid && !this.isStandaloneMode) {
             await this.loadReaderHome();
@@ -5823,11 +6656,14 @@ class Reader {
         this.bookPreparing = false;
         this.error = '';
         this.readerHtml = '';
+        this.readerSearchText = '';
         this.contents = [];
         this.bookmarks = [];
         this.currentPlacesTab = 'progress';
         this.currentSectionId = '';
         this.restorePending = false;
+        this.restoreFromSavedProgress = false;
+        this.pendingReflowAnchor = null;
         this.controlsOpen = false;
         this.contentsDialogOpen = false;
         this.bookmarksDialogOpen = false;
@@ -5839,9 +6675,13 @@ class Reader {
 
         try {
             await this.afterLayoutRefreshPaint();
+            if (loadJobId !== this.readerLoadJobId)
+                return;
 
         this.loadingMessage = this.uiText.loadingParse;
         await this.afterLayoutRefreshPaint();
+        if (loadJobId !== this.readerLoadJobId)
+            return;
 
         if (this.isStandaloneMode) {
                 const source = (this.standaloneSource || {});
@@ -5884,22 +6724,39 @@ class Reader {
                     stateResponse,
                 });
             }
+            if (loadJobId !== this.readerLoadJobId)
+                return;
 
             this.loading = false;
             this.bookPreparing = true;
             this.loadingMessage = this.uiText.loadingPages;
             this.pagedPages = [];
-            this.currentPageIndex = 0;
+            {
+                const savedPageIndex = Number(this.progress && this.progress.pageIndex);
+                this.currentPageIndex = (Number.isFinite(savedPageIndex) && savedPageIndex > 0)
+                    ? Math.max(0, Math.round(savedPageIndex))
+                    : 0;
+            }
 
             await this.$nextTick();
             await this.afterLayoutRefreshPaint();
+            if (loadJobId !== this.readerLoadJobId)
+                return;
             if (this.isPagedMode) {
                 await this.waitForStablePagedStage();
+                if (loadJobId !== this.readerLoadJobId)
+                    return;
                 this.scrollerViewportWidth = ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0);
                 this.scrollerViewportHeight = ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0);
                 this.pagedBuildJobId += 1;
                 await this.buildPagedPagesChunked(this.pagedBuildJobId);
-                this.syncPagedProgress(false);
+                if (loadJobId !== this.readerLoadJobId)
+                    return;
+                if (this.hasReaderProgressPlace(this.progress))
+                    this.restorePending = true;
+                this.restoreFromSavedProgress = this.restorePending;
+                if (!this.restorePending)
+                    this.syncPagedProgress(false);
                 if (this.bottomClipCalibrationPending)
                     this.scheduleBottomClipCalibration();
             } else {
@@ -5908,15 +6765,24 @@ class Reader {
             }
             this.attachScrollerObserver();
             await this.waitForAnimationFrames(2);
+            if (loadJobId !== this.readerLoadJobId)
+                return;
             this.restoreProgress();
+            if (this.pendingReaderProgressUpload) {
+                this.pendingReaderProgressUpload = false;
+                this.queuePersistProgress();
+            }
             await this.waitForAnimationFrames(2);
         } catch (e) {
-            this.error = e.message;
+            if (loadJobId === this.readerLoadJobId)
+                this.error = e.message;
         } finally {
-            this.loading = false;
-            this.bookPreparing = false;
-            this.loadingMessage = '';
-            this.captureStableReaderStatus(true);
+            if (loadJobId === this.readerLoadJobId) {
+                this.loading = false;
+                this.bookPreparing = false;
+                this.loadingMessage = '';
+                this.captureStableReaderStatus(true);
+            }
         }
     }
 
@@ -5924,8 +6790,50 @@ class Reader {
         if (!this.restorePending || !this.$refs.scroller)
             return;
 
+        const restoreFromSavedProgress = !!this.restoreFromSavedProgress;
+        if (this.isPagedMode) {
+            const layoutSignature = this.getPagedLayoutSignature();
+            if (
+                this.pagedBuildInProgress
+                || this.pagedViewportFrame
+                || !this.pagedPages.length
+                || (!restoreFromSavedProgress && layoutSignature && layoutSignature !== this.pagedLayoutSignature)
+            ) {
+                this.updateScrollerViewport();
+                this.scheduleRestoreProgressRetry();
+                return;
+            }
+        }
+
         this.restorePending = false;
+        this.restoreFromSavedProgress = false;
+        if (restoreFromSavedProgress)
+            this.pendingReflowAnchor = null;
+        else if (this.restorePendingReflowAnchor())
+            return;
         const scroller = this.$refs.scroller;
+
+        if (this.isPagedMode) {
+            const savedPageIndex = Number(this.progress.pageIndex);
+            const textOffset = Number(this.progress.textOffset);
+            const textSnippet = String(this.progress.textSnippet || '').trim();
+            if ((Number.isFinite(textOffset) && textOffset >= 0) || textSnippet) {
+                const textPageIndex = this.findPagedPageIndexByReaderTextAnchor(textSnippet, textOffset, savedPageIndex);
+                if (textPageIndex >= 0) {
+                    this.setCurrentPagedRestorePage(textPageIndex);
+                    return;
+                }
+            }
+            const progressPercent = Number(this.progress.percent || 0) || 0;
+            if (progressPercent > 0 && progressPercent < 1 && this.totalPagedLogicalPages > 1) {
+                this.setCurrentPagedPage(Math.round((this.totalPagedLogicalPages - 1) * progressPercent), false);
+                return;
+            }
+            if (Number.isFinite(savedPageIndex) && savedPageIndex > 0) {
+                this.setCurrentPagedPage(savedPageIndex, false);
+                return;
+            }
+        }
 
         if (this.progress.sectionId) {
             if (this.isPagedMode) {
@@ -5955,6 +6863,37 @@ class Reader {
             scroller.scrollTop = maxScroll * (Number(this.progress.percent || 0) || 0);
             this.updateCurrentSectionFromScroll();
         }
+    }
+
+    scheduleRestoreProgressRetry() {
+        if (!this.restorePending || typeof window === 'undefined')
+            return;
+        if (this.restoreProgressFrame)
+            cancelAnimationFrame(this.restoreProgressFrame);
+
+        this.restoreProgressFrame = requestAnimationFrame(() => {
+            this.restoreProgressFrame = 0;
+            this.$nextTick(() => {
+                if (!this.restorePending)
+                    return;
+                requestAnimationFrame(() => this.restoreProgress());
+            });
+        });
+    }
+
+    setCurrentPagedRestorePage(index = 0) {
+        if (!this.isPagedMode)
+            return;
+
+        const rawIndex = Math.max(0, Math.min(this.totalPagedLogicalPages - 1, Math.round(Number(index || 0) || 0)));
+        if (this.isDualPagedSpread) {
+            this.pageTurnDirection = (rawIndex < this.currentPageIndex ? -1 : 1);
+            this.currentPageIndex = rawIndex;
+            this.syncPagedProgress(false);
+            return;
+        }
+
+        this.setCurrentPagedPage(rawIndex, false);
     }
 
     getPagedOffset(target) {
@@ -6019,7 +6958,9 @@ class Reader {
         this.progress = Object.assign({}, this.progress, {
             percent,
             sectionId: this.currentSectionId || '',
+            updatedAt: new Date().toISOString(),
         });
+        this.writeStoredReaderProgress();
         this.saveProgressDebounced();
     }
 
@@ -6417,6 +7358,246 @@ class Reader {
         return this.findPagedPageIndexByAnchorText(safeId);
     }
 
+    findPagedPageIndexByTextSnippet(textSnippet = '', preferredIndex = -1) {
+        const safeSnippet = this.normalizeReaderSearchText(textSnippet).toLowerCase();
+        if (!safeSnippet || !this.pagedPages.length)
+            return -1;
+
+        const needles = [
+            safeSnippet.slice(0, 180),
+            safeSnippet.slice(0, 120),
+            safeSnippet.slice(0, 80),
+            safeSnippet.slice(0, 48),
+            safeSnippet.slice(0, 24),
+        ].filter((value) => value.length >= 12);
+        if (!needles.length)
+            return -1;
+
+        let bestIndex = -1;
+        let bestDistance = Infinity;
+        for (let index = 0; index < this.pagedPages.length; index += 1) {
+            const page = this.pagedPages[index] || {};
+            const pageText = this.normalizeReaderSearchText(this.stripHtml(page.html || '')).toLowerCase();
+            if (!pageText)
+                continue;
+            if (!needles.some((needle) => pageText.includes(needle)))
+                continue;
+
+            const distance = (preferredIndex >= 0 ? Math.abs(index - preferredIndex) : 0);
+            if (bestIndex < 0 || distance < bestDistance) {
+                bestIndex = index;
+                bestDistance = distance;
+                if (!distance)
+                    break;
+            }
+        }
+
+        return bestIndex;
+    }
+
+    findPagedPageIndexByReaderTextAnchor(textSnippet = '', textOffset = -1, preferredIndex = -1) {
+        let pageIndex = -1;
+        if (String(textSnippet || '').startsWith('image:'))
+            pageIndex = this.findPagedPageIndexByAnchor(textSnippet);
+        if (pageIndex < 0 && Number(textOffset) >= 0)
+            pageIndex = this.findPagedPageIndexByPageStartOffset(textOffset);
+        if (pageIndex < 0 && Number(textOffset) >= 0)
+            pageIndex = this.findPagedPageIndexByTextOffset(textOffset);
+        if (pageIndex < 0 && textSnippet)
+            pageIndex = this.findPagedPageIndexByTextSnippet(textSnippet, preferredIndex);
+        return pageIndex;
+    }
+
+    getPagedPageSearchText(index = 0) {
+        const page = this.pagedPages[Math.max(0, Math.min(this.pagedPages.length - 1, Number(index || 0) || 0))] || {};
+        return this.normalizeReaderSearchText(this.stripHtml(page.html || '')).toLowerCase();
+    }
+
+    getPagedSpreadSearchText(index = 0) {
+        const safeIndex = Math.max(0, Math.min(this.pagedPages.length - 1, Math.round(Number(index || 0) || 0)));
+        const indexes = [safeIndex];
+        if (this.isDualPagedSpread && safeIndex + 1 < this.pagedPages.length)
+            indexes.push(safeIndex + 1);
+
+        return this.normalizeReaderSearchText(indexes.map(pageIndex => this.getPagedPageSearchText(pageIndex)).filter(Boolean).join(' '));
+    }
+
+    getPagedTextOffsetForSnippet(textSnippet = '', pageIndex = 0) {
+        const safeSnippet = this.normalizeReaderSearchText(textSnippet).toLowerCase();
+        if (!safeSnippet || !this.pagedPages.length)
+            return -1;
+
+        const safePageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, Math.round(Number(pageIndex || 0) || 0)));
+        const needles = [
+            safeSnippet.slice(0, 180),
+            safeSnippet.slice(0, 120),
+            safeSnippet.slice(0, 80),
+            safeSnippet.slice(0, 48),
+            safeSnippet.slice(0, 24),
+        ].filter((value) => value.length >= 12);
+        if (!needles.length)
+            return -1;
+
+        const documentText = this.getReaderDocumentSearchText();
+        for (const needle of needles) {
+            const documentOffset = documentText.indexOf(needle);
+            if (documentOffset >= 0)
+                return documentOffset;
+        }
+
+        let offset = 0;
+        for (let index = 0; index < safePageIndex; index += 1)
+            offset += this.getPagedPageSearchText(index).length + 1;
+
+        const pageText = this.getPagedPageSearchText(safePageIndex);
+        for (const needle of needles) {
+            const localOffset = pageText.indexOf(needle);
+            if (localOffset >= 0)
+                return offset + localOffset;
+        }
+
+        return offset;
+    }
+
+    findPagedPageIndexByTextOffset(textOffset = -1) {
+        const targetOffset = Math.max(0, Math.round(Number(textOffset)));
+        if (!Number.isFinite(targetOffset) || !this.pagedPages.length)
+            return -1;
+
+        const documentText = this.getReaderDocumentSearchText();
+        if (documentText) {
+            const targetSnippet = documentText.slice(targetOffset, targetOffset + 80);
+            const pageIndex = this.findPagedPageIndexByTextSnippet(targetSnippet);
+            if (pageIndex >= 0)
+                return pageIndex;
+        }
+
+        let offset = 0;
+        for (let index = 0; index < this.pagedPages.length; index += 1) {
+            const pageText = this.getPagedPageSearchText(index);
+            const nextOffset = offset + pageText.length + 1;
+            if (targetOffset < nextOffset)
+                return index;
+            offset = nextOffset;
+        }
+
+        return this.pagedPages.length - 1;
+    }
+
+    findPagedPageIndexByPageStartOffset(textOffset = -1) {
+        const targetOffset = Math.max(0, Math.round(Number(textOffset)));
+        if (!Number.isFinite(targetOffset) || !this.pagedPages.length)
+            return -1;
+
+        const pageStarts = this.getPagedPageDocumentStartOffsets();
+        if (pageStarts.length) {
+            let bestIndex = 0;
+            let bestDistance = Infinity;
+            for (let index = 0; index < pageStarts.length; index += 1) {
+                const start = Number(pageStarts[index]);
+                if (!Number.isFinite(start) || start < 0)
+                    continue;
+
+                const distance = Math.abs(targetOffset - start);
+                if (distance < bestDistance) {
+                    bestIndex = index;
+                    bestDistance = distance;
+                }
+
+                if (start > targetOffset && distance > bestDistance)
+                    break;
+            }
+            return bestIndex;
+        }
+
+        let offset = 0;
+        let bestIndex = 0;
+        let bestDistance = Math.abs(targetOffset);
+
+        for (let index = 0; index < this.pagedPages.length; index += 1) {
+            const pageText = this.getPagedPageSearchText(index);
+            const distance = Math.abs(targetOffset - offset);
+            if (offset <= targetOffset && distance <= bestDistance) {
+                bestIndex = index;
+                bestDistance = distance;
+            }
+
+            const nextOffset = offset + pageText.length + 1;
+            if (nextOffset > targetOffset)
+                break;
+            offset = nextOffset;
+        }
+
+        return bestIndex;
+    }
+
+    getPagedPageDocumentStartOffsets() {
+        const documentText = this.getReaderDocumentSearchText();
+        if (!documentText || !this.pagedPages.length)
+            return [];
+
+        const starts = [];
+        let searchFrom = 0;
+        let estimatedOffset = 0;
+        for (let index = 0; index < this.pagedPages.length; index += 1) {
+            const pageText = this.getPagedPageSearchText(index);
+            if (!pageText) {
+                starts.push(starts.length ? starts[starts.length - 1] : estimatedOffset);
+                continue;
+            }
+
+            const needles = [
+                pageText.slice(0, 160),
+                pageText.slice(0, 100),
+                pageText.slice(0, 60),
+                pageText.slice(0, 32),
+            ].filter(value => value.length >= 12);
+
+            let foundAt = -1;
+            for (const needle of needles) {
+                foundAt = documentText.indexOf(needle, Math.max(0, searchFrom - 12));
+                if (foundAt >= 0)
+                    break;
+            }
+
+            if (foundAt < 0)
+                foundAt = Math.max(searchFrom, estimatedOffset);
+
+            starts.push(foundAt);
+            searchFrom = foundAt + 1;
+            estimatedOffset = Math.max(estimatedOffset, foundAt + pageText.length + 1);
+        }
+
+        return starts;
+    }
+
+    findReaderNodeByTextSnippet(root = null, textSnippet = '') {
+        if (!root || typeof root.querySelectorAll !== 'function')
+            return null;
+
+        const safeSnippet = this.normalizeReaderSearchText(textSnippet).toLowerCase();
+        if (!safeSnippet)
+            return null;
+
+        const needles = [
+            safeSnippet.slice(0, 180),
+            safeSnippet.slice(0, 120),
+            safeSnippet.slice(0, 80),
+            safeSnippet.slice(0, 48),
+        ].filter((value) => value.length >= 24);
+        if (!needles.length)
+            return null;
+
+        const nodes = [root].concat(Array.from(root.querySelectorAll('*')));
+        for (const node of nodes) {
+            const text = this.normalizeReaderSearchText(node.textContent || '').toLowerCase();
+            if (text && needles.some((needle) => text.includes(needle)))
+                return node;
+        }
+
+        return null;
+    }
+
     normalizeReaderSearchText(text = '') {
         return String(text || '').replace(/\s+/g, ' ').trim();
     }
@@ -6627,17 +7808,59 @@ class Reader {
     async persistProgress() {
         if (!this.bookUid)
             return;
-        if (this.readerProfileWarningVisible)
+        if (
+            this.isPagedMode
+            && (this.restorePending || this.pagedBuildInProgress || !this.pagedPages.length)
+        )
+            return;
+
+        const requestProgress = this.normalizeReaderProgress(Object.assign({}, this.progress, {
+            sectionId: this.currentSectionId || this.progress.sectionId || '',
+        }));
+        this.writeStoredReaderProgress(requestProgress);
+
+        if (this.readerProfileWarningVisible && !this.hasReaderProfileAccessToken)
             return;
 
         const api = this.$root.api;
         if (!api)
             return;
 
-        await api.updateReaderProgress(this.bookUid, {
-            percent: Number(this.progress.percent || 0) || 0,
-            sectionId: this.currentSectionId || '',
+        const response = await api.updateReaderProgress(this.bookUid, {
+            percent: requestProgress.percent,
+            sectionId: requestProgress.sectionId,
+            pageIndex: requestProgress.pageIndex,
+            textOffset: requestProgress.textOffset,
+            textSnippet: requestProgress.textSnippet,
+            updatedAt: requestProgress.updatedAt,
         });
+        const currentProgress = this.normalizeReaderProgress(this.progress);
+        const requestTime = Date.parse(requestProgress.updatedAt || '');
+        const currentTime = Date.parse(currentProgress.updatedAt || '');
+        if (
+            Number.isFinite(requestTime)
+            && Number.isFinite(currentTime)
+            && currentTime > requestTime
+        ) {
+            this.writeStoredReaderProgress(currentProgress);
+            return;
+        }
+
+        const savedProgress = this.mergeReaderProgress(this.progress, response && response.progress ? response.progress : {});
+        this.progress = Object.assign({}, this.progress, savedProgress);
+        this.currentSectionId = String(this.progress.sectionId || this.currentSectionId || '').trim();
+        this.writeStoredReaderProgress();
+    }
+
+    queuePersistProgress() {
+        const request = this.persistProgress()
+            .catch(() => {})
+            .finally(() => {
+                if (this.progressSavePromise === request)
+                    this.progressSavePromise = null;
+            });
+        this.progressSavePromise = request;
+        return request;
     }
 
     async toggleCurrentBookRead() {
@@ -6657,6 +7880,9 @@ class Reader {
             this.progress = Object.assign({}, this.progress, {
                 percent: (read ? 1 : 0),
                 sectionId: '',
+                pageIndex: 0,
+                textOffset: -1,
+                textSnippet: '',
                 updatedAt: new Date().toISOString(),
             });
             this.currentSectionId = '';
@@ -6680,9 +7906,52 @@ class Reader {
         if (!preferences || typeof preferences !== 'object')
             return this.preferences;
 
-        return Object.assign({}, this.preferences, preferences, {
-            einkProfile: Object.assign({}, this.preferences.einkProfile || {}, preferences.einkProfile || {}),
+        const normalized = this.normalizeReaderSpacingPreferences(preferences);
+        return Object.assign({}, this.preferences, normalized, {
+            einkProfile: Object.assign(
+                {},
+                this.preferences.einkProfile || {},
+                this.normalizeReaderSpacingPreferences(normalized.einkProfile || {}),
+            ),
         });
+    }
+
+    normalizeReaderSpacingPreferences(preferences = {}) {
+        if (!preferences || typeof preferences !== 'object')
+            return {};
+
+        const next = Object.assign({}, preferences);
+        const hasOwn = key => Object.prototype.hasOwnProperty.call(next, key);
+        const numberOrNull = value => {
+            const number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        };
+
+        const vertical = numberOrNull(next.pageVerticalPadding);
+        if (vertical != null) {
+            if (!hasOwn('pagePaddingTop'))
+                next.pagePaddingTop = vertical;
+            if (!hasOwn('pagePaddingBottom'))
+                next.pagePaddingBottom = Math.max(0, vertical + 4);
+        }
+
+        const horizontal = numberOrNull(next.pageHorizontalPadding);
+        if (horizontal != null) {
+            if (!hasOwn('pagePaddingLeft'))
+                next.pagePaddingLeft = horizontal;
+            if (!hasOwn('pagePaddingRight'))
+                next.pagePaddingRight = horizontal;
+        }
+
+        const outer = numberOrNull(next.pageOuterGap);
+        if (outer != null) {
+            if (!hasOwn('pageOuterGapTop'))
+                next.pageOuterGapTop = outer;
+            if (!hasOwn('pageOuterGapBottom'))
+                next.pageOuterGapBottom = outer;
+        }
+
+        return next;
     }
 
     applyReaderPreferences(preferences = {}, options = {}) {
@@ -6711,6 +7980,24 @@ class Reader {
         }
     }
 
+    readStoredReaderProgress() {
+        if (typeof localStorage === 'undefined' || !this.bookUid)
+            return null;
+
+        try {
+            const parsed = JSON.parse(localStorage.getItem(readerProgressStorageKey) || '{}');
+            const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
+            const userId = String(this.currentUserId || '').trim();
+            const bucket = (userId && byUser[userId] && typeof byUser[userId] === 'object')
+                ? byUser[userId]
+                : ((parsed && parsed.progress && typeof parsed.progress === 'object') ? parsed.progress : {});
+            const progress = bucket && typeof bucket === 'object' ? bucket[this.bookUid] : null;
+            return progress && typeof progress === 'object' ? progress : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
     writeStoredReaderPreferences() {
         if (typeof localStorage === 'undefined')
             return;
@@ -6734,6 +8021,162 @@ class Reader {
         }
     }
 
+    writeStoredReaderProgress(progress = null) {
+        if (typeof localStorage === 'undefined' || !this.bookUid)
+            return;
+
+        try {
+            const raw = localStorage.getItem(readerProgressStorageKey);
+            const parsed = raw ? JSON.parse(raw) : {};
+            const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
+            const userId = String(this.currentUserId || '').trim();
+            const nextProgress = this.normalizeReaderProgress(progress || this.progress);
+            const globalProgress = (parsed && parsed.progress && typeof parsed.progress === 'object') ? parsed.progress : {};
+            const existingBucket = (userId && byUser[userId] && typeof byUser[userId] === 'object')
+                ? byUser[userId]
+                : globalProgress;
+            const existingProgress = existingBucket && typeof existingBucket === 'object'
+                ? this.normalizeReaderProgress(existingBucket[this.bookUid] || {})
+                : null;
+            const protectForwardProgress = !!(
+                this.isPagedMode
+                && (this.loading || this.bookPreparing || this.restorePending || this.pagedBuildInProgress || !this.pagedPages.length)
+            );
+            if (protectForwardProgress && existingProgress) {
+                const existingTime = Date.parse(existingProgress.updatedAt || '');
+                const nextTime = Date.parse(nextProgress.updatedAt || '');
+                if (
+                    Number.isFinite(existingTime)
+                    && Number.isFinite(nextTime)
+                    && nextTime > existingTime
+                    && nextTime - existingTime < 120000
+                    && (
+                        existingProgress.pageIndex > nextProgress.pageIndex
+                        || existingProgress.percent > nextProgress.percent + 0.0001
+                    )
+                )
+                    return;
+            }
+
+            if (userId) {
+                const scoped = (byUser[userId] && typeof byUser[userId] === 'object') ? byUser[userId] : {};
+                scoped[this.bookUid] = nextProgress;
+                byUser[userId] = scoped;
+            }
+
+            globalProgress[this.bookUid] = nextProgress;
+
+            localStorage.setItem(readerProgressStorageKey, JSON.stringify({
+                progress: globalProgress,
+                byUser,
+            }));
+        } catch (e) {
+            // ignore storage failures
+        }
+    }
+
+    normalizeReaderProgress(progress = {}) {
+        const percent = Number(progress && progress.percent);
+        const sectionId = String((progress && progress.sectionId) || '').trim();
+        const pageIndex = Number(progress && progress.pageIndex);
+        const textOffset = Number(progress && progress.textOffset);
+        const textSnippet = String((progress && progress.textSnippet) || '').trim().slice(0, 240);
+        const updatedAt = String((progress && progress.updatedAt) || '').trim();
+        return {
+            percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
+            sectionId,
+            pageIndex: Number.isFinite(pageIndex) ? Math.max(0, Math.round(pageIndex)) : 0,
+            textOffset: Number.isFinite(textOffset) ? Math.max(-1, Math.round(textOffset)) : -1,
+            textSnippet,
+            updatedAt,
+        };
+    }
+
+    mergeReaderProgress(primary = {}, secondary = {}, options = {}) {
+        const first = this.normalizeReaderProgress(primary || {});
+        const second = this.normalizeReaderProgress(secondary || {});
+        const firstHasPlace = this.hasReaderProgressPlace(first);
+        const secondHasPlace = this.hasReaderProgressPlace(second);
+        if (secondHasPlace && !firstHasPlace)
+            return second;
+        if (firstHasPlace && !secondHasPlace)
+            return first;
+
+        const firstTime = Date.parse(first.updatedAt || '');
+        const secondTime = Date.parse(second.updatedAt || '');
+        if (
+            options.preferSecondaryRecentForward
+            && Number.isFinite(firstTime)
+            && Number.isFinite(secondTime)
+            && firstTime > secondTime
+            && firstTime - secondTime < 120000
+            && (
+                second.pageIndex > first.pageIndex
+                || second.percent > first.percent + 0.0001
+            )
+        )
+            return second;
+
+        if (Number.isFinite(firstTime) && Number.isFinite(secondTime) && firstTime !== secondTime)
+            return (secondTime > firstTime ? second : first);
+
+        if (Number.isFinite(secondTime) && !Number.isFinite(firstTime))
+            return second;
+        if (Number.isFinite(firstTime) && !Number.isFinite(secondTime))
+            return first;
+
+        if (Math.abs((second.percent || 0) - (first.percent || 0)) > 0.0001)
+            return (second.percent > first.percent ? second : first);
+
+        if (second.sectionId && !first.sectionId)
+            return second;
+
+        return first;
+    }
+
+    shouldUploadRestoredReaderProgress(serverProgress = {}, restoredProgress = {}) {
+        const server = this.normalizeReaderProgress(serverProgress || {});
+        const restored = this.normalizeReaderProgress(restoredProgress || {});
+        if (!this.hasReaderProgressPlace(restored))
+            return false;
+
+        const differs = (
+            server.pageIndex !== restored.pageIndex
+            || server.textOffset !== restored.textOffset
+            || String(server.textSnippet || '') !== String(restored.textSnippet || '')
+            || Math.abs((server.percent || 0) - (restored.percent || 0)) > 0.0001
+            || String(server.sectionId || '') !== String(restored.sectionId || '')
+        );
+        if (!differs)
+            return false;
+
+        if (!this.hasReaderProgressPlace(server))
+            return true;
+
+        const serverTime = Date.parse(server.updatedAt || '');
+        const restoredTime = Date.parse(restored.updatedAt || '');
+        if (Number.isFinite(restoredTime) && Number.isFinite(serverTime))
+            return restoredTime >= serverTime;
+        if (Number.isFinite(restoredTime) && !Number.isFinite(serverTime))
+            return true;
+        if (Number.isFinite(serverTime) && !Number.isFinite(restoredTime))
+            return false;
+
+        return (
+            restored.pageIndex > server.pageIndex
+            || restored.percent > server.percent + 0.0001
+        );
+    }
+
+    hasReaderProgressPlace(progress = {}) {
+        const normalized = this.normalizeReaderProgress(progress || {});
+        return !!(
+            normalized.pageIndex > 0
+            || normalized.percent > 0.0001
+            || normalized.sectionId
+        );
+    }
+
     async promptReaderProfileLogin() {
         const api = this.$root.api;
         const target = this.currentSelectedProfile;
@@ -6741,6 +8184,15 @@ class Reader {
             return false;
 
         try {
+            if (document.fullscreenElement && this.fullscreenActive) {
+                try {
+                    await document.exitFullscreen();
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                } catch (fullscreenError) {
+                    // Ignore fullscreen exit failures and still attempt to show the dialog.
+                }
+            }
+
             await api.showProfileLoginDialog(
                 target && !this.config.profileAuthorized && !target.anonymousProfile ? target.login || '' : '',
                 {
@@ -6749,8 +8201,12 @@ class Reader {
                 },
             );
             this.profileWarningNotifiedKey = '';
-            if (!this.bookUid && !this.isStandaloneMode)
+            if (this.bookUid && !this.isStandaloneMode) {
+                window.location.reload();
+                return true;
+            } else if (!this.bookUid && !this.isStandaloneMode) {
                 await this.loadReaderHome();
+            }
             return true;
         } catch (e) {
             const message = e.message || String(e);
@@ -6778,6 +8234,10 @@ class Reader {
     flushProgress() {
         if (this.saveProgressDebounced && this.saveProgressDebounced.flush)
             this.saveProgressDebounced.flush();
+        else
+            this.queuePersistProgress();
+
+        return this.progressSavePromise;
     }
 
     async setTheme(theme) {
@@ -6851,6 +8311,7 @@ class Reader {
     }
 
     async changeFontSize(delta) {
+        this.capturePendingReflowAnchor(true);
         this.beginLayoutRefresh();
         await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({
@@ -6865,6 +8326,7 @@ class Reader {
         if (next === this.selectedFontFamily)
             return;
 
+        this.capturePendingReflowAnchor(true);
         this.beginLayoutRefresh();
         await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({fontFamily: next});
@@ -6873,6 +8335,7 @@ class Reader {
     }
 
     async changeContentWidth(delta) {
+        this.capturePendingReflowAnchor(true);
         this.beginLayoutRefresh();
         await this.afterLayoutRefreshPaint();
         this.updateActivePreferences({
@@ -6883,6 +8346,7 @@ class Reader {
     }
 
     async changeLineHeight(delta) {
+        this.capturePendingReflowAnchor(true);
         this.beginLayoutRefresh();
         await this.afterLayoutRefreshPaint();
         const next = Math.round((this.activePreferences.lineHeight + delta) * 100) / 100;
@@ -7028,19 +8492,28 @@ export default vueComponent(Reader);
 }
 
 .reader-toolbar-actions {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 16px;
+    z-index: 45;
     display: flex;
-    align-items: center;
-    gap: 5px;
-    flex-wrap: nowrap;
-    justify-content: safe center;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
     box-sizing: border-box;
-    width: 100%;
-    max-width: none;
-    margin: 0 auto;
-    padding: 0 10px 4px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    contain: layout paint;
+    width: min(760px, calc(100vw - 32px));
+    max-height: min(72vh, 620px);
+    margin: 0;
+    padding: 12px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    contain: none;
+    border: 1px solid var(--reader-border);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--reader-surface) 96%, var(--reader-bg) 4%);
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.24);
+    backdrop-filter: blur(14px);
     scrollbar-width: thin;
 }
 
@@ -7048,21 +8521,73 @@ export default vueComponent(Reader);
     display: none;
 }
 
-.reader-background-control {
-    display: inline-flex;
+.reader-controls-header {
+    display: flex;
     align-items: center;
-    flex: 0 0 auto;
-    min-height: 32px;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.reader-controls-body {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+    width: 100%;
+}
+
+.reader-controls-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid var(--reader-border);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--reader-surface) 90%, var(--reader-surface-2) 10%);
+}
+
+.reader-controls-group-title {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--reader-text);
+}
+
+.reader-control-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.reader-control-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--reader-muted);
+    padding-left: 2px;
+}
+
+.reader-spacing-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.reader-background-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-height: 34px;
     padding: 1px;
     border: 1px solid var(--reader-border);
-    border-radius: 999px;
+    border-radius: 14px;
     background: var(--reader-surface-2);
     color: var(--reader-text);
 }
 
-.reader-background-control .q-btn {
-    min-width: 28px;
-    min-height: 28px;
+.reader-background-control :deep(.q-btn) {
+    flex: 1 1 0;
+    min-height: 30px;
 }
 
 .reader-profile-chip {
@@ -7119,21 +8644,24 @@ export default vueComponent(Reader);
 .reader-stepper {
     display: inline-flex;
     align-items: center;
+    align-content: stretch;
+    flex-wrap: wrap;
     gap: 1px;
     padding: 1px;
     border: 1px solid var(--reader-border);
     border-radius: 999px;
     background: var(--reader-surface-2);
+    overflow: hidden;
 }
 
 .reader-controls-tabs {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    flex: 0 0 auto;
-    margin-right: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
     background: color-mix(in srgb, var(--reader-surface) 82%, var(--reader-surface-2) 18%);
-    box-shadow: 10px 0 14px color-mix(in srgb, var(--reader-bg) 18%, transparent);
+}
+
+.reader-stepper {
+    flex-wrap: nowrap;
 }
 
 .reader-controls-tabs :deep(.q-btn),
@@ -7143,6 +8671,13 @@ export default vueComponent(Reader);
     min-width: 30px;
     padding: 3px 7px;
     font-size: 12px;
+}
+
+.reader-controls-tabs :deep(.q-btn),
+.reader-theme-switch :deep(.q-btn) {
+    flex: 1 1 auto;
+    min-width: 0;
+    border-radius: 12px;
 }
 
 .reader-stepper :deep(.q-btn--round) {
@@ -7156,18 +8691,19 @@ export default vueComponent(Reader);
 }
 
 .reader-font-select {
-    min-width: 108px;
-    max-width: 136px;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
     background: var(--reader-surface-2);
     border: 1px solid var(--reader-border);
-    border-radius: 999px;
+    border-radius: 14px;
     color: var(--reader-text);
 }
 
 .reader-font-select :deep(.q-field__control) {
     min-height: 32px;
     height: 32px;
-    border-radius: 999px;
+    border-radius: 14px;
     color: var(--reader-text);
     padding: 0 8px 0 12px;
     background: transparent;
@@ -7224,6 +8760,12 @@ export default vueComponent(Reader);
     font-size: 12px;
     font-weight: 700;
     color: var(--reader-muted);
+}
+
+.reader-progress-text {
+    flex: 0 0 auto;
+    padding: 0 2px;
+    white-space: nowrap;
 }
 
 .reader-loading,
@@ -7664,7 +9206,7 @@ export default vueComponent(Reader);
     min-height: 100%;
     box-sizing: border-box;
     overflow: hidden;
-    padding: var(--reader-page-outer-gap, 28px) 18px var(--reader-page-outer-gap, 28px);
+    padding: var(--reader-page-outer-gap-top, 28px) 18px var(--reader-page-outer-gap-bottom, 28px);
 }
 
 .reader-shell--paged-horizontal {
@@ -7733,6 +9275,8 @@ export default vueComponent(Reader);
 .reader-page-column-sheet .reader-html {
     flex: 1 1 auto;
     min-height: 0;
+    height: 100%;
+    max-height: 100%;
     box-sizing: border-box;
     overflow: hidden;
     padding-bottom: 0;
@@ -7791,10 +9335,15 @@ export default vueComponent(Reader);
 }
 
 .reader-page-sheet {
+    position: relative;
     width: min(100%, var(--reader-page-frame-width));
     max-width: var(--reader-page-frame-width);
     height: var(--reader-page-min-height);
     padding: var(--reader-page-padding);
+    padding-block-start: var(--reader-page-padding-top);
+    padding-inline-end: var(--reader-page-padding-right);
+    padding-block-end: var(--reader-page-padding-bottom);
+    padding-inline-start: var(--reader-page-padding-left);
     box-sizing: border-box;
     border: 1px solid var(--reader-border);
     border-radius: 26px;
@@ -7816,8 +9365,42 @@ export default vueComponent(Reader);
 
 .reader-page-sheet--live {
     position: absolute;
-    inset: 0;
-    margin: auto;
+    inset: 0 0 auto;
+    margin: 0 auto;
+}
+
+.reader-page-sheet--placeholder {
+    position: absolute;
+    inset: 0 0 auto;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--reader-muted);
+}
+
+.reader-page-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    max-width: min(360px, 82%);
+    padding: 18px 22px;
+    border: 1px solid var(--reader-border);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--reader-surface) 88%, transparent);
+    text-align: center;
+}
+
+.reader-page-placeholder-title {
+    color: var(--reader-text);
+    font-size: 15px;
+    font-weight: 800;
+}
+
+.reader-page-placeholder-text {
+    font-size: 13px;
+    font-weight: 650;
 }
 
 .reader-page-sheet--dual {
@@ -7836,17 +9419,68 @@ export default vueComponent(Reader);
 }
 
 .reader-page-column-sheet {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
     height: 100%;
     padding: var(--reader-page-padding);
+    padding-block-start: var(--reader-page-padding-top);
+    padding-inline-end: var(--reader-page-padding-right);
+    padding-block-end: var(--reader-page-padding-bottom);
+    padding-inline-start: var(--reader-page-padding-left);
     box-sizing: border-box;
     border: 1px solid var(--reader-border);
     border-radius: 26px;
     background: color-mix(in srgb, var(--reader-surface) 94%, transparent);
     overflow: hidden;
     contain: layout paint style;
+}
+
+.reader-page-sheet--padding-preview-top::after,
+.reader-page-sheet--padding-preview-bottom::after,
+.reader-page-sheet--padding-preview-left::after,
+.reader-page-sheet--padding-preview-right::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    z-index: 2;
+    border-radius: inherit;
+    background:
+        repeating-linear-gradient(
+            45deg,
+            color-mix(in srgb, var(--reader-accent) 20%, transparent) 0 8px,
+            color-mix(in srgb, var(--reader-accent) 7%, transparent) 8px 16px
+        );
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--reader-accent) 28%, transparent);
+}
+
+.reader-page-sheet--padding-preview-top::after {
+    inset: 0 0 auto;
+    height: var(--reader-page-padding-top);
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.reader-page-sheet--padding-preview-bottom::after {
+    inset: auto 0 0;
+    height: var(--reader-page-padding-bottom);
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.reader-page-sheet--padding-preview-left::after {
+    inset: 0 auto 0 0;
+    width: var(--reader-page-padding-left);
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.reader-page-sheet--padding-preview-right::after {
+    inset: 0 0 0 auto;
+    width: var(--reader-page-padding-right);
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
 }
 
 .reader-page-column-sheet--empty {
@@ -8726,7 +10360,19 @@ export default vueComponent(Reader);
     }
 
     .reader-toolbar-actions {
+        left: 10px;
+        right: 10px;
+        width: auto;
         justify-content: flex-start;
+    }
+
+    .reader-controls-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .reader-progress-text {
+        text-align: left;
     }
 }
 
@@ -8880,9 +10526,23 @@ export default vueComponent(Reader);
         backdrop-filter: blur(14px);
     }
 
+    .reader-controls-body {
+        grid-template-columns: 1fr;
+    }
+
+    .reader-controls-group {
+        padding: 10px;
+        border-radius: 14px;
+    }
+
+    .reader-spacing-grid {
+        grid-template-columns: 1fr;
+    }
+
     .reader-theme-switch,
     .reader-stepper,
-    .reader-font-select {
+    .reader-font-select,
+    .reader-background-control {
         width: 100%;
         max-width: none;
         justify-content: center;
@@ -8900,6 +10560,7 @@ export default vueComponent(Reader);
         min-width: 0;
         text-align: left;
         padding-left: 4px;
+        white-space: normal;
     }
 
     .reader-shell {
