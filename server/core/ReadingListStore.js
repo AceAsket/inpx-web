@@ -115,51 +115,110 @@ class ReadingListStore {
     }
 
     normalizeReaderRuntimeSettings(value = {}, defaults = {}) {
-        const fontFamily = String(value.fontFamily || defaults.fontFamily || 'serif').trim().toLowerCase();
-        const contentWidthMode = String(value.contentWidthMode || defaults.contentWidthMode || 'fixed').trim().toLowerCase();
-        const pagedSpreadMode = String(value.pagedSpreadMode || defaults.pagedSpreadMode || 'single').trim().toLowerCase();
+        const setting = (key, fallback) => (
+            utilsHasProp(value, key)
+                ? value[key]
+                : (utilsHasProp(defaults, key) ? defaults[key] : fallback)
+        );
+        const fontFamily = String(setting('fontFamily', 'serif')).trim().toLowerCase();
+        const contentWidthMode = String(setting('contentWidthMode', 'fixed')).trim().toLowerCase();
+        const pagedSpreadMode = String(setting('pagedSpreadMode', 'single')).trim().toLowerCase();
         return {
-            readMode: (String(value.readMode || defaults.readMode || '').trim().toLowerCase() === 'paged' ? 'paged' : 'scroll'),
-            pagedNavigation: (String(value.pagedNavigation || defaults.pagedNavigation || '').trim().toLowerCase() === 'wheel' ? 'wheel' : 'tap'),
-            pagedDirection: (String(value.pagedDirection || defaults.pagedDirection || '').trim().toLowerCase() === 'horizontal' ? 'horizontal' : 'vertical'),
-            pageAnimation: (['none', 'soft', 'slide'].includes(String(value.pageAnimation || defaults.pageAnimation || '').trim().toLowerCase())
-                ? String(value.pageAnimation || defaults.pageAnimation || '').trim().toLowerCase()
+            readMode: (String(setting('readMode', '')).trim().toLowerCase() === 'paged' ? 'paged' : 'scroll'),
+            pagedNavigation: (String(setting('pagedNavigation', '')).trim().toLowerCase() === 'wheel' ? 'wheel' : 'tap'),
+            pagedDirection: (String(setting('pagedDirection', '')).trim().toLowerCase() === 'horizontal' ? 'horizontal' : 'vertical'),
+            pageAnimation: (['none', 'soft', 'slide'].includes(String(setting('pageAnimation', '')).trim().toLowerCase())
+                ? String(setting('pageAnimation', '')).trim().toLowerCase()
                 : 'soft'),
-            pageAnimationSpeed: (['fast', 'normal', 'slow'].includes(String(value.pageAnimationSpeed || defaults.pageAnimationSpeed || '').trim().toLowerCase())
-                ? String(value.pageAnimationSpeed || defaults.pageAnimationSpeed || '').trim().toLowerCase()
+            pageAnimationSpeed: (['fast', 'normal', 'slow'].includes(String(setting('pageAnimationSpeed', '')).trim().toLowerCase())
+                ? String(setting('pageAnimationSpeed', '')).trim().toLowerCase()
                 : 'normal'),
             showStatusBar: (value.showStatusBar !== false),
             statusBarClock: (value.statusBarClock === true),
             statusBarProgressBar: (value.statusBarProgressBar === true),
-            statusBarProgressPosition: (String(value.statusBarProgressPosition || defaults.statusBarProgressPosition || '').trim().toLowerCase() === 'side' ? 'side' : 'bottom'),
+            statusBarProgressPosition: (String(setting('statusBarProgressPosition', '')).trim().toLowerCase() === 'side' ? 'side' : 'bottom'),
             statusBarRemaining: (value.statusBarRemaining === true),
-            statusBarAlign: (String(value.statusBarAlign || defaults.statusBarAlign || '').trim().toLowerCase() === 'edge' ? 'edge' : 'center'),
-            statusBarSize: Math.max(10, Math.min(18, parseInt(value.statusBarSize || defaults.statusBarSize || 12, 10) || 12)),
+            statusBarAlign: (String(setting('statusBarAlign', '')).trim().toLowerCase() === 'edge' ? 'edge' : 'center'),
+            statusBarSize: Math.max(10, Math.min(18, parseInt(setting('statusBarSize', 12), 10) || 12)),
             fontFamily: (['serif', 'sans', 'mono', 'system'].includes(fontFamily) ? fontFamily : 'serif'),
-            fontSize: Math.max(14, Math.min(30, parseInt(value.fontSize || defaults.fontSize || 18, 10) || 18)),
-            lineHeight: Math.max(1.15, Math.min(2.2, Number(value.lineHeight || defaults.lineHeight || 1.7) || 1.7)),
+            fontSize: Math.max(14, Math.min(30, parseInt(setting('fontSize', 18), 10) || 18)),
+            lineHeight: Math.max(1.15, Math.min(2.2, Number(setting('lineHeight', 1.7)) || 1.7)),
             textShadow: (value.textShadow !== false),
-            contentWidth: Math.max(480, Math.min(2200, parseInt(value.contentWidth || defaults.contentWidth || 1040, 10) || 1040)),
+            contentWidth: Math.max(480, Math.min(2200, parseInt(setting('contentWidth', 1040), 10) || 1040)),
             contentWidthMode: (contentWidthMode === 'viewport' ? 'viewport' : 'fixed'),
-            backgroundImage: String(value.backgroundImage || defaults.backgroundImage || '').trim(),
-            backgroundImageName: String(value.backgroundImageName || defaults.backgroundImageName || '').trim().slice(0, 160),
+            backgroundImage: String(setting('backgroundImage', '') || '').trim(),
+            backgroundImageName: String(setting('backgroundImageName', '') || '').trim().slice(0, 160),
             backgroundTransparentPages: (value.backgroundTransparentPages === true),
             backgroundTransparentStatus: (value.backgroundTransparentStatus === true),
             pagedSpreadMode: (pagedSpreadMode === 'dual' ? 'dual' : 'single'),
-            dualPageGap: Math.max(0, Math.min(240, parseInt(value.dualPageGap || defaults.dualPageGap || 28, 10) || 28)),
-            pageVerticalPadding: Math.max(0, Math.min(160, parseInt(value.pageVerticalPadding || defaults.pageVerticalPadding || 18, 10) || 18)),
-            pageHorizontalPadding: Math.max(0, Math.min(220, parseInt(value.pageHorizontalPadding || defaults.pageHorizontalPadding || 18, 10) || 18)),
-            pagePaddingTop: Math.max(0, Math.min(160, parseInt(value.pagePaddingTop || defaults.pagePaddingTop || value.pageVerticalPadding || defaults.pageVerticalPadding || 18, 10) || 18)),
-            pagePaddingBottom: Math.max(0, Math.min(160, parseInt(value.pagePaddingBottom || defaults.pagePaddingBottom || value.pageVerticalPadding || defaults.pageVerticalPadding || 22, 10) || 22)),
-            pagePaddingLeft: Math.max(0, Math.min(220, parseInt(value.pagePaddingLeft || defaults.pagePaddingLeft || value.pageHorizontalPadding || defaults.pageHorizontalPadding || 18, 10) || 18)),
-            pagePaddingRight: Math.max(0, Math.min(220, parseInt(value.pagePaddingRight || defaults.pagePaddingRight || value.pageHorizontalPadding || defaults.pageHorizontalPadding || 18, 10) || 18)),
-            pageOuterGap: Math.max(0, Math.min(220, parseInt(value.pageOuterGap || defaults.pageOuterGap || 28, 10) || 28)),
-            pageOuterGapTop: Math.max(0, Math.min(220, parseInt(value.pageOuterGapTop || defaults.pageOuterGapTop || value.pageOuterGap || defaults.pageOuterGap || 28, 10) || 28)),
-            pageOuterGapBottom: Math.max(0, Math.min(220, parseInt(value.pageOuterGapBottom || defaults.pageOuterGapBottom || value.pageOuterGap || defaults.pageOuterGap || 28, 10) || 28)),
-            einkContrast: Math.max(72, Math.min(100, parseInt(value.einkContrast || defaults.einkContrast || 92, 10) || 92)),
-            einkPaperTone: Math.max(84, Math.min(99, parseInt(value.einkPaperTone || defaults.einkPaperTone || 94, 10) || 94)),
-            einkInkTone: Math.max(4, Math.min(26, parseInt(value.einkInkTone || defaults.einkInkTone || 10, 10) || 10)),
+            dualPageGap: Math.max(0, Math.min(240, parseInt(setting('dualPageGap', 28), 10) || 0)),
+            pageVerticalPadding: Math.max(0, Math.min(160, parseInt(setting('pageVerticalPadding', 18), 10) || 0)),
+            pageHorizontalPadding: Math.max(0, Math.min(220, parseInt(setting('pageHorizontalPadding', 18), 10) || 0)),
+            pagePaddingTop: Math.max(0, Math.min(160, parseInt(setting('pagePaddingTop', setting('pageVerticalPadding', 18)), 10) || 0)),
+            pagePaddingBottom: Math.max(0, Math.min(160, parseInt(setting('pagePaddingBottom', setting('pageVerticalPadding', 22)), 10) || 0)),
+            pagePaddingLeft: Math.max(0, Math.min(220, parseInt(setting('pagePaddingLeft', setting('pageHorizontalPadding', 18)), 10) || 0)),
+            pagePaddingRight: Math.max(0, Math.min(220, parseInt(setting('pagePaddingRight', setting('pageHorizontalPadding', 18)), 10) || 0)),
+            pageOuterGap: Math.max(0, Math.min(220, parseInt(setting('pageOuterGap', 28), 10) || 0)),
+            pageOuterGapTop: Math.max(0, Math.min(220, parseInt(setting('pageOuterGapTop', setting('pageOuterGap', 28)), 10) || 0)),
+            pageOuterGapBottom: Math.max(0, Math.min(220, parseInt(setting('pageOuterGapBottom', setting('pageOuterGap', 28)), 10) || 0)),
+            einkContrast: Math.max(72, Math.min(100, parseInt(setting('einkContrast', 92), 10) || 92)),
+            einkPaperTone: Math.max(84, Math.min(99, parseInt(setting('einkPaperTone', 94), 10) || 94)),
+            einkInkTone: Math.max(4, Math.min(26, parseInt(setting('einkInkTone', 10), 10) || 10)),
         };
+    }
+
+    normalizeReaderDeviceSettings(value = {}, defaults = {}) {
+        if (!value || typeof(value) !== 'object')
+            return {};
+
+        const hasOwn = key => utilsHasProp(value, key);
+        const normalized = this.normalizeReaderRuntimeSettings(Object.assign({}, defaults, value), defaults);
+        const allowed = [
+            'readMode',
+            'pagedNavigation',
+            'pagedDirection',
+            'pageAnimation',
+            'pageAnimationSpeed',
+            'contentWidth',
+            'contentWidthMode',
+            'pagedSpreadMode',
+            'dualPageGap',
+            'pageVerticalPadding',
+            'pageHorizontalPadding',
+            'pagePaddingTop',
+            'pagePaddingBottom',
+            'pagePaddingLeft',
+            'pagePaddingRight',
+            'pageOuterGap',
+            'pageOuterGapTop',
+            'pageOuterGapBottom',
+        ];
+        const result = {};
+        for (const key of allowed) {
+            if (hasOwn(key))
+                result[key] = normalized[key];
+        }
+
+        if (hasOwn('pageVerticalPadding')) {
+            if (!hasOwn('pagePaddingTop'))
+                result.pagePaddingTop = normalized.pagePaddingTop;
+            if (!hasOwn('pagePaddingBottom'))
+                result.pagePaddingBottom = normalized.pagePaddingBottom;
+        }
+        if (hasOwn('pageHorizontalPadding')) {
+            if (!hasOwn('pagePaddingLeft'))
+                result.pagePaddingLeft = normalized.pagePaddingLeft;
+            if (!hasOwn('pagePaddingRight'))
+                result.pagePaddingRight = normalized.pagePaddingRight;
+        }
+        if (hasOwn('pageOuterGap')) {
+            if (!hasOwn('pageOuterGapTop'))
+                result.pageOuterGapTop = normalized.pageOuterGapTop;
+            if (!hasOwn('pageOuterGapBottom'))
+                result.pageOuterGapBottom = normalized.pageOuterGapBottom;
+        }
+
+        return result;
     }
 
     normalizeReaderPreferences(value = {}) {
@@ -239,10 +298,16 @@ class ReadingListStore {
             einkPaperTone: 94,
             einkInkTone: 10,
         };
+        const einkProfile = this.normalizeReaderRuntimeSettings(value.einkProfile || {}, einkDefaults);
+        einkProfile.regularProfile = this.normalizeReaderDeviceSettings((value.einkProfile || {}).regularProfile || {}, einkDefaults);
+        einkProfile.compactProfile = this.normalizeReaderDeviceSettings((value.einkProfile || {}).compactProfile || {}, einkDefaults);
+
         return {
             theme: this.normalizeReaderTheme(value.theme),
             ...this.normalizeReaderRuntimeSettings(value, defaults),
-            einkProfile: this.normalizeReaderRuntimeSettings(value.einkProfile || {}, einkDefaults),
+            regularProfile: this.normalizeReaderDeviceSettings(value.regularProfile || {}, defaults),
+            compactProfile: this.normalizeReaderDeviceSettings(value.compactProfile || {}, defaults),
+            einkProfile,
         };
     }
 
@@ -892,7 +957,10 @@ class ReadingListStore {
         const currentUpdatedAt = String(current.updatedAt || '').trim();
         const patchTime = Date.parse(patchUpdatedAt);
         const currentTime = Date.parse(currentUpdatedAt);
+        const force = patch.force === true;
         if (
+            !force
+            &&
             Number.isFinite(patchTime)
             && Number.isFinite(currentTime)
             && patchTime < currentTime

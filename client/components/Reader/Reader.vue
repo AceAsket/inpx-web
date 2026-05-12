@@ -880,7 +880,11 @@
             >
                 <template v-if="showCompactPagedBuildIndicator">
                     <q-icon class="la la-spinner icon-rotate reader-status-bar-spinner" size="14px" />
-                    <span>{{ compactStatusBarBuildText }}</span>
+                    <span class="reader-status-main">{{ compactStatusBarBuildText }}</span>
+                    <span v-if="activePreferences.statusBarClock" class="reader-status-clock">{{ statusClockText }}</span>
+                    <div v-if="activePreferences.statusBarProgressBar" class="reader-status-progress">
+                        <div :style="{width: `${statusBarProgressPercent}%`}"></div>
+                    </div>
                 </template>
                 <template v-else>
                     <span class="reader-status-main">{{ compactStatusBarText }}</span>
@@ -945,7 +949,11 @@
             <div class="reader-status-bar reader-status-bar--desktop" :class="statusBarClass" :style="statusBarStyle">
                 <template v-if="showDesktopPagedBuildIndicator">
                     <q-icon class="la la-spinner icon-rotate reader-status-bar-spinner" size="14px" />
-                    <span>{{ compactStatusBarBuildText }}</span>
+                    <span class="reader-status-main">{{ compactStatusBarBuildText }}</span>
+                    <span v-if="activePreferences.statusBarClock" class="reader-status-clock">{{ statusClockText }}</span>
+                    <div v-if="activePreferences.statusBarProgressBar" class="reader-status-progress">
+                        <div :style="{width: `${statusBarProgressPercent}%`}"></div>
+                    </div>
                 </template>
                 <template v-else>
                     <span class="reader-status-main">{{ desktopStatusBarText }}</span>
@@ -1313,6 +1321,27 @@ import he from 'he';
 
 const readerPreferencesStorageKey = 'inpx.reader.preferences.v1';
 const readerProgressStorageKey = 'inpx.reader.progress.v1';
+const readerDeviceProfileKeys = ['regularProfile', 'compactProfile'];
+const readerDeviceScopedPreferenceKeys = new Set([
+    'readMode',
+    'pagedNavigation',
+    'pagedDirection',
+    'pageAnimation',
+    'pageAnimationSpeed',
+    'contentWidth',
+    'contentWidthMode',
+    'pagedSpreadMode',
+    'dualPageGap',
+    'pageVerticalPadding',
+    'pageHorizontalPadding',
+    'pagePaddingTop',
+    'pagePaddingBottom',
+    'pagePaddingLeft',
+    'pagePaddingRight',
+    'pageOuterGap',
+    'pageOuterGapTop',
+    'pageOuterGapBottom',
+]);
 
 const componentOptions = {
     watch: {
@@ -1387,6 +1416,8 @@ class Reader {
     readerNoteReturnPoint = null;
     pendingReaderAnchorJump = null;
     pendingReflowAnchor = null;
+    stableReaderReflowAnchor = null;
+    reflowPageStartOverride = null;
     reflowAnchorHighlightTimer = null;
     bookmarkDraft = {
         title: '',
@@ -1499,6 +1530,9 @@ class Reader {
     viewportRefreshFrame = 0;
     pagedBuildInProgress = false;
     pagedBuildNeedsRefresh = false;
+    pagedBuildSignature = '';
+    pagedBuildGeometrySignature = '';
+    progressPersistPendingAfterPagedBuild = false;
     pagedBuildJobId = 0;
     pagedLayoutSignature = '';
     restoreProgressFrame = 0;
@@ -1509,6 +1543,7 @@ class Reader {
     compactChromeBuildSettleTimer = null;
     compactChromeBuildLastActivityAt = 0;
     compactChromeStatusHold = false;
+    compactChromeViewportRefreshSuppressedUntil = 0;
     wakeLock = null;
     wakeLockSupported = false;
     wakeLockActive = false;
@@ -1907,14 +1942,29 @@ class Reader {
         const basePreferences = (this.preferences.theme === 'eink')
             ? Object.assign({}, this.preferences, this.preferences.einkProfile || {})
             : this.preferences;
-        return Object.assign({}, basePreferences, this.readerDebugPreferenceOverrides);
+        return Object.assign(
+            {},
+            basePreferences,
+            this.getDeviceScopedReaderPreferences(basePreferences),
+            this.readerDebugPreferenceOverrides,
+        );
     }
 
     getActivePreferencesForTheme(theme = '', basePreferences = null) {
         const source = Object.assign({}, (basePreferences || this.preferences || {}), {theme});
-        return (theme === 'eink')
+        const themedPreferences = (theme === 'eink')
             ? Object.assign({}, source, source.einkProfile || {})
             : source;
+        return Object.assign({}, themedPreferences, this.getDeviceScopedReaderPreferences(themedPreferences));
+    }
+
+    get activeReaderDeviceProfileKey() {
+        return this.isCompactLayout ? 'compactProfile' : 'regularProfile';
+    }
+
+    getDeviceScopedReaderPreferences(preferences = {}) {
+        const profile = preferences && preferences[this.activeReaderDeviceProfileKey];
+        return (profile && typeof profile === 'object') ? profile : {};
     }
 
     layoutSignatureForPreferences(prefs = {}) {
@@ -2644,6 +2694,10 @@ class Reader {
         if (!page)
             return '';
 
+        const overrideHtml = this.renderReflowPageStartOverride(page, pageIndex);
+        if (overrideHtml)
+            return overrideHtml;
+
         if (!this.searchQuery.trim() || !this.hasSearchResults)
             return page.html || '';
 
@@ -2652,6 +2706,35 @@ class Reader {
             return page.html || '';
 
         return this.highlightHtmlMatches(page.html || '', this.searchQuery);
+    }
+
+    renderReflowPageStartOverride(page = null, pageIndex = 0) {
+        const override = this.reflowPageStartOverride;
+        if (!override || !page || this.searchQuery.trim())
+            return '';
+        if (Number(override.pageIndex) !== Number(pageIndex) && !this.pageHtmlContainsReaderSnippet(page.html || '', override.textSnippet || ''))
+            return '';
+
+        const html = this.trimPagedPageHtmlBeforeSnippet(page.html || '', override.textSnippet || '');
+        return html || '';
+    }
+
+    pageHtmlContainsReaderSnippet(html = '', textSnippet = '') {
+        const safeSnippet = this.normalizeReaderSearchText(textSnippet).toLowerCase();
+        if (!safeSnippet || safeSnippet.length < 24)
+            return false;
+
+        const needles = [
+            safeSnippet.slice(0, 160),
+            safeSnippet.slice(0, 120),
+            safeSnippet.slice(0, 80),
+            safeSnippet.slice(0, 48),
+            safeSnippet.slice(0, 24),
+        ].filter(value => value.length >= 24);
+        if (!needles.length)
+            return false;
+
+        return needles.some(needle => this.getHtmlReaderSearchText(html).includes(needle));
     }
 
     get hasSearchResults() {
@@ -2896,8 +2979,8 @@ class Reader {
 
     get availableReaderFrameWidth() {
         const scrollerWidth = (this.scrollerViewportWidth || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0));
-        const reservedGap = (this.isCompactLayout ? 2 : 28);
-        return Math.max(280, scrollerWidth - reservedGap);
+        const shellInlinePadding = this.isHorizontalPaged ? 0 : 36;
+        return Math.max(280, scrollerWidth - shellInlinePadding);
     }
 
     get readerContentFrameWidth() {
@@ -3484,14 +3567,45 @@ class Reader {
     }
 
     updateActivePreferences(patch = {}) {
+        const scopedPatch = {};
+        const globalPatch = {};
+        for (const [key, value] of Object.entries(patch || {})) {
+            if (readerDeviceScopedPreferenceKeys.has(key))
+                scopedPatch[key] = value;
+            else
+                globalPatch[key] = value;
+        }
+        const hasScopedPatch = Object.keys(scopedPatch).length > 0;
+        const hasGlobalPatch = Object.keys(globalPatch).length > 0;
+        const deviceProfileKey = this.activeReaderDeviceProfileKey;
+
         if (this.preferences.theme === 'eink') {
+            const currentEinkProfile = this.preferences.einkProfile || {};
+            const nextEinkProfile = Object.assign({}, currentEinkProfile, globalPatch);
+            if (hasScopedPatch) {
+                nextEinkProfile[deviceProfileKey] = Object.assign(
+                    {},
+                    currentEinkProfile[deviceProfileKey] || {},
+                    scopedPatch,
+                );
+            }
             this.preferences = Object.assign({}, this.preferences, {
-                einkProfile: Object.assign({}, this.preferences.einkProfile || {}, patch),
+                einkProfile: nextEinkProfile,
             });
             return;
         }
 
-        this.preferences = Object.assign({}, this.preferences, patch);
+        const nextPreferences = Object.assign({}, this.preferences, globalPatch);
+        if (hasScopedPatch) {
+            nextPreferences[deviceProfileKey] = Object.assign(
+                {},
+                this.preferences[deviceProfileKey] || {},
+                scopedPatch,
+            );
+        }
+
+        if (hasGlobalPatch || hasScopedPatch)
+            this.preferences = nextPreferences;
     }
 
     attachScrollerObserver() {
@@ -3501,6 +3615,12 @@ class Reader {
 
         this.resizeObserver = new ResizeObserver(() => {
             if (this.controlsOpen)
+                return;
+            if (
+                this.isCompactLayout
+                && this.isPagedMode
+                && Date.now() < (Number(this.compactChromeViewportRefreshSuppressedUntil || 0) || 0)
+            )
                 return;
             this.scheduleViewportRefresh({calibrate: false});
         });
@@ -3538,9 +3658,30 @@ class Reader {
 
     updateScrollerViewport() {
         const scroller = (this.$refs ? this.$refs.scroller : null);
+        const previousViewportWidth = Math.round(Number(this.scrollerViewportWidth || 0) || 0);
+        const previousViewportHeight = Math.round(Number(this.scrollerViewportHeight || 0) || 0);
         this.scrollerViewportWidth = ((scroller && scroller.clientWidth) || 0);
         this.scrollerViewportHeight = ((scroller && scroller.clientHeight) || 0);
         if (this.isPagedMode) {
+            const nextViewportWidth = Math.round(Number(this.scrollerViewportWidth || 0) || 0);
+            const nextViewportHeight = Math.round(Number(this.scrollerViewportHeight || 0) || 0);
+            if (
+                this.isCompactLayout
+                && this.pagedPages.length
+                && previousViewportWidth > 0
+                && previousViewportHeight > 0
+                && nextViewportWidth === previousViewportWidth
+                && nextViewportHeight !== previousViewportHeight
+                && !this.layoutRefreshing
+                && !this.compactChromePagedBuildPending
+                && !this.bookPreparing
+                && !this.restorePending
+                && !this.pagedBuildInProgress
+            ) {
+                this.pagedLayoutSignature = this.getPagedLayoutSignature();
+                return;
+            }
+
             const signature = this.getPagedLayoutSignature();
             if (this.pagedPages.length && signature && signature === this.pagedLayoutSignature) {
                 if (this.compactChromePagedBuildPending)
@@ -3548,13 +3689,20 @@ class Reader {
                 return;
             }
 
-            this.capturePendingReflowAnchor();
-            if (this.compactChromePagedBuildPending)
-                this.touchCompactChromeBuildActivity();
             if (this.pagedBuildInProgress) {
+                const geometrySignature = this.getPagedGeometrySignature();
+                if (
+                    (signature && signature === this.pagedBuildSignature)
+                    || (geometrySignature && geometrySignature === this.pagedBuildGeometrySignature)
+                )
+                    return;
                 this.pagedBuildNeedsRefresh = true;
                 return;
             }
+
+            this.capturePendingReflowAnchor(false, {preferStable: true});
+            if (this.compactChromePagedBuildPending)
+                this.touchCompactChromeBuildActivity();
             this.schedulePagedViewportBuild();
             return;
         }
@@ -3601,6 +3749,8 @@ class Reader {
                     this.pagedLayoutSignature = this.getPagedLayoutSignature();
                     if (this.restorePending)
                         this.scheduleRestoreProgressRetry();
+                    else if (this.restorePendingReflowAnchor())
+                        this.captureStableReaderStatus(true);
                     else
                         this.syncPagedProgress(false);
                     if (this.bottomClipCalibrationPending)
@@ -3621,12 +3771,23 @@ class Reader {
             return '';
 
         return [
-            Math.round(Number(this.scrollerViewportWidth || 0) || 0),
-            Math.round(Number(this.scrollerViewportHeight || 0) || 0),
+            Math.round(Number(this.pageFrameWidth || 0) || 0),
             Math.round(Number(this.pageMeasureFrameWidth || 0) || 0),
             Math.round(Number(this.pageMinHeight || 0) || 0),
             this.layoutSignatureForPreferences(this.activePreferences),
             this.readerSourceKey,
+        ].join('|');
+    }
+
+    getPagedGeometrySignature() {
+        if (!this.isPagedMode)
+            return '';
+
+        return [
+            Math.round(Number(this.scrollerViewportWidth || 0) || 0),
+            Math.round(Number(this.scrollerViewportHeight || 0) || 0),
+            Math.round(Number(this.pageMeasureFrameWidth || 0) || 0),
+            Math.round(Number(this.pageMinHeight || 0) || 0),
         ].join('|');
     }
 
@@ -3898,6 +4059,12 @@ class Reader {
         if (typeof window === 'undefined')
             return;
 
+        if (this.isCompactLayout && this.isPagedMode && this.pagedPages.length) {
+            this.requestBottomClipCalibration();
+            this.scheduleBottomClipCalibration();
+            return;
+        }
+
         this.beginLayoutRefresh();
         this.requestBottomClipCalibration();
         if (this.imageLayoutFrame)
@@ -4101,6 +4268,9 @@ class Reader {
             liveTextBottom: Math.round(metrics.textBottom),
             liveOverflowPx: Math.round(metrics.overflow),
         });
+
+        if (!this.isCompactLayout)
+            return;
 
         const overflow = metrics.overflow;
         const currentDynamic = this.currentDynamicBottomClipCompensation;
@@ -4334,15 +4504,36 @@ class Reader {
         this.goToSearchResult(nextIndex, true);
     }
 
-    capturePendingReflowAnchor(force = false) {
+    cloneReaderReflowAnchor(anchor = null) {
+        if (!anchor || typeof anchor !== 'object')
+            return null;
+
+        return Object.assign({}, anchor);
+    }
+
+    rememberStableReaderReflowAnchor(anchor = null) {
+        const safeAnchor = this.cloneReaderReflowAnchor(anchor);
+        if (!safeAnchor || !String(safeAnchor.textSnippet || '').trim())
+            return;
+
+        this.stableReaderReflowAnchor = safeAnchor;
+    }
+
+    capturePendingReflowAnchor(force = false, {preferStable = false} = {}) {
         if (!this.bookUid)
             return null;
+        if (!force && preferStable && this.stableReaderReflowAnchor) {
+            this.pendingReflowAnchor = this.cloneReaderReflowAnchor(this.stableReaderReflowAnchor);
+            return this.pendingReflowAnchor;
+        }
         if (!force && this.pendingReflowAnchor)
             return this.pendingReflowAnchor;
 
         const anchor = this.captureReaderReflowAnchor();
-        if (anchor)
+        if (anchor) {
             this.pendingReflowAnchor = anchor;
+            this.rememberStableReaderReflowAnchor(anchor);
+        }
         return this.pendingReflowAnchor;
     }
 
@@ -4359,13 +4550,17 @@ class Reader {
         const sheet = this.getActiveLivePagedSheet();
         const anchorSheet = this.getPagedAnchorSheet(sheet);
         const contentRoot = (anchorSheet && anchorSheet.querySelector('.reader-page-content, .reader-html')) || null;
+        const caretAnchor = this.captureTopLeftReaderTextAnchor(contentRoot);
         const focusNode = this.findTopLeftReaderContentNode(contentRoot);
-        const focusId = this.getReaderNodeAnchorId(focusNode);
-        const focusText = this.getReaderNodeTextSnippet(focusNode)
+        const focusId = caretAnchor.id || this.getReaderNodeAnchorId(focusNode);
+        const focusText = caretAnchor.textSnippet
+            || this.getReaderNodeTextSnippet(focusNode)
             || this.getReaderNodeImageAnchor(focusNode)
             || this.getPagedVisibleTextSnippet(anchorSheet)
             || this.getPagedVisibleImageAnchor(anchorSheet);
-        const textOffset = this.getPagedTextOffsetForSnippet(focusText, pageIndex);
+        const textOffset = Number(caretAnchor.textOffset) >= 0
+            ? caretAnchor.textOffset
+            : this.getPagedTextOffsetForSnippet(focusText, pageIndex);
 
         return {
             mode: 'paged',
@@ -4376,6 +4571,144 @@ class Reader {
             textSnippet: focusText,
             textOffset,
         };
+    }
+
+    captureTopLeftReaderTextAnchor(root = null) {
+        if (!root || typeof document === 'undefined' || typeof window === 'undefined' || typeof document.createRange !== 'function')
+            return {};
+
+        const textPosition = this.findTopLeftReaderTextPosition(root);
+        if (!textPosition || !textPosition.node)
+            return {};
+
+        const textSnippet = this.getReaderTextSnippetFromPosition(root, textPosition.node, textPosition.offset);
+        if (!textSnippet)
+            return {};
+
+        return {
+            id: this.getReaderNodeAnchorId(textPosition.node.parentElement),
+            textSnippet,
+            textOffset: this.getPagedTextOffsetForSnippet(textSnippet, this.getPagedAnchorPageIndex()),
+        };
+    }
+
+    findTopLeftReaderTextPosition(root = null) {
+        if (!root || typeof document === 'undefined' || typeof window === 'undefined' || typeof document.createTreeWalker !== 'function')
+            return null;
+
+        const rootRect = (typeof root.getBoundingClientRect === 'function' ? root.getBoundingClientRect() : null);
+        if (!rootRect || rootRect.width <= 0 || rootRect.height <= 0)
+            return null;
+
+        const walker = document.createTreeWalker(
+            root,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => (
+                    this.normalizeReaderSearchText(node.nodeValue || '').length
+                        ? NodeFilter.FILTER_ACCEPT
+                        : NodeFilter.FILTER_REJECT
+                ),
+            },
+        );
+        let bestRect = null;
+        let current = walker.nextNode();
+
+        while (current) {
+            const range = document.createRange();
+            range.selectNodeContents(current);
+            const rects = Array.from(range.getClientRects());
+            if (typeof range.detach === 'function')
+                range.detach();
+
+            for (const rect of rects) {
+                if (!rect || rect.width <= 0 || rect.height <= 0)
+                    continue;
+                if (rect.bottom < rootRect.top || rect.top > rootRect.bottom)
+                    continue;
+                if (rect.right < rootRect.left || rect.left > rootRect.right)
+                    continue;
+
+                if (!bestRect || rect.top < bestRect.top || (Math.round(rect.top) === Math.round(bestRect.top) && rect.left < bestRect.left))
+                    bestRect = rect;
+            }
+
+            current = walker.nextNode();
+        }
+
+        if (!bestRect)
+            return null;
+
+        const points = [
+            {x: bestRect.left + 1, y: bestRect.top + (bestRect.height / 2)},
+            {x: bestRect.left + Math.min(12, Math.max(2, bestRect.width / 4)), y: bestRect.top + (bestRect.height / 2)},
+            {x: rootRect.left + 2, y: bestRect.top + (bestRect.height / 2)},
+        ];
+
+        for (const point of points) {
+            const position = this.getReaderTextPositionFromPoint(point.x, point.y);
+            if (position && position.node && root.contains(position.node))
+                return position;
+        }
+
+        return null;
+    }
+
+    getReaderTextPositionFromPoint(x = 0, y = 0) {
+        if (typeof document === 'undefined')
+            return null;
+
+        if (typeof document.caretPositionFromPoint === 'function') {
+            const position = document.caretPositionFromPoint(x, y);
+            if (position && position.offsetNode)
+                return {
+                    node: position.offsetNode,
+                    offset: Math.max(0, Math.round(Number(position.offset || 0) || 0)),
+                };
+        }
+
+        if (typeof document.caretRangeFromPoint === 'function') {
+            const range = document.caretRangeFromPoint(x, y);
+            if (range && range.startContainer)
+                return {
+                    node: range.startContainer,
+                    offset: Math.max(0, Math.round(Number(range.startOffset || 0) || 0)),
+                };
+        }
+
+        return null;
+    }
+
+    getReaderTextSnippetFromPosition(root = null, node = null, offset = 0) {
+        if (!root || !node || node.nodeType !== Node.TEXT_NODE || typeof document === 'undefined' || typeof document.createTreeWalker !== 'function')
+            return '';
+
+        let text = String(node.nodeValue || '').slice(Math.max(0, Math.min(String(node.nodeValue || '').length, Math.round(Number(offset || 0) || 0))));
+        const walker = document.createTreeWalker(
+            root,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (candidate) => (
+                    this.normalizeReaderSearchText(candidate.nodeValue || '').length
+                        ? NodeFilter.FILTER_ACCEPT
+                        : NodeFilter.FILTER_REJECT
+                ),
+            },
+        );
+
+        let found = false;
+        let current = walker.nextNode();
+        while (current && text.length < 260) {
+            if (current === node) {
+                found = true;
+            } else if (found) {
+                text += ` ${String(current.nodeValue || '')}`;
+            }
+            current = walker.nextNode();
+        }
+
+        const normalized = this.normalizeReaderSearchText(text);
+        return normalized.length >= 12 ? normalized.slice(0, 180) : '';
     }
 
     captureScrollReflowAnchor() {
@@ -4533,12 +4866,12 @@ class Reader {
 
         if (anchor.mode === 'paged') {
             let pageIndex = -1;
+            if (pageIndex < 0 && anchor.textSnippet)
+                pageIndex = this.findPagedPageIndexByTextSnippet(anchor.textSnippet, anchor.pageIndex);
             if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
                 pageIndex = this.findPagedPageIndexByTextOffset(anchor.textOffset);
             if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
                 pageIndex = this.findPagedPageIndexByPageStartOffset(anchor.textOffset);
-            if (pageIndex < 0 && anchor.textSnippet)
-                pageIndex = this.findPagedPageIndexByTextSnippet(anchor.textSnippet, anchor.pageIndex);
             if (pageIndex < 0 && anchor.id)
                 pageIndex = this.findPagedPageIndexByAnchor(anchor.id);
             if (pageIndex < 0 && anchor.sectionId)
@@ -4550,8 +4883,10 @@ class Reader {
                 const rawIndex = Math.max(0, Math.min(this.totalPagedLogicalPages - 1, Math.round(Number(pageIndex || 0) || 0)));
                 this.pageTurnDirection = (rawIndex < this.currentPageIndex ? -1 : 1);
                 this.currentPageIndex = rawIndex;
+                this.setReflowPageStartOverride(rawIndex, anchor);
                 this.syncPagedProgress(false);
             } else {
+                this.setReflowPageStartOverride(pageIndex, anchor);
                 this.setCurrentPagedPage(pageIndex, false);
             }
             return true;
@@ -4585,6 +4920,232 @@ class Reader {
         scroller.scrollTop = Math.max(0, Number(anchor.scrollTop || 0) || 0);
         this.updateCurrentSectionFromScroll();
         return true;
+    }
+
+    setReflowPageStartOverride(pageIndex = -1, anchor = null) {
+        const textSnippet = String((anchor && anchor.textSnippet) || '').trim();
+        if (!this.isPagedMode || !textSnippet || textSnippet.startsWith('image:') || Number(pageIndex) < 0) {
+            this.reflowPageStartOverride = null;
+            return;
+        }
+
+        this.reflowPageStartOverride = {
+            pageIndex: Math.max(0, Math.min(this.totalPagedLogicalPages - 1, Math.round(Number(pageIndex || 0) || 0))),
+            textSnippet,
+        };
+    }
+
+    trimPagedPageHtmlBeforeSnippet(html = '', textSnippet = '') {
+        const safeHtml = String(html || '');
+        const safeSnippet = this.normalizeReaderSearchText(textSnippet).toLowerCase();
+        if (!safeHtml || safeSnippet.length < 24 || typeof document === 'undefined')
+            return '';
+
+        const host = document.createElement('div');
+        host.innerHTML = safeHtml;
+        const target = this.findReaderNodeByTextSnippet(host, safeSnippet);
+        const textPosition = this.findReaderTextPositionBySnippet(host, safeSnippet)
+            || this.findReaderTextPositionByDocumentSnippet(host, safeSnippet);
+        if (!target && !textPosition)
+            return '';
+
+        const trimNode = (textPosition && textPosition.node) || target;
+        if (textPosition && textPosition.node) {
+            textPosition.node.nodeValue = String(textPosition.node.nodeValue || '').slice(textPosition.offset);
+        } else {
+            this.trimReaderNodeTextBeforeSnippet(target, safeSnippet);
+        }
+        this.removeReaderContentBeforeNode(host, trimNode);
+        return host.innerHTML || '';
+    }
+
+    findReaderTextPositionBySnippet(root = null, textSnippet = '') {
+        if (!root || typeof document === 'undefined' || typeof document.createTreeWalker !== 'function')
+            return null;
+
+        const safeSnippet = this.normalizeReaderSearchText(textSnippet).toLowerCase();
+        const needles = [
+            safeSnippet.slice(0, 120),
+            safeSnippet.slice(0, 80),
+            safeSnippet.slice(0, 48),
+            safeSnippet.slice(0, 24),
+        ].filter(value => value.length >= 24);
+        if (!needles.length)
+            return null;
+
+        const walker = document.createTreeWalker(
+            root,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => (
+                    this.normalizeReaderSearchText(node.nodeValue || '').length
+                        ? NodeFilter.FILTER_ACCEPT
+                        : NodeFilter.FILTER_REJECT
+                ),
+            },
+        );
+        let current = walker.nextNode();
+        while (current) {
+            const rawText = String(current.nodeValue || '');
+            const normalized = this.normalizeReaderSearchText(rawText).toLowerCase();
+            if (normalized) {
+                for (const needle of needles) {
+                    const normalizedIndex = normalized.indexOf(needle);
+                    if (normalizedIndex < 0)
+                        continue;
+
+                    const offset = this.mapNormalizedTextIndexToRawOffset(rawText, normalizedIndex);
+                    return {node: current, offset};
+                }
+            }
+            current = walker.nextNode();
+        }
+
+        return null;
+    }
+
+    findReaderTextPositionByDocumentSnippet(root = null, textSnippet = '') {
+        if (!root || typeof document === 'undefined' || typeof document.createTreeWalker !== 'function')
+            return null;
+
+        const safeSnippet = this.normalizeReaderSearchText(textSnippet).toLowerCase();
+        const needles = [
+            safeSnippet.slice(0, 160),
+            safeSnippet.slice(0, 120),
+            safeSnippet.slice(0, 80),
+            safeSnippet.slice(0, 48),
+            safeSnippet.slice(0, 24),
+        ].filter(value => value.length >= 24);
+        if (!needles.length)
+            return null;
+
+        const fullText = this.getReaderRootSearchText(root);
+        const needle = needles.find(value => fullText.includes(value));
+        if (!needle)
+            return null;
+
+        const targetIndex = fullText.indexOf(needle);
+        if (targetIndex < 0)
+            return null;
+
+        const walker = document.createTreeWalker(
+            root,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => (
+                    this.normalizeReaderSearchText(node.nodeValue || '').length
+                        ? NodeFilter.FILTER_ACCEPT
+                        : NodeFilter.FILTER_REJECT
+                ),
+            },
+        );
+        let normalizedOffset = 0;
+        let current = walker.nextNode();
+
+        while (current) {
+            const rawText = String(current.nodeValue || '');
+            const nodeText = this.normalizeReaderSearchText(rawText).toLowerCase();
+            if (!nodeText) {
+                current = walker.nextNode();
+                continue;
+            }
+
+            const nodeStart = normalizedOffset;
+            const nodeEnd = nodeStart + nodeText.length;
+            if (targetIndex <= nodeEnd) {
+                const localIndex = Math.max(0, targetIndex - nodeStart);
+                return {
+                    node: current,
+                    offset: this.mapNormalizedTextIndexToRawOffset(rawText, localIndex),
+                };
+            }
+
+            normalizedOffset = nodeEnd + 1;
+            current = walker.nextNode();
+        }
+
+        return null;
+    }
+
+    mapNormalizedTextIndexToRawOffset(rawText = '', normalizedIndex = 0) {
+        const raw = String(rawText || '');
+        const targetIndex = Math.max(0, Math.round(Number(normalizedIndex || 0) || 0));
+        let normalizedCount = 0;
+        let inWhitespace = true;
+
+        for (let index = 0; index < raw.length; index += 1) {
+            const char = raw[index];
+            if (/\s/.test(char)) {
+                if (!inWhitespace) {
+                    if (normalizedCount >= targetIndex)
+                        return index;
+                    normalizedCount += 1;
+                    inWhitespace = true;
+                }
+                continue;
+            }
+
+            if (normalizedCount >= targetIndex)
+                return index;
+
+            normalizedCount += 1;
+            inWhitespace = false;
+        }
+
+        return raw.length;
+    }
+
+    trimReaderNodeTextBeforeSnippet(node = null, textSnippet = '') {
+        if (!node)
+            return;
+
+        const needles = [
+            String(textSnippet || '').slice(0, 120),
+            String(textSnippet || '').slice(0, 80),
+            String(textSnippet || '').slice(0, 48),
+            String(textSnippet || '').slice(0, 24),
+        ].filter(value => value.length >= 24);
+        if (!needles.length)
+            return;
+
+        const rawText = String(node.textContent || '');
+        const normalizedRaw = this.normalizeReaderSearchText(rawText).toLowerCase();
+        const needle = needles.find(value => normalizedRaw.includes(value));
+        if (!needle)
+            return;
+
+        const rawNeedle = String(needle || '').slice(0, 24);
+        const directIndex = rawText.toLowerCase().indexOf(rawNeedle);
+        if (directIndex >= 0) {
+            node.textContent = rawText.slice(directIndex);
+            return;
+        }
+
+        const words = rawNeedle.split(/\s+/).filter(Boolean);
+        const firstWord = words[0] || '';
+        if (!firstWord)
+            return;
+
+        const wordIndex = rawText.toLowerCase().indexOf(firstWord);
+        if (wordIndex >= 0)
+            node.textContent = rawText.slice(wordIndex);
+    }
+
+    removeReaderContentBeforeNode(root = null, target = null) {
+        if (!root || !target)
+            return;
+
+        let node = target;
+        while (node && node !== root) {
+            let sibling = node.previousSibling;
+            while (sibling) {
+                const previous = sibling.previousSibling;
+                if (sibling.parentNode)
+                    sibling.parentNode.removeChild(sibling);
+                sibling = previous;
+            }
+            node = node.parentNode;
+        }
     }
 
     async scheduleReaderReflowAnchorHighlight(anchor = null) {
@@ -5041,6 +5602,7 @@ class Reader {
             || (this.contents[0] ? this.contents[0].id : '');
         const percent = (this.totalPagedLogicalPages > 1 ? safeIndex / (this.totalPagedLogicalPages - 1) : 0);
         const anchor = this.capturePagedReflowAnchor() || {};
+        this.rememberStableReaderReflowAnchor(anchor);
         const textSnippet = String(anchor.textSnippet || '').trim();
         const textOffset = Number(anchor.textOffset);
 
@@ -5067,6 +5629,8 @@ class Reader {
 
         const rawIndex = Math.max(0, Math.min(this.totalPagedLogicalPages - 1, Math.round(index)));
         const nextIndex = this.isDualPagedSpread ? rawIndex - (rawIndex % this.pagedStep) : rawIndex;
+        if (this.reflowPageStartOverride && Number(this.reflowPageStartOverride.pageIndex) !== nextIndex)
+            this.reflowPageStartOverride = null;
         this.pageTurnDirection = (nextIndex < this.currentPageIndex ? -1 : 1);
         this.currentPageIndex = nextIndex;
         if (save) {
@@ -6293,6 +6857,8 @@ class Reader {
 
         this.pagedBuildInProgress = true;
         this.pagedBuildNeedsRefresh = false;
+        this.pagedBuildSignature = this.getPagedLayoutSignature();
+        this.pagedBuildGeometrySignature = this.getPagedGeometrySignature();
         this.pagedBuildProgressPercent = 1;
         if (this.readerDebugEnabled)
             publishStats('building');
@@ -6454,13 +7020,36 @@ class Reader {
         } finally {
             this.pagedBuildInProgress = false;
             this.pagedBuildProgressPercent = 0;
+            const completedBuildSignature = this.pagedBuildSignature;
+            const completedGeometrySignature = this.pagedBuildGeometrySignature;
+            this.pagedBuildSignature = '';
+            this.pagedBuildGeometrySignature = '';
             if (this.compactChromePagedBuildPending)
                 this.touchCompactChromeBuildActivity();
             if (this.pagedBuildNeedsRefresh) {
+                if (
+                    (completedBuildSignature && completedBuildSignature === this.getPagedLayoutSignature())
+                    || (completedGeometrySignature && completedGeometrySignature === this.getPagedGeometrySignature())
+                ) {
+                    this.pagedBuildNeedsRefresh = false;
+                    if (this.progressPersistPendingAfterPagedBuild) {
+                        this.progressPersistPendingAfterPagedBuild = false;
+                        this.$nextTick(() => this.queuePersistProgress());
+                    }
+                    if (this.compactChromePagedBuildPending)
+                        this.scheduleCompactChromeBuildPendingClear();
+                    this.$nextTick(() => this.flushPendingReaderAnchorJump());
+                    return;
+                }
                 this.pagedBuildNeedsRefresh = false;
                 this.updateScrollerViewport();
-            } else if (this.compactChromePagedBuildPending) {
-                this.scheduleCompactChromeBuildPendingClear();
+            } else {
+                if (this.progressPersistPendingAfterPagedBuild) {
+                    this.progressPersistPendingAfterPagedBuild = false;
+                    this.$nextTick(() => this.queuePersistProgress());
+                }
+                if (this.compactChromePagedBuildPending)
+                    this.scheduleCompactChromeBuildPendingClear();
             }
             this.$nextTick(() => this.flushPendingReaderAnchorJump());
         }
@@ -6955,7 +7544,10 @@ class Reader {
             if ((Number.isFinite(textOffset) && textOffset >= 0) || textSnippet) {
                 const textPageIndex = this.findPagedPageIndexByReaderTextAnchor(textSnippet, textOffset, savedPageIndex);
                 if (textPageIndex >= 0) {
-                    this.setCurrentPagedRestorePage(textPageIndex);
+                    this.setCurrentPagedRestorePage(textPageIndex, {
+                        textSnippet,
+                        textOffset,
+                    });
                     return;
                 }
             }
@@ -7016,7 +7608,7 @@ class Reader {
         });
     }
 
-    setCurrentPagedRestorePage(index = 0) {
+    setCurrentPagedRestorePage(index = 0, anchor = null) {
         if (!this.isPagedMode)
             return;
 
@@ -7024,10 +7616,12 @@ class Reader {
         if (this.isDualPagedSpread) {
             this.pageTurnDirection = (rawIndex < this.currentPageIndex ? -1 : 1);
             this.currentPageIndex = rawIndex;
+            this.setReflowPageStartOverride(rawIndex, anchor);
             this.syncPagedProgress(false);
             return;
         }
 
+        this.setReflowPageStartOverride(rawIndex, anchor);
         this.setCurrentPagedPage(rawIndex, false);
     }
 
@@ -7512,7 +8106,7 @@ class Reader {
         let bestDistance = Infinity;
         for (let index = 0; index < this.pagedPages.length; index += 1) {
             const page = this.pagedPages[index] || {};
-            const pageText = this.normalizeReaderSearchText(this.stripHtml(page.html || '')).toLowerCase();
+            const pageText = this.getHtmlReaderSearchText(page.html || '');
             if (!pageText)
                 continue;
             if (!needles.some((needle) => pageText.includes(needle)))
@@ -7534,18 +8128,54 @@ class Reader {
         let pageIndex = -1;
         if (String(textSnippet || '').startsWith('image:'))
             pageIndex = this.findPagedPageIndexByAnchor(textSnippet);
+        if (pageIndex < 0 && textSnippet)
+            pageIndex = this.findPagedPageIndexByTextSnippet(textSnippet, preferredIndex);
         if (pageIndex < 0 && Number(textOffset) >= 0)
             pageIndex = this.findPagedPageIndexByTextOffset(textOffset);
         if (pageIndex < 0 && Number(textOffset) >= 0)
             pageIndex = this.findPagedPageIndexByPageStartOffset(textOffset);
-        if (pageIndex < 0 && textSnippet)
-            pageIndex = this.findPagedPageIndexByTextSnippet(textSnippet, preferredIndex);
         return pageIndex;
     }
 
     getPagedPageSearchText(index = 0) {
         const page = this.pagedPages[Math.max(0, Math.min(this.pagedPages.length - 1, Number(index || 0) || 0))] || {};
-        return this.normalizeReaderSearchText(this.stripHtml(page.html || '')).toLowerCase();
+        return this.getHtmlReaderSearchText(page.html || '');
+    }
+
+    getHtmlReaderSearchText(html = '') {
+        if (typeof document === 'undefined')
+            return this.normalizeReaderSearchText(this.stripHtml(html || '')).toLowerCase();
+
+        const host = document.createElement('div');
+        host.innerHTML = String(html || '');
+        return this.getReaderRootSearchText(host);
+    }
+
+    getReaderRootSearchText(root = null) {
+        if (!root || typeof document === 'undefined' || typeof document.createTreeWalker !== 'function')
+            return this.normalizeReaderSearchText(root && root.textContent ? root.textContent : '').toLowerCase();
+
+        const parts = [];
+        const walker = document.createTreeWalker(
+            root,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => (
+                    this.normalizeReaderSearchText(node.nodeValue || '').length
+                        ? NodeFilter.FILTER_ACCEPT
+                        : NodeFilter.FILTER_REJECT
+                ),
+            },
+        );
+        let current = walker.nextNode();
+        while (current) {
+            const text = this.normalizeReaderSearchText(current.nodeValue || '');
+            if (text)
+                parts.push(text);
+            current = walker.nextNode();
+        }
+
+        return this.normalizeReaderSearchText(parts.join(' ')).toLowerCase();
     }
 
     getPagedSpreadSearchText(index = 0) {
@@ -7961,8 +8591,11 @@ class Reader {
         if (
             this.isPagedMode
             && (this.restorePending || this.pagedBuildInProgress || !this.pagedPages.length)
-        )
+        ) {
+            if (this.pagedBuildInProgress && this.pagedPages.length)
+                this.progressPersistPendingAfterPagedBuild = true;
             return;
+        }
 
         const requestProgress = this.normalizeReaderProgress(Object.assign({}, this.progress, {
             sectionId: this.currentSectionId || this.progress.sectionId || '',
@@ -7976,14 +8609,15 @@ class Reader {
         if (!api)
             return;
 
-        const response = await api.updateReaderProgress(this.bookUid, {
+        const progressPatch = {
             percent: requestProgress.percent,
             sectionId: requestProgress.sectionId,
             pageIndex: requestProgress.pageIndex,
             textOffset: requestProgress.textOffset,
             textSnippet: requestProgress.textSnippet,
             updatedAt: requestProgress.updatedAt,
-        }, {suppressProfileLogin: true});
+        };
+        let response = await api.updateReaderProgress(this.bookUid, progressPatch, {suppressProfileLogin: true});
         const currentProgress = this.normalizeReaderProgress(this.progress);
         const requestTime = Date.parse(requestProgress.updatedAt || '');
         const currentTime = Date.parse(currentProgress.updatedAt || '');
@@ -7994,6 +8628,18 @@ class Reader {
         ) {
             this.writeStoredReaderProgress(currentProgress);
             return;
+        }
+
+        const responseProgress = this.normalizeReaderProgress(response && response.progress ? response.progress : {});
+        const responseDiffers = (
+            responseProgress.pageIndex !== requestProgress.pageIndex
+            || responseProgress.textOffset !== requestProgress.textOffset
+            || String(responseProgress.textSnippet || '') !== String(requestProgress.textSnippet || '')
+            || Math.abs((responseProgress.percent || 0) - (requestProgress.percent || 0)) > 0.0001
+            || String(responseProgress.sectionId || '') !== String(requestProgress.sectionId || '')
+        );
+        if (responseDiffers) {
+            response = await api.updateReaderProgress(this.bookUid, Object.assign({}, progressPatch, {force: true}), {suppressProfileLogin: true});
         }
 
         const savedProgress = this.mergeReaderProgress(this.progress, response && response.progress ? response.progress : {});
@@ -8062,13 +8708,17 @@ class Reader {
             return this.preferences;
 
         const normalized = this.normalizeReaderSpacingPreferences(preferences);
-        return Object.assign({}, this.preferences, normalized, {
+        const nextPreferences = Object.assign({}, this.preferences, normalized, {
             einkProfile: Object.assign(
                 {},
                 this.preferences.einkProfile || {},
                 this.normalizeReaderSpacingPreferences(normalized.einkProfile || {}),
             ),
         });
+        this.mergeReaderDeviceProfiles(nextPreferences, this.preferences, normalized);
+        if (nextPreferences.einkProfile)
+            this.mergeReaderDeviceProfiles(nextPreferences.einkProfile, this.preferences.einkProfile || {}, normalized.einkProfile || {});
+        return nextPreferences;
     }
 
     normalizeReaderSpacingPreferences(preferences = {}) {
@@ -8106,11 +8756,29 @@ class Reader {
                 next.pageOuterGapBottom = outer;
         }
 
+        for (const key of readerDeviceProfileKeys) {
+            if (next[key] && typeof next[key] === 'object')
+                next[key] = this.normalizeReaderSpacingPreferences(next[key]);
+        }
+
         return next;
     }
 
+    mergeReaderDeviceProfiles(target = {}, base = {}, incoming = {}) {
+        for (const key of readerDeviceProfileKeys) {
+            if (!incoming[key] || typeof incoming[key] !== 'object')
+                continue;
+
+            target[key] = Object.assign({}, base[key] || {}, incoming[key] || {});
+        }
+    }
+
     applyReaderPreferences(preferences = {}, options = {}) {
-        this.preferences = this.mergeReaderPreferences(preferences);
+        const nextPreferences = this.mergeReaderPreferences(preferences);
+        if (_.isEqual(nextPreferences, this.preferences))
+            return;
+
+        this.preferences = nextPreferences;
         if (options.persistLocal)
             this.writeStoredReaderPreferences();
     }

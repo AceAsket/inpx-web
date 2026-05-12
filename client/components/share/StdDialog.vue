@@ -146,6 +146,64 @@
         </div>
 
         <!--------------------------------------------------->
+        <div v-show="type == 'profileLogin'" :class="dialogContentClass" :style="dialogContentStyle">
+            <div class="header row">
+                <div class="caption col row items-center q-ml-md">
+                    <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
+                    <div v-html="caption"></div>
+                </div>
+                <div v-if="!noCancel" class="close-icon column justify-center items-center">
+                    <q-btn v-close-popup flat round dense>
+                        <q-icon name="la la-times" size="18px"></q-icon>
+                    </q-btn>
+                </div>
+            </div>
+
+            <div class="q-mx-md">
+                <div v-html="message"></div>
+                <q-input
+                    ref="profileLoginInput"
+                    v-model="inputValue"
+                    label="Логин"
+                    autocomplete="username"
+                    class="q-mt-sm"
+                    outlined
+                    dense
+                />
+                <q-input
+                    ref="profilePasswordInput"
+                    v-model="profilePasswordValue"
+                    :type="passwordVisible ? 'text' : 'password'"
+                    label="Пароль"
+                    autocomplete="current-password"
+                    class="q-mt-sm"
+                    outlined
+                    dense
+                >
+                    <template #append>
+                        <q-icon
+                            :name="passwordVisible ? 'la la-eye-slash' : 'la la-eye'"
+                            class="password-visibility-toggle"
+                            @click="passwordVisible = !passwordVisible"
+                        />
+                    </template>
+                </q-input>
+                <div class="error">
+                    <span v-show="error != ''">{{ error }}</span>
+                </div>
+            </div>
+
+            <div class="buttons row justify-end q-pa-md">
+                <q-btn v-if="!noCancel" v-close-popup class="q-px-md q-ml-sm" dense no-caps>
+                    Отмена
+                </q-btn>
+                <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps @click="okClick">
+                    OK
+                </q-btn>
+            </div>
+        </div>
+
+        <!--------------------------------------------------->
         <div v-show="type == 'hotKey'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
@@ -189,7 +247,14 @@ import * as utils from '../../share/utils';
 const componentOptions = {
     watch: {
         inputValue: function(newValue) {
-            this.validate(newValue);
+            if (this.type == 'profileLogin')
+                this.validateProfileLogin();
+            else
+                this.validate(newValue);
+        },
+        profilePasswordValue: function() {
+            if (this.type == 'profileLogin')
+                this.validateProfileLogin();
         },
     }
 };
@@ -200,6 +265,7 @@ class StdDialog {
     active = false;
     type = '';
     inputValue = '';
+    profilePasswordValue = '';
     error = '';
     iconColor = '';
     iconName = '';
@@ -225,7 +291,7 @@ class StdDialog {
     }
 
     get dialogPosition() {
-        return (this.isCompactLayout && (this.type == 'prompt' || this.type == 'password'))
+        return (this.isCompactLayout && (this.type == 'prompt' || this.type == 'password' || this.type == 'profileLogin'))
             ? 'top'
             : 'standard';
     }
@@ -244,6 +310,7 @@ class StdDialog {
         this.type = '';
         this.inputValidator = null;
         this.inputValue = '';
+        this.profilePasswordValue = '';
         this.error = '';
         this.showed = false;
         this.noEscDismiss = (opts && opts.noEscDismiss) || false;
@@ -284,6 +351,9 @@ class StdDialog {
             if (this.inputValue)
                 this.validate(this.inputValue);
             this.$refs.input.focus();
+        } else if (this.type == 'profileLogin') {
+            this.enableValidator = true;
+            this.$refs.profileLoginInput.focus();
         }
         this.showed = true;
     }
@@ -303,8 +373,32 @@ class StdDialog {
         return true;
     }
 
+    validateProfileLogin() {
+        if (!this.enableValidator)
+            return false;
+
+        const login = String(this.inputValue || '').trim();
+        if (!login) {
+            this.error = 'Логин не должен быть пустым';
+            return false;
+        }
+
+        if (!String(this.profilePasswordValue || '')) {
+            this.error = 'Пароль не должен быть пустым';
+            return false;
+        }
+
+        this.error = '';
+        return true;
+    }
+
     okClick() {
         if ((this.type == 'prompt' || this.type == 'password') && !this.validate(this.inputValue)) {
+            this.$refs.dialog.shake();
+            return;
+        }
+
+        if (this.type == 'profileLogin' && !this.validateProfileLogin()) {
             this.$refs.dialog.shake();
             return;
         }
@@ -394,6 +488,32 @@ class StdDialog {
                 this.inputValidator = opts.inputValidator || null;
                 this.inputValue = opts.inputValue || '';
                 this.userName = opts.userName || '';
+            }
+            this.active = true;
+        });
+    }
+
+    profileLogin(message, caption, opts) {
+        return new Promise((resolve) => {
+            this.enableValidator = false;
+            this.init(message, caption, opts);
+
+            this.hideTrigger = () => {
+                if (this.ok) {
+                    history.pushState({}, null);
+                    resolve({
+                        login: String(this.inputValue || '').trim(),
+                        password: String(this.profilePasswordValue || ''),
+                    });
+                } else {
+                    resolve(false);
+                }
+            };
+
+            this.type = 'profileLogin';
+            if (opts) {
+                this.inputValue = opts.login || '';
+                this.profilePasswordValue = opts.password || '';
             }
             this.active = true;
         });
