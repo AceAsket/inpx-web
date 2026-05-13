@@ -140,7 +140,14 @@
                 </div>
             </div>
 
-            <div v-show="bookUid && showToolbarActions" class="reader-toolbar-actions">
+            <div
+                v-show="bookUid && showToolbarActions"
+                ref="readerToolbarActions"
+                class="reader-toolbar-actions"
+                :class="{
+                    'reader-toolbar-actions--mobile-sheet': isCompactLayout,
+                }"
+            >
                 <input
                     ref="readerBackgroundInput"
                     class="reader-background-input"
@@ -178,7 +185,7 @@
 
                 <div class="reader-controls-body">
                     <template v-if="readerControlsTab === 'text'">
-                        <section class="reader-controls-group">
+                        <section class="reader-controls-group reader-controls-group--mode">
                             <div class="reader-controls-group-title">{{ uiText.controlsView }}</div>
 
                             <div class="reader-control-field">
@@ -324,7 +331,7 @@
                             </template>
                         </section>
 
-                        <section v-if="activePreferences.readMode === 'paged'" class="reader-controls-group">
+                        <section v-if="activePreferences.readMode === 'paged'" class="reader-controls-group reader-controls-group--spacing">
                             <div class="reader-controls-group-title">{{ uiText.controlsSpacing }}</div>
 
                             <div v-if="activePreferences.pagedSpreadMode === 'dual' && !isCompactLayout" class="reader-control-field">
@@ -336,7 +343,32 @@
                                 </div>
                             </div>
 
-                            <div class="reader-spacing-grid">
+                            <div v-if="isCompactLayout" class="reader-mobile-spacing-control">
+                                <div class="reader-mobile-spacing-stepper">
+                                    <div class="reader-mobile-spacing-active">{{ activeMobileSpacingControl.label }}</div>
+                                    <div class="reader-stepper">
+                                        <q-btn flat dense round icon="la la-minus" @click="changeMobileSpacingControl(-4)" />
+                                        <div class="reader-stepper-value">{{ activeMobileSpacingControl.value }}px</div>
+                                        <q-btn flat dense round icon="la la-plus" @click="changeMobileSpacingControl(4)" />
+                                    </div>
+                                </div>
+
+                                <div class="reader-mobile-spacing-targets">
+                                    <button
+                                        v-for="item in mobileSpacingControls"
+                                        :key="item.key"
+                                        type="button"
+                                        class="reader-mobile-spacing-target"
+                                        :class="{'is-active': item.key === mobileSpacingControl}"
+                                        @click="setMobileSpacingControl(item.key)"
+                                    >
+                                        <span>{{ item.label }}</span>
+                                        <strong>{{ item.value }}px</strong>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div v-else class="reader-spacing-grid">
                                 <div class="reader-control-field">
                                     <div class="reader-control-label">{{ uiText.pagePaddingTop }}</div>
                                     <div class="reader-stepper">
@@ -393,7 +425,7 @@
                             </div>
                         </section>
 
-                        <section v-if="activePreferences.readMode === 'paged'" class="reader-controls-group">
+                        <section v-if="activePreferences.readMode === 'paged'" class="reader-controls-group reader-controls-group--animation">
                             <div class="reader-controls-group-title">{{ uiText.controlsAnimation }}</div>
 
                             <div class="reader-control-field">
@@ -868,12 +900,16 @@
         </template>
 
         <div
-            v-if="bookUid && isCompactLayout && (showCompactStatusBar || !compactChromeHidden)"
+            v-if="bookUid && isCompactLayout && (showCompactStatusBar || !compactChromeHidden || controlsOpen)"
             ref="readerMobileFooter"
             class="reader-mobile-footer"
+            :style="readerMobileFooterStyle"
+            :class="{
+                'reader-mobile-footer--settings': controlsOpen,
+            }"
         >
             <div
-                v-if="showCompactStatusBar"
+                v-if="showCompactStatusBar && !controlsOpen"
                 class="reader-status-bar"
                 :class="statusBarClass"
                 :style="statusBarStyle"
@@ -896,7 +932,7 @@
             </div>
 
             <div
-                v-if="!compactChromeHidden"
+                v-if="!compactChromeHidden && !controlsOpen"
                 class="reader-mobile-bar"
                 :class="{'reader-mobile-bar--with-contents': hasContents}"
             >
@@ -1341,6 +1377,8 @@ const readerDeviceScopedPreferenceKeys = new Set([
     'pageOuterGap',
     'pageOuterGapTop',
     'pageOuterGapBottom',
+    'pageOuterGapLeft',
+    'pageOuterGapRight',
 ]);
 
 const componentOptions = {
@@ -1523,6 +1561,8 @@ class Reader {
     pageTurnDirection = 1;
     pagePaddingPreviewEdge = '';
     pagePaddingPreviewTimer = null;
+    mobileSpacingControl = 'pageBottom';
+    mobileSettingsPanelHeight = 0;
     touchStartPoint = null;
     imageLayoutFrame = 0;
     pagedViewportFrame = 0;
@@ -1972,6 +2012,7 @@ class Reader {
         const verticalPadding = preferenceValue('pageVerticalPadding', 18);
         const horizontalPadding = preferenceValue('pageHorizontalPadding', 18);
         const outerGap = preferenceValue('pageOuterGap', 28);
+        const outerInlineGap = this.isCompactLayout ? 6 : 18;
         return [
             prefs.readMode || 'scroll',
             prefs.pagedDirection || 'vertical',
@@ -1987,6 +2028,8 @@ class Reader {
             preferenceValue('pagePaddingRight', horizontalPadding),
             preferenceValue('pageOuterGapTop', outerGap),
             preferenceValue('pageOuterGapBottom', outerGap),
+            preferenceValue('pageOuterGapLeft', outerInlineGap),
+            preferenceValue('pageOuterGapRight', outerInlineGap),
             prefs.lineHeight || 1.7,
         ].join('|');
     }
@@ -2294,6 +2337,8 @@ class Reader {
             pagePaddingRight: '\u041b\u0438\u0441\u0442 \u0441\u043f\u0440\u0430\u0432\u0430',
             pageOuterGapTop: '\u042d\u043a\u0440\u0430\u043d \u0441\u0432\u0435\u0440\u0445\u0443',
             pageOuterGapBottom: '\u042d\u043a\u0440\u0430\u043d \u0441\u043d\u0438\u0437\u0443',
+            pageOuterGapLeft: '\u042d\u043a\u0440\u0430\u043d \u0441\u043b\u0435\u0432\u0430',
+            pageOuterGapRight: '\u042d\u043a\u0440\u0430\u043d \u0441\u043f\u0440\u0430\u0432\u0430',
             controlsText: '\u0422\u0435\u043a\u0441\u0442',
             controlsPage: '\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u0430',
             controlsBackground: '\u0424\u043e\u043d',
@@ -2604,7 +2649,8 @@ class Reader {
         if (this.isCompactLayout)
             return 0;
 
-        return Math.max(0, Math.min(240, Math.round(Number(this.activePreferences.dualPageGap || 28) || 28)));
+        const value = Number(this.activePreferences.dualPageGap);
+        return Math.max(0, Math.min(240, Math.round(Number.isFinite(value) ? value : 28)));
     }
 
     get pageVerticalPadding() {
@@ -2652,9 +2698,25 @@ class Reader {
         return this.normalizePageSpacingValue(this.activePreferences.pageOuterGapBottom, this.pageOuterGap, 160);
     }
 
+    get pageOuterGapLeft() {
+        const fallback = this.isCompactLayout ? 6 : 18;
+        return this.normalizePageSpacingValue(this.activePreferences.pageOuterGapLeft, fallback, 160);
+    }
+
+    get pageOuterGapRight() {
+        const fallback = this.isCompactLayout ? 6 : 18;
+        return this.normalizePageSpacingValue(this.activePreferences.pageOuterGapRight, fallback, 160);
+    }
+
+    get configuredReaderShellHorizontalPadding() {
+        return Math.max(0, this.pageOuterGapLeft + this.pageOuterGapRight);
+    }
+
     normalizePageSpacingValue(value, fallback = 0, max = 160) {
-        const safeFallback = Math.max(0, Math.min(max, Math.round(Number(fallback || 0) || 0)));
-        return Math.max(0, Math.min(max, Math.round(Number(value != null ? value : safeFallback) || safeFallback)));
+        const fallbackNumber = Number(fallback);
+        const safeFallback = Math.max(0, Math.min(max, Math.round(Number.isFinite(fallbackNumber) ? fallbackNumber : 0)));
+        const number = value != null ? Number(value) : safeFallback;
+        return Math.max(0, Math.min(max, Math.round(Number.isFinite(number) ? number : safeFallback)));
     }
 
     get activePagedSpread() {
@@ -2970,6 +3032,25 @@ class Reader {
         return {
             '--reader-page-outer-gap-top': `${this.pageOuterGapTop}px`,
             '--reader-page-outer-gap-bottom': `${this.pageOuterGapBottom}px`,
+            '--reader-page-outer-gap-left': `${this.pageOuterGapLeft}px`,
+            '--reader-page-outer-gap-right': `${this.pageOuterGapRight}px`,
+        };
+    }
+
+    get defaultMobileSettingsFooterHeight() {
+        if (typeof window === 'undefined')
+            return 388;
+
+        return Math.round(Math.min(window.innerHeight * 0.46, 388));
+    }
+
+    get readerMobileFooterStyle() {
+        if (!this.controlsOpen || !this.isCompactLayout)
+            return {};
+
+        const height = this.mobileSettingsPanelHeight || this.defaultMobileSettingsFooterHeight;
+        return {
+            '--reader-mobile-settings-height': `${height}px`,
         };
     }
 
@@ -2979,7 +3060,7 @@ class Reader {
 
     get availableReaderFrameWidth() {
         const scrollerWidth = (this.scrollerViewportWidth || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0));
-        const shellInlinePadding = this.isHorizontalPaged ? 0 : 36;
+        const shellInlinePadding = this.isHorizontalPaged ? 0 : this.configuredReaderShellHorizontalPadding;
         return Math.max(280, scrollerWidth - shellInlinePadding);
     }
 
@@ -3019,6 +3100,25 @@ class Reader {
 
     get configuredReaderShellVerticalPadding() {
         return Math.max(0, this.pageOuterGapTop + this.pageOuterGapBottom);
+    }
+
+    get mobileSpacingControls() {
+        return [
+            {key: 'pageTop', label: this.uiText.pagePaddingTop, value: this.pagePaddingTop, kind: 'page', edge: 'top'},
+            {key: 'pageBottom', label: this.uiText.pagePaddingBottom, value: this.pagePaddingBottom, kind: 'page', edge: 'bottom'},
+            {key: 'pageLeft', label: this.uiText.pagePaddingLeft, value: this.pagePaddingLeft, kind: 'page', edge: 'left'},
+            {key: 'pageRight', label: this.uiText.pagePaddingRight, value: this.pagePaddingRight, kind: 'page', edge: 'right'},
+            {key: 'outerTop', label: this.uiText.pageOuterGapTop, value: this.pageOuterGapTop, kind: 'outer', edge: 'top'},
+            {key: 'outerBottom', label: this.uiText.pageOuterGapBottom, value: this.pageOuterGapBottom, kind: 'outer', edge: 'bottom'},
+            {key: 'outerLeft', label: this.uiText.pageOuterGapLeft, value: this.pageOuterGapLeft, kind: 'outer', edge: 'left'},
+            {key: 'outerRight', label: this.uiText.pageOuterGapRight, value: this.pageOuterGapRight, kind: 'outer', edge: 'right'},
+        ];
+    }
+
+    get activeMobileSpacingControl() {
+        return this.mobileSpacingControls.find((item) => item.key === this.mobileSpacingControl)
+            || this.mobileSpacingControls[1]
+            || {key: 'pageBottom', label: '', value: 0, kind: 'page', edge: 'bottom'};
     }
 
     get isCompactLayout() {
@@ -3114,9 +3214,52 @@ class Reader {
 
     toggleControls() {
         const nextOpen = !this.controlsOpen;
+        if (nextOpen && this.isCompactLayout)
+            this.readerControlsTab = 'text';
         this.controlsOpen = nextOpen;
+        if (this.isCompactLayout)
+            this.refreshCompactSettingsViewport();
+        if (!nextOpen)
+            this.mobileSettingsPanelHeight = 0;
         if (!nextOpen)
             this.applyPendingReaderSettingsReflow();
+    }
+
+    refreshCompactSettingsViewport() {
+        if (!this.isCompactLayout)
+            return;
+
+        this.$nextTick(() => {
+            requestAnimationFrame(() => {
+                this.updateMobileSettingsPanelHeight();
+                requestAnimationFrame(() => {
+                    this.updateScrollerViewport();
+                    if (this.isPagedMode)
+                        this.requestBottomClipCalibration();
+                });
+            });
+        });
+    }
+
+    updateMobileSettingsPanelHeight() {
+        if (!this.controlsOpen || !this.isCompactLayout || typeof window === 'undefined') {
+            this.mobileSettingsPanelHeight = 0;
+            return;
+        }
+
+        const panel = this.$refs && this.$refs.readerToolbarActions;
+        const rect = panel && panel.getBoundingClientRect ? panel.getBoundingClientRect() : null;
+        const fallback = this.defaultMobileSettingsFooterHeight;
+        const measured = rect && rect.height
+            ? Math.ceil(Math.max(0, window.innerHeight - rect.top))
+            : fallback;
+        const shouldKeepFullHeight = ['text', 'page'].includes(this.readerControlsTab);
+        const nextHeight = Math.max(
+            shouldKeepFullHeight ? fallback : 128,
+            Math.min(fallback, measured),
+        );
+
+        this.mobileSettingsPanelHeight = nextHeight;
     }
 
     toggleContentsDialog() {
@@ -3408,6 +3551,9 @@ class Reader {
 
         const [key, current, max] = target;
         const next = Math.max(0, Math.min(max, current + (Number(delta || 0) || 0)));
+        if (next === current)
+            return;
+
         this.capturePendingReflowAnchor(true);
         this.updateActivePreferences({
             [key]: next,
@@ -3447,6 +3593,8 @@ class Reader {
         const map = {
             top: ['pageOuterGapTop', this.pageOuterGapTop],
             bottom: ['pageOuterGapBottom', this.pageOuterGapBottom],
+            left: ['pageOuterGapLeft', this.pageOuterGapLeft],
+            right: ['pageOuterGapRight', this.pageOuterGapRight],
         };
         const target = map[edge];
         this.capturePendingReflowAnchor(true);
@@ -3461,12 +3609,36 @@ class Reader {
         } else {
             const [key, current] = target;
             const next = Math.max(0, Math.min(160, current + (Number(delta || 0) || 0)));
+            if (next === current)
+                return;
+
             this.updateActivePreferences({
                 [key]: next,
             });
         }
         this.savePreferencesDebounced();
         this.requestReaderSettingsReflow({previewSpacing: true});
+    }
+
+    setMobileSpacingControl(key = '') {
+        const next = this.mobileSpacingControls.find((item) => item.key === key);
+        if (!next)
+            return;
+
+        this.mobileSpacingControl = next.key;
+    }
+
+    changeMobileSpacingControl(delta = 0) {
+        const control = this.activeMobileSpacingControl;
+        if (!control)
+            return;
+
+        if (control.kind === 'outer') {
+            this.changePageOuterGap(control.edge, delta);
+            return;
+        }
+
+        this.changePagePadding(control.edge, delta);
     }
 
     setPageAnimation(mode = 'soft') {
@@ -3525,7 +3697,12 @@ class Reader {
 
     setReaderControlsTab(tab = 'text') {
         const next = ['text', 'page', 'background', 'status'].includes(tab) ? tab : 'text';
+        if (this.readerControlsTab === next)
+            return;
+
         this.readerControlsTab = next;
+        if (this.isCompactLayout && this.controlsOpen)
+            this.refreshCompactSettingsViewport();
     }
 
     setBackgroundTransparency(key = '', enabled = false) {
@@ -9510,7 +9687,7 @@ export default vueComponent(Reader);
 
 .reader-controls-tabs :deep(.q-btn),
 .reader-theme-switch :deep(.q-btn) {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
     border-radius: 12px;
 }
@@ -10041,7 +10218,11 @@ export default vueComponent(Reader);
     min-height: 100%;
     box-sizing: border-box;
     overflow: hidden;
-    padding: var(--reader-page-outer-gap-top, 28px) 18px var(--reader-page-outer-gap-bottom, 28px);
+    padding:
+        var(--reader-page-outer-gap-top, 28px)
+        var(--reader-page-outer-gap-right, 18px)
+        var(--reader-page-outer-gap-bottom, 28px)
+        var(--reader-page-outer-gap-left, 18px);
 }
 
 .reader-shell--paged-horizontal {
@@ -11253,6 +11434,7 @@ export default vueComponent(Reader);
         padding: 8px 8px 10px;
         gap: 8px;
         z-index: 40;
+        backdrop-filter: none;
     }
 
     .reader-toolbar-main {
@@ -11374,41 +11556,158 @@ export default vueComponent(Reader);
     }
 
     .reader-toolbar-actions {
-        position: absolute;
-        left: 8px;
-        right: 8px;
-        top: calc(100% + 6px);
-        z-index: 45;
+        position: fixed;
+        left: 4px;
+        right: 4px;
+        top: auto;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+        z-index: 70;
         align-items: stretch;
         flex-direction: column;
         justify-content: flex-start;
         gap: 8px;
         width: auto;
-        max-height: min(62vh, 460px);
+        max-height: min(44vh, 372px);
+        max-height: min(44dvh, 372px);
         margin: 0;
-        padding: 10px;
+        padding: 18px 10px 10px;
         overflow-x: hidden;
         overflow-y: auto;
         overscroll-behavior: contain;
         contain: none;
         border: 1px solid var(--reader-border);
-        border-radius: 18px;
+        border-radius: 20px 20px 16px 16px;
         background: color-mix(in srgb, var(--reader-surface) 96%, var(--reader-bg) 4%);
-        box-shadow: 0 18px 38px rgba(0, 0, 0, 0.22);
+        box-shadow: 0 -14px 44px rgba(0, 0, 0, 0.28);
         backdrop-filter: blur(14px);
+    }
+
+    .reader-toolbar-actions::before {
+        content: "";
+        position: absolute;
+        top: 7px;
+        left: 50%;
+        width: 42px;
+        height: 4px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--reader-muted) 44%, transparent);
+        transform: translateX(-50%);
+    }
+
+    .reader-mobile-footer--settings {
+        flex: 0 0 var(--reader-mobile-settings-height, min(46dvh, 388px));
+        height: var(--reader-mobile-settings-height, min(46dvh, 388px));
+        min-height: 0;
+        gap: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        pointer-events: none;
     }
 
     .reader-controls-body {
         grid-template-columns: 1fr;
+        gap: 8px;
     }
 
     .reader-controls-group {
-        padding: 10px;
+        padding: 9px;
         border-radius: 14px;
     }
 
     .reader-spacing-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 5px;
+    }
+
+    .reader-spacing-grid .reader-control-label {
+        min-height: 22px;
+        line-height: 1.12;
+        font-size: 10px;
+    }
+
+    .reader-spacing-grid .reader-stepper {
+        min-height: 32px;
+        border-radius: 12px;
+    }
+
+    .reader-spacing-grid .reader-stepper :deep(.q-btn) {
+        min-height: 30px;
+        min-width: 28px;
+        padding: 0;
+    }
+
+    .reader-spacing-grid .reader-stepper-value {
+        min-width: 34px;
+        font-size: 11px;
+    }
+
+    .reader-mobile-spacing-control {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .reader-mobile-spacing-stepper {
+        display: grid;
+        grid-template-columns: minmax(86px, 1fr) minmax(0, 1.4fr);
+        align-items: center;
+        gap: 8px;
+    }
+
+    .reader-mobile-spacing-active {
+        min-width: 0;
+        color: var(--reader-text);
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.1;
+    }
+
+    .reader-mobile-spacing-targets {
+        display: flex;
+        gap: 5px;
+        min-width: 0;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+    }
+
+    .reader-mobile-spacing-targets::-webkit-scrollbar {
+        display: none;
+    }
+
+    .reader-mobile-spacing-target {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 32px;
+        padding: 5px 9px;
+        border: 1px solid var(--reader-border);
+        border-radius: 999px;
+        background: var(--reader-surface-2);
+        color: var(--reader-muted);
+        font: inherit;
+        font-size: 11px;
+        font-weight: 800;
+        line-height: 1;
+    }
+
+    .reader-mobile-spacing-target strong {
+        color: var(--reader-text);
+        font-weight: 850;
+    }
+
+    .reader-mobile-spacing-target.is-active {
+        border-color: color-mix(in srgb, var(--reader-accent) 42%, var(--reader-border));
+        background: var(--reader-accent-soft);
+        color: var(--reader-accent);
+    }
+
+    .reader-mobile-spacing-target.is-active strong {
+        color: var(--reader-accent);
     }
 
     .reader-theme-switch,
@@ -11420,6 +11719,17 @@ export default vueComponent(Reader);
         justify-content: center;
         border-radius: 14px;
         min-height: 44px;
+    }
+
+    .reader-controls-tabs {
+        min-height: 38px;
+        flex-wrap: nowrap;
+    }
+
+    .reader-controls-tabs :deep(.q-btn),
+    .reader-theme-switch :deep(.q-btn),
+    .reader-stepper :deep(.q-btn) {
+        min-height: 36px;
     }
 
     .reader-font-select :deep(.q-field__control) {
@@ -11437,6 +11747,14 @@ export default vueComponent(Reader);
 
     .reader-shell {
         padding: 2px 2px 10px;
+    }
+
+    .reader-shell--paged {
+        padding:
+            var(--reader-page-outer-gap-top, 10px)
+            var(--reader-page-outer-gap-right, 6px)
+            var(--reader-page-outer-gap-bottom, 10px)
+            var(--reader-page-outer-gap-left, 6px);
     }
 
     .reader-body--paged {

@@ -76,6 +76,17 @@ class BasePage {
         return (queryString ? `${base}?${queryString}` : base);
     }
 
+    searchTemplateHref(req = null) {
+        const params = [];
+        const scopeUser = this.getScopeUserId(req);
+
+        params.push('term={searchTerms}');
+        if (scopeUser)
+            params.push(`user=${encodeURIComponent(scopeUser)}`);
+
+        return `${this.opdsRoot}/search?${params.join('&')}`;
+    }
+
     getScopeUserId(req) {
         return String((req && req.query && req.query.user) || '').trim();
     }
@@ -124,7 +135,7 @@ class BasePage {
         const scopeQuery = (this.getScopeUserId(req) ? {user: this.getScopeUserId(req)} : {});
         const result = [
             this.makeLink({href: this.scopedHref(`${this.opdsRoot}/opensearch`, req), rel: 'search', type: 'application/opensearchdescription+xml'}),
-            this.makeLink({href: this.scopedHref(`${this.opdsRoot}/search?type=title&term={searchTerms}`, req), rel: 'search', type: 'application/atom+xml'}),
+            this.makeLink({href: this.searchTemplateHref(req), rel: 'search', type: 'application/atom+xml'}),
 
             this.navLink({rel: 'start', req, query: scopeQuery}),
         ];
