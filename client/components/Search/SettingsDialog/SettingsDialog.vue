@@ -960,7 +960,7 @@ class SettingsDialog {
         return {
             bookCacheSizeMb: 2048,
             coverCacheSizeMb: 512,
-            cacheCleanIntervalMinutes: 720,
+            cacheCleanIntervalMinutes: 1440,
             cacheCleanTargetPercent: 80,
         };
     }
@@ -976,7 +976,7 @@ class SettingsDialog {
         this.adminCacheSettings = {
             bookCacheSizeMb: toMb(limits.bookCacheSize, 2048 * 1024 * 1024),
             coverCacheSizeMb: toMb(limits.coverCacheSize, 512 * 1024 * 1024),
-            cacheCleanIntervalMinutes: Math.max(0, Math.round(Number(limits.cacheCleanInterval || 720))),
+            cacheCleanIntervalMinutes: Math.max(0, Math.round(Number(limits.cacheCleanInterval || 1440))),
             cacheCleanTargetPercent: Math.max(10, Math.min(100, Math.round(ratio * 100))),
         };
     }

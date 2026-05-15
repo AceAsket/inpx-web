@@ -74,7 +74,7 @@ module.exports = {
     queryCacheEnabled: true,
     queryCacheMemSize: 50,
     queryCacheDiskSize: 500,
-    cacheCleanInterval: numberFromEnv('INPX_CACHE_CLEAN_INTERVAL_MINUTES', 12*60),//minutes
+    cacheCleanInterval: numberFromEnv('INPX_CACHE_CLEAN_INTERVAL_MINUTES', 24*60),//minutes
     cacheCleanTargetRatio: numberFromEnv('INPX_CACHE_CLEAN_TARGET_RATIO', 0.8),
     adminEventLogEnabled: true,
     adminEventLogSize: 300,
