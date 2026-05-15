@@ -2,6 +2,27 @@ const path = require('path');
 const pckg = require('../../package.json');
 
 const execDir = path.resolve(__dirname, '..');
+const MB = 1024*1024;
+
+function sizeFromEnv(bytesName, mbName, fallback) {
+    const bytes = parseInt(process.env[bytesName] || '', 10);
+    if (Number.isFinite(bytes) && bytes >= 0)
+        return bytes;
+
+    const mb = parseInt(process.env[mbName] || '', 10);
+    if (Number.isFinite(mb) && mb >= 0)
+        return mb * MB;
+
+    return fallback;
+}
+
+function numberFromEnv(name, fallback) {
+    const value = parseFloat(process.env[name] || '');
+    return (Number.isFinite(value) ? value : fallback);
+}
+
+const defaultBookCacheSize = sizeFromEnv('INPX_BOOK_CACHE_SIZE', 'INPX_BOOK_CACHE_SIZE_MB', 2048*MB);
+const defaultCoverCacheSize = sizeFromEnv('INPX_COVER_CACHE_SIZE', 'INPX_COVER_CACHE_SIZE_MB', 512*MB);
 
 module.exports = {
     branch: 'unknown',
@@ -47,13 +68,14 @@ module.exports = {
     dbCacheSize: 5,
 
     maxPayloadSize: 500,//in MB
-    maxFilesDirSize: 1024*1024*1024,//1Gb
-    coverCacheSize: parseInt(process.env.INPX_COVER_CACHE_SIZE || '', 10)
-        || ((parseInt(process.env.INPX_COVER_CACHE_SIZE_MB || '', 10) || 512) * 1024*1024),
+    maxFilesDirSize: defaultBookCacheSize,//legacy alias for bookCacheSize
+    bookCacheSize: sizeFromEnv('INPX_BOOK_CACHE_SIZE', 'INPX_BOOK_CACHE_SIZE_MB', null),
+    coverCacheSize: defaultCoverCacheSize,
     queryCacheEnabled: true,
     queryCacheMemSize: 50,
     queryCacheDiskSize: 500,
-    cacheCleanInterval: 7*24*60,//minutes
+    cacheCleanInterval: numberFromEnv('INPX_CACHE_CLEAN_INTERVAL_MINUTES', 12*60),//minutes
+    cacheCleanTargetRatio: numberFromEnv('INPX_CACHE_CLEAN_TARGET_RATIO', 0.8),
     adminEventLogEnabled: true,
     adminEventLogSize: 300,
     inpxCheckInterval: 60,//minutes

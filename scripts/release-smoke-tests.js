@@ -348,6 +348,35 @@ async function testCoverCacheRoutesAndCleaner() {
     });
 }
 
+async function testCacheRotationUsesTargetWatermark() {
+    await withTempDir(async(dir) => {
+        const cacheDir = path.join(dir, 'cache');
+        await fs.ensureDir(cacheDir);
+
+        const now = Date.now();
+        const files = ['oldest.bin', 'old.bin', 'new.bin', 'newest.bin'];
+        for (let i = 0; i < files.length; i++) {
+            const filePath = path.join(cacheDir, files[i]);
+            await fs.writeFile(filePath, Buffer.alloc(400, i));
+            const time = new Date(now - ((files.length - i) * 60000));
+            await fs.utimes(filePath, time, time);
+        }
+
+        const worker = makeWorker();
+        const cleaned = await worker.cleanDir({
+            dir: cacheDir,
+            maxSize: 1000,
+            targetRatio: 0.5,
+        });
+
+        assert.strictEqual(cleaned.size, 1600);
+        assert.strictEqual(cleaned.targetSize, 500);
+        assert.strictEqual(cleaned.removed, 3);
+        assert.strictEqual(cleaned.after, 400);
+        assert.deepStrictEqual((await fs.readdir(cacheDir)).sort(), ['newest.bin']);
+    });
+}
+
 async function testExternalDiscoveryMultiSourceSearch() {
     const singleSourceWorker = makeWorker({
         librarySources: [{id: 'only', name: 'Only', enabled: true}],
@@ -443,6 +472,7 @@ const tests = [
     testAdminBackupArchiveAndDownload,
     testUserBackupExportsAndRestoresReaderState,
     testCoverCacheRoutesAndCleaner,
+    testCacheRotationUsesTargetWatermark,
     testExternalDiscoveryMultiSourceSearch,
     testExternalDiscoverySingleFetch,
     testConfiguredConverterPathsHavePriority,

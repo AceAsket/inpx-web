@@ -217,10 +217,12 @@
                         <div class="admin-stat">
                             <div class="admin-stat-label">{{ adminUi.bookCache }}</div>
                             <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.bookCache && adminDashboard.sizes.bookCache.size) }}</div>
+                            <div class="admin-stat-hint">{{ adminCacheLimitText('book') }}</div>
                         </div>
                         <div class="admin-stat">
                             <div class="admin-stat-label">{{ adminUi.coverCache }}</div>
                             <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.coverCache && adminDashboard.sizes.coverCache.size) }}</div>
+                            <div class="admin-stat-hint">{{ adminCacheLimitText('cover') }}</div>
                         </div>
                     </div>
 
@@ -246,6 +248,7 @@
                             <div class="admin-stat">
                                 <div class="admin-stat-label">{{ adminUi.limit }}</div>
                                 <div class="admin-stat-value">{{ formatBytes(adminCoverStats.limit) }}</div>
+                                <div class="admin-stat-hint">{{ adminCacheTargetText(adminCoverStats.targetSize) }}</div>
                             </div>
                             <div class="admin-stat">
                                 <div class="admin-stat-label">{{ adminUi.coverErrors }}</div>
@@ -968,6 +971,30 @@ class SettingsDialog {
         const stats = (this.adminDashboard && this.adminDashboard.stats) || {};
         const value = stats[name];
         return (value === undefined || value === null ? '0' : String(value));
+    }
+
+    adminCacheLimitText(kind = '') {
+        const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
+        const limit = kind === 'book' ? limits.bookCacheSize : limits.coverCacheSize;
+        const target = kind === 'book' ? limits.bookCacheTargetSize : limits.coverCacheTargetSize;
+        const interval = Number(limits.cacheCleanInterval || 0);
+        const parts = [];
+
+        if (limit !== null && limit !== undefined)
+            parts.push(`Лимит: ${this.formatBytes(limit)}`);
+        if (target !== null && target !== undefined)
+            parts.push(this.adminCacheTargetText(target));
+        if (interval > 0)
+            parts.push(`Ротация: ${this.formatDuration(interval * 60)}`);
+
+        return parts.join(' · ');
+    }
+
+    adminCacheTargetText(value) {
+        if (value === null || value === undefined)
+            return '';
+
+        return `Цель после чистки: ${this.formatBytes(value)}`;
     }
 
     get adminUptime() {
@@ -1711,6 +1738,13 @@ export default vueComponent(SettingsDialog);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.admin-stat-hint {
+    margin-top: 4px;
+    color: var(--app-muted);
+    font-size: 11px;
+    line-height: 1.25;
 }
 
 .admin-subsection {

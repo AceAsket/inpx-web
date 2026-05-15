@@ -78,7 +78,9 @@ async function buildMetrics(config, webWorker, security = null, webSocketControl
     addMetric(lines, 'inpx_web_files_total', 'Indexed non-deleted files.', 'gauge', [{value: stats.filesCount || 0}]);
     addMetric(lines, 'inpx_web_db_size_bytes', 'Search database directory size in bytes.', 'gauge', [{value: dbSize.size}]);
     addMetric(lines, 'inpx_web_book_cache_size_bytes', 'Prepared book cache size in bytes.', 'gauge', [{value: bookCacheSize.size}]);
+    addMetric(lines, 'inpx_web_book_cache_limit_bytes', 'Prepared book cache limit in bytes.', 'gauge', [{value: config.bookCacheSize || config.maxFilesDirSize || 0}]);
     addMetric(lines, 'inpx_web_cover_cache_size_bytes', 'Cover cache size in bytes.', 'gauge', [{value: coverCacheSize.size}]);
+    addMetric(lines, 'inpx_web_cover_cache_limit_bytes', 'Cover cache limit in bytes.', 'gauge', [{value: config.coverCacheSize || 0}]);
     addMetric(lines, 'inpx_web_cover_cache_files', 'Cover cache file count.', 'gauge', [{value: coverCacheSize.files}]);
     addMetric(lines, 'inpx_web_library_sources_total', 'Configured library sources by enabled state.', 'gauge', [
         {labels: {enabled: 'true'}, value: enabledSources.length},

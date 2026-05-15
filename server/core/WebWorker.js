@@ -60,6 +60,22 @@ function cleanDirMaxSize(value) {
     return (Number.isFinite(maxSize) && maxSize >= 0 ? maxSize : null);
 }
 
+function cleanDirTargetRatio(value) {
+    const ratio = Number(value);
+    if (!Number.isFinite(ratio) || ratio <= 0)
+        return 0.8;
+
+    return Math.max(0.1, Math.min(1, ratio));
+}
+
+function cleanDirTargetSize(maxSize, value, ratio) {
+    const targetSize = cleanDirMaxSize(value);
+    if (targetSize !== null)
+        return Math.max(0, Math.min(maxSize, targetSize));
+
+    return Math.floor(maxSize * cleanDirTargetRatio(ratio));
+}
+
 function normalizeVersionTag(value = '') {
     return String(value || '').trim().replace(/^v/i, '');
 }
@@ -473,6 +489,8 @@ class WebWorker {
             this.authorToArchive = null;
             this.reviewArchives = null;
             this.reviewToArchives = null;
+            this.cacheCleanTimer = null;
+            this.cacheCleanRunning = false;
 
             this.wState = this.workerState.getControl('server_state');
             this.myState = '';
@@ -489,20 +507,7 @@ class WebWorker {
             this.loadOrCreateDb();//no await
             this.periodicLogServerStats();//no await
 
-            const dirConfig = [
-                {
-                    dir: config.bookDir,
-                    maxSize: config.maxFilesDirSize,
-                },
-            ];
-            if (config.coverCacheSize > 0) {
-                dirConfig.push({
-                    dir: config.coverDir || `${config.publicFilesDir}/cover`,
-                    maxSize: config.coverCacheSize,
-                });
-            }
-
-            this.periodicCleanDir(dirConfig);//no await
+            this.periodicCleanDir();//no await
             this.periodicCheckInpx();//no await
             this.periodicCheckNewRelease();//no await
 
@@ -3322,6 +3327,9 @@ class WebWorker {
         }, await this.getLibrarySourceDiagnostics(source))));
         const coverDir = this.config.coverDir || `${this.config.publicFilesDir}/cover`;
         const coverSize = await this.dirSize(coverDir);
+        const bookCacheSize = this.effectiveBookCacheSize();
+        const coverCacheSize = cleanDirMaxSize(this.config.coverCacheSize);
+        const cacheCleanTargetRatio = this.cacheCleanTargetRatio();
         const coverErrors = (this.config.adminEventLogEnabled === false ? [] : this.adminEvents.slice().reverse())
             .filter(event => {
                 if (event.level !== 'error')
@@ -3354,15 +3362,20 @@ class WebWorker {
             },
             limits: {
                 maxFilesDirSize: this.config.maxFilesDirSize,
-                coverCacheSize: this.config.coverCacheSize,
+                bookCacheSize,
+                bookCacheTargetSize: (bookCacheSize === null ? null : cleanDirTargetSize(bookCacheSize, null, cacheCleanTargetRatio)),
+                coverCacheSize,
+                coverCacheTargetSize: (coverCacheSize === null ? null : cleanDirTargetSize(coverCacheSize, null, cacheCleanTargetRatio)),
                 cacheCleanInterval: this.config.cacheCleanInterval,
+                cacheCleanTargetRatio,
             },
             sources,
             covers: {
                 dir: coverDir,
                 size: coverSize.size,
                 files: coverSize.files,
-                limit: this.config.coverCacheSize,
+                limit: coverCacheSize,
+                targetSize: (coverCacheSize === null ? null : cleanDirTargetSize(coverCacheSize, null, cacheCleanTargetRatio)),
                 latestErrors: coverErrors,
             },
             tasks: [
@@ -3488,16 +3501,95 @@ class WebWorker {
         return await this.getLibrarySourceDiagnostics(source);
     }
 
+    effectiveBookCacheSize() {
+        const bookCacheSize = cleanDirMaxSize(this.config.bookCacheSize);
+        if (bookCacheSize !== null)
+            return bookCacheSize;
+
+        return cleanDirMaxSize(this.config.maxFilesDirSize);
+    }
+
+    cacheCleanTargetRatio() {
+        return cleanDirTargetRatio(this.config.cacheCleanTargetRatio);
+    }
+
+    cacheDirConfig() {
+        const targetRatio = this.cacheCleanTargetRatio();
+        const result = [];
+        const bookMaxSize = this.effectiveBookCacheSize();
+        if (bookMaxSize !== null) {
+            result.push({
+                id: 'book',
+                title: 'Книжный кэш',
+                dir: this.config.bookDir,
+                maxSize: bookMaxSize,
+                targetRatio,
+            });
+        }
+
+        const coverMaxSize = cleanDirMaxSize(this.config.coverCacheSize);
+        if (coverMaxSize !== null && coverMaxSize > 0) {
+            result.push({
+                id: 'cover',
+                title: 'Кэш обложек',
+                dir: this.config.coverDir || `${this.config.publicFilesDir}/cover`,
+                maxSize: coverMaxSize,
+                targetRatio,
+            });
+        }
+
+        return result;
+    }
+
+    async runCacheClean(reason = 'manual') {
+        if (this.cacheCleanRunning)
+            return {skipped: true, reason: 'already-running'};
+
+        this.cacheCleanRunning = true;
+        try {
+            const result = [];
+            for (const config of this.cacheDirConfig()) {
+                try {
+                    result.push(await this.cleanDir(config));
+                } catch(e) {
+                    log(LM_ERR, e.stack || e.message);
+                    result.push({
+                        id: config.id || '',
+                        title: config.title || '',
+                        dir: config.dir,
+                        error: e.message,
+                    });
+                }
+            }
+
+            if (reason)
+                this.addAdminEvent('info', 'cache', `Чистка кэша: ${reason}`, {result});
+
+            return {cleaned: result};
+        } finally {
+            this.cacheCleanRunning = false;
+        }
+    }
+
+    scheduleCacheClean(reason = 'deferred', delay = 10*60*1000) {
+        const interval = cleanDirInterval(this.config);
+        if (!interval || this.cacheCleanTimer)
+            return;
+
+        this.cacheCleanTimer = setTimeout(async() => {
+            this.cacheCleanTimer = null;
+            try {
+                await this.runCacheClean(reason);
+            } catch(e) {
+                log(LM_ERR, e.stack || e.message);
+            }
+        }, Math.max(60*1000, delay));
+    }
+
     async runAdminCacheClean(userId = '', profileAccessToken = '') {
         await this.requireAdmin(userId, profileAccessToken);
 
-        const result = [];
-        result.push(await this.cleanDir({dir: this.config.bookDir, maxSize: this.config.maxFilesDirSize}));
-        if (this.config.coverCacheSize > 0)
-            result.push(await this.cleanDir({dir: this.config.coverDir || `${this.config.publicFilesDir}/cover`, maxSize: this.config.coverCacheSize}));
-
-        this.addAdminEvent('info', 'cache', 'Запущена ручная чистка кэша', {result});
-        return {cleaned: result};
+        return await this.runCacheClean('ручной запуск');
     }
 
     async cleanBrokenCoverCache(userId = '', profileAccessToken = '') {
@@ -3745,11 +3837,13 @@ class WebWorker {
             'metricsExemptAuth',
             'dbCacheSize',
             'maxFilesDirSize',
+            'bookCacheSize',
             'coverCacheSize',
             'queryCacheEnabled',
             'queryCacheMemSize',
             'queryCacheDiskSize',
             'cacheCleanInterval',
+            'cacheCleanTargetRatio',
             'adminEventLogEnabled',
             'adminEventLogSize',
             'inpxCheckInterval',
@@ -4768,6 +4862,7 @@ class WebWorker {
         }
 
         await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, sourceLibDir, downFileName, assetVersion: bookAssetVersion}));
+        this.scheduleCacheClean('после подготовки книги');
 
         await db.insert({
             table: 'file_hash',
@@ -4858,8 +4953,11 @@ class WebWorker {
         const gzipFile = `${this.config.bookDir}/${hash}`;
         const rawFile = `${gzipFile}.raw`;
 
-        if (!await fs.pathExists(rawFile))
+        let cacheChanged = false;
+        if (!await fs.pathExists(rawFile)) {
             await utils.gunzipFile(gzipFile, rawFile);
+            cacheChanged = true;
+        }
 
         await utils.touchFile(gzipFile);
         await utils.touchFile(rawFile);
@@ -4889,10 +4987,14 @@ class WebWorker {
                     sourceFileName: downFileName,
                     converterPaths: this.config.converterPaths,
                 });
+                cacheChanged = true;
             }
             preparedFileName = convertedFileName(downFileName, targetFormat);
             await utils.touchFile(preparedFile);
         }
+
+        if (cacheChanged)
+            this.scheduleCacheClean('после обновления книжного кэша');
 
         return {
             book: rows[0],
@@ -5349,7 +5451,22 @@ class WebWorker {
     async cleanDir(config) {
         const {dir} = config;
         const maxSize = cleanDirMaxSize(config.maxSize);
-        const result = {dir, maxSize, exists: false, found: 0, removed: 0, size: 0, after: 0};
+        const targetRatio = cleanDirTargetRatio(config.targetRatio);
+        const targetSize = (maxSize === null ? null : cleanDirTargetSize(maxSize, config.targetSize, targetRatio));
+        const result = {
+            id: config.id || '',
+            title: config.title || '',
+            dir,
+            maxSize,
+            targetSize,
+            targetRatio,
+            exists: false,
+            found: 0,
+            removed: 0,
+            size: 0,
+            after: 0,
+            overLimit: false,
+        };
         if (!dir || maxSize === null)
             return result;
 
@@ -5376,9 +5493,10 @@ class WebWorker {
         const initialSize = size;
         result.found = files.length;
         result.size = initialSize;
+        result.overLimit = initialSize > maxSize;
         let i = 0;
         //удаляем
-        while (i < files.length && size > maxSize) {
+        while (result.overLimit && i < files.length && size > targetSize) {
             const file = files[i];
             const oldFile = file.name;
             try {
@@ -5391,7 +5509,7 @@ class WebWorker {
         }
 
         if (i) {
-            log(LM_WARN, `clean dir ${dir}, maxSize=${maxSize}, found ${files.length} files, total size=${initialSize}, after=${size}`);
+            log(LM_WARN, `clean dir ${dir}, maxSize=${maxSize}, targetSize=${targetSize}, found ${files.length} files, total size=${initialSize}, after=${size}`);
             log(LM_WARN, `removed ${i} files`);
         }
 
@@ -5400,9 +5518,9 @@ class WebWorker {
         return result;
     }
 
-    async periodicCleanDir(dirConfig) {
+    async periodicCleanDir() {
         try {
-            for (const config of dirConfig) 
+            for (const config of this.cacheDirConfig())
                 await fs.ensureDir(config.dir);
 
             const interval = cleanDirInterval(this.config);
@@ -5413,13 +5531,7 @@ class WebWorker {
             while (1) {// eslint-disable-line no-constant-condition
                 //чистка папок
                 if (Date.now() - lastCleanDirTime >= interval) {
-                    for (const config of dirConfig) {
-                        try {
-                            await this.cleanDir(config);
-                        } catch(e) {
-                            log(LM_ERR, e.stack);
-                        }
-                    }
+                    await this.runCacheClean('плановая ротация');
 
                     lastCleanDirTime = Date.now();
                 }
