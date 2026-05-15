@@ -230,16 +230,16 @@
                         <div class="admin-subsection-head">
                             <div>
                                 <div class="admin-mail-title">Ротация кэша</div>
-                                <div class="admin-mail-subtitle">Лимиты задаются в мегабайтах. Ручная очистка удаляет старые файлы до целевого размера.</div>
+                                <div class="admin-mail-subtitle">Лимиты задаются в мегабайтах. Плановая ротация идёт по cron-расписанию и локальному времени сервера.</div>
                             </div>
                             <q-btn outline color="primary" dense no-caps icon="la la-save" :loading="adminCacheSaveLoading" @click="saveAdminCacheSettings">
-                                Сохранить лимиты
+                                Сохранить
                             </q-btn>
                         </div>
                         <div class="admin-cache-settings-grid">
                             <q-input v-model.number="adminCacheSettings.bookCacheSizeMb" outlined dense type="number" min="1" label="Книжный кэш, MB" />
                             <q-input v-model.number="adminCacheSettings.coverCacheSizeMb" outlined dense type="number" min="1" label="Кэш обложек, MB" />
-                            <q-input v-model.number="adminCacheSettings.cacheCleanIntervalMinutes" outlined dense type="number" min="0" label="Ротация, минут" />
+                            <q-input class="admin-cache-schedule-input" v-model.trim="adminCacheSettings.cacheCleanSchedule" outlined dense label="Расписание, cron" placeholder="0 0 * * *" hint="По времени сервера: минута час день месяц день-недели" persistent-hint />
                             <q-input v-model.number="adminCacheSettings.cacheCleanTargetPercent" outlined dense type="number" min="10" max="100" label="Цель после чистки, %" />
                         </div>
                         <div class="admin-cache-actions">
@@ -960,7 +960,7 @@ class SettingsDialog {
         return {
             bookCacheSizeMb: 2048,
             coverCacheSizeMb: 512,
-            cacheCleanIntervalMinutes: 1440,
+            cacheCleanSchedule: '0 0 * * *',
             cacheCleanTargetPercent: 80,
         };
     }
@@ -976,7 +976,7 @@ class SettingsDialog {
         this.adminCacheSettings = {
             bookCacheSizeMb: toMb(limits.bookCacheSize, 2048 * 1024 * 1024),
             coverCacheSizeMb: toMb(limits.coverCacheSize, 512 * 1024 * 1024),
-            cacheCleanIntervalMinutes: Math.max(0, Math.round(Number(limits.cacheCleanInterval || 1440))),
+            cacheCleanSchedule: String(limits.cacheCleanSchedule || '0 0 * * *'),
             cacheCleanTargetPercent: Math.max(10, Math.min(100, Math.round(ratio * 100))),
         };
     }
@@ -1032,17 +1032,16 @@ class SettingsDialog {
         const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
         const limit = kind === 'book' ? limits.bookCacheSize : limits.coverCacheSize;
         const target = kind === 'book' ? limits.bookCacheTargetSize : limits.coverCacheTargetSize;
-        const interval = Number(limits.cacheCleanInterval || 0);
+        const schedule = String(limits.cacheCleanSchedule || '').trim();
         const parts = [];
 
         if (limit !== null && limit !== undefined)
             parts.push(`Лимит: ${this.formatBytes(limit)}`);
         if (target !== null && target !== undefined)
             parts.push(this.adminCacheTargetText(target));
-        if (interval > 0)
-            parts.push(`Ротация: ${this.formatDuration(interval * 60)}`);
+        parts.push(this.adminCacheScheduleText(schedule, limits.cacheCleanNextRunAt, limits.cacheCleanServerTimeZone));
 
-        return parts.join(' · ');
+        return parts.filter(Boolean).join(' · ');
     }
 
     adminCacheTargetText(value) {
@@ -1050,6 +1049,37 @@ class SettingsDialog {
             return '';
 
         return `Цель после чистки: ${this.formatBytes(value)}`;
+    }
+
+    adminCacheScheduleText(schedule = '', nextRunAt = '', timeZone = '') {
+        if (!schedule)
+            return 'Ротация: отключена';
+
+        const parts = [`Ротация: ${schedule}`];
+        const nextRun = this.formatServerDateTime(nextRunAt, timeZone);
+        if (nextRun)
+            parts.push(`след.: ${nextRun}`);
+        if (timeZone)
+            parts.push(timeZone);
+
+        return parts.join(' · ');
+    }
+
+    formatServerDateTime(value = '', timeZone = '') {
+        if (!value)
+            return '';
+
+        try {
+            return new Date(value).toLocaleString('ru-RU', {
+                timeZone: timeZone || undefined,
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+            });
+        } catch (e) {
+            return this.formatDateTime(value);
+        }
     }
 
     get adminUptime() {
@@ -1339,7 +1369,7 @@ class SettingsDialog {
             await this.api.updateAdminCache(this.adminCacheSettings);
             await this.api.updateConfig();
             await this.refreshAdminDashboard(false);
-            this.$root.notify.success('Лимиты кэша сохранены');
+            this.$root.notify.success('Настройки ротации кэша сохранены');
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
@@ -1769,15 +1799,20 @@ export default vueComponent(SettingsDialog);
 .admin-cache-settings-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
+    column-gap: 10px;
+    row-gap: 18px;
     margin-top: 10px;
+}
+
+.admin-cache-schedule-input {
+    grid-column: span 2;
 }
 
 .admin-cache-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    margin-top: 10px;
+    margin-top: 14px;
 }
 
 .admin-index-status {

@@ -399,16 +399,20 @@ async function testCacheRotationUsesTargetWatermark() {
 
 async function testCacheRotationAlignsToServerClock() {
     const worker = makeWorker({
-        cacheCleanInterval: 24 * 60,
+        cacheCleanSchedule: '0 0 * * *',
     });
     const morning = new Date(2026, 0, 2, 10, 15, 30, 0);
     const nextMidnight = new Date(2026, 0, 3, 0, 0, 0, 0);
-    assert.strictEqual(worker.cacheCleanNextAlignedDelay(morning), nextMidnight.getTime() - morning.getTime());
+    assert.strictEqual(worker.cacheCleanNextScheduledDelay(morning), nextMidnight.getTime() - morning.getTime());
 
-    worker.config.cacheCleanInterval = 60;
+    worker.config.cacheCleanSchedule = '0 11 * * *';
     const nextHour = new Date(2026, 0, 2, 11, 0, 0, 0);
-    assert.strictEqual(worker.cacheCleanNextAlignedDelay(morning), nextHour.getTime() - morning.getTime());
-    assert.strictEqual(worker.cacheCleanNextAlignedDelay(new Date(2026, 0, 2, 11, 0, 0, 0)), 0);
+    assert.strictEqual(worker.cacheCleanNextScheduledDelay(morning), nextHour.getTime() - morning.getTime());
+    assert.strictEqual(worker.cacheCleanNextScheduledDelay(new Date(2026, 0, 2, 11, 0, 0, 0)), 0);
+
+    worker.config.cacheCleanSchedule = '*/15 10-11 * * 1-5';
+    assert.strictEqual(worker.cacheCleanNextScheduledDelay(new Date(2026, 0, 2, 10, 10, 0, 0)), 5*60*1000);
+    assert.throws(() => worker.normalizeAdminCachePatch({cacheCleanSchedule: 'bad cron'}), /cron/);
 }
 
 async function testExternalDiscoveryMultiSourceSearch() {

@@ -44,6 +44,7 @@ const propsToSave = [
     'queryCacheMemSize',
     'queryCacheDiskSize',
     'cacheCleanInterval',
+    'cacheCleanSchedule',
     'cacheCleanTargetRatio',
     'adminEventLogEnabled',
     'adminEventLogSize',
