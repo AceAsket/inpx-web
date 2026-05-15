@@ -670,7 +670,7 @@ class SettingsDialog {
         series: 'Серии',
         uptime: 'Uptime',
         memory: 'Память',
-        cpu: 'CPU',
+        cpu: 'CPU процесса',
         dbSize: 'База',
         bookCache: 'Книжный кэш',
         coverCache: 'Кэш обложек',
@@ -1236,14 +1236,11 @@ class SettingsDialog {
 
     get adminCpuHint() {
         const cpu = (this.adminDashboard && this.adminDashboard.cpu) || {};
-        const load = Array.isArray(cpu.loadAverage) ? cpu.loadAverage : [];
-        if (!load.length)
-            return '';
-
-        const values = load.slice(0, 3).map(value => Number(value || 0).toFixed(2)).join(' / ');
         const average = Number(cpu.averagePercent);
         const averageText = Number.isFinite(average) ? `Среднее: ${average.toFixed(average >= 10 ? 0 : 1)}% · ` : '';
-        return `${averageText}Load: ${values}`;
+        const totalSeconds = Number(cpu.totalSeconds);
+        const totalText = Number.isFinite(totalSeconds) ? `CPU-время: ${this.formatDuration(totalSeconds)}` : '';
+        return `${averageText}${totalText}`.trim();
     }
 
     get adminIndex() {

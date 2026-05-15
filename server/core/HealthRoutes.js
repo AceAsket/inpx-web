@@ -1,5 +1,3 @@
-const os = require('os');
-
 function noStore(res) {
     res.set('Cache-Control', 'no-store');
 }
@@ -54,7 +52,6 @@ async function buildMetrics(config, webWorker, security = null, webSocketControl
     const stats = index.stats || {};
     const memory = process.memoryUsage();
     const cpu = process.cpuUsage();
-    const loadAverage = os.loadavg();
     const dbSize = await webWorker.dirSize(`${config.dataDir}/db`);
     const bookCacheSize = await webWorker.dirSize(config.bookDir);
     const coverCacheSize = await webWorker.dirSize(config.coverDir || `${config.publicFilesDir}/cover`);
@@ -76,9 +73,6 @@ async function buildMetrics(config, webWorker, security = null, webSocketControl
     addMetric(lines, 'inpx_web_process_cpu_user_seconds_total', 'Total user CPU time spent by the process.', 'counter', [{value: cpu.user / 1000000}]);
     addMetric(lines, 'inpx_web_process_cpu_system_seconds_total', 'Total system CPU time spent by the process.', 'counter', [{value: cpu.system / 1000000}]);
     addMetric(lines, 'inpx_web_process_cpu_seconds_total', 'Total CPU time spent by the process.', 'counter', [{value: (cpu.user + cpu.system) / 1000000}]);
-    addMetric(lines, 'inpx_web_load_average_1m', 'System load average for the last minute.', 'gauge', [{value: loadAverage[0]}]);
-    addMetric(lines, 'inpx_web_load_average_5m', 'System load average for the last 5 minutes.', 'gauge', [{value: loadAverage[1]}]);
-    addMetric(lines, 'inpx_web_load_average_15m', 'System load average for the last 15 minutes.', 'gauge', [{value: loadAverage[2]}]);
     addMetric(lines, 'inpx_web_index_ready', 'Whether the search index is ready.', 'gauge', [{value: index.ready ? 1 : 0}]);
     addMetric(lines, 'inpx_web_index_progress', 'Current indexing progress from 0 to 1.', 'gauge', [{value: metricNumber(index.progress)}]);
     addMetric(lines, 'inpx_web_index_records_loaded', 'Records loaded while indexing.', 'gauge', [{value: index.recsLoaded || stats.recsLoaded || 0}]);

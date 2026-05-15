@@ -3529,8 +3529,6 @@ class WebWorker {
                 totalSeconds: cpuTotalSeconds,
                 currentPercent: cpuCurrentPercent,
                 averagePercent: uptime > 0 ? (cpuTotalSeconds / uptime) * 100 : 0,
-                loadAverage: os.loadavg(),
-                cores: os.cpus().length,
             },
             index,
             stats: (dbConfig && dbConfig.stats) || (index && index.stats) || {},
