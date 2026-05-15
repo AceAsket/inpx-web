@@ -55,6 +55,17 @@ function cleanDirInterval(config) {
     return minutes*60*1000;
 }
 
+function cleanDirNextAlignedDelay(config, now = new Date()) {
+    const interval = cleanDirInterval(config);
+    if (!interval)
+        return 0;
+
+    const date = now instanceof Date ? now : new Date(now);
+    const localTime = date.getTime() - date.getTimezoneOffset()*60*1000;
+    const remainder = ((localTime % interval) + interval) % interval;
+    return Math.round(remainder === 0 ? 0 : interval - remainder);
+}
+
 function cleanDirMaxSize(value) {
     if (value === null || value === undefined || value === '')
         return null;
@@ -3592,6 +3603,10 @@ class WebWorker {
         }, Math.max(60*1000, delay));
     }
 
+    cacheCleanNextAlignedDelay(now = new Date()) {
+        return cleanDirNextAlignedDelay(this.config, now);
+    }
+
     async runAdminCacheClean(userId = '', profileAccessToken = '') {
         await this.requireAdmin(userId, profileAccessToken);
 
@@ -5606,16 +5621,15 @@ class WebWorker {
             if (!interval)
                 return;
 
-            let lastCleanDirTime = 0;
             while (1) {// eslint-disable-line no-constant-condition
-                //чистка папок
-                if (Date.now() - lastCleanDirTime >= interval) {
+                const delay = this.cacheCleanNextAlignedDelay();
+                if (delay <= 1000) {
                     await this.runCacheClean('плановая ротация');
 
-                    lastCleanDirTime = Date.now();
+                    await utils.sleep(Math.min(interval, 60*1000));
+                } else {
+                    await utils.sleep(Math.min(delay, 60*1000));//интервал проверки не чаще 1 минуты
                 }
-
-                await utils.sleep(Math.min(interval, 60*1000));//интервал проверки не чаще 1 минуты
             }
         } catch (e) {
             log(LM_FATAL, e.message);

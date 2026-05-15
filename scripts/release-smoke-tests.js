@@ -397,6 +397,20 @@ async function testCacheRotationUsesTargetWatermark() {
     });
 }
 
+async function testCacheRotationAlignsToServerClock() {
+    const worker = makeWorker({
+        cacheCleanInterval: 24 * 60,
+    });
+    const morning = new Date(2026, 0, 2, 10, 15, 30, 0);
+    const nextMidnight = new Date(2026, 0, 3, 0, 0, 0, 0);
+    assert.strictEqual(worker.cacheCleanNextAlignedDelay(morning), nextMidnight.getTime() - morning.getTime());
+
+    worker.config.cacheCleanInterval = 60;
+    const nextHour = new Date(2026, 0, 2, 11, 0, 0, 0);
+    assert.strictEqual(worker.cacheCleanNextAlignedDelay(morning), nextHour.getTime() - morning.getTime());
+    assert.strictEqual(worker.cacheCleanNextAlignedDelay(new Date(2026, 0, 2, 11, 0, 0, 0)), 0);
+}
+
 async function testExternalDiscoveryMultiSourceSearch() {
     const singleSourceWorker = makeWorker({
         librarySources: [{id: 'only', name: 'Only', enabled: true}],
@@ -493,6 +507,7 @@ const tests = [
     testUserBackupExportsAndRestoresReaderState,
     testCoverCacheRoutesAndCleaner,
     testCacheRotationUsesTargetWatermark,
+    testCacheRotationAlignsToServerClock,
     testExternalDiscoveryMultiSourceSearch,
     testExternalDiscoverySingleFetch,
     testConfiguredConverterPathsHavePriority,
