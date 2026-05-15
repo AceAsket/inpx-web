@@ -240,7 +240,10 @@
                             <q-input v-model.number="adminCacheSettings.bookCacheSizeMb" outlined dense type="number" min="1" label="Книжный кэш, MB" />
                             <q-input v-model.number="adminCacheSettings.coverCacheSizeMb" outlined dense type="number" min="1" label="Кэш обложек, MB" />
                             <q-checkbox class="admin-cache-enabled-toggle" v-model="adminCacheSettings.cacheCleanEnabled" size="32px" label="Плановая ротация" />
-                            <q-input class="admin-cache-time-input" v-model="adminCacheSettings.cacheCleanTime" outlined dense type="time" label="Время запуска" hint="По времени сервера" persistent-hint :disable="!adminCacheSettings.cacheCleanEnabled" />
+                            <q-select v-model="adminCacheSettings.cacheCleanFrequency" :options="adminCacheFrequencyOptions" outlined dense emit-value map-options label="Периодичность" :disable="!adminCacheSettings.cacheCleanEnabled" />
+                            <q-select v-if="adminCacheSettings.cacheCleanFrequency === 'weekly'" v-model="adminCacheSettings.cacheCleanWeekDay" :options="adminCacheWeekDayOptions" outlined dense emit-value map-options label="День недели" :disable="!adminCacheSettings.cacheCleanEnabled" />
+                            <q-select v-if="adminCacheSettings.cacheCleanFrequency === 'monthly'" v-model="adminCacheSettings.cacheCleanMonthDay" :options="adminCacheMonthDayOptions" outlined dense emit-value map-options label="Число месяца" :disable="!adminCacheSettings.cacheCleanEnabled" />
+                            <q-input class="admin-cache-time-input" v-model="adminCacheSettings.cacheCleanTime" outlined dense type="time" label="Время запуска" hint="По времени сервера" persistent-hint :disable="!adminCacheSettings.cacheCleanEnabled || adminCacheSettings.cacheCleanFrequency === 'advanced'" />
                             <q-input v-model.number="adminCacheSettings.cacheCleanTargetPercent" outlined dense type="number" min="10" max="100" label="Цель после чистки, %" />
                         </div>
                         <div class="admin-cache-actions">
@@ -799,6 +802,28 @@ class SettingsDialog {
         {label: 'Список', value: 'list'},
     ];
 
+    adminCacheFrequencyOptions = [
+        {label: 'Каждый день', value: 'daily'},
+        {label: 'Раз в неделю', value: 'weekly'},
+        {label: 'Раз в месяц', value: 'monthly'},
+        {label: 'Сложное расписание из config.json', value: 'advanced', disable: true},
+    ];
+
+    adminCacheWeekDayOptions = [
+        {label: 'Понедельник', value: 1},
+        {label: 'Вторник', value: 2},
+        {label: 'Среда', value: 3},
+        {label: 'Четверг', value: 4},
+        {label: 'Пятница', value: 5},
+        {label: 'Суббота', value: 6},
+        {label: 'Воскресенье', value: 0},
+    ];
+
+    adminCacheMonthDayOptions = Array.from({length: 31}, (_, index) => ({
+        label: `${index + 1} число`,
+        value: index + 1,
+    }));
+
     created() {
         this.commit = this.$store.commit;
         this.api = this.$root.api;
@@ -962,7 +987,10 @@ class SettingsDialog {
             bookCacheSizeMb: 2048,
             coverCacheSizeMb: 512,
             cacheCleanEnabled: true,
+            cacheCleanFrequency: 'daily',
             cacheCleanTime: '00:00',
+            cacheCleanWeekDay: 1,
+            cacheCleanMonthDay: 1,
             cacheCleanAdvancedSchedule: '',
             cacheCleanTargetPercent: 80,
         };
@@ -981,38 +1009,96 @@ class SettingsDialog {
             bookCacheSizeMb: toMb(limits.bookCacheSize, 2048 * 1024 * 1024),
             coverCacheSizeMb: toMb(limits.coverCacheSize, 512 * 1024 * 1024),
             cacheCleanEnabled: schedule.enabled,
+            cacheCleanFrequency: schedule.frequency,
             cacheCleanTime: schedule.time,
+            cacheCleanWeekDay: schedule.weekDay,
+            cacheCleanMonthDay: schedule.monthDay,
             cacheCleanAdvancedSchedule: schedule.advancedSchedule,
             cacheCleanTargetPercent: Math.max(10, Math.min(100, Math.round(ratio * 100))),
         };
     }
 
-    parseDailyCacheSchedule(schedule = '') {
+    parseAdminCacheSchedule(schedule = '') {
         const text = String(schedule || '').trim();
         if (!text)
-            return {enabled: false, time: '00:00', advancedSchedule: ''};
+            return this.makeParsedAdminCacheSchedule({enabled: false});
 
-        const match = text.match(/^(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*$/);
-        if (!match)
-            return {enabled: true, time: '00:00', advancedSchedule: text};
+        const fields = text.split(/\s+/);
+        if (fields.length !== 5)
+            return this.makeParsedAdminCacheSchedule({advancedSchedule: text});
 
-        const minute = Math.max(0, Math.min(59, parseInt(match[1], 10) || 0));
-        const hour = Math.max(0, Math.min(23, parseInt(match[2], 10) || 0));
+        const [minuteText, hourText, dayOfMonth, month, dayOfWeek] = fields;
+        const minute = this.clampAdminCacheNumber(minuteText, 0, 59, 0);
+        const hour = this.clampAdminCacheNumber(hourText, 0, 23, 0);
+        const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+
+        if (month === '*' && dayOfMonth === '*' && dayOfWeek === '*')
+            return this.makeParsedAdminCacheSchedule({frequency: 'daily', time});
+
+        if (month === '*' && dayOfMonth === '*' && /^\d{1,2}$/.test(dayOfWeek)) {
+            const weekDay = this.clampAdminCacheNumber(dayOfWeek, 0, 7, 1);
+            return this.makeParsedAdminCacheSchedule({frequency: 'weekly', time, weekDay: weekDay === 7 ? 0 : weekDay});
+        }
+
+        if (month === '*' && dayOfWeek === '*' && /^\d{1,2}$/.test(dayOfMonth)) {
+            const monthDay = this.clampAdminCacheNumber(dayOfMonth, 1, 31, 1);
+            return this.makeParsedAdminCacheSchedule({frequency: 'monthly', time, monthDay});
+        }
+
+        return this.makeParsedAdminCacheSchedule({advancedSchedule: text});
+    }
+
+    makeParsedAdminCacheSchedule(values = {}) {
         return {
-            enabled: true,
-            time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
-            advancedSchedule: '',
+            enabled: values.enabled !== false,
+            frequency: values.frequency || (values.advancedSchedule ? 'advanced' : 'daily'),
+            time: values.time || '00:00',
+            weekDay: values.weekDay === 0 ? 0 : (values.weekDay || 1),
+            monthDay: values.monthDay || 1,
+            advancedSchedule: values.advancedSchedule || '',
         };
+    }
+
+    clampAdminCacheNumber(value, min, max, fallback) {
+        const parsed = parseInt(value, 10);
+        if (!Number.isFinite(parsed))
+            return fallback;
+
+        return Math.max(min, Math.min(max, parsed));
+    }
+
+    parseDailyCacheSchedule(schedule = '') {
+        return this.parseAdminCacheSchedule(schedule);
     }
 
     dailyCacheScheduleFromSettings(settings = this.adminCacheSettings) {
         if (!settings.cacheCleanEnabled)
             return '';
+        if (settings.cacheCleanAdvancedSchedule && !['daily', 'weekly', 'monthly'].includes(settings.cacheCleanFrequency))
+            return settings.cacheCleanAdvancedSchedule;
 
         const match = String(settings.cacheCleanTime || '00:00').trim().match(/^(\d{1,2}):(\d{2})$/);
-        const hour = match ? Math.max(0, Math.min(23, parseInt(match[1], 10) || 0)) : 0;
-        const minute = match ? Math.max(0, Math.min(59, parseInt(match[2], 10) || 0)) : 0;
+        const hour = match ? this.clampAdminCacheNumber(match[1], 0, 23, 0) : 0;
+        const minute = match ? this.clampAdminCacheNumber(match[2], 0, 59, 0) : 0;
+        const frequency = String(settings.cacheCleanFrequency || 'daily');
+
+        if (frequency === 'weekly') {
+            const weekDay = this.clampAdminCacheNumber(settings.cacheCleanWeekDay, 0, 7, 1);
+            return `${minute} ${hour} * * ${weekDay === 7 ? 0 : weekDay}`;
+        }
+
+        if (frequency === 'monthly') {
+            const monthDay = this.clampAdminCacheNumber(settings.cacheCleanMonthDay, 1, 31, 1);
+            return `${minute} ${hour} ${monthDay} * *`;
+        }
+
         return `${minute} ${hour} * * *`;
+    }
+
+    adminCacheWeekDayLabel(value = 1) {
+        const normalized = value === 7 ? 0 : value;
+        const option = this.adminCacheWeekDayOptions.find(item => item.value === normalized);
+        return option ? option.label.toLowerCase() : '';
     }
 
     formatBytes(value) {
@@ -1100,11 +1186,17 @@ class SettingsDialog {
     }
 
     adminCacheScheduleLabel(schedule = '') {
-        const parsed = this.parseDailyCacheSchedule(schedule);
-        if (parsed.enabled && !parsed.advancedSchedule)
-            return `ежедневно в ${parsed.time}`;
+        const parsed = this.parseAdminCacheSchedule(schedule);
+        if (!parsed.enabled)
+            return 'отключена';
+        if (parsed.advancedSchedule)
+            return schedule;
+        if (parsed.frequency === 'weekly')
+            return `еженедельно, ${this.adminCacheWeekDayLabel(parsed.weekDay)} в ${parsed.time}`;
+        if (parsed.frequency === 'monthly')
+            return `ежемесячно, ${parsed.monthDay} числа в ${parsed.time}`;
 
-        return schedule;
+        return `ежедневно в ${parsed.time}`;
     }
 
     formatServerDateTime(value = '', timeZone = '') {
