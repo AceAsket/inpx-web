@@ -654,6 +654,11 @@ class WebWorker {
             this.db = null;
             this.dbSearcher = null;
             this.adminEvents = [];
+            const cpuUsage = process.cpuUsage();
+            this.adminCpuSnapshot = {
+                at: Date.now(),
+                totalMicros: cpuUsage.user + cpuUsage.system,
+            };
             appLogger.setEventListener((level, message) => {
                 const eventLevel = (level >= LM_ERR ? 'error' : 'warn');
                 this.addAdminEvent(eventLevel, 'system', message);
@@ -3498,10 +3503,35 @@ class WebWorker {
             .slice(0, 8);
         const state = this.wState.get() || {};
 
+        const uptime = process.uptime();
+        const cpuUsage = process.cpuUsage();
+        const cpuTotalMicros = cpuUsage.user + cpuUsage.system;
+        const cpuTotalSeconds = cpuTotalMicros / 1000000;
+        const cpuNow = Date.now();
+        const previousCpuSnapshot = this.adminCpuSnapshot || null;
+        const cpuElapsedSeconds = previousCpuSnapshot ? Math.max(0, (cpuNow - previousCpuSnapshot.at) / 1000) : 0;
+        const cpuCurrentPercent = (previousCpuSnapshot && cpuElapsedSeconds > 0)
+            ? ((cpuTotalMicros - previousCpuSnapshot.totalMicros) / 1000000 / cpuElapsedSeconds) * 100
+            : null;
+
+        this.adminCpuSnapshot = {
+            at: cpuNow,
+            totalMicros: cpuTotalMicros,
+        };
+
         return {
             generatedAt: new Date().toISOString(),
-            uptime: process.uptime(),
+            uptime,
             memory: process.memoryUsage(),
+            cpu: {
+                userSeconds: cpuUsage.user / 1000000,
+                systemSeconds: cpuUsage.system / 1000000,
+                totalSeconds: cpuTotalSeconds,
+                currentPercent: cpuCurrentPercent,
+                averagePercent: uptime > 0 ? (cpuTotalSeconds / uptime) * 100 : 0,
+                loadAverage: os.loadavg(),
+                cores: os.cpus().length,
+            },
             index,
             stats: (dbConfig && dbConfig.stats) || (index && index.stats) || {},
             paths: {

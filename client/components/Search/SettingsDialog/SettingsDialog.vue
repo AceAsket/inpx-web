@@ -211,6 +211,11 @@
                             <div class="admin-stat-value">{{ formatBytes(adminDashboard.memory && adminDashboard.memory.rss) }}</div>
                         </div>
                         <div class="admin-stat">
+                            <div class="admin-stat-label">{{ adminUi.cpu }}</div>
+                            <div class="admin-stat-value">{{ adminCpuText }}</div>
+                            <div class="admin-stat-hint">{{ adminCpuHint }}</div>
+                        </div>
+                        <div class="admin-stat">
                             <div class="admin-stat-label">{{ adminUi.dbSize }}</div>
                             <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.db && adminDashboard.sizes.db.size) }}</div>
                         </div>
@@ -665,6 +670,7 @@ class SettingsDialog {
         series: 'Серии',
         uptime: 'Uptime',
         memory: 'Память',
+        cpu: 'CPU',
         dbSize: 'База',
         bookCache: 'Книжный кэш',
         coverCache: 'Кэш обложек',
@@ -1217,6 +1223,27 @@ class SettingsDialog {
 
     get adminUptime() {
         return this.formatDuration(this.adminDashboard && this.adminDashboard.uptime);
+    }
+
+    get adminCpuText() {
+        const cpu = (this.adminDashboard && this.adminDashboard.cpu) || {};
+        const percent = Number.isFinite(Number(cpu.currentPercent)) ? Number(cpu.currentPercent) : Number(cpu.averagePercent);
+        if (!Number.isFinite(percent))
+            return '0%';
+
+        return `${percent.toFixed(percent >= 10 ? 0 : 1)}%`;
+    }
+
+    get adminCpuHint() {
+        const cpu = (this.adminDashboard && this.adminDashboard.cpu) || {};
+        const load = Array.isArray(cpu.loadAverage) ? cpu.loadAverage : [];
+        if (!load.length)
+            return '';
+
+        const values = load.slice(0, 3).map(value => Number(value || 0).toFixed(2)).join(' / ');
+        const average = Number(cpu.averagePercent);
+        const averageText = Number.isFinite(average) ? `Среднее: ${average.toFixed(average >= 10 ? 0 : 1)}% · ` : '';
+        return `${averageText}Load: ${values}`;
     }
 
     get adminIndex() {
