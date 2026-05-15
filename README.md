@@ -122,6 +122,8 @@ docker run -d \
   -e INPX=/library/my-library.inpx \
   -e LIBDIR=/library \
   -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
+  -e INPX_BOOK_CACHE_SIZE_MB=2048 \
+  -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
   aceasket/inpx-web-7z:latest
@@ -141,6 +143,8 @@ docker run -d \
   -e INPX=/library/my-library.inpx \
   -e LIBDIR=/library \
   -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
+  -e INPX_BOOK_CACHE_SIZE_MB=2048 \
+  -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
   aceasket/inpx-web-7z:latest
@@ -150,6 +154,7 @@ docker run -d \
 
 * в каталог `/library` должны быть смонтированы `.inpx` и файлы библиотеки, которые указаны в `INPX` и `LIBDIR`
 * каталог `/usr/local/bin/.inpx-web` хранит базу поиска, кэш, конфигурацию и служебные данные, поэтому его лучше выносить в постоянный volume
+* `INPX_BOOK_CACHE_SIZE_MB` и `INPX_COVER_CACHE_SIZE_MB` ограничивают подготовленные книги и обложки; при превышении лимита старые файлы удаляются до целевого размера
 * библиотека подключена как `:ro`, чтобы контейнер не изменял исходные архивы
 * первый запуск может быть долгим: приложение создаёт поисковую базу, а конвертация в `epub` / `epub3` / `kepub` / `kfx` / `azw8` / `pdf` требует установленного в образе fb2cng и MuPDF
 * после обновления образа контейнер удобнее пересоздавать: `docker rm -f inpx-web` и затем запускать команду снова
@@ -282,13 +287,28 @@ docker run -d \
 Этот кэш нужен для быстрого повторного скачивания, чтения и конвертации. Обычно вручную его чистить не нужно:
 
 * сервер сам периодически подчищает кэш каталога книг
-* лимит размера задаётся параметром `maxFilesDirSize`
-* интервал проверки задаётся параметром `cacheCleanInterval`
+* лимит размера задаётся параметром `bookCacheSize` или переменной окружения `INPX_BOOK_CACHE_SIZE_MB`
+* старый параметр `maxFilesDirSize` поддерживается как совместимый fallback
+* интервал проверки задаётся параметром `cacheCleanInterval` или переменной окружения `INPX_CACHE_CLEAN_INTERVAL_MINUTES`
+* при превышении лимита удаляются самые старые файлы до целевого размера, который задаёт `cacheCleanTargetRatio`
 
 Обложки кэшируются отдельно в `public-files/cover`. Лимит задаётся параметром `coverCacheSize`
 в байтах или переменной окружения `INPX_COVER_CACHE_SIZE_MB` в мегабайтах. Кэш обложек чистится
 автоматически вместе с книжным кэшем, интервал задаётся параметром `cacheCleanInterval`
-(по умолчанию раз в неделю).
+(по умолчанию раз в 12 часов).
+
+По умолчанию книжный кэш ограничен 2048 MB, кэш обложек — 512 MB, а целевой размер после чистки
+составляет 80% от лимита. Например, если книжный кэш вырос выше 2048 MB, ротация удалит старые
+подготовленные файлы примерно до 1638 MB. Это уменьшает постоянные мелкие чистки у самой границы лимита.
+
+Для Docker/Unraid чаще всего достаточно этих переменных:
+
+```sh
+-e INPX_BOOK_CACHE_SIZE_MB=2048
+-e INPX_COVER_CACHE_SIZE_MB=512
+-e INPX_CACHE_CLEAN_INTERVAL_MINUTES=720
+-e INPX_CACHE_CLEAN_TARGET_RATIO=0.8
+```
 
 Если нужно очистить кэш вручную, удаляйте только каталог с книжным кэшем внутри appdata, не трогая весь каталог `/usr/local/bin/.inpx-web` целиком.
 
@@ -316,6 +336,8 @@ docker run -d \
   -e INPX=/library/my-library.inpx \
   -e LIBDIR=/library \
   -e CACHE_DIR=/usr/local/bin/.inpx-web/cache \
+  -e INPX_BOOK_CACHE_SIZE_MB=2048 \
+  -e INPX_COVER_CACHE_SIZE_MB=512 \
   -e TELEGRAM_BOT_TOKEN=<telegram_bot_token> \
   -e TELEGRAM_CAPTION_TEMPLATE='${AUTHOR} - ${TITLE}' \
   -e SMTP_HOST=smtp.example.com \
@@ -809,9 +831,10 @@ Options:
     // если надо кешировать всю БД, можно поставить значение от 1000 и больше
     "dbCacheSize": 5,
 
-    // максимальный размер в байтах директории закешированных файлов в <раб.дир>/public-files
-    // чистка выполняется по cacheCleanInterval
-    "maxFilesDirSize": 1073741824,
+    // максимальный размер в байтах директории книжного кэша в <раб.дир>/public-files
+    // можно задать через INPX_BOOK_CACHE_SIZE_MB; maxFilesDirSize оставлен для совместимости
+    "bookCacheSize": 2147483648,
+    "maxFilesDirSize": 2147483648,
 
     // максимальный размер в байтах директории кеша обложек в <раб.дир>/public-files/cover
     "coverCacheSize": 536870912,
@@ -827,9 +850,13 @@ Options:
     // 0 - отключить кеширование запросов на диске
     "queryCacheDiskSize": 500,
 
-    // периодичность чистки кеша запросов на сервере, в минутах
+    // периодичность ротации книжного кеша и кеша обложек, в минутах
     // 0 - отключить чистку
-    "cacheCleanInterval": 10080,
+    "cacheCleanInterval": 720,
+
+    // до какой доли лимита чистить кэш при превышении лимита
+    // 0.8 означает: при лимите 2 GB удалить старые файлы примерно до 1.6 GB
+    "cacheCleanTargetRatio": 0.8,
 
     // периодичность проверки изменений .inpx-файла, в минутах
     // если файл изменился, поисковая БД будет автоматически пересоздана
