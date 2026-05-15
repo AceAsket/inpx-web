@@ -366,6 +366,7 @@ async function testCacheRotationUsesTargetWatermark() {
         const cleaned = await worker.cleanDir({
             dir: cacheDir,
             maxSize: 1000,
+            targetSize: null,
             targetRatio: 0.5,
         });
 

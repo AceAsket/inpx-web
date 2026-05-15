@@ -56,6 +56,9 @@ function cleanDirInterval(config) {
 }
 
 function cleanDirMaxSize(value) {
+    if (value === null || value === undefined || value === '')
+        return null;
+
     const maxSize = Number(value);
     return (Number.isFinite(maxSize) && maxSize >= 0 ? maxSize : null);
 }
