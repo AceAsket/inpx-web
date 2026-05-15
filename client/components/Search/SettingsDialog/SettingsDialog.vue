@@ -806,7 +806,6 @@ class SettingsDialog {
         {label: 'Каждый день', value: 'daily'},
         {label: 'Раз в неделю', value: 'weekly'},
         {label: 'Раз в месяц', value: 'monthly'},
-        {label: 'Сложное расписание из config.json', value: 'advanced', disable: true},
     ];
 
     adminCacheWeekDayOptions = [
