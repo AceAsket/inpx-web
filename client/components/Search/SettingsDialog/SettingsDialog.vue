@@ -189,46 +189,68 @@
                         </div>
                     </div>
 
-                    <div class="admin-dashboard-grid">
-                        <div class="admin-stat">
-                            <div class="admin-stat-label">{{ adminUi.books }}</div>
-                            <div class="admin-stat-value">{{ adminStat('bookCountAll') }}</div>
-                        </div>
-                        <div class="admin-stat">
-                            <div class="admin-stat-label">{{ adminUi.authors }}</div>
-                            <div class="admin-stat-value">{{ adminStat('authorCountAll') }}</div>
-                        </div>
-                        <div class="admin-stat">
-                            <div class="admin-stat-label">{{ adminUi.series }}</div>
-                            <div class="admin-stat-value">{{ adminStat('seriesCount') }}</div>
-                        </div>
-                        <div class="admin-stat">
-                            <div class="admin-stat-label">{{ adminUi.uptime }}</div>
-                            <div class="admin-stat-value">{{ adminUptime }}</div>
-                        </div>
-                        <div class="admin-stat">
-                            <div class="admin-stat-label">{{ adminUi.memory }}</div>
-                            <div class="admin-stat-value">{{ formatBytes(adminDashboard.memory && adminDashboard.memory.rss) }}</div>
-                        </div>
-                        <div class="admin-stat">
-                            <div class="admin-stat-label">{{ adminUi.cpu }}</div>
-                            <div class="admin-stat-value">{{ adminCpuText }}</div>
-                            <div class="admin-stat-hint">{{ adminCpuHint }}</div>
-                        </div>
-                        <div class="admin-stat">
-                            <div class="admin-stat-label">{{ adminUi.dbSize }}</div>
-                            <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.db && adminDashboard.sizes.db.size) }}</div>
-                        </div>
-                        <div class="admin-stat">
-                            <div class="admin-stat-label">{{ adminUi.bookCache }}</div>
-                            <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.bookCache && adminDashboard.sizes.bookCache.size) }}</div>
-                            <div class="admin-stat-hint">{{ adminCacheLimitText('book') }}</div>
-                        </div>
-                        <div class="admin-stat">
-                            <div class="admin-stat-label">{{ adminUi.coverCache }}</div>
-                            <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.coverCache && adminDashboard.sizes.coverCache.size) }}</div>
-                            <div class="admin-stat-hint">{{ adminCacheLimitText('cover') }}</div>
-                        </div>
+                    <div class="admin-dashboard-sections">
+                        <section class="admin-dashboard-section">
+                            <div class="admin-dashboard-section-title">Библиотека</div>
+                            <div class="admin-dashboard-grid">
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.books }}</div>
+                                    <div class="admin-stat-value">{{ adminStat('bookCountAll') }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.authors }}</div>
+                                    <div class="admin-stat-value">{{ adminStat('authorCountAll') }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.series }}</div>
+                                    <div class="admin-stat-value">{{ adminStat('seriesCount') }}</div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="admin-dashboard-section">
+                            <div class="admin-dashboard-section-title">Процесс</div>
+                            <div class="admin-dashboard-grid">
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.uptime }}</div>
+                                    <div class="admin-stat-value">{{ adminUptime }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.memory }}</div>
+                                    <div class="admin-stat-value">{{ formatBytes(adminDashboard.memory && adminDashboard.memory.rss) }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.cpu }}</div>
+                                    <div class="admin-stat-value">{{ adminCpuText }}</div>
+                                    <div class="admin-stat-hint">{{ adminCpuHint }}</div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="admin-dashboard-section">
+                            <div class="admin-dashboard-section-title">Хранилище</div>
+                            <div class="admin-dashboard-grid admin-dashboard-grid--storage">
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.dbSize }}</div>
+                                    <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.db && adminDashboard.sizes.db.size) }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.bookCache }}</div>
+                                    <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.bookCache && adminDashboard.sizes.bookCache.size) }}</div>
+                                    <div class="admin-stat-hint">{{ adminCacheLimitText('book') }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.coverCache }}</div>
+                                    <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.coverCache && adminDashboard.sizes.coverCache.size) }}</div>
+                                    <div class="admin-stat-hint">{{ adminCacheLimitText('cover') }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">Ротация кэша</div>
+                                    <div class="admin-stat-value">{{ adminCacheRotationValue() }}</div>
+                                    <div class="admin-stat-hint">{{ adminCacheRotationHint() }}</div>
+                                </div>
+                            </div>
+                        </section>
                     </div>
 
                     <div class="admin-subsection">
@@ -1157,16 +1179,55 @@ class SettingsDialog {
         const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
         const limit = kind === 'book' ? limits.bookCacheSize : limits.coverCacheSize;
         const target = kind === 'book' ? limits.bookCacheTargetSize : limits.coverCacheTargetSize;
-        const schedule = String(limits.cacheCleanSchedule || '').trim();
         const parts = [];
 
         if (limit !== null && limit !== undefined)
             parts.push(`Лимит: ${this.formatBytes(limit)}`);
         if (target !== null && target !== undefined)
             parts.push(this.adminCacheTargetText(target));
-        parts.push(this.adminCacheScheduleText(schedule, limits.cacheCleanNextRunAt, limits.cacheCleanServerTimeZone));
 
         return parts.filter(Boolean).join(' · ');
+    }
+
+    adminCacheRotationValue() {
+        const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
+        const schedule = String(limits.cacheCleanSchedule || '').trim();
+        const parsed = this.parseAdminCacheSchedule(schedule);
+        if (!parsed.enabled)
+            return 'Отключена';
+        if (parsed.advancedSchedule)
+            return 'По cron';
+        if (parsed.frequency === 'weekly')
+            return 'Раз в неделю';
+        if (parsed.frequency === 'monthly')
+            return 'Раз в месяц';
+
+        return 'Каждый день';
+    }
+
+    adminCacheRotationHint() {
+        const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
+        const schedule = String(limits.cacheCleanSchedule || '').trim();
+        const parsed = this.parseAdminCacheSchedule(schedule);
+        const nextRun = this.formatServerDateTime(limits.cacheCleanNextRunAt, limits.cacheCleanServerTimeZone);
+        const parts = [];
+
+        if (parsed.enabled && !parsed.advancedSchedule) {
+            if (parsed.frequency === 'weekly')
+                parts.push(`${this.adminCacheWeekDayLabel(parsed.weekDay)}, ${parsed.time}`);
+            else if (parsed.frequency === 'monthly')
+                parts.push(`${parsed.monthDay} число, ${parsed.time}`);
+            else
+                parts.push(parsed.time);
+        } else if (parsed.advancedSchedule) {
+            parts.push(schedule);
+        }
+        if (nextRun)
+            parts.push(`Следующая: ${nextRun}`);
+        if (limits.cacheCleanServerTimeZone)
+            parts.push(limits.cacheCleanServerTimeZone);
+
+        return parts.join(' · ');
     }
 
     adminCacheTargetText(value) {
@@ -2021,14 +2082,35 @@ export default vueComponent(SettingsDialog);
     margin-top: 8px;
 }
 
-.admin-dashboard-grid {
+.admin-dashboard-sections {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
+    gap: 14px;
     margin-top: 12px;
 }
 
+.admin-dashboard-section {
+    display: grid;
+    gap: 8px;
+}
+
+.admin-dashboard-section-title {
+    color: var(--app-muted);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0;
+}
+
+.admin-dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
 .admin-dashboard-grid--compact {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-dashboard-grid--storage {
     grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
@@ -2059,6 +2141,7 @@ export default vueComponent(SettingsDialog);
     color: var(--app-muted);
     font-size: 11px;
     line-height: 1.25;
+    overflow-wrap: anywhere;
 }
 
 .admin-subsection {
