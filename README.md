@@ -326,7 +326,9 @@ docker run -d \
 Поисковая база в `db/` отдельно не ротируется: это индекс, построенный из INPX, и его безопаснее
 пересоздавать целиком, а не удалять частями по лимиту. Размер базы и потребление памяти уже видны
 в админ-панели и в Prometheus-метриках (`inpx_web_db_size_bytes`, `inpx_web_memory_rss_bytes`,
-`inpx_web_memory_heap_used_bytes`). Если база или память становятся слишком большими для сервера,
+`inpx_web_memory_heap_used_bytes`, `inpx_web_process_cpu_seconds_total`). Текущую нагрузку CPU
+удобнее смотреть как rate по счётчику CPU, например `rate(inpx_web_process_cpu_seconds_total[5m])`.
+Если база, память или CPU становятся слишком большими для сервера,
 проверьте `lowMemoryMode`, `dbCacheSize`, количество подключённых INPX-источников и пересоздайте
 индекс после изменения библиотек.
 
