@@ -129,6 +129,8 @@ class WebSocketController {
                     await this.updateAdminOpds(req, ws); break;
                 case 'get-admin-dashboard':
                     await this.getAdminDashboard(req, ws); break;
+                case 'get-admin-dashboard-metrics':
+                    await this.getAdminDashboardMetrics(req, ws); break;
                 case 'get-admin-events':
                     await this.getAdminEvents(req, ws); break;
                 case 'update-admin-event-log':
@@ -514,6 +516,11 @@ class WebSocketController {
 
     async getAdminDashboard(req, ws) {
         const result = await this.webWorker.getAdminDashboard(req.userId, req.profileAccessToken);
+        this.send(result, req, ws);
+    }
+
+    async getAdminDashboardMetrics(req, ws) {
+        const result = await this.webWorker.getAdminDashboardMetrics(req.userId, req.profileAccessToken);
         this.send(result, req, ws);
     }
 

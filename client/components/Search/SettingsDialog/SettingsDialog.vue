@@ -528,6 +528,14 @@ const componentOptions = {
         },
         dialogVisible(newValue) {
             this.$emit('update:modelValue', newValue);
+            if (!newValue) {
+                this.stopAdminMetricsPolling();
+                this.stopAdminIndexPolling();
+                return;
+            }
+
+            if (this.adminExpanded && this.adminDashboard.generatedAt)
+                this.startAdminMetricsPolling();
         },
         settings() {
             this.loadSettings();
@@ -671,6 +679,8 @@ class SettingsDialog {
     adminSourcesReindexNeeded = false;
     adminReindexInProgress = false;
     adminIndexPollTimer = null;
+    adminMetricsPollTimer = null;
+    adminMetricsPollInFlight = false;
     adminDashboard = {};
     adminCacheSettings = this.makeDefaultAdminCacheSettings();
     adminSources = [];
@@ -858,6 +868,7 @@ class SettingsDialog {
     }
 
     unmounted() {
+        this.stopAdminMetricsPolling();
         this.stopAdminIndexPolling();
     }
 
@@ -1403,8 +1414,15 @@ class SettingsDialog {
 
     async toggleAdminExpanded() {
         this.adminExpanded = !this.adminExpanded;
-        if (this.adminExpanded && !this.adminDashboard.generatedAt)
+        if (!this.adminExpanded) {
+            this.stopAdminMetricsPolling();
+            return;
+        }
+
+        if (!this.adminDashboard.generatedAt)
             await this.loadAdminPanel();
+        else
+            this.startAdminMetricsPolling();
     }
 
     async loadAdminPanel() {
@@ -1412,6 +1430,7 @@ class SettingsDialog {
         try {
             await this.refreshAdminDashboard(true);
             this.refreshAdminEvents();
+            this.startAdminMetricsPolling();
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
@@ -1424,6 +1443,48 @@ class SettingsDialog {
         this.syncAdminCacheSettings();
         if (syncSources)
             this.syncAdminSources();
+    }
+
+    async refreshAdminMetrics() {
+        const metrics = await this.api.getAdminDashboardMetrics();
+        this.adminDashboard = Object.assign({}, this.adminDashboard, metrics);
+    }
+
+    startAdminMetricsPolling(delay = 5000) {
+        this.stopAdminMetricsPolling();
+        if (!this.dialogVisible || !this.adminExpanded)
+            return;
+
+        this.adminMetricsPollTimer = setTimeout(async() => {
+            this.adminMetricsPollTimer = null;
+            if (!this.dialogVisible || !this.adminExpanded)
+                return;
+
+            if (this.adminMetricsPollInFlight || this.adminIndexBusy || this.adminReindexInProgress) {
+                this.startAdminMetricsPolling();
+                return;
+            }
+
+            this.adminMetricsPollInFlight = true;
+            try {
+                await this.refreshAdminMetrics();
+            } catch (e) {
+                // Keep the settings panel quiet; the next tick or manual refresh can recover.
+            } finally {
+                this.adminMetricsPollInFlight = false;
+            }
+
+            if (this.dialogVisible && this.adminExpanded)
+                this.startAdminMetricsPolling();
+        }, delay);
+    }
+
+    stopAdminMetricsPolling() {
+        if (!this.adminMetricsPollTimer)
+            return;
+
+        clearTimeout(this.adminMetricsPollTimer);
+        this.adminMetricsPollTimer = null;
     }
 
     scheduleAdminIndexPolling(delay = 2500) {

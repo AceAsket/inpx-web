@@ -430,6 +430,10 @@ class Api {
         return await this.request({action: 'get-admin-dashboard'}, 120);
     }
 
+    async getAdminDashboardMetrics() {
+        return await this.request({action: 'get-admin-dashboard-metrics'}, 120);
+    }
+
     async getAdminEvents(options = {}) {
         return await this.request({action: 'get-admin-events', options}, 120);
     }

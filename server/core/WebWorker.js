@@ -3475,34 +3475,14 @@ class WebWorker {
         return result;
     }
 
-    async getAdminDashboard(userId = '', profileAccessToken = '') {
-        await this.requireAdmin(userId, profileAccessToken);
-
-        const index = await this.getIndexStatus();
-        const dbConfig = (index.ready ? await this.dbConfig() : {});
-        const sources = await Promise.all(getEnabledLibrarySources(this.config).map(async(source) => Object.assign({
-            id: source.id || '',
-            name: source.name || '',
-            enabled: source.enabled !== false,
-            inpx: source.inpx || source.inpxFile || '',
-            libDir: source.libDir || '',
-        }, await this.getLibrarySourceDiagnostics(source))));
+    async buildAdminDashboardMetrics(index = null, dbConfig = null) {
+        index = index || await this.getIndexStatus();
+        dbConfig = dbConfig || (index.ready ? await this.dbConfig() : {});
         const coverDir = this.config.coverDir || `${this.config.publicFilesDir}/cover`;
         const coverSize = await this.dirSize(coverDir);
         const bookCacheSize = this.effectiveBookCacheSize();
         const coverCacheSize = cleanDirMaxSize(this.config.coverCacheSize);
         const cacheCleanTargetRatio = this.cacheCleanTargetRatio();
-        const coverErrors = (this.config.adminEventLogEnabled === false ? [] : this.adminEvents.slice().reverse())
-            .filter(event => {
-                if (event.level !== 'error')
-                    return false;
-
-                const text = `${event.category || ''} ${event.message || ''}`.toLowerCase();
-                return text.includes('cover') || text.includes('облож') || /\bimage\s+\S+:/i.test(text);
-            })
-            .slice(0, 8);
-        const state = this.wState.get() || {};
-
         const uptime = process.uptime();
         const cpuUsage = process.cpuUsage();
         const cpuTotalMicros = cpuUsage.user + cpuUsage.system;
@@ -3557,13 +3537,46 @@ class WebWorker {
                 cacheCleanServerTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || '',
                 cacheCleanTargetRatio,
             },
+        };
+    }
+
+    async getAdminDashboardMetrics(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+        return await this.buildAdminDashboardMetrics();
+    }
+
+    async getAdminDashboard(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const index = await this.getIndexStatus();
+        const dbConfig = (index.ready ? await this.dbConfig() : {});
+        const metrics = await this.buildAdminDashboardMetrics(index, dbConfig);
+        const sources = await Promise.all(getEnabledLibrarySources(this.config).map(async(source) => Object.assign({
+            id: source.id || '',
+            name: source.name || '',
+            enabled: source.enabled !== false,
+            inpx: source.inpx || source.inpxFile || '',
+            libDir: source.libDir || '',
+        }, await this.getLibrarySourceDiagnostics(source))));
+        const coverErrors = (this.config.adminEventLogEnabled === false ? [] : this.adminEvents.slice().reverse())
+            .filter(event => {
+                if (event.level !== 'error')
+                    return false;
+
+                const text = `${event.category || ''} ${event.message || ''}`.toLowerCase();
+                return text.includes('cover') || text.includes('облож') || /\bimage\s+\S+:/i.test(text);
+            })
+            .slice(0, 8);
+        const state = this.wState.get() || {};
+
+        return Object.assign({}, metrics, {
             sources,
             covers: {
-                dir: coverDir,
-                size: coverSize.size,
-                files: coverSize.files,
-                limit: coverCacheSize,
-                targetSize: (coverCacheSize === null ? null : cleanDirTargetSize(coverCacheSize, null, cacheCleanTargetRatio)),
+                dir: metrics.paths.coverCache,
+                size: metrics.sizes.coverCache.size,
+                files: metrics.sizes.coverCache.files,
+                limit: metrics.limits.coverCacheSize,
+                targetSize: metrics.limits.coverCacheTargetSize,
                 latestErrors: coverErrors,
             },
             tasks: [
@@ -3598,7 +3611,7 @@ class WebWorker {
                     cancellable: false,
                 },
             ],
-        };
+        });
     }
 
     async getAdminEvents(userId = '', profileAccessToken = '', options = {}) {
