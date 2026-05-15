@@ -1937,15 +1937,19 @@ export default vueComponent(SettingsDialog);
 
 .admin-cache-settings-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     column-gap: 10px;
     row-gap: 18px;
-    margin-top: 10px;
+    margin-top: 14px;
 }
 
 .admin-cache-enabled-toggle {
+    grid-column: 1 / -1;
     align-self: center;
     min-height: 40px;
+    margin-top: 2px;
+    padding-top: 14px;
+    border-top: 1px solid var(--app-border);
 }
 
 .admin-cache-time-input {
