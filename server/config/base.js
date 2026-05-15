@@ -69,7 +69,7 @@ module.exports = {
 
     maxPayloadSize: 500,//in MB
     maxFilesDirSize: defaultBookCacheSize,//legacy alias for bookCacheSize
-    bookCacheSize: sizeFromEnv('INPX_BOOK_CACHE_SIZE', 'INPX_BOOK_CACHE_SIZE_MB', null),
+    bookCacheSize: defaultBookCacheSize,
     coverCacheSize: defaultCoverCacheSize,
     queryCacheEnabled: true,
     queryCacheMemSize: 50,

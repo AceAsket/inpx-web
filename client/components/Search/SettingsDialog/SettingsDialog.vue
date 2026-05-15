@@ -171,8 +171,8 @@
                         <q-btn outline color="primary" dense no-caps icon="la la-sync" :loading="adminLoading" @click="loadAdminPanel">
                             {{ adminUi.refresh }}
                         </q-btn>
-                        <q-btn outline color="primary" dense no-caps icon="la la-broom" :loading="adminCleanLoading" @click="cleanAdminCache">
-                            {{ adminUi.cleanCache }}
+                        <q-btn outline color="primary" dense no-caps icon="la la-broom" :loading="adminCleanLoading" @click="cleanAdminCache('all')">
+                            Очистить оба кэша
                         </q-btn>
                         <q-btn outline color="negative" dense no-caps icon="la la-database" :loading="adminReindexLoading" :disable="adminIndexBusy" @click="reindexAdmin">
                             {{ adminUi.reindex }}
@@ -223,6 +223,32 @@
                             <div class="admin-stat-label">{{ adminUi.coverCache }}</div>
                             <div class="admin-stat-value">{{ formatBytes(adminDashboard.sizes && adminDashboard.sizes.coverCache && adminDashboard.sizes.coverCache.size) }}</div>
                             <div class="admin-stat-hint">{{ adminCacheLimitText('cover') }}</div>
+                        </div>
+                    </div>
+
+                    <div class="admin-subsection">
+                        <div class="admin-subsection-head">
+                            <div>
+                                <div class="admin-mail-title">Ротация кэша</div>
+                                <div class="admin-mail-subtitle">Лимиты задаются в мегабайтах. Ручная очистка удаляет старые файлы до целевого размера.</div>
+                            </div>
+                            <q-btn outline color="primary" dense no-caps icon="la la-save" :loading="adminCacheSaveLoading" @click="saveAdminCacheSettings">
+                                Сохранить лимиты
+                            </q-btn>
+                        </div>
+                        <div class="admin-cache-settings-grid">
+                            <q-input v-model.number="adminCacheSettings.bookCacheSizeMb" outlined dense type="number" min="1" label="Книжный кэш, MB" />
+                            <q-input v-model.number="adminCacheSettings.coverCacheSizeMb" outlined dense type="number" min="1" label="Кэш обложек, MB" />
+                            <q-input v-model.number="adminCacheSettings.cacheCleanIntervalMinutes" outlined dense type="number" min="0" label="Ротация, минут" />
+                            <q-input v-model.number="adminCacheSettings.cacheCleanTargetPercent" outlined dense type="number" min="10" max="100" label="Цель после чистки, %" />
+                        </div>
+                        <div class="admin-cache-actions">
+                            <q-btn outline color="primary" dense no-caps icon="la la-book" :loading="adminCleanBookCacheLoading" @click="cleanAdminCache('book')">
+                                Очистить книжный кэш
+                            </q-btn>
+                            <q-btn outline color="primary" dense no-caps icon="la la-image" :loading="adminCleanCoverCacheLoading" @click="cleanAdminCache('cover')">
+                                Очистить кэш обложек
+                            </q-btn>
                         </div>
                     </div>
 
@@ -600,6 +626,9 @@ class SettingsDialog {
     adminExpanded = false;
     adminLoading = false;
     adminCleanLoading = false;
+    adminCleanBookCacheLoading = false;
+    adminCleanCoverCacheLoading = false;
+    adminCacheSaveLoading = false;
     adminReindexLoading = false;
     adminSourcesLoading = false;
     adminBrokenCoversLoading = false;
@@ -612,6 +641,7 @@ class SettingsDialog {
     adminReindexInProgress = false;
     adminIndexPollTimer = null;
     adminDashboard = {};
+    adminCacheSettings = this.makeDefaultAdminCacheSettings();
     adminSources = [];
     adminEvents = [];
     adminEventLevel = 'all';
@@ -926,6 +956,31 @@ class SettingsDialog {
         this.loadOpdsSettings();
     }
 
+    makeDefaultAdminCacheSettings() {
+        return {
+            bookCacheSizeMb: 2048,
+            coverCacheSizeMb: 512,
+            cacheCleanIntervalMinutes: 720,
+            cacheCleanTargetPercent: 80,
+        };
+    }
+
+    syncAdminCacheSettings() {
+        const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
+        const toMb = (value, fallback) => {
+            const size = Number(value || 0);
+            return Math.max(1, Math.round((size > 0 ? size : fallback) / (1024 * 1024)));
+        };
+        const ratio = Number(limits.cacheCleanTargetRatio || 0.8);
+
+        this.adminCacheSettings = {
+            bookCacheSizeMb: toMb(limits.bookCacheSize, 2048 * 1024 * 1024),
+            coverCacheSizeMb: toMb(limits.coverCacheSize, 512 * 1024 * 1024),
+            cacheCleanIntervalMinutes: Math.max(0, Math.round(Number(limits.cacheCleanInterval || 720))),
+            cacheCleanTargetPercent: Math.max(10, Math.min(100, Math.round(ratio * 100))),
+        };
+    }
+
     formatBytes(value) {
         let size = Number(value || 0);
         if (!(size > 0))
@@ -1118,6 +1173,7 @@ class SettingsDialog {
 
     async refreshAdminDashboard(syncSources = false) {
         this.adminDashboard = await this.api.getAdminDashboard();
+        this.syncAdminCacheSettings();
         if (syncSources)
             this.syncAdminSources();
     }
@@ -1265,16 +1321,54 @@ class SettingsDialog {
         }
     }
 
-    async cleanAdminCache() {
-        this.adminCleanLoading = true;
+    cacheCleanSummary(result = {}) {
+        const rows = Array.isArray(result.cleaned) ? result.cleaned : [];
+        if (!rows.length)
+            return 'Кэш уже чист';
+
+        return rows.map(row => {
+            const title = row.title || row.id || 'Кэш';
+            const removed = Number(row.removed || 0);
+            return `${title}: удалено ${removed}, сейчас ${this.formatBytes(row.after || row.size || 0)}`;
+        }).join(' · ');
+    }
+
+    async saveAdminCacheSettings() {
+        this.adminCacheSaveLoading = true;
         try {
-            await this.api.adminCleanCache();
-            await this.loadAdminPanel();
-            this.$root.notify.success(this.adminUi.cleanStarted);
+            await this.api.updateAdminCache(this.adminCacheSettings);
+            await this.api.updateConfig();
+            await this.refreshAdminDashboard(false);
+            this.$root.notify.success('Лимиты кэша сохранены');
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
-            this.adminCleanLoading = false;
+            this.adminCacheSaveLoading = false;
+        }
+    }
+
+    async cleanAdminCache(kind = 'all') {
+        const normalizedKind = String(kind || 'all');
+        if (normalizedKind === 'book')
+            this.adminCleanBookCacheLoading = true;
+        else if (normalizedKind === 'cover')
+            this.adminCleanCoverCacheLoading = true;
+        else
+            this.adminCleanLoading = true;
+
+        try {
+            const result = await this.api.adminCleanCache(normalizedKind);
+            await this.loadAdminPanel();
+            this.$root.notify.success(this.cacheCleanSummary(result));
+        } catch (e) {
+            this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
+        } finally {
+            if (normalizedKind === 'book')
+                this.adminCleanBookCacheLoading = false;
+            else if (normalizedKind === 'cover')
+                this.adminCleanCoverCacheLoading = false;
+            else
+                this.adminCleanLoading = false;
         }
     }
 
@@ -1672,6 +1766,20 @@ export default vueComponent(SettingsDialog);
     gap: 10px;
 }
 
+.admin-cache-settings-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.admin-cache-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 10px;
+}
+
 .admin-index-status {
     display: flex;
     align-items: flex-start;
@@ -1922,6 +2030,10 @@ export default vueComponent(SettingsDialog);
 
 @media (max-width: 720px) {
     .admin-dashboard-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .admin-cache-settings-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 

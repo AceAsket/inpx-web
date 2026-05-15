@@ -450,8 +450,12 @@ class Api {
         return await this.request({action: 'admin-diagnose-library-source', source}, 300);
     }
 
-    async adminCleanCache() {
-        return await this.request({action: 'admin-clean-cache'}, 300);
+    async updateAdminCache(cache = {}) {
+        return await this.request({action: 'update-admin-cache', cache}, 120);
+    }
+
+    async adminCleanCache(kind = 'all') {
+        return await this.request({action: 'admin-clean-cache', kind}, 300);
     }
 
     async adminCleanBrokenCovers() {

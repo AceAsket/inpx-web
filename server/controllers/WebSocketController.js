@@ -139,6 +139,8 @@ class WebSocketController {
                     await this.updateAdminLibrarySources(req, ws); break;
                 case 'admin-diagnose-library-source':
                     await this.adminDiagnoseLibrarySource(req, ws); break;
+                case 'update-admin-cache':
+                    await this.updateAdminCache(req, ws); break;
                 case 'admin-clean-cache':
                     await this.adminCleanCache(req, ws); break;
                 case 'admin-clean-broken-covers':
@@ -263,6 +265,7 @@ class WebSocketController {
             'add-admin-test-event',
             'update-admin-library-sources',
             'admin-diagnose-library-source',
+            'update-admin-cache',
             'admin-clean-cache',
             'admin-clean-broken-covers',
             'admin-rebuild-cover',
@@ -544,7 +547,12 @@ class WebSocketController {
     }
 
     async adminCleanCache(req, ws) {
-        const result = await this.webWorker.runAdminCacheClean(req.userId, req.profileAccessToken);
+        const result = await this.webWorker.runAdminCacheCleanKind(req.userId, req.profileAccessToken, req.kind || 'all');
+        this.send(result, req, ws);
+    }
+
+    async updateAdminCache(req, ws) {
+        const result = await this.webWorker.updateAdminCacheConfig(req.userId, req.profileAccessToken, req.cache || {});
         this.send(result, req, ws);
     }
 

@@ -3513,11 +3513,12 @@ class WebWorker {
         return cleanDirTargetRatio(this.config.cacheCleanTargetRatio);
     }
 
-    cacheDirConfig() {
+    cacheDirConfig(kind = 'all') {
+        const normalizedKind = String(kind || 'all').trim().toLowerCase();
         const targetRatio = this.cacheCleanTargetRatio();
         const result = [];
         const bookMaxSize = this.effectiveBookCacheSize();
-        if (bookMaxSize !== null) {
+        if ((normalizedKind === 'all' || normalizedKind === 'book') && bookMaxSize !== null && bookMaxSize > 0) {
             result.push({
                 id: 'book',
                 title: 'Книжный кэш',
@@ -3528,7 +3529,7 @@ class WebWorker {
         }
 
         const coverMaxSize = cleanDirMaxSize(this.config.coverCacheSize);
-        if (coverMaxSize !== null && coverMaxSize > 0) {
+        if ((normalizedKind === 'all' || normalizedKind === 'cover') && coverMaxSize !== null && coverMaxSize > 0) {
             result.push({
                 id: 'cover',
                 title: 'Кэш обложек',
@@ -3541,16 +3542,18 @@ class WebWorker {
         return result;
     }
 
-    async runCacheClean(reason = 'manual') {
+    async runCacheClean(reason = 'manual', options = {}) {
         if (this.cacheCleanRunning)
             return {skipped: true, reason: 'already-running'};
 
         this.cacheCleanRunning = true;
         try {
             const result = [];
-            for (const config of this.cacheDirConfig()) {
+            for (const config of this.cacheDirConfig(options.kind || 'all')) {
                 try {
-                    result.push(await this.cleanDir(config));
+                    result.push(await this.cleanDir(Object.assign({}, config, {
+                        forceTarget: options.forceTarget === true,
+                    })));
                 } catch(e) {
                     log(LM_ERR, e.stack || e.message);
                     result.push({
@@ -3589,7 +3592,79 @@ class WebWorker {
     async runAdminCacheClean(userId = '', profileAccessToken = '') {
         await this.requireAdmin(userId, profileAccessToken);
 
-        return await this.runCacheClean('ручной запуск');
+        return await this.runCacheClean('ручной запуск', {
+            kind: 'all',
+            forceTarget: true,
+        });
+    }
+
+    async runAdminCacheCleanKind(userId = '', profileAccessToken = '', kind = 'all') {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const normalizedKind = String(kind || 'all').trim().toLowerCase();
+        if (!['all', 'book', 'cover'].includes(normalizedKind))
+            throw new Error('Неизвестный кэш для очистки');
+
+        return await this.runCacheClean('ручной запуск', {
+            kind: normalizedKind,
+            forceTarget: true,
+        });
+    }
+
+    normalizeAdminCachePatch(patch = {}) {
+        const normalized = {};
+        const mb = 1024*1024;
+
+        const sizeFromMb = (value, fallback) => {
+            const mbValue = parseFloat(value);
+            if (!Number.isFinite(mbValue))
+                return fallback;
+
+            return Math.round(Math.max(1, mbValue) * mb);
+        };
+
+        if (utils.hasProp(patch, 'bookCacheSizeMb')) {
+            const current = this.effectiveBookCacheSize() || 2048*mb;
+            normalized.bookCacheSize = sizeFromMb(patch.bookCacheSizeMb, current);
+            normalized.maxFilesDirSize = normalized.bookCacheSize;
+        }
+
+        if (utils.hasProp(patch, 'coverCacheSizeMb')) {
+            const current = cleanDirMaxSize(this.config.coverCacheSize) || 512*mb;
+            normalized.coverCacheSize = sizeFromMb(patch.coverCacheSizeMb, current);
+        }
+
+        if (utils.hasProp(patch, 'cacheCleanIntervalMinutes')) {
+            const minutes = parseFloat(patch.cacheCleanIntervalMinutes);
+            if (Number.isFinite(minutes))
+                normalized.cacheCleanInterval = Math.max(0, Math.round(minutes));
+        }
+
+        if (utils.hasProp(patch, 'cacheCleanTargetPercent')) {
+            const percent = parseFloat(patch.cacheCleanTargetPercent);
+            if (Number.isFinite(percent))
+                normalized.cacheCleanTargetRatio = Math.max(0.1, Math.min(1, percent / 100));
+        }
+
+        return normalized;
+    }
+
+    async updateAdminCacheConfig(userId = '', profileAccessToken = '', patch = {}) {
+        await this.requireAdmin(userId, profileAccessToken);
+
+        const normalized = this.normalizeAdminCachePatch(patch || {});
+        if (Object.keys(normalized).length)
+            await this.saveRuntimeConfigPatch(normalized);
+
+        this.addAdminEvent('info', 'settings', 'Обновлены настройки ротации кэша', normalized);
+        return {
+            cache: {
+                bookCacheSize: this.effectiveBookCacheSize(),
+                coverCacheSize: cleanDirMaxSize(this.config.coverCacheSize),
+                cacheCleanInterval: this.config.cacheCleanInterval,
+                cacheCleanTargetRatio: this.cacheCleanTargetRatio(),
+            },
+        };
     }
 
     async cleanBrokenCoverCache(userId = '', profileAccessToken = '') {
@@ -5460,6 +5535,7 @@ class WebWorker {
             maxSize,
             targetSize,
             targetRatio,
+            forceTarget: config.forceTarget === true,
             exists: false,
             found: 0,
             removed: 0,
@@ -5496,7 +5572,7 @@ class WebWorker {
         result.overLimit = initialSize > maxSize;
         let i = 0;
         //удаляем
-        while (result.overLimit && i < files.length && size > targetSize) {
+        while ((result.overLimit || result.forceTarget) && i < files.length && size > targetSize) {
             const file = files[i];
             const oldFile = file.name;
             try {

@@ -374,6 +374,25 @@ async function testCacheRotationUsesTargetWatermark() {
         assert.strictEqual(cleaned.removed, 3);
         assert.strictEqual(cleaned.after, 400);
         assert.deepStrictEqual((await fs.readdir(cacheDir)).sort(), ['newest.bin']);
+
+        await fs.emptyDir(cacheDir);
+        await fs.writeFile(path.join(cacheDir, 'old.bin'), Buffer.alloc(400));
+        await fs.writeFile(path.join(cacheDir, 'new.bin'), Buffer.alloc(400));
+
+        const passive = await worker.cleanDir({
+            dir: cacheDir,
+            maxSize: 1000,
+            targetRatio: 0.5,
+        });
+        assert.strictEqual(passive.removed, 0);
+
+        const forced = await worker.cleanDir({
+            dir: cacheDir,
+            maxSize: 1000,
+            targetRatio: 0.5,
+            forceTarget: true,
+        });
+        assert.strictEqual(forced.removed, 1);
     });
 }
 
