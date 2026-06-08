@@ -95,14 +95,27 @@ class TitleList extends BaseList {
             if (rec.books) {
                 const filtered = this.filterBooks(rec.books);
 
-                for (let i = 0; i < filtered.length; i++) {
+                const seen = new Map();
+                for (const book of filtered) {
+                    const key = book.libid || book.file || book.id;
+                    if (seen.has(key)) {
+                        const existing = seen.get(key);
+                        if (book.series && !existing.series.split(';').map(s => s.trim()).includes(book.series))
+                            existing.series += '; ' + book.series;
+                    } else {
+                        seen.set(key, {...book});
+                    }
+                }
+                const deduped = [...seen.values()];
+
+                for (let i = 0; i < deduped.length; i++) {
                     if (i === 0)
-                        item.book = filtered[i];
+                        item.book = deduped[i];
                     else
-                        item.books.push(filtered[i]);                    
+                        item.books.push(deduped[i]);                    
                 }
 
-                if (filtered.length) {
+                if (deduped.length) {
                     num++;
                     result.push(item);
                 }
