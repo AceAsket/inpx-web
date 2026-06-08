@@ -591,7 +591,7 @@ export default class BaseList {
                 const re = new RegExp(searchValue, 'i');
                 return re.test(bookValue);
             } else {
-                return bookValue.indexOf(searchValue) === 0;
+                return bookValue !== emptyFieldValue && bookValue.indexOf(searchValue) >= 0;
             }
         };
 
