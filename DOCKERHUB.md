@@ -21,9 +21,9 @@ This image is built from the [`AceAsket/inpx-web`](https://github.com/AceAsket/i
 | Tag | Purpose |
 | --- | --- |
 | `latest` | Current stable full image with fb2cng, MuPDF, 7z, JXL and WebP tools. |
-| `1.6.8` | Pinned stable release. Recommended for reproducible deployments. |
+| `1.7.2` | Pinned stable release. Recommended for reproducible deployments. |
 | `lite` | Smaller image without book conversion tools. Catalog, reader, OPDS, covers and 7z support remain available. |
-| `1.6.8-lite` | Pinned lite release. |
+| `1.7.2-lite` | Pinned lite release. |
 
 The default image does not include Calibre. Calibre is available only when building the `runtime-calibre` target from the repository Dockerfile.
 
@@ -174,6 +174,22 @@ docker run -d \
 ## Reverse Proxy Auth
 
 For public access, put the service behind SWAG, Authelia or Authentik and do not expose port `12380` directly to the internet.
+
+Minimal nginx WebSocket proxy example:
+
+```nginx
+location / {
+  proxy_pass http://127.0.0.1:12380;
+  proxy_http_version 1.1;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
 
 Example proxy-auth hardening:
 

@@ -939,41 +939,41 @@
                 <q-btn
                     flat
                     no-caps
+                    stack
                     icon="la la-bookmark"
+                    :label="uiText.myPlaces"
                     class="reader-mobile-btn"
                     @click="openPlacesDialog(defaultPlacesTab)"
-                >
-                    {{ uiText.myPlaces }}
-                </q-btn>
+                />
                 <q-btn
                     v-if="hasContents"
                     flat
                     no-caps
+                    stack
                     icon="la la-list"
+                    :label="uiText.contents"
                     class="reader-mobile-btn"
                     @click="toggleContentsDialog"
-                >
-                    {{ uiText.contents }}
-                </q-btn>
+                />
                 <q-btn
                     flat
                     no-caps
+                    stack
                     icon="la la-sliders-h"
+                    :label="uiText.settings"
                     class="reader-mobile-btn"
                     :class="{'is-active': controlsOpen}"
                     @click="toggleControls"
-                >
-                    {{ uiText.settings }}
-                </q-btn>
+                />
                 <q-btn
                     flat
                     no-caps
+                    stack
                     :icon="fullscreenActive ? 'la la-compress-arrows-alt' : 'la la-expand-arrows-alt'"
+                    :label="uiText.screen"
                     class="reader-mobile-btn"
                     @click="toggleFullscreen"
-                >
-                    {{ uiText.screen }}
-                </q-btn>
+                />
             </div>
         </div>
 
@@ -1572,6 +1572,7 @@ class Reader {
     pagedBuildNeedsRefresh = false;
     pagedBuildSignature = '';
     pagedBuildGeometrySignature = '';
+    pagedBuildStage = 'idle';
     progressPersistPendingAfterPagedBuild = false;
     pagedBuildJobId = 0;
     pagedLayoutSignature = '';
@@ -2412,6 +2413,8 @@ class Reader {
             loadingParse: '\u041f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0430 \u0442\u0435\u043a\u0441\u0442\u0430...',
             loadingPages: '\u0420\u0430\u0437\u0431\u0438\u0432\u043a\u0430 \u043d\u0430 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
             loadingPagesCompact: '\u0421\u0447\u0438\u0442\u0430\u044e \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
+            loadingPagesCompacting: '\u0423\u0431\u0438\u0440\u0430\u044e \u043f\u0443\u0441\u0442\u044b\u0435 \u043c\u0435\u0441\u0442\u0430...',
+            loadingPagesFinalizing: '\u0413\u043e\u0442\u043e\u0432\u043b\u044e \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443...',
             loadingPagedPage: '\u0413\u043e\u0442\u043e\u0432\u043b\u044e \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0443',
             restoringPage: '\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u0430\u0432\u043b\u0438\u0432\u0430\u044e \u043c\u0435\u0441\u0442\u043e \u0447\u0442\u0435\u043d\u0438\u044f...',
             refreshingPagesCompact: '\u041f\u0435\u0440\u0435\u0441\u0442\u0440\u0430\u0438\u0432\u0430\u044e \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b...',
@@ -2524,11 +2527,7 @@ class Reader {
         const hasMeasuredProgress = isActivePagedBuild && this.pagedBuildProgressPercent > 0;
         let pagesMessage = '';
 
-        if (
-            isActivePagedBuild
-            && sourceMessage
-            && sourceMessage.startsWith(this.uiText.loadingPages.replace('...', ''))
-        )
+        if (isActivePagedBuild && sourceMessage)
             pagesMessage = sourceMessage;
         else if (hasMeasuredProgress)
             pagesMessage = `${this.uiText.loadingPagesCompact.replace('...', '')} ${this.pagedBuildProgressPercent}%`;
@@ -5982,6 +5981,96 @@ class Reader {
             }));
     }
 
+    async compactMobilePagedPagesChunked(pages = [], measureHost = null, measureHtml = null, jobId = 0) {
+        if (!this.isCompactLayout || !this.isPagedMode || !measureHost || !measureHtml || !Array.isArray(pages) || pages.length < 2)
+            return pages;
+
+        const compacted = pages.map((page) => Object.assign({}, page, {
+            units: this.extractPagedContentUnits(page.html),
+        }));
+        const totalIndexes = Math.max(1, compacted.length - 1);
+        let operationsSinceYield = 0;
+        const compactStartedAt = Date.now();
+        const maxCompactMs = compacted.length > 800 ? 1400 : 2200;
+
+        const finalizeCompactedPages = () => {
+            measureHtml.innerHTML = '';
+            return compacted
+                .filter((page) => page.units && page.units.length && !this.isBlankPagedPageUnits(page.units))
+                .map((page) => ({
+                    html: this.wrapPagedMeasureHtml(page.units),
+                    sectionId: page.sectionId || '',
+                    anchorIds: this.collectPagedAnchorIdsFromUnits(page.units, page.sectionId || ''),
+                }));
+        };
+
+        const maybeYield = async(index = 0, force = false) => {
+            if (jobId && jobId !== this.pagedBuildJobId)
+                return 'cancelled';
+
+            const elapsedMs = Math.max(0, Date.now() - compactStartedAt);
+            if (!force && elapsedMs > maxCompactMs)
+                return 'budget';
+
+            operationsSinceYield += 1;
+            if (!force && operationsSinceYield < 8)
+                return '';
+
+            operationsSinceYield = 0;
+            const indexRatio = Math.max(0, index) / totalIndexes;
+            const timeRatio = Math.min(1, elapsedMs / Math.max(1, maxCompactMs));
+            const compactProgress = Math.min(98, Math.max(93, Math.round(93 + Math.max(indexRatio, timeRatio) * 5)));
+            this.pagedBuildStage = 'compacting';
+            this.pagedBuildProgressPercent = compactProgress;
+            this.loadingMessage = `${this.uiText.loadingPagesCompacting.replace('...', '')} ${compactProgress}%`;
+            await this.waitForAnimationFrames(1);
+            return jobId && jobId !== this.pagedBuildJobId ? 'cancelled' : '';
+        };
+
+        await maybeYield(0, true);
+        for (let index = 0; index < compacted.length - 1; index += 1) {
+            const yieldResult = await maybeYield(index);
+            if (yieldResult === 'cancelled')
+                return null;
+            if (yieldResult === 'budget')
+                return finalizeCompactedPages();
+
+            const page = compacted[index];
+            const next = compacted[index + 1];
+            if (!page || !next || !Array.isArray(page.units) || !Array.isArray(next.units))
+                continue;
+
+            while (next.units.length) {
+                const candidateUnits = page.units.concat(next.units[0]);
+                measureHtml.innerHTML = this.wrapPagedMeasureHtml(candidateUnits);
+                if (this.doesPagedMeasureOverflow(measureHost, measureHtml)) {
+                    const splitUnits = this.splitUnitToFitCurrentPage({html: next.units[0]}, page.units);
+                    if (splitUnits.length > 1) {
+                        const firstSplitUnit = splitUnits[0];
+                        const remainingSplitUnits = splitUnits.slice(1).map((unit) => unit.html).filter(Boolean);
+                        const splitCandidateUnits = page.units.concat(firstSplitUnit.html);
+                        measureHtml.innerHTML = this.wrapPagedMeasureHtml(splitCandidateUnits);
+                        if (firstSplitUnit.html && remainingSplitUnits.length && !this.doesPagedMeasureOverflow(measureHost, measureHtml)) {
+                            page.units.push(firstSplitUnit.html);
+                            next.units.splice(0, 1, ...remainingSplitUnits);
+                        }
+                    }
+                    break;
+                }
+
+                page.units.push(next.units.shift());
+                const innerYieldResult = await maybeYield(index);
+                if (innerYieldResult === 'cancelled')
+                    return null;
+                if (innerYieldResult === 'budget')
+                    return finalizeCompactedPages();
+            }
+        }
+
+        await maybeYield(totalIndexes, true);
+        return finalizeCompactedPages();
+    }
+
     collectPagedAnchorIdsFromUnits(units = [], sectionId = '') {
         const ids = new Set();
         const addId = (value = '') => {
@@ -6968,6 +7057,7 @@ class Reader {
         let activeSectionId = '';
         let currentPageSectionId = '';
         let currentEstimatedLines = 0;
+        let buildProgressPercent = 1;
         const fastLineBudget = this.getFastPagedLineBudget(measureHost);
         const buildStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
         const fallbackRoots = new Map();
@@ -7026,9 +7116,11 @@ class Reader {
                 return;
             if (jobId && jobId !== this.pagedBuildJobId)
                 return;
-            const percent = Math.min(99, Math.max(1, Math.round((index / totalUnits) * 100)));
-            this.pagedBuildProgressPercent = percent;
-            this.loadingMessage = `${this.uiText.loadingPages} ${percent}%`;
+            const dynamicTotalUnits = Math.max(totalUnits, queue.length || 1, index + 1);
+            const percent = Math.min(92, Math.max(1, Math.round((index / dynamicTotalUnits) * 92)));
+            buildProgressPercent = Math.max(buildProgressPercent, percent);
+            this.pagedBuildProgressPercent = buildProgressPercent;
+            this.loadingMessage = `${this.uiText.loadingPages} ${buildProgressPercent}%`;
             await this.waitForAnimationFrames(1);
         };
 
@@ -7036,6 +7128,7 @@ class Reader {
         this.pagedBuildNeedsRefresh = false;
         this.pagedBuildSignature = this.getPagedLayoutSignature();
         this.pagedBuildGeometrySignature = this.getPagedGeometrySignature();
+        this.pagedBuildStage = 'building';
         this.pagedBuildProgressPercent = 1;
         if (this.readerDebugEnabled)
             publishStats('building');
@@ -7186,17 +7279,40 @@ class Reader {
                 sectionId: '',
                 anchorIds: this.collectPagedAnchorIdsFromUnits([this.readerHtml || ''], ''),
             }]);
-            finalPages = this.compactMobilePagedPages(finalPages, measureHost, measureHtml);
+            if (this.isCompactLayout) {
+                finalPages = await this.compactMobilePagedPagesChunked(finalPages, measureHost, measureHtml, jobId);
+                if (!finalPages)
+                    return;
+            } else {
+                this.pagedBuildStage = 'finalizing';
+                this.pagedBuildProgressPercent = 98;
+                this.loadingMessage = `${this.uiText.loadingPagesFinalizing.replace('...', '')} 98%`;
+                await this.waitForAnimationFrames(1);
+            }
+            this.pagedBuildStage = 'finalizing';
+            this.pagedBuildProgressPercent = 99;
+            this.loadingMessage = `${this.uiText.loadingPagesFinalizing.replace('...', '')} 99%`;
+            await this.waitForAnimationFrames(1);
             this.pagedPages = finalPages;
             this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
             this.pagedLayoutSignature = this.getPagedLayoutSignature();
             this.noteCompactChromeTotalPages();
             this.rebuildSearchResults(false);
+            this.pagedBuildProgressPercent = 100;
+            this.loadingMessage = `${this.uiText.loadingPagesFinalizing.replace('...', '')} 100%`;
+            await this.waitForAnimationFrames(1);
             if (this.readerDebugEnabled)
                 publishStats('done');
         } finally {
             this.pagedBuildInProgress = false;
             this.pagedBuildProgressPercent = 0;
+            this.pagedBuildStage = 'idle';
+            if (
+                String(this.loadingMessage || '').startsWith(this.uiText.loadingPages.replace('...', ''))
+                || String(this.loadingMessage || '').startsWith(this.uiText.loadingPagesCompacting.replace('...', ''))
+                || String(this.loadingMessage || '').startsWith(this.uiText.loadingPagesFinalizing.replace('...', ''))
+            )
+                this.loadingMessage = '';
             const completedBuildSignature = this.pagedBuildSignature;
             const completedGeometrySignature = this.pagedBuildGeometrySignature;
             this.pagedBuildSignature = '';
@@ -10873,6 +10989,7 @@ export default vueComponent(Reader);
 
 .reader-mobile-btn {
     flex: 1 1 0;
+    min-width: 0;
     min-height: 64px;
     padding: 6px 4px 8px;
     border: 1px solid color-mix(in srgb, var(--reader-border) 78%, var(--reader-surface) 22%);
@@ -10895,23 +11012,33 @@ export default vueComponent(Reader);
     align-items: center;
     justify-content: center;
     gap: 5px;
+    width: 100%;
+    min-width: 0;
     min-height: 100%;
     line-height: 1.08;
+    overflow: hidden;
 }
 
 .reader-mobile-btn :deep(.q-icon) {
     font-size: 19px;
+    margin: 0;
 }
 
-.reader-mobile-btn :deep(.block) {
+.reader-mobile-btn :deep(.block),
+.reader-mobile-btn-label {
     display: block;
+    width: 100%;
+    min-width: 0;
     max-width: 100%;
     font-size: 10.5px;
     font-weight: 760;
-    letter-spacing: 0.01em;
+    letter-spacing: 0;
     text-align: center;
     text-wrap: balance;
     white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: normal;
+    hyphens: auto;
 }
 
 .reader-mobile-btn.is-active {
@@ -11805,7 +11932,8 @@ export default vueComponent(Reader);
         font-size: 18px;
     }
 
-    .reader-mobile-btn :deep(.block) {
+    .reader-mobile-btn :deep(.block),
+    .reader-mobile-btn-label {
         font-size: 10px;
     }
 

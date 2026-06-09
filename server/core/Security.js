@@ -52,6 +52,14 @@ function timingSafeStringEqual(a = '', b = '') {
     return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
+function logSecurityWarning(message = '') {
+    try {
+        new (require('./AppLogger'))().log(LM_WARN, message);
+    } catch (e) {
+        // Security checks must keep working even before the app logger is initialized.
+    }
+}
+
 class Security {
     constructor(config) {
         this.config = config;
@@ -216,6 +224,10 @@ class Security {
         if (!this.isTrustedProxy(req))
             return '';
 
+        return this.headerFirstValue(req, name);
+    }
+
+    headerFirstValue(req, name = '') {
         return String(req.headers[String(name || '').toLowerCase()] || '').split(',')[0].trim();
     }
 
@@ -225,6 +237,14 @@ class Security {
 
     forwardedHost(req) {
         return this.forwardedHeader(req, 'x-forwarded-host');
+    }
+
+    requestHost(req) {
+        return this.headerFirstValue(req, 'host');
+    }
+
+    requestProto(req) {
+        return (req.socket && req.socket.encrypted ? 'https' : 'http');
     }
 
     getProxyAuthUser(req) {
@@ -323,27 +343,63 @@ class Security {
     }
 
     isSameOrigin(req) {
-        const origin = String(req.headers.origin || '').trim();
-        if (!origin)
-            return true;
+        return this.sameOriginCheck(req).ok;
+    }
 
+    normalizeOrigin(value = '') {
         try {
-            const originUrl = new URL(origin);
-            const host = this.forwardedHost(req) || String(req.headers.host || '').split(',')[0].trim();
-            const proto = this.forwardedProto(req)
-                || (req.socket && req.socket.encrypted ? 'https' : 'http');
-            return originUrl.host === host && originUrl.protocol === `${proto}:`;
+            return new URL(String(value || '').trim()).origin;
         } catch (e) {
-            return false;
+            return '';
         }
     }
 
-    verifyWebSocket(req) {
-        if (!this.verifyRequiredAuth(req).ok)
-            return false;
+    sameOriginCheck(req) {
+        const origin = String(req.headers.origin || '').trim();
+        if (!origin)
+            return {ok: true, origin: '', expectedOrigins: []};
 
-        if (!this.isSameOrigin(req))
+        const normalizedOrigin = this.normalizeOrigin(origin);
+        if (!normalizedOrigin)
+            return {ok: false, origin, expectedOrigins: []};
+
+        const hosts = [
+            this.forwardedHost(req),
+            this.headerFirstValue(req, 'x-forwarded-host'),
+            this.requestHost(req),
+        ].filter(Boolean);
+        const protos = [
+            this.forwardedProto(req),
+            this.headerFirstValue(req, 'x-forwarded-proto'),
+            this.requestProto(req),
+        ].filter(Boolean);
+
+        const expectedOrigins = Array.from(new Set(
+            hosts.flatMap(host => protos.map(proto => this.normalizeOrigin(`${proto}://${host}`)))
+                .filter(Boolean)
+        ));
+
+        return {
+            ok: expectedOrigins.includes(normalizedOrigin),
+            origin: normalizedOrigin,
+            expectedOrigins,
+        };
+    }
+
+    verifyWebSocket(req) {
+        const auth = this.verifyRequiredAuth(req);
+        if (!auth.ok) {
+            logSecurityWarning(`WebSocket forbidden: auth failed, status=${auth.status || 401}, remote=${this.clientIp(req) || '-'}`);
             return false;
+        }
+
+        const sameOrigin = this.sameOriginCheck(req);
+        if (!sameOrigin.ok) {
+            logSecurityWarning(
+                `WebSocket forbidden: origin mismatch, origin=${sameOrigin.origin || '-'}, expected=${sameOrigin.expectedOrigins.join(',') || '-'}, host=${this.requestHost(req) || '-'}, x-forwarded-host=${this.headerFirstValue(req, 'x-forwarded-host') || '-'}, x-forwarded-proto=${this.headerFirstValue(req, 'x-forwarded-proto') || '-'}, remote=${this.clientIp(req) || '-'}`
+            );
+            return false;
+        }
 
         this.ensureSession(req);
         return true;
