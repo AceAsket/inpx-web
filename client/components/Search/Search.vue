@@ -1508,8 +1508,6 @@ class Search {
                 if (v) {
                     if (v[0] === '=')
                         v = v.substring(1);
-                    else if (!specSym.has(v[0]))
-                        v = '^' + v;
                 }
                 return v || '';
             };
