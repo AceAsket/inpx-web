@@ -20,6 +20,7 @@ const FileDownloader = require('./FileDownloader');
 const ReadingListStore = require('./ReadingListStore');
 const imageUtils = require('./ImageUtils');
 const bookConverter = require('./BookConverter');
+const runtimeMetrics = require('./RuntimeMetrics');
 
 const asyncExit = new (require('./AsyncExit'))();
 const appLogger = new (require('./AppLogger'))();//singleton
@@ -3510,6 +3511,7 @@ class WebWorker {
                 currentPercent: cpuCurrentPercent,
                 averagePercent: uptime > 0 ? (cpuTotalSeconds / uptime) * 100 : 0,
             },
+            runtime: runtimeMetrics.getSnapshot(),
             index,
             stats: (dbConfig && dbConfig.stats) || (index && index.stats) || {},
             paths: {

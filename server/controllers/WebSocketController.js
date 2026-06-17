@@ -5,6 +5,7 @@ const WorkerState = require('../core/WorkerState');//singleton
 const WebWorker = require('../core/WebWorker');//singleton
 const log = new (require('../core/AppLogger'))().log;//singleton
 const utils = require('../core/utils');
+const runtimeMetrics = require('../core/RuntimeMetrics');
 
 const cleanPeriod = 1*60*1000;//1 минута
 const closeSocketOnIdle = 5*60*1000;//5 минут
@@ -57,6 +58,8 @@ class WebSocketController {
 
     async onMessage(ws, message) {
         let req = {};
+        let metricToken = null;
+        let metricOk = false;
         try {
             if (this.isDevelopment || this.config.logQueries) {
                 log(`WebSocket-IN:  ${utils.cutString(message)}`);
@@ -64,6 +67,7 @@ class WebSocketController {
 
             req = JSON.parse(message);
             req.__startTime = Date.now();
+            metricToken = runtimeMetrics.beginAction(req.action);
             if (!req.profileAccessToken && this.security && ws.req && ws.req.securitySession && ws.req.securitySession.profileAccessToken)
                 req.profileAccessToken = ws.req.securitySession.profileAccessToken;
 
@@ -228,8 +232,11 @@ class WebSocketController {
                 default:
                     throw new Error(`Action not found: ${req.action}`);
             }
+            metricOk = true;
         } catch (e) {
             this.send({error: e.message}, req, ws);
+        } finally {
+            runtimeMetrics.endAction(metricToken, metricOk);
         }
     }
 

@@ -46,6 +46,24 @@ function createHttpServer(app) {
     });
 }
 
+function testTitleSearchKeepsIndexedPrefixFallbacks() {
+    const DbSearcher = require('../server/core/DbSearcher');
+    const searcher = Object.create(DbSearcher.prototype);
+    searcher.db = {esc: JSON.stringify};
+
+    const candidates = searcher.getTitleSearchPrefixCandidates('night');
+    assert.ok(candidates.includes('night'));
+    assert.ok(candidates.includes('«night'));
+    assert.ok(candidates.includes('"night'));
+    assert.ok(candidates.includes('(night'));
+    assert.deepStrictEqual(searcher.getTitleSearchPrefixCandidates('*night'), ['*night']);
+
+    const where = searcher.getWhere('Night', {looseTitlePrefix: true});
+    assert.match(where, /@dirtyIndexLR\('value', "night"/);
+    assert.match(where, /@dirtyIndexLR\('value', "«night"/);
+    assert.doesNotMatch(where, /@indexIter/);
+}
+
 function request(server, urlPath) {
     const port = server.address().port;
     return new Promise((resolve, reject) => {
@@ -506,6 +524,7 @@ async function testConfiguredConverterPathsHavePriority() {
 }
 
 const tests = [
+    testTitleSearchKeepsIndexedPrefixFallbacks,
     testAdminSettingsRestoreKeepsSecrets,
     testAdminBackupArchiveAndDownload,
     testUserBackupExportsAndRestoresReaderState,

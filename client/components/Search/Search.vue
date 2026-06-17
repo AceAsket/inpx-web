@@ -1503,13 +1503,10 @@ class Search {
 
         if (!this.isExtendedSearch) {
             const search = this.search;
-            const specSym = new Set(['*', '#']);
             const correctValue = (v) => {
                 if (v) {
                     if (v[0] === '=')
                         v = v.substring(1);
-                    else if (!specSym.has(v[0]))
-                        v = '^' + v;
                 }
                 return v || '';
             };

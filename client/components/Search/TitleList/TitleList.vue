@@ -74,6 +74,41 @@ class TitleList extends BaseList {
         return `${this.list.totalFound} уникальн${utils.wordEnding(this.list.totalFound, 6)} назван${utils.wordEnding(this.list.totalFound, 3)}`;
     }
 
+    getTitleBookDedupeKey(book = {}) {
+        const sourceId = String(book.sourceId || '').trim();
+        if (book.libid)
+            return `libid:${sourceId}:${book.libid}`;
+
+        const fileParts = [
+            sourceId,
+            book.folder || '',
+            book.file || '',
+            book.ext || '',
+            String(book.insno || 0),
+        ].map(value => String(value || '').trim().toLowerCase());
+
+        if (fileParts.some(Boolean))
+            return `file:${fileParts.join('|')}`;
+
+        return `id:${sourceId}:${book.id}`;
+    }
+
+    mergeTitleBookSeries(existing = {}, book = {}) {
+        const series = String(book.series || '').trim();
+        if (!series)
+            return;
+
+        const seriesList = String(existing.series || '')
+            .split(';')
+            .map(item => item.trim())
+            .filter(Boolean);
+
+        if (!seriesList.includes(series))
+            seriesList.push(series);
+
+        existing.series = seriesList.join('; ');
+    }
+
     async updateTableData() {
         let result = [];
 
@@ -95,14 +130,25 @@ class TitleList extends BaseList {
             if (rec.books) {
                 const filtered = this.filterBooks(rec.books);
 
-                for (let i = 0; i < filtered.length; i++) {
+                const seen = new Map();
+                for (const book of filtered) {
+                    const key = this.getTitleBookDedupeKey(book);
+                    if (seen.has(key)) {
+                        this.mergeTitleBookSeries(seen.get(key), book);
+                    } else {
+                        seen.set(key, {...book});
+                    }
+                }
+                const deduped = [...seen.values()];
+
+                for (let i = 0; i < deduped.length; i++) {
                     if (i === 0)
-                        item.book = filtered[i];
+                        item.book = deduped[i];
                     else
-                        item.books.push(filtered[i]);                    
+                        item.books.push(deduped[i]);
                 }
 
-                if (filtered.length) {
+                if (deduped.length) {
                     num++;
                     result.push(item);
                 }

@@ -227,6 +227,33 @@
                             </div>
                         </section>
 
+                        <section class="admin-dashboard-section admin-dashboard-section--wide">
+                            <div class="admin-dashboard-section-title">{{ adminUi.requests }}</div>
+                            <div class="admin-dashboard-grid admin-dashboard-grid--runtime">
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.actionsTotal }}</div>
+                                    <div class="admin-stat-value">{{ adminRuntime.totalActions || 0 }}</div>
+                                    <div class="admin-stat-hint">{{ adminRuntimeHint }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.eventLoopLag }}</div>
+                                    <div class="admin-stat-value">{{ runtimeLagText }}</div>
+                                    <div class="admin-stat-hint">{{ runtimeLagHint }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">{{ adminUi.lastSlowAction }}</div>
+                                    <div class="admin-stat-value admin-stat-value--small">{{ runtimeLastSlowActionText }}</div>
+                                    <div class="admin-stat-hint">{{ runtimeLastSlowActionHint }}</div>
+                                </div>
+                            </div>
+                            <div v-if="runtimeSlowestActions.length" class="admin-runtime-list">
+                                <div v-for="item in runtimeSlowestActions" :key="item.action" class="admin-runtime-row">
+                                    <span class="admin-runtime-action">{{ item.action }}</span>
+                                    <span class="admin-runtime-value">{{ actionDurationText(item) }}</span>
+                                </div>
+                            </div>
+                        </section>
+
                         <section class="admin-dashboard-section">
                             <div class="admin-dashboard-section-title">Хранилище</div>
                             <div class="admin-dashboard-grid admin-dashboard-grid--storage">
@@ -703,6 +730,10 @@ class SettingsDialog {
         uptime: 'Uptime',
         memory: 'Память',
         cpu: 'CPU процесса',
+        requests: 'Запросы',
+        actionsTotal: 'WebSocket action',
+        eventLoopLag: 'Event loop',
+        lastSlowAction: 'Медленный action',
         dbSize: 'База',
         bookCache: 'Книжный кэш',
         coverCache: 'Кэш обложек',
@@ -1180,6 +1211,16 @@ class SettingsDialog {
         ].filter(Boolean).join(' ');
     }
 
+    formatMilliseconds(value = 0) {
+        const ms = Number(value);
+        if (!Number.isFinite(ms) || ms <= 0)
+            return '0 ms';
+        if (ms < 1000)
+            return `${ms.toFixed(ms >= 10 ? 0 : 1)} ms`;
+
+        return `${(ms / 1000).toFixed(1)} s`;
+    }
+
     adminStat(name) {
         const stats = (this.adminDashboard && this.adminDashboard.stats) || {};
         const value = stats[name];
@@ -1313,6 +1354,46 @@ class SettingsDialog {
         const totalSeconds = Number(cpu.totalSeconds);
         const totalText = Number.isFinite(totalSeconds) ? `CPU-время: ${this.formatDuration(totalSeconds)}` : '';
         return `${averageText}${totalText}`.trim();
+    }
+
+    get adminRuntime() {
+        return (this.adminDashboard && this.adminDashboard.runtime) || {};
+    }
+
+    get adminRuntimeHint() {
+        const inFlight = Number(this.adminRuntime.inFlightActions || 0);
+        const actionCount = Number(this.adminRuntime.actionCount || 0);
+        return `${inFlight} выполняется · ${actionCount} типов`;
+    }
+
+    get runtimeLagText() {
+        return this.formatMilliseconds(this.adminRuntime.lastEventLoopLagMs);
+    }
+
+    get runtimeLagHint() {
+        return `p95: ${this.formatMilliseconds(this.adminRuntime.eventLoopLagP95Ms)}`;
+    }
+
+    get runtimeLastSlowActionText() {
+        const slow = this.adminRuntime.lastSlowAction || {};
+        return slow.action || 'нет';
+    }
+
+    get runtimeLastSlowActionHint() {
+        const slow = this.adminRuntime.lastSlowAction || {};
+        if (!slow.action)
+            return 'Порог: 1.5 s';
+
+        const time = slow.at ? this.formatDateTime(slow.at) : '';
+        return `${this.formatMilliseconds(slow.durationMs)}${time ? ` · ${time}` : ''}`;
+    }
+
+    get runtimeSlowestActions() {
+        return Array.isArray(this.adminRuntime.slowestActions) ? this.adminRuntime.slowestActions : [];
+    }
+
+    actionDurationText(item = {}) {
+        return `p95 ${this.formatMilliseconds(item.p95Ms)} · max ${this.formatMilliseconds(item.maxMs)} · ${item.count || 0}`;
     }
 
     get adminIndex() {
@@ -1468,6 +1549,7 @@ class SettingsDialog {
             this.adminMetricsPollInFlight = true;
             try {
                 await this.refreshAdminMetrics();
+                await this.refreshAdminEvents({quiet: true});
             } catch (e) {
                 // Keep the settings panel quiet; the next tick or manual refresh can recover.
             } finally {
@@ -1517,9 +1599,11 @@ class SettingsDialog {
         this.adminIndexPollTimer = null;
     }
 
-    async refreshAdminEvents() {
+    async refreshAdminEvents(options = {}) {
+        const quiet = options.quiet === true;
         const requestId = ++this.adminEventsRequestId;
-        this.adminEventsLoading = true;
+        if (!quiet)
+            this.adminEventsLoading = true;
         try {
             const result = await this.api.getAdminEvents({
                 level: this.adminEventLevel,
@@ -1533,10 +1617,10 @@ class SettingsDialog {
             this.adminEventLogSize = parseInt(result.maxSize, 10) || 300;
             this.adminEvents = result.events || [];
         } catch (e) {
-            if (requestId === this.adminEventsRequestId)
+            if (!quiet && requestId === this.adminEventsRequestId)
                 this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
-            if (requestId === this.adminEventsRequestId)
+            if (!quiet)
                 this.adminEventsLoading = false;
         }
     }
@@ -2175,6 +2259,10 @@ export default vueComponent(SettingsDialog);
     grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.admin-dashboard-grid--runtime {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .admin-stat {
     min-width: 0;
     padding: 10px;
@@ -2197,12 +2285,47 @@ export default vueComponent(SettingsDialog);
     text-overflow: ellipsis;
 }
 
+.admin-stat-value--small {
+    font-size: 14px;
+}
+
 .admin-stat-hint {
     margin-top: 4px;
     color: var(--app-muted);
     font-size: 11px;
     line-height: 1.25;
     overflow-wrap: anywhere;
+}
+
+.admin-runtime-list {
+    display: grid;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--app-border);
+    border-radius: 10px;
+    background: var(--app-surface);
+}
+
+.admin-runtime-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    color: var(--app-muted);
+    font-size: 12px;
+}
+
+.admin-runtime-action {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--app-text);
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.admin-runtime-value {
+    white-space: nowrap;
 }
 
 .admin-subsection {

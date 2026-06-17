@@ -4698,10 +4698,6 @@ class Reader {
     capturePendingReflowAnchor(force = false, {preferStable = false} = {}) {
         if (!this.bookUid)
             return null;
-        if (!force && preferStable && this.stableReaderReflowAnchor) {
-            this.pendingReflowAnchor = this.cloneReaderReflowAnchor(this.stableReaderReflowAnchor);
-            return this.pendingReflowAnchor;
-        }
         if (!force && this.pendingReflowAnchor)
             return this.pendingReflowAnchor;
 
@@ -4709,6 +4705,11 @@ class Reader {
         if (anchor) {
             this.pendingReflowAnchor = anchor;
             this.rememberStableReaderReflowAnchor(anchor);
+            return this.pendingReflowAnchor;
+        }
+        if (!force && preferStable && this.stableReaderReflowAnchor) {
+            this.pendingReflowAnchor = this.cloneReaderReflowAnchor(this.stableReaderReflowAnchor);
+            return this.pendingReflowAnchor;
         }
         return this.pendingReflowAnchor;
     }

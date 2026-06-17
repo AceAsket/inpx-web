@@ -257,6 +257,7 @@ class BasePage {
     //скопировано из BaseList.js, часть функционала не используется
     filterBooks(books, query = {}) {
         const s = query;
+        const titleSearchLeadingPattern = /^[\s«"'„“”‘’`()\[\]{}]+/;
 
         const splitAuthor = (author) => {
             if (!author) {
@@ -270,7 +271,7 @@ class BasePage {
             return result;
         };
 
-        const filterBySearch = (bookValue, searchValue) => {
+        const filterBySearch = (bookValue, searchValue, options = {}) => {
             if (!searchValue)
                 return true;
 
@@ -302,6 +303,10 @@ class BasePage {
                 const re = new RegExp(searchValue, 'i');
                 return re.test(bookValue);
             } else {
+                if (options.looseTitlePrefix) {
+                    const normalizedTitle = bookValue.replace(titleSearchLeadingPattern, '');
+                    return bookValue.indexOf(searchValue) === 0 || normalizedTitle.indexOf(searchValue) === 0;
+                }
                 //where = `@dirtyIndexLR('value', ${db.esc(a)}, ${db.esc(a + maxUtf8Char)})`;
                 return bookValue.localeCompare(searchValue) >= 0 && bookValue.localeCompare(searchValue + maxUtf8Char) <= 0;
             }
@@ -361,7 +366,7 @@ class BasePage {
             return (this.showDeleted || !book.del)
                 && authorFound
                 && filterBySearch(book.series, s.series)
-                && filterBySearch(book.title, s.title)
+                && filterBySearch(book.title, s.title, {looseTitlePrefix: true})
                 && genreFound
                 && langFound
                 && dateFound

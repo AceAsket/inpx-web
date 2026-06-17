@@ -546,6 +546,7 @@ export default class BaseList {
         const ruAlphabet = 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя';
         const enAlphabet = 'abcdefghijklmnopqrstuvwxyz';
         const enru = new Set((ruAlphabet + enAlphabet).split(''));
+        const titleSearchLeadingPattern = /^[\s«"'„“”‘’`()\[\]{}]+/;
 
         const splitAuthor = (author) => {
             if (!author) {
@@ -559,7 +560,7 @@ export default class BaseList {
             return result;
         };
 
-        const filterBySearch = (bookValue, searchValue) => {
+        const filterBySearch = (bookValue, searchValue, options = {}) => {
             if (!searchValue)
                 return true;
 
@@ -591,6 +592,10 @@ export default class BaseList {
                 const re = new RegExp(searchValue, 'i');
                 return re.test(bookValue);
             } else {
+                if (options.looseTitlePrefix) {
+                    const normalizedTitle = bookValue.replace(titleSearchLeadingPattern, '');
+                    return bookValue.indexOf(searchValue) === 0 || normalizedTitle.indexOf(searchValue) === 0;
+                }
                 return bookValue.indexOf(searchValue) === 0;
             }
         };
@@ -656,7 +661,7 @@ export default class BaseList {
             return (this.showDeleted || !book.del)
                 && authorFound
                 && filterBySearch(book.series, s.series)
-                && filterBySearch(book.title, s.title)
+                && filterBySearch(book.title, s.title, {looseTitlePrefix: true})
                 && genreFound
                 && langFound
                 && dateFound

@@ -9,7 +9,9 @@ const maxUtf8Char = String.fromCodePoint(0xFFFFF);
 const ruAlphabet = 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя';
 const enAlphabet = 'abcdefghijklmnopqrstuvwxyz';
 const enruArr = (ruAlphabet + enAlphabet).split('');
-const copyDedupeVersion = 'copy-dedupe-v2';
+const titleSearchLeadingChars = ['«', '"', "'", '„', '“', '”', '‘', '’', '`', '(', '[', '{'];
+const titleSearchLeadingPattern = '^[\\s«"\'„“”‘’`()\\[\\]{}]+';
+const copyDedupeVersion = 'copy-dedupe-v3-title-prefix';
 
 class DbSearcher {
     constructor(config, db) {
@@ -50,7 +52,49 @@ class DbSearcher {
         return JSON.stringify(result);
     }
 
-    getWhere(a) {
+    getTitleSearchPrefixCandidates(value = '') {
+        const result = [];
+        const seen = new Set();
+        const add = (prefix) => {
+            if (!prefix || seen.has(prefix))
+                return;
+            seen.add(prefix);
+            result.push(prefix);
+        };
+
+        const safeValue = String(value || '');
+        add(safeValue);
+
+        if (!safeValue || ['=', '*', '#', '~'].includes(safeValue[0]) || titleSearchLeadingChars.includes(safeValue[0]))
+            return result;
+
+        for (const char of titleSearchLeadingChars) {
+            add(`${char}${safeValue}`);
+            add(`${char} ${safeValue}`);
+        }
+
+        return result;
+    }
+
+    getTitlePrefixWhere(a) {
+        const db = this.db;
+        const candidates = this.getTitleSearchPrefixCandidates(a);
+
+        if (candidates.length <= 1)
+            return `@dirtyIndexLR('value', ${db.esc(a)}, ${db.esc(a + maxUtf8Char)})`;
+
+        return `(() => {
+            const result = new Set();
+            const append = (ids) => {
+                for (const id of ids)
+                    result.add(id);
+            };
+            ${candidates.map(prefix => `append(@dirtyIndexLR('value', ${db.esc(prefix)}, ${db.esc(prefix + maxUtf8Char)}));`).join('\n            ')}
+            return new Uint32Array(result);
+        })()`;
+    }
+
+    getWhere(a, options = {}) {
         const db = this.db;
 
         if (a[0] !== '~')
@@ -81,7 +125,9 @@ class DbSearcher {
                 })()
             `;
         } else {
-            where = `@dirtyIndexLR('value', ${db.esc(a)}, ${db.esc(a + maxUtf8Char)})`;
+            where = options.looseTitlePrefix
+                ? this.getTitlePrefixWhere(a)
+                : `@dirtyIndexLR('value', ${db.esc(a)}, ${db.esc(a + maxUtf8Char)})`;
         }
 
         return where;
@@ -143,11 +189,11 @@ class DbSearcher {
 
         //названия
         if (query.title) {
-            const key = `book-ids-title-${query.title}`;
+            const key = `book-ids-title-${copyDedupeVersion}-${query.title}`;
             let ids = await this.getCached(key);
 
             if (ids === null) {
-                ids = await tableBookIds('title', this.getWhere(query.title));
+                ids = await tableBookIds('title', this.getWhere(query.title, {looseTitlePrefix: true}));
 
                 await this.putCached(key, ids);
             }
@@ -710,8 +756,19 @@ class DbSearcher {
                             return re.test(row.${bookField});
                         })()
                     `;
-                } else {
+                } else if (bookField === 'title') {
 
+                    return `(
+                        row.${bookField}
+                        && row.${bookField} !== ${db.esc(emptyFieldValue)}
+                        && (() => {
+                            const value = row.${bookField}.toLowerCase();
+                            const normalized = value.replace(new RegExp(${db.esc(titleSearchLeadingPattern)}), '');
+                            return value.indexOf(${db.esc(searchValue)}) === 0
+                                || normalized.indexOf(${db.esc(searchValue)}) === 0;
+                        })()
+                    )`;
+                } else {
                     return `(row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)}) >= 0 ` +
                         `&& row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)} + ${db.esc(maxUtf8Char)}) <= 0)`;
                 }

@@ -4,14 +4,22 @@ ARG NODE_IMAGE=node:18-bookworm-slim
 ARG RUNTIME_IMAGE=debian:bookworm-slim
 ARG FB2CNG_VERSION=v1.2.3
 ARG FB2CNG_ARCH=linux-amd64
+ARG PKG_FETCH_VERSION=v3.4
+ARG PKG_NODE_VERSION=v16.16.0
 
 FROM ${NODE_IMAGE} AS build-deps
+
+ARG PKG_FETCH_VERSION
+ARG PKG_NODE_VERSION
 
 WORKDIR /app
 
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     npm ci --ignore-scripts --no-audit --no-fund
+RUN mkdir -p "/root/.pkg-cache/${PKG_FETCH_VERSION}" \
+    && node -e "const fs=require('fs'); const version=process.env.PKG_FETCH_VERSION; const nodeVersion=process.env.PKG_NODE_VERSION; const url='https://github.com/vercel/pkg-fetch/releases/download/'+version+'/node-'+nodeVersion+'-linux-x64'; const out='/root/.pkg-cache/'+version+'/fetched-'+nodeVersion+'-linux-x64'; fetch(url).then((res)=>{ if(!res.ok) throw new Error('download failed '+res.status+' '+url); return res.arrayBuffer(); }).then((body)=>fs.writeFileSync(out, Buffer.from(body))).catch((err)=>{ console.error(err); process.exit(1); });" \
+    && chmod +x "/root/.pkg-cache/${PKG_FETCH_VERSION}/fetched-${PKG_NODE_VERSION}-linux-x64"
 
 FROM build-deps AS build
 
