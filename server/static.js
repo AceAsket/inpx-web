@@ -41,19 +41,6 @@ function generateZip(zipFile, dataFile, dataFileInZip) {
     });
 }
 
-function convertedFileName(downFileName, format) {
-    const ext = path.extname(downFileName);
-    const base = (ext ? downFileName.slice(0, -ext.length) : downFileName);
-    return `${base}.${format}`;
-}
-
-function normalizedRawFileName(downFileName, fileType) {
-    if (fileType === 'raw' || fileType === undefined)
-        return downFileName;
-
-    return downFileName;
-}
-
 function normalizeLibraryDir(dir = '') {
     return String(dir || '').replace(/\\/g, '/').replace(/\/+$/g, '');
 }
@@ -459,7 +446,6 @@ module.exports = (app, config) => {
 
                         if (fileType === undefined || fileType === 'raw') {
                             bookFile = rawFile;
-                            downFileName = normalizedRawFileName(downFileName, fileType);
                         } else if (fileType === 'zip') {
                             //создаем zip-файл
                             bookFile += '.zip';
@@ -473,10 +459,10 @@ module.exports = (app, config) => {
                             if (!config.conversionEnabled)
                                 throw new Error('Book conversion is disabled in this image');
 
-                            bookFile += `.${fileType}`;
+                            bookFile += `.${bookConverter.getConvertedExtension(fileType)}`;
                             if (!await fs.pathExists(bookFile))
                                 await bookConverter.convert({inputFile: rawFile, outputFile: bookFile, format: fileType, sourceFileName: downFileName});
-                            downFileName = convertedFileName(downFileName, fileType);
+                            downFileName = bookConverter.getConvertedFileName(downFileName, fileType);
                         } else {
                             throw new Error(`Unsupported file type: ${fileType}`);
                         }

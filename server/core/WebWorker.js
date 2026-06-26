@@ -550,12 +550,6 @@ function formatTemplate(template, book = {}) {
         .replace(/\$\{EXT\}/g, book.ext || '');
 }
 
-function convertedFileName(downFileName, format) {
-    const ext = path.extname(downFileName);
-    const base = (ext ? downFileName.slice(0, -ext.length) : downFileName);
-    return `${base}.${format}`;
-}
-
 function buildAuthorVariants(author) {
     const result = new Set();
     const normalized = normalizeAuthorText(author);
@@ -5295,7 +5289,7 @@ class WebWorker {
                 });
                 cacheChanged = true;
             }
-            preparedFileName = convertedFileName(downFileName, targetFormat);
+            preparedFileName = bookConverter.getConvertedFileName(downFileName, targetFormat);
             await utils.touchFile(preparedFile);
         }
 
