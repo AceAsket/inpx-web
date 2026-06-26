@@ -254,4 +254,5 @@ module.exports = {
     mutoolCommandCandidates,
     calibreCommandCandidates,
     convert,
+    fb2cngOutputExtensions,
 };

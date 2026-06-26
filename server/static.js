@@ -7,6 +7,7 @@ const utils = require('./core/utils');
 const ZipReader = require('./core/ZipReader');
 const imageUtils = require('./core/ImageUtils');
 const bookConverter = require('./core/BookConverter');
+const { fb2cngOutputExtensions } = bookConverter;
 const webAppDir = require('../build/appdir');
 const externalTools = require('./core/ExternalTools');
 const {getEnabledLibrarySources} = require('./core/LibrarySources');
@@ -44,7 +45,8 @@ function generateZip(zipFile, dataFile, dataFileInZip) {
 function convertedFileName(downFileName, format) {
     const ext = path.extname(downFileName);
     const base = (ext ? downFileName.slice(0, -ext.length) : downFileName);
-    return `${base}.${format}`;
+    const extNew = fb2cngOutputExtensions.get(format)[0];
+    return `${base}${extNew}`;
 }
 
 function normalizedRawFileName(downFileName, fileType) {
@@ -473,7 +475,8 @@ module.exports = (app, config) => {
                             if (!config.conversionEnabled)
                                 throw new Error('Book conversion is disabled in this image');
 
-                            bookFile += `.${fileType}`;
+                            bookFileExtension = fb2cngOutputExtensions.get(fileType)[0];
+                            bookFile += `${bookFileExtension}`;
                             if (!await fs.pathExists(bookFile))
                                 await bookConverter.convert({inputFile: rawFile, outputFile: bookFile, format: fileType, sourceFileName: downFileName});
                             downFileName = convertedFileName(downFileName, fileType);
