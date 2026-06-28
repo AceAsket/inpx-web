@@ -14,12 +14,22 @@ const fb2cngFormats = new Map([
     ['azw8', 'azw8'],
 ]);
 const fb2cngOutputExtensions = new Map([
-    ['epub', ['.epub']],
-    ['epub3', ['.epub']],
-    ['kepub', ['.kepub.epub', '.epub']],
-    ['kfx', ['.kfx']],
-    ['azw8', ['.azw8']],
+    ['epub3', 'epub'],
+    ['kepub', 'kepub.epub'],
 ]);
+
+function getConvertedExtension(fileType) {
+    const outputExtension = fb2cngOutputExtensions.get(fileType) || fileType.toLowerCase();
+    return outputExtension;
+};
+
+function getConvertedFileName(originalFileName, format) {
+    const ext = path.extname(originalFileName);
+    const base = (ext ? originalFileName.slice(0, -ext.length) : originalFileName);
+    const extNew = getConvertedExtension(format);
+    return `${base}.${extNew}`;
+}
+
 function bundledToolPath(fileName) {
     const dir = bundledBinDir();
     return dir ? path.join(dir, fileName) : '';
@@ -161,10 +171,11 @@ async function convertWithFb2cng(inputFile, outputFile, format, converterPaths =
     await fs.ensureDir(outputDir);
     await runFirst(fb2cngCommandCandidates(converterPaths), ['convert', '--to', fb2cngFormat, '--overwrite', inputFile, outputDir]);
 
-    const outputExtensions = fb2cngOutputExtensions.get(format) || [`.${format}`];
-    const converted = (await fs.readdir(outputDir))
-        .filter(file => outputExtensions.some(ext => file.toLowerCase().endsWith(ext)))
-        .map(file => path.join(outputDir, file))[0];
+    const outputExtension = `.${getConvertedExtension(format)}`;
+    const firstMatchedFile = (await fs.readdir(outputDir))
+        .find(file => file.toLowerCase().endsWith(outputExtension));
+    const converted = firstMatchedFile ? path.join(outputDir, firstMatchedFile) : undefined;
+
 
     if (!converted)
         throw new Error(`fb2cng did not produce ${format}`);
@@ -254,4 +265,6 @@ module.exports = {
     mutoolCommandCandidates,
     calibreCommandCandidates,
     convert,
+    getConvertedFileName,
+    getConvertedExtension,
 };
