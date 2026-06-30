@@ -238,17 +238,55 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Checkout requested tag
+        if: github.event_name == 'workflow_dispatch'
+        run: git checkout ${{ github.event.inputs.tag }}
+
       - name: Download artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: gh run download ${{ github.run_id }} --repo ${{ github.repository }} --dir release-assets
 
+      - name: Prepare release notes
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+
+          const tag = process.env.RELEASE_TAG || '';
+          const version = tag.replace(/^v/, '');
+          const text = fs.readFileSync('CHANGELOG.md', 'utf8').replace(/\r\n/g, '\n');
+          const lines = text.split('\n');
+          const start = lines.findIndex(line => line.startsWith(`${version} / `));
+          let body = '';
+
+          if (start >= 0) {
+            let end = lines.length;
+            for (let i = start + 1; i < lines.length; i++) {
+              if (/^\d+\.\d+\.\d+(?:[-.][^\s/]+)?\s+\//.test(lines[i])) {
+                end = i;
+                break;
+              }
+            }
+            body = lines.slice(start, end).join('\n').trim();
+          }
+
+          fs.writeFileSync('release-notes.md', `${body || `Release ${tag}`}\n`);
+          NODE
+
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
           prerelease: ${{ contains(github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name, '-rc') }}
+          body_path: release-notes.md
           files: release-assets/**/*.zip
           overwrite_files: true
 
