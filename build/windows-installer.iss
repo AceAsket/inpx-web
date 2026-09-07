@@ -42,7 +42,8 @@ VersionInfoVersion={#AppVersionInfo}
 VersionInfoCompany=AceAsket
 VersionInfoDescription=inpx-web Windows installer
 VersionInfoProductName=inpx-web
-VersionInfoProductVersion={#AppVersion}
+VersionInfoProductVersion={#AppVersionInfo}
+VersionInfoProductTextVersion={#AppVersion}
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
