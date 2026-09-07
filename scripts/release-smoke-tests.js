@@ -46,6 +46,83 @@ function createHttpServer(app) {
     });
 }
 
+async function testConfigSecretsSurviveRestart() {
+    const execFile = require('util').promisify(require('child_process').execFile);
+    const configModulePath = require.resolve('../server/config');
+    const cases = [
+        {explicit: true, cli: true, saved: true},
+        {explicit: true, saved: true},
+        {cli: true, saved: true},
+        {explicit: true, cli: true},
+        {explicit: true},
+        {explicit: true, empty: true},
+        {cli: true},
+        {},
+        {explicit: true, saved: true, plaintext: true},
+    ];
+    const childScript = `
+        const assert = require('assert');
+        const path = require('path');
+        const [modulePath, optionsJson, phase] = process.argv.slice(1);
+        const options = JSON.parse(optionsJson);
+        // Keep the executable's default data directory inside the test sandbox.
+        for (const branch of ['development', 'production']) {
+            const config = require(path.join(path.dirname(modulePath), branch));
+            config.execDir = options.execDir;
+            config.dataDir = '';
+        }
+        (async() => {
+            const manager = new (require(modulePath))();
+            await manager.init(options.cliDir, options.explicitFile);
+            await manager.load();
+            assert.strictEqual(path.resolve(manager.config.dataDir), options.expectedDir);
+            assert.strictEqual(manager.config.opds.user, 'user1');
+            if (phase === 'save') {
+                assert.strictEqual(manager.config.opds.password, options.initialPassword);
+                manager.config = {
+                    opds: {...manager.config.opds, password: 'opds-test-password'},
+                    smtpPass: 'smtp-test-password',
+                    telegramBotToken: 'telegram-test-token',
+                    metricsToken: 'metrics-test-token',
+                };
+                await manager.save();
+            } else {
+                assert.strictEqual(manager.config.opds.password, 'opds-test-password');
+                assert.strictEqual(manager.config.smtpPass, 'smtp-test-password');
+                assert.strictEqual(manager.config.telegramBotToken, 'telegram-test-token');
+                assert.strictEqual(manager.config.metricsToken, 'metrics-test-token');
+            }
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+    `;
+
+    for (const scenario of cases) {
+        await withTempDir(async(dir) => {
+            const execDir = path.join(dir, 'app');
+            const cliDir = scenario.cli ? path.join(dir, 'cli-data') : undefined;
+            const defaultDir = cliDir || path.join(execDir, '.inpx-web');
+            const expectedDir = scenario.saved ? path.join(dir, 'saved-data') : defaultDir;
+            const configFile = scenario.explicit ? path.join(dir, 'config.json') : path.join(defaultDir, 'config.json');
+            const initialPassword = scenario.plaintext ? 'old-plaintext-password' : '';
+            const initialConfig = {opds: {enabled: true, user: 'user1', password: initialPassword}};
+            if (scenario.saved || scenario.empty)
+                initialConfig.dataDir = scenario.saved ? expectedDir : '';
+            await fs.outputJson(configFile, initialConfig);
+            const options = {execDir, cliDir, expectedDir, initialPassword,
+                explicitFile: scenario.explicit ? configFile : undefined};
+            const run = phase => execFile(process.execPath,
+                ['-e', childScript, configModulePath, JSON.stringify(options), phase], {cwd: dir});
+            await run('save');
+            const stored = await fs.readJson(configFile);
+            assert.ok(stored.opds.password.startsWith('enc:v1:'));
+            const keyFile = path.join(expectedDir, 'secret.key');
+            const keyBeforeRestart = await fs.readFile(keyFile, 'utf8');
+            await run('load');
+            assert.strictEqual(await fs.readFile(keyFile, 'utf8'), keyBeforeRestart);
+            assert.ok(!await fs.pathExists(path.join(dir, 'secret.key')));
+        });
+    }
+}
+
 async function testTitleSearchKeepsIndexedPrefixFallbacks() {
     const DbSearcher = require('../server/core/DbSearcher');
     const searcher = Object.create(DbSearcher.prototype);
@@ -1543,6 +1620,7 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
 }
 
 const tests = [
+    testConfigSecretsSurviveRestart,
     testAppCacheRecoveryBootstrapAndRoute,
     testTitleSearchKeepsIndexedPrefixFallbacks,
     testFb2ContentsExcludeNotesBodies,

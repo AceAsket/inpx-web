@@ -156,6 +156,7 @@ class ConfigManager {
 
         if (configFile) {
             config.configFile = path.resolve(configFile);
+            config.dataDir = config.dataDir || defaultDataDir;
         } else {
             let resolvedDataDir = defaultDataDir;
 
@@ -200,7 +201,9 @@ class ConfigManager {
             if (await fs.pathExists(this._config.configFile)) {
                 const data = JSON.parse(await fs.readFile(this._config.configFile, 'utf8'));
                 const rawConfig = _.pick(data, propsToSave);
-                const secretStore = new SecretStore(this._config);
+                // Resolve the same data directory for decrypting and saving secrets.
+                rawConfig.dataDir = rawConfig.dataDir || this._config.dataDir;
+                const secretStore = new SecretStore(rawConfig);
                 const secretResult = await secretStore.unprotectConfig(rawConfig);
                 const config = secretResult.config;
                 let needsSave = false;
