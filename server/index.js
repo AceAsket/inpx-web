@@ -18,6 +18,15 @@ let branch = '';
 const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'library-sources', 'admin-login', 'admin-password'];
 
 function applyEnvSecurityOverrides(targetConfig) {
+    for (const [field, variable] of Object.entries({
+        conversionConcurrency: 'INPX_CONVERSION_CONCURRENCY',
+        conversionQueueLimit: 'INPX_CONVERSION_QUEUE_LIMIT',
+        conversionTimeoutMs: 'INPX_CONVERSION_TIMEOUT_MS',
+        conversionQueueTimeoutMs: 'INPX_CONVERSION_QUEUE_TIMEOUT_MS',
+    })) {
+        if (Object.prototype.hasOwnProperty.call(process.env, variable))
+            targetConfig[field] = Number(process.env[variable]);
+    }
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_REQUIRE_AUTH'))
         targetConfig.requireAuth = process.env.INPX_REQUIRE_AUTH === 'true';
     if (process.env.INPX_AUTH_MODE)
@@ -86,6 +95,7 @@ async function init() {
     config = configManager.config;
     applyEnvSecurityOverrides(config);
     applyEnvLibraryOverrides(config, argv);
+    require('./core/BookConverter').configure(config);
     branch = config.branch;
 
     //dirs
@@ -221,7 +231,7 @@ async function main() {
         devModule.logQueries(app);
 
     const opds = require('./core/opds');
-    opds(app, config);
+    opds(app, config, security);
 
     const webAccess = new (require('./core/WebAccess'))(config);
     await webAccess.init();

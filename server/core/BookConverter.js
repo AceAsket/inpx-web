@@ -1,7 +1,8 @@
 const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
-const {spawn} = require('child_process');
+const {ConversionRuntime, runProcess: run} = require('./ConversionRuntime');
+const runtime = new ConversionRuntime();
 const externalTools = require('./ExternalTools');
 const {bundledBinDir} = externalTools;
 
@@ -142,6 +143,8 @@ async function validateFb2cngConfig(configInfo, converterPaths = null, runner = 
     try {
         await runner(commands, ['--config', configInfo.path, 'dumpconfig']);
     } catch (err) {
+        if (err.code === 'INPX_CONVERSION_TIMEOUT')
+            throw err;
         throw fb2cngConfigError(configInfo.path, err.message);
     }
     validatedFb2cngConfigs.add(validationKey);
@@ -217,38 +220,6 @@ async function buildCalibreEnv() {
     };
 }
 
-async function run(command, args, options = {}) {
-    return new Promise((resolve, reject) => {
-        const child = spawn(command, args, {
-            stdio: ['ignore', 'ignore', 'pipe'],
-            env: (options.env || process.env),
-            cwd: options.cwd,
-        });
-        let stderr = '';
-
-        child.stderr.on('data', data => {
-            stderr += data.toString();
-        });
-
-        child.on('error', err => {
-            if (err && err.code === 'ENOENT') {
-                reject(new Error(`${command} not found`));
-                return;
-            }
-
-            reject(err);
-        });
-
-        child.on('close', code => {
-            if (code === 0) {
-                resolve();
-            } else {
-                reject(new Error(`${command} failed with exit code ${code}: ${stderr.trim()}`));
-            }
-        });
-    });
-}
-
 async function runFirst(commands, args, options = {}) {
     let lastError = null;
 
@@ -258,7 +229,7 @@ async function runFirst(commands, args, options = {}) {
             return;
         } catch(e) {
             lastError = e;
-            if (!/not found/i.test(e.message))
+            if (e.code !== 'ENOENT')
                 throw e;
         }
     }
@@ -344,26 +315,27 @@ async function convert({inputFile, outputFile, format, sourceFileName = '', conv
     if (pending.has(key))
         return await pending.get(key);
 
-    const job = (async() => {
+    const job = runtime.run(async() => {
         await fs.ensureDir(path.dirname(outputFile));
         let convertInput = inputFile;
         let tempInput = '';
+        const workingOutput = `${outputFile}.work-${crypto.randomBytes(8).toString('hex')}.${getConvertedExtension(format)}`;
         const sourceExt = path.extname(sourceFileName || '').toLowerCase();
 
-        if (sourceExt && sourceExt !== path.extname(inputFile).toLowerCase()) {
-            tempInput = `${inputFile}${sourceExt}`;
-            if (!await fs.pathExists(tempInput))
-                await fs.copyFile(inputFile, tempInput);
-            convertInput = tempInput;
-        }
-        
         try {
-            await convertPrepared(convertInput, outputFile, format, converterPaths, fb2cngConfigPath);
+            if (sourceExt && sourceExt !== path.extname(inputFile).toLowerCase()) {
+                tempInput = `${outputFile}.input-${crypto.randomBytes(8).toString('hex')}${sourceExt}`;
+                await fs.copyFile(inputFile, tempInput);
+                convertInput = tempInput;
+            }
+            await convertPrepared(convertInput, workingOutput, format, converterPaths, fb2cngConfigPath);
+            await fs.rename(workingOutput, outputFile);
         } finally {
+            await fs.remove(workingOutput);
             if (tempInput)
                 await fs.remove(tempInput);
         }
-    })();
+    });
 
     pending.set(key, job);
     try {
@@ -397,8 +369,6 @@ async function prepareConvertedFile({
         format,
         config,
     });
-    if (cacheInfo.usesFb2cng)
-        await validateFb2cngConfig(cacheInfo.fb2cngConfig, config.converterPaths);
 
     const created = !await fs.pathExists(cacheInfo.filePath);
     if (created) {
@@ -420,6 +390,7 @@ async function prepareConvertedFile({
 }
 
 module.exports = {
+    configure: config => runtime.configure(config),
     canConvertTo,
     canConvertSourceTo,
     fb2cngCommandCandidates,

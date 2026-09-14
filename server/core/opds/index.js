@@ -15,32 +15,7 @@ const SearchHelpPage = require('./SearchHelpPage');
 
 const log = new (require('../AppLogger'))().log;//singleton
 
-function parseBasicAuth(header = '') {
-    const match = String(header || '').match(/^Basic\s+(.+)$/i);
-    if (!match)
-        return null;
-
-    try {
-        const decoded = Buffer.from(match[1], 'base64').toString('utf8');
-        const splitAt = decoded.indexOf(':');
-        if (splitAt < 0)
-            return null;
-
-        return {
-            user: decoded.slice(0, splitAt),
-            password: decoded.slice(splitAt + 1),
-        };
-    } catch(e) {
-        return null;
-    }
-}
-
-function requireBasicAuth(res, realm = 'inpx-web OPDS') {
-    res.set('WWW-Authenticate', `Basic realm="${realm}", charset="UTF-8"`);
-    res.status(401).send('Authentication required');
-}
-
-module.exports = function(app, config) {
+module.exports = function(app, config, security = new (require('../Security'))(config)) {
     if (!config.opds || !config.opds.enabled)
         return;
     
@@ -109,41 +84,7 @@ module.exports = function(app, config) {
 
     const opdsPaths = [opdsRoot, `${opdsRoot}/*`];
 
-    app.use(opdsPaths, async(req, res, next) => {
-        try {
-            const credentials = parseBasicAuth(req.headers.authorization);
-
-            if (config.opds.password) {
-                if (!config.opds.user)
-                    throw new Error('User must not be empty if password set');
-
-                if (!credentials || credentials.user !== config.opds.user || credentials.password !== config.opds.password) {
-                    requireBasicAuth(res);
-                    return;
-                }
-
-                next();
-                return;
-            }
-
-            const scopedUser = String((req.query && req.query.user) || '').trim();
-            if (!scopedUser) {
-                next();
-                return;
-            }
-
-            const auth = await root.webWorker.verifyOpdsPassword(scopedUser, credentials ? credentials.user : '', credentials ? credentials.password : '');
-            if (auth.user && auth.user.opdsAuthEnabled === true && !auth.authorized) {
-                requireBasicAuth(res, `inpx-web OPDS ${auth.user.name || scopedUser}`);
-                return;
-            }
-
-            next();
-        } catch(e) {
-            log(LM_ERR, `OPDS auth: ${e.message}, url: ${req.originalUrl}`);
-            res.status(500).send({error: e.message});
-        }
-    });
+    app.use(opdsPaths, require('./Auth')(config, (...args) => root.webWorker.verifyOpdsPassword(...args), security));
 
     app.get(opdsPaths, opds);
 };

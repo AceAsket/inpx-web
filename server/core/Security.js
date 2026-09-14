@@ -66,6 +66,7 @@ class Security {
         this.config = config;
         this.sessions = new Map();
         this.loginAttempts = new Map();
+        this.lastLoginAttemptSweep = 0;
         this.loginAttemptTotals = new Map();
         this.secret = '';
         this.trustedProxyRanges = (config.trustedProxyCidrs || [])
@@ -469,7 +470,13 @@ class Security {
     }
 
     normalizeLoginKind(kind = 'access') {
-        return String(kind || 'access').trim().toLowerCase() === 'profile' ? 'profile' : 'access';
+        const normalized = String(kind || 'access').trim().toLowerCase();
+        return ['profile', 'opds'].includes(normalized) ? normalized : 'access';
+    }
+
+    loginAttemptKey(req, kind) {
+        const ip = this.clientIp(req) || 'unknown';
+        return kind === 'opds' ? `opds:${ip}` : ip;
     }
 
     incrementLoginMetric(kind = 'access', result = 'failure') {
@@ -477,12 +484,23 @@ class Security {
         this.loginAttemptTotals.set(key, (this.loginAttemptTotals.get(key) || 0) + 1);
     }
 
+    pruneLoginAttempts(now = Date.now()) {
+        if (now - this.lastLoginAttemptSweep < 60000 && this.loginAttempts.size < 10000)
+            return;
+        for (const [key, rec] of this.loginAttempts) {
+            if (now > rec.resetAt)
+                this.loginAttempts.delete(key);
+        }
+        this.lastLoginAttemptSweep = now;
+    }
+
     checkLoginRate(req, kind = 'access') {
         if (this.config.loginRateLimitEnabled === false)
             return;
 
-        const ip = this.clientIp(req) || 'unknown';
+        const ip = this.loginAttemptKey(req, kind);
         const now = Date.now();
+        this.pruneLoginAttempts(now);
         const windowMs = Math.max(60*1000, Number(this.config.loginRateLimitWindowMs || defaultLoginWindowMs));
         const maxAttempts = Math.max(1, Number(this.config.loginRateLimitMaxAttempts || defaultLoginMaxAttempts));
         const rec = this.loginAttempts.get(ip) || {count: 0, resetAt: now + windowMs};
@@ -492,24 +510,31 @@ class Security {
             rec.resetAt = now + windowMs;
         }
 
-        if (rec.count >= maxAttempts) {
+        if (rec.count >= maxAttempts || (!this.loginAttempts.has(ip) && this.loginAttempts.size >= 10000)) {
             this.incrementLoginMetric(kind, 'blocked');
-            throw new Error('Too many login attempts. Try again later.');
+            throw Object.assign(new Error('Too many login attempts. Try again later.'), {
+                code: 'INPX_LOGIN_RATE_LIMIT', retryAfter: Math.max(1, Math.ceil((rec.resetAt - now)/1000)),
+            });
         }
     }
 
     recordLoginAttempt(req, success = false, kind = 'access') {
-        const ip = this.clientIp(req) || 'unknown';
+        const ip = this.loginAttemptKey(req, kind);
         this.incrementLoginMetric(kind, success ? 'success' : 'failure');
         if (this.config.loginRateLimitEnabled === false)
             return;
 
         if (success) {
-            this.loginAttempts.delete(ip);
+            // A known account must not erase failures against other OPDS profiles.
+            if (kind !== 'opds')
+                this.loginAttempts.delete(ip);
             return;
         }
 
         const now = Date.now();
+        this.pruneLoginAttempts(now);
+        if (!this.loginAttempts.has(ip) && this.loginAttempts.size >= 10000)
+            return;
         const windowMs = Math.max(60*1000, Number(this.config.loginRateLimitWindowMs || defaultLoginWindowMs));
         const rec = this.loginAttempts.get(ip) || {count: 0, resetAt: now + windowMs};
         if (now > rec.resetAt) {
@@ -538,7 +563,7 @@ class Security {
         }
 
         const attempts = [];
-        for (const kind of ['access', 'profile']) {
+        for (const kind of ['access', 'profile', 'opds']) {
             for (const result of ['success', 'failure', 'blocked']) {
                 attempts.push({
                     labels: {kind, result},
