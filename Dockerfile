@@ -1,80 +1,19 @@
 # syntax=docker/dockerfile:1.7
 
-ARG NODE_IMAGE=node:18-bookworm-slim
+ARG NODE_IMAGE=node:24-bookworm-slim
 ARG RUNTIME_IMAGE=debian:bookworm-slim
 ARG FB2CNG_VERSION=v1.2.3
 ARG FB2CNG_ARCH=linux-amd64
-ARG PKG_FETCH_VERSION=v3.4
-ARG PKG_NODE_VERSION=v16.16.0
 
 FROM ${NODE_IMAGE} AS build-deps
-
-ARG PKG_FETCH_VERSION
-ARG PKG_NODE_VERSION
 
 WORKDIR /app
 
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     npm ci --ignore-scripts --no-audit --no-fund
-RUN mkdir -p "/root/.pkg-cache/${PKG_FETCH_VERSION}"
-RUN node <<'NODE'
-const fs = require('fs');
-const https = require('https');
-const {setTimeout: sleep} = require('timers/promises');
-
-const version = process.env.PKG_FETCH_VERSION;
-const nodeVersion = process.env.PKG_NODE_VERSION;
-const url = `https://github.com/vercel/pkg-fetch/releases/download/${version}/node-${nodeVersion}-linux-x64`;
-const out = `/root/.pkg-cache/${version}/fetched-${nodeVersion}-linux-x64`;
-
-function download(targetUrl, redirects = 5) {
-    return new Promise((resolve, reject) => {
-        const req = https.get(targetUrl, {headers: {'User-Agent': 'inpx-web-docker-build'}}, (res) => {
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                res.resume();
-                if (redirects <= 0)
-                    reject(new Error(`too many redirects for ${targetUrl}`));
-                else
-                    resolve(download(new URL(res.headers.location, targetUrl).toString(), redirects - 1));
-                return;
-            }
-
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-                res.resume();
-                reject(new Error(`download failed ${res.statusCode} ${targetUrl}`));
-                return;
-            }
-
-            const chunks = [];
-            res.on('data', chunk => chunks.push(chunk));
-            res.on('end', () => resolve(Buffer.concat(chunks)));
-        });
-
-        req.setTimeout(60000, () => req.destroy(new Error(`download timeout ${targetUrl}`)));
-        req.on('error', reject);
-    });
-}
-
-(async() => {
-    let lastError;
-    for (let attempt = 1; attempt <= 5; attempt++) {
-        try {
-            fs.writeFileSync(out, await download(url));
-            return;
-        } catch (err) {
-            lastError = err;
-            console.error(`pkg-fetch download attempt ${attempt} failed: ${err.message}`);
-            await sleep(attempt * 2000);
-        }
-    }
-    throw lastError;
-})().catch((err) => {
-    console.error(err);
-    process.exit(1);
-});
-NODE
-RUN chmod +x "/root/.pkg-cache/${PKG_FETCH_VERSION}/fetched-${PKG_NODE_VERSION}-linux-x64"
+# Let the locked packaging dependency select and verify its matching base binary.
+RUN node -e "require('@yao-pkg/pkg-fetch').need({nodeRange:'node24',platform:'linux',arch:'x64'}).catch(error=>{console.error(error);process.exit(1)})"
 
 FROM build-deps AS build
 

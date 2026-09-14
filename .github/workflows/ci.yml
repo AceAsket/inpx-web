@@ -1,0 +1,44 @@
+name: Validate development changes
+
+on:
+  push:
+    branches: [develop, master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Test and package ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+            extension: ''
+          - os: windows-latest
+            target: win
+            extension: .exe
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run test:release
+      - run: npm run build:${{ matrix.target }}
+      - run: node scripts/binary-smoke-test.js dist/${{ matrix.target }}/inpx-web${{ matrix.extension }}
+      - if: matrix.target == 'linux'
+        run: docker build --target runtime-lite -t inpx-web:ci .
+      - if: matrix.target == 'linux'
+        run: node scripts/binary-smoke-test.js --image inpx-web:ci

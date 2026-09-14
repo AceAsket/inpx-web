@@ -8,3 +8,4 @@ npm-debug.log*
 server/.inpx-web
 server/config/application_env
 tmp
+tmp-*

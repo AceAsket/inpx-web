@@ -2,7 +2,7 @@ const fs = require('fs-extra');
 const path = require('path');
 const yazl = require('yazl');
 
-const showdown = require('showdown');
+const MarkdownIt = require('markdown-it');
 
 const platform = process.argv[2];
 
@@ -52,8 +52,8 @@ async function build() {
 
     // Добавляем README в релиз.
     let readme = await fs.readFile(path.resolve(__dirname, '../README.md'), 'utf-8');
-    const converter = new showdown.Converter();
-    readme = converter.makeHtml(readme);
+    const converter = new MarkdownIt({html: true, linkify: true});
+    readme = converter.render(readme);
     await fs.writeFile(`${outDir}/readme.html`, readme);
 
     // Упаковываем public в public.json для pkg.
