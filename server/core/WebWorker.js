@@ -18,6 +18,8 @@ const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
 const FileDownloader = require('./FileDownloader');
 const ReadingListStore = require('./ReadingListStore');
+const {withFileTransaction} = require('./FilePersistence');
+const sessionLifetime = require('./SessionLifetime');
 const imageUtils = require('./ImageUtils');
 const bookConverter = require('./BookConverter');
 const runtimeMetrics = require('./RuntimeMetrics');
@@ -3492,20 +3494,24 @@ class WebWorker {
     }
 
     createProfileSession(userId) {
+        sessionLifetime.makeRoom(this.profileSessions);
         const token = utils.randomHexString(24);
         this.profileSessions.set(token, {
             userId,
-            time: Date.now(),
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
         });
         return token;
     }
 
     getProfileSessionUser(token = '') {
         const rec = this.profileSessions.get(String(token || '').trim());
-        if (!rec)
+        if (sessionLifetime.expired(rec)) {
+            this.profileSessions.delete(String(token || '').trim());
             return '';
+        }
 
-        rec.time = Date.now();
+        rec.updatedAt = Date.now();
         return rec.userId || '';
     }
 
@@ -3575,19 +3581,18 @@ class WebWorker {
 
     async loginUserProfile(login = '', password = '') {
         this.checkMyState();
-
-        const user = await this.readingListStore.findUserByLogin(login);
-        if (!user || !user.passwordHash)
-            throw new Error('Неверный логин или пароль');
-
-        const passwordHash = this.hashProfilePassword(user.login, password);
-        if (passwordHash !== user.passwordHash)
-            throw new Error('Неверный логин или пароль');
-
-        return {
-            userId: user.id,
-            profileAccessToken: this.createProfileSession(user.id),
-        };
+        return withFileTransaction(this.readingListStore.file, async() => {
+            const user = await this.readingListStore.findUserByLogin(login);
+            if (!user || !user.passwordHash)
+                throw new Error('Неверный логин или пароль');
+            const passwordHash = this.hashProfilePassword(user.login, password);
+            if (passwordHash !== user.passwordHash)
+                throw new Error('Неверный логин или пароль');
+            return {
+                userId: user.id,
+                profileAccessToken: this.createProfileSession(user.id),
+            };
+        });
     }
 
     async createUserProfile(profile = {}) {
@@ -3597,12 +3602,29 @@ class WebWorker {
 
     async updateUserProfile(userId, patch = {}) {
         this.checkMyState();
-        return {user: await this.readingListStore.updateUser(userId, patch)};
+        return withFileTransaction(this.readingListStore.file, async() => {
+            const previous = await this.readingListStore.getUser(userId);
+            const user = await this.readingListStore.updateUser(userId, patch);
+            if (previous.passwordHash !== user.passwordHash || previous.login !== user.login)
+                this.revokeUserSessions(userId);
+            return {user};
+        });
     }
 
     async deleteUserProfile(userId) {
         this.checkMyState();
-        return await this.readingListStore.deleteUser(userId);
+        return withFileTransaction(this.readingListStore.file, async() => {
+            const result = await this.readingListStore.deleteUser(userId);
+            this.revokeUserSessions(userId);
+            return result;
+        });
+    }
+
+    revokeUserSessions(userId) {
+        for (const [token, session] of this.profileSessions) {
+            if (session.userId === userId)
+                this.profileSessions.delete(token);
+        }
     }
 
     async getOpdsUsers() {
@@ -4631,7 +4653,7 @@ class WebWorker {
         this.checkMyState();
         await this.requireAdmin(userId, profileAccessToken);
 
-        const backupDir = path.join(this.config.bookDir, 'backup');
+        const backupDir = path.join(this.config.dataDir, 'backups');
         await fs.ensureDir(backupDir);
 
         const createdAt = new Date();
@@ -4665,7 +4687,7 @@ class WebWorker {
         return {
             success: true,
             fileName,
-            link: `${this.config.bookPathStatic}/backup/${encodeURIComponent(fileName)}`,
+            link: `${String(this.config.rootPathStatic || '').replace(/\/$/, '')}/admin-backups/${encodeURIComponent(fileName)}`,
             createdAt: createdAt.toISOString(),
         };
     }
@@ -4729,7 +4751,10 @@ class WebWorker {
 
             const readingLists = await readJsonEntry('reading-lists.json');
             if (readingLists && typeof readingLists === 'object') {
-                await this.readingListStore.save(readingLists, {rebaseProgressGeneration: true});
+                await withFileTransaction(this.readingListStore.file, async() => {
+                    await this.readingListStore.save(readingLists, {rebaseProgressGeneration: true});
+                    this.profileSessions.clear();
+                });
                 restored.push('reading-lists.json');
             }
 

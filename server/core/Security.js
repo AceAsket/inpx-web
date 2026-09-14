@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs-extra');
 const path = require('path');
+const sessionLifetime = require('./SessionLifetime');
 
 const sessionCookieName = 'inpx_web_session';
 const secretFileName = 'session-secret';
@@ -113,8 +114,13 @@ class Security {
 
             const key = part.slice(0, idx).trim();
             const value = part.slice(idx + 1).trim();
-            if (key)
-                result[key] = decodeURIComponent(value);
+            if (key) {
+                try {
+                    result[key] = decodeURIComponent(value);
+                } catch (e) {
+                    // Ignore malformed cookies instead of failing the request.
+                }
+            }
         }
         return result;
     }
@@ -129,26 +135,34 @@ class Security {
             return '';
 
         const expected = this.sign(sessionId);
-        if (
-            signature.length !== expected.length
-            || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-        ) {
+        if (!timingSafeStringEqual(signature, expected)) {
             return '';
         }
 
         return sessionId;
     }
 
-    ensureSession(req, res = null) {
-        if (req.securitySession)
-            return req.securitySession;
-
+    getSession(req) {
         const cookies = this.parseCookies(req.headers.cookie || '');
-        let sessionId = this.unpackSessionId(cookies[sessionCookieName] || '');
-        let session = sessionId ? this.sessions.get(sessionId) : null;
+        const sessionId = req.securitySession ? req.securitySession.id
+            : this.unpackSessionId(cookies[sessionCookieName] || '');
+        const session = this.sessions.get(sessionId);
+        if (sessionLifetime.expired(session)) {
+            this.sessions.delete(sessionId);
+            delete req.securitySession;
+            return null;
+        }
+        session.updatedAt = Date.now();
+        req.securitySession = session;
+        return session;
+    }
+
+    ensureSession(req, res = null) {
+        let session = this.getSession(req);
 
         if (!session) {
-            sessionId = this.randomToken(24);
+            sessionLifetime.makeRoom(this.sessions);
+            const sessionId = this.randomToken(24);
             session = {
                 id: sessionId,
                 csrfToken: this.randomToken(32),
@@ -165,7 +179,7 @@ class Security {
         if (res) {
             res.setHeader(
                 'Set-Cookie',
-                `${sessionCookieName}=${encodeURIComponent(this.packSessionId(sessionId))}; ${this.cookieOptions(req)}`
+                `${sessionCookieName}=${encodeURIComponent(this.packSessionId(session.id))}; ${this.cookieOptions(req)}`
             );
         }
 
@@ -186,7 +200,16 @@ class Security {
     middleware() {
         return (req, res, next) => {
             this.applySecurityHeaders(req, res);
-            this.ensureSession(req, res);
+            // Only a document navigation needs a new browser session. Polling and
+            // public assets must not allocate a session on every cookie-less hit.
+            const pathname = String(req.path || '/');
+            const root = String(this.config.rootPathStatic || '').replace(/\/$/, '');
+            const documentRequest = pathname === `${root}/` || pathname === root
+                || String(req.headers.accept || '').includes('text/html');
+            if (!this.isHealthPath(req) && !this.isMetricsPath(req) && documentRequest)
+                this.ensureSession(req, res);
+            else
+                this.getSession(req);
             next();
         };
     }
@@ -269,7 +292,8 @@ class Security {
 
     proxyAuthCookieValue(user = '') {
         const normalized = String(user || '').trim();
-        return `${normalized}.${this.sign(`proxy:${normalized}`)}`;
+        const issuedAt = Date.now();
+        return `${normalized}.${issuedAt}.${this.sign(`proxy:${normalized}:${issuedAt}`)}`;
     }
 
     unpackProxyAuthCookie(raw = '') {
@@ -278,9 +302,16 @@ class Security {
         if (splitAt <= 0)
             return '';
 
-        const user = value.slice(0, splitAt);
+        const payload = value.slice(0, splitAt);
+        const timeAt = payload.lastIndexOf('.');
+        if (timeAt <= 0)
+            return '';
+        const user = payload.slice(0, timeAt);
+        const issuedAt = Number(payload.slice(timeAt + 1));
+        if (!Number.isSafeInteger(issuedAt) || issuedAt > Date.now() || Date.now() - issuedAt >= sessionLifetime.maxAgeMs)
+            return '';
         const signature = value.slice(splitAt + 1);
-        const expected = this.sign(`proxy:${user}`);
+        const expected = this.sign(`proxy:${user}:${issuedAt}`);
         return timingSafeStringEqual(signature, expected) ? user : '';
     }
 
@@ -428,7 +459,7 @@ class Security {
         if (!supplied || supplied.length !== session.csrfToken.length)
             return false;
 
-        return crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(session.csrfToken));
+        return timingSafeStringEqual(supplied, session.csrfToken);
     }
 
     clientIp(req) {

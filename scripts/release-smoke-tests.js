@@ -24,6 +24,7 @@ function makeWorker(config = {}) {
         opds: {},
     }, config);
     worker.checkMyState = () => true;
+    worker.profileSessions = new Map();
     worker.requireAdmin = async() => true;
     worker.addAdminEvent = () => {};
     return worker;
@@ -295,13 +296,14 @@ async function testFb2cngConfigAndConversionCache() {
     assert.match(workerSource, /Конвертация книг отключена в текущем образе/);
 }
 
-function request(server, urlPath) {
+function request(server, urlPath, headers = {}) {
     const port = server.address().port;
     return new Promise((resolve, reject) => {
         const req = http.get({
             host: '127.0.0.1',
             port,
             path: urlPath,
+            headers,
         }, (res) => {
             const chunks = [];
             res.on('data', chunk => chunks.push(chunk));
@@ -315,10 +317,12 @@ function request(server, urlPath) {
     });
 }
 
-async function withStaticServer(config, fn) {
+async function withStaticServer(config, fn, worker = null, security = null) {
     const express = require('express');
     const app = express();
-    require('../server/static')(app, Object.assign({rootPathStatic: ''}, config));
+    if (security)
+        app.use(security.middleware());
+    require('../server/static')(app, Object.assign({rootPathStatic: ''}, config), worker, security);
     const server = await createHttpServer(app);
     try {
         return await fn(server);
@@ -822,11 +826,11 @@ async function testAdminBackupArchiveAndDownload() {
         const result = await worker.createAdminBackup('admin', 'token');
         assert.strictEqual(result.success, true);
         assert.match(result.fileName, /^inpx-web-backup-.+\.zip$/);
-        assert.strictEqual(result.link, `/book/backup/${encodeURIComponent(result.fileName)}`);
-        assert.strictEqual(await fs.pathExists(path.join(bookDir, 'backup', result.fileName)), true);
+        assert.strictEqual(result.link, `/admin-backups/${encodeURIComponent(result.fileName)}`);
+        assert.strictEqual(await fs.pathExists(path.join(dataDir, 'backups', result.fileName)), true);
 
         const StreamZip = require('node-stream-zip');
-        const zip = new StreamZip.async({file: path.join(bookDir, 'backup', result.fileName)});
+        const zip = new StreamZip.async({file: path.join(dataDir, 'backups', result.fileName)});
         try {
             const entries = await zip.entries();
             assert.ok(entries['backup-info.json']);
@@ -848,23 +852,55 @@ async function testAdminBackupArchiveAndDownload() {
             await zip.close();
         }
 
+        const Security = require('../server/core/Security');
+        const security = new Security({dataDir});
+        await security.init();
+        worker.profileSessions = new Map();
+        worker.requireAdmin = async(userId) => {
+            if (userId !== 'admin')
+                throw new Error('Admin required');
+        };
+        const sessionHeaders = userId => {
+            const session = security.ensureSession({headers: {}});
+            session.profileAccessToken = worker.createProfileSession(userId);
+            return {cookie: `inpx_web_session=${security.packSessionId(session.id)}`};
+        };
+        const adminHeaders = sessionHeaders('admin');
+        const readerHeaders = sessionHeaders('reader');
+        await fs.outputFile(path.join(bookDir, 'backup', result.fileName), 'legacy-secret');
+
         await withStaticServer({
             bookDir,
             bookPathStatic: '/book',
+            dataDir,
             publicFilesDir: path.join(dir, 'public-files'),
             publicDir: path.join(dir, 'public'),
             tempDir: path.join(dir, 'tmp'),
             libDir: dir,
             librarySources: [],
         }, async(server) => {
-            const ok = await request(server, `/book/backup/${encodeURIComponent(result.fileName)}`);
+            assert.strictEqual((await request(server, result.link)).status, 401);
+            assert.strictEqual((await request(server, result.link, readerHeaders)).status, 403);
+            const ok = await request(server, result.link, adminHeaders);
             assert.strictEqual(ok.status, 200);
             assert.match(ok.headers['content-disposition'] || '', /attachment/);
             assert.ok(ok.body.length > 0);
 
-            const notZip = await request(server, '/book/backup/readme.txt');
+            const expiredHeaders = sessionHeaders('admin');
+            const expiredSession = security.getSession({headers: expiredHeaders});
+            expiredSession.createdAt = Date.now() - 400*24*60*60*1000;
+            assert.strictEqual((await request(server, result.link, expiredHeaders)).status, 401);
+
+            const notZip = await request(server, '/admin-backups/readme.txt', adminHeaders);
             assert.strictEqual(notZip.status, 404);
-        });
+            for (const prefix of ['/book/backup/', '/book/%62ackup/', '/book/BACKUP/', '/book/foo/../backup/', '/book/backup%2f']) {
+                const denied = await request(server, prefix + result.fileName, adminHeaders);
+                assert.strictEqual(denied.status, 403, prefix);
+                assert.ok(!denied.body.includes(Buffer.from('legacy-secret')));
+            }
+            worker.revokeUserSessions('admin');
+            assert.strictEqual((await request(server, result.link, adminHeaders)).status, 401);
+        }, worker, security);
 
         const ReadingListStore = require('../server/core/ReadingListStore');
         const restoreDataDir = path.join(dir, 'restore-data');
@@ -904,12 +940,14 @@ async function testAdminBackupArchiveAndDownload() {
         });
         const preRestoreReset = await restoreWorker.readingListStore.clearReaderProgress('reader');
         assert.strictEqual(preRestoreReset.generation, 1);
+        const preRestoreSession = restoreWorker.createProfileSession('reader');
 
         const restored = await restoreWorker.importAdminBackup('admin', 'token', {
             fileName: result.fileName,
-            contentBase64: (await fs.readFile(path.join(bookDir, 'backup', result.fileName))).toString('base64'),
+            contentBase64: (await fs.readFile(path.join(dataDir, 'backups', result.fileName))).toString('base64'),
         });
         assert.strictEqual(restored.success, true);
+        assert.strictEqual(restoreWorker.getProfileSessionUser(preRestoreSession), '');
         assert.strictEqual(restored.restartRecommended, true);
         assert.ok(restored.restored.includes('config.json'));
         assert.ok(restored.restored.includes('secret.key'));
@@ -1620,6 +1658,7 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
 }
 
 const tests = [
+    ...require('./security-regression-tests'),
     testConfigSecretsSurviveRestart,
     testAppCacheRecoveryBootstrapAndRoute,
     testTitleSearchKeepsIndexedPrefixFallbacks,

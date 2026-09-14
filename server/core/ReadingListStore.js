@@ -1,6 +1,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
+const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 
 const readerPreferencesVersion = 2;
 
@@ -8,8 +9,6 @@ class ReadingListStore {
     constructor(config) {
         this.config = config;
         this.file = path.join(config.dataDir, 'reading-lists.json');
-        this.writeQueue = Promise.resolve();
-        this.progressMutationQueue = Promise.resolve();
     }
 
     makeDefaultData() {
@@ -796,12 +795,7 @@ class ReadingListStore {
                 return await this.rebaseReaderProgressGeneration(snapshot);
             return await this.preserveReaderProgressResetState(snapshot);
         };
-        const write = this.writeQueue.then(
-            async() => await this.writeDataNow(await prepare()),
-            async() => await this.writeDataNow(await prepare()),
-        );
-        this.writeQueue = write.catch(() => {});
-        return await write;
+        return await this.writeDataNow(await prepare());
     }
 
     async rebaseReaderProgressGeneration(data) {
@@ -883,16 +877,11 @@ class ReadingListStore {
     }
 
     async withProgressMutation(task) {
-        const mutation = this.progressMutationQueue.then(task, task);
-        this.progressMutationQueue = mutation.catch(() => {});
-        return await mutation;
+        return await task();
     }
 
     async writeDataNow(data) {
-        await fs.ensureDir(path.dirname(this.file));
-        const tmpFile = `${this.file}.tmp-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-        await fs.writeFile(tmpFile, JSON.stringify(data, null, 2));
-        await fs.rename(tmpFile, this.file);
+        await writeFileAtomic(this.file, JSON.stringify(data, null, 2));
     }
 
     async getSharedDiscoveryConfig() {
@@ -1077,6 +1066,9 @@ class ReadingListStore {
 
         const nextName = this.validateUserName(utilsHasProp(patch, 'name') ? patch.name : target.name);
         const nextLogin = this.validateLogin(utilsHasProp(patch, 'login') ? patch.login : target.login);
+        if (nextLogin !== target.login && target.passwordHash
+            && (!String(patch.passwordHash || '').trim() || patch.passwordHash === target.passwordHash))
+            throw new Error('Для смены логина укажите пароль заново');
         this.ensureUniqueUserName(data.users, nextName, target.id);
         this.ensureUniqueUserLogin(data.users, nextLogin, target.id);
 
@@ -1952,6 +1944,17 @@ class ReadingListStore {
 
 function utilsHasProp(obj, prop) {
     return !!obj && Object.prototype.hasOwnProperty.call(obj, prop);
+}
+
+// Every asynchronous store operation may read or change the persisted state (even
+// load can bootstrap it). Keep its entire call tree in one reentrant transaction.
+for (const name of Object.getOwnPropertyNames(ReadingListStore.prototype)) {
+    const method = ReadingListStore.prototype[name];
+    if (method.constructor.name === 'AsyncFunction') {
+        ReadingListStore.prototype[name] = function(...args) {
+            return withFileTransaction(this.file, () => method.apply(this, args));
+        };
+    }
 }
 
 module.exports = ReadingListStore;

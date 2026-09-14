@@ -42,23 +42,43 @@ class SecretStore {
         return (typeof(value) === 'string' && value.startsWith(encryptedPrefix));
     }
 
-    async getKey() {
-        if (this.key)
-            return this.key;
+    async getKey(create = true) {
+        let raw;
+        try {
+            raw = await fs.readFile(this.keyFile, 'utf8');
+        } catch (error) {
+            if (error.code !== 'ENOENT')
+                throw error;
+            if (!create)
+                throw new Error('Secret key is missing; restore secret.key from backup');
 
-        await fs.ensureDir(path.dirname(this.keyFile));
-        if (await fs.pathExists(this.keyFile)) {
-            const raw = String(await fs.readFile(this.keyFile, 'utf8')).trim();
-            this.key = Buffer.from(raw, 'base64');
-        } else {
-            this.key = crypto.randomBytes(32);
-            await fs.writeFile(this.keyFile, this.key.toString('base64'), {mode: 0o600});
+            await fs.ensureDir(path.dirname(this.keyFile));
+            const temporary = `${this.keyFile}.tmp-${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+            try {
+                const handle = await require('fs').promises.open(temporary, 'wx', 0o600);
+                try {
+                    await handle.writeFile(crypto.randomBytes(32).toString('base64'));
+                    await handle.sync();
+                } finally {
+                    await handle.close();
+                }
+                // Publish a complete key without overwriting another process's winner.
+                try {
+                    await fs.link(temporary, this.keyFile);
+                } catch (linkError) {
+                    if (linkError.code !== 'EEXIST')
+                        throw linkError;
+                }
+            } finally {
+                await fs.remove(temporary);
+            }
+            raw = await fs.readFile(this.keyFile, 'utf8');
         }
 
-        if (this.key.length !== 32)
+        const key = Buffer.from(String(raw).trim(), 'base64');
+        if (key.length !== 32)
             throw new Error('Invalid secret key length');
-
-        return this.key;
+        return key;
     }
 
     async encrypt(value) {
@@ -92,7 +112,7 @@ class SecretStore {
         if (!ivRaw || !tagRaw || !dataRaw)
             throw new Error('Invalid encrypted secret format');
 
-        const key = await this.getKey();
+        const key = await this.getKey(false);
         const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivRaw, 'base64'));
         decipher.setAuthTag(Buffer.from(tagRaw, 'base64'));
 

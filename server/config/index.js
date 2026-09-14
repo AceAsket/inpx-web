@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs-extra');
 const os = require('os');
 const SecretStore = require('../core/SecretStore');
+const {withFileTransaction, writeFileAtomic} = require('../core/FilePersistence');
 
 const branchFilename = __dirname + '/application_env';
 
@@ -253,9 +254,12 @@ class ConfigManager {
         if (!this.inited)
             throw new Error('not inited');
 
-        const secretStore = new SecretStore(this._config);
-        const dataToSave = await secretStore.protectConfig(_.pick(this._config, propsToSave));
-        await fs.writeFile(this._config.configFile, JSON.stringify(dataToSave, null, 4));
+        const snapshot = _.cloneDeep(this._config);
+        await withFileTransaction(snapshot.configFile, async() => {
+            const secretStore = new SecretStore(snapshot);
+            const dataToSave = await secretStore.protectConfig(_.pick(snapshot, propsToSave));
+            await writeFileAtomic(snapshot.configFile, JSON.stringify(dataToSave, null, 4));
+        });
     }
 }
 

@@ -443,7 +443,7 @@ async function extractBookCover(libid, config, sourceId = '') {
     return null;
 }
 
-module.exports = (app, config, webWorker = null) => {
+module.exports = (app, config, webWorker = null, security = null) => {
     /*
     config.bookPathStatic = `${config.rootPathStatic}/book`;
     config.bookDir = `${config.publicFilesDir}/book`;
@@ -556,22 +556,46 @@ module.exports = (app, config, webWorker = null) => {
         await sendCover(req, res, '', req.params.libid);
     });
 
-    //загрузка или восстановление файлов в /public-files, при необходимости
-    app.get(`${config.bookPathStatic}/backup/:fileName`, async(req, res) => {
-        const fileName = path.basename(String(req.params.fileName || '').trim());
-        if (!fileName || path.extname(fileName).toLowerCase() !== '.zip') {
-            res.sendStatus(404);
-            return;
+    // Older versions put secrets under the public book directory. Block those
+    // paths before every book handler, including express.static and encoded URLs.
+    app.use(config.bookPathStatic, (req, res, next) => {
+        let pathname;
+        try {
+            pathname = path.posix.normalize('/' + decodeURIComponent(req.path).replace(/\\/g, '/')).toLowerCase();
+        } catch (e) {
+            return res.sendStatus(400);
         }
+        if (pathname === '/backup' || pathname.startsWith('/backup/'))
+            return res.sendStatus(403);
+        next();
+    });
 
-        const backupFile = path.join(config.bookDir, 'backup', fileName);
-        if (!await fs.pathExists(backupFile)) {
-            res.sendStatus(404);
-            return;
-        }
-
+    app.get(`${webAppRoutePrefix}/admin-backups/:fileName`, async(req, res, next) => {
         res.set('Cache-Control', 'no-store');
-        res.download(backupFile, fileName);
+        const session = security && security.getSession(req);
+        const token = session && session.profileAccessToken;
+        const userId = token && webWorker && webWorker.getProfileSessionUser(token);
+        if (!userId)
+            return res.sendStatus(401);
+        try {
+            await webWorker.requireAdmin(userId, token);
+        } catch (e) {
+            return res.sendStatus(403);
+        }
+        const fileName = path.basename(String(req.params.fileName || '').trim());
+        if (!fileName || fileName !== req.params.fileName || path.extname(fileName).toLowerCase() !== '.zip') {
+            res.sendStatus(404);
+            return;
+        }
+
+        try {
+            const backupFile = path.join(config.dataDir, 'backups', fileName);
+            if (!await fs.pathExists(backupFile))
+                return res.sendStatus(404);
+            res.download(backupFile, fileName);
+        } catch (error) {
+            next(error);
+        }
     });
 
     app.get(`${config.bookPathStatic}/by-uid`, async(req, res) => {
