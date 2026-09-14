@@ -19,6 +19,10 @@ const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir',
 
 function applyEnvSecurityOverrides(targetConfig) {
     for (const [field, variable] of Object.entries({
+        wsMessageLimitMb: 'INPX_WS_MESSAGE_LIMIT_MB',
+        importLimitMb: 'INPX_IMPORT_LIMIT_MB',
+        backupUploadLimitMb: 'INPX_BACKUP_UPLOAD_LIMIT_MB',
+        backupExpandedLimitMb: 'INPX_BACKUP_EXPANDED_LIMIT_MB',
         conversionConcurrency: 'INPX_CONVERSION_CONCURRENCY',
         conversionQueueLimit: 'INPX_CONVERSION_QUEUE_LIMIT',
         conversionTimeoutMs: 'INPX_CONVERSION_TIMEOUT_MS',
@@ -218,7 +222,7 @@ async function main() {
     const server = http.createServer(app);
     const wss = new WebSocket.Server({
         server,
-        maxPayload: config.maxPayloadSize*1024*1024,
+        maxPayload: require('./core/RequestLimits').transportLimit(config),
         verifyClient: (info, done) => {
             done(security.verifyWebSocket(info.req), 403, 'Forbidden');
         },

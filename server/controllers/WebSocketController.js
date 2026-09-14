@@ -22,10 +22,15 @@ class WebSocketController {
         this.webWorker = new WebWorker(config);
 
         this.wss = wss;
+        this.activeRequests = 0;
 
         wss.on('connection', (ws, req) => {
             ws.req = req;
-            ws.on('message', (message) => {
+            ws.on('message', (message, isBinary) => {
+                if (isBinary) {
+                    ws.close(1003, 'Text JSON required');
+                    return;
+                }
                 this.onMessage(ws, message.toString());
             });
 
@@ -57,6 +62,16 @@ class WebSocketController {
     }
 
     async onMessage(ws, message) {
+        const messageBytes = Buffer.byteLength(message);
+        const large = messageBytes > require('../core/RequestLimits').limits(this.config).message;
+        if ((ws.activeRequests || 0) >= 8 || (this.activeRequests || 0) >= 64 || (large && this.largeRequestActive)) {
+            ws.close(1013, 'Too many active requests');
+            return;
+        }
+        ws.activeRequests = (ws.activeRequests || 0) + 1;
+        this.activeRequests = (this.activeRequests || 0) + 1;
+        if (large)
+            this.largeRequestActive = true;
         let req = {};
         let metricToken = null;
         let metricOk = false;
@@ -66,6 +81,7 @@ class WebSocketController {
             }
 
             req = JSON.parse(message);
+            require('../core/RequestLimits').checkRequest(req, messageBytes, this.config);
             req.__startTime = Date.now();
             metricToken = runtimeMetrics.beginAction(req.action);
             if (!req.profileAccessToken && this.security && ws.req && ws.req.securitySession && ws.req.securitySession.profileAccessToken)
@@ -238,8 +254,12 @@ class WebSocketController {
             }
             metricOk = true;
         } catch (e) {
-            this.send({error: e.message}, req, ws);
+            this.send({error: e.message}, req || {}, ws);
         } finally {
+            ws.activeRequests--;
+            this.activeRequests--;
+            if (large)
+                this.largeRequestActive = false;
             runtimeMetrics.endAction(metricToken, metricOk);
         }
     }
@@ -730,10 +750,11 @@ class WebSocketController {
     async createUserProfile(req, ws) {
         await this.webWorker.requireAdmin(req.userId, req.profileAccessToken);
         const profile = Object.assign({}, req.profile || {});
+        delete profile.passwordHash;
         if (profile.password && !String(profile.login || '').trim())
             throw new Error('Для пароля нужно указать логин');
         if (profile.password)
-            profile.passwordHash = this.webWorker.hashProfilePassword(profile.login, profile.password);
+            profile.passwordHash = await this.webWorker.hashProfilePassword(profile.login, profile.password);
         delete profile.password;
 
         const result = await this.webWorker.createUserProfile(profile);
@@ -754,11 +775,12 @@ class WebSocketController {
         }
 
         const profile = Object.assign({}, req.profile || {});
+        delete profile.passwordHash;
         const passwordLogin = String(profile.login || target.login || '').trim();
         if (profile.password && !passwordLogin)
             throw new Error('Для пароля нужно указать логин');
         if (profile.password)
-            profile.passwordHash = this.webWorker.hashProfilePassword(passwordLogin, profile.password);
+            profile.passwordHash = await this.webWorker.hashProfilePassword(passwordLogin, profile.password);
         delete profile.password;
         delete profile.isAdmin;
 

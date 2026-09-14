@@ -1,6 +1,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
+const profilePassword = require('./ProfilePassword');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 
 const readerPreferencesVersion = 2;
@@ -80,12 +81,6 @@ class ReadingListStore {
         return String(this.config.adminPassword || 'admin');
     }
 
-    hashProfilePassword(login, password) {
-        return crypto.createHash('sha256')
-            .update(`${String(login || '').trim().toLowerCase()}::${String(password || '')}`, 'utf8')
-            .digest('hex');
-    }
-
     makeAdminUser() {
         const now = this.nowIso();
         const login = this.adminLogin();
@@ -93,7 +88,7 @@ class ReadingListStore {
             id: 'admin',
             name: 'Администратор',
             login,
-            passwordHash: this.hashProfilePassword(login, this.adminPassword()),
+            passwordHash: '',
             emailTo: '',
             telegramChatId: '',
             opdsEnabled: false,
@@ -679,7 +674,7 @@ class ReadingListStore {
         };
     }
 
-    applyAdminBootstrap(data) {
+    async applyAdminBootstrap(data) {
         const source = this.normalizeData(data);
         const users = [...source.users];
         let changed = false;
@@ -688,6 +683,7 @@ class ReadingListStore {
         let admin = users.find((item) => item.isAdmin) || users.find((item) => item.id === adminTemplate.id) || null;
 
         if (!admin) {
+            adminTemplate.passwordHash = await profilePassword.hash(this.adminPassword());
             users.unshift(adminTemplate);
             changed = true;
         } else {
@@ -707,7 +703,7 @@ class ReadingListStore {
 
             if (!admin.passwordHash || this.config.resetAdminPassword) {
                 admin.login = adminTemplate.login;
-                admin.passwordHash = adminTemplate.passwordHash;
+                admin.passwordHash = await profilePassword.hash(this.adminPassword());
                 admin.updatedAt = this.nowIso();
                 changed = true;
             }
@@ -757,9 +753,10 @@ class ReadingListStore {
             await this.save(raw);
         }
 
-        const {data, changed} = this.applyAdminBootstrap(raw);
+        const {data, changed} = await this.applyAdminBootstrap(raw);
         if (changed)
             await this.writeData(data);
+        this.config.resetAdminPassword = false;
         return data;
     }
 
@@ -1026,11 +1023,22 @@ class ReadingListStore {
             return {user, authorized: false};
 
         const normalizedLogin = this.normalizeLogin(login);
-        const passwordHash = this.hashProfilePassword(user.login, password);
         return {
             user,
-            authorized: normalizedLogin === user.login && passwordHash === user.passwordHash,
+            authorized: normalizedLogin === user.login && await this.verifyUserPassword(user.id, password),
         };
+    }
+
+    async verifyUserPassword(userId, password) {
+        const data = await this.load();
+        const user = data.users.find(item => item.id === userId);
+        if (!user || !user.passwordHash || !await profilePassword.verify(user.passwordHash, user.login, password))
+            return false;
+        if (profilePassword.isLegacy(user.passwordHash)) {
+            user.passwordHash = await profilePassword.hash(password);
+            await this.save(data);
+        }
+        return true;
     }
 
     async createUser(profile = {}) {
@@ -1066,7 +1074,7 @@ class ReadingListStore {
 
         const nextName = this.validateUserName(utilsHasProp(patch, 'name') ? patch.name : target.name);
         const nextLogin = this.validateLogin(utilsHasProp(patch, 'login') ? patch.login : target.login);
-        if (nextLogin !== target.login && target.passwordHash
+        if (nextLogin !== target.login && profilePassword.isLegacy(target.passwordHash)
             && (!String(patch.passwordHash || '').trim() || patch.passwordHash === target.passwordHash))
             throw new Error('Для смены логина укажите пароль заново');
         this.ensureUniqueUserName(data.users, nextName, target.id);
@@ -1831,6 +1839,7 @@ class ReadingListStore {
     }
 
     async importData(userId = '', payload) {
+        require('./RequestLimits').checkImport(payload, this.config);
         if (!payload || !Array.isArray(payload.lists))
             throw new Error('Некорректный файл импорта списков');
 

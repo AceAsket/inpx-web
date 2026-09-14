@@ -5,18 +5,23 @@ const crypto = require('crypto');
 
 const context = new AsyncLocalStorage();
 const queues = new Map();
+const blocked = new Set();
 
 // Serialize whole operations, including their reads, across instances in this process.
 // Nested store calls join the current operation instead of waiting on themselves.
 function withFileTransaction(file, task) {
     const key = path.resolve(file);
     const current = context.getStore();
-    if (current && current.active && current.key === key)
-        return task();
+    for (let parent = current; parent; parent = parent.parent) {
+        if (parent.active && parent.key === key)
+            return task();
+    }
 
     const previous = queues.get(key) || Promise.resolve();
     const operation = previous.catch(() => {}).then(() => {
-        const scope = {key, active: true};
+        if (blocked.has(key))
+            throw new Error('Восстановление данных прервано; требуется перезапуск для восстановления из журнала');
+        const scope = {key, active: true, parent: current};
         return context.run(scope, async() => {
             try {
                 return await task();
@@ -51,4 +56,15 @@ async function writeFileAtomic(file, data) {
     }
 }
 
-module.exports = {withFileTransaction, writeFileAtomic};
+function withFileTransactions(files, task) {
+    const keys = [...new Set(files.map(file => path.resolve(file)))].sort();
+    const next = (index) => index === keys.length ? task() : withFileTransaction(keys[index], () => next(index + 1));
+    return next(0);
+}
+
+function blockFileTransactions(files) {
+    for (const file of files)
+        blocked.add(path.resolve(file));
+}
+
+module.exports = {withFileTransaction, withFileTransactions, writeFileAtomic, blockFileTransactions};

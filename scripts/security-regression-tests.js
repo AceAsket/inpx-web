@@ -135,17 +135,19 @@ async function testProfileCredentialChangesRevokeSessions() {
         worker.checkMyState = () => {};
         worker.profileSessions = new Map();
         worker.readingListStore = new ReadingListStore({dataDir});
-        const user = await worker.readingListStore.createUser({name: 'Reader', login: 'reader', passwordHash: worker.hashProfilePassword('reader', 'old')});
+        const user = await worker.readingListStore.createUser({name: 'Reader', login: 'reader',
+            passwordHash: require('../server/core/ProfilePassword').legacy('reader', 'old')});
+        await assert.rejects(worker.updateUserProfile(user.id, {login: 'renamed'}), /пароль заново/);
         const login = await worker.loginUserProfile('reader', 'old');
         await worker.updateUserProfile(user.id, {login: 'reader', name: 'Changed name'});
         assert.strictEqual(worker.getProfileSessionUser(login.profileAccessToken), user.id);
-        await assert.rejects(worker.updateUserProfile(user.id, {login: 'renamed'}), /пароль заново/);
+        assert.match((await worker.readingListStore.getUser(user.id)).passwordHash, /^scrypt:v1:/);
         await worker.loginUserProfile('reader', 'old');
-        await worker.updateUserProfile(user.id, {passwordHash: worker.hashProfilePassword('reader', 'new')});
+        await worker.updateUserProfile(user.id, {passwordHash: await worker.hashProfilePassword('reader', 'new')});
         await assert.rejects(worker.requireAuthorizedUser(user.id, login.profileAccessToken), /need_profile_login/);
         await assert.rejects(worker.loginUserProfile('reader', 'old'), /Неверный/);
         const current = await worker.loginUserProfile('reader', 'new');
-        await worker.updateUserProfile(user.id, {login: 'renamed', passwordHash: worker.hashProfilePassword('renamed', 'new')});
+        await worker.updateUserProfile(user.id, {login: 'renamed'});
         assert.strictEqual(worker.getProfileSessionUser(current.profileAccessToken), '');
         const renamed = await worker.loginUserProfile('renamed', 'new');
         worker.profileSessions.get(renamed.profileAccessToken).updatedAt = Date.now() - lifetime.idleMs - 1;

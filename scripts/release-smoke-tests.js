@@ -810,7 +810,8 @@ async function testAdminBackupArchiveAndDownload() {
             lists: [{id: 'list-1', userId: 'reader', name: 'Reading', books: [{bookUid: 'book:1', read: false}]}],
         });
         await fs.writeJson(path.join(dataDir, 'discovery-cache.json'), {items: []});
-        await fs.writeFile(path.join(dataDir, 'secret.key'), 'secret');
+        const backupSecretKey = require('crypto').randomBytes(32).toString('base64');
+        await fs.writeFile(path.join(dataDir, 'secret.key'), backupSecretKey);
         await fs.ensureDir(path.join(dataDir, 'db'));
         await fs.writeFile(path.join(dataDir, 'db', 'index.json'), '{}');
 
@@ -952,8 +953,10 @@ async function testAdminBackupArchiveAndDownload() {
         assert.ok(restored.restored.includes('config.json'));
         assert.ok(restored.restored.includes('secret.key'));
         assert.ok(restored.restored.includes('reading-lists.json'));
-        assert.strictEqual((await fs.readJson(restoreConfigFile)).opds.password, 'full-backup-secret');
-        assert.strictEqual((await fs.readFile(path.join(restoreDataDir, 'secret.key'), 'utf8')), 'secret');
+        const restoredSecrets = await new (require('../server/core/SecretStore'))({dataDir: restoreDataDir})
+            .unprotectConfig(await fs.readJson(restoreConfigFile));
+        assert.strictEqual(restoredSecrets.config.opds.password, 'full-backup-secret');
+        assert.strictEqual((await fs.readFile(path.join(restoreDataDir, 'secret.key'), 'utf8')), backupSecretKey);
 
         const restoredLists = await restoreWorker.readingListStore.load();
         const restoredReader = restoredLists.users.find(user => user.id === 'reader');
@@ -1658,6 +1661,7 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
 }
 
 const tests = [
+    ...require('./audit-stage4-tests'),
     ...require('./resource-limit-tests'),
     ...require('./dependency-smoke-tests'),
     ...require('./security-regression-tests'),

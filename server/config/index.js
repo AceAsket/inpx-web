@@ -9,6 +9,10 @@ const branchFilename = __dirname + '/application_env';
 
 const propsToSave = [
     'dataDir',
+    'wsMessageLimitMb',
+    'importLimitMb',
+    'backupUploadLimitMb',
+    'backupExpandedLimitMb',
     'tempDir',
     'logDir',
     'libDir',
@@ -203,6 +207,11 @@ class ConfigManager {
             if (!this.inited)
                 throw new Error('not inited');
 
+            let recoveryDir = this._config.dataDir;
+            if (await fs.pathExists(this._config.configFile))
+                recoveryDir = (await fs.readJson(this._config.configFile)).dataDir || recoveryDir;
+            await require('../core/BackupTransaction').recover({...this._config, dataDir: recoveryDir});
+
             if (await fs.pathExists(this._config.configFile)) {
                 const data = JSON.parse(await fs.readFile(this._config.configFile, 'utf8'));
                 const rawConfig = _.pick(data, propsToSave);
@@ -258,8 +267,8 @@ class ConfigManager {
         if (!this.inited)
             throw new Error('not inited');
 
-        const snapshot = _.cloneDeep(this._config);
-        await withFileTransaction(snapshot.configFile, async() => {
+        await withFileTransaction(this._config.configFile, async() => {
+            const snapshot = _.cloneDeep(this._config);
             const secretStore = new SecretStore(snapshot);
             const dataToSave = await secretStore.protectConfig(_.pick(snapshot, propsToSave));
             await writeFileAtomic(snapshot.configFile, JSON.stringify(dataToSave, null, 4));

@@ -1197,8 +1197,8 @@ class WebWorker {
     async saveDiscoveryDiskCache() {
         if (!this.discoveryDiskCacheFile)
             this.discoveryDiskCacheFile = path.join(this.config.dataDir, 'discovery-cache.json');
-        await fs.ensureDir(path.dirname(this.discoveryDiskCacheFile));
-        await fs.writeFile(this.discoveryDiskCacheFile, JSON.stringify(this.discoveryDiskCache || {}, null, 2));
+        await withFileTransaction(this.discoveryDiskCacheFile, () =>
+            require('./FilePersistence').writeFileAtomic(this.discoveryDiskCacheFile, JSON.stringify(this.discoveryDiskCache || {}, null, 2)));
     }
 
     async rememberPersistedDiscovery(key, loader, ttl = discoveryCacheTtl, options = {}) {
@@ -3490,7 +3490,7 @@ class WebWorker {
     }
 
     hashProfilePassword(login, password) {
-        return utils.getBufHash(`${String(login || '').trim().toLowerCase()}::${String(password || '')}`, 'sha256', 'hex');
+        return require('./ProfilePassword').hash(password);
     }
 
     createProfileSession(userId) {
@@ -3585,8 +3585,7 @@ class WebWorker {
             const user = await this.readingListStore.findUserByLogin(login);
             if (!user || !user.passwordHash)
                 throw new Error('Неверный логин или пароль');
-            const passwordHash = this.hashProfilePassword(user.login, password);
-            if (passwordHash !== user.passwordHash)
+            if (!await this.readingListStore.verifyUserPassword(user.id, password))
                 throw new Error('Неверный логин или пароль');
             return {
                 userId: user.id,
@@ -4372,10 +4371,21 @@ class WebWorker {
     }
 
     async saveRuntimeConfigPatch(patch = {}) {
-        Object.assign(this.config, patch);
-        const configManager = new ConfigManager();
-        configManager.config = this.config;
-        await configManager.save();
+        return withFileTransaction(this.config.configFile, async() => {
+            const configManager = new ConfigManager();
+            const previous = _.cloneDeep(this.config);
+            try {
+                Object.assign(this.config, patch);
+                configManager.config = this.config;
+                await configManager.save();
+            } catch (error) {
+                for (const key of Object.keys(patch))
+                    delete this.config[key];
+                Object.assign(this.config, previous);
+                configManager.config = this.config;
+                throw error;
+            }
+        });
     }
 
     normalizeIntegrationPatch(patch = {}) {
@@ -4593,6 +4603,7 @@ class WebWorker {
     }
 
     normalizeImportedAdminSettings(payload = {}) {
+        require('./RequestLimits').checkImport(payload, this.config);
         const source = (payload && payload.settings && typeof payload.settings === 'object')
             ? payload.settings
             : payload;
@@ -4652,6 +4663,14 @@ class WebWorker {
     async createAdminBackup(userId = '', profileAccessToken = '') {
         this.checkMyState();
         await this.requireAdmin(userId, profileAccessToken);
+        const {withFileTransactions} = require('./FilePersistence');
+        const files = Object.values(require('./BackupTransaction').targets(this.config));
+        return withFileTransactions(files, () => this.createAdminBackupSnapshot(userId, profileAccessToken));
+    }
+
+    async createAdminBackupSnapshot(userId = '', profileAccessToken = '') {
+        this.checkMyState();
+        await this.requireAdmin(userId, profileAccessToken);
 
         const backupDir = path.join(this.config.dataDir, 'backups');
         await fs.ensureDir(backupDir);
@@ -4696,89 +4715,65 @@ class WebWorker {
         this.checkMyState();
         await this.requireAdmin(userId, profileAccessToken);
 
-        const rawBase64 = String((payload && (payload.contentBase64 || payload.data)) || '').trim()
-            .replace(/^data:[^,]+,/, '');
-        if (!rawBase64)
-            throw new Error('Файл бэкапа не передан');
-
-        const backupBuffer = Buffer.from(rawBase64, 'base64');
-        if (!backupBuffer.length)
-            throw new Error('Файл бэкапа пустой');
-
-        const tempDir = this.config.tempDir || os.tmpdir();
-        await fs.ensureDir(tempDir);
-        const tempFile = path.join(tempDir, `admin-backup-${utils.randomHexString(12)}.zip`);
-        const zipReader = new ZipReader();
-
+        const transaction = require('./BackupTransaction');
+        const {withFileTransactions} = require('./FilePersistence');
+        const tempRoot = this.config.tempDir || os.tmpdir();
+        await fs.ensureDir(tempRoot);
+        const folder = await fs.mkdtemp(path.join(tempRoot, 'admin-restore-'));
         try {
-            await fs.writeFile(tempFile, backupBuffer);
-            await zipReader.open(tempFile, true);
-
-            const entryByName = new Map();
-            for (const entry of Object.values(zipReader.entries || {})) {
-                if (!entry || entry.isDirectory)
-                    continue;
-                entryByName.set(String(entry.name || '').replace(/\\/g, '/').replace(/^\/+/, ''), entry.name);
-            }
-
-            if (!entryByName.has('backup-info.json') || (!entryByName.has('config.json') && !entryByName.has('reading-lists.json')))
-                throw new Error('Файл не похож на полный бэкап inpx-web');
-
-            const readEntry = async(name) => {
-                const entryName = entryByName.get(name);
-                return entryName ? await zipReader.extractToBuf(entryName) : null;
-            };
-            const readJsonEntry = async(name) => {
-                const data = await readEntry(name);
-                return data ? JSON.parse(data.toString('utf8')) : null;
-            };
-
-            const restored = [];
-            const configData = await readJsonEntry('config.json');
-            if (configData && typeof configData === 'object' && !Array.isArray(configData)) {
-                await fs.ensureDir(path.dirname(this.config.configFile));
-                await fs.writeFile(this.config.configFile, JSON.stringify(configData, null, 4));
-                Object.assign(this.config, this.normalizeImportedAdminSettings(configData));
-                restored.push('config.json');
-            }
-
-            const secretKey = await readEntry('secret.key');
-            if (secretKey) {
-                await fs.ensureDir(this.config.dataDir);
-                await fs.writeFile(path.join(this.config.dataDir, 'secret.key'), secretKey);
-                restored.push('secret.key');
-            }
-
-            const readingLists = await readJsonEntry('reading-lists.json');
-            if (readingLists && typeof readingLists === 'object') {
-                await withFileTransaction(this.readingListStore.file, async() => {
-                    await this.readingListStore.save(readingLists, {rebaseProgressGeneration: true});
-                    this.profileSessions.clear();
-                });
-                restored.push('reading-lists.json');
-            }
-
-            const discoveryCache = await readJsonEntry('discovery-cache.json');
-            if (discoveryCache && typeof discoveryCache === 'object') {
-                await fs.ensureDir(this.config.dataDir);
-                await fs.writeFile(path.join(this.config.dataDir, 'discovery-cache.json'), JSON.stringify(discoveryCache, null, 2));
-                this.discoveryCache = null;
-                restored.push('discovery-cache.json');
-            }
-
-            if (!restored.length)
-                throw new Error('В бэкапе не найдено данных для восстановления');
-
-            this.addAdminEvent('warn', 'settings', `Восстановлен полный бэкап: ${restored.join(', ')}`);
-            return {
-                success: true,
-                restored,
-                restartRecommended: true,
-                message: 'Полный бэкап восстановлен. Перезапустите приложение, чтобы настройки и ключи точно перечитались. Если менялись источники библиотек, выполните переиндексацию.',
-            };
+            const archive = await require('./BackupArchive').read(payload, this.config, folder);
+            return await withFileTransactions(Object.values(transaction.targets(this.config)), async() => {
+                // Recheck after waiting for earlier writes or another restore.
+                await this.requireAdmin(userId, profileAccessToken);
+                const content = {};
+                let runtimePatch = null;
+                if (archive['config.json']) {
+                    const SecretStore = require('./SecretStore');
+                    const sourceKey = archive['secret.key'];
+                    if (sourceKey) {
+                        await fs.writeFile(path.join(folder, 'secret.key'), sourceKey, {mode: 0o600});
+                        content['secret.key'] = sourceKey;
+                    } else {
+                        const currentKey = path.join(this.config.dataDir, 'secret.key');
+                        if (await fs.pathExists(currentKey))
+                            await fs.copy(currentKey, path.join(folder, 'secret.key'));
+                    }
+                    const secretStore = new SecretStore({dataDir: folder});
+                    const {config: decoded} = await secretStore.unprotectConfig(archive['config.json']);
+                    this.normalizeImportedAdminSettings(decoded);
+                    // Keep machine-local storage paths, including the recovery journal location.
+                    runtimePatch = Object.assign(_.pick(decoded, ConfigManager.propsToSave), {
+                        dataDir: this.config.dataDir, tempDir: this.config.tempDir, logDir: this.config.logDir,
+                    });
+                    const protectedConfig = await secretStore.protectConfig(runtimePatch);
+                    if (await fs.pathExists(path.join(folder, 'secret.key')))
+                        content['secret.key'] = await fs.readFile(path.join(folder, 'secret.key'));
+                    content['config.json'] = JSON.stringify(protectedConfig, null, 4);
+                }
+                if (archive['reading-lists.json']) {
+                    const normalized = this.readingListStore.normalizeData(archive['reading-lists.json']);
+                    const rebased = await this.readingListStore.rebaseReaderProgressGeneration(normalized);
+                    content['reading-lists.json'] = JSON.stringify(rebased, null, 2);
+                }
+                if (archive['discovery-cache.json'])
+                    content['discovery-cache.json'] = JSON.stringify(archive['discovery-cache.json'], null, 2);
+                await transaction.commit(this.config, content);
+                if (runtimePatch)
+                    Object.assign(this.config, runtimePatch);
+                this.profileSessions.clear();
+                if (archive['discovery-cache.json']) {
+                    this.discoveryCache = new Map();
+                    this.discoveryDiskCache = archive['discovery-cache.json'];
+                }
+                const restored = Object.keys(content);
+                this.addAdminEvent('warn', 'settings', 'Восстановлен полный бэкап: ' + restored.join(', '));
+                return {
+                    success: true, restored, restartRecommended: true,
+                    message: 'Полный бэкап восстановлен. Перезапустите приложение для применения всех настроек. При смене библиотек выполните переиндексацию.',
+                };
+            });
         } finally {
-            await zipReader.close().catch(() => {});
-            await fs.remove(tempFile);
+            await fs.remove(folder);
         }
     }
 
