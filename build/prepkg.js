@@ -48,6 +48,8 @@ async function build() {
     if (!platform)
         throw new Error(`Please set platform`);
 
+    require('./patch-pkg')();
+
     await fs.emptyDir(outDir);
 
     // Добавляем README в релиз.

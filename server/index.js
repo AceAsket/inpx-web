@@ -100,6 +100,11 @@ async function init() {
 
     //dirs
     config.dataDir = config.dataDir || argvDataDir || `${config.execDir}/.${config.name}`;
+    await fs.ensureDir(config.dataDir);
+    // Expand Windows 8.3 aliases before JembaDb watches its lock directory.
+    // Node 24's fs.watch can abort the process for paths containing RUNNER~1 etc.
+    if (process.platform === 'win32')
+        config.dataDir = await require('util').promisify(require('fs').realpath.native)(config.dataDir);
     config.tempDir = config.tempDir || `${config.dataDir}/tmp`;
     if (config.tempDir === '${OS}')
         config.tempDir = `${os.tmpdir()}/${config.name}`
@@ -114,7 +119,6 @@ async function init() {
 
     configManager.config = config;
 
-    await fs.ensureDir(config.dataDir);
     await fs.ensureDir(config.bookDir);
     await fs.ensureDir(config.coverDir);
     await fs.ensureDir(config.tempDir);
