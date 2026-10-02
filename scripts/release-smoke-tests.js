@@ -1661,6 +1661,7 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
 }
 
 const tests = [
+    ...require('./profile-access-tests'),
     ...require('./audit-stage4-tests'),
     ...require('./resource-limit-tests'),
     ...require('./dependency-smoke-tests'),

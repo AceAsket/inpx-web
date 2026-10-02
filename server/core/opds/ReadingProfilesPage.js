@@ -11,7 +11,9 @@ class ReadingProfilesPage extends BasePage {
     async body(req) {
         const result = {};
         const entry = [];
-        const users = await this.webWorker.getOpdsUsers();
+        let users = await this.webWorker.getOpdsUsers();
+        if (req.profileAccessIdentity && req.profileAccessIdentity.user)
+            users = users.filter(user => user.id === req.profileAccessIdentity.user.id);
 
         for (const item of users) {
             entry.push(

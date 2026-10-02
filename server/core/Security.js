@@ -219,8 +219,6 @@ class Security {
         return (req, res, next) => {
             const result = this.verifyRequiredAuth(req);
             if (result.ok) {
-                if (result.user)
-                    this.setProxyAuthCookie(req, res, result.user);
                 next();
                 return;
             }
@@ -357,7 +355,8 @@ class Security {
     }
 
     verifyRequiredAuth(req) {
-        if (!this.config.requireAuth)
+        const mode = String(this.config.authMode || 'local').trim().toLowerCase();
+        if (!this.config.requireAuth && !(mode === 'proxy' && this.config.proxyBindProfile))
             return {ok: true};
 
         if (this.config.authExemptHealth !== false && this.isHealthPath(req))
@@ -366,7 +365,6 @@ class Security {
         if (this.isMetricsAuthExempt(req))
             return {ok: true};
 
-        const mode = String(this.config.authMode || 'local').trim().toLowerCase();
         if (mode === 'none')
             return {ok: true};
 
@@ -374,9 +372,6 @@ class Security {
             const user = this.getProxyAuthUser(req);
             if (user)
                 return {ok: true, user};
-
-            if (this.isTrustedProxy(req) && this.hasLocalProxyAuthCookie(req))
-                return {ok: true};
 
             return this.isTrustedProxy(req)
                 ? {ok: false, status: 401, message: 'Proxy authentication required'}

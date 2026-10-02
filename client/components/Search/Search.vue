@@ -52,6 +52,7 @@
                                         emit-value
                                         map-options
                                         :options="userProfileOptions"
+                                        :disable="!!config.profileBoundId"
                                         label="Профиль"
                                         style="min-width: 180px"
                                         @update:model-value="selectUserProfile"
@@ -1070,6 +1071,7 @@ class Search {
         return users.map((item) => ({
             label: item.name,
             value: item.id,
+            disable: !!(this.config.profileLoginRequired && item.anonymousProfile),
         }));
     }
 

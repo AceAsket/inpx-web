@@ -66,7 +66,10 @@
                 {{ uiText.availableProfiles }}
             </div>
 
-            <div v-if="!canViewAllProfiles" class="profile-session-actions">
+            <div v-if="config.profileBoundId" class="admin-note">
+                Профиль выбран по вашему входу через SSO. Для смены пользователя выйдите из SSO.
+            </div>
+            <div v-else-if="!canViewAllProfiles" class="profile-session-actions">
                 <q-btn flat dense no-caps color="primary" icon="la la-sign-in-alt" @click="loginOtherProfile">
                     {{ uiText.loginOtherProfile }}
                 </q-btn>
@@ -98,7 +101,7 @@
                             <span v-if="item.requiresLogin && !item.isAdmin" class="lock-badge">{{ uiText.login }}</span>
                         </div>
                         <div class="profile-actions">
-                            <q-btn v-if="profiles.length > 1" flat dense no-caps color="primary" @click="selectProfile(item)">
+                            <q-btn v-if="profiles.length > 1" :disable="!!config.profileBoundId && item.id !== config.profileBoundId" flat dense no-caps color="primary" @click="selectProfile(item)">
                                 {{ uiText.select }}
                             </q-btn>
                             <q-btn
@@ -336,7 +339,7 @@
 
                         <div v-else-if="currentProfileTab === 'settings'" class="profile-grid profile-edit-grid">
                             <q-input v-model="editableProfile.name" outlined dense :label="uiText.name" />
-                            <q-input v-model="editableProfile.login" outlined dense clearable :label="uiText.login" />
+                            <q-input v-model="editableProfile.login" :disable="!!config.profileBoundId" outlined dense clearable :label="uiText.login" />
                             <q-input
                                 v-model="editableProfile.password"
                                 outlined

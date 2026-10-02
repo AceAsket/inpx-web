@@ -4562,6 +4562,8 @@ class WebWorker {
             'loginRateLimitWindowMs',
             'loginRateLimitMaxAttempts',
             'requireAuth',
+            'allowAnonymousAccess',
+            'proxyBindProfile',
             'authMode',
             'trustProxy',
             'proxyAuthHeader',

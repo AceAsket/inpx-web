@@ -20,6 +20,7 @@ class WebSocketController {
 
         this.workerState = new WorkerState();
         this.webWorker = new WebWorker(config);
+        this.profileAccess = security ? new (require('../core/ProfileAccess'))(config, this.webWorker, security) : null;
 
         this.wss = wss;
         this.activeRequests = 0;
@@ -110,6 +111,9 @@ class WebSocketController {
                 this.send({error: 'bad_csrf_token'}, req, ws);
                 return;
             }
+
+            if (this.profileAccess)
+                await this.profileAccess.prepareWebSocket(req, ws.req);
 
             //api
             switch (req.action) {
@@ -367,7 +371,18 @@ class WebSocketController {
     }
 
     async getConfig(req, ws) {
+        if (req.profileLoginRequired) {
+            const config = _.pick(this.config, ['name', 'version', 'branch', 'dbVersion', 'rootPathStatic']);
+            Object.assign(config, {profileLoginRequired: true, profileAuthorized: false, userProfiles: [],
+                currentUserId: '', currentUserProfile: null, freeAccess: this.webAccess.freeAccess});
+            if (this.security)
+                config.csrfToken = this.security.getCsrfToken(ws.req);
+            this.send(config, req, ws);
+            return;
+        }
         const config = _.pick(this.config, this.config.webConfigParams);
+        config.profileLoginRequired = this.config.allowAnonymousAccess === false;
+        config.profileBoundId = req.profileBoundId || '';
         config.librarySources = (Array.isArray(this.config.librarySources) ? this.config.librarySources : []).map(source => ({
             id: source.id || '',
             name: source.name || source.id || '',
@@ -384,7 +399,7 @@ class WebSocketController {
         config.freeAccess = this.webAccess.freeAccess;
         const profiles = await this.webWorker.getUserProfiles(req.userId);
         const currentProfile = await this.webWorker.getCurrentUserProfile(req.userId, req.profileAccessToken);
-        config.userProfiles = profiles.users;
+        config.userProfiles = this.profileAccess ? this.profileAccess.filterProfiles(profiles.users, req) : profiles.users;
         config.currentUserId = currentProfile.currentUserId || profiles.currentUserId;
         config.currentUserProfile = currentProfile.currentUserProfile;
         config.profileAuthorized = currentProfile.profileAuthorized;
@@ -419,6 +434,11 @@ class WebSocketController {
     }
 
     async getWorkerState(req, ws) {
+        if (req.profileLoginRequired) {
+            const state = this.workerState.getState('server_state') || {};
+            this.send({state: state.state || 'normal', serverMessage: state.state === 'normal' ? '' : 'Подготовка библиотеки'}, req, ws);
+            return;
+        }
         if (!req.workerId)
             throw new Error(`key 'workerId' is empty`);
 
@@ -715,6 +735,8 @@ class WebSocketController {
 
     async getUserProfiles(req, ws) {
         const result = await this.webWorker.getUserProfiles(req.userId);
+        if (this.profileAccess)
+            result.users = this.profileAccess.filterProfiles(result.users, req);
         this.send(result, req, ws);
     }
 

@@ -52,6 +52,8 @@ module.exports = {
     loginRateLimitWindowMs: 15*60*1000,
     loginRateLimitMaxAttempts: 8,
     requireAuth: process.env.INPX_REQUIRE_AUTH === 'true',
+    allowAnonymousAccess: process.env.INPX_ALLOW_ANONYMOUS_ACCESS !== 'false',
+    proxyBindProfile: process.env.INPX_PROXY_BIND_PROFILE === 'true',
     authMode: String(process.env.INPX_AUTH_MODE || 'local').trim().toLowerCase(),
     trustProxy: process.env.INPX_TRUST_PROXY === 'true',
     proxyAuthHeader: process.env.INPX_PROXY_AUTH_HEADER || 'Remote-User',

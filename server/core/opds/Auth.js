@@ -17,6 +17,8 @@ function parseBasicAuth(header = '') {
 module.exports = function opdsAuth(config, verifyPassword, security) {
     return async(req, res, next) => {
         try {
+            if (req.opdsAuthorized)
+                return next();
             const credentials = parseBasicAuth(req.headers.authorization);
             const attempted = !!req.headers.authorization;
             const scopedUser = String((req.query && req.query.user) || '').trim();
@@ -46,6 +48,7 @@ module.exports = function opdsAuth(config, verifyPassword, security) {
                 res.set('Cache-Control', 'no-store');
                 return res.status(401).send('Authentication required');
             }
+            req.opdsAuthorized = true;
             next();
         } catch (error) {
             if (error.code === 'INPX_LOGIN_RATE_LIMIT') {
@@ -57,3 +60,6 @@ module.exports = function opdsAuth(config, verifyPassword, security) {
         }
     };
 };
+
+module.exports.parseBasicAuth = parseBasicAuth;
+module.exports.equal = equal;

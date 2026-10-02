@@ -84,6 +84,7 @@ module.exports = function(app, config, security = new (require('../Security'))(c
 
     const opdsPaths = [opdsRoot, `${opdsRoot}/*`];
 
+    app.use(opdsPaths, new (require('../ProfileAccess'))(config, root.webWorker, security).httpGuard(true));
     app.use(opdsPaths, require('./Auth')(config, (...args) => root.webWorker.verifyOpdsPassword(...args), security));
 
     app.get(opdsPaths, opds);

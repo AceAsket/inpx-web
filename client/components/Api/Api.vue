@@ -187,12 +187,27 @@ class Api {
         this.profileAccessToken = resolvedSettings.profileAccessToken;
     }
 
-    async updateConfig() {
+    async updateConfig(options = {}) {
         try {
             this.loadSettings();
             const config = await this.getConfig();
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
+            if (config.profileLoginRequired && !config.profileAuthorized) {
+                if (options.skipProfileLogin)
+                    return;
+                if (!this.profileLoginPromise) {
+                    this.profileLoginPromise = this.showProfileLoginDialog('', {required: true});
+                    try {
+                        await this.profileLoginPromise;
+                    } finally {
+                        this.profileLoginPromise = null;
+                    }
+                } else {
+                    await this.profileLoginPromise;
+                }
+                return;
+            }
             const selectedUserId = String(this.settings.currentUserId || this.currentUserId || '').trim();
             const preferredProfile = Array.isArray(config.userProfiles)
                 ? (
@@ -341,7 +356,7 @@ class Api {
                     if (this.profileLoginPromise) {
                         await this.profileLoginPromise;
                     } else {
-                        this.profileLoginPromise = this.showProfileLoginDialog();
+                        this.profileLoginPromise = this.showProfileLoginDialog('', {required: !!this.$store.state.config.profileLoginRequired});
                         try {
                             await this.profileLoginPromise;
                         } finally {
@@ -352,7 +367,7 @@ class Api {
                     this.accessGranted = true;
                     await this.showBusyDialog();
                 } else if (response && response.error == 'bad_csrf_token') {
-                    await this.updateConfig();
+                    await this.updateConfig({skipProfileLogin: !!this.profileLoginPromise});
                 } else {
                     this.accessGranted = true;
                     if (response.error) {
@@ -659,18 +674,30 @@ class Api {
             dialogClass: opts.dialogClass || '',
             dialogStyle: opts.dialogStyle || null,
         };
-        const loginPrompt = await this.$root.stdDialog.profileLogin(
-            'Введите логин и пароль профиля:',
-            'Вход в профиль',
-            Object.assign({}, dialogOpts, {
-                login: prefillLogin || current.login || '',
-            }),
-        );
-        if (!loginPrompt || loginPrompt === false)
-            throw new Error('Вход в профиль отменён');
-
-        const login = String(loginPrompt.login || '').trim();
-        const result = await this.loginUserProfile(login, String(loginPrompt.password || ''));
+        let result;
+        let login = prefillLogin || current.login || '';
+        while (!result) {
+            const loginPrompt = await this.$root.stdDialog.profileLogin(
+                'Введите логин и пароль профиля:',
+                'Вход в профиль',
+                Object.assign({}, dialogOpts, {
+                    login,
+                    noCancel: opts.required === true,
+                    noEscDismiss: opts.required === true,
+                    noBackdropDismiss: opts.required === true,
+                }),
+            );
+            if (!loginPrompt || loginPrompt === false)
+                throw new Error('Вход в профиль отменён');
+            login = String(loginPrompt.login || '').trim();
+            try {
+                result = await this.loginUserProfile(login, String(loginPrompt.password || ''));
+            } catch (error) {
+                if (!opts.required)
+                    throw error;
+                await this.$root.stdDialog.alert(error.message, 'Ошибка входа');
+            }
+        }
         this.commit('setSettings', {
             currentUserId: result.userId,
             profileAccessToken: result.profileAccessToken || '',

@@ -450,6 +450,10 @@ module.exports = (app, config, webWorker = null, security = null) => {
     */
     const webAppBasePath = normalizeWebAppBasePath(config.rootPathStatic);
     const webAppRoutePrefix = (webAppBasePath === '/' ? '' : webAppBasePath.slice(0, -1));
+    if (webWorker && security) {
+        const guard = new (require('./core/ProfileAccess'))(config, webWorker, security).httpGuard();
+        app.use([config.bookPathStatic, `${webAppRoutePrefix}/cover`, `${webAppRoutePrefix}/reader-lab-source`, `${webAppRoutePrefix}/admin-backups`], guard);
+    }
     app.get(`${webAppRoutePrefix}/app-reset`, (req, res) => {
         res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.set('Pragma', 'no-cache');
@@ -573,7 +577,8 @@ module.exports = (app, config, webWorker = null, security = null) => {
     app.get(`${webAppRoutePrefix}/admin-backups/:fileName`, async(req, res, next) => {
         res.set('Cache-Control', 'no-store');
         const session = security && security.getSession(req);
-        const token = session && session.profileAccessToken;
+        const identity = req.profileAccessIdentity;
+        const token = identity ? identity.token : session && session.profileAccessToken;
         const userId = token && webWorker && webWorker.getProfileSessionUser(token);
         if (!userId)
             return res.sendStatus(401);
