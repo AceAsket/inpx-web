@@ -23,6 +23,7 @@ const sessionLifetime = require('./SessionLifetime');
 const imageUtils = require('./ImageUtils');
 const epubRestorer = require('./EpubRestorer');
 const externalTools = require('./ExternalTools');
+const libraryReviews = require('./LibraryReviews');
 const bookConverter = require('./BookConverter');
 const runtimeMetrics = require('./RuntimeMetrics');
 
@@ -642,14 +643,9 @@ class WebWorker {
             this.fb2Helper = new Fb2Helper();
             this.profileSessions = new Map();
             this.inpxFileHash = '';
-            this.authorInfoCache = new Map();
             this.discoveryCache = new Map();
             this.sharedDiscoveryConfig = null;
-            this.authorInfoArchives = null;
-            this.authorPictureArchives = null;
-            this.authorToArchive = null;
-            this.reviewArchives = null;
-            this.reviewToArchives = null;
+            this.resetLibraryAssetCaches();
             this.cacheCleanTimer = null;
             this.cacheCleanRunning = false;
 
@@ -864,6 +860,7 @@ class WebWorker {
             db.wwCache = {};            
             this.db = db;
 
+            this.resetLibraryAssetCaches();
             this.setMyState(ssNormal);
 
             log('Searcher DB ready');
@@ -885,6 +882,16 @@ class WebWorker {
         await this.closeDb();
 
         await this.loadOrCreateDb(true);
+    }
+
+    resetLibraryAssetCaches() {
+        this.libraryAssetGeneration = (this.libraryAssetGeneration || 0) + 1;
+        this.fblibraryArchives = {};
+        this.authorInfoCache = new Map();
+        this.authorInfoArchives = null;
+        this.authorPictureArchives = null;
+        this.authorToArchive = null;
+        this.reviewArchiveStates = new Map();
     }
 
     async dbConfig() {
@@ -5985,35 +5992,26 @@ class WebWorker {
         return result;
     }
 
-    async getReviewArchives(sourceLibDir = '') {
+    async getReviewArchiveState(sourceLibDir = '') {
         const libDir = sourceLibDir || this.config.libDir;
-        if (!this.reviewArchives)
-            this.reviewArchives = {};
+        const dirs = [
+            ...await this.resolveLibraryAssetDirs('reviews', libDir),
+            ...await this.resolveLibraryAssetDirs('etc/reviews', libDir),
+        ];
+        const state = await libraryReviews.snapshot(dirs);
+        // Include the source even when no review directories exist.
+        state.signature = utils.getBufHash(`${path.resolve(libDir)}:${state.signature}`, 'sha256', 'hex');
+        if (!this.reviewArchiveStates)
+            this.reviewArchiveStates = new Map();
+        const cached = this.reviewArchiveStates.get(libDir);
+        if (cached && cached.signature === state.signature)
+            return cached;
+        this.reviewArchiveStates.set(libDir, state);
+        return state;
+    }
 
-        if (this.reviewArchives[libDir] !== undefined)
-            return this.reviewArchives[libDir];
-
-        const reviewsDir = await this.resolveLibraryAssetDir('reviews', libDir);
-        const result = [];
-
-        if (!await fs.pathExists(reviewsDir)) {
-            this.reviewArchives[libDir] = result;
-            return result;
-        }
-
-        const files = await fs.readdir(reviewsDir);
-        for (const file of files.sort()) {
-            if (!/\.(7z|zip)$/i.test(file))
-                continue;
-
-            result.push({
-                id: path.basename(file, path.extname(file)),
-                file: `${reviewsDir}/${file}`,
-            });
-        }
-
-        this.reviewArchives[libDir] = result;
-        return result;
+    async getReviewArchives(sourceLibDir = '') {
+        return (await this.getReviewArchiveState(sourceLibDir)).archives;
     }
 
     metadataBookUid(book = {}) {
@@ -6050,19 +6048,20 @@ class WebWorker {
         return result;
     }
 
-    async ensureReviewIndex(sourceLibDir = '') {
-        const libDir = sourceLibDir || this.config.libDir;
-        if (!this.reviewToArchives)
-            this.reviewToArchives = {};
+    async ensureReviewIndex(sourceLibDir = '', state = null) {
+        state = state || await this.getReviewArchiveState(sourceLibDir);
+        if (!state.indexPromise)
+            state.indexPromise = this.createReviewIndex(state.archives);
+        return state.indexPromise;
+    }
 
-        if (this.reviewToArchives[libDir])
-            return this.reviewToArchives[libDir];
-
+    async createReviewIndex(archives) {
         const reviewToArchives = new Map();
-        const archives = await this.getReviewArchives(libDir);
 
         for (const archive of archives) {
-            const zipReader = new ZipReader();
+            if (archive.id.toLowerCase() === 'additional')
+                continue;
+            const zipReader = new ZipReader(this.config);
             try {
                 await zipReader.open(archive.file);
                 for (const item of Object.values(zipReader.entries || {})) {
@@ -6070,9 +6069,11 @@ class WebWorker {
                     if (!entryName || item.isDirectory)
                         continue;
 
-                    const list = reviewToArchives.get(entryName) || [];
+                    const key = libraryReviews.normalizeEntryKey(entryName);
+                    if (!key) continue;
+                    const list = reviewToArchives.get(key) || [];
                     list.push({archive: archive.file, entryName});
-                    reviewToArchives.set(entryName, list);
+                    reviewToArchives.set(key, list);
                 }
             } catch(e) {
                 log(LM_WARN, `review archive ${archive.file}: ${e.message}`);
@@ -6081,18 +6082,18 @@ class WebWorker {
             }
         }
 
-        this.reviewToArchives[libDir] = reviewToArchives;
         return reviewToArchives;
     }
 
-    async getBookReviews(book) {
-        const entryKey = `${book.folder}#${book.file}.${book.ext}`;
-        const reviewIndex = await this.ensureReviewIndex(book.sourceLibDir);
+    async getBookReviews(book, state = null) {
+        const entryKey = libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`);
+        const reviewIndex = await this.ensureReviewIndex(book.sourceLibDir, state);
         const matches = reviewIndex.get(entryKey) || [];
         const reviews = [];
+        const seen = new Set();
 
         for (const match of matches) {
-            const zipReader = new ZipReader();
+            const zipReader = new ZipReader(this.config);
             try {
                 await zipReader.open(match.archive, false);
                 const raw = await zipReader.extractToBuf(match.entryName);
@@ -6104,11 +6105,16 @@ class WebWorker {
                     if (!item || typeof(item) !== 'object')
                         continue;
 
-                    reviews.push({
+                    const review = {
                         name: String(item.name || '').trim() || 'Аноним',
                         time: String(item.time || '').trim(),
                         text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
-                    });
+                    };
+                    const key = JSON.stringify(review);
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        reviews.push(review);
+                    }
                 }
             } catch(e) {
                 log(LM_WARN, `review entry ${match.archive}:${match.entryName}: ${e.message}`);
@@ -6118,6 +6124,40 @@ class WebWorker {
         }
 
         return reviews;
+    }
+
+    async getBookLibraryRating(book, state = null) {
+        state = state || await this.getReviewArchiveState(book.sourceLibDir);
+        if (!state.ratingsPromise)
+            state.ratingsPromise = this.readLibraryRatings(state.archives);
+        const ratings = await state.ratingsPromise;
+        return ratings.get(libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`)) || null;
+    }
+
+    async readLibraryRatings(archives) {
+        const ratings = new Map();
+        for (const archive of archives.filter(item => item.id.toLowerCase() === 'additional')) {
+            const reader = new ZipReader(this.config);
+            try {
+                await reader.open(archive.file, false);
+                const rows = JSON.parse(decodeArchiveText(await reader.extractToBuf('books.json')));
+                if (!Array.isArray(rows)) continue;
+                for (const row of rows) {
+                    if (!row || typeof row.folder !== 'string' || typeof row.file !== 'string'
+                        || !Number.isFinite(row.sum) || !Number.isSafeInteger(row.count)
+                        || row.count <= 0 || row.sum <= 0 || row.sum > row.count * 5)
+                        continue;
+                    const key = libraryReviews.entryKey(row.folder, row.file);
+                    if (!ratings.has(key))
+                        ratings.set(key, {value: row.sum / row.count, count: row.count});
+                }
+            } catch (error) {
+                log(LM_WARN, `library ratings ${archive.file}: ${error.message}`);
+            } finally {
+                await reader.close();
+            }
+        }
+        return ratings;
     }
 
     async getBookInfo(bookUid) {
@@ -6135,6 +6175,12 @@ class WebWorker {
             if (!rows.length)
                 throw new Error('404 Файл не найден');
             const book = rows[0];
+            const reviewState = await this.getReviewArchiveState(book.sourceLibDir);
+            const refreshReviews = async(info) => {
+                info.reviews = await this.getBookReviews(book, reviewState);
+                info.libraryRating = await this.getBookLibraryRating(book, reviewState);
+                info.reviewSignature = reviewState.signature;
+            };
 
             const restoreBookInfo = async(info) => {
                 const result = {};
@@ -6161,7 +6207,7 @@ class WebWorker {
                     }
                 }
 
-                result.reviews = await this.getBookReviews(book);
+                await refreshReviews(result);
 
                 Object.assign(info, result);
 
@@ -6188,6 +6234,11 @@ class WebWorker {
                     await restoreBookInfo(bookInfo);
                 } else {
                     bookInfo = tmpInfo;
+                    bookInfo.book = book;
+                    if (tmpInfo.reviewSignature !== reviewState.signature) {
+                        await refreshReviews(bookInfo);
+                        await fs.writeJson(bookFileInfo, bookInfo);
+                    }
                 }
             }
 

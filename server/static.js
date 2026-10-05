@@ -15,6 +15,8 @@ const Fb2Helper = require('./core/fb2/Fb2Helper');
 const log = new (require('./core/AppLogger'))().log;//singleton
 let coverArchives = null;
 let bookArchives = null;
+let coverArchivesKey = '';
+let bookArchivesKey = '';
 const runtimeWarnings = new Set();
 const fb2Helper = new Fb2Helper();
 
@@ -90,11 +92,16 @@ function libraryToolDirs(sourceLibDir = '', config) {
     ]));
 }
 
-async function getCoverArchives(config) {
-    if (coverArchives && coverArchives.length)
+function libraryArchivesKey(config, generation) {
+    return JSON.stringify([generation, getEnabledLibrarySources(config).map(source => [source.id, source.libDir || config.libDir])]);
+}
+
+async function getCoverArchives(config, generation = 0) {
+    const key = libraryArchivesKey(config, generation);
+    if (coverArchives && coverArchives.length && coverArchivesKey === key)
         return coverArchives;
 
-    coverArchives = [];
+    const result = [];
     for (const source of getEnabledLibrarySources(config)) {
         const coverDirs = resolveLibraryAssetDirs('covers', source.libDir, config);
         for (const coverDir of coverDirs) {
@@ -107,7 +114,7 @@ async function getCoverArchives(config) {
                 if (!match)
                     continue;
 
-                coverArchives.push({
+                result.push({
                     file: `${coverDir}/${file}`,
                     from: parseInt(match[1], 10),
                     to: parseInt(match[2], 10),
@@ -118,8 +125,10 @@ async function getCoverArchives(config) {
         }
     }
 
-    coverArchives.sort((a, b) => a.from - b.from);
-    return coverArchives;
+    result.sort((a, b) => a.from - b.from);
+    coverArchives = result;
+    coverArchivesKey = key;
+    return result;
 }
 
 async function addBookArchivesFromDir(result, dir, source, config) {
@@ -142,11 +151,12 @@ async function addBookArchivesFromDir(result, dir, source, config) {
     }
 }
 
-async function getBookArchives(config) {
-    if (bookArchives && bookArchives.length)
+async function getBookArchives(config, generation = 0) {
+    const key = libraryArchivesKey(config, generation);
+    if (bookArchives && bookArchives.length && bookArchivesKey === key)
         return bookArchives;
 
-    bookArchives = [];
+    const result = [];
     for (const source of getEnabledLibrarySources(config)) {
         const libDir = normalizeLibraryDir(source.libDir || config.libDir);
         if (!await fs.pathExists(libDir))
@@ -159,7 +169,7 @@ async function getBookArchives(config) {
                 return;
 
             scanned.add(key);
-            await addBookArchivesFromDir(bookArchives, dir, source, config);
+            await addBookArchivesFromDir(result, dir, source, config);
         };
 
         for (const dir of [libDir, `${libDir}/fb2`, `${libDir}/books`, `${libDir}/archives`])
@@ -172,8 +182,10 @@ async function getBookArchives(config) {
         }
     }
 
-    bookArchives.sort((a, b) => a.from - b.from);
-    return bookArchives;
+    result.sort((a, b) => a.from - b.from);
+    bookArchives = result;
+    bookArchivesKey = key;
+    return result;
 }
 
 function coverCacheKey(libid, sourceId = '') {
@@ -411,8 +423,8 @@ async function extractCoverFromNestedZip(data, config, sourceLibDir, libid) {
     return null;
 }
 
-async function extractBookCover(libid, config, sourceId = '') {
-    const archives = matchingArchivesBySpecificity(await getBookArchives(config), libid, sourceId);
+async function extractBookCover(libid, config, sourceId = '', generation = 0) {
+    const archives = matchingArchivesBySpecificity(await getBookArchives(config, generation), libid, sourceId);
     for (const archive of archives) {
         const zipReader = new ZipReader();
         try {
@@ -496,7 +508,8 @@ module.exports = (app, config, webWorker = null, security = null) => {
             if (await sendCachedCover(res, cacheDir, libid, normalizedSourceId))
                 return;
 
-            const archives = matchingArchivesBySpecificity(await getCoverArchives(config), libid, normalizedSourceId);
+            const generation = webWorker ? webWorker.libraryAssetGeneration || 0 : 0;
+            const archives = matchingArchivesBySpecificity(await getCoverArchives(config, generation), libid, normalizedSourceId);
             for (const archive of archives) {
                 const zipReader = new ZipReader();
                 await zipReader.open(archive.file, false);
@@ -524,7 +537,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
                 }
             }
 
-            const embeddedCover = await extractBookCover(libid, config, normalizedSourceId);
+            const embeddedCover = await extractBookCover(libid, config, normalizedSourceId, generation);
             if (embeddedCover) {
                 await writeCachedCover(cacheDir, libid, embeddedCover, normalizedSourceId);
 

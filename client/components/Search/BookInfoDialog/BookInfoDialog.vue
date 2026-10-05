@@ -15,6 +15,9 @@
             <div>
                 <b class="info-link" @click.stop.prevent="emitNavigate('title', book.title)">{{ book.title }}</b>
             </div>
+            <div v-if="libraryRating" class="text-grey-7 q-mt-xs">
+                Оценка читателей: {{ libraryRating.value.toFixed(2) }}/5 · голосов: {{ libraryRating.count }}
+            </div>
             <div v-if="book.series" class="q-mt-xs info-series-link" @click.stop.prevent="emitNavigate('series', book.series)">
                 {{ seriesLabel }}: {{ book.series }}<span v-if="book.serno"> #{{ book.serno }}</span>
             </div>
@@ -203,7 +206,7 @@
             </div>
         </div>
 
-        <div v-if="selectedTab == 'fb2' && reviews.length" class="reviews-block q-mt-md">
+        <div v-if="['fb2', 'inpx'].includes(selectedTab) && reviews.length" class="reviews-block q-mt-md">
             <div class="text-blue section-label q-mb-sm">
                 Отзывы читателей
             </div>
@@ -322,6 +325,7 @@ class BookInfoDialog {
     fb2Images = [];
     annotationMeta = null;
     reviews = [];
+    libraryRating = null;
     book = {};
     authorInfo = null;
     authorInfoLoading = false;
@@ -340,6 +344,7 @@ class BookInfoDialog {
         this.fb2Images = [];
         this.annotationMeta = null;
         this.reviews = [];
+        this.libraryRating = null;
         this.book = {};
         this.authorInfo = null;
         this.authorInfoLoading = false;
@@ -704,6 +709,7 @@ class BookInfoDialog {
         this.authorInfo = (bookInfo.authorInfo ? bookInfo.authorInfo : null);
         this.annotationMeta = (bookInfo.annotationMeta ? bookInfo.annotationMeta : null);
         this.reviews = (Array.isArray(bookInfo.reviews) ? bookInfo.reviews : []);
+        this.libraryRating = bookInfo.libraryRating || null;
 
         if (bookInfo.cover)
             this.coverSrc = bookInfo.cover;
