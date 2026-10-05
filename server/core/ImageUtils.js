@@ -6,7 +6,8 @@ const utils = require('./utils');
 const externalTools = require('./ExternalTools');
 
 function contentType(buf) {
-    if (buf.length >= 2 && buf[0] == 0xff && buf[1] == 0x0a)
+    if ((buf.length >= 2 && buf[0] == 0xff && buf[1] == 0x0a)
+        || (buf.length >= 12 && buf.subarray(0, 12).equals(Buffer.from('0000000c4a584c200d0a870a', 'hex'))))
         return 'image/jxl';
 
     if (buf.length >= 8 && buf[0] == 0x89 && buf[1] == 0x50 && buf[2] == 0x4e && buf[3] == 0x47)

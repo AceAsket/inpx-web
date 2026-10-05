@@ -199,5 +199,13 @@ async function testInvalidCompressedEpubDoesNotPublishPartialResults() {
     });
 }
 
-module.exports = [testCompressedEpubDownloadsRestoreImagesAndInvalidateCache,
+async function testJxlCodestreamAndContainerImagesAreRecognized() {
+    const imageUtils = require('../server/core/ImageUtils');
+    assert.strictEqual(imageUtils.contentType(Buffer.from('ff0a00112233', 'hex')), 'image/jxl');
+    assert.strictEqual(imageUtils.contentType(Buffer.from('0000000c4a584c200d0a870a00000014667479706a786c20', 'hex')), 'image/jxl');
+    assert.strictEqual(imageUtils.contentType(png), 'image/png');
+    assert.strictEqual(imageUtils.contentType(Buffer.from('ffd8ffe000104a464946', 'hex')), 'image/jpeg');
+}
+
+module.exports = [testJxlCodestreamAndContainerImagesAreRecognized, testCompressedEpubDownloadsRestoreImagesAndInvalidateCache,
     testEpubContainersPreserveResourcesAndOrdinaryEpubBytes, testInvalidCompressedEpubDoesNotPublishPartialResults];
