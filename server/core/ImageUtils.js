@@ -1,4 +1,5 @@
 const fs = require('fs-extra');
+const path = require('path');
 const {spawn} = require('child_process');
 
 const utils = require('./utils');
@@ -72,10 +73,10 @@ function shouldSkipToolError(err, command) {
     return /MZ[\s\S]*(?:not found|Syntax error)/i.test(stderr);
 }
 
-async function jxlToPng(buf, tempDir, toolDirs = [], converterPaths = null) {
+async function jxlToImage(buf, tempDir, toolDirs = [], converterPaths = null, extension = 'png') {
     const id = utils.randomHexString(30);
     const inputFile = `${tempDir}/${id}.jxl`;
-    const outputFile = `${tempDir}/${id}.png`;
+    const outputFile = `${tempDir}/${id}.${extension}`;
 
     try {
         await fs.writeFile(inputFile, buf);
@@ -103,6 +104,23 @@ async function jxlToPng(buf, tempDir, toolDirs = [], converterPaths = null) {
         await fs.remove(inputFile);
         await fs.remove(outputFile);
     }
+}
+
+async function jxlToPng(buf, tempDir, toolDirs = [], converterPaths = null) {
+    return await jxlToImage(buf, tempDir, toolDirs, converterPaths);
+}
+
+async function normalizeForEpub(buf, fileName, tempDir, toolDirs = [], converterPaths = null) {
+    const extension = path.extname(fileName).slice(1).toLowerCase();
+    const type = contentType(buf);
+    if (type === 'image/jxl') {
+        if (!['png', 'jpg', 'jpeg'].includes(extension))
+            throw new Error(`Неподдерживаемый формат изображения EPUB: ${fileName}`);
+        return await jxlToImage(buf, tempDir, toolDirs, converterPaths, extension);
+    }
+    if (type === 'image/webp' && extension === 'png')
+        return await webpToPng(buf, tempDir, toolDirs, converterPaths);
+    return buf;
 }
 
 async function webpToPng(buf, tempDir, toolDirs = [], converterPaths = null) {
@@ -153,4 +171,5 @@ module.exports = {
     jxlToPng,
     webpToPng,
     normalizeForFb2,
+    normalizeForEpub,
 };

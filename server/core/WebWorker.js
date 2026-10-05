@@ -21,6 +21,8 @@ const ReadingListStore = require('./ReadingListStore');
 const {withFileTransaction} = require('./FilePersistence');
 const sessionLifetime = require('./SessionLifetime');
 const imageUtils = require('./ImageUtils');
+const epubRestorer = require('./EpubRestorer');
+const externalTools = require('./ExternalTools');
 const bookConverter = require('./BookConverter');
 const runtimeMetrics = require('./RuntimeMetrics');
 
@@ -47,7 +49,7 @@ const stateToText = {
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const discoveryCacheTtl = 15*60*1000;//15 minutes
 const externalDiscoveryCacheVersion = 'v4';
-const bookAssetVersion = 'fblibrary-assets-v2';
+const bookAssetVersion = 'fblibrary-assets-v3';
 const bookInfoVersion = 'fb2-binaries-v7';
 
 function cleanDirInterval(config) {
@@ -5283,6 +5285,52 @@ class WebWorker {
         return null;
     }
 
+    async getEpubImageArchives(subDir, libFolder, libid, sourceLibDir = '') {
+        const libDir = sourceLibDir || this.config.libDir;
+        const bookArchive = await this.resolveLibraryArchivePath(`${libDir}/${libFolder}`, libDir);
+        const baseName = path.basename(bookArchive, path.extname(bookArchive));
+        const dirs = Array.from(new Set([
+            path.join(path.dirname(bookArchive), subDir),
+            ...await this.resolveLibraryAssetDirs(subDir, libDir),
+        ]));
+        const exact = [];
+        for (const dir of dirs) {
+            if (!await fs.pathExists(dir))
+                continue;
+            for (const name of await fs.readdir(dir)) {
+                if (['.zip', '.7z'].includes(path.extname(name).toLowerCase())
+                    && path.basename(name, path.extname(name)).toLowerCase() === baseName.toLowerCase())
+                    exact.push({file: path.join(dir, name)});
+            }
+        }
+        return [...exact, ...await this.getFblibraryArchives(subDir, libid, libDir)]
+            .filter((archive, index, all) => all.findIndex(item => item.file === archive.file) === index);
+    }
+
+    async getEpubImage(libid, num, fileName, libFolder, sourceLibDir = '', archiveCache = new Map()) {
+        const subDir = num === -1 ? 'covers' : 'images';
+        if (!archiveCache.has(subDir))
+            archiveCache.set(subDir, await this.getEpubImageArchives(subDir, libFolder, libid, sourceLibDir));
+        for (const archive of archiveCache.get(subDir)) {
+            const reader = new ZipReader(this.config);
+            let data;
+            try {
+                await reader.open(archive.file, false);
+                data = await reader.extractToBuf(num === -1 ? String(libid) : `${libid}/${num}`);
+            } catch (error) {
+                if (externalTools.isMissingToolError(error))
+                    throw error;
+                log(LM_WARN, `EPUB image ${archive.file}: ${error.message}`);
+            } finally {
+                await reader.close();
+            }
+            if (data && data.length)
+                return await imageUtils.normalizeForEpub(data, fileName, this.config.tempDir,
+                    this.libraryToolDirs(sourceLibDir), this.config.converterPaths);
+        }
+        return null;
+    }
+
     async ensureAuthorInfoArchives() {
         if (this.authorInfoArchives && this.authorPictureArchives && this.authorToArchive)
             return;
@@ -5564,6 +5612,16 @@ class WebWorker {
                 const libid = parseInt(path.basename(libFile, path.extname(libFile)), 10);
                 if (libid && await this.shouldInjectFblibraryImages(extractedFile, libFolder))
                     await this.injectFblibraryImages(extractedFile, libid, sourceLibDir);
+            } else if (path.extname(libFile).toLowerCase() === '.epub') {
+                const libid = path.basename(libFile, path.extname(libFile));
+                const archiveCache = new Map();
+                try {
+                    await epubRestorer.restore(extractedFile, this.config,
+                        (num, name) => this.getEpubImage(libid, num, name, libFolder, sourceLibDir, archiveCache));
+                } catch (error) {
+                    await fs.remove(extractedFile);
+                    throw error;
+                }
             }
             hash = await utils.getFileHash(extractedFile, 'sha256', 'hex');
         } else {

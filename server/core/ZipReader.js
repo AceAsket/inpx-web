@@ -193,6 +193,8 @@ class ZipReader {
                 entry.name = value;
             else if (key === 'Folder')
                 entry.isDirectory = value === '+';
+            else if (key === 'Attributes' && /^D/.test(value))
+                entry.isDirectory = true;
         }
 
         commit();
@@ -203,11 +205,20 @@ class ZipReader {
         if (this.zip || this.archiveFile)
             throw new Error('Archive file is already open');
 
-        if (path.extname(zipFile).toLowerCase() === '.7z') {
+        // FLibrary stores recompressed EPUB containers with an .epub name;
+        // extracted books also have extensionless temporary names.
+        const handle = await fs.promises.open(zipFile, 'r');
+        const signature = Buffer.alloc(6);
+        try {
+            await handle.read(signature, 0, signature.length, 0);
+        } finally {
+            await handle.close();
+        }
+        if (signature.equals(Buffer.from('377abcaf271c', 'hex')) || path.extname(zipFile).toLowerCase() === '.7z') {
             this.archiveFile = zipFile;
             this.archiveType = '7z';
             if (zipEntries) {
-                const listing = await this.run7zStdout(['l', '-slt', zipFile]);
+                const listing = await this.run7zStdout(['l', '-slt', '-sccUTF-8', zipFile]);
                 this.zipEntries = this.parse7zEntries(listing.toString());
             }
             return;
@@ -215,11 +226,10 @@ class ZipReader {
 
         const zip = new StreamUnzip.async({file: zipFile, skipEntryNameValidation: true});
 
-        if (zipEntries)
-            this.zipEntries = await zip.entries();
-
         this.zip = zip;
         this.archiveType = 'zip';
+        if (zipEntries)
+            this.zipEntries = await zip.entries();
     }
 
     get entries() {
@@ -232,7 +242,7 @@ class ZipReader {
         this.checkState();
 
         if (this.archiveType === '7z')
-            return await this.run7zStdout(['x', '-y', '-bd', '-so', this.archiveFile, entryFilePath]);
+            return await this.run7zStdout(['x', '-y', '-bd', '-spd', '-so', this.archiveFile, entryFilePath]);
 
         return await this.zip.entryData(entryFilePath);
     }
@@ -241,7 +251,7 @@ class ZipReader {
         this.checkState();
 
         if (this.archiveType === '7z') {
-            await this.run7z(['x', '-y', '-bd', '-so', this.archiveFile, entryFilePath], outputFile);
+            await this.run7z(['x', '-y', '-bd', '-spd', '-so', this.archiveFile, entryFilePath], outputFile);
             return;
         }
 
