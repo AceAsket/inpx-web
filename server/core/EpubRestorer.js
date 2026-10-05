@@ -39,7 +39,11 @@ async function restore(bookFile, config = {}, loadImage = async() => null) {
                 throw new Error(`Повторяющийся файл в EPUB: ${name}`);
             files.set(name, entry.sourceName);
         }
-        const indexes = [...files.keys()].filter(name => path.posix.basename(name).toLowerCase() === imageIndexName.toLowerCase());
+        // Heimdall stores this sidecar at the archive root while EPUB files
+        // live under a book-id directory. Search the whole container.
+        const indexes = entries.filter(entry => path.posix.basename(entry.name).toLowerCase() === imageIndexName.toLowerCase());
+        const indexSources = new Set(indexes.map(entry => entry.sourceName));
+        const indexNames = indexes.map(entry => entry.name.startsWith(prefix) ? entry.name.slice(prefix.length) : entry.name);
         if (reader.archiveType === 'zip' && !indexes.length)
             return false;
         if (indexes.length > 1)
@@ -50,7 +54,7 @@ async function restore(bookFile, config = {}, loadImage = async() => null) {
         let imageIndex = [];
         if (indexes.length) {
             try {
-                imageIndex = JSON.parse((await reader.extractToBuf(files.get(indexes[0]))).toString());
+                imageIndex = JSON.parse((await reader.extractToBuf(indexes[0].sourceName)).toString());
             } catch (error) {
                 throw new Error(`Некорректный индекс изображений EPUB: ${error.message}`);
             }
@@ -64,7 +68,7 @@ async function restore(bookFile, config = {}, loadImage = async() => null) {
             let name = safeEntryName(item.id);
             if (prefix && name.startsWith(prefix))
                 name = name.slice(prefix.length);
-            if (imageNames.has(name) || ['mimetype', 'META-INF/container.xml', ...indexes].includes(name))
+            if (imageNames.has(name) || ['mimetype', 'META-INF/container.xml', ...indexNames].includes(name))
                 throw new Error(`Некорректное имя изображения EPUB: ${name}`);
             imageNames.add(name);
             return {name, num: item.num};
@@ -73,7 +77,7 @@ async function restore(bookFile, config = {}, loadImage = async() => null) {
         stagingDir = await fs.mkdtemp(path.join(config.tempDir || path.dirname(bookFile), 'epub-'));
         const staged = new Map();
         for (const [name, sourceName] of files) {
-            if (name === 'mimetype' || indexes.includes(name))
+            if (name === 'mimetype' || indexSources.has(sourceName))
                 continue;
             const file = path.join(stagingDir, `entry-${staged.size}`);
             await reader.extractToFile(sourceName, file);

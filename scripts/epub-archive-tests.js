@@ -76,8 +76,12 @@ async function testCompressedEpubDownloadsRestoreImagesAndInvalidateCache() {
         const bookDir = path.join(dir, 'book');
         const tempDir = path.join(dir, 'tmp');
         await Promise.all([source, otherSource, bookDir, tempDir].map(value => fs.ensureDir(value)));
-        const indexed = {...contents,
+        // Heimdall's fb2cut stores book files under the book id, but the index
+        // and FBD metadata sit beside that directory at the archive root.
+        const indexed = {...Object.fromEntries(Object.entries({...contents,
             'OEBPS/image.png': Buffer.alloc(0),
+        }).map(([name, value]) => [`12345/${name}`, value])),
+            '12345.fbd': '<FictionBook/>',
             'FLibraryImageIndex.json': JSON.stringify([{id: 'OEBPS/cover.png', num: -1}, {id: 'OEBPS/image.png', num: 0}]),
         };
         const inner = path.join(dir, 'compressed.epub');
@@ -102,8 +106,10 @@ async function testCompressedEpubDownloadsRestoreImagesAndInvalidateCache() {
             select: async({table}) => table === 'book' ? [record] : fileHash ? [fileHash] : [],
             insert: async({rows}) => { fileHash = rows[0]; },
         };
-        await utils.gzipFile(inner, path.join(bookDir, 'old-cache'));
-        await fs.writeJson(path.join(bookDir, 'old-cache.d.json'), {assetVersion: 'fblibrary-assets-v2'});
+        const cached = path.join(dir, 'cached-without-images.epub');
+        await archive(cached, contents);
+        await utils.gzipFile(cached, path.join(bookDir, 'old-cache'));
+        await fs.writeJson(path.join(bookDir, 'old-cache.d.json'), {assetVersion: 'fblibrary-assets-v3'});
         const app = require('express')();
         require('../server/static')(app, config, worker);
         const server = require('http').createServer(app);
@@ -118,6 +124,8 @@ async function testCompressedEpubDownloadsRestoreImagesAndInvalidateCache() {
             await fs.writeFile(download, rawBytes);
             const names = await inspectEpub(download);
             assert.ok(!names.includes('FLibraryImageIndex.json'));
+            assert.ok(!names.includes('12345.fbd'));
+            assert.ok(names.every(name => !name.startsWith('12345/')));
             const reader = new ZipReader();
             await reader.open(download);
             try {
@@ -127,7 +135,7 @@ async function testCompressedEpubDownloadsRestoreImagesAndInvalidateCache() {
             assert.notStrictEqual(fileHash.hash, 'old-cache');
             const firstHash = fileHash.hash;
             const desc = await fs.readJson(path.join(bookDir, `${firstHash}.d.json`));
-            assert.notStrictEqual(desc.assetVersion, 'fblibrary-assets-v2');
+            assert.notStrictEqual(desc.assetVersion, 'fblibrary-assets-v3');
             const wrapped = await fetch(`${base}/book/by-uid?uid=epub-fixture&zip=1`);
             assert.strictEqual(wrapped.status, 200);
             const wrapper = path.join(dir, 'download.zip');
@@ -176,12 +184,28 @@ async function testEpubContainersPreserveResourcesAndOrdinaryEpubBytes() {
         await archive(strippedZip, {...contents, 'FLibraryImageIndex.json': JSON.stringify([{id: 'OEBPS/image.png', num: 0}])});
         await epubRestorer.restore(strippedZip, {}, async() => png);
         await inspectEpub(strippedZip);
+        const heimdallZip = path.join(dir, 'heimdall.epub');
+        await archive(heimdallZip, {...Object.fromEntries(Object.entries(contents).map(([name, value]) => [`12345/${name}`, value])),
+            'FLibraryImageIndex.json': JSON.stringify([{id: 'OEBPS/cover.png', num: -1}, {id: 'OEBPS/image.png', num: 0}]),
+        });
+        const requested = [];
+        assert.strictEqual(await epubRestorer.restore(heimdallZip, {}, async(num, name) => {
+            requested.push({num, name});
+            return png;
+        }), true);
+        const heimdallNames = await inspectEpub(heimdallZip);
+        assert.deepStrictEqual(requested, [{num: -1, name: 'OEBPS/cover.png'}, {num: 0, name: 'OEBPS/image.png'}]);
+        assert.ok(!heimdallNames.includes('FLibraryImageIndex.json'));
     });
 }
 
 async function testInvalidCompressedEpubDoesNotPublishPartialResults() {
     await temporary(async dir => {
         const cases = [
+            [{...Object.fromEntries(Object.entries(contents).map(([name, value]) => [`12345/${name}`, value])),
+                'FLibraryImageIndex.json': 'not json'}, /индекс/],
+            [{...Object.fromEntries(Object.entries(contents).map(([name, value]) => [`12345/${name}`, value])),
+                'FLibraryImageIndex.json': '[]', '12345/FLibraryImageIndex.json': '[]'}, /Несколько индексов/],
             [{...contents, 'FLibraryImageIndex.json': JSON.stringify([{id: '../escape.png', num: 0}])}, /путь/],
             [{...contents, 'FLibraryImageIndex.json': 'not json'}, /индекс/],
             [{...contents, 'FLibraryImageIndex.json': JSON.stringify([{id: 'OEBPS/missing.png', num: 0}])}, /Не найдено изображение/],

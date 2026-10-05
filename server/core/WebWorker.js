@@ -49,7 +49,7 @@ const stateToText = {
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const discoveryCacheTtl = 15*60*1000;//15 minutes
 const externalDiscoveryCacheVersion = 'v4';
-const bookAssetVersion = 'fblibrary-assets-v3';
+const bookAssetVersion = 'fblibrary-assets-v4';
 const bookInfoVersion = 'fb2-binaries-v7';
 
 function cleanDirInterval(config) {
