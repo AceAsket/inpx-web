@@ -163,6 +163,7 @@ class ZipReader {
             result[index++] = {
                 name: entry.name.replace(/\\/g, '/'),
                 isDirectory: !!entry.isDirectory,
+                isLink: !!entry.isLink,
             };
         };
 
@@ -195,6 +196,8 @@ class ZipReader {
                 entry.isDirectory = value === '+';
             else if (key === 'Attributes' && /^D/.test(value))
                 entry.isDirectory = true;
+            if (['Symbolic Link', 'Hard Link'].includes(key) || (key === 'Attributes' && /l[rwx-]{9}/.test(value)))
+                entry.isLink = true;
         }
 
         commit();

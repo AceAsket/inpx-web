@@ -218,8 +218,7 @@ function imageCacheExt(contentType = '') {
     return '';
 }
 
-async function sendCachedCover(res, cacheDir, libid, sourceId = '') {
-    const cacheKey = coverCacheKey(libid, sourceId);
+async function sendCachedCover(res, cacheDir, cacheKey) {
     for (const item of [
         {ext: '.png', type: 'image/png'},
         {ext: '.jpg', type: 'image/jpeg'},
@@ -239,13 +238,13 @@ async function sendCachedCover(res, cacheDir, libid, sourceId = '') {
     return false;
 }
 
-async function writeCachedCover(cacheDir, libid, cover, sourceId = '') {
+async function writeCachedCover(cacheDir, cacheKey, cover) {
     const ext = imageCacheExt(cover.contentType);
     if (!ext)
         return;
 
     await fs.ensureDir(cacheDir);
-    await fs.writeFile(`${cacheDir}/${coverCacheKey(libid, sourceId)}${ext}`, cover.data);
+    await fs.writeFile(`${cacheDir}/${cacheKey}${ext}`, cover.data);
 }
 
 function normalizeWebAppBasePath(rootPathStatic = '') {
@@ -505,7 +504,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
 
         try {
             const cacheDir = config.coverDir || `${config.publicFilesDir}/cover`;
-            if (await sendCachedCover(res, cacheDir, libid, normalizedSourceId))
+            if (await sendCachedCover(res, cacheDir, coverCacheKey(libid, normalizedSourceId)))
                 return;
 
             const generation = webWorker ? webWorker.libraryAssetGeneration || 0 : 0;
@@ -520,7 +519,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
                     cover = normalized.data;
                     let type = normalized.contentType;
 
-                    await writeCachedCover(cacheDir, libid, {data: cover, contentType: type}, archive.sourceId);
+                    await writeCachedCover(cacheDir, coverCacheKey(libid, archive.sourceId), {data: cover, contentType: type});
 
                     res.set('Cache-Control', 'public, max-age=2592000, immutable');
                     res.type(type);
@@ -539,7 +538,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
 
             const embeddedCover = await extractBookCover(libid, config, normalizedSourceId, generation);
             if (embeddedCover) {
-                await writeCachedCover(cacheDir, libid, embeddedCover, normalizedSourceId);
+                await writeCachedCover(cacheDir, coverCacheKey(libid, normalizedSourceId), embeddedCover);
 
                 res.set('Cache-Control', 'public, max-age=2592000, immutable');
                 res.type(embeddedCover.contentType);
@@ -558,6 +557,35 @@ module.exports = (app, config, webWorker = null, security = null) => {
             res.sendStatus(404);
         }
     };
+
+    app.get(`${config.rootPathStatic || ''}/cover/by-uid`, async(req, res) => {
+        try {
+            const book = await webWorker.getBookRecordByUid(String(req.query.uid || '').trim());
+            if (!book) {
+                res.sendStatus(404);
+                return;
+            }
+            const cacheDir = config.coverDir || `${config.publicFilesDir}/cover`;
+            const cacheKey = require('./core/BookAssets').coverCacheKey(book);
+            if (await sendCachedCover(res, cacheDir, cacheKey))
+                return;
+            const cover = await webWorker.getBookCover(book);
+            if (!cover) {
+                res.sendStatus(404);
+                return;
+            }
+            await writeCachedCover(cacheDir, cacheKey, cover);
+            res.set('Cache-Control', 'public, max-age=2592000, immutable');
+            res.type(cover.contentType).send(cover.data);
+        } catch (error) {
+            if (externalTools.isMissingToolError(error)) {
+                logRuntimeWarningOnce(error.message);
+                res.status(503).type('text/plain; charset=utf-8').send(error.message);
+            } else {
+                res.sendStatus(404);
+            }
+        }
+    });
 
     app.get(`${config.rootPathStatic || ''}/cover/:sourceId/:libid`, async(req, res) => {
         await sendCover(req, res, req.params.sourceId, req.params.libid);

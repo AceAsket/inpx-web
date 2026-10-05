@@ -533,10 +533,12 @@ class BookView {
         if (this.book.discoveryCoverUrl)
             return this.book.discoveryCoverUrl;
 
+        const root = this.config.rootPathStatic || '';
+        const bookUid = this.getBookUid();
+        if (bookUid)
+            return `${root}/cover/by-uid?uid=${encodeURIComponent(bookUid)}`;
         if (!this.book.libid)
             return '';
-
-        const root = this.config.rootPathStatic || '';
         const sourceId = String(this.book.sourceId || '').trim();
         return sourceId
             ? `${root}/cover/${encodeURIComponent(sourceId)}/${this.book.libid}`

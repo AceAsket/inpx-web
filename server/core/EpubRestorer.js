@@ -9,7 +9,7 @@ const mimetype = 'application/epub+zip';
 
 function safeEntryName(value) {
     const name = String(value || '').replace(/\\/g, '/').replace(/^(\.\/)+/, '');
-    if (!name || name.startsWith('/') || /^[a-z]:/i.test(name) || /[\x00-\x1f]/.test(name)
+    if (!name || name.startsWith('/') || /[:\x00-\x1f]/.test(name)
         || name.split('/').some(part => part === '..'))
         throw new Error(`Некорректный путь в EPUB: ${name}`);
     const normalized = path.posix.normalize(name);
@@ -18,13 +18,20 @@ function safeEntryName(value) {
     return normalized;
 }
 
+function safeArchiveEntry(entry) {
+    if (entry.isLink)
+        throw new Error(`Ссылка внутри EPUB: ${entry.name}`);
+    const rawName = entry.isDirectory ? entry.name.replace(/[\\/]+$/, '') : entry.name;
+    return {sourceName: entry.name, name: safeEntryName(rawName), isDirectory: entry.isDirectory};
+}
+
 async function restore(bookFile, config = {}, loadImage = async() => null) {
     const reader = new ZipReader(config);
     let stagingDir = '';
     try {
         await reader.open(bookFile);
-        const entries = Object.values(reader.entries).filter(entry => !entry.isDirectory)
-            .map(entry => ({sourceName: entry.name, name: safeEntryName(entry.name)}));
+        const validated = Object.values(reader.entries).map(safeArchiveEntry);
+        const entries = validated.filter(entry => !entry.isDirectory);
         const containers = entries.filter(entry => entry.name === 'META-INF/container.xml'
             || entry.name.endsWith('/META-INF/container.xml'));
         if (containers.length !== 1)
@@ -48,13 +55,37 @@ async function restore(bookFile, config = {}, loadImage = async() => null) {
             return false;
         if (indexes.length > 1)
             throw new Error('Несколько индексов изображений EPUB');
-        if (!files.has('mimetype') || (await reader.extractToBuf(files.get('mimetype'))).toString().trim() !== mimetype)
+
+        stagingDir = await fs.mkdtemp(path.join(config.tempDir || path.dirname(bookFile), 'epub-'));
+        let extractedDir = '';
+        if (reader.archiveType === '7z') {
+            // A solid PPMd container must be decompressed once. Extracting each
+            // chapter separately replays the solid block for every file.
+            extractedDir = path.join(stagingDir, 'source');
+            await fs.ensureDir(extractedDir);
+            const seen = new Set();
+            for (const entry of validated) {
+                const key = entry.name.toLowerCase();
+                if (seen.has(key))
+                    throw new Error(`Повторяющийся путь в EPUB: ${entry.name}`);
+                seen.add(key);
+            }
+            await reader.extractAllToDir(extractedDir);
+            for (const entry of entries) {
+                const stat = await fs.lstat(path.join(extractedDir, entry.name));
+                if (!stat.isFile())
+                    throw new Error(`Некорректный файл EPUB: ${entry.name}`);
+            }
+        }
+        const readEntry = async(name) => extractedDir
+            ? await fs.readFile(path.join(extractedDir, safeEntryName(name))) : await reader.extractToBuf(name);
+        if (!files.has('mimetype') || (await readEntry(files.get('mimetype'))).toString().trim() !== mimetype)
             throw new Error('Некорректный mimetype EPUB');
 
         let imageIndex = [];
         if (indexes.length) {
             try {
-                imageIndex = JSON.parse((await reader.extractToBuf(indexes[0].sourceName)).toString());
+                imageIndex = JSON.parse((await readEntry(indexes[0].sourceName)).toString());
             } catch (error) {
                 throw new Error(`Некорректный индекс изображений EPUB: ${error.message}`);
             }
@@ -74,13 +105,14 @@ async function restore(bookFile, config = {}, loadImage = async() => null) {
             return {name, num: item.num};
         });
 
-        stagingDir = await fs.mkdtemp(path.join(config.tempDir || path.dirname(bookFile), 'epub-'));
         const staged = new Map();
         for (const [name, sourceName] of files) {
             if (name === 'mimetype' || indexSources.has(sourceName))
                 continue;
-            const file = path.join(stagingDir, `entry-${staged.size}`);
-            await reader.extractToFile(sourceName, file);
+            const file = extractedDir ? path.join(extractedDir, safeEntryName(sourceName))
+                : path.join(stagingDir, `entry-${staged.size}`);
+            if (!extractedDir)
+                await reader.extractToFile(sourceName, file);
             staged.set(name, file);
         }
         for (const image of images) {

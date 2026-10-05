@@ -24,6 +24,7 @@ const imageUtils = require('./ImageUtils');
 const epubRestorer = require('./EpubRestorer');
 const externalTools = require('./ExternalTools');
 const libraryReviews = require('./LibraryReviews');
+const bookAssets = require('./BookAssets');
 const bookConverter = require('./BookConverter');
 const runtimeMetrics = require('./RuntimeMetrics');
 
@@ -50,7 +51,7 @@ const stateToText = {
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const discoveryCacheTtl = 15*60*1000;//15 minutes
 const externalDiscoveryCacheVersion = 'v4';
-const bookAssetVersion = 'fblibrary-assets-v4';
+const bookAssetVersion = 'fblibrary-assets-v5';
 const bookInfoVersion = 'fb2-binaries-v7';
 
 function cleanDirInterval(config) {
@@ -4342,12 +4343,9 @@ class WebWorker {
             throw new Error('Книга не найдена');
 
         const libid = parseInt(book.libid, 10);
-        if (!libid)
-            throw new Error('У книги нет LibId для обложки');
 
         const sourceId = String(book.sourceId || '').trim();
-        const sourceKey = sourceId.replace(/[^a-z0-9._-]+/gi, '_');
-        const cacheBase = sourceKey ? `${sourceKey}-${libid}` : String(libid);
+        const cacheBase = bookAssets.coverCacheKey(book);
         const coverDir = this.config.coverDir || `${this.config.publicFilesDir}/cover`;
         const removed = [];
         for (const ext of ['.png', '.jpg', '.gif']) {
@@ -4358,7 +4356,7 @@ class WebWorker {
             }
         }
 
-        const coverUrl = `${this.config.rootPathStatic || ''}/cover/${sourceId ? `${encodeURIComponent(sourceId)}/` : ''}${libid}`;
+        const coverUrl = `${this.config.rootPathStatic || ''}/cover/by-uid?uid=${encodeURIComponent(bookUid)}`;
         this.addAdminEvent('info', 'cover', `Сброшен кэш обложки для ${book.title || bookUid}`, {bookUid, libid, sourceId, removed});
         return {
             success: true,
@@ -5231,8 +5229,9 @@ class WebWorker {
             });
     }
 
-    async getFblibraryImages(libid, sourceLibDir = '') {
-        const archives = await this.getFblibraryArchives('images', libid, sourceLibDir);
+    async getFblibraryImages(libid, sourceLibDir = '', libFolder = '') {
+        const archives = libFolder ? await this.getBookAssetArchives('images', libFolder, sourceLibDir)
+            : await this.getFblibraryArchives('images', libid, sourceLibDir);
         for (const archive of archives) {
             const zipReader = new ZipReader();
             await zipReader.open(archive.file);
@@ -5273,8 +5272,9 @@ class WebWorker {
         return [];
     }
 
-    async getFblibraryCover(libid, sourceLibDir = '') {
-        const archives = await this.getFblibraryArchives('covers', libid, sourceLibDir);
+    async getFblibraryCover(libid, sourceLibDir = '', libFolder = '') {
+        const archives = libFolder ? await this.getBookAssetArchives('covers', libFolder, sourceLibDir)
+            : await this.getFblibraryArchives('covers', libid, sourceLibDir);
         for (const archive of archives) {
             const zipReader = new ZipReader();
             await zipReader.open(archive.file, false);
@@ -5283,6 +5283,8 @@ class WebWorker {
                 const data = await zipReader.extractToBuf(String(libid));
                 return Object.assign({id: '0'}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir), this.config.converterPaths));
             } catch(e) {
+                if (externalTools.isMissingToolError(e))
+                    throw e;
                 // try next matching archive
             } finally {
                 await zipReader.close();
@@ -5292,7 +5294,7 @@ class WebWorker {
         return null;
     }
 
-    async getEpubImageArchives(subDir, libFolder, libid, sourceLibDir = '') {
+    async getBookAssetArchives(subDir, libFolder, sourceLibDir = '') {
         const libDir = sourceLibDir || this.config.libDir;
         const bookArchive = await this.resolveLibraryArchivePath(`${libDir}/${libFolder}`, libDir);
         const baseName = path.basename(bookArchive, path.extname(bookArchive));
@@ -5310,14 +5312,32 @@ class WebWorker {
                     exact.push({file: path.join(dir, name)});
             }
         }
-        return [...exact, ...await this.getFblibraryArchives(subDir, libid, libDir)]
+        return exact
             .filter((archive, index, all) => all.findIndex(item => item.file === archive.file) === index);
+    }
+
+    async getBookCover(book) {
+        const fileId = path.basename(String(book.file || ''), path.extname(String(book.file || '')));
+        const cover = book.folder ? await this.getFblibraryCover(fileId, book.sourceLibDir, book.folder) : null;
+        if (cover || String(book.ext).toLowerCase() !== 'fb2')
+            return cover;
+
+        // Embedded covers must come from this book, never another archive
+        // that happens to contain the same numeric filename.
+        const file = await this.extractBook(book.folder, `${book.file}.${book.ext}`, book.sourceLibDir);
+        try {
+            const {cover: embedded} = await this.fb2Helper.getDescAndCover(file);
+            return embedded ? await imageUtils.normalizeForFb2(embedded, this.config.tempDir,
+                this.libraryToolDirs(book.sourceLibDir), this.config.converterPaths) : null;
+        } finally {
+            await fs.remove(file);
+        }
     }
 
     async getEpubImage(libid, num, fileName, libFolder, sourceLibDir = '', archiveCache = new Map()) {
         const subDir = num === -1 ? 'covers' : 'images';
         if (!archiveCache.has(subDir))
-            archiveCache.set(subDir, await this.getEpubImageArchives(subDir, libFolder, libid, sourceLibDir));
+            archiveCache.set(subDir, await this.getBookAssetArchives(subDir, libFolder, sourceLibDir));
         for (const archive of archiveCache.get(subDir)) {
             const reader = new ZipReader(this.config);
             let data;
@@ -5536,9 +5556,9 @@ class WebWorker {
         return {authorInfo};
     }
 
-    async injectFblibraryImages(bookFile, libid, sourceLibDir = '') {
-        const images = await this.getFblibraryImages(libid, sourceLibDir);
-        const cover = await this.getFblibraryCover(libid, sourceLibDir);
+    async injectFblibraryImages(bookFile, libid, sourceLibDir = '', libFolder = '') {
+        const images = await this.getFblibraryImages(libid, sourceLibDir, libFolder);
+        const cover = await this.getFblibraryCover(libid, sourceLibDir, libFolder);
         if (!images.length && !cover)
             return false;
 
@@ -5618,7 +5638,7 @@ class WebWorker {
             if (path.extname(libFile).toLowerCase() === '.fb2') {
                 const libid = parseInt(path.basename(libFile, path.extname(libFile)), 10);
                 if (libid && await this.shouldInjectFblibraryImages(extractedFile, libFolder))
-                    await this.injectFblibraryImages(extractedFile, libid, sourceLibDir);
+                    await this.injectFblibraryImages(extractedFile, libid, sourceLibDir, libFolder);
             } else if (path.extname(libFile).toLowerCase() === '.epub') {
                 const libid = path.basename(libFile, path.extname(libFile));
                 const archiveCache = new Map();
@@ -5638,6 +5658,7 @@ class WebWorker {
         const link = `${this.config.bookPathStatic}/${hash}`;
         const bookFile = `${this.config.bookDir}/${hash}`;
         const bookFileDesc = `${bookFile}.d.json`;
+        const size = extractedFile ? (await fs.stat(extractedFile)).size : 0;
 
         if (!await fs.pathExists(bookFile) || !await fs.pathExists(bookFileDesc)) {
             if (!await fs.pathExists(bookFile) && extractedFile) {
@@ -5656,7 +5677,7 @@ class WebWorker {
             await utils.touchFile(bookFileDesc);
         }
 
-        await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, sourceLibDir, downFileName, assetVersion: bookAssetVersion}));
+        await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, sourceLibDir, downFileName, size, assetVersion: bookAssetVersion}));
         this.scheduleCacheClean('после подготовки книги');
 
         await db.insert({
@@ -5676,6 +5697,7 @@ class WebWorker {
         try {
             const db = this.db;
             let link = '';
+            let size = 0;
 
             //найдем downFileName, libFolder, libFile
             let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
@@ -5718,8 +5740,10 @@ class WebWorker {
                 if (await fs.pathExists(bookFile) && await fs.pathExists(bookFileDesc)) {
                     try {
                         const desc = JSON.parse(await fs.readFile(bookFileDesc, 'utf8'));
-                        if (desc.assetVersion === bookAssetVersion)
+                        if (desc.assetVersion === bookAssetVersion) {
                             link = `${this.config.bookPathStatic}/${hash}`;
+                            size = desc.size || 0;
+                        }
                     } catch(e) {
                         link = '';
                     }
@@ -5727,13 +5751,23 @@ class WebWorker {
             }
 
             if (!link) {
-                link = await this.restoreBook(bookUid, libFolder, libFile, downFileName, sourceLibDir);
+                if (!this.pendingBookRestores)
+                    this.pendingBookRestores = new Map();
+                const pending = this.pendingBookRestores;
+                const key = JSON.stringify([bookUid, libFolder, libFile, sourceLibDir, this.libraryAssetGeneration]);
+                if (!pending.has(key)) {
+                    pending.set(key, this.restoreBook(bookUid, libFolder, libFile, downFileName, sourceLibDir)
+                        .finally(() => pending.delete(key)));
+                }
+                link = await pending.get(key);
+                const desc = await fs.readJson(`${this.config.bookDir}/${path.basename(link)}.d.json`);
+                size = desc.size || 0;
             }
 
             if (!link)
                 throw new Error('404 Файл не найден');
 
-            return {link, libFolder, libFile, downFileName};
+            return {link, libFolder, libFile, downFileName, size};
         } catch(e) {
             log(LM_ERR, `getBookLink error: ${e.message}`);
             if (e.message.indexOf('ENOENT') >= 0)
@@ -6174,7 +6208,7 @@ class WebWorker {
             let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
             if (!rows.length)
                 throw new Error('404 Файл не найден');
-            const book = rows[0];
+            const book = {...rows[0], size: Number(rows[0].size) || bookInfo.size || 0};
             const reviewState = await this.getReviewArchiveState(book.sourceLibDir);
             const refreshReviews = async(info) => {
                 info.reviews = await this.getBookReviews(book, reviewState);

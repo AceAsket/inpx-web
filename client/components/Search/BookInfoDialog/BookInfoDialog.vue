@@ -451,10 +451,14 @@ class BookInfoDialog {
     }
 
     get fallbackCoverSrc() {
-        if (this.coverError || !this.book.libid)
+        if (this.coverError)
             return '';
 
         const root = this.config.rootPathStatic || '';
+        if (this.bookUid)
+            return `${root}/cover/by-uid?uid=${encodeURIComponent(this.bookUid)}`;
+        if (!this.book.libid)
+            return '';
         const sourceId = String(this.book.sourceId || '').trim();
         return sourceId
             ? `${root}/cover/${encodeURIComponent(sourceId)}/${this.book.libid}`

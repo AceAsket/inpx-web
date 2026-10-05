@@ -251,8 +251,8 @@ class BookPage extends BasePage {
                 if (coverHref && path.extname(coverHref) == '.png')
                     coverType = 'image/png';
 
-                if (!coverHref && bookInfo.book.libid) {
-                    coverHref = `${this.config.rootPathStatic || ''}/cover/${bookInfo.book.libid}`;
+                if (!coverHref && bookUid) {
+                    coverHref = `${this.config.rootPathStatic || ''}/cover/by-uid?uid=${encodeURIComponent(bookUid)}`;
                     coverType = 'image/png';
                 }
 
