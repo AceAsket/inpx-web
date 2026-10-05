@@ -245,7 +245,7 @@ async function testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads() {
             {_uid: 'fb2/UID+504942=', file: '504942', libid: 504942, ext: 'fb2', folder: 'f.fb2-502689-505100.zip',
                 title: 'Other FB2', author: 'Other Author', genre: '', sourceId: 'main', sourceLibDir: source},
             {_uid: epubUid, file: '504942', libid: 504942, ext: 'epub', folder: 'usr-500000-504999.zip',
-                title: 'Keeping My Home', author: 'EPUB Author', genre: '', size: 0, sourceId: 'main', sourceLibDir: source},
+                title: 'Keeping My Home', author: 'EPUB Author', genre: '', size: 42, sourceId: 'main', sourceLibDir: source},
         ];
         for (const record of records)
             Object.assign(record, {id: record._uid, series: '', serno: 0, lang: 'en', keywords: '',
@@ -301,6 +301,13 @@ async function testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads() {
             assert.strictEqual(restores, 0, 'Cover requests must not prepare the EPUB');
             const unknown = await fetch(`${base}/cover/by-uid?uid=unknown`);
             assert.strictEqual(unknown.status, 404);
+            const page = Object.create(require('../server/core/opds/BookPage').prototype);
+            Object.assign(page, {config, webWorker: worker, rootTag: 'feed', opdsRoot: '/opds', id: 'book', title: 'Книга'});
+            worker.getGenreMap = async() => new Map();
+            page.getGenres = async() => ({genreMap: new Map()});
+            const coldXml = await page.body({query: {uid: epubUid}, originalUrl: `/opds/book?uid=${encodeURIComponent(epubUid)}`});
+            assert.strictEqual(restores, 0, 'OPDS must return an EPUB acquisition link before preparing the book');
+            assert.ok(coldXml.includes(`/book/by-uid?uid=${encodeURIComponent(epubUid)}&amp;format=raw`));
             const [{bookInfo}, raw, wrapped] = await Promise.all([
                 worker.getBookInfo(epubUid),
                 fetch(`${base}/book/by-uid?uid=${encodeURIComponent(epubUid)}&format=raw`),
@@ -311,7 +318,8 @@ async function testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads() {
             assert.strictEqual(wrapped.status, 200);
             const rawBytes = Buffer.from(await raw.arrayBuffer());
             assert.strictEqual(bookInfo.book.title, 'Keeping My Home');
-            assert.strictEqual(bookInfo.book.size, rawBytes.length, 'Unknown INPX size must use restored EPUB size');
+            assert.strictEqual(bookInfo.book.size, rawBytes.length, 'The INPX stub size must use restored EPUB size');
+            assert.strictEqual(bookInfo.book.inpxSize, 42);
             assert.notStrictEqual(hashes.get(epubUid).hash, 'rc4-wrong-cover');
             const result = path.join(dir, 'result.epub');
             await fs.writeFile(result, rawBytes);
@@ -321,13 +329,9 @@ async function testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads() {
                 assert.ok((await reader.extractToBuf('OEBPS/cover.png')).equals(epubCover));
                 assert.ok((await reader.extractToBuf('OEBPS/image.png')).equals(epubCover));
             } finally { await reader.close(); }
-            const page = Object.create(require('../server/core/opds/BookPage').prototype);
-            Object.assign(page, {config, webWorker: worker, rootTag: 'feed', opdsRoot: '/opds', id: 'book', title: 'Книга'});
-            worker.getGenreMap = async() => new Map();
-            page.getGenres = async() => ({genreMap: new Map()});
             const xml = await page.body({query: {uid: epubUid}, originalUrl: `/opds/book?uid=${encodeURIComponent(epubUid)}`});
             assert.ok(xml.includes(`/cover/by-uid?uid=${encodeURIComponent(epubUid)}`));
-            const acquisition = await fetch(`${base}${bookInfo.link}/raw/${encodeURIComponent(bookInfo.downFileName)}`);
+            const acquisition = await fetch(`${base}/book/by-uid?uid=${encodeURIComponent(epubUid)}&format=raw`);
             assert.strictEqual(acquisition.status, 200);
             assert.ok(Buffer.from(await acquisition.arrayBuffer()).equals(rawBytes));
             const fb2Download = await fetch(`${base}/book/by-uid?uid=${encodeURIComponent(records[0]._uid)}&format=raw`);
@@ -387,6 +391,52 @@ async function testSolidEpubExtractsAllChaptersOnce() {
     });
 }
 
+async function testEpubReusesImageArchiveReadersAndClosesOnFailure() {
+    await temporary(async dir => {
+        const source = path.join(dir, 'source');
+        const config = {libDir: source, tempDir: path.join(dir, 'tmp'), bookDir: path.join(dir, 'book'), bookPathStatic: '/book'};
+        await Promise.all([source, config.tempDir, config.bookDir].map(file => fs.ensureDir(file)));
+        for (const missing of [false, true]) {
+            const folder = `collection-${missing ? 'bad' : 'good'}.zip`;
+            const inner = path.join(dir, 'inner.epub');
+            const index = Array.from({length: 8}, (_, num) => ({id: `OEBPS/picture-${num}.png`, num}));
+            await archive(inner, {...contents, 'FLibraryImageIndex.json': JSON.stringify(index)});
+            await archive(path.join(source, folder), {'12345.epub': await fs.readFile(inner)});
+            const images = Object.fromEntries(index.slice(0, missing ? 1 : 8).map(item => [`12345/${item.num}`, png]));
+            // A realistic sidecar has many entries unrelated to this book.
+            for (let num = 0; num < 5000; num++) images[`other/${num}`] = 'unrelated';
+            await archive(path.join(source, 'images', folder), images);
+            const worker = Object.create(require('../server/core/WebWorker').prototype);
+            worker.config = config; worker.checkMyState = () => {}; worker.scheduleCacheClean = () => {};
+            const record = {_uid: folder, author: 'Fixture Author', title: 'Images', file: '12345', ext: 'epub', folder};
+            worker.db = {esc: JSON.stringify, select: async({table}) => table === 'book' ? [record] : [], insert: async() => {}};
+            const opened = [];
+            const original = ZipReader.prototype.open;
+            ZipReader.prototype.open = async function(file, ...args) {
+                if (path.basename(path.dirname(file)) === 'images') opened.push(this);
+                return await original.call(this, file, ...args);
+            };
+            try {
+                if (missing) {
+                    await assert.rejects(worker.getBookLink(folder), /Не найдено изображение/);
+                } else {
+                    const result = await worker.getPreparedBookFile(folder, 'epub');
+                    const reader = new ZipReader();
+                    await reader.open(result.rawFile);
+                    try {
+                        for (const item of index) assert.ok((await reader.extractToBuf(item.id)).equals(png));
+                    } finally { await reader.close(); }
+                }
+            } finally {
+                ZipReader.prototype.open = original;
+            }
+            assert.strictEqual(opened.length, 1, 'The same image archive must open once per EPUB');
+            assert.ok(opened.every(reader => !reader.zip && !reader.archiveFile), 'All image archives must close on success and failure');
+        }
+    });
+}
+
 module.exports = [testJxlCodestreamAndContainerImagesAreRecognized, testCompressedEpubDownloadsRestoreImagesAndInvalidateCache,
     testEpubContainersPreserveResourcesAndOrdinaryEpubBytes, testInvalidCompressedEpubDoesNotPublishPartialResults,
-    testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads, testSolidEpubExtractsAllChaptersOnce];
+    testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads, testSolidEpubExtractsAllChaptersOnce,
+    testEpubReusesImageArchiveReadersAndClosesOnFailure];

@@ -11,7 +11,7 @@ const enAlphabet = 'abcdefghijklmnopqrstuvwxyz';
 const enruArr = (ruAlphabet + enAlphabet).split('');
 const titleSearchLeadingChars = ['«', '"', "'", '„', '“', '”', '‘', '’', '`', '(', '[', '{'];
 const titleSearchLeadingPattern = '^[\\s«"\'„“”‘’`()\\[\\]{}]+';
-const copyDedupeVersion = 'copy-dedupe-v3-title-prefix';
+const copyDedupeVersion = 'copy-dedupe-v4-file-identity';
 
 class DbSearcher {
     constructor(config, db) {
@@ -783,7 +783,13 @@ class DbSearcher {
                 if (query[f.field]) {
                     let searchValue = query[f.field];
                     if (f.type === 'S') {
-                        checks.push(filterBySearch(f.field, searchValue));
+                        if (['lang', 'ext'].includes(f.field) && searchValue.includes(',') && !/^[=*#~]/.test(searchValue)) {
+                            const values = searchValue.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+                            checks.push(`(${db.esc(values)}.includes(String(row.${f.field} || '').toLowerCase())
+                                || (${values.includes(emptyFieldValue)} && !row.${f.field}))`);
+                        } else {
+                            checks.push(filterBySearch(f.field, searchValue));
+                        }
                     } if (f.type === 'N') {
                         const v = searchValue.split('..');
 
@@ -844,8 +850,8 @@ class DbSearcher {
                                 return 'copy-title:' + titleKey;
                         }
 
-                        if (row.libid)
-                            return 'libid:' + sourceKey + ':' + row.libid;
+                        if (row.libid && !row.folder && !row.file)
+                            return ['libid', sourceKey, row.sourcelib || '', row.libid, row.ext || ''].join(':');
 
                         const parts = [
                             sourceKey,

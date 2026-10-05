@@ -274,6 +274,8 @@ export default class BaseList {
         try {
             if (action == 'bookInfo' || action == 'authorInfo') {
                 const response = await this.api.getBookInfo(book._uid);
+                if (response.bookInfo && response.bookInfo.book && response.bookInfo.book.size > 0)
+                    book.size = response.bookInfo.book.size;
                 this.$emit('listEvent', {
                     action: 'bookInfo',
                     data: response.bookInfo,

@@ -139,8 +139,18 @@ class BookPage extends BasePage {
 
         const bookUid = req.query.uid;
         const entry = [];
-        if (bookUid) {            
-            const {bookInfo} = await this.webWorker.getBookInfo(bookUid);
+        if (bookUid) {
+            const record = await this.webWorker.getBookRecordByUid(bookUid);
+            const directDownload = record && String(record.ext).toLowerCase() !== 'fb2';
+            let bookInfo;
+            if (directDownload) {
+                await this.webWorker.applyMetadataOverridesToSearchResult({books: [record]});
+                // EPUB metadata is already in INPX. Preparing the book and
+                // loading reviews here can time out before Kindle gets a link.
+                bookInfo = {book: record, cover: '', fb2: false};
+            } else if (record) {
+                ({bookInfo} = await this.webWorker.getBookInfo(bookUid));
+            }
 
             if (bookInfo) {
                 const {genreMap} = await this.getGenres();
@@ -148,7 +158,8 @@ class BookPage extends BasePage {
                 //format
                 const ext = bookInfo.book.ext;
                 const fileNameInUrl = encodeURIComponent(bookInfo.downFileName || `${bookInfo.book.title || 'book'}.${ext}`);
-                const rawHref = `${bookInfo.link}/raw/${fileNameInUrl}`;
+                const directHref = `${this.config.bookPathStatic}/by-uid?uid=${encodeURIComponent(bookUid)}`;
+                const rawHref = directDownload ? `${directHref}&format=raw` : `${bookInfo.link}/raw/${fileNameInUrl}`;
                 const links = [];
                 const addLink = (href, type) => {
                     links.push({href, type});
@@ -163,7 +174,7 @@ class BookPage extends BasePage {
                     addLink(rawHref, 'application/x-mobipocket-ebook');
                 } else {
                     addLink(rawHref, `application/${ext}`);
-                    addLink(`${bookInfo.link}/zip`, 'application/zip');
+                    addLink(directDownload ? `${directHref}&zip=1` : `${bookInfo.link}/zip`, 'application/zip');
                 }
 
                 //entry

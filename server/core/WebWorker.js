@@ -893,6 +893,7 @@ class WebWorker {
         this.authorPictureArchives = null;
         this.authorToArchive = null;
         this.reviewArchiveStates = new Map();
+        this.preparedBookSizes = new Map();
     }
 
     async dbConfig() {
@@ -5334,22 +5335,28 @@ class WebWorker {
         }
     }
 
-    async getEpubImage(libid, num, fileName, libFolder, sourceLibDir = '', archiveCache = new Map()) {
+    async getEpubImage(libid, num, fileName, libFolder, sourceLibDir = '', archiveCache = new Map(), readerCache = null) {
         const subDir = num === -1 ? 'covers' : 'images';
         if (!archiveCache.has(subDir))
             archiveCache.set(subDir, await this.getBookAssetArchives(subDir, libFolder, sourceLibDir));
         for (const archive of archiveCache.get(subDir)) {
-            const reader = new ZipReader(this.config);
+            const cachedReader = readerCache && readerCache.get(archive.file);
+            const reader = cachedReader || new ZipReader(this.config);
             let data;
             try {
-                await reader.open(archive.file, false);
+                if (!cachedReader) {
+                    await reader.open(archive.file, false);
+                    if (readerCache)
+                        readerCache.set(archive.file, reader);
+                }
                 data = await reader.extractToBuf(num === -1 ? String(libid) : `${libid}/${num}`);
             } catch (error) {
                 if (externalTools.isMissingToolError(error))
                     throw error;
                 log(LM_WARN, `EPUB image ${archive.file}: ${error.message}`);
             } finally {
-                await reader.close();
+                if (!readerCache || !readerCache.has(archive.file))
+                    await reader.close();
             }
             if (data && data.length)
                 return await imageUtils.normalizeForEpub(data, fileName, this.config.tempDir,
@@ -5642,12 +5649,15 @@ class WebWorker {
             } else if (path.extname(libFile).toLowerCase() === '.epub') {
                 const libid = path.basename(libFile, path.extname(libFile));
                 const archiveCache = new Map();
+                const readerCache = new Map();
                 try {
                     await epubRestorer.restore(extractedFile, this.config,
-                        (num, name) => this.getEpubImage(libid, num, name, libFolder, sourceLibDir, archiveCache));
+                        (num, name) => this.getEpubImage(libid, num, name, libFolder, sourceLibDir, archiveCache, readerCache));
                 } catch (error) {
                     await fs.remove(extractedFile);
                     throw error;
+                } finally {
+                    await Promise.all([...readerCache.values()].map(reader => reader.close()));
                 }
             }
             hash = await utils.getFileHash(extractedFile, 'sha256', 'hex');
@@ -5684,7 +5694,7 @@ class WebWorker {
             table: 'file_hash',
             replace: true,
             rows: [
-                {id: bookUid, hash},
+                {id: bookUid, hash, size, assetVersion: bookAssetVersion},
             ]
         });
 
@@ -6075,10 +6085,56 @@ class WebWorker {
         }
     }
 
+    applyPreparedBookSize(book, size) {
+        if (!Number.isSafeInteger(size) || size <= 0)
+            return;
+        if (!utils.hasProp(book, 'inpxSize'))
+            book.inpxSize = book.size;
+        book.size = size;
+    }
+
+    async applyPreparedBookSizesToRows(rows = []) {
+        const books = rows.flatMap(row => [row, ...(Array.isArray(row.books) ? row.books : [])])
+            .filter(book => this.metadataBookUid(book));
+        if (!books.length || !this.db || !this.config.bookDir)
+            return;
+        const ids = Array.from(new Set(books.map(book => this.metadataBookUid(book))));
+        const hashes = await this.db.select({table: 'file_hash', where: `@@id(${this.db.esc(ids)})`});
+        const sizes = new Map();
+        if (!this.preparedBookSizes)
+            this.preparedBookSizes = new Map();
+        for (const item of hashes) {
+            if (typeof item.hash !== 'string' || !item.hash || path.basename(item.hash) !== item.hash)
+                continue;
+            let size = item.assetVersion === bookAssetVersion ? item.size : 0;
+            if (!Number.isSafeInteger(size) || size <= 0) {
+                const key = JSON.stringify([item.id, item.hash]);
+                if (!this.preparedBookSizes.has(key)) {
+                    size = 0;
+                    try {
+                        const desc = await fs.readJson(path.join(this.config.bookDir, `${item.hash}.d.json`));
+                        if (desc.assetVersion === bookAssetVersion)
+                            size = desc.size;
+                    } catch (_) {
+                        // A missing or old prepared cache must not break the catalog.
+                    }
+                    if (this.preparedBookSizes.size >= 1000)
+                        this.preparedBookSizes.delete(this.preparedBookSizes.keys().next().value);
+                    this.preparedBookSizes.set(key, size);
+                }
+                size = this.preparedBookSizes.get(key);
+            }
+            sizes.set(item.id, size);
+        }
+        for (const book of books)
+            this.applyPreparedBookSize(book, sizes.get(this.metadataBookUid(book)));
+    }
+
     async applyMetadataOverridesToSearchResult(result = {}) {
         const overrides = await this.readingListStore.getMetadataOverrides();
         this.applyMetadataOverridesToRows(result.found || [], overrides);
         this.applyMetadataOverridesToRows(result.books || [], overrides);
+        await this.applyPreparedBookSizesToRows([...(result.found || []), ...(result.books || [])]);
         return result;
     }
 
@@ -6208,11 +6264,13 @@ class WebWorker {
             let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
             if (!rows.length)
                 throw new Error('404 Файл не найден');
-            const book = {...rows[0], size: Number(rows[0].size) || bookInfo.size || 0};
+            const book = {...rows[0]};
+            this.applyPreparedBookSize(book, bookInfo.size);
             const reviewState = await this.getReviewArchiveState(book.sourceLibDir);
             const refreshReviews = async(info) => {
-                info.reviews = await this.getBookReviews(book, reviewState);
-                info.libraryRating = await this.getBookLibraryRating(book, reviewState);
+                [info.reviews, info.libraryRating] = await Promise.all([
+                    this.getBookReviews(book, reviewState), this.getBookLibraryRating(book, reviewState),
+                ]);
                 info.reviewSignature = reviewState.signature;
             };
 
