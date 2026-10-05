@@ -1,6 +1,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const yazl = require('yazl');
+const {pipeline} = require('stream/promises');
 
 const express = require('express');
 const utils = require('./core/utils');
@@ -58,18 +59,12 @@ function getBookDownloadMimeType(fileName) {
 }
 
 function generateZip(zipFile, dataFile, dataFileInZip) {
-    return new Promise((resolve, reject) => {
-        const zip = new yazl.ZipFile();
-        zip.addFile(dataFile, dataFileInZip);
-        zip.outputStream
-            .pipe(fs.createWriteStream(zipFile)).on('error', reject)
-            .on('finish', (err) => {
-                if (err) reject(err);
-                else resolve();
-            }
-        );
-        zip.end();
-    });
+    const zip = new yazl.ZipFile();
+    const complete = pipeline(zip.outputStream, fs.createWriteStream(zipFile));
+    zip.on('error', error => zip.outputStream.destroy(error));
+    zip.addFile(dataFile, dataFileInZip);
+    zip.end();
+    return complete;
 }
 
 function normalizeLibraryDir(dir = '') {
@@ -698,15 +693,14 @@ module.exports = (app, config, webWorker = null, security = null) => {
                     await utils.touchFile(bookFile);
                     await utils.touchFile(bookFileDesc);
 
-                    let desc = await fs.readFile(bookFileDesc, 'utf8');
-                    let downFileName = (JSON.parse(desc)).downFileName;
+                    const desc = await fs.readJson(bookFileDesc);
+                    let downFileName = desc.downFileName;
                     let gzipped = true;
 
                     if (!req.acceptsEncodings('gzip') || fileType) {
                         const rawFile = `${bookFile}.raw`;
                         //не принимает gzip, тогда распакуем
-                        if (!await fs.pathExists(rawFile))
-                            await utils.gunzipFile(bookFile, rawFile);
+                        await utils.ensureGunzipFile(bookFile, rawFile, desc.size);
 
                         gzipped = false;
 
@@ -714,9 +708,9 @@ module.exports = (app, config, webWorker = null, security = null) => {
                             bookFile = rawFile;
                         } else if (fileType === 'zip') {
                             //создаем zip-файл
-                            bookFile += '.zip';
-                            if (!await fs.pathExists(bookFile))
-                                await generateZip(bookFile, rawFile, downFileName);
+                            // Older ZIP caches may contain an incomplete download.
+                            bookFile += '.download-v2.zip';
+                            await utils.prepareCachedFile(bookFile, outputFile => generateZip(outputFile, rawFile, downFileName));
                             downFileName += '.zip';
                         } else if (bookConverter.canConvertTo(fileType)) {
                             const prepared = await bookConverter.prepareConvertedFile({

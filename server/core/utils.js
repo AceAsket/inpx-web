@@ -2,6 +2,8 @@ const fs = require('fs-extra');
 const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
+const {pipeline} = require('stream/promises');
+const pendingCacheFiles = new Map();
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -117,20 +119,44 @@ function gzipFile(inputFile, outputFile, level = 1) {
 }
 
 function gunzipFile(inputFile, outputFile) {
-    return new Promise((resolve, reject) => {
-        const gzip = zlib.createGunzip();
-        const input = fs.createReadStream(inputFile);
-        const output = fs.createWriteStream(outputFile);
+    return pipeline(fs.createReadStream(inputFile), zlib.createGunzip(), fs.createWriteStream(outputFile));
+}
 
-        input.on('error', reject)
-            .pipe(gzip).on('error', reject)
-            .pipe(output).on('error', reject)
-            .on('finish', (err) => {
-                if (err) reject(err);
-                else resolve();
+function prepareCachedFile(outputFile, writer, expectedSize = 0) {
+    const key = path.resolve(outputFile);
+    if (!pendingCacheFiles.has(key)) {
+        const prepare = async() => {
+            const valid = async file => {
+                try {
+                    const stat = await fs.stat(file);
+                    return stat.isFile() && stat.size > 0 && (!(expectedSize > 0) || stat.size === expectedSize);
+                } catch (error) {
+                    if (error.code !== 'ENOENT')
+                        throw error;
+                    return false;
+                }
+            };
+            if (await valid(outputFile))
+                return false;
+            const temporaryFile = `${outputFile}.cache-tmp-${randomHexString(12)}`;
+            try {
+                await writer(temporaryFile);
+                if (!await valid(temporaryFile))
+                    throw new Error('Подготовленный файл кэша пуст или имеет неверный размер');
+                // Only the completed file becomes visible to downloads.
+                await fs.rename(temporaryFile, outputFile);
+                return true;
+            } finally {
+                await fs.remove(temporaryFile);
             }
-        );
-    });
+        };
+        pendingCacheFiles.set(key, prepare().finally(() => pendingCacheFiles.delete(key)));
+    }
+    return pendingCacheFiles.get(key);
+}
+
+function ensureGunzipFile(inputFile, outputFile, expectedSize = 0) {
+    return prepareCachedFile(outputFile, temporaryFile => gunzipFile(inputFile, temporaryFile), expectedSize);
 }
 
 function gzipBuffer(buf) {
@@ -224,6 +250,8 @@ module.exports = {
     randomHexString,
     gzipFile,
     gunzipFile,
+    prepareCachedFile,
+    ensureGunzipFile,
     gzipBuffer,
     gunzipBuffer,
     toUnixPath,

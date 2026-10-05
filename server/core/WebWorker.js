@@ -5787,16 +5787,12 @@ class WebWorker {
     }
 
     async getPreparedBookFile(bookUid, format = '') {
-        const {link, downFileName} = await this.getBookLink(bookUid);
+        const {link, downFileName, size} = await this.getBookLink(bookUid);
         const hash = path.basename(link);
         const gzipFile = `${this.config.bookDir}/${hash}`;
         const rawFile = `${gzipFile}.raw`;
 
-        let cacheChanged = false;
-        if (!await fs.pathExists(rawFile)) {
-            await utils.gunzipFile(gzipFile, rawFile);
-            cacheChanged = true;
-        }
+        let cacheChanged = await utils.ensureGunzipFile(gzipFile, rawFile, size);
 
         await utils.touchFile(gzipFile);
         await utils.touchFile(rawFile);

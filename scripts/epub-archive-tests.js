@@ -26,6 +26,52 @@ async function temporary(task) {
     try { await task(dir); } finally { await fs.remove(dir); }
 }
 
+async function testAtomicBookCacheFilesAndRecovery() {
+    await temporary(async dir => {
+        const target = path.join(dir, 'book.raw');
+        let startWrite, completeWrite;
+        const started = new Promise(resolve => { startWrite = resolve; });
+        const continueWriting = new Promise(resolve => { completeWrite = resolve; });
+        let writes = 0;
+        const writer = async file => {
+            writes++;
+            await fs.writeFile(file, 'first');
+            startWrite();
+            await continueWriting;
+            await fs.appendFile(file, '-complete');
+        };
+        const first = utils.prepareCachedFile(target, writer, 14);
+        await started;
+        const second = utils.prepareCachedFile(target, writer, 14);
+        try {
+            assert.strictEqual(await fs.pathExists(target), false, 'A second download must not see a partially written file');
+            assert.strictEqual(writes, 1, 'Concurrent requests must share the same file preparation');
+        } finally {
+            completeWrite();
+        }
+        await Promise.all([first, second]);
+        assert.strictEqual(await fs.readFile(target, 'utf8'), 'first-complete');
+        assert.strictEqual(await utils.prepareCachedFile(target, writer, 14), false);
+        const gzip = path.join(dir, 'book.gz');
+        const content = Buffer.from('Complete book contents. '.repeat(4096));
+        await fs.writeFile(gzip, await utils.gzipBuffer(content));
+        for (const old of [Buffer.alloc(0), Buffer.from('truncated')]) {
+            await fs.writeFile(target, old);
+            await Promise.all([utils.ensureGunzipFile(gzip, target, content.length),
+                utils.ensureGunzipFile(gzip, target, content.length)]);
+            assert.ok((await fs.readFile(target)).equals(content), 'Partial old raw caches must be repaired');
+        }
+        await fs.remove(target);
+        await fs.writeFile(gzip, 'invalid gzip');
+        await assert.rejects(utils.ensureGunzipFile(gzip, target, content.length));
+        assert.strictEqual(await fs.pathExists(target), false);
+        assert.ok(!(await fs.readdir(dir)).some(name => name.includes('.cache-tmp-')));
+        await fs.writeFile(gzip, await utils.gzipBuffer(content));
+        await utils.ensureGunzipFile(gzip, target, content.length);
+        assert.ok((await fs.readFile(target)).equals(content), 'A failed preparation must not prevent retry');
+    });
+}
+
 async function archive(file, entries, sevenZip = false) {
     await fs.ensureDir(path.dirname(file));
     if (sevenZip) {
@@ -308,15 +354,32 @@ async function testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads() {
             const coldXml = await page.body({query: {uid: epubUid}, originalUrl: `/opds/book?uid=${encodeURIComponent(epubUid)}`});
             assert.strictEqual(restores, 0, 'OPDS must return an EPUB acquisition link before preparing the book');
             assert.ok(coldXml.includes(`/book/by-uid?uid=${encodeURIComponent(epubUid)}&amp;format=raw`));
-            const [{bookInfo}, raw, wrapped] = await Promise.all([
+            const [{bookInfo}, raw, wrapped, rawAgain, wrappedAgain, prepared] = await Promise.all([
                 worker.getBookInfo(epubUid),
                 fetch(`${base}/book/by-uid?uid=${encodeURIComponent(epubUid)}&format=raw`),
                 fetch(`${base}/book/by-uid?uid=${encodeURIComponent(epubUid)}&zip=1`),
+                fetch(`${base}/book/by-uid?uid=${encodeURIComponent(epubUid)}&format=raw`),
+                fetch(`${base}/book/by-uid?uid=${encodeURIComponent(epubUid)}&zip=1`),
+                worker.getPreparedBookFile(epubUid, 'epub'),
             ]);
             assert.strictEqual(restores, 1, 'Concurrent info and download requests must share one preparation');
             assert.strictEqual(raw.status, 200);
             assert.strictEqual(wrapped.status, 200);
             const rawBytes = Buffer.from(await raw.arrayBuffer());
+            assert.ok(Buffer.from(await rawAgain.arrayBuffer()).equals(rawBytes));
+            assert.ok((await fs.readFile(prepared.rawFile)).equals(rawBytes));
+            for (const [index, response] of [wrapped, wrappedAgain].entries()) {
+                assert.strictEqual(response.status, 200);
+                const wrappedFile = path.join(dir, `wrapped-${index}.zip`);
+                await fs.writeFile(wrappedFile, Buffer.from(await response.arrayBuffer()));
+                const wrappedReader = new ZipReader();
+                await wrappedReader.open(wrappedFile);
+                try {
+                    const entry = Object.values(wrappedReader.entries).find(item => item.name.endsWith('.epub'));
+                    assert.ok(entry);
+                    assert.ok((await wrappedReader.extractToBuf(entry.name)).equals(rawBytes), 'Concurrent ZIP downloads must contain the complete EPUB');
+                } finally { await wrappedReader.close(); }
+            }
             assert.strictEqual(bookInfo.book.title, 'Keeping My Home');
             assert.strictEqual(bookInfo.book.size, rawBytes.length, 'The INPX stub size must use restored EPUB size');
             assert.strictEqual(bookInfo.book.inpxSize, 42);
@@ -436,7 +499,7 @@ async function testEpubReusesImageArchiveReadersAndClosesOnFailure() {
     });
 }
 
-module.exports = [testJxlCodestreamAndContainerImagesAreRecognized, testCompressedEpubDownloadsRestoreImagesAndInvalidateCache,
+module.exports = [testAtomicBookCacheFilesAndRecovery, testJxlCodestreamAndContainerImagesAreRecognized, testCompressedEpubDownloadsRestoreImagesAndInvalidateCache,
     testEpubContainersPreserveResourcesAndOrdinaryEpubBytes, testInvalidCompressedEpubDoesNotPublishPartialResults,
     testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads, testSolidEpubExtractsAllChaptersOnce,
     testEpubReusesImageArchiveReadersAndClosesOnFailure];
