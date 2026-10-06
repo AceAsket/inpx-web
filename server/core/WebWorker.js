@@ -52,7 +52,12 @@ const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const discoveryCacheTtl = 15*60*1000;//15 minutes
 const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
-const bookInfoVersion = 'fb2-binaries-v7';
+const fb2AssetVersion = 'fb2-encoding-v6';
+const bookInfoVersion = 'fb2-encoding-v8';
+
+function assetVersionFor(ext) {
+    return String(ext || '').toLowerCase() === 'fb2' ? fb2AssetVersion : bookAssetVersion;
+}
 
 function cleanDirInterval(config) {
     const minutes = parseFloat(config.cacheCleanInterval);
@@ -5643,9 +5648,18 @@ class WebWorker {
         if (!this.remoteLib) {
             extractedFile = await this.extractBook(libFolder, libFile, sourceLibDir);
             if (path.extname(libFile).toLowerCase() === '.fb2') {
-                const libid = parseInt(path.basename(libFile, path.extname(libFile)), 10);
-                if (libid && await this.shouldInjectFblibraryImages(extractedFile, libFolder))
-                    await this.injectFblibraryImages(extractedFile, libid, sourceLibDir, libFolder);
+                try {
+                    const data = await fs.readFile(extractedFile);
+                    const normalized = this.fb2Helper.checkEncoding(await this.fb2Helper.decompressIfNeeded(data));
+                    if (!normalized.equals(data))
+                        await fs.writeFile(extractedFile, normalized);
+                    const libid = parseInt(path.basename(libFile, path.extname(libFile)), 10);
+                    if (libid && await this.shouldInjectFblibraryImages(extractedFile, libFolder))
+                        await this.injectFblibraryImages(extractedFile, libid, sourceLibDir, libFolder);
+                } catch (error) {
+                    await fs.remove(extractedFile);
+                    throw error;
+                }
             } else if (path.extname(libFile).toLowerCase() === '.epub') {
                 const libid = path.basename(libFile, path.extname(libFile));
                 const archiveCache = new Map();
@@ -5687,14 +5701,15 @@ class WebWorker {
             await utils.touchFile(bookFileDesc);
         }
 
-        await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, sourceLibDir, downFileName, size, assetVersion: bookAssetVersion}));
+        const assetVersion = assetVersionFor(path.extname(libFile).slice(1));
+        await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, sourceLibDir, downFileName, size, assetVersion}));
         this.scheduleCacheClean('после подготовки книги');
 
         await db.insert({
             table: 'file_hash',
             replace: true,
             rows: [
-                {id: bookUid, hash, size, assetVersion: bookAssetVersion},
+                {id: bookUid, hash, size, assetVersion},
             ]
         });
 
@@ -5750,7 +5765,7 @@ class WebWorker {
                 if (await fs.pathExists(bookFile) && await fs.pathExists(bookFileDesc)) {
                     try {
                         const desc = JSON.parse(await fs.readFile(bookFileDesc, 'utf8'));
-                        if (desc.assetVersion === bookAssetVersion) {
+                        if (desc.assetVersion === assetVersionFor(book.ext)) {
                             link = `${this.config.bookPathStatic}/${hash}`;
                             size = desc.size || 0;
                         }
@@ -6095,6 +6110,7 @@ class WebWorker {
         if (!books.length || !this.db || !this.config.bookDir)
             return;
         const ids = Array.from(new Set(books.map(book => this.metadataBookUid(book))));
+        const versions = new Map(books.map(book => [this.metadataBookUid(book), assetVersionFor(book.ext)]));
         const hashes = await this.db.select({table: 'file_hash', where: `@@id(${this.db.esc(ids)})`});
         const sizes = new Map();
         if (!this.preparedBookSizes)
@@ -6102,14 +6118,15 @@ class WebWorker {
         for (const item of hashes) {
             if (typeof item.hash !== 'string' || !item.hash || path.basename(item.hash) !== item.hash)
                 continue;
-            let size = item.assetVersion === bookAssetVersion ? item.size : 0;
+            const version = versions.get(item.id);
+            let size = item.assetVersion === version ? item.size : 0;
             if (!Number.isSafeInteger(size) || size <= 0) {
-                const key = JSON.stringify([item.id, item.hash]);
+                const key = JSON.stringify([item.id, item.hash, version]);
                 if (!this.preparedBookSizes.has(key)) {
                     size = 0;
                     try {
                         const desc = await fs.readJson(path.join(this.config.bookDir, `${item.hash}.d.json`));
-                        if (desc.assetVersion === bookAssetVersion)
+                        if (desc.assetVersion === version)
                             size = desc.size;
                     } catch (_) {
                         // A missing or old prepared cache must not break the catalog.

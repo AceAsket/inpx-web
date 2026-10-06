@@ -63,6 +63,10 @@ module.exports = {
     metricsPath: process.env.INPX_METRICS_PATH || '/metrics',
     metricsToken: process.env.INPX_METRICS_TOKEN || '',
     metricsExemptAuth: process.env.INPX_METRICS_EXEMPT_AUTH === 'true',
+    absEnabled: process.env.INPX_ABS_ENABLED === 'true',
+    absToken: String(process.env.INPX_ABS_TOKEN || '').trim(),
+    absPublicUrl: String(process.env.INPX_ABS_PUBLIC_URL || '').trim(),
+    absMaxResults: numberFromEnv('INPX_ABS_MAX_RESULTS', 10),
 
     // Поправить в случае, если были критические изменения в DbCreator или InpxParser,
     // иначе будет рассинхронизация по кэшу между сервером и клиентом на уровне БД.

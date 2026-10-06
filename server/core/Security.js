@@ -355,6 +355,10 @@ class Security {
     }
 
     verifyRequiredAuth(req) {
+        // A dedicated read-only service token/signed cover grants access only
+        // to ABS routes, never the web catalog, OPDS or book downloads.
+        if (require('./AudiobookshelfProvider').isAuthorizedRequest(req, this.config))
+            return {ok: true};
         const mode = String(this.config.authMode || 'local').trim().toLowerCase();
         if (!this.config.requireAuth && !(mode === 'proxy' && this.config.proxyBindProfile))
             return {ok: true};

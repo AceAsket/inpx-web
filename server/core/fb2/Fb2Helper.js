@@ -1,5 +1,6 @@
 const fs = require('fs-extra');
 const iconv = require('iconv-lite');
+const {isUtf8} = require('buffer');
 const textUtils = require('./textUtils');
 
 const Fb2Parser = require('../fb2/Fb2Parser');
@@ -14,47 +15,38 @@ class Fb2Helper {
     }
 
     checkEncoding(data) {
-        //Корректируем кодировку UTF-16
-        let encoding = textUtils.getEncoding(data);
-        if (encoding.indexOf('UTF-16') == 0) {
-            data = Buffer.from(iconv.decode(data, encoding));
-            encoding = 'utf-8';
-        }
+        if (!Buffer.isBuffer(data) || !data.length)
+            return data;
 
-        //Корректируем пробелы, всякие файлы попадаются :(
-        if (data[0] == 32) {
-            data = Buffer.from(data.toString().trim());
-        }
+        // A BOM or the XML byte order is reliable even when a language-based
+        // detector mistakes UTF-16 for a single-byte encoding.
+        let encoding = '';
+        if ((data[0] === 0xff && data[1] === 0xfe) || (data[0] === 0x3c && data[1] === 0 && data[3] === 0))
+            encoding = 'utf-16le';
+        else if ((data[0] === 0xfe && data[1] === 0xff) || (data[0] === 0 && data[1] === 0x3c && data[2] === 0))
+            encoding = 'utf-16be';
 
-        //Окончательно корректируем кодировку
-        let result = data;
-
-        let left = data.indexOf('<?xml version="1.0"');
-        if (left < 0) {
-            left = data.indexOf('<?xml version=\'1.0\'');
-        }
-
-        if (left >= 0) {
-            const right = data.indexOf('?>', left);
-            if (right >= 0) {
-                const head = data.slice(left, right + 2).toString();
-                const m = head.match(/encoding=['"](.*?)['"]/);
-                if (m) {
-                    let enc = m[1].toLowerCase();
-                    if (enc != 'utf-8') {
-                        //если кодировка не определена в getEncoding, используем enc
-                        if (encoding.indexOf('ISO-8859') >= 0) {
-                            encoding = enc;
-                        }
-
-                        result = iconv.decode(data, encoding);
-                        result = Buffer.from(result.toString().replace(m[0], `encoding="utf-8"`));
-                    }
-                }
+        if (!encoding) {
+            const head = data.subarray(0, 1024).toString('latin1');
+            const declaration = head.match(/^\s*<\?xml\b[^?]*\?>/i);
+            const declared = declaration && declaration[0].match(/\bencoding\s*=\s*(['"])([^'"]+)\1/i);
+            // FLibrary can retain a legacy declaration on UTF-8 bytes. Validate
+            // the bytes first; otherwise honour XML instead of guessing by prose.
+            if (isUtf8(data)) {
+                encoding = 'utf-8';
+            } else if (declared && !/^utf-?8$/i.test(declared[2])) {
+                if (!iconv.encodingExists(declared[2]))
+                    throw new Error(`Неподдерживаемая кодировка FB2: ${declared[2]}`);
+                encoding = declared[2];
+            } else {
+                encoding = textUtils.getEncoding(data);
             }
         }
 
-        return result;
+        let text = iconv.decode(data, encoding).replace(/^\uFEFF/, '').trimStart();
+        text = text.replace(/^<\?xml\b[^?]*\?>/i, declaration =>
+            declaration.replace(/\bencoding\s*=\s*(['"])[^'"]+\1/i, 'encoding="utf-8"'));
+        return Buffer.from(text, 'utf8');
     }
 
     async getDescAndCover(bookFile) {
