@@ -2,6 +2,9 @@ const crypto = require('crypto');
 const {BookMetadata} = require('./BookMetadata');
 const genreNames = new Map(require('./genres').flatMap(section => section.value).map(genre => [genre.value, genre.name]));
 const coverLifetime = 24 * 60 * 60 * 1000;
+// Audiobookshelf's CustomProviderAdapter stops waiting after 10 seconds.
+const searchTimeoutMs = 8000;
+const metadataTimeoutMs = 3000;
 
 function equal(left = '', right = '') {
     const a = Buffer.from(left);
@@ -21,7 +24,7 @@ function isAuthorizedRequest(req, config) {
     if (!config.absEnabled || !config.absToken)
         return false;
     const pathname = String(req.path || '').replace(/\/+$/, '');
-    if (![`${rootPath(config)}/search`, `${rootPath(config)}/cover`].includes(pathname) || !['GET', 'HEAD'].includes(req.method))
+    if (![rootPath(config), `${rootPath(config)}/search`, `${rootPath(config)}/cover`].includes(pathname) || !['GET', 'HEAD'].includes(req.method))
         return false;
     const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
     if (equal(supplied, config.absToken))
@@ -93,11 +96,16 @@ function init(app, config, worker, security) {
         if (!isAuthorizedRequest(req, config)) return res.status(401).json({error: 'Invalid authorization token'});
         next();
     };
+    app.get(root, authorize, (req, res) => res.json({
+        provider: 'inpx-web', version: config.version || '', search: `${root}/search`, authorizationRequired: true,
+    }));
     app.get(`${root}/search`, authorize, async(req, res) => {
         if (activeSearches >= 2)
             return res.status(429).set('Retry-After', '2').json({error: 'Too many metadata searches'});
         activeSearches++;
         let timer;
+        let metadataTimer;
+        let indexWork;
         try {
             const {query, author = ''} = req.query;
             if (typeof query !== 'string' || typeof author !== 'string' || query.length > 200 || author.length > 200 || (!query.trim() && !author.trim()))
@@ -110,32 +118,38 @@ function init(app, config, worker, security) {
                 const longest = authorTerm.split(/[\s,]+/).filter(Boolean).sort((a, b) => b.length - a.length)[0];
                 search.author = `*${longest}`;
             }
-            const run = async() => {
-                const result = await worker.bookSearch(search);
-                const limit = Math.max(1, Math.min(20, Math.floor(Number(config.absMaxResults) || 10)));
-                const books = (result.found || []).filter(book => !authorTerm || authorMatches(book.author, authorTerm));
-                books.sort((a, b) => {
-                    const score = book => (normalized(book.title) === normalized(title) ? 4 : 0) + (book.ext === 'fb2' ? 1 : 0);
-                    return score(b) - score(a);
-                });
-                const selected = books.slice(0, limit);
-                const extras = await Promise.all(selected.map(book => metadata.read(book)));
-                return {matches: selected.map((book, i) => ({...mapMetadata(book, extras[i]), cover: signedCoverUrl(book, req, config, security)}))};
-            };
+            const deadline = Date.now() + searchTimeoutMs;
             const timeout = new Promise((resolve, reject) => {
-                timer = setTimeout(() => reject(Object.assign(new Error('Metadata search timed out'), {status: 503})), 20000);
+                timer = setTimeout(() => reject(Object.assign(new Error('Metadata index search timed out'), {status: 503})), searchTimeoutMs);
             });
-            // Keep the work counted until it finishes, even if the HTTP timeout
-            // wins; slow archives must not create unbounded background work.
-            const work = run().finally(() => {activeSearches--;});
-            const value = await Promise.race([work, timeout]);
-            res.json(value);
+            indexWork = Promise.resolve(worker.bookSearch(search));
+            const result = await Promise.race([indexWork, timeout]);
+            const limit = Math.max(1, Math.min(20, Math.floor(Number(config.absMaxResults) || 10)));
+            const books = (result.found || []).filter(book => !authorTerm || authorMatches(book.author, authorTerm));
+            books.sort((a, b) => {
+                const score = book => (normalized(book.title) === normalized(title) ? 4 : 0) + (book.ext === 'fb2' ? 1 : 0);
+                return score(b) - score(a);
+            });
+            const selected = books.slice(0, limit);
+            const extras = selected.map(() => ({}));
+            const enrich = Promise.all(selected.map((book, i) => metadata.read(book)
+                .then(value => {extras[i] = value;})
+                .catch(() => {})));
+            // Archive reads are optional: retain index matches when a NAS is
+            // slow or the bounded metadata queue is full. Finished reads enter
+            // the shared cache and enrich subsequent searches.
+            const budget = Math.max(0, Math.min(metadataTimeoutMs, deadline - Date.now()));
+            await Promise.race([enrich, new Promise(resolve => {metadataTimer = setTimeout(resolve, budget);})]);
+            res.json({matches: selected.map((book, i) => ({...mapMetadata(book, extras[i]), cover: signedCoverUrl(book, req, config, security)}))});
         } catch (error) {
             res.status(error.status || 503).json({error: error.status ? error.message : 'Metadata search is unavailable'});
         } finally {
             clearTimeout(timer);
-            // Validation returns before the work promise has been created.
-            if (!timer) activeSearches--;
+            clearTimeout(metadataTimer);
+            // An index query that outlives its HTTP deadline still occupies a
+            // slot. Archive work is already bounded by BookMetadata's semaphore.
+            if (indexWork) indexWork.then(() => {activeSearches--;}, () => {activeSearches--;});
+            else activeSearches--;
         }
     });
     app.get(`${root}/cover`, authorize, async(req, res) => {

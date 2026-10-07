@@ -95,6 +95,10 @@ async function testAudiobookshelfNativeMetadataAndAuthorOrder() {
 
 async function testAudiobookshelfTokenScopeAndSignedCoverLinks() {
     await fixture(async({config, request, root, base, count}) => {
+        assert.strictEqual((await request('', '')).status, 403);
+        const diagnostic = await (await request('')).json();
+        assert.strictEqual(diagnostic.search, root + '/search');
+        assert.strictEqual(diagnostic.authorizationRequired, true);
         assert.notStrictEqual((await request('/search?query=abc', '')).status, 200);
         assert.notStrictEqual((await request('/search?query=abc', 'wrong-token')).status, 200);
         const response = await request('/search?query=' + encodeURIComponent('Проверка метаданных'), `Bearer ${config.absToken}`);
@@ -118,7 +122,9 @@ async function testAudiobookshelfTokenScopeAndSignedCoverLinks() {
     }, {rootPathStatic: '/library', requireAuth: true, authMode: 'proxy', trustProxy: false});
     await fixture(async({config, request}) => {
         config.absEnabled = false; assert.strictEqual((await request('/search?query=x')).status, 404);
+        assert.strictEqual((await request('')).status, 404);
         config.absEnabled = true; config.absToken = ''; assert.strictEqual((await request('/search?query=x')).status, 503);
+        assert.strictEqual((await request('')).status, 503);
     });
 }
 
@@ -150,4 +156,40 @@ async function testAudiobookshelfSearchBoundsAndCacheInvalidation() {
     });
 }
 
-module.exports = [testAudiobookshelfNativeMetadataAndAuthorOrder, testAudiobookshelfTokenScopeAndSignedCoverLinks, testAudiobookshelfSearchBoundsAndCacheInvalidation];
+async function testAudiobookshelfReturnsMatchesBeforeClientTimeout() {
+    await fixture(async({worker, metadata, request, config, base, root}) => {
+        config.absMaxResults = 20;
+        const record = (await worker.bookSearch({title: '*Проверка метаданных'})).found.find(book => book.file === '1');
+        const books = Array.from({length: 20}, (_, i) => ({...record, _uid: `slow-archive-${i}`}));
+        worker.bookSearch = async() => ({found: books});
+        let release;
+        const gate = new Promise(resolve => {release = resolve;});
+        const extract = worker.extractBook.bind(worker);
+        let started = 0;
+        worker.extractBook = async(...args) => {started++; await gate; return extract(...args);};
+        const query = '/search?query=' + encodeURIComponent('Проверка метаданных');
+        try {
+            const start = Date.now();
+            const responses = await Promise.all([1, 2].map(() => fetch(base + root + query, {
+                headers: {Authorization: config.absToken}, signal: AbortSignal.timeout(10000),
+            })));
+            assert.ok(Date.now() - start < 8000, 'Matches must arrive before the ABS 10-second client timeout');
+            for (const response of responses) {
+                assert.strictEqual(response.status, 200, 'A full metadata queue must not hide index matches');
+                const result = await response.json();
+                assert.strictEqual(result.matches.length, 20);
+                assert.ok(result.matches.every(book => book.title && book.author && book.cover));
+            }
+            assert.strictEqual(started, 2, 'Only two physical archive reads may run');
+            assert.ok(metadata.queue.length <= 16);
+        } finally {
+            release();
+            await Promise.allSettled([...metadata.pending.values()]);
+        }
+        const warm = await request(query);
+        assert.strictEqual(warm.status, 200, 'Background archive reads must not occupy HTTP search slots');
+        assert.strictEqual((await warm.json()).matches[0].publisher, 'Тестовое & издательство í');
+    });
+}
+
+module.exports = [testAudiobookshelfNativeMetadataAndAuthorOrder, testAudiobookshelfTokenScopeAndSignedCoverLinks, testAudiobookshelfSearchBoundsAndCacheInvalidation, testAudiobookshelfReturnsMatchesBeforeClientTimeout];
