@@ -3410,6 +3410,9 @@ class WebWorker {
         };
         const rows = Object.entries(progressMap)
             .map(([bookUid, progress]) => {
+                bookUid = String(bookUid || '').trim();
+                if (!bookUid)
+                    return null;
                 const normalizedProgress = Object.assign({percent: 0, sectionId: '', updatedAt: '', hidden: false}, progress || {});
                 const percent = Math.max(0, Math.min(1, Number(normalizedProgress.percent || 0) || 0));
                 const hidden = normalizedProgress.hidden === true;
@@ -3417,26 +3420,26 @@ class WebWorker {
                 counters.all++;
                 counters[rowState]++;
                 return {
-                    bookUid: String(bookUid || '').trim(),
+                    bookUid,
                     progress: Object.assign(normalizedProgress, {percent, hidden}),
                     state: rowState,
                 };
             })
-            .filter((item) => item.bookUid && (state === 'all' || item.state === state));
+            .filter((item) => item && (state === 'all' || item.state === state));
 
         const items = [];
         for (const item of rows) {
             const book = await this.getBookRecordByUid(item.bookUid);
-            if (!book)
-                continue;
+            const metadata = book || {};
 
             const resultItem = {
                 bookUid: item.bookUid,
-                title: book.title || 'Без названия',
-                author: book.author || '',
-                series: book.series || '',
-                serno: book.serno || '',
-                ext: book.ext || '',
+                title: metadata.title || (book ? 'Без названия' : 'Книга недоступна'),
+                author: metadata.author || '',
+                series: metadata.series || '',
+                serno: metadata.serno || '',
+                ext: metadata.ext || '',
+                unavailable: !book,
                 percent: item.progress.percent,
                 hidden: item.progress.hidden === true,
                 state: item.state,

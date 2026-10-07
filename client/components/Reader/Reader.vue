@@ -212,6 +212,8 @@
                                     :model-value="selectedFontFamily"
                                     :options="fontFamilyOptions"
                                     class="reader-font-select"
+                                    behavior="menu"
+                                    :dark="preferences.theme === 'dark'"
                                     popup-content-class="reader-font-menu"
                                     :popup-content-style="readerDialogStyle"
                                     borderless
@@ -662,6 +664,7 @@
                     <div class="reader-home-search-row">
                         <q-input
                             v-model="readerHomeSearch"
+                            :dark="preferences.theme === 'dark'"
                             dense
                             outlined
                             clearable
@@ -678,6 +681,10 @@
                         <q-select
                             v-model="readerHomeSort"
                             :options="readerHomeSortOptions"
+                            behavior="menu"
+                            :dark="preferences.theme === 'dark'"
+                            popup-content-class="reader-font-menu"
+                            :popup-content-style="readerDialogStyle"
                             dense
                             outlined
                             emit-value
@@ -703,6 +710,9 @@
                             <div v-if="book.series" class="reader-home-book-meta">
                                 {{ uiText.series }}: {{ book.series }}<span v-if="book.serno"> #{{ book.serno }}</span>
                             </div>
+                            <div v-if="book.unavailable" class="reader-home-book-meta">
+                                {{ uiText.readerHomeUnavailableText }}
+                            </div>
                             <div class="reader-home-progress">
                                 <div class="reader-home-progress-bar">
                                     <div class="reader-home-progress-fill" :style="{width: `${formatReaderHomePercent(book.percent)}%`}"></div>
@@ -712,7 +722,7 @@
                         </div>
                         <div class="reader-home-book-actions">
                             <q-btn
-                                v-if="!book.hidden"
+                                v-if="!book.hidden && !book.unavailable"
                                 flat
                                 no-caps
                                 icon="la la-book-open"
@@ -2570,6 +2580,7 @@ class Reader {
             readerHomeEmptyText: '\u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435 \u043a\u043d\u0438\u0433\u0443 \u0438\u0437 \u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0430, \u0438 \u043e\u043d\u0430 \u043f\u043e\u044f\u0432\u0438\u0442\u0441\u044f \u0437\u0434\u0435\u0441\u044c.',
             readerHomeSearchPlaceholder: 'Быстрый поиск по своим книгам',
             readerHomeSearchEmptyText: 'По этому запросу в выбранном разделе ничего не найдено.',
+            readerHomeUnavailableText: 'Прогресс сохранён, но книга не найдена в текущей библиотеке. Проверьте выбранную библиотеку и её INPX-индекс.',
             readerHomeReadEmptyText: 'Здесь появятся книги, вручную отмеченные прочитанными или дочитанные до конца.',
             readerHomeHiddenEmptyText: 'Скрытых книг нет. Если убрать книгу из чтения, её можно будет вернуть отсюда.',
             readerHomeFilterReading: 'Читаю',

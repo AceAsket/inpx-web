@@ -67,19 +67,22 @@ class ReadingProgressPage extends BasePage {
 
         for (const book of response.items || []) {
             const percent = Math.max(0, Math.min(100, Math.round((Number(book.percent || 0) || 0) * 100)));
-            const title = `${book.state === 'read' ? '✓ ' : ''}${book.serno ? `${book.serno}. ` : ''}${book.title || 'Без названия'} (${book.ext})`;
+            const title = `${book.state === 'read' ? '✓ ' : ''}${book.serno ? `${book.serno}. ` : ''}${book.title || 'Без названия'}${book.ext ? ` (${book.ext})` : ''}`;
             const subtitle = [
                 this.bookAuthor(book.author),
                 book.series ? `Серия: ${book.series}` : '',
                 `${percent}%`,
                 book.hidden ? 'Скрыто' : '',
+                book.unavailable ? 'Прогресс сохранён, но книга не найдена в текущей библиотеке' : '',
             ].filter(Boolean).join(' · ');
 
             entry.push(
                 this.makeEntry({
                     id: book.bookUid,
                     title,
-                    link: this.acqLink({href: `/book?uid=${encodeURIComponent(book.bookUid)}`, req}),
+                    link: book.unavailable
+                        ? this.navLink({href: `/${this.id}`, req, query: {state: response.state}})
+                        : this.acqLink({href: `/book?uid=${encodeURIComponent(book.bookUid)}`, req}),
                     content: {
                         '*ATTRS': {type: 'text'},
                         '*TEXT': subtitle,

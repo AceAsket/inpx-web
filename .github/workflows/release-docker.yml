@@ -8,7 +8,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v1.7.9-rc.4
+        default: v1.7.9-rc.5
 
 permissions:
   contents: read

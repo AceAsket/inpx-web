@@ -1055,6 +1055,47 @@ async function testUserBackupExportsAndRestoresReaderState() {
     });
 }
 
+async function testReaderHomeKeepsUnavailableProgressVisible() {
+    const worker = makeWorker();
+    worker.getBookRecordByUid = async(uid) => uid === 'available'
+        ? {title: 'Доступная книга', author: 'Автор', ext: 'fb2'} : null;
+    const user = {readerProgress: Object.fromEntries(Array.from({length: 12}, (_, i) => [
+        `missing-${i}`, {percent: (i + 1) / 100, hidden: false, updatedAt: `2026-01-${String(i + 1).padStart(2, '0')}`},
+    ]))};
+    const saved = JSON.stringify(user);
+    const missing = await worker.getUserReadingLibrary(user);
+    assert.strictEqual(missing.counters.reading, 12);
+    assert.strictEqual(missing.count, 12);
+    assert.strictEqual(missing.items.length, 12);
+    assert.ok(missing.items.every(book => book.unavailable && book.title && book.percent > 0));
+    assert.strictEqual(JSON.stringify(user), saved, 'Reading the library must preserve saved progress');
+
+    user.readerProgress.available = {percent: 0.5};
+    user.readerProgress.finished = {percent: 1};
+    user.readerProgress.hidden = {percent: 0.3, hidden: true};
+    user.readerProgress['   '] = {percent: 0.2};
+    const all = await worker.getUserReadingLibrary(user, {state: 'all', limit: 2});
+    assert.deepStrictEqual(all.counters, {all: 15, reading: 13, read: 1, hidden: 1});
+    assert.strictEqual(all.count, 15);
+    assert.strictEqual(all.items.length, 2);
+    const found = await worker.getUserReadingLibrary(user, {query: 'Автор'});
+    assert.strictEqual(found.items.length, 1);
+    assert.strictEqual(found.items[0].bookUid, 'available');
+    assert.strictEqual(found.items[0].unavailable, false);
+    assert.strictEqual((await worker.getUserReadingLibrary(user, {state: 'read'})).items[0].bookUid, 'finished');
+    assert.strictEqual((await worker.getUserReadingLibrary(user, {state: 'hidden'})).items[0].bookUid, 'hidden');
+
+    const ReadingProgressPage = require('../server/core/opds/ReadingProgressPage');
+    const page = Object.create(ReadingProgressPage.prototype);
+    Object.assign(page, {id: 'reading-progress', rootTag: 'feed', opdsRoot: '/opds',
+        webWorker: {getOpdsUserReadingLibrary: async() => await worker.getUserReadingLibrary(user, {state: 'all'})},
+    });
+    const xml = await page.body({query: {user: 'reader', state: 'all'}, originalUrl: '/opds/reading-progress?user=reader&state=all'});
+    assert.match(xml, /Прогресс сохранён, но книга не найдена/);
+    assert.match(xml, /\/book\?uid=available/);
+    assert.doesNotMatch(xml, /\/book\?uid=(?:missing-\d+|finished|hidden)/, 'Unavailable books must not expose broken acquisition links');
+}
+
 async function testReaderProgressResetAndHiddenState() {
     await withTempDir(async(dir) => {
         const ReadingListStore = require('../server/core/ReadingListStore');
@@ -1689,6 +1730,7 @@ const tests = [
     testAdminBackupArchiveAndDownload,
     testUserBackupExportsAndRestoresReaderState,
     testReaderProgressResetAndHiddenState,
+    testReaderHomeKeepsUnavailableProgressVisible,
     testDiscoveryFeedbackAndEventsPersist,
     testCoverCacheRoutesAndCleaner,
     testCacheRotationUsesTargetWatermark,
