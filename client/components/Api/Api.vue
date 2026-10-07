@@ -641,6 +641,14 @@ class Api {
         return await this.request({action: 'send-book-email', bookUid, format}, 300);
     }
 
+    async prepareReaderAudio(bookUid, speaker) {
+        return await this.request({action: 'prepare-reader-audio', bookUid, speaker}, 120);
+    }
+
+    async getReaderAudioStatus(jobId) {
+        return await this.request({action: 'get-reader-audio-status', jobId}, 30);
+    }
+
     async getConfig() {
         return await this.request({action: 'get-config'});
     }

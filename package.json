@@ -1,6 +1,6 @@
 {
   "name": "inpx-web",
-  "version": "1.7.9-rc.3",
+  "version": "1.7.9-rc.4",
   "author": "AceAsket",
   "license": "CC0-1.0",
   "repository": "AceAsket/inpx-web",
@@ -19,6 +19,7 @@
     "build:client-dev": "webpack --config build/webpack.dev.config.js",
     "build:all": "npm run build:linux && npm run build:win && npm run build:macos && npm run build:linux-arm64",
     "test:release": "node scripts/release-smoke-tests.js",
+    "test:tts": "node scripts/reader-speech-tests.js",
     "release": "npm run build:all && node build/release.js",
     "release:linux": "npm run build:linux && node build/release.js linux",
     "release:win": "npm run build:win && node build/release.js win",

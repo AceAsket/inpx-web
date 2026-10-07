@@ -456,6 +456,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
     */
     const webAppBasePath = normalizeWebAppBasePath(config.rootPathStatic);
     const webAppRoutePrefix = (webAppBasePath === '/' ? '' : webAppBasePath.slice(0, -1));
+    require('./core/ReaderSpeech').registerSpeechRoute(app, config);
     if (webWorker && security) {
         const guard = new (require('./core/ProfileAccess'))(config, webWorker, security).httpGuard();
         app.use([config.bookPathStatic, `${webAppRoutePrefix}/cover`, `${webAppRoutePrefix}/reader-lab-source`, `${webAppRoutePrefix}/admin-backups`], guard);

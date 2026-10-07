@@ -38,6 +38,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
       - run: npm audit --omit=dev --audit-level=moderate
       - run: npm run test:release
+      - run: npm run test:tts
       - run: npm run build:${{ matrix.target }}
       - run: node scripts/binary-smoke-test.js dist/${{ matrix.target }}/inpx-web${{ matrix.extension }}
       - if: matrix.target == 'linux'

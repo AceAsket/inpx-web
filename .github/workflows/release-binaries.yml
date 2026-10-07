@@ -49,6 +49,9 @@ jobs:
       - name: Run release smoke tests
         run: npm run test:release
 
+      - name: Run TTS tests
+        run: npm run test:tts
+
   build:
     name: Build ${{ matrix.label }}
     needs: release-smoke-tests

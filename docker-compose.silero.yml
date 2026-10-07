@@ -1,0 +1,26 @@
+# INPX_TTS_ENABLED=true docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts up -d --build
+services:
+  inpx-web:
+    image: aceasket/inpx-web-7z:1.7.9-rc.4
+    build: .
+    environment:
+      INPX_TTS_ENABLED: ${INPX_TTS_ENABLED:-false}
+      INPX_TTS_URL: http://silero:8000
+      INPX_TTS_MODEL: v5_5_ru
+      INPX_TTS_CACHE_SIZE_MB: "4096"
+      INPX_TTS_TIMEOUT_MS: "3600000"
+  silero:
+    profiles: [tts]
+    image: aceasket/inpx-web-7z:1.7.9-rc.4-silero
+    build: ./tts/silero
+    restart: unless-stopped
+    environment:
+      SILERO_MODEL: v5_5_ru
+      SILERO_THREADS: "4"
+    volumes:
+      - silero-models:/models
+    # No host port: the web server connects over the Compose network.
+    cpus: 4
+    mem_limit: 4g
+volumes:
+  silero-models:

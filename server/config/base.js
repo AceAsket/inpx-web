@@ -147,6 +147,12 @@ module.exports = {
     emailFrom: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
     emailTo: process.env.EMAIL_TO || '',
     onlineReaderEnabled: true,
+    ttsEnabled: process.env.INPX_TTS_ENABLED === 'true',
+    ttsUrl: String(process.env.INPX_TTS_URL || '').trim(),
+    ttsModel: String(process.env.INPX_TTS_MODEL || 'v5_5_ru').trim(),
+    ttsApiKey: String(process.env.INPX_TTS_API_KEY || '').trim(),
+    ttsCacheSizeMb: numberFromEnv('INPX_TTS_CACHE_SIZE_MB', 4096),
+    ttsTimeoutMs: numberFromEnv('INPX_TTS_TIMEOUT_MS', 3600000),
     discovery: {
         enabled: true,
         shelfLimit: parseInt(process.env.INPX_DISCOVERY_LIMIT || '8', 10) || 8,

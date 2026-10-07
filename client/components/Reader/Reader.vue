@@ -122,6 +122,12 @@
                         @click="toggleHelpDialog"
                     />
                     <q-btn
+                        v-if="config.ttsEnabled && !isStandaloneMode"
+                        flat dense round icon="la la-headphones" class="reader-icon-btn"
+                        aria-label="Озвучка книги" title="Озвучка книги — Silero"
+                        @click="openReaderAudio"
+                    />
+                    <q-btn
                         flat
                         dense
                         round
@@ -974,7 +980,10 @@
             <div
                 v-if="!compactChromeHidden && !controlsOpen"
                 class="reader-mobile-bar"
-                :class="{'reader-mobile-bar--with-contents': hasContentsMenu}"
+                :class="{
+                    'reader-mobile-bar--with-contents': hasContentsMenu,
+                    'reader-mobile-bar--tts': config.ttsEnabled && !isStandaloneMode,
+                }"
             >
                 <q-btn
                     flat
@@ -994,6 +1003,12 @@
                     :label="uiText.contents"
                     class="reader-mobile-btn"
                     @click="toggleContentsDialog"
+                />
+                <q-btn
+                    v-if="config.ttsEnabled && !isStandaloneMode"
+                    flat no-caps stack icon="la la-headphones" label="Озвучка"
+                    class="reader-mobile-btn" aria-label="Озвучка книги"
+                    @click="openReaderAudio"
                 />
                 <q-btn
                     flat
@@ -1498,6 +1513,11 @@
             </div>
         </q-dialog>
 
+        <reader-audio
+            v-if="bookUid && config.ttsEnabled && !isStandaloneMode"
+            ref="audioPlayer" :book-uid="bookUid" :title="title" :author="authorLine" :cover="coverSrc"
+        />
+
         <q-dialog v-model="bookmarkComposerOpen">
             <div class="reader-dialog reader-dialog--composer std-dialog-card--reader" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
                 <div class="reader-dialog-header">
@@ -1532,6 +1552,7 @@ import Fb2Parser from '../../../server/core/fb2/Fb2Parser';
 import readerContent from '../../../server/core/fb2/ReaderContent';
 import _ from 'lodash';
 import he from 'he';
+import ReaderAudio from './ReaderAudio.vue';
 
 const readerPreferencesStorageKey = 'inpx.reader.preferences.v1';
 const readerProgressStorageKey = 'inpx.reader.progress.v1';
@@ -1561,6 +1582,7 @@ const readerDeviceScopedPreferenceKeys = new Set([
 ]);
 
 const componentOptions = {
+    components: {ReaderAudio},
     watch: {
         readerSourceKey: {
             immediate: true,
@@ -10766,6 +10788,11 @@ class Reader {
             await this.promptReaderProfileLogin();
     }
 
+    async openReaderAudio() {
+        if (await this.ensureReaderProfileReady())
+            this.$refs.audioPlayer?.open();
+    }
+
     async ensureReaderProfileReady() {
         if (!this.readerProfileWarningVisible)
             return true;
@@ -13570,6 +13597,14 @@ export default vueComponent(Reader);
 
     .reader-mobile-bar--with-contents {
         grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .reader-mobile-bar--tts {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .reader-mobile-bar--tts.reader-mobile-bar--with-contents {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
     }
 
     .reader-mobile-btn {

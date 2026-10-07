@@ -1,7 +1,7 @@
 inpx-web-7z
 ===========
 
-Ветка `develop` содержит **1.7.9-rc.1**: [предварительный релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.7.9-rc.1), [история изменений](./CHANGELOG.md). Стабильная версия — [1.7.8](https://github.com/AceAsket/inpx-web/releases/tag/v1.7.8). Основные Docker-примеры используют стабильный образ; примеры сборки из исходников — тег `v1.7.9-rc.1`.
+Ветка `develop` содержит **1.7.9-rc.4**: [предварительный релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.7.9-rc.4), [история изменений](./CHANGELOG.md). Стабильная версия — [1.7.8](https://github.com/AceAsket/inpx-web/releases/tag/v1.7.8). Основные Docker-примеры используют стабильный образ; примеры сборки из исходников — тег `v1.7.9-rc.4`.
 
 <a id="ключевые-отличия" />
 
@@ -74,7 +74,7 @@ inpx-web-7z
 Для самостоятельной сборки сначала получите исходники релиза:
 
 ```sh
-git clone --branch v1.7.9-rc.1 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.7.9-rc.4 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 ```
 
@@ -606,7 +606,7 @@ http://<ваш_хост>:12380/opds?user=<profileId>
 
 Начиная с **1.7.9-rc.1**, сервер поддерживает нативный [Custom metadata provider Audiobookshelf](https://audiobookshelf.org/docs/documentation/community/community-providers/). Он позволяет подбирать метаданные для аудиокниги по электронным книгам в INPX-библиотеке, включая самостоятельно озвученные книги.
 
-Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:1.7.9-rc.3` и добавьте к своей команде запуска:
+Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:1.7.9-rc.4` и добавьте к своей команде запуска:
 
 ```sh
 -e INPX_ABS_ENABLED=true \
@@ -781,7 +781,7 @@ http://127.0.0.1:12380/#/reader-lab?sample=night-watch.fb2&debugReader=1&debugRe
 Сборка на машине с архитектурой целевой платформы предпочтительна; CI использует отдельный ARM64 runner. Для кросс-сборки linux-arm64 на x64 потребуется [QEMU](https://wiki.debian.org/QemuUserEmulation). Linux-бинарники используют glibc; для Alpine используйте Docker-образ на Debian.
 
 ```sh
-git clone --branch v1.7.9-rc.1 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.7.9-rc.4 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 npm ci
 npm run release:linux
@@ -844,7 +844,7 @@ sudo apt install -y nodejs
 node --version
 
 # подготовка
-git clone --branch v1.7.9-rc.1 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.7.9-rc.4 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 npm ci
 npm run build:client
@@ -1381,6 +1381,10 @@ pct set <CTID> -features nesting=1,keyctl=1
 ```sh
 ./scripts/proxmox-lxc-install.sh --help
 ```
+
+### Озвучка книг — Silero TTS
+
+Для русских FB2 доступна необязательная серверная озвучка: пять голосов, MP3-плеер с перемоткой, скоростью и сохранением места. Silero запускается отдельным CPU-контейнером. [Настройка, запуск и ограничения](docs/silero-tts.md).
 
 ### Обратная связь
 
