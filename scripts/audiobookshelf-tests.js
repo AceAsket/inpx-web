@@ -231,4 +231,49 @@ async function testAudiobookshelfDiagnosticsExplainAuthorizationWithoutExposingS
     }, {rootPathStatic: '/library'});
 }
 
-module.exports = [testAudiobookshelfNativeMetadataAndAuthorOrder, testAudiobookshelfTokenScopeAndSignedCoverLinks, testAudiobookshelfSearchBoundsAndCacheInvalidation, testAudiobookshelfReturnsMatchesBeforeClientTimeout, testAudiobookshelfDiagnosticsExplainAuthorizationWithoutExposingSecrets];
+async function testAudiobookshelfOmitsMissingAndNullMetadata() {
+    await fixture(async({dir, worker, metadata, request, count}) => {
+        await fs.writeFile(path.join(dir, 'source', '1.fb2'), '<FictionBook><description><title-info><book-title>Без метаданных</book-title></title-info><publish-info><book-name>Без метаданных</book-name></publish-info></description></FictionBook>');
+        const zip = new(require('yazl').ZipFile)();
+        const done = pipeline(zip.outputStream, fs.createWriteStream(path.join(dir, 'source', '2.epub')));
+        zip.addBuffer(Buffer.from('<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>'), 'META-INF/container.xml');
+        zip.addBuffer(Buffer.from('<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:description>null</dc:description><dc:publisher>null</dc:publisher><dc:language>null</dc:language><dc:identifier>urn:isbn:null</dc:identifier><dc:subject>null</dc:subject></metadata></package>'), 'book.opf');
+        zip.end(); await done;
+        const found = (await worker.bookSearch({title: '*Проверка метаданных'})).found.filter(book => ['1', '2'].includes(book.file));
+        const books = found.map(book => ({...book, lang: null, year: ' null ', genre: 'NULL', keywords: 'null', series: null, serno: 'null'}));
+        worker.bookSearch = async() => ({found: books});
+        const query = '/search?query=' + encodeURIComponent('Проверка метаданных');
+        let response = await request(query);
+        assert.strictEqual(response.status, 200);
+        let {matches} = await response.json();
+        assert.strictEqual(matches.length, 2);
+        for (const book of matches) {
+            assert.deepStrictEqual(Object.keys(book).sort(), ['author', 'cover', 'title']);
+            assert.ok(book.cover && book.author && book.title);
+        }
+        const cachedFb2 = [...metadata.cache.values()].find(entry => entry.value.publisher === '');
+        assert.ok(cachedFb2, 'Missing FB2 elements must not become the string null during parsing');
+        assert.strictEqual(cachedFb2.value.description, '');
+        assert.strictEqual(cachedFb2.value.isbn, '');
+        assert.deepStrictEqual(cachedFb2.value.tags, []);
+        // Legacy cached placeholders must not mask valid index values, and a
+        // mixed list must retain real tags while dropping only null entries.
+        for (const book of books) Object.assign(book, {lang: 'ru', year: '2025', genre: 'sf, null', keywords: 'null; полезный тег; ещё тег'});
+        for (const entry of metadata.cache.values()) Object.assign(entry.value, {
+            language: ' null ', publishedYear: 'null', tags: [null, ' NULL ', '', ' полезный тег ', 'null programming'],
+        });
+        response = await request(query);
+        assert.strictEqual(response.status, 200);
+        ({matches} = await response.json());
+        for (const book of matches) {
+            assert.strictEqual(book.language, 'ru');
+            assert.strictEqual(book.publishedYear, '2025');
+            assert.deepStrictEqual(book.tags, ['полезный тег', 'null programming', 'ещё тег']);
+            assert.strictEqual(book.genres.length, 1);
+            for (const field of ['publisher', 'isbn', 'description', 'series']) assert.ok(!Object.hasOwn(book, field), field);
+        }
+        assert.strictEqual(count().extractions, 2, 'Cached metadata must be sanitized without re-reading archives');
+    });
+}
+
+module.exports = [testAudiobookshelfNativeMetadataAndAuthorOrder, testAudiobookshelfTokenScopeAndSignedCoverLinks, testAudiobookshelfSearchBoundsAndCacheInvalidation, testAudiobookshelfReturnsMatchesBeforeClientTimeout, testAudiobookshelfDiagnosticsExplainAuthorizationWithoutExposingSecrets, testAudiobookshelfOmitsMissingAndNullMetadata];

@@ -66,21 +66,34 @@ function signedCoverUrl(book, req, config, security) {
     return url.toString();
 }
 
+function optionalText(value) {
+    const text = String(value ?? '').trim();
+    return /^null$/i.test(text) ? '' : text;
+}
+
 function mapMetadata(book, extra) {
     const result = {
         title: book.title || 'Без названия',
-        author: String(book.author || '').split(',').map(value => value.trim()).filter(Boolean).join(', '),
-        language: extra.language || book.lang || '',
-        genres: String(book.genre || '').split(',').filter(Boolean).map(value => genreNames.get(value) || value),
-        tags: [...new Set([...(extra.tags || []), ...String(book.keywords || '').split(/[,;]/).map(value => value.trim()).filter(Boolean)])],
     };
-    for (const field of ['description', 'publisher', 'isbn'])
-        if (extra[field]) result[field] = String(extra[field]);
-    const year = extra.publishedYear || book.year;
-    if (year && String(year) !== '0') result.publishedYear = String(year);
-    if (book.series) {
-        result.series = [{series: book.series}];
-        if (book.serno) result.series[0].sequence = String(book.serno);
+    const author = optionalText(book.author).split(',').map(optionalText).filter(Boolean).join(', ');
+    if (author) result.author = author;
+    const language = optionalText(extra.language) || optionalText(book.lang);
+    if (language) result.language = language;
+    const genres = optionalText(book.genre).split(',').map(optionalText).filter(Boolean).map(value => genreNames.get(value) || value);
+    if (genres.length) result.genres = genres;
+    const tags = [...new Set([...(extra.tags || []), ...optionalText(book.keywords).split(/[,;]/)].map(optionalText).filter(Boolean))];
+    if (tags.length) result.tags = tags;
+    for (const field of ['description', 'publisher', 'isbn']) {
+        const value = optionalText(extra[field]);
+        if (value) result[field] = value;
+    }
+    const year = optionalText(extra.publishedYear) || optionalText(book.year);
+    if (year && year !== '0') result.publishedYear = year;
+    const series = optionalText(book.series);
+    if (series) {
+        result.series = [{series}];
+        const sequence = optionalText(book.serno);
+        if (book.serno && sequence) result.series[0].sequence = sequence;
     }
     return result;
 }

@@ -10,7 +10,7 @@ const ZipReader = require('./ZipReader');
 const {coverCacheKey} = require('./BookAssets');
 
 function plainText(value = '') {
-    return he.decode(String(value)).replace(/<\s*(?:\/p|br\s*\/?)\s*>/gi, '\n')
+    return he.decode(String(value ?? '')).replace(/<\s*(?:\/p|br\s*\/?)\s*>/gi, '\n')
         .replace(/<[^>]*>/g, '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
 }
 
