@@ -85,20 +85,62 @@ function mapMetadata(book, extra) {
     return result;
 }
 
+function resultLimit(config) {
+    return Math.max(1, Math.min(20, Math.floor(Number(config.absMaxResults) || 10)));
+}
+
+function authorizationError(req, config) {
+    if (!config.absEnabled) return {status: 404, error: 'Metadata provider is disabled'};
+    if (!config.absToken) return {status: 503, error: 'INPX_ABS_TOKEN is required'};
+    if (!isAuthorizedRequest(req, config)) return {status: 401, error: 'Invalid authorization token'};
+    return null;
+}
+
 function init(app, config, worker, security) {
     const metadata = new BookMetadata(worker);
     const root = rootPath(config);
     let activeSearches = 0;
     const authorize = (req, res, next) => {
         res.set('Cache-Control', 'no-store');
-        if (!config.absEnabled) return res.status(404).json({error: 'Metadata provider is disabled'});
-        if (!config.absToken) return res.status(503).json({error: 'INPX_ABS_TOKEN is required'});
-        if (!isAuthorizedRequest(req, config)) return res.status(401).json({error: 'Invalid authorization token'});
+        const denied = authorizationError(req, config);
+        if (denied) return res.status(denied.status).json({error: denied.error});
         next();
     };
-    app.get(root, authorize, (req, res) => res.json({
-        provider: 'inpx-web', version: config.version || '', search: `${root}/search`, authorizationRequired: true,
-    }));
+    app.get(root, (req, res) => {
+        res.set('Cache-Control', 'no-store');
+        const denied = authorizationError(req, config);
+        const info = {
+            provider: 'inpx-web', version: config.version || '',
+            description: 'Провайдер метаданных Audiobookshelf. Укажите этот базовый адрес в настройках custom provider; ABS сам добавляет /search.',
+            search: `${root}/search`, cover: `${root}/cover`, authorizationRequired: true,
+            configuration: {enabled: !!config.absEnabled, tokenConfigured: !!config.absToken},
+            authorization: {header: 'Authorization', formats: ['<INPX_ABS_TOKEN>', 'Bearer <INPX_ABS_TOKEN>']},
+            parameters: {
+                query: 'Название книги; параметр обязателен, но может быть пустым при поиске по автору.',
+                author: 'Имя автора; необязательный параметр. Название или автор должны быть заполнены.',
+                maxLength: 200,
+            },
+            limits: {maxResults: resultLimit(config), searchTimeoutMs, metadataTimeoutMs},
+            example: {
+                method: 'GET', path: `${root}/search?query=&author=${encodeURIComponent('Хандке')}`,
+                curl: `curl --get 'http://<host>:12380${root}/search' --header 'Authorization: <INPX_ABS_TOKEN>' --data-urlencode 'query=' --data-urlencode 'author=Хандке'`,
+            },
+            troubleshooting: {
+                400: 'Проверьте query и author: строки до 200 символов, хотя бы одна непустая.',
+                401: 'Передайте INPX_ABS_TOKEN в заголовке Authorization. В браузере заголовок обычно отсутствует.',
+                403: 'Проверьте общую авторизацию inpx-web и правила reverse proxy.',
+                404: 'Включите провайдер: INPX_ABS_ENABLED=true.',
+                429: 'Дождитесь завершения активных поисков и повторите запрос.',
+                503: 'Проверьте INPX_ABS_TOKEN, готовность индекса и доступность библиотеки.',
+            },
+        };
+        if (denied) return res.status(denied.status).json({...info, error: denied.error});
+        info.diagnostics = {
+            activeSearches, activeArchiveReads: metadata.active, queuedArchiveReads: metadata.queue.length,
+            pendingMetadata: metadata.pending.size, cachedMetadata: metadata.cache.size,
+        };
+        res.json(info);
+    });
     app.get(`${root}/search`, authorize, async(req, res) => {
         if (activeSearches >= 2)
             return res.status(429).set('Retry-After', '2').json({error: 'Too many metadata searches'});
@@ -124,7 +166,7 @@ function init(app, config, worker, security) {
             });
             indexWork = Promise.resolve(worker.bookSearch(search));
             const result = await Promise.race([indexWork, timeout]);
-            const limit = Math.max(1, Math.min(20, Math.floor(Number(config.absMaxResults) || 10)));
+            const limit = resultLimit(config);
             const books = (result.found || []).filter(book => !authorTerm || authorMatches(book.author, authorTerm));
             books.sort((a, b) => {
                 const score = book => (normalized(book.title) === normalized(title) ? 4 : 0) + (book.ext === 'fb2' ? 1 : 0);

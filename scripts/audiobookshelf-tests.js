@@ -192,4 +192,43 @@ async function testAudiobookshelfReturnsMatchesBeforeClientTimeout() {
     });
 }
 
-module.exports = [testAudiobookshelfNativeMetadataAndAuthorOrder, testAudiobookshelfTokenScopeAndSignedCoverLinks, testAudiobookshelfSearchBoundsAndCacheInvalidation, testAudiobookshelfReturnsMatchesBeforeClientTimeout];
+async function testAudiobookshelfDiagnosticsExplainAuthorizationWithoutExposingSecrets() {
+    await fixture(async({request, config, count, root, metadata}) => {
+        config.absMaxResults = 100;
+        let response = await request('', '');
+        assert.strictEqual(response.status, 401);
+        assert.strictEqual(response.headers.get('cache-control'), 'no-store');
+        let info = await response.json();
+        assert.strictEqual(info.search, root + '/search');
+        assert.deepStrictEqual(info.configuration, {enabled: true, tokenConfigured: true});
+        assert.ok(info.example.curl.includes('Authorization: <INPX_ABS_TOKEN>'));
+        assert.strictEqual(info.limits.maxResults, 20);
+        assert.ok(info.troubleshooting['401'].includes('Authorization'));
+        assert.ok(!info.diagnostics, 'Runtime diagnostics require the service token');
+        assert.ok(!JSON.stringify(info).includes(config.absToken), 'Help must not disclose the configured token');
+        response = await request('/', `Bearer ${config.absToken}`);
+        assert.strictEqual(response.status, 200);
+        info = await response.json();
+        assert.strictEqual(info.cover, root + '/cover');
+        assert.deepStrictEqual(info.diagnostics, {activeSearches: 0, activeArchiveReads: 0, queuedArchiveReads: 0, pendingMetadata: 0, cachedMetadata: 0});
+        await request('/search?query=' + encodeURIComponent('Проверка метаданных') + '&author=' + encodeURIComponent('Тестов'));
+        info = await (await request('')).json();
+        assert.strictEqual(info.diagnostics.cachedMetadata, metadata.cache.size);
+        assert.ok(info.diagnostics.cachedMetadata > 0);
+        config.absEnabled = false;
+        response = await request('');
+        assert.strictEqual(response.status, 404);
+        info = await response.json();
+        assert.strictEqual(info.configuration.enabled, false);
+        assert.ok(info.troubleshooting['404'].includes('INPX_ABS_ENABLED=true'));
+        config.absEnabled = true; config.absToken = '';
+        response = await request('');
+        assert.strictEqual(response.status, 503);
+        info = await response.json();
+        assert.strictEqual(info.configuration.tokenConfigured, false);
+        assert.strictEqual(info.error, 'INPX_ABS_TOKEN is required');
+        assert.deepStrictEqual(count(), {extractions: 2, coverLoads: 0}, 'Diagnostics must not read archives or generate covers');
+    }, {rootPathStatic: '/library'});
+}
+
+module.exports = [testAudiobookshelfNativeMetadataAndAuthorOrder, testAudiobookshelfTokenScopeAndSignedCoverLinks, testAudiobookshelfSearchBoundsAndCacheInvalidation, testAudiobookshelfReturnsMatchesBeforeClientTimeout, testAudiobookshelfDiagnosticsExplainAuthorizationWithoutExposingSecrets];
