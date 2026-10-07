@@ -10945,6 +10945,7 @@ export default vueComponent(Reader);
 
 <style scoped>
 .reader-page {
+    --q-primary: var(--reader-accent);
     position: relative;
     display: flex;
     flex-direction: column;
@@ -10964,6 +10965,14 @@ export default vueComponent(Reader);
 
 .reader-page--immersive {
     cursor: default;
+}
+
+.reader-page :deep(.q-field--focused .q-field__control) {
+    box-shadow: 0 0 0 3px var(--reader-accent-soft);
+}
+
+.reader-page :deep(.q-field.q-field--focused .q-field__control::after) {
+    border-color: var(--reader-accent);
 }
 
 .reader-toolbar {

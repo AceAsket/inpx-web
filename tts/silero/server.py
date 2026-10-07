@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,6 +25,23 @@ MODEL_DIR = Path(os.environ.get("SILERO_MODEL_DIR", "/models"))
 API_KEY = os.environ.get("SILERO_API_KEY", "")
 LOCK = threading.Lock()
 MODEL = None
+STATE_LOCK = threading.Lock()
+JOBS = {}
+SPEED = max(1.0, float(os.environ.get("SILERO_ESTIMATED_CHARS_PER_SECOND", "15")))
+SPEED_MEASURED = False
+
+
+def update_job(request_id, **values):
+    if not request_id:
+        return
+    with STATE_LOCK:
+        if request_id not in JOBS:
+            for key, job in list(JOBS.items()):
+                if len(JOBS) < 128:
+                    break
+                if job.get("state") in ("ready", "error"):
+                    del JOBS[key]
+        JOBS.setdefault(request_id, {}).update(values)
 
 
 def normalize_numbers(text):
@@ -82,8 +100,16 @@ def load_model():
     return MODEL
 
 
-def synthesize(text, speaker, directory):
+def synthesize(text, speaker, directory, request_id=""):
+    global SPEED, SPEED_MEASURED
+    update_job(request_id, state="loading", progress=0, remainingSeconds=None)
     model = load_model()
+    chunks = list(split_text(text))
+    total = sum(map(len, chunks))
+    if not total or total > MAX_TEXT:
+        raise ValueError("Normalized text exceeds synthesis limit or is empty")
+    started = time.monotonic()
+    update_job(request_id, state="generating", progress=0, remainingSeconds=round(total / SPEED))
     mp3_file = Path(directory) / "speech.mp3"
     # Encode incrementally: a whole-book PCM/WAV file can occupy gigabytes.
     encoder = subprocess.Popen(
@@ -95,7 +121,7 @@ def synthesize(text, speaker, directory):
     generated_characters = 0
     try:
         with torch.inference_mode():
-            for chunk in split_text(text):
+            for chunk in chunks:
                 generated_characters += len(chunk)
                 if generated_characters > MAX_TEXT:
                     raise ValueError("Normalized text exceeds synthesis limit")
@@ -105,6 +131,9 @@ def synthesize(text, speaker, directory):
                 )
                 pcm = (audio.detach().cpu().clamp(-1, 1) * 32767).to(torch.int16)
                 encoder.stdin.write(pcm.numpy().astype("<i2", copy=False).tobytes())
+                elapsed = max(0.01, time.monotonic() - started)
+                update_job(request_id, progress=generated_characters / total,
+                           remainingSeconds=round((total - generated_characters) * elapsed / generated_characters))
         encoder.stdin.close()
         if encoder.wait(timeout=300) != 0:
             raise RuntimeError("FFmpeg encoding failed")
@@ -114,6 +143,12 @@ def synthesize(text, speaker, directory):
             encoder.wait(timeout=10)
         if not encoder.stdin.closed:
             encoder.stdin.close()
+    elapsed = max(0.01, time.monotonic() - started)
+    with STATE_LOCK:
+        observed = total / elapsed
+        SPEED = (SPEED * 0.7 + observed * 0.3) if SPEED_MEASURED else observed
+        SPEED_MEASURED = True
+    update_job(request_id, state="ready", progress=1, remainingSeconds=0)
     return mp3_file
 
 
@@ -135,9 +170,22 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_GET(self):
-        if self.path != "/health":
+        if self.path != "/health" and API_KEY and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {API_KEY}"):
+            return self.reply(401, "Unauthorized")
+        if self.path == "/estimate":
+            with STATE_LOCK:
+                result = {"charactersPerSecond": SPEED, "measured": SPEED_MEASURED,
+                          "warmupSeconds": 0 if MODEL is not None else 120}
+        elif re.fullmatch(r"/jobs/[a-f0-9]{64}", self.path):
+            with STATE_LOCK:
+                result = dict(JOBS.get(self.path.rsplit("/", 1)[-1], {}))
+            if not result:
+                return self.reply(404, "Job not found")
+        elif self.path == "/health":
+            result = {"ok": True, "model": MODEL_ID, "loaded": MODEL is not None}
+        else:
             return self.reply(404, "Not found")
-        data = json.dumps({"ok": True, "model": MODEL_ID, "loaded": MODEL is not None}).encode()
+        data = json.dumps(result).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -160,6 +208,9 @@ class Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(None)
             text = data.get("text", "")
             speaker = data.get("speaker", "xenia")
+            request_id = data.get("requestId", "")
+            if not isinstance(request_id, str) or (request_id and not re.fullmatch(r"[a-f0-9]{64}", request_id)):
+                return self.reply(400, "Invalid request ID")
             if not isinstance(text, str) or not re.search(r"[А-Яа-яЁё\d]", text) or len(text) > MAX_TEXT:
                 return self.reply(400, "Invalid text")
             if speaker not in SPEAKERS or data.get("model", MODEL_ID) != MODEL_ID:
@@ -170,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(429, "Synthesis is busy")
         try:
             with tempfile.TemporaryDirectory(prefix="silero-") as directory:
-                audio = synthesize(text, speaker, directory)
+                audio = synthesize(text, speaker, directory, request_id)
                 self.send_response(200)
                 self.send_header("Content-Type", "audio/mpeg")
                 self.send_header("Content-Length", str(audio.stat().st_size))
@@ -182,6 +233,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception:
+            update_job(request_id, state="error", remainingSeconds=None)
             logging.exception("Synthesis failed")
             self.reply(500, "Synthesis failed; check service logs")
         finally:

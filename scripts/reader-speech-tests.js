@@ -8,7 +8,7 @@ const axios = require('axios');
 const {Readable} = require('stream');
 const {execFileSync} = require('child_process');
 const Fb2Parser = require('../server/core/fb2/Fb2Parser');
-const {ReaderSpeech, extractSpeechText, registerSpeechRoute} = require('../server/core/ReaderSpeech');
+const {ReaderSpeech, extractSpeechText, extractSpeechChapters, splitSpeechText, registerSpeechRoute} = require('../server/core/ReaderSpeech');
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fb2 = text => new Fb2Parser().fromString(`<FictionBook><body><section><p>${text}</p></section></body></FictionBook>`).rawNodes;
@@ -51,6 +51,22 @@ async function testCore(directory) {
     assert.equal(extractSpeechText(sample), 'Глава первая\n\nПривет, мир & книга!\n\nСтрока стиха\n\nТекст <без разметки>');
     assert.throws(() => extractSpeechText(fb2('')), /нет текста/);
     assert.throws(() => extractSpeechText(fb2('a'.repeat(3000001))), /слишком большой/);
+    const nested = new Fb2Parser().fromString(`<FictionBook><body><title><p>Книга</p></title><section>
+        <title><p>Часть первая</p></title><section><title><p>Первая глава</p></title><p>Первый текст.</p></section>
+        <section><title><p>Вторая глава</p></title><p>Второй текст.</p></section><p>Послесловие части.</p>
+        </section><p>Конец книги.</p></body><body name="notes"><p>НЕ ЧИТАТЬ</p></body></FictionBook>`).rawNodes;
+    const nestedParts = extractSpeechChapters(nested);
+    assert.equal(nestedParts.map(part => part.text).join('\n\n'), extractSpeechText(nested), 'Nested chapters preserve order and all text without duplicates');
+    assert.equal(nestedParts[0].title, 'Первая глава');
+    assert.ok(nestedParts.every((part, index) => part.index === index));
+    const longText = 'Русский текст. Очень длинная глава! '.repeat(600);
+    const bounded = extractSpeechChapters(fb2(longText));
+    assert.ok(bounded.length > 1 && bounded.every(part => part.text.length <= 6000));
+    assert.equal(bounded.map(part => part.text).join(' '), longText.trim());
+    const online = extractSpeechChapters(fb2(longText), 700);
+    assert.ok(online.length > bounded.length && online.every(part => part.text.length <= 700));
+    assert.equal(online.map(part => part.text).join(' '), longText.trim());
+    assert.equal(splitSpeechText('я'.repeat(1401), 700).join(''), 'я'.repeat(1401));
 
     const audio = Buffer.from('ID3test-audio-range-payload');
     let calls = 0, mode = 'ok', release;
@@ -61,6 +77,7 @@ async function testCore(directory) {
         calls++;
         assert.equal(req.headers.authorization, 'Bearer test-key');
         assert.equal(req.body.model, 'v5_5_ru');
+        assert.equal(Object.hasOwn(req.body, 'rate'), false, 'Playback speed must not become a synthesis parameter');
         await gate;
         if (mode === 'error') return res.status(503).json({error: 'busy'});
         res.type(mode === 'wrong-type' ? 'text/plain' : 'audio/mpeg').send(mode === 'empty' ? Buffer.alloc(0) : audio);
@@ -105,6 +122,31 @@ async function testCore(directory) {
         const regenerated = await speech.prepare('a', 'book-1', {fb2: sample});
         assert.equal((await settled(speech, 'a', regenerated.id)).state, 'ready');
         assert.equal(calls, 2, 'An evicted file must regenerate');
+        const plan = await speech.plan({fb2: nested}, 'chapters');
+        assert.equal(plan.chapters.length, nestedParts.length);
+        assert.ok(plan.chapters.every(part => part.characters > 0 && !Object.hasOwn(part, 'text')), 'Plans must not expose book text');
+        const chapter = await speech.preparePart('a', 'chapter-book', {fb2: nested}, 'aidar', 'chapters', 1);
+        assert.equal((await settled(speech, 'a', chapter.id)).state, 'ready');
+        await assert.rejects(speech.preparePart('a', 'chapter-book', {fb2: nested}, 'aidar', 'chapters', -1), /не найдена/);
+        await assert.rejects(speech.preparePart('a', 'chapter-book', {fb2: nested}, 'aidar', 'chapters', '1'), /не найдена/);
+        const preview = await speech.preview('a', 'baya');
+        assert.equal((await settled(speech, 'a', preview.id)).state, 'ready');
+        const beforePreview = calls;
+        assert.equal((await speech.preview('b', 'baya')).state, 'ready');
+        assert.equal(calls, beforePreview, 'A voice preview is cached across profiles');
+        const progressSpeech = new ReaderSpeech({...config, dataDir: path.join(directory, 'progress')}, {
+            post: async() => { await pause(1300); return {headers: {'content-type': 'audio/mpeg'}, data: Readable.from(audio)}; },
+            get: async url => ({data: url.endsWith('/estimate') ? {charactersPerSecond: 10, measured: true, warmupSeconds: 0} : {progress: 0.5, remainingSeconds: 12}}),
+        });
+        const estimate = await progressSpeech.plan({fb2: sample}, 'book');
+        assert.equal(estimate.estimate.totalSeconds, Math.ceil(extractSpeechText(sample).length / 10));
+        const progressJob = await progressSpeech.preparePart('a', 'progress', {fb2: sample}, 'xenia', 'book', 0);
+        await pause(1150);
+        const progressing = progressSpeech.status('a', progressJob.id);
+        assert.ok(progressing.progress > 0.4 && progressing.progress <= 0.5);
+        assert.equal(progressing.remainingSeconds, 12);
+        const done = await settled(progressSpeech, 'a', progressJob.id);
+        assert.equal(done.progress, 1);
         for (const failure of ['empty', 'wrong-type', 'error']) {
             mode = failure;
             const failed = await speech.prepare('a', failure, {fb2: sample});
@@ -152,6 +194,7 @@ async function testRealService(url) {
 (async() => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-speech-tests-'));
     try { await testCore(directory); } finally { await fs.remove(directory); }
+    await require('./reader-audio-player-tests')();
     const index = process.argv.indexOf('--silero-url');
     if (index >= 0) await testRealService(process.argv[index + 1]);
 })().catch(error => { console.error(error); process.exitCode = 1; });

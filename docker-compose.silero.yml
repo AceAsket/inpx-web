@@ -1,7 +1,7 @@
 # INPX_TTS_ENABLED=true docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts up -d --build
 services:
   inpx-web:
-    image: aceasket/inpx-web-7z:1.7.9-rc.5
+    image: aceasket/inpx-web-7z:1.7.9-rc.6
     build: .
     environment:
       INPX_TTS_ENABLED: ${INPX_TTS_ENABLED:-false}
@@ -11,7 +11,7 @@ services:
       INPX_TTS_TIMEOUT_MS: "3600000"
   silero:
     profiles: [tts]
-    image: aceasket/inpx-web-7z:1.7.9-rc.5-silero
+    image: aceasket/inpx-web-7z:1.7.9-rc.6-silero
     build: ./tts/silero
     restart: unless-stopped
     environment:

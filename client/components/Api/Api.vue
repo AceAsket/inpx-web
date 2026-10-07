@@ -641,8 +641,16 @@ class Api {
         return await this.request({action: 'send-book-email', bookUid, format}, 300);
     }
 
-    async prepareReaderAudio(bookUid, speaker) {
-        return await this.request({action: 'prepare-reader-audio', bookUid, speaker}, 120);
+    async prepareReaderAudio(bookUid, speaker, mode, chapterIndex) {
+        return await this.request({action: 'prepare-reader-audio', bookUid, speaker, mode, chapterIndex}, 120);
+    }
+
+    async getReaderAudioPlan(bookUid, mode) {
+        return await this.request({action: 'get-reader-audio-plan', bookUid, mode}, 120);
+    }
+
+    async previewReaderVoice(speaker) {
+        return await this.request({action: 'preview-reader-voice', speaker}, 120);
     }
 
     async getReaderAudioStatus(jobId) {

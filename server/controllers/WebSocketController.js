@@ -198,6 +198,10 @@ class WebSocketController {
                     await this.prepareReaderAudio(req, ws); break;
                 case 'get-reader-audio-status':
                     await this.getReaderAudioStatus(req, ws); break;
+                case 'get-reader-audio-plan':
+                    await this.getReaderAudioPlan(req, ws); break;
+                case 'preview-reader-voice':
+                    await this.previewReaderVoice(req, ws); break;
                 case 'get-user-reading-library':
                     await this.getUserReadingLibrary(req, ws); break;
                 case 'update-reader-progress':
@@ -317,6 +321,7 @@ class WebSocketController {
             'import-admin-backup',
             'update-reader-progress',
             'prepare-reader-audio',
+            'preview-reader-voice',
             'delete-reader-progress',
             'clear-reader-progress',
             'update-reader-preferences',
@@ -690,8 +695,21 @@ class WebSocketController {
         if (!speech.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!req.bookUid) throw new Error('bookUid is empty');
         const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid);
-        const result = await speech.prepare(user.id, req.bookUid, bookInfo, req.speaker || 'xenia');
+        const result = req.mode ? await speech.preparePart(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.mode, req.chapterIndex)
+            : await speech.prepare(user.id, req.bookUid, bookInfo, req.speaker || 'xenia');
         this.send(result, req, ws);
+    }
+
+    async getReaderAudioPlan(req, ws) {
+        await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        if (!req.bookUid) throw new Error('bookUid is empty');
+        const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid);
+        this.send(await getReaderSpeech(this.config).plan(bookInfo, req.mode || 'online'), req, ws);
+    }
+
+    async previewReaderVoice(req, ws) {
+        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        this.send(await getReaderSpeech(this.config).preview(user.id, req.speaker || 'xenia'), req, ws);
     }
 
     async getReaderAudioStatus(req, ws) {
