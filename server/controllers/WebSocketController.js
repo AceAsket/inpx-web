@@ -695,8 +695,8 @@ class WebSocketController {
         if (!speech.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!req.bookUid) throw new Error('bookUid is empty');
         const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid);
-        const result = req.mode ? await speech.preparePart(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.mode, req.chapterIndex)
-            : await speech.prepare(user.id, req.bookUid, bookInfo, req.speaker || 'xenia');
+        const result = req.mode ? await speech.preparePart(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.mode, req.chapterIndex, req.options)
+            : await speech.prepare(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.options);
         this.send(result, req, ws);
     }
 
@@ -709,7 +709,7 @@ class WebSocketController {
 
     async previewReaderVoice(req, ws) {
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-        this.send(await getReaderSpeech(this.config).preview(user.id, req.speaker || 'xenia'), req, ws);
+        this.send(await getReaderSpeech(this.config).preview(user.id, req.speaker || 'xenia', req.options, req.sampleText), req, ws);
     }
 
     async getReaderAudioStatus(req, ws) {

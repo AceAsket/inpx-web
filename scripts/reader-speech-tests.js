@@ -9,6 +9,7 @@ const {Readable} = require('stream');
 const {execFileSync} = require('child_process');
 const Fb2Parser = require('../server/core/fb2/Fb2Parser');
 const {ReaderSpeech, extractSpeechText, extractSpeechChapters, splitSpeechText, registerSpeechRoute} = require('../server/core/ReaderSpeech');
+const {normalizeSpeechOptions, defaultSpeechOptions} = require('../shared/speechOptions');
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fb2 = text => new Fb2Parser().fromString(`<FictionBook><body><section><p>${text}</p></section></body></FictionBook>`).rawNodes;
@@ -67,19 +68,28 @@ async function testCore(directory) {
     assert.ok(online.length > bounded.length && online.every(part => part.text.length <= 700));
     assert.equal(online.map(part => part.text).join(' '), longText.trim());
     assert.equal(splitSpeechText('я'.repeat(1401), 700).join(''), 'я'.repeat(1401));
+    assert.equal(bounded.filter(part => part.chapterEnd).length, 1, 'Split fragments must not invent chapter boundaries');
+    assert.deepEqual(normalizeSpeechOptions(), defaultSpeechOptions());
+    for (const options of [{pitch: 'evil'}, {sentencePauseMs: -1}, {chapterPauseMs: 10001}, {paragraphPauseMs: '100'},
+        {dictionary: 'слово = <break/>'}, {dictionary: 'слово = +слово'}, {dictionary: 'Имя = имя\nимя = имя'}])
+        assert.throws(() => normalizeSpeechOptions(options));
 
     const audio = Buffer.from('ID3test-audio-range-payload');
-    let calls = 0, mode = 'ok', release;
+    let calls = 0, mode = 'ok', release, lastPayload, engineId = '';
     let gate = new Promise(resolve => { release = resolve; });
     const mock = express();
     mock.use(express.json());
+    mock.get('/health', (req, res) => res.json({cacheIdentity: engineId}));
     mock.post('/synthesize', async(req, res) => {
         calls++;
+        lastPayload = req.body;
         assert.equal(req.headers.authorization, 'Bearer test-key');
         assert.equal(req.body.model, 'v5_5_ru');
         assert.equal(Object.hasOwn(req.body, 'rate'), false, 'Playback speed must not become a synthesis parameter');
         await gate;
         if (mode === 'error') return res.status(503).json({error: 'busy'});
+        if (mode !== 'old-service') res.set('X-INPX-Speech-Options', '1');
+        res.set('X-INPX-Speech-Engine', mode === 'wrong-engine' ? 'other-engine' : engineId || 'builtin');
         res.type(mode === 'wrong-type' ? 'text/plain' : 'audio/mpeg').send(mode === 'empty' ? Buffer.alloc(0) : audio);
     });
     const service = await listen(mock);
@@ -118,10 +128,22 @@ async function testCore(directory) {
         const second = new ReaderSpeech(config);
         assert.equal((await second.prepare('b', 'book-1', {fb2: sample})).state, 'ready');
         assert.equal(calls, 1, 'Cache survives service restart');
+        engineId = 'silero-stress-1.5-pipeline-v1';
+        const stressed = await speech.prepare('a', 'book-1', {fb2: sample});
+        assert.notEqual(stressed.id, id, 'External accentuation must not reuse the built-in audio cache');
+        assert.equal((await settled(speech, 'a', stressed.id)).state, 'ready');
+        assert.equal(speech.status('a', stressed.id).engineId, engineId);
+        engineId = '';
+        assert.equal((await speech.prepare('a', 'book-1', {fb2: sample})).id, id, 'Disabling stress returns to the original audio cache');
+        mode = 'wrong-engine';
+        const incompatible = await speech.prepare('a', 'wrong-engine-book', {fb2: sample});
+        assert.match((await settled(speech, 'a', incompatible.id)).error, /расстановки ударений изменился/);
+        mode = 'ok';
+        const beforeRegeneration = calls;
         await fs.remove(path.join(speech.directory, `${id}.mp3`));
         const regenerated = await speech.prepare('a', 'book-1', {fb2: sample});
         assert.equal((await settled(speech, 'a', regenerated.id)).state, 'ready');
-        assert.equal(calls, 2, 'An evicted file must regenerate');
+        assert.equal(calls, beforeRegeneration + 1, 'An evicted file must regenerate');
         const plan = await speech.plan({fb2: nested}, 'chapters');
         assert.equal(plan.chapters.length, nestedParts.length);
         assert.ok(plan.chapters.every(part => part.characters > 0 && !Object.hasOwn(part, 'text')), 'Plans must not expose book text');
@@ -134,6 +156,26 @@ async function testCore(directory) {
         const beforePreview = calls;
         assert.equal((await speech.preview('b', 'baya')).state, 'ready');
         assert.equal(calls, beforePreview, 'A voice preview is cached across profiles');
+        const options = {pitch: 'low', sentencePauseMs: 300, paragraphPauseMs: 1000, chapterPauseMs: 2000, dictionary: 'Гермиона = Герми+она'};
+        const custom = await speech.preview('a', 'baya', options, 'Гермиона открыла книгу.\n\nКонец пробы.');
+        assert.notEqual(custom.id, preview.id);
+        assert.equal((await settled(speech, 'a', custom.id)).state, 'ready');
+        assert.deepEqual(lastPayload.options, normalizeSpeechOptions(options));
+        assert.equal(lastPayload.segments[0].chapterEnd, true);
+        const reused = await speech.preview('b', 'baya', {...options, dictionary: ' Гермиона=Герми+она '}, 'Гермиона открыла книгу.\n\nКонец пробы.');
+        assert.equal(reused.id, custom.id, 'Whitespace differences in the dictionary must reuse audio');
+        const changed = await speech.preview('a', 'baya', {...options, pitch: 'high'}, 'Гермиона открыла книгу.');
+        assert.notEqual(changed.id, custom.id);
+        assert.equal((await settled(speech, 'a', changed.id)).state, 'ready');
+        const whole = await speech.preparePart('a', 'tuned-book', {fb2: nested}, 'xenia', 'book', 0, options);
+        assert.equal((await settled(speech, 'a', whole.id)).state, 'ready');
+        assert.equal(lastPayload.segments.map(segment => segment.text).join('\n\n'), extractSpeechText(nested));
+        assert.equal(lastPayload.segments.length, nestedParts.length, 'Whole-book synthesis retains chapter boundaries');
+        await assert.rejects(speech.preview('a', 'baya', options, 'a'.repeat(501)), /500/);
+        mode = 'old-service';
+        const unsupported = await speech.preview('a', 'aidar', options);
+        assert.match((await settled(speech, 'a', unsupported.id)).error, /Обновите контейнер Silero/);
+        mode = 'ok';
         const progressSpeech = new ReaderSpeech({...config, dataDir: path.join(directory, 'progress')}, {
             post: async() => { await pause(1300); return {headers: {'content-type': 'audio/mpeg'}, data: Readable.from(audio)}; },
             get: async url => ({data: url.endsWith('/estimate') ? {charactersPerSecond: 10, measured: true, warmupSeconds: 0} : {progress: 0.5, remainingSeconds: 12}}),
@@ -188,6 +230,20 @@ async function testRealService(url) {
     assert.equal(ready.state, 'ready', ready.error);
     const file = path.join(speech.directory, `${job.id}.mp3`);
     assert.ok((await fs.stat(file)).size > 10000, 'Real synthesized audio must be nonempty');
+    const sampleText = 'Гермиона открыла книгу. Сегодня хорошая погода.\n\nСледующая глава.';
+    const samples = [];
+    for (const options of [
+        {sentencePauseMs: 0, paragraphPauseMs: 0, chapterPauseMs: 0},
+        {sentencePauseMs: 1000, paragraphPauseMs: 2000, chapterPauseMs: 3000},
+        {pitch: 'low', dictionary: 'Гермиона = Герми+она'},
+    ]) {
+        const preview = await speech.preview('test', 'xenia', options, sampleText);
+        const result = await settled(speech, 'test', preview.id, 600000);
+        assert.equal(result.state, 'ready', result.error);
+        samples.push((await fs.stat(path.join(speech.directory, `${preview.id}.mp3`))).size);
+    }
+    assert.ok(samples[1] > samples[0] + 40000, 'Six seconds of explicit pauses must be present in the actual 64 kbps MP3');
+    console.log('Real Silero: speech options, trailing silence, pitch and stressed pronunciation passed');
     console.log(`Real Silero: ${((Date.now() - start) / 1000).toFixed(1)}s; sample: ${file}`);
 }
 

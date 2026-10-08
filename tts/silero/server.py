@@ -12,6 +12,8 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from speech_options import normalize_options, validate_segments, tuned_chunks, trailing_pause
+from accentuation import StressProcessor, STRESS_VERSION
 
 import torch
 from num2words import num2words
@@ -25,6 +27,7 @@ MODEL_DIR = Path(os.environ.get("SILERO_MODEL_DIR", "/models"))
 API_KEY = os.environ.get("SILERO_API_KEY", "")
 LOCK = threading.Lock()
 MODEL = None
+STRESS = StressProcessor(os.environ.get("SILERO_STRESS_ENABLED", "true").lower() == "true")
 STATE_LOCK = threading.Lock()
 JOBS = {}
 SPEED = max(1.0, float(os.environ.get("SILERO_ESTIMATED_CHARS_PER_SECOND", "15")))
@@ -56,10 +59,12 @@ def normalize_numbers(text):
     return re.sub(r"\s+", " ", re.sub(r"\d+", words, text)).strip()
 
 
-def split_text(text, limit=700):
+def split_text(text, limit=700, accentuate=None):
     """Bound synthesis calls, preserving paragraph/sentence boundaries where possible."""
     for paragraph in re.split(r"\n\s*\n", text):
         paragraph = normalize_numbers(re.sub(r"\s+", " ", paragraph).strip())
+        if accentuate is not None:
+            paragraph = accentuate(paragraph)
         while paragraph:
             if len(paragraph) <= limit:
                 if re.search(r"[А-Яа-яЁё]", paragraph):
@@ -70,6 +75,8 @@ def split_text(text, limit=700):
             cut = ends[-1].end() if ends else prefix.rfind(" ")
             if cut < 1:
                 cut = limit
+            if paragraph[cut - 1] == "+":
+                cut -= 1
             chunk = paragraph[:cut].strip()
             if re.search(r"[А-Яа-яЁё]", chunk):
                 yield chunk
@@ -100,16 +107,29 @@ def load_model():
     return MODEL
 
 
-def synthesize(text, speaker, directory, request_id=""):
+def synthesize(text, speaker, directory, request_id="", options=None, segments=None):
     global SPEED, SPEED_MEASURED
     update_job(request_id, state="loading", progress=0, remainingSeconds=None)
     model = load_model()
-    chunks = list(split_text(text))
-    total = sum(map(len, chunks))
+    custom = options is not None
+    started = time.monotonic()
+    accentuate = STRESS if STRESS.enabled else None
+    source = tuned_chunks(segments, options, normalize_numbers, accentuate=accentuate) if custom else (
+        (chunk, len(chunk)) for chunk in split_text(text, accentuate=accentuate))
+    chunks, total = [], 0
+    preparation_share = 0.1 if STRESS.enabled else 0
+    if STRESS.enabled:
+        update_job(request_id, state="preparing", progress=0, remainingSeconds=None)
+    for chunk, count in source:
+        total += count
+        if total > MAX_TEXT:
+            raise ValueError("Normalized text exceeds synthesis limit")
+        chunks.append((chunk, count))
+        if STRESS.enabled:
+            update_job(request_id, progress=preparation_share * min(1, total / max(1, len(text))))
     if not total or total > MAX_TEXT:
         raise ValueError("Normalized text exceeds synthesis limit or is empty")
-    started = time.monotonic()
-    update_job(request_id, state="generating", progress=0, remainingSeconds=round(total / SPEED))
+    update_job(request_id, state="generating", progress=preparation_share, remainingSeconds=round(total / SPEED))
     mp3_file = Path(directory) / "speech.mp3"
     # Encode incrementally: a whole-book PCM/WAV file can occupy gigabytes.
     encoder = subprocess.Popen(
@@ -121,18 +141,20 @@ def synthesize(text, speaker, directory, request_id=""):
     generated_characters = 0
     try:
         with torch.inference_mode():
-            for chunk in chunks:
-                generated_characters += len(chunk)
+            for chunk, count in chunks:
+                generated_characters += count
                 if generated_characters > MAX_TEXT:
                     raise ValueError("Normalized text exceeds synthesis limit")
-                audio = model.apply_tts(
-                    text=chunk, speaker=speaker, sample_rate=SAMPLE_RATE,
-                    put_accent=True, put_yo=True,
-                )
+                chunk, silence_ms = trailing_pause(chunk) if custom else (chunk, 0)
+                audio = model.apply_tts(**({"ssml_text": chunk} if custom else {"text": chunk}),
+                                        speaker=speaker, sample_rate=SAMPLE_RATE, put_accent=not STRESS.enabled, put_yo=not STRESS.enabled,
+                                        **({"put_stress_homo": False, "put_yo_homo": False, "stress_single_vowel": False} if STRESS.enabled else {}))
                 pcm = (audio.detach().cpu().clamp(-1, 1) * 32767).to(torch.int16)
                 encoder.stdin.write(pcm.numpy().astype("<i2", copy=False).tobytes())
+                if silence_ms:
+                    encoder.stdin.write(bytes(SAMPLE_RATE * silence_ms // 1000 * 2))
                 elapsed = max(0.01, time.monotonic() - started)
-                update_job(request_id, progress=generated_characters / total,
+                update_job(request_id, progress=preparation_share + (1 - preparation_share) * generated_characters / total,
                            remainingSeconds=round((total - generated_characters) * elapsed / generated_characters))
         encoder.stdin.close()
         if encoder.wait(timeout=300) != 0:
@@ -175,14 +197,16 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/estimate":
             with STATE_LOCK:
                 result = {"charactersPerSecond": SPEED, "measured": SPEED_MEASURED,
-                          "warmupSeconds": 0 if MODEL is not None else 120}
+                          "warmupSeconds": 0 if MODEL is not None and (not STRESS.enabled or STRESS.model is not None) else 120,
+                          "cacheIdentity": STRESS.cache_identity}
         elif re.fullmatch(r"/jobs/[a-f0-9]{64}", self.path):
             with STATE_LOCK:
                 result = dict(JOBS.get(self.path.rsplit("/", 1)[-1], {}))
             if not result:
                 return self.reply(404, "Job not found")
         elif self.path == "/health":
-            result = {"ok": True, "model": MODEL_ID, "loaded": MODEL is not None}
+            result = {"ok": True, "model": MODEL_ID, "loaded": MODEL is not None, "cacheIdentity": STRESS.cache_identity,
+                      "stressEnabled": STRESS.enabled, "stressVersion": STRESS_VERSION if STRESS.enabled else None, "stressLoaded": STRESS.model is not None}
         else:
             return self.reply(404, "Not found")
         data = json.dumps(result).encode()
@@ -215,15 +239,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(400, "Invalid text")
             if speaker not in SPEAKERS or data.get("model", MODEL_ID) != MODEL_ID:
                 return self.reply(400, "Unsupported speaker or model")
+            options = normalize_options(data["options"]) if "options" in data else None
+            segments = validate_segments(data.get("segments"), text) if options is not None else None
         except (ValueError, TypeError, AttributeError, TimeoutError):
             return self.reply(400, "Invalid JSON")
         if not LOCK.acquire(blocking=False):
             return self.reply(429, "Synthesis is busy")
         try:
             with tempfile.TemporaryDirectory(prefix="silero-") as directory:
-                audio = synthesize(text, speaker, directory, request_id)
+                audio = synthesize(text, speaker, directory, request_id, options, segments)
                 self.send_response(200)
                 self.send_header("Content-Type", "audio/mpeg")
+                self.send_header("X-INPX-Speech-Options", "1")
+                self.send_header("X-INPX-Speech-Engine", STRESS.cache_identity or "builtin")
                 self.send_header("Content-Length", str(audio.stat().st_size))
                 self.send_header("Connection", "close")
                 self.end_headers()

@@ -6,12 +6,19 @@ const {pipeline} = require('stream/promises');
 const {Transform} = require('stream');
 const Fb2Parser = require('./fb2/Fb2Parser');
 const he = require('he');
+const {normalizeSpeechOptions, hasSpeechOptions} = require('../../shared/speechOptions');
 
 const speakers = ['aidar', 'baya', 'kseniya', 'xenia', 'eugene'];
 const maxTextLength = 3000000;
 const tokenLifetime = 24 * 60 * 60 * 1000;
 const chapterLimit = 6000;
 const voiceSample = 'Откройте книгу и устройтесь поудобнее. За окном тихо шумел дождь, а в комнате было тепло и спокойно. Каждая новая история — это путешествие. Послушайте мой голос и выберите удобную скорость чтения.';
+
+function speechEngineId(data) {
+    const id = data?.cacheIdentity ?? '';
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9:._-]{0,120}$/.test(id)) throw new Error('Некорректная версия сервиса Silero.');
+    return id;
+}
 
 function splitSpeechText(text, limit = chapterLimit) {
     const parts = [];
@@ -67,15 +74,20 @@ function extractSpeechChapters(rawNodes, limit = chapterLimit) {
     let heading = '';
     for (const unit of units) {
         if (unit.headingOnly) { heading += `${unit.text}\n\n`; continue; }
-        const parts = splitSpeechText(heading + unit.text, limit);
+        const source = heading + unit.text;
+        const parts = splitSpeechText(source, limit);
         heading = '';
         const title = unit.title || `Глава ${chapters.length + 1}`;
-        for (const [part, text] of parts.entries()) chapters.push({
-            index: chapters.length, title: parts.length > 1 ? `${title} · часть ${part + 1}/${parts.length}` : title, text,
-        });
+        let offset = 0;
+        for (const [part, text] of parts.entries()) {
+            offset = source.indexOf(text, offset) + text.length;
+            chapters.push({index: chapters.length, title: parts.length > 1 ? `${title} · часть ${part + 1}/${parts.length}` : title, text,
+                chapterEnd: part === parts.length - 1, paragraphEnd: /^\s*\n\s*\n/.test(source.slice(offset))});
+        }
     }
     if (heading.trim()) {
-        for (const text of splitSpeechText(heading.trim(), limit)) chapters.push({index: chapters.length, title: 'Заключение', text});
+        const parts = splitSpeechText(heading.trim(), limit);
+        for (const [index, text] of parts.entries()) chapters.push({index: chapters.length, title: 'Заключение', text, chapterEnd: index === parts.length - 1});
     }
     return chapters;
 }
@@ -128,12 +140,27 @@ class ReaderSpeech {
     get enabled() { return Boolean(this.config.ttsEnabled && this.config.ttsUrl); }
     get cacheLimit() { return Math.max(64, Number(this.config.ttsCacheSizeMb) || 4096) * 1024 * 1024; }
 
-    async prepare(userId, bookUid, bookInfo, speaker = 'xenia') {
+    async engineIdentity() {
+        if (!this.transport.get) return ''; // Minimal injected transports used by tests.
+        if (this.engineRequest) return this.engineRequest;
+        const request = this.transport.get(`${this.config.ttsUrl.replace(/\/$/, '')}/health`, {timeout: 5000, maxRedirects: 0,
+            headers: this.config.ttsApiKey ? {'Authorization': `Bearer ${this.config.ttsApiKey}`} : {}})
+            .then(response => speechEngineId(response.data)).catch(error => {
+                if (error.response?.status === 404) return ''; // Compatibility with older services.
+                throw new Error('Не удалось проверить сервис Silero. Проверьте контейнер озвучки.');
+            });
+        this.engineRequest = request;
+        try { return await request; } finally { if (this.engineRequest === request) this.engineRequest = null; }
+    }
+
+    async prepare(userId, bookUid, bookInfo, speaker = 'xenia', options) {
         if (!this.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!speakers.includes(speaker)) throw new Error('Неизвестный голос Silero.');
         if (!bookInfo || !bookInfo.fb2) throw new Error('Озвучка доступна для книг FB2.');
         const text = extractSpeechText(bookInfo.fb2);
-        return this.prepareText(userId, bookUid, text, speaker);
+        options = normalizeSpeechOptions(options);
+        return this.prepareText(userId, bookUid, text, speaker, false, options,
+            hasSpeechOptions(options) ? extractSpeechChapters(bookInfo.fb2) : undefined);
     }
 
     parts(bookInfo, mode = 'chapters') {
@@ -147,13 +174,14 @@ class ReaderSpeech {
     async plan(bookInfo, mode) {
         const chapters = this.parts(bookInfo, mode).map(({index, title, text}) => ({index, title, characters: text.length}));
         const characters = chapters.reduce((sum, part) => sum + part.characters, 0);
-        let estimate;
+        let estimate, engineId = '';
         try {
             const response = await this.transport.get(`${this.config.ttsUrl.replace(/\/$/, '')}/estimate`, {
                 timeout: 5000, maxRedirects: 0,
                 headers: this.config.ttsApiKey ? {'Authorization': `Bearer ${this.config.ttsApiKey}`} : {},
             });
             const data = response.data || {};
+            engineId = speechEngineId(data);
             if (Number.isFinite(Number(data.charactersPerSecond)) && Number(data.charactersPerSecond) > 0) estimate = {
                 charactersPerSecond: Number(data.charactersPerSecond), warmupSeconds: Math.max(0, Number(data.warmupSeconds) || 0),
                 measured: data.measured === true,
@@ -161,7 +189,7 @@ class ReaderSpeech {
         } catch { /* Older/offline services cannot estimate; preparation reports the actual error. */ }
         const queuedCharacters = Array.from(this.jobs.values()).filter(job => ['queued', 'generating'].includes(job.state))
             .reduce((sum, job) => sum + Math.max(0, job.characters - (job.processedCharacters || 0)), 0);
-        return {chapters, characters, estimate: estimate ? {
+        return {chapters, characters, engineId, estimate: estimate ? {
             charactersPerSecond: estimate.charactersPerSecond, warmupSeconds: estimate.warmupSeconds,
             firstSeconds: Math.ceil(chapters[0].characters / estimate.charactersPerSecond + estimate.warmupSeconds),
             totalSeconds: Math.ceil(characters / estimate.charactersPerSecond + estimate.warmupSeconds),
@@ -169,27 +197,40 @@ class ReaderSpeech {
         } : null};
     }
 
-    async preparePart(userId, bookUid, bookInfo, speaker, mode, chapterIndex) {
+    async preparePart(userId, bookUid, bookInfo, speaker, mode, chapterIndex, options) {
         const chapters = this.parts(bookInfo, mode);
         if (!Number.isInteger(chapterIndex) || chapterIndex < 0 || chapterIndex >= chapters.length)
             throw new Error('Глава озвучки не найдена.');
         const chapter = chapters[chapterIndex];
-        return this.prepareText(userId, mode === 'book' ? bookUid : `${bookUid}:${mode}:${chapterIndex}`, chapter.text, speaker);
+        options = normalizeSpeechOptions(options);
+        const segments = hasSpeechOptions(options) ? mode === 'book' ? extractSpeechChapters(bookInfo.fb2) : [chapter] : undefined;
+        return this.prepareText(userId, mode === 'book' ? bookUid : `${bookUid}:${mode}:${chapterIndex}`, chapter.text, speaker, false, options, segments);
     }
 
-    async preview(userId, speaker) {
-        return this.prepareText(userId, 'voice-preview-v1', voiceSample, speaker, true);
+    async preview(userId, speaker, options, sampleText) {
+        const text = sampleText === undefined ? voiceSample : sampleText;
+        if (typeof text !== 'string' || !text.trim() || text.length > 500 || !/[а-яё]/i.test(text))
+            throw new Error('Для пробы введите русский текст, до 500 символов.');
+        options = normalizeSpeechOptions(options);
+        return this.prepareText(userId, 'voice-preview-v1', text.trim(), speaker, true, options,
+            hasSpeechOptions(options) ? [{text: text.trim(), chapterEnd: true}] : undefined);
     }
 
-    async prepareText(userId, bookUid, text, speaker, priority = false) {
+    async prepareText(userId, bookUid, text, speaker, priority = false, options, segments) {
         if (!this.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!speakers.includes(speaker)) throw new Error('Неизвестный голос Silero.');
-        const id = crypto.createHash('sha256').update(JSON.stringify([
+        options = normalizeSpeechOptions(options);
+        const custom = hasSpeechOptions(options);
+        const engineId = await this.engineIdentity();
+        const cacheKey = [
             'silero-mp3-v1', this.config.ttsModel || 'v5_5_ru', speaker, bookUid, text,
-        ])).digest('hex');
+        ];
+        if (custom) cacheKey.push('speech-options-v1', options, segments);
+        if (engineId) cacheKey.push('speech-engine-v1', engineId);
+        const id = crypto.createHash('sha256').update(JSON.stringify(cacheKey)).digest('hex');
         // The lock also covers the async cache lookup: concurrent clicks enqueue once.
         if (!this.pending.has(id)) {
-            const preparation = this.prepareJob(id, text, speaker, priority);
+            const preparation = this.prepareJob(id, text, speaker, priority, custom ? options : undefined, custom ? segments : undefined, engineId);
             this.pending.set(id, preparation);
             preparation.finally(() => this.pending.delete(id)).catch(() => {});
         }
@@ -198,7 +239,7 @@ class ReaderSpeech {
         return this.describe(job);
     }
 
-    async prepareJob(id, text, speaker, priority = false) {
+    async prepareJob(id, text, speaker, priority = false, options, segments, engineId = '') {
         const existing = this.jobs.get(id);
         if (existing && existing.state !== 'error' && (existing.state !== 'ready' || await fs.pathExists(existing.file))) return existing;
         await fs.ensureDir(this.directory);
@@ -212,7 +253,7 @@ class ReaderSpeech {
             if (value.state === 'ready' || value.state === 'error') this.jobs.delete(key);
         }
         const job = {id, file, speaker, text: cached ? '' : text, characters: text.length, processedCharacters: cached ? text.length : 0,
-            state: cached ? 'ready' : 'queued', users: new Set(), error: ''};
+            options, engineId, segments: cached ? undefined : segments, state: cached ? 'ready' : 'queued', users: new Set(), error: ''};
         this.jobs.set(id, job);
         if (cached) await fs.utimes(file, new Date(), new Date());
         else {
@@ -234,7 +275,7 @@ class ReaderSpeech {
     }
 
     describe(job) {
-        const result = {id: job.id, state: job.state, error: job.error, speaker: job.speaker};
+        const result = {id: job.id, state: job.state, error: job.error, speaker: job.speaker, engineId: job.engineId};
         result.progress = job.state === 'ready' ? 1 : Math.min(0.99, (job.processedCharacters || 0) / Math.max(1, job.characters));
         result.remainingSeconds = job.remainingSeconds ?? null;
         result.phase = job.phase || '';
@@ -311,11 +352,17 @@ class ReaderSpeech {
                     progressTimer = setTimeout(trackProgress, 1000);
                     response = await this.transport.post(`${this.config.ttsUrl.replace(/\/$/, '')}/synthesize`, {
                         text: job.text, speaker: job.speaker, model: this.config.ttsModel || 'v5_5_ru', requestId: job.id,
+                        ...(job.options ? {options: job.options, segments: job.segments?.map(({text, chapterEnd, paragraphEnd}) => ({text, chapterEnd, paragraphEnd}))} : {}),
                     }, {
                         responseType: 'stream', timeout: Number(this.config.ttsTimeoutMs) || 3600000,
                         maxRedirects: 0, maxBodyLength: 16 * 1024 * 1024,
                         headers: this.config.ttsApiKey ? {'Authorization': `Bearer ${this.config.ttsApiKey}`} : {},
                     });
+                    const actualEngine = response.headers['x-inpx-speech-engine'];
+                    if ((job.engineId || actualEngine) && actualEngine !== (job.engineId || 'builtin'))
+                        throw new Error('Способ расстановки ударений изменился. Повторите подготовку аудио.');
+                    if (job.options && response.headers['x-inpx-speech-options'] !== '1')
+                        throw new Error('Обновите контейнер Silero: он не поддерживает настройки озвучки.');
                     if (!String(response.headers['content-type'] || '').startsWith('audio/mpeg'))
                         throw new Error('Silero вернул некорректный аудиофайл.');
                     let bytes = 0;
@@ -337,7 +384,7 @@ class ReaderSpeech {
                         ? 'Сервис Silero недоступен. Проверьте контейнер озвучки.'
                         : error.code === 'ECONNABORTED' ? 'Истекло время подготовки аудио.' : error.response
                             ? `Ошибка сервиса Silero (HTTP ${error.response.status}). Проверьте его журнал.` : error.message;
-                } finally { finished = true; clearTimeout(progressTimer); job.text = ''; }
+                } finally { finished = true; clearTimeout(progressTimer); job.text = ''; job.segments = undefined; job.options = undefined; }
             }
         } finally { this.running = false; }
     }

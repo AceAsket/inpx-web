@@ -34,7 +34,46 @@
                     </select>
                 </label>
             </div>
-            <q-btn v-if="!busy" class="reader-audio-preview" no-caps flat icon="la la-volume-up" label="Послушать голос · короткая проба" @click="prepare(true, true)" />
+            <details class="reader-audio-tuning">
+                <summary>Настроить озвучку</summary>
+                <fieldset :disabled="busy">
+                    <label>Высота голоса
+                        <select v-model="draftOptions.pitch">
+                            <option value="x-low">Очень низкая</option><option value="low">Низкая</option>
+                            <option value="medium">Обычная</option><option value="high">Высокая</option><option value="x-high">Очень высокая</option>
+                        </select>
+                    </label>
+                    <label v-for="pause in pauseControls" :key="pause.key">{{ pause.label }}
+                        <select v-model="draftOptions[pause.key]">
+                            <option :value="null">Автоматически</option>
+                            <option v-for="ms in pause.values" :key="ms" :value="ms">{{ ms === 0 ? 'Без дополнительной паузы' : `${ms / 1000} сек` }}</option>
+                        </select>
+                    </label>
+                    <label class="reader-audio-dictionary">Словарь произношения
+                        <textarea v-model="draftOptions.dictionary" rows="3" maxlength="10000" placeholder="Гермиона = Герми+она" />
+                    </label>
+                    <p class="reader-audio-hint">
+                        Одна замена на строку: «Гермиона = Герми+она». Плюс ставится перед ударной гласной. Замены действуют на целые слова и фразы, без учёта регистра.
+                    </p>
+                    <p v-if="tuningError" class="reader-audio-error" role="alert">
+                        {{ tuningError }}
+                    </p>
+                    <div class="reader-audio-tuning-actions">
+                        <q-btn no-caps outline label="Применить настройки" :disabled="!tuningDirty || !!tuningError" @click="applyTuning" />
+                        <q-btn no-caps flat label="По умолчанию" @click="resetTuning" />
+                    </div>
+                    <p class="reader-audio-hint">
+                        Настройки сохраняются для этой книги в данном браузере. Изменение настроек остановит плеер; запись подготовится заново. Скорость меняется в плеере.
+                    </p>
+                    <label class="reader-audio-dictionary">Текст пробы
+                        <textarea v-model="sampleText" rows="3" maxlength="500" />
+                    </label>
+                    <p class="reader-audio-hint">
+                        До 500 символов. Добавьте имена из словаря, чтобы проверить произношение. В конце пробы звучит пауза главы.
+                    </p>
+                </fieldset>
+            </details>
+            <q-btn v-if="!busy" :disabled="tuningDirty" class="reader-audio-preview" no-caps flat icon="la la-volume-up" label="Послушать голос · короткая проба" @click="prepare(true, true)" />
             <p v-if="!src && !busy && !error" class="reader-audio-hint">
                 {{ mode === 'online' ? 'Подготовим небольшой фрагмент и продолжим озвучку по мере прослушивания.' : mode === 'chapters' ? 'Подготовим выбранную главу. Следующая начнёт готовиться заранее.' : 'Подготовим всю книгу в MP3; готовая запись сохранится в кэше.' }}
                 Скорость меняется плеером, без повторной озвучки.
@@ -50,7 +89,7 @@
             <p v-if="error" class="reader-audio-error" role="alert">
                 {{ error }}
             </p>
-            <q-btn v-if="(!src || isPreview) && !busy" :disabled="planLoading" no-caps outline icon="la la-headphones" :label="error ? 'Повторить подготовку' : mode === 'book' ? 'Создать аудиокнигу' : 'Подготовить и слушать'" @click="prepare(false)" />
+            <q-btn v-if="(!src || isPreview) && !busy" :disabled="planLoading || tuningDirty" no-caps outline icon="la la-headphones" :label="error ? 'Повторить подготовку' : mode === 'book' ? 'Создать аудиокнигу' : 'Подготовить и слушать'" @click="prepare(false)" />
             <audio
                 v-show="src" ref="audio" :src="src || undefined" controls preload="metadata"
                 @loadedmetadata="restorePosition" @play="onPlay" @pause="onPause"
@@ -67,6 +106,7 @@
 </template>
 
 <script>
+const {defaultSpeechOptions, normalizeSpeechOptions, hasSpeechOptions} = require('../../../shared/speechOptions');
 let mediaOwner = null;
 const mediaActions = ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'stop'];
 
@@ -81,6 +121,13 @@ export default {
     data() {
         return {
             visible: false, minimized: false, speaker: 'xenia', rate: 1, mode: 'online',
+            speechOptions: defaultSpeechOptions(), draftOptions: defaultSpeechOptions(), loadedTuningKey: '', engineId: '',
+            sampleText: 'Гермиона открыла книгу и устроилась поудобнее. За окном тихо шумел дождь.\n\nКаждая новая история — это путешествие. Послушайте мой голос и выберите удобную скорость чтения.',
+            pauseControls: [
+                {key: 'sentencePauseMs', label: 'Между предложениями', values: [0, 150, 300, 500, 1000, 2000]},
+                {key: 'paragraphPauseMs', label: 'Между абзацами', values: [0, 300, 500, 1000, 2000, 3000, 5000]},
+                {key: 'chapterPauseMs', label: 'Между главами', values: [0, 500, 1000, 2000, 3000, 5000, 10000]},
+            ],
             state: '', src: '', error: '', jobId: '', generation: 0,
             pollTimer: null, storageKey: '', lastSaved: 0, pageHideHandler: null,
             chapters: [], chapterIndex: 0, activeChapter: 0, estimate: null, planLoading: false, planGeneration: 0,
@@ -93,6 +140,8 @@ export default {
         };
     },
     computed: {
+        tuningError() { try { normalizeSpeechOptions(this.draftOptions); return ''; } catch (error) { return error.message; } },
+        tuningDirty() { try { return JSON.stringify(normalizeSpeechOptions(this.draftOptions)) !== JSON.stringify(this.speechOptions); } catch { return true; } },
         busy() { return this.state === 'queued' || this.state === 'generating' || this.state === 'requesting'; },
         estimateText() {
             if (!this.estimate) return 'Время подготовки пока неизвестно. Короткая проба поможет оценить скорость сервера.';
@@ -122,9 +171,28 @@ export default {
     },
     deactivated() { this.close(); },
     methods: {
-        open() { this.visible = true; this.minimized = false; if (!this.chapters.length) this.loadPlan(); },
+        open() { this.loadTuning(); this.visible = true; this.minimized = false; if (!this.chapters.length) this.loadPlan(); },
         close() { this.clearAudio(); this.visible = false; },
-        reset() { this.close(); this.planGeneration++; this.chapters = []; this.chapterIndex = 0; this.estimate = null; this.planLoading = false; },
+        reset() { this.close(); this.planGeneration++; this.chapters = []; this.chapterIndex = 0; this.estimate = null; this.planLoading = false; this.loadedTuningKey = ''; },
+        tuningKey() {
+            const settings = this.$store.state.settings || {}, config = this.$store.state.config || {};
+            return `inpx.speech-options.v1:${config.rootPathStatic || '/'}:${settings.currentUserId || config.currentUserId}:${this.bookUid}`;
+        },
+        loadTuning() {
+            const key = this.tuningKey();
+            if (this.loadedTuningKey === key) return;
+            this.speechOptions = defaultSpeechOptions();
+            try { this.speechOptions = normalizeSpeechOptions(JSON.parse(localStorage.getItem(key) || '{}')); } catch { /* Storage is optional. */ }
+            this.draftOptions = {...this.speechOptions}; this.loadedTuningKey = key;
+        },
+        applyTuning() {
+            let options;
+            try { options = normalizeSpeechOptions(this.draftOptions); } catch (error) { this.fail(error); return; }
+            this.clearAudio(); this.speechOptions = options; this.draftOptions = {...options};
+            try { localStorage.setItem(this.tuningKey(), JSON.stringify(options)); } catch { /* Storage is optional. */ }
+            this.loadPlan();
+        },
+        resetTuning() { this.draftOptions = defaultSpeechOptions(); this.applyTuning(); },
         formatTime(seconds) {
             seconds = Math.max(1, Math.ceil(seconds));
             if (seconds < 60) return `${seconds} сек`;
@@ -134,7 +202,9 @@ export default {
         },
         positionKey() {
             const settings = this.$store.state.settings || {}, config = this.$store.state.config || {};
-            return `inpx.audio.v2:${config.rootPathStatic || '/'}:${settings.currentUserId || config.currentUserId}:${this.bookUid}:${this.speaker}:${this.mode}`;
+            const key = `inpx.audio.v2:${config.rootPathStatic || '/'}:${settings.currentUserId || config.currentUserId}:${this.bookUid}:${this.speaker}:${this.mode}`;
+            const engineKey = this.engineId ? `${key}:engine-v1:${this.engineId}` : key;
+            return hasSpeechOptions(this.speechOptions) ? `${engineKey}:speech-v1:${JSON.stringify(this.speechOptions)}` : engineKey;
         },
         async loadPlan() {
             const generation = ++this.planGeneration;
@@ -143,6 +213,7 @@ export default {
                 const result = await this.$root.api.getReaderAudioPlan(this.bookUid, this.mode);
                 if (generation !== this.planGeneration) return;
                 this.chapters = result.chapters; this.estimate = result.estimate;
+                this.engineId = result.engineId || '';
                 try {
                     const saved = JSON.parse(localStorage.getItem(this.positionKey()) || '{}');
                     if (!this.src && Number.isInteger(saved.chapter) && saved.chapter >= 0 && saved.chapter < this.chapters.length) this.chapterIndex = saved.chapter;
@@ -174,12 +245,16 @@ export default {
             this.storageKey = preview ? '' : this.positionKey();
             this.state = 'requesting';
             try {
-                const result = preview ? await this.$root.api.previewReaderVoice(this.speaker)
-                    : await this.$root.api.prepareReaderAudio(this.bookUid, this.speaker, this.mode, this.activeChapter);
+                const result = preview ? await this.$root.api.previewReaderVoice(this.speaker, this.speechOptions, this.sampleText)
+                    : await this.$root.api.prepareReaderAudio(this.bookUid, this.speaker, this.mode, this.activeChapter, this.speechOptions);
                 if (generation === this.generation) this.acceptStatus(result, generation);
             } catch (error) { if (generation === this.generation) this.fail(error); }
         },
         acceptStatus(result, generation) {
+            if (typeof result.engineId === 'string' && result.engineId !== this.engineId) {
+                this.engineId = result.engineId;
+                if (!this.isPreview) this.storageKey = this.positionKey();
+            }
             this.jobId = result.id;
             this.state = result.state;
             this.error = result.error || '';
@@ -199,7 +274,7 @@ export default {
         async prefetchNext(generation) {
             if (this.activeChapter + 1 >= this.chapters.length) return;
             try {
-                const next = await this.$root.api.prepareReaderAudio(this.bookUid, this.speaker, this.mode, this.activeChapter + 1);
+                const next = await this.$root.api.prepareReaderAudio(this.bookUid, this.speaker, this.mode, this.activeChapter + 1, this.speechOptions);
                 if (generation !== this.generation) return;
                 this.nextJob = next;
                 this.acceptNext(next, generation);
@@ -207,6 +282,10 @@ export default {
         },
         acceptNext(result, generation) {
             this.nextJob = result;
+            if (typeof result.engineId === 'string' && result.engineId !== this.engineId) {
+                this.nextError = 'Способ расстановки ударений изменился. Откройте плеер заново.';
+                return;
+            }
             if (result.state === 'ready') { this.nextSrc = result.url; return; }
             if (result.state === 'error') { this.nextError = `Следующий фрагмент: ${result.error}`; return; }
             this.nextTimer = setTimeout(async() => {
@@ -274,6 +353,11 @@ export default {
             this.savePosition(true);
             if (!this.isPreview && this.activeChapter + 1 < this.chapters.length) {
                 this.chapterIndex = this.activeChapter + 1;
+                if (typeof this.nextJob?.engineId === 'string' && this.nextJob.engineId !== this.engineId) {
+                    this.clearAudio();
+                    this.fail(new Error('Способ расстановки ударений изменился. Повторите подготовку аудио.'));
+                    return;
+                }
                 if (this.nextSrc) {
                     clearTimeout(this.nextTimer);
                     const next = this.nextSrc;
@@ -336,6 +420,15 @@ export default {
 .reader-audio-mode label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .reader-audio-mode select { flex: 1; min-width: 0; color: inherit; background: var(--reader-bg); border: 1px solid currentColor; border-radius: 4px; padding: 4px; }
 .reader-audio-preview { font-size: 12px; }
+.reader-audio-tuning { margin: 8px 0; font-size: 13px; }
+.reader-audio-tuning summary { cursor: pointer; padding: 6px 0; }
+.reader-audio-tuning fieldset { border: 0; padding: 8px 0 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
+.reader-audio-tuning label { display: flex; align-items: center; gap: 8px; }
+.reader-audio-tuning select { flex: 1; min-width: 0; }
+.reader-audio-tuning select, .reader-audio-tuning textarea { color: inherit; background: var(--reader-bg); border: 1px solid currentColor; border-radius: 4px; padding: 4px; }
+.reader-audio-tuning .reader-audio-dictionary { display: grid; gap: 4px; }
+.reader-audio-tuning textarea { width: 100%; resize: vertical; box-sizing: border-box; }
+.reader-audio-tuning-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .reader-audio progress { width: 100%; accent-color: var(--reader-accent); }
 .reader-audio-preload { display: none; }
 .reader-audio-hint { font-size: 12px; line-height: 1.5; margin: 8px 0; opacity: .8; }

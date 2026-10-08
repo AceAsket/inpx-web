@@ -8,7 +8,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v1.7.9-rc.6
+        default: v1.7.9-rc.7
 
 permissions:
   contents: read
@@ -80,8 +80,16 @@ jobs:
           IMAGE: ${{ steps.version.outputs.image }}
         run: |
           docker run --rm -v "$PWD/tts/silero/test_server.py:/app/test_server.py:ro" "$IMAGE" python -m unittest -v test_server
-          docker run -d --name silero-test -p 127.0.0.1:18080:8000 "$IMAGE"
+          docker run -d --name silero-test -p 127.0.0.1:18080:8000 -v "$RUNNER_TEMP/inpx-silero-models:/models" "$IMAGE"
           trap 'docker logs silero-test; docker rm -f silero-test' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/health; then break; fi
+            sleep 2
+          done
+          node scripts/reader-speech-tests.js --silero-url http://127.0.0.1:18080
+          docker stop silero-test
+          docker rm silero-test
+          docker run -d --name silero-test -p 127.0.0.1:18080:8000 -e SILERO_STRESS_ENABLED=false -v "$RUNNER_TEMP/inpx-silero-models:/models" "$IMAGE"
           for i in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:18080/health; then break; fi
             sleep 2

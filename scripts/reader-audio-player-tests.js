@@ -7,7 +7,8 @@ module.exports = async function testReaderAudioPlayer() {
     const storage = new Map();
     const localStorage = {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value)};
     const script = parse(fs.readFileSync(path.join(__dirname, '../client/components/Reader/ReaderAudio.vue'), 'utf8')).descriptor.script.content;
-    const component = new Function('navigator', 'localStorage', 'MediaMetadata', script.replace('export default', 'return'))({}, localStorage);
+    const component = new Function('navigator', 'localStorage', 'MediaMetadata', 'require', script.replace('export default', 'return'))(
+        {}, localStorage, undefined, require('module').createRequire(path.resolve(__dirname, '../client/components/Reader/ReaderAudio.vue')));
     const parts = [{index: 0, title: 'Первая', characters: 100}, {index: 1, title: 'Вторая', characters: 100}, {index: 2, title: 'Третья', characters: 100}];
     function player(api = {}) {
         const audio = {currentTime: 0, duration: 60, paused: true, playbackRate: 1,
@@ -69,5 +70,36 @@ module.exports = async function testReaderAudioPlayer() {
     assert.notEqual(delayed.positionKey(), key);
     delayed.bookUid = 'book-a'; delayed.$store.state.settings.currentUserId = 'profile-b';
     assert.notEqual(delayed.positionKey(), key);
+    const tuningCalls = [];
+    const tuning = player({previewReaderVoice: async(...args) => { tuningCalls.push(args); return {state: 'ready', url: '/custom-preview.mp3'}; },
+        prepareReaderAudio: async(...args) => { tuningCalls.push(args); return {state: 'ready', url: '/custom.mp3'}; }});
+    const plainKey = tuning.positionKey();
+    tuning.draftOptions = {...tuning.draftOptions, pitch: 'low', chapterPauseMs: 2000, dictionary: 'Гермиона = Герми+она'};
+    tuning.applyTuning();
+    assert.notEqual(tuning.positionKey(), plainKey, 'Changed speech timing must not reuse a previous audio position');
+    tuning.sampleText = 'Гермиона открыла книгу.';
+    await tuning.prepare(true);
+    assert.deepEqual(tuningCalls[0], ['xenia', tuning.speechOptions, tuning.sampleText]);
+    await tuning.prepare();
+    assert.deepEqual(tuningCalls[1].slice(0, 4), ['book-a', 'xenia', 'online', 0]);
+    assert.deepEqual(tuningCalls[1][4], tuning.speechOptions);
+    const other = player(); other.loadTuning();
+    assert.deepEqual(other.speechOptions, tuning.speechOptions, 'Book speech preferences survive reopening');
+    tuning.close(); other.close();
+    tuning.resetTuning(); assert.equal(tuning.positionKey(), plainKey, 'Returning to defaults restores legacy positions');
+    const stress = player({getReaderAudioPlan: async() => ({chapters: parts, engineId: 'stress-v1'})});
+    const builtinKey = stress.positionKey();
+    storage.set(builtinKey, JSON.stringify({chapter: 1, time: 40}));
+    await stress.loadPlan();
+    assert.notEqual(stress.positionKey(), builtinKey, 'A different accentuator must not inherit time in old audio');
+    assert.equal(stress.chapterIndex, 0);
+    stress.chapters = parts;
+    stress.acceptNext({state: 'ready', engineId: 'stress-v2', url: '/wrong-engine.mp3'}, stress.generation);
+    assert.equal(stress.nextSrc, '', 'A prefetched chapter with another accentuator must not play silently');
+    assert.match(stress.nextError, /ударений изменился/);
+    stress.src = '/old-engine.mp3'; stress.onEnded();
+    assert.equal(stress.src, '');
+    assert.equal(stress.state, 'error', 'A changed accentuator stops automatic continuation and requires fresh preparation');
+    stress.close();
     console.log('TTS player: resume, playback speed, preview isolation, chapter continuation and stale responses passed');
 };
