@@ -35,7 +35,11 @@
                 </label>
             </div>
             <details class="reader-audio-tuning">
-                <summary>Настроить озвучку</summary>
+                <summary>
+                    <i class="la la-sliders-h" aria-hidden="true" />
+                    <span>Настроить озвучку</span>
+                    <i class="la la-angle-down reader-audio-tuning-arrow" aria-hidden="true" />
+                </summary>
                 <fieldset :disabled="busy">
                     <label>Высота голоса
                         <select v-model="draftOptions.pitch">
@@ -50,33 +54,32 @@
                         </select>
                     </label>
                     <label class="reader-audio-dictionary">Словарь произношения
-                        <textarea v-model="draftOptions.dictionary" rows="3" maxlength="10000" placeholder="Гермиона = Герми+она" />
+                        <textarea v-model="draftOptions.dictionary" rows="2" maxlength="10000" placeholder="Гермиона = Герми+она" />
                     </label>
                     <p class="reader-audio-hint">
-                        Одна замена на строку: «Гермиона = Герми+она». Плюс ставится перед ударной гласной. Замены действуют на целые слова и фразы, без учёта регистра.
+                        Одна замена на строку. Плюс перед гласной задаёт ударение.
                     </p>
                     <p v-if="tuningError" class="reader-audio-error" role="alert">
                         {{ tuningError }}
                     </p>
                     <div class="reader-audio-tuning-actions">
-                        <q-btn no-caps outline label="Применить настройки" :disabled="!tuningDirty || !!tuningError" @click="applyTuning" />
-                        <q-btn no-caps flat label="По умолчанию" @click="resetTuning" />
+                        <q-btn no-caps outline label="Применить" :disabled="!tuningDirty || !!tuningError" @click="applyTuning" />
+                        <q-btn no-caps flat label="Сбросить" @click="resetTuning" />
                     </div>
                     <p class="reader-audio-hint">
-                        Настройки сохраняются для этой книги в данном браузере. Изменение настроек остановит плеер; запись подготовится заново. Скорость меняется в плеере.
+                        Применение остановит текущую запись.
                     </p>
                     <label class="reader-audio-dictionary">Текст пробы
-                        <textarea v-model="sampleText" rows="3" maxlength="500" />
+                        <textarea v-model="sampleText" rows="2" maxlength="500" />
                     </label>
                     <p class="reader-audio-hint">
-                        До 500 символов. Добавьте имена из словаря, чтобы проверить произношение. В конце пробы звучит пауза главы.
+                        До 500 символов. Проба учитывает выбранные настройки.
                     </p>
                 </fieldset>
             </details>
-            <q-btn v-if="!busy" :disabled="tuningDirty" class="reader-audio-preview" no-caps flat icon="la la-volume-up" label="Послушать голос · короткая проба" @click="prepare(true, true)" />
+            <q-btn v-if="!busy" :disabled="tuningDirty" class="reader-audio-preview" no-caps outline icon="la la-volume-up" label="Послушать пробу" @click="prepare(true, true)" />
             <p v-if="!src && !busy && !error" class="reader-audio-hint">
-                {{ mode === 'online' ? 'Подготовим небольшой фрагмент и продолжим озвучку по мере прослушивания.' : mode === 'chapters' ? 'Подготовим выбранную главу. Следующая начнёт готовиться заранее.' : 'Подготовим всю книгу в MP3; готовая запись сохранится в кэше.' }}
-                Скорость меняется плеером, без повторной озвучки.
+                {{ mode === 'online' ? 'Начните с первого фрагмента — остальные готовятся по ходу чтения.' : mode === 'chapters' ? 'Выбранная глава готовится первой, затем следующая.' : 'Прослушивание начнётся после подготовки всей книги.' }}
             </p>
             <p v-if="!busy && (!src || isPreview)" class="reader-audio-hint" role="status">
                 {{ planLoading ? 'Оцениваем время подготовки…' : estimateText }}
@@ -89,7 +92,7 @@
             <p v-if="error" class="reader-audio-error" role="alert">
                 {{ error }}
             </p>
-            <q-btn v-if="(!src || isPreview) && !busy" :disabled="planLoading || tuningDirty" no-caps outline icon="la la-headphones" :label="error ? 'Повторить подготовку' : mode === 'book' ? 'Создать аудиокнигу' : 'Подготовить и слушать'" @click="prepare(false)" />
+            <q-btn v-if="(!src || isPreview) && !busy" class="reader-audio-start" :disabled="planLoading || tuningDirty" no-caps outline icon="la la-headphones" :label="error ? 'Повторить подготовку' : mode === 'book' ? 'Создать аудиокнигу' : 'Подготовить и слушать'" @click="prepare(false)" />
             <audio
                 v-show="src" ref="audio" :src="src || undefined" controls preload="metadata"
                 @loadedmetadata="restorePosition" @play="onPlay" @pause="onPause"
@@ -97,8 +100,7 @@
             />
             <audio ref="preloadAudio" class="reader-audio-preload" :src="nextSrc || undefined" preload="auto" aria-hidden="true" />
             <p v-if="src" class="reader-audio-hint">
-                {{ isPreview ? 'Короткая проба выбранного голоса.' : mode === 'book' ? 'Вся книга.' : `${mode === 'online' ? 'Фрагмент' : 'Глава'} ${activeChapter + 1}/${chapters.length}. ${nextSrc ? 'Следующий готов.' : nextError || (activeChapter + 1 < chapters.length ? 'Следующий готовится…' : '')}` }}
-                Нажмите ▶, чтобы слушать. Можно свернуть плеер.
+                {{ isPreview ? 'Проба голоса' : mode === 'book' ? 'Вся книга' : `${mode === 'online' ? 'Фрагмент' : 'Глава'} ${activeChapter + 1}/${chapters.length} · ${nextSrc ? 'следующий готов' : nextError || (activeChapter + 1 < chapters.length ? 'следующий готовится…' : 'конец книги')}` }}
             </p>
         </div>
         <q-btn v-show="minimized" no-caps icon="la la-headphones" :label="busy ? 'Готовим озвучку…' : 'Озвучка'" @click="minimized = false" />
@@ -403,8 +405,8 @@ export default {
 .reader-audio {
     position: fixed; z-index: 2100; right: max(12px, env(safe-area-inset-right));
     bottom: max(12px, env(safe-area-inset-bottom)); width: min(420px, calc(100vw - 24px));
-    color: var(--reader-text, #222); background: var(--reader-bg, #fff);
-    border: 1px solid currentColor; border-radius: 12px; box-shadow: 0 4px 24px #0003;
+    color: var(--reader-text, #222); background: var(--reader-surface, #fff);
+    border: 1px solid var(--reader-border, currentColor); border-radius: 12px; box-shadow: 0 4px 24px #0003;
 }
 .reader-audio-panel { padding: 12px; max-height: calc(100dvh - 24px); overflow-y: auto; }
 .reader-audio--minimized { width: auto; max-width: calc(100vw - 24px); }
@@ -413,22 +415,40 @@ export default {
 }
 .reader-audio-header { display: flex; align-items: center; gap: 4px; }
 .reader-audio-title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.reader-audio-options { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
-.reader-audio-options label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
-.reader-audio-options select { color: inherit; background: inherit; border: 1px solid currentColor; border-radius: 4px; padding: 4px; }
-.reader-audio-mode { display: grid; gap: 8px; margin: 8px 0; }
-.reader-audio-mode label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.reader-audio-mode select { flex: 1; min-width: 0; color: inherit; background: var(--reader-bg); border: 1px solid currentColor; border-radius: 4px; padding: 4px; }
-.reader-audio-preview { font-size: 12px; }
+.reader-audio-options { display: grid; grid-template-columns: minmax(0, 1fr) 100px; gap: 10px; margin: 12px 0; }
+.reader-audio-options label { display: grid; gap: 4px; font-size: 12px; color: var(--reader-muted, inherit); }
+.reader-audio-options select { width: 100%; min-width: 0; }
+.reader-audio-mode { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 8px 0; }
+.reader-audio-mode label { display: grid; grid-template-columns: 68px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 13px; }
+.reader-audio-mode select { width: 100%; min-width: 0; }
+.reader-audio-preview, .reader-audio-start { width: 100%; min-height: 40px; font-size: 13px; }
+.reader-audio-preview { margin-top: 4px; }
+.reader-audio-start { background: var(--reader-accent-soft); font-weight: 600; }
 .reader-audio-tuning { margin: 8px 0; font-size: 13px; }
-.reader-audio-tuning summary { cursor: pointer; padding: 6px 0; }
-.reader-audio-tuning fieldset { border: 0; padding: 8px 0 0; margin: 0; display: grid; gap: 8px; min-width: 0; }
-.reader-audio-tuning label { display: flex; align-items: center; gap: 8px; }
-.reader-audio-tuning select { flex: 1; min-width: 0; }
-.reader-audio-tuning select, .reader-audio-tuning textarea { color: inherit; background: var(--reader-bg); border: 1px solid currentColor; border-radius: 4px; padding: 4px; }
-.reader-audio-tuning .reader-audio-dictionary { display: grid; gap: 4px; }
+.reader-audio-tuning summary {
+    display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px;
+    box-sizing: border-box; border: 1px solid var(--reader-border, currentColor); border-radius: 8px;
+    background: var(--reader-surface-2, inherit); font-weight: 600; cursor: pointer; list-style: none;
+}
+.reader-audio-tuning summary::-webkit-details-marker { display: none; }
+.reader-audio-tuning summary:hover { border-color: var(--reader-accent, currentColor); }
+.reader-audio-tuning summary:focus-visible { outline: 2px solid var(--reader-accent, currentColor); outline-offset: 2px; }
+.reader-audio-tuning summary i { font-size: 18px; }
+.reader-audio-tuning-arrow { margin-left: auto; }
+.reader-audio-tuning[open] .reader-audio-tuning-arrow { transform: rotate(180deg); }
+.reader-audio-tuning fieldset { border: 0; padding: 12px 0 4px; margin: 0; display: grid; gap: 8px; min-width: 0; }
+.reader-audio-tuning label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(112px, 148px); align-items: center; gap: 8px; }
+.reader-audio-tuning select { width: 100%; min-width: 0; }
+.reader-audio-options select, .reader-audio-mode select, .reader-audio-tuning select, .reader-audio-tuning textarea {
+    box-sizing: border-box;
+    color: var(--reader-text, inherit); background: var(--reader-surface, inherit);
+    border: 1px solid var(--reader-border, currentColor); border-radius: 6px; padding: 7px 8px; min-height: 38px;
+}
+.reader-audio select:focus-visible, .reader-audio textarea:focus-visible { outline: 2px solid var(--reader-accent, currentColor); outline-offset: 1px; }
+.reader-audio-tuning .reader-audio-dictionary { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .reader-audio-tuning textarea { width: 100%; resize: vertical; box-sizing: border-box; }
 .reader-audio-tuning-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.reader-audio-tuning fieldset .reader-audio-hint { margin: 0; }
 .reader-audio progress { width: 100%; accent-color: var(--reader-accent); }
 .reader-audio-preload { display: none; }
 .reader-audio-hint { font-size: 12px; line-height: 1.5; margin: 8px 0; opacity: .8; }

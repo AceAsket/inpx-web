@@ -12,7 +12,7 @@ docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts 
 docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts up -d --no-build
 ```
 
-Для стенда RC7 опубликованы образы `aceasket/inpx-web-7z:1.7.9-rc.7` и `aceasket/inpx-web-7z:1.7.9-rc.7-silero` для Linux x64. Возьмите `docker-compose.silero.yml` из тега `v1.7.9-rc.7`; основной Compose-файл с вашими путями и портами сохраняется. Для сборки из исходников замените `--no-build` на `--build` и пропустите `pull`.
+Для стенда RC8 опубликованы образы `aceasket/inpx-web-7z:1.7.9-rc.8` и `aceasket/inpx-web-7z:1.7.9-rc.8-silero` для Linux x64. Возьмите `docker-compose.silero.yml` из тега `v1.7.9-rc.8`; основной Compose-файл с вашими путями и портами сохраняется. Для сборки из исходников замените `--no-build` на `--build` и пропустите `pull`.
 
 При первой озвучке сервис скачает официальную модель `v5_5_ru` в постоянный том `silero-models`. Для первого запуска нужен доступ к `models.silero.ai`; последующие запуски используют локальную модель. Контейнер по умолчанию использует до 4 CPU и 4 ГБ RAM. `/health` проверяет доступность HTTP-сервиса; модель загружается при первом запросе синтеза.
 
@@ -21,7 +21,7 @@ docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts 
 Для существующего контейнера INPX Web на Unraid загрузите сервис отдельно:
 
 ```sh
-docker pull aceasket/inpx-web-7z:1.7.9-rc.7-silero
+docker pull aceasket/inpx-web-7z:1.7.9-rc.8-silero
 ```
 
 Подключите оба контейнера к одной пользовательской Docker-сети, запустите Silero с именем `silero`, портом `8000` внутри сети и постоянным томом `/models`. В **новой сборке** INPX Web задайте `INPX_TTS_ENABLED=true` и `INPX_TTS_URL=http://silero:8000`. При использовании разных хостов укажите адрес и доступный порт вашего Silero. После изменения переменных пересоздайте контейнер INPX Web.
@@ -31,20 +31,20 @@ docker pull aceasket/inpx-web-7z:1.7.9-rc.7-silero
 Для нового сервиса Silero создайте сеть и запустите контейнер. Порт сервиса остаётся внутри сети; модель хранится в `/mnt/user/appdata/inpx-silero`.
 
 ```sh
-docker pull aceasket/inpx-web-7z:1.7.9-rc.7-silero &&
+docker pull aceasket/inpx-web-7z:1.7.9-rc.8-silero &&
 (docker network inspect inpx-tts >/dev/null 2>&1 || docker network create inpx-tts) &&
 docker run -d --name silero --restart unless-stopped --network inpx-tts \
   --cpus=4 --memory=4g \
   -e SILERO_MODEL=v5_5_ru -e SILERO_THREADS=4 -e SILERO_STRESS_ENABLED=true \
   -v /mnt/user/appdata/inpx-silero:/models \
-  aceasket/inpx-web-7z:1.7.9-rc.7-silero
+  aceasket/inpx-web-7z:1.7.9-rc.8-silero
 ```
 
 Затем замените существующий `inpx-web`, сохранив переменные запуска, включая токен Audiobookshelf. Команда ниже использует пути стенда `/mnt/user/appdata/inpx-web` и `/mnt/user/Torrents`.
 
 ```sh
 inpx_env_file=$(mktemp) &&
-docker pull aceasket/inpx-web-7z:1.7.9-rc.7 &&
+docker pull aceasket/inpx-web-7z:1.7.9-rc.8 &&
 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' inpx-web > "$inpx_env_file" &&
 docker stop inpx-web && docker rm inpx-web &&
 docker run -d --name inpx-web --restart unless-stopped --network inpx-tts \
@@ -54,7 +54,7 @@ docker run -d --name inpx-web --restart unless-stopped --network inpx-tts \
   -e INPX_TTS_MODEL=v5_5_ru \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/Torrents:/library:ro \
-  aceasket/inpx-web-7z:1.7.9-rc.7 &&
+  aceasket/inpx-web-7z:1.7.9-rc.8 &&
 rm -f "$inpx_env_file"
 ```
 
@@ -62,24 +62,26 @@ rm -f "$inpx_env_file"
 
 ### Обновление существующего Silero на стенде
 
-Для перехода с RC6 обновите также работающий `silero`, сохранив его переменные и модель. Сеть и пути — из приведённого выше запуска стенда. После этой команды выполните блок замены `inpx-web` выше.
+Для перехода с RC6 или более ранних версий обновите также работающий `silero`, сохранив его переменные и модель. Сеть и пути — из приведённого выше запуска стенда. После этой команды выполните блок замены `inpx-web` выше.
 
 ```sh
 silero_env_file=$(mktemp) &&
-docker pull aceasket/inpx-web-7z:1.7.9-rc.7-silero &&
+docker pull aceasket/inpx-web-7z:1.7.9-rc.8-silero &&
 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' silero > "$silero_env_file" &&
 docker stop silero && docker rm silero &&
 docker run -d --name silero --restart unless-stopped --network inpx-tts \
   --cpus=4 --memory=4g --env-file "$silero_env_file" \
   -e SILERO_MODEL=v5_5_ru -e SILERO_THREADS=4 -e SILERO_STRESS_ENABLED=true \
   -v /mnt/user/appdata/inpx-silero:/models \
-  aceasket/inpx-web-7z:1.7.9-rc.7-silero &&
+  aceasket/inpx-web-7z:1.7.9-rc.8-silero &&
 rm -f "$silero_env_file"
 ```
 
+При переходе с RC7 на RC8 для нового дизайна панели достаточно обновить основной контейнер `inpx-web`. Контейнер Silero из RC7 совместим; новый образ Silero опубликован под тегом RC8 для одинаковых версий в Compose.
+
 ## Использование
 
-Войдите в профиль, откройте FB2 в читалке и нажмите значок наушников. Доступны пять русских голосов: Xenia, Kseniya, Бая, Айдар, Евгений. Кнопка «Послушать голос · короткая проба» озвучивает один и тот же небольшой русский текст выбранным голосом; готовая проба кэшируется независимо от книги. Это позволяет сравнить дикторов перед началом подготовки.
+Войдите в профиль, откройте FB2 в читалке и нажмите значок наушников. Доступны пять русских голосов: Xenia, Kseniya, Бая, Айдар, Евгений. Кнопка «Послушать пробу» озвучивает один и тот же небольшой русский текст выбранным голосом; готовая проба кэшируется независимо от книги. Это позволяет сравнить дикторов перед началом подготовки.
 
 Выберите режим:
 
@@ -110,9 +112,9 @@ rm -f "$silero_env_file"
 
 Переменные сервиса: `SILERO_MODEL=v5_5_ru`, `SILERO_MODEL_DIR=/models`, `SILERO_THREADS=4`, необязательный `SILERO_API_KEY`. `SILERO_ESTIMATED_CHARS_PER_SECOND=15` задаёт начальную скорость для предварительной оценки; после первого синтеза используется измеренная скорость. Не публикуйте незащищённый сервис в интернет; пример Compose оставляет его доступным только внутри сети.
 
-### Настройка звучания (RC7)
+### Настройка звучания
 
-В RC7 контейнера Silero отдельный акцентор **silero-stress 1.5 включён по умолчанию**. Для возврата к встроенному акцентору TTS задайте `-e SILERO_STRESS_ENABLED=false` при запуске контейнера `silero` и пересоздайте его. Для Compose задайте `SILERO_STRESS_ENABLED=false` в окружении запуска. В панели администратора этой настройки нет; включение самой озвучки по-прежнему требует `INPX_TTS_ENABLED=true` в основном контейнере.
+Начиная с RC7 контейнера Silero отдельный акцентор **silero-stress 1.5 включён по умолчанию**. Для возврата к встроенному акцентору TTS задайте `-e SILERO_STRESS_ENABLED=false` при запуске контейнера `silero` и пересоздайте его. Для Compose задайте `SILERO_STRESS_ENABLED=false` в окружении запуска. В панели администратора этой настройки нет; включение самой озвучки по-прежнему требует `INPX_TTS_ENABLED=true` в основном контейнере.
 
 Модель акцентора входит в образ и загружается на CPU при первом синтезе, только если включена. Библиотека зафиксирована на версии 1.5; текст обрабатывается локально, модель не скачивается во время этой обработки. Сначала применяются ручные замены из словаря и нормализация чисел, затем silero-stress, затем SSML и синтез. Явные `+` и «ё» сохраняются. Внешняя обработка отключает повторную расстановку ударений и «ё» во встроенном акценторе TTS. Импорт библиотеки меняет число потоков Torch; сервис восстанавливает значение, заданное `SILERO_THREADS`.
 
@@ -122,7 +124,7 @@ rm -f "$silero_env_file"
 
 Словарь содержит до 100 замен, по одной на строке: `Гермиона = Герми+она`. Плюс перед гласной обозначает ударение, `ё` можно задать явно. Допускаются слова и фразы; замены выполняются без учёта регистра, на границах целых слов, без склонения и повторного применения других правил к результату. Для разных падежей добавляйте отдельные записи.
 
-Нажмите «Применить настройки», затем «Послушать голос · короткая проба». В поле «Текст пробы» можно ввести до 500 символов, например имена из словаря. К пробе применяются все настройки; в конце добавляется заданная пауза главы. Высота и паузы используют возможности [SSML Silero](https://github.com/snakers4/silero-models/wiki/SSML); скорость синтеза не меняется.
+Нажмите «Применить», затем «Послушать пробу». В поле «Текст пробы» можно ввести до 500 символов, например имена из словаря. К пробе применяются все настройки; в конце добавляется заданная пауза главы. Высота и паузы используют возможности [SSML Silero](https://github.com/snakers4/silero-models/wiki/SSML); скорость синтеза не меняется.
 
 Настройки хранятся локально для профиля и книги, не синхронизируются между устройствами. Изменение звучания останавливает плеер и использует отдельные аудиокэш и позицию; возврат к настройкам по умолчанию возвращает исходную позицию и кэш. Короткая проба не изменяет позицию книги. Для новых параметров нужно обновить основной контейнер и Silero: со старым сервисом вместо молчаливого игнорирования настроек показывается ошибка обновления.
 
