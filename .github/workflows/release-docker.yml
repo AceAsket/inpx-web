@@ -9,6 +9,14 @@ on:
         description: Git tag to build and publish
         required: true
         default: v1.7.9-rc.12
+      metadata_only:
+        description: Update Docker Hub description without rebuilding images
+        type: boolean
+        default: false
+      cleanup_old_rc:
+        description: Delete old RC tags, keeping the two latest RC versions and all stable tags
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,6 +27,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.event_name != 'workflow_dispatch' || !inputs.metadata_only
     name: Build, test and publish ${{ matrix.component }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -104,3 +113,29 @@ jobs:
         env:
           IMAGE: ${{ steps.version.outputs.image }}
         run: docker push "$IMAGE"
+
+  metadata:
+    if: github.event_name == 'workflow_dispatch' && inputs.metadata_only
+    name: Update Docker Hub description and optional RC cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Verify cleanup selection and description
+        run: node scripts/dockerhub-maintenance-tests.js
+      - name: Update description and optionally delete old RC tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          CLEANUP_OLD_RC: ${{ inputs.cleanup_old_rc }}
+        run: node scripts/dockerhub-maintenance.js
+      - name: Save original description and tag digests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dockerhub-metadata-backup
+          path: dockerhub-backup.json
+          retention-days: 30
