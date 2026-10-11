@@ -487,9 +487,44 @@ class ReadingListStore {
                 updatedAt: String(row.updatedAt || '').trim(),
                 hidden: (row.hidden === true),
                 generation: Math.max(0, parseInt(row.generation, 10) || 0),
+                revision: Math.max(0, parseInt(row.revision, 10) || 0),
             };
         }
         return result;
+    }
+
+    normalizeAudioProgress(value = {}) {
+        const result = {};
+        for (const [key, row] of Object.entries(value || {}).slice(-2000)) {
+            if (!row || typeof row !== 'object' || key.length > 512) continue;
+            result[key] = {
+                chapter: Math.max(0, Math.min(100000, Math.floor(Number(row.chapter) || 0))),
+                time: Math.max(0, Math.min(604800, Number(row.time) || 0)),
+                rate: Math.max(0.5, Math.min(3, Number(row.rate) || 1)),
+                revision: Math.max(0, Math.floor(Number(row.revision) || 0)),
+                updatedAt: String(row.updatedAt || '').slice(0, 40),
+            };
+        }
+        return result;
+    }
+
+    async audioPosition(userId, bookUid, variant, patch = null) {
+        const uid = this.normalizeBookUid(bookUid);
+        if (!uid || uid.length > 447 || typeof variant !== 'string' || !variant || variant.length > 12000)
+            throw new Error('Некорректный идентификатор аудио');
+        const execute = async() => {
+            const {data, user} = await this.resolveUser(userId);
+            user.audioProgress = this.normalizeAudioProgress(user.audioProgress);
+            const key = `${uid}:${require('crypto').createHash('sha256').update(variant).digest('hex')}`;
+            const current = user.audioProgress[key] || {revision: 0};
+            if (!patch) return current;
+            if (Number(patch.baseRevision) !== current.revision) return {...current, conflict: true};
+            const next = this.normalizeAudioProgress({[key]: {...patch, revision: current.revision + 1, updatedAt: this.nowIso()}})[key];
+            user.audioProgress[key] = next;
+            await this.save(data);
+            return next;
+        };
+        return patch ? this.withProgressMutation(execute) : execute();
     }
 
     normalizeReaderBookmarks(value = {}) {
@@ -624,6 +659,7 @@ class ReadingListStore {
         normalized.opdsAuthEnabled = (normalized.opdsAuthEnabled === true);
         normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
         normalized.readerProgress = this.normalizeReaderProgress(normalized.readerProgress);
+        normalized.audioProgress = this.normalizeAudioProgress(normalized.audioProgress);
         normalized.readerProgressGeneration = Math.max(0, parseInt(normalized.readerProgressGeneration, 10) || 0);
         normalized.readerProgressResetAt = String(normalized.readerProgressResetAt || '').trim();
         normalized.readerBookmarks = this.normalizeReaderBookmarks(normalized.readerBookmarks);
@@ -644,6 +680,7 @@ class ReadingListStore {
         normalized.createdAt = normalized.createdAt || now;
         normalized.updatedAt = normalized.updatedAt || now;
         normalized.books = this.normalizeEntries(normalized.books);
+        normalized.filters = require('./SmartShelf').normalize(normalized.filters);
         return normalized;
     }
 
@@ -1425,8 +1462,12 @@ class ReadingListStore {
                 generation,
             };
         }
+        if (utilsHasProp(patch, 'baseRevision') && Number(patch.baseRevision) !== (Number(current.revision) || 0))
+            return {...current, revision: Number(current.revision) || 0, conflict: true};
         if (
             !force
+            &&
+            !utilsHasProp(patch, 'baseRevision')
             &&
             Number.isFinite(patchTime)
             && Number.isFinite(currentTime)
@@ -1442,6 +1483,7 @@ class ReadingListStore {
             updatedAt: patchUpdatedAt || this.nowIso(),
             hidden,
             generation,
+            revision: (Number(current.revision) || 0) + 1,
         };
         target.updatedAt = this.nowIso();
 
@@ -1595,6 +1637,7 @@ class ReadingListStore {
             readCount: this.countRead(entries),
             containsBook: !!currentEntry,
             readBook: !!(currentEntry && currentEntry.read),
+            filters: item.filters || null,
         };
     }
 
@@ -1638,7 +1681,7 @@ class ReadingListStore {
             throw new Error('Список с таким названием уже существует');
     }
 
-    async createList(userId = '', name, visibility = 'private') {
+    async createList(userId = '', name, visibility = 'private', filters = null) {
         const {data, user} = await this.resolveUser(userId);
         const normalized = this.validateName(name);
         this.ensureUniqueListName(data.lists, user.id, normalized);
@@ -1652,6 +1695,7 @@ class ReadingListStore {
             createdAt: now,
             updatedAt: now,
             books: [],
+            filters,
         }, user.id);
 
         data.lists.push(item);
@@ -1707,6 +1751,7 @@ class ReadingListStore {
         const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
+        if (item.filters) throw new Error('Состав умной полки определяется фильтрами');
 
         const normalizedBookUid = this.normalizeBookUid(bookUid);
         if (!normalizedBookUid)
@@ -1732,6 +1777,10 @@ class ReadingListStore {
         const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
+        if (item.filters) {
+            await this.setBooksRead(userId, [bookUid], read);
+            return item;
+        }
 
         const normalizedBookUid = this.normalizeBookUid(bookUid);
         if (!normalizedBookUid)
@@ -1778,12 +1827,14 @@ class ReadingListStore {
         const generation = Math.max(0, parseInt(target.readerProgressGeneration, 10) || 0);
         for (const bookUid of normalizedBookUids) {
             if (read) {
+                const revision = (Number(target.readerProgress[bookUid]?.revision) || 0) + 1;
                 target.readerProgress[bookUid] = {
                     percent: 1,
                     sectionId: '',
                     updatedAt,
                     hidden: false,
                     generation,
+                    revision,
                 };
             } else {
                 delete target.readerProgress[bookUid];
@@ -1828,6 +1879,7 @@ class ReadingListStore {
         const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
+        if (item.filters) throw new Error('Состав умной полки определяется фильтрами');
 
         item.books = this.normalizeEntries(item.books);
         const existing = new Set(item.books.map((row) => row.bookUid));
@@ -1864,6 +1916,7 @@ class ReadingListStore {
                 opdsAuthEnabled: user.opdsAuthEnabled,
                 readerPreferences: this.normalizeReaderPreferences(user.readerPreferences),
                 readerProgress: this.normalizeReaderProgress(user.readerProgress),
+                audioProgress: this.normalizeAudioProgress(user.audioProgress),
                 readerBookmarks: this.normalizeReaderBookmarks(user.readerBookmarks),
                 discoveryPreferences: this.normalizeDiscoveryPreferences(user.discoveryPreferences),
             },
@@ -1873,6 +1926,7 @@ class ReadingListStore {
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
                 books: this.normalizeEntries(item.books),
+                filters: item.filters || null,
             })),
         };
     }
@@ -1910,11 +1964,17 @@ class ReadingListStore {
             if (utilsHasProp(incomingUser, 'discoveryPreferences'))
                 target.discoveryPreferences = this.normalizeDiscoveryPreferences(incomingUser.discoveryPreferences);
 
+            if (utilsHasProp(incomingUser, 'audioProgress')) {
+                const progress = this.normalizeAudioProgress(incomingUser.audioProgress);
+                for (const [key, row] of Object.entries(progress)) row.revision = (Number(target.audioProgress?.[key]?.revision) || 0) + 1;
+                target.audioProgress = {...target.audioProgress, ...progress};
+            }
             if (utilsHasProp(incomingUser, 'readerProgress')) {
                 const generation = Math.max(0, parseInt(target.readerProgressGeneration, 10) || 0);
                 const progress = Object.fromEntries(
                     Object.entries(this.normalizeReaderProgress(incomingUser.readerProgress))
-                        .map(([bookUid, row]) => [bookUid, Object.assign({}, row, {generation})])
+                        .map(([bookUid, row]) => [bookUid, Object.assign({}, row, {generation,
+                            revision: (Number(target.readerProgress?.[bookUid]?.revision) || 0) + 1})])
                 );
                 target.readerProgress = Object.assign({}, target.readerProgress || {}, progress);
                 importedProgress = Object.keys(progress).length;
@@ -1947,6 +2007,7 @@ class ReadingListStore {
                 name: incoming.name,
                 visibility: incoming.visibility,
                 books: incoming.books,
+                filters: incoming.filters,
                 createdAt: incoming.createdAt,
                 updatedAt: incoming.updatedAt,
                 userId: user.id,
@@ -1982,6 +2043,7 @@ class ReadingListStore {
             }
 
             item.books = Array.from(existing.values());
+            item.filters = normalizedIncoming.filters;
             item.updatedAt = this.nowIso();
         }
 

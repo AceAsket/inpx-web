@@ -2,6 +2,9 @@
     <div class="root column fit" style="position: relative">
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
+            <div class="q-px-md q-py-xs">
+                <q-btn outline dense no-caps icon="la la-bookmark" label="Сохранить поиск как полку" @click="saveSearchShelf" />
+            </div>
             <div ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
                 <!-- Обновление -->
                 <div v-show="showNewReleaseAvailable && newReleaseAvailable" class="row q-py-sm bg-green-4 items-center">
@@ -1813,6 +1816,16 @@ class Search {
     openReadingLists(book = null) {
         this.readingListsDialogBook = (book || null);
         this.readingListsDialogVisible = true;
+    }
+
+    async saveSearchShelf() {
+        const result = await this.$root.stdDialog.prompt('Название умной полки:', 'Сохранить поиск', {inputValue: ''});
+        if (!result || !String(result.value || '').trim()) return;
+        try {
+            const unreadOnly = await this.$root.stdDialog.confirm('Показывать только непрочитанные книги?', 'Умная полка');
+            await this.$root.api.createReadingListWithVisibility(result.value, 'private', {...this.search, unreadOnly});
+            this.openReadingLists();
+        } catch (error) { this.$root.stdDialog.alert(error.message, 'Ошибка'); }
     }
 
     hideDiscoveryShelf(shelfId = '') {

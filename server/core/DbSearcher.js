@@ -10,8 +10,7 @@ const ruAlphabet = 'абвгдеёжзийклмнопрстуфхцчшщъыь
 const enAlphabet = 'abcdefghijklmnopqrstuvwxyz';
 const enruArr = (ruAlphabet + enAlphabet).split('');
 const titleSearchLeadingChars = ['«', '"', "'", '„', '“', '”', '‘', '’', '`', '(', '[', '{'];
-const titleSearchLeadingPattern = '^[\\s«"\'„“”‘’`()\\[\\]{}]+';
-const copyDedupeVersion = 'copy-dedupe-v4-file-identity';
+const copyDedupeVersion = 'copy-dedupe-v5-catalog-words';
 
 class DbSearcher {
     constructor(config, db) {
@@ -126,12 +125,26 @@ class DbSearcher {
                 })()
             `;
         } else {
-            where = options.looseTitlePrefix
-                ? this.getTitlePrefixWhere(a)
-                : `@dirtyIndexLR('value', ${db.esc(a)}, ${db.esc(a + maxUtf8Char)})`;
+            where = options.looseTitlePrefix ? this.getTitlePrefixWhere(a) : `@dirtyIndexLR('value', ${db.esc(a)}, ${db.esc(a + maxUtf8Char)})`;
         }
 
         return where;
+    }
+
+    async wordBookIds(field, query) {
+        if (/^[=*#~?]/.test(query) || !await this.db.tableExists({table: 'word'})) return null;
+        const search = require('./CatalogSearch');
+        const tokens = [...new Set(search.words(query).map(search.root))];
+        if (!tokens.length) return new Uint32Array();
+        let matches = null;
+        for (const token of tokens) {
+            const key = `${field}:${token}`;
+            const rows = await this.db.select({table: 'word', where: `@@indexLR('value', ${this.db.esc(key)}, ${this.db.esc(key + maxUtf8Char)})`});
+            const ids = new Set(rows.flatMap(row => row.bookIds));
+            matches = matches === null ? ids : new Set([...matches].filter(id => ids.has(id)));
+            if (!matches.size) break;
+        }
+        return new Uint32Array(matches || []);
     }
 
     async selectBookIds(query) {
@@ -166,7 +179,7 @@ class DbSearcher {
             let ids = await this.getCached(key);
 
             if (ids === null) {
-                ids = await tableBookIds('author', this.getWhere(query.author));
+                ids = await this.wordBookIds('author', query.author) || await tableBookIds('author', this.getWhere(query.author));
 
                 await this.putCached(key, ids);
             }
@@ -180,7 +193,7 @@ class DbSearcher {
             let ids = await this.getCached(key);
 
             if (ids === null) {
-                ids = await tableBookIds('series', this.getWhere(query.series));
+                ids = await this.wordBookIds('series', query.series) || await tableBookIds('series', this.getWhere(query.series));
 
                 await this.putCached(key, ids);
             }
@@ -194,7 +207,7 @@ class DbSearcher {
             let ids = await this.getCached(key);
 
             if (ids === null) {
-                ids = await tableBookIds('title', this.getWhere(query.title, {looseTitlePrefix: true}));
+                ids = await this.wordBookIds('title', query.title) || await tableBookIds('title', this.getWhere(query.title, {looseTitlePrefix: true}));
 
                 await this.putCached(key, ids);
             }
@@ -470,10 +483,12 @@ class DbSearcher {
             let authorIds = await this.getCached(key);
 
             if (authorIds === null) {
+                const where = /^[=*#~?]/.test(query.author) ? this.getWhere(query.author)
+                    : `@indexIter('value', (value) => ${require('./CatalogSearch').expression('value', query.author)})`;
                 const rows = await this.db.select({
                     table: 'author',
                     rawResult: true,
-                    where: `return new Uint32Array(${this.getWhere(query.author)})`
+                    where: `return new Uint32Array(${where})`
                 });
 
                 authorIds = rows[0].rawResult;
@@ -758,18 +773,8 @@ class DbSearcher {
                             return re.test(row.${bookField});
                         })()
                     `;
-                } else if (bookField === 'title') {
-
-                    return `(
-                        row.${bookField}
-                        && row.${bookField} !== ${db.esc(emptyFieldValue)}
-                        && (() => {
-                            const value = row.${bookField}.toLowerCase();
-                            const normalized = value.replace(new RegExp(${db.esc(titleSearchLeadingPattern)}), '');
-                            return value.indexOf(${db.esc(searchValue)}) === 0
-                                || normalized.indexOf(${db.esc(searchValue)}) === 0;
-                        })()
-                    )`;
+                } else if (['title', 'author', 'series', 'keywords'].includes(bookField)) {
+                    return require('./CatalogSearch').expression(`row.${bookField}`, searchValue);
                 } else {
                     return `(row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)}) >= 0 ` +
                         `&& row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)} + ${db.esc(maxUtf8Char)}) <= 0)`;
@@ -784,6 +789,23 @@ class DbSearcher {
             for (const f of this.recStruct) {
                 if (query[f.field]) {
                     let searchValue = query[f.field];
+                    if (f.field === 'date' && !/^[=*#~]/.test(searchValue)) {
+                        const [from, to] = searchValue.split(',');
+                        if (from) checks.push(`row.date >= ${db.esc(from)}`);
+                        if (to) checks.push(`row.date <= ${db.esc(to)}`);
+                        continue;
+                    }
+                    if (f.field === 'genre' && !/^[=*#~]/.test(searchValue)) {
+                        const genres = searchValue.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+                        checks.push(`String(row.genre || '').toLowerCase().split(',').some(value => ${db.esc(genres)}.includes(value.trim()) || (value === '' && ${genres.includes(emptyFieldValue)}))`);
+                        continue;
+                    }
+                    if (f.field === 'librate' && searchValue.includes(',')) {
+                        const rates = searchValue.split(',').map(Number);
+                        if (rates.some(value => !Number.isFinite(value))) throw new Error('Некорректный фильтр оценки');
+                        checks.push(`${db.esc(rates)}.includes(row.librate)`);
+                        continue;
+                    }
                     if (f.type === 'S') {
                         if (['lang', 'ext'].includes(f.field) && searchValue.includes(',') && !/^[=*#~]/.test(searchValue)) {
                             const values = searchValue.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
@@ -818,7 +840,8 @@ class DbSearcher {
                 || this.recStruct.some(f => f.field !== 'del' && !!query[f.field]);
             const candidateIds = hideCopies && hasNarrowingFilter
                 ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}))
-                : null;
+                : ['title', 'author', 'series'].some(field => query[field] && !/^[=*#~?]/.test(query[field])) && await db.tableExists({table: 'word'})
+                    ? await this.selectBookIds(query) : null;
             const iterator = candidateIds ? db.esc(Array.from(candidateIds)) : '@all()';
             const rows = await db.select({
                 table: 'book',

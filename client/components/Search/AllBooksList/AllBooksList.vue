@@ -45,6 +45,7 @@
                 {{ selectionMode ? 'Закрыть выбор' : 'Выбрать книги' }}
             </q-btn>
             <template v-if="selectionMode">
+                <q-btn outline dense no-caps icon="la la-download" label="Скачать ZIP" :disable="!selectedBookCount || batchBusy" :loading="batchBusy" @click="downloadSelected" />
                 <q-btn flat dense no-caps icon="la la-check-double" @click="selectVisibleBooks">
                     Выбрать видимые
                 </q-btn>
@@ -94,6 +95,14 @@ import _ from 'lodash';
 class AllBooksList extends BaseList {
     selectionMode = false;
     selectedBookUids = [];
+    batchBusy = false;
+
+    async downloadSelected() {
+        this.batchBusy = true;
+        try { await this.api.downloadBatch({bookUids: this.selectedBookUids.slice()}); }
+        catch (error) { this.$root.stdDialog.alert(error.message, 'Ошибка'); }
+        finally { this.batchBusy = false; }
+    }
 
     get foundCountMessage() {
         const count = this.list.totalFound;

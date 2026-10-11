@@ -640,6 +640,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
         }
     });
 
+    require('./core/BatchDownload').register(app, config);
     app.get(`${config.bookPathStatic}/by-uid`, async(req, res) => {
         if (!webWorker) {
             res.sendStatus(404);

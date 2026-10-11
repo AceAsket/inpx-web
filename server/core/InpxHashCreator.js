@@ -22,7 +22,7 @@ class InpxHashCreator {
                 source.id,
                 source.name,
                 source.libDir,
-                await utils.getFileHash(inpxFile, 'sha256', 'hex'),
+                source.type === 'folder' ? await require('./FolderIndexer').fingerprint(source) : await utils.getFileHash(inpxFile, 'sha256', 'hex'),
             ].join(':'));
         }
 

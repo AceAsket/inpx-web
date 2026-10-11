@@ -65,6 +65,8 @@ async function epubMetadata(file, config) {
         const isbn = identifiers.find(node => /isbn/i.test((node.attrs() || {})['opf:scheme'] || '') || /^urn:isbn:/i.test(node.text()));
         const year = (values('date')[0] || '').match(/\b\d{4}\b/);
         return {
+            title: plainText(values('title')[0]),
+            authors: values('creator').map(value => plainText(value)),
             description: plainText(values('description').join('\n\n')),
             publisher: plainText(values('publisher')[0]),
             publishedYear: year ? year[0] : '',

@@ -17,6 +17,7 @@ module.exports = async function testReaderAudioPlayer() {
             $store: {state: {settings: {currentUserId: 'profile-a'}, config: {rootPathStatic: '/books'}}},
             $refs: {audio, preloadAudio: {...audio}},
             $root: {api: {getReaderAudioPlan: async() => ({chapters: parts, estimate: null}),
+                audioPosition: async() => ({progress: {revision: 0}}),
                 prepareReaderAudio: async() => ({id: 'chapter', state: 'ready', url: '/chapter.mp3'}),
                 previewReaderVoice: async() => ({id: 'preview', state: 'ready', url: '/preview.mp3'}), ...api}},
         };
@@ -101,5 +102,35 @@ module.exports = async function testReaderAudioPlayer() {
     assert.equal(stress.src, '');
     assert.equal(stress.state, 'error', 'A changed accentuator stops automatic continuation and requires fresh preparation');
     stress.close();
-    console.log('TTS player: resume, playback speed, preview isolation, chapter continuation and stale responses passed');
+    let shared = {revision: 0};
+    const api = {audioPosition: async(book, variant, position) => {
+        if (!position) return {progress: {...shared}};
+        if (position.baseRevision !== shared.revision) return {progress: {...shared, conflict: true}};
+        shared = {...position, revision: shared.revision + 1};
+        return {progress: {...shared}};
+    }};
+    const phone = player(api), desktop = player(api);
+    await phone.loadPlan(); await desktop.loadPlan();
+    await phone.prepare(); phone.$refs.audio.currentTime = 22; phone.savePosition(true); await phone.positionWrite;
+    assert.equal(shared.time, 22);
+    await desktop.prepare(); desktop.$refs.audio.currentTime = 5; desktop.savePosition(true); await desktop.positionWrite;
+    assert.equal(desktop.positionConflict, true);
+    assert.equal(desktop.$refs.audio.paused, true);
+    assert.equal(shared.time, 22, 'An outdated device must not overwrite the listening position');
+    const secondPhone = player(api); await secondPhone.loadPlan(); await secondPhone.prepare(); secondPhone.restorePosition();
+    assert.equal(secondPhone.$refs.audio.currentTime, 22, 'Another browser restores the server position');
+    phone.close(); desktop.close(); secondPhone.close();
+    await Promise.all([phone.positionWrite, desktop.positionWrite, secondPhone.positionWrite]);
+    let engine = 'one'; const variants = [];
+    const switched = player({getReaderAudioPlan: async() => ({chapters: parts, engineId: engine}),
+        audioPosition: async(book, variant, position) => { if (position) variants.push(JSON.parse(variant)[0]); return {progress: {revision: 0}}; }});
+    await switched.loadPlan();
+    engine = 'two';
+    switched.acceptStatus({state: 'ready', engineId: engine, url: '/new-engine.mp3'}, switched.generation);
+    assert.equal(switched.positionVariant, '', 'A new engine must stop writes under the old audio variant');
+    await switched.loadPlan();
+    switched.$refs.audio.currentTime = 20; switched.savePosition(true); await switched.positionWrite;
+    assert.deepEqual(variants, ['two']);
+    switched.close(); await switched.positionWrite;
+    console.log('TTS player: resume, playback speed, preview isolation, chapter continuation, stale responses and device conflicts passed');
 };

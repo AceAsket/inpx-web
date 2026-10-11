@@ -727,6 +727,7 @@ class WebWorker {
                 result.inpxHash = dbConfig.inpxHash || '';
                 result.stats = dbConfig.stats || {};
                 result.inpxInfo = dbConfig.inpxInfo || {};
+                result.indexUpdate = dbConfig.indexUpdate || null;
             } catch (e) {
                 result.ready = false;
                 result.error = e.message;
@@ -751,7 +752,7 @@ class WebWorker {
         }
     }
 
-    async createDb(dbPath) {
+    async createDb(dbPath, previousPath = '') {
         this.setMyState(ssDbCreating);
         log('Searcher DB create start');
 
@@ -759,6 +760,11 @@ class WebWorker {
 
         if (await fs.pathExists(dbPath))
             throw new Error(`createDb.pathExists: ${dbPath}`);
+
+        if (previousPath && await fs.pathExists(`${previousPath}/book`)) {
+            await fs.ensureDir(dbPath);
+            await fs.copy(`${previousPath}/book`, `${dbPath}/book`);
+        }
 
         const db = new JembaDbThread();
         await db.lock({
@@ -772,7 +778,7 @@ class WebWorker {
         });
 
         try {
-            const dbCreator = new DbCreator(config);        
+            const dbCreator = new DbCreator({...config, indexDbPath: dbPath});
 
             await dbCreator.run(db, (state) => {
                 this.setMyState(ssDbCreating, state);
@@ -797,6 +803,8 @@ class WebWorker {
         try {
             const config = this.config;
             const dbPath = `${config.dataDir}/db`;
+            if (!await fs.pathExists(dbPath) && await fs.pathExists(`${dbPath}.previous`))
+                await fs.move(`${dbPath}.previous`, dbPath);
 
             this.inpxFileHash = await this.inpxHashCreator.getInpxFileHash();
 
@@ -823,8 +831,22 @@ class WebWorker {
             }
 
             //удалим БД если нужно
-            if (config.recreateDb || recreate)
-                await fs.remove(dbPath);
+            if (config.recreateDb || recreate) {
+                const staging = `${dbPath}.building-${utils.randomHexString(8)}`;
+                const previous = `${dbPath}.previous`;
+                try {
+                    await this.createDb(staging, config.recreateDb || iteration > 0 ? '' : dbPath);
+                    await fs.remove(previous);
+                    if (await fs.pathExists(dbPath)) await fs.move(dbPath, previous);
+                    try { await fs.move(staging, dbPath); }
+                    catch (error) { if (await fs.pathExists(previous)) await fs.move(previous, dbPath); throw error; }
+                    await fs.remove(previous);
+                } catch (error) {
+                    await fs.remove(staging);
+                    if (!await fs.pathExists(dbPath)) throw error;
+                    log(LM_ERR, `Index update failed; keeping previous index: ${error.message}`);
+                }
+            }
 
             //пересоздаем БД из INPX если нужно
             if (!await fs.pathExists(dbPath)) {
@@ -857,6 +879,7 @@ class WebWorker {
                 });
             } catch(e) {
                 log(LM_ERR, `Database error: ${e.message}`);
+                await db.unlock();
                 if (iteration < 1) {
                     log('Recreating DB');
                     await this.loadOrCreateDb(true, iteration + 1);
@@ -4118,6 +4141,7 @@ class WebWorker {
 
                 return {
                     id: idBase,
+                    type: source.type === 'folder' ? 'folder' : 'inpx',
                     name,
                     inpx,
                     inpxFile: inpx,
@@ -4833,7 +4857,10 @@ class WebWorker {
     async getReadingLists(userId = '', bookUid = '', options = {}) {
         this.checkMyState();
 
-        const lists = await this.readingListStore.getLists(userId, options);
+        const lists = (await this.readingListStore.getLists(userId, options)).map(item => ({...item}));
+        for (const item of lists) {
+            if (item.filters) item.books = await this.smartShelfEntries(userId, item);
+        }
         return {
             lists: lists
                 .map((item) => this.readingListStore.listStats(item, bookUid))
@@ -4848,12 +4875,14 @@ class WebWorker {
         if (!item)
             throw new Error('Список не найден');
 
-        const listEntries = this.readingListStore.normalizeEntries(item.books);
+        const listEntries = item.filters ? await this.smartShelfEntries(userId, item) : this.readingListStore.normalizeEntries(item.books);
         const books = [];
-        for (const entry of listEntries) {
-            const book = await this.getBookRecordByUid(entry.bookUid);
-            if (book) {
-                book._readingListRead = !!entry.read;
+        for (let offset = 0; offset < listEntries.length; offset += 500) {
+            const chunk = listEntries.slice(offset, offset + 500);
+            const read = new Map(chunk.map(entry => [entry.bookUid, !!entry.read]));
+            const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(chunk.map(entry => entry.bookUid))})`});
+            for (const book of rows) {
+                book._readingListRead = read.get(book._uid);
                 books.push(book);
             }
         }
@@ -4866,19 +4895,36 @@ class WebWorker {
                 userId: item.userId,
                 name: item.name,
                 visibility: item.visibility,
+                filters: item.filters || null,
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
-                bookCount: (item.books || []).length,
-                readCount: this.readingListStore.countRead(item.books),
+                bookCount: listEntries.length,
+                readCount: this.readingListStore.countRead(listEntries),
             },
             books,
         };
     }
 
-    async createReadingList(userId = '', name, visibility = 'private') {
+    async smartShelfEntries(userId, item) {
+        const filters = require('./SmartShelf').normalize(item.filters);
+        const {user} = await this.readingListStore.resolveUser(userId);
+        const lists = await this.readingListStore.getLists(userId);
+        const read = this.getPersonalReadBookSet(user, lists);
+        const ids = await this.dbSearcher.bookSearchIds(filters);
+        const entries = [];
+        for (let offset = 0; offset < ids.length; offset += 1000) {
+            const rows = await this.db.select({table: 'book', where: `@@id(${this.db.esc(Array.from(ids.slice(offset, offset + 1000)))})`, map: '(row) => ({_uid: row._uid})'});
+            for (const book of rows) {
+                if (!filters.unreadOnly || !read.has(book._uid)) entries.push({bookUid: book._uid, read: read.has(book._uid)});
+            }
+        }
+        return entries;
+    }
+
+    async createReadingList(userId = '', name, visibility = 'private', filters = null) {
         this.checkMyState();
 
-        const item = await this.readingListStore.createList(userId, name, visibility);
+        const item = await this.readingListStore.createList(userId, name, visibility, filters);
         return {
             list: this.readingListStore.listStats(item),
         };
@@ -4934,8 +4980,9 @@ class WebWorker {
         if (!book)
             throw new Error('404 Файл не найден');
 
-        const item = await this.readingListStore.setBookRead(userId, listId, bookUid, read);
-        await this.readingListStore.setBooksRead(userId, [bookUid], read, {listIds: [listId]});
+        let item = await this.readingListStore.setBookRead(userId, listId, bookUid, read);
+        if (item.filters) item = {...item, books: await this.smartShelfEntries(userId, item)};
+        else await this.readingListStore.setBooksRead(userId, [bookUid], read, {listIds: [listId]});
         return {
             list: this.readingListStore.listStats(item),
             bookUid,
@@ -5011,6 +5058,13 @@ class WebWorker {
         const folder = await resolveFolder();
         
         const fullPath = `${folder}/${file}`;
+        const folderStat = file ? await fs.stat(folder).catch(() => null) : null;
+        if (folderStat && folderStat.isDirectory()) {
+            const resolved = await this.resolveExistingPath(fullPath);
+            if (!resolved) throw new Error(`file not found: ${fullPath}`);
+            await fs.copy(resolved, outFile);
+            return outFile;
+        }
 
         if (!file || await fs.pathExists(fullPath)) {// файл есть на диске
             

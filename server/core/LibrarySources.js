@@ -101,14 +101,16 @@ async function normalizeSource(source, index, options = {}) {
     if (requireExists && !await fs.pathExists(libDir))
         throw new Error(`Library source #${index + 1}: directory "${libDir}" not exists`);
 
-    const resolvedInpx = inpx || await findSingleInpx(libDir);
-    if (requireExists && !await fs.pathExists(resolvedInpx))
+    const type = source.type === 'folder' ? 'folder' : 'inpx';
+    const resolvedInpx = type === 'folder' ? '' : inpx || await findSingleInpx(libDir);
+    if (type !== 'folder' && requireExists && !await fs.pathExists(resolvedInpx))
         throw new Error(`Library source #${index + 1}: file "${resolvedInpx}" not found`);
 
     const id = stableId(source.id || source.name || path.basename(resolvedInpx, path.extname(resolvedInpx)), `source-${index + 1}`);
     const name = String(source.name || '').trim() || path.basename(resolvedInpx, path.extname(resolvedInpx)) || id;
 
     return {
+        type,
         id,
         name,
         inpx: resolvedInpx,
@@ -180,6 +182,7 @@ function getEnabledLibrarySources(config = {}) {
             libDir: source.libDir || config.libDir,
             enabled: source.enabled !== false,
             remote: !!source.remote,
+            type: source.type === 'folder' ? 'folder' : 'inpx',
         }));
 
     return [{

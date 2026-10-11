@@ -537,6 +537,17 @@ class Api {
         return await this.request({action: 'delete-reader-progress', bookUid}, 120);
     }
 
+    async audioPosition(bookUid, variant, progress = null) {
+        return await this.request({action: progress ? 'update-audio-position' : 'get-audio-position', bookUid, variant, progress}, 30);
+    }
+
+    async downloadBatch(selection) {
+        const result = await this.request({action: 'prepare-batch-download', selection}, 600);
+        const link = document.createElement('a');
+        link.href = result.url; link.download = 'books.zip'; document.body.appendChild(link); link.click(); link.remove();
+        return result;
+    }
+
     async clearReaderProgress() {
         return await this.request({action: 'clear-reader-progress'}, 120);
     }
@@ -589,8 +600,8 @@ class Api {
         return await this.request({action: 'create-reading-list', name}, 120);
     }
 
-    async createReadingListWithVisibility(name, visibility = 'private') {
-        return await this.request({action: 'create-reading-list', name, visibility}, 120);
+    async createReadingListWithVisibility(name, visibility = 'private', filters = null) {
+        return await this.request({action: 'create-reading-list', name, visibility, filters}, 120);
     }
 
     async renameReadingList(listId, name) {

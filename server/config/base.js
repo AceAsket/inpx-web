@@ -70,7 +70,7 @@ module.exports = {
 
     // Поправить в случае, если были критические изменения в DbCreator или InpxParser,
     // иначе будет рассинхронизация по кэшу между сервером и клиентом на уровне БД.
-    dbVersion: '13',
+    dbVersion: '14',
     dbCacheSize: 5,
 
     maxPayloadSize: 500,//in MB

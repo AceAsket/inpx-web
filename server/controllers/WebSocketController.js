@@ -206,6 +206,19 @@ class WebSocketController {
                     await this.getUserReadingLibrary(req, ws); break;
                 case 'update-reader-progress':
                     await this.updateReaderProgress(req, ws); break;
+                case 'get-audio-position':
+                case 'update-audio-position': {
+                    const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+                    const progress = await this.webWorker.readingListStore.audioPosition(user.id, req.bookUid, req.variant,
+                        req.action === 'update-audio-position' ? req.progress || {} : null);
+                    this.send({progress}, req, ws);
+                    break;
+                }
+                case 'prepare-batch-download': {
+                    const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+                    this.send(await require('../core/BatchDownload').create(this.webWorker, user.id, req.selection || {}), req, ws);
+                    break;
+                }
                 case 'delete-reader-progress':
                     await this.deleteReaderProgress(req, ws); break;
                 case 'clear-reader-progress':
@@ -320,6 +333,8 @@ class WebSocketController {
             'import-admin-settings',
             'import-admin-backup',
             'update-reader-progress',
+            'update-audio-position',
+            'prepare-batch-download',
             'prepare-reader-audio',
             'preview-reader-voice',
             'delete-reader-progress',
@@ -871,7 +886,7 @@ class WebSocketController {
 
     async createReadingList(req, ws) {
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-        const result = await this.webWorker.createReadingList(user.id, req.name, req.visibility);
+        const result = await this.webWorker.createReadingList(user.id, req.name, req.visibility, req.filters);
         this.send(result, req, ws);
     }
 

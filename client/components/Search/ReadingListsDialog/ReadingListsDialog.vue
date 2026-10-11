@@ -76,7 +76,7 @@
                 <div v-for="item in lists" :key="item.id" class="list-row">
                     <div class="list-main">
                         <q-checkbox
-                            v-if="book"
+                            v-if="book && !item.filters"
                             :model-value="item.containsBook"
                             toggle-order="ft"
                             @update:model-value="toggleBook(item, $event)"
@@ -85,6 +85,7 @@
                         <div class="list-meta">
                             <div class="list-name">
                                 {{ item.name }}
+                                <span v-if="item.filters" class="list-visibility">Умная полка</span>
                                 <span class="list-visibility">
                                     {{ visibilityLabel(item.visibility) }}
                                 </span>
@@ -92,10 +93,12 @@
                             <div class="list-subtitle">
                                 {{ item.readCount || 0 }} / {{ item.bookCount }} книг прочитано
                             </div>
+                            <div v-if="item.filters" class="list-subtitle">{{ shelfDescription(item.filters) }}</div>
                         </div>
                     </div>
 
                     <div class="list-actions">
+                        <q-btn outline dense no-caps icon="la la-download" label="ZIP" :loading="batchListId === item.id" :disable="!!batchListId" @click="downloadList(item)" />
                         <q-btn
                             flat
                             dense
@@ -147,6 +150,7 @@
                                     @update:model-value="toggleBookItemRead(item, bookItem, $event)"
                                 />
                                 <q-btn
+                                    v-if="!item.filters"
                                     flat
                                     dense
                                     round
@@ -207,6 +211,7 @@ class ReadingListsDialog {
     dialogVisible = false;
     loading = false;
     lists = [];
+    batchListId = '';
     newListName = '';
     newListVisibility = 'private';
     expandedLists = {};
@@ -329,6 +334,19 @@ class ReadingListsDialog {
         }
     }
 
+    async downloadList(item) {
+        this.batchListId = item.id;
+        try { await this.api.downloadBatch({listId: item.id}); }
+        catch (error) { this.$root.stdDialog.alert(error.message, 'Ошибка'); }
+        finally { this.batchListId = ''; }
+    }
+
+    shelfDescription(filters) {
+        const labels = {title: 'Название', author: 'Автор', series: 'Серия', genre: 'Жанр', lang: 'Язык', ext: 'Формат', date: 'Дата', librate: 'Оценка', keywords: 'Ключевые слова'};
+        return Object.entries(labels).filter(([key]) => filters[key]).map(([key, label]) => `${label}: ${filters[key]}`)
+            .concat(filters.unreadOnly ? ['Непрочитанные'] : []).join(' · ');
+    }
+
     async changeVisibility(item, visibility) {
         try {
             await this.api.setReadingListVisibility(item.id, visibility);
@@ -373,6 +391,7 @@ class ReadingListsDialog {
             const bookItem = (item.books || []).find((row) => String(row.bookUid || '').trim() === bookUid);
             if (bookItem)
                 bookItem.read = !!read;
+            if (item.filters) await this.loadLists();
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
             await this.loadLists();
@@ -429,6 +448,7 @@ class ReadingListsDialog {
 
         if (nextValue && !item.booksLoaded)
             await this.loadListBooks(item);
+        else if (nextValue && item.filters) await this.loadListBooks(item);
     }
 
     async loadListBooks(item) {
@@ -446,6 +466,10 @@ class ReadingListsDialog {
                 read: !!(book._readingListRead || book.read),
             }));
             item.booksLoaded = true;
+            if (response.list) {
+                item.bookCount = response.list.bookCount;
+                item.readCount = response.list.readCount;
+            }
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.errorTitle);
         } finally {
@@ -493,6 +517,7 @@ class ReadingListsDialog {
             if (!!bookItem.read !== !!read)
                 list.readCount = Math.max(0, (Number(list.readCount || 0) || 0) + (read ? 1 : -1));
             bookItem.read = !!read;
+            if (list.filters) await this.loadListBooks(list);
 
             if (this.book && String(this.book._uid || '').trim() === bookUid)
                 list.readBook = !!read;
@@ -679,6 +704,8 @@ export default vueComponent(ReadingListsDialog);
 }
 
 .list-visibility {
+    display: inline-block;
+    white-space: nowrap;
     margin-left: 8px;
     padding: 2px 8px;
     border-radius: 999px;

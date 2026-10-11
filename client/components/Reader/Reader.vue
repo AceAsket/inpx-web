@@ -1775,6 +1775,7 @@ class Reader {
     progressSavePromise = null;
     pendingReaderProgressUpload = false;
     readerProgressGeneration = 0;
+    readerProgressRevision = 0;
     readerLoadJobId = 0;
     readerBackgroundMaxBytes = 4 * 1024 * 1024;
     statusClockText = '';
@@ -8769,9 +8770,11 @@ class Reader {
             progressGeneration,
         ) || Object.assign({}, emptyProgress);
         const serverProgress = this.normalizeReaderProgress(stateProgress);
+        this.readerProgressRevision = Number(stateProgress.revision) || 0;
         const profileProgress = this.readerProgressAfterReset(this.getCurrentProfileBookProgress(), progressResetAt, progressGeneration);
         const storedProgress = this.readStoredReaderProgress();
-        const usableStoredProgress = this.readerProgressAfterReset(storedProgress, progressResetAt, progressGeneration);
+        const usableStoredProgress = serverProgress.revision > 0 && Number(storedProgress && storedProgress.revision) !== serverProgress.revision
+            ? null : this.readerProgressAfterReset(storedProgress, progressResetAt, progressGeneration);
         if (storedProgress && !usableStoredProgress)
             this.clearStoredReaderProgress(this.bookUid);
         let restoredProgress = this.hasReaderProgressPlace(stateProgress)
@@ -10270,8 +10273,20 @@ class Reader {
             updatedAt: requestProgress.updatedAt,
             generation: this.readerProgressGeneration,
         };
-        let response = await api.updateReaderProgress(this.bookUid, progressPatch, {suppressProfileLogin: true});
+        progressPatch.baseRevision = this.readerProgressRevision;
+        const uid = this.bookUid, scope = this.currentUserId;
+        let response = await api.updateReaderProgress(uid, progressPatch, {suppressProfileLogin: true});
+        if (uid !== this.bookUid || scope !== this.currentUserId) return;
         let rawResponseProgress = (response && response.progress ? response.progress : {});
+        this.readerProgressRevision = Number(rawResponseProgress.revision) || 0;
+        if (rawResponseProgress.conflict) {
+            this.progress = this.normalizeReaderProgress(rawResponseProgress);
+            this.currentSectionId = this.progress.sectionId || '';
+            this.writeStoredReaderProgress();
+            this.jumpToProgress();
+            this.$root.notify.warning('На другом устройстве сохранена новая позиция. Восстанавливаем её.');
+            return;
+        }
         const responseGeneration = Number(rawResponseProgress && rawResponseProgress.generation);
         if (Number.isFinite(responseGeneration)) {
             this.readerProgressGeneration = Math.max(0, Math.round(responseGeneration));
@@ -10288,6 +10303,8 @@ class Reader {
             && Number.isFinite(currentTime)
             && currentTime > requestTime
         ) {
+            currentProgress.revision = this.readerProgressRevision;
+            this.progress.revision = this.readerProgressRevision;
             this.writeStoredReaderProgress(currentProgress);
             return;
         }
@@ -10300,7 +10317,7 @@ class Reader {
             || Math.abs((responseProgress.percent || 0) - (requestProgress.percent || 0)) > 0.0001
             || String(responseProgress.sectionId || '') !== String(requestProgress.sectionId || '')
         );
-        if (responseDiffers) {
+        if (responseDiffers && rawResponseProgress.revision === undefined) {
             response = await api.updateReaderProgress(this.bookUid, Object.assign({}, progressPatch, {force: true}), {suppressProfileLogin: true});
             rawResponseProgress = (response && response.progress ? response.progress : {});
             const forcedGeneration = Number(rawResponseProgress && rawResponseProgress.generation);
@@ -10310,14 +10327,17 @@ class Reader {
                 return;
         }
 
-        const savedProgress = this.mergeReaderProgress(this.progress, response && response.progress ? response.progress : {});
+        const savedProgress = rawResponseProgress.revision === undefined
+            ? this.mergeReaderProgress(this.progress, rawResponseProgress)
+            : this.normalizeReaderProgress(rawResponseProgress);
         this.progress = Object.assign({}, this.progress, savedProgress);
         this.currentSectionId = String(this.progress.sectionId || this.currentSectionId || '').trim();
         this.writeStoredReaderProgress();
     }
 
     queuePersistProgress() {
-        const request = this.persistProgress()
+        const previous = this.progressSavePromise || Promise.resolve();
+        const request = previous.catch(() => {}).then(() => this.persistProgress())
             .catch(() => {})
             .finally(() => {
                 if (this.progressSavePromise === request)
@@ -10664,6 +10684,7 @@ class Reader {
             textOffset: Number.isFinite(textOffset) ? Math.max(-1, Math.round(textOffset)) : -1,
             textSnippet,
             updatedAt,
+            revision: Math.max(0, Math.floor(Number(progress && progress.revision) || 0)),
             generation: Number.isFinite(generation)
                 ? Math.max(0, Math.round(generation))
                 : Math.max(0, Math.round(Number(this.readerProgressGeneration || 0) || 0)),

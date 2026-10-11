@@ -132,6 +132,7 @@ export default {
             ],
             state: '', src: '', error: '', jobId: '', generation: 0,
             pollTimer: null, storageKey: '', lastSaved: 0, pageHideHandler: null,
+            serverPosition: {}, positionVariant: '', positionWrite: null, positionConflict: false,
             chapters: [], chapterIndex: 0, activeChapter: 0, estimate: null, planLoading: false, planGeneration: 0,
             isPreview: false, autoPlay: false, nextSrc: '', nextJob: null, nextTimer: null, nextError: '',
             progress: 0, remainingSeconds: null, queuePosition: 0, phase: '',
@@ -173,7 +174,7 @@ export default {
     },
     deactivated() { this.close(); },
     methods: {
-        open() { this.loadTuning(); this.visible = true; this.minimized = false; if (!this.chapters.length) this.loadPlan(); },
+        open() { this.loadTuning(); this.visible = true; this.minimized = false; if (!this.src) this.loadPlan(); },
         close() { this.clearAudio(); this.visible = false; },
         reset() { this.close(); this.planGeneration++; this.chapters = []; this.chapterIndex = 0; this.estimate = null; this.planLoading = false; this.loadedTuningKey = ''; },
         tuningKey() {
@@ -208,6 +209,7 @@ export default {
             const engineKey = this.engineId ? `${key}:engine-v1:${this.engineId}` : key;
             return hasSpeechOptions(this.speechOptions) ? `${engineKey}:speech-v1:${JSON.stringify(this.speechOptions)}` : engineKey;
         },
+        audioVariant() { return JSON.stringify([this.engineId, this.speaker, this.mode, this.speechOptions]); },
         async loadPlan() {
             const generation = ++this.planGeneration;
             this.planLoading = true;
@@ -216,10 +218,17 @@ export default {
                 if (generation !== this.planGeneration) return;
                 this.chapters = result.chapters; this.estimate = result.estimate;
                 this.engineId = result.engineId || '';
+                const variant = this.audioVariant();
+                const position = await this.$root.api.audioPosition(this.bookUid, variant);
+                if (generation !== this.planGeneration) return;
+                this.positionVariant = variant; this.serverPosition = position.progress || {}; this.positionConflict = false;
+                if (!this.src && Number.isInteger(this.serverPosition.chapter) && this.serverPosition.chapter < this.chapters.length)
+                    this.chapterIndex = this.serverPosition.chapter;
+                if (!this.src && this.serverPosition.rate) this.rate = this.serverPosition.rate;
                 try {
                     const saved = JSON.parse(localStorage.getItem(this.positionKey()) || '{}');
-                    if (!this.src && Number.isInteger(saved.chapter) && saved.chapter >= 0 && saved.chapter < this.chapters.length) this.chapterIndex = saved.chapter;
-                    if (!this.src && [0.75, 1, 1.25, 1.5, 2].includes(saved.rate)) this.rate = saved.rate;
+                    if (!this.serverPosition.revision && !this.src && Number.isInteger(saved.chapter) && saved.chapter >= 0 && saved.chapter < this.chapters.length) this.chapterIndex = saved.chapter;
+                    if (!this.serverPosition.revision && !this.src && [0.75, 1, 1.25, 1.5, 2].includes(saved.rate)) this.rate = saved.rate;
                 } catch { /* Storage is optional. */ }
             } catch (error) { if (generation === this.planGeneration) this.fail(error); }
             finally { if (generation === this.planGeneration) this.planLoading = false; }
@@ -255,7 +264,8 @@ export default {
         acceptStatus(result, generation) {
             if (typeof result.engineId === 'string' && result.engineId !== this.engineId) {
                 this.engineId = result.engineId;
-                if (!this.isPreview) this.storageKey = this.positionKey();
+                this.positionVariant = ''; this.serverPosition = {};
+                if (!this.isPreview) { this.storageKey = this.positionKey(); this.loadPlan(); }
             }
             this.jobId = result.id;
             this.state = result.state;
@@ -301,7 +311,7 @@ export default {
             const audio = this.$refs.audio;
             if (!this.src || !audio) return;
             try {
-                const saved = JSON.parse(localStorage.getItem(this.storageKey) || '{}');
+                const saved = this.serverPosition.revision ? this.serverPosition : JSON.parse(localStorage.getItem(this.storageKey) || '{}');
                 if (saved.chapter === this.activeChapter && !this.isPreview && Number.isFinite(saved.time) && saved.time >= 0 && saved.time < audio.duration)
                     audio.currentTime = saved.time;
             } catch { /* Storage is optional. */ }
@@ -316,8 +326,24 @@ export default {
             if (!this.storageKey || !this.src || !audio || !Number.isFinite(audio.currentTime)) return;
             if (!force && Date.now() - this.lastSaved < 3000) return;
             this.lastSaved = Date.now();
-            try { localStorage.setItem(this.storageKey, JSON.stringify({chapter: this.activeChapter, time: audio.currentTime, rate: this.rate})); }
+            const position = {chapter: this.activeChapter, time: audio.currentTime, rate: this.rate};
+            try { localStorage.setItem(this.storageKey, JSON.stringify(position)); }
             catch { /* Storage is optional. */ }
+            if (!this.positionConflict && this.positionVariant) {
+                const uid = this.bookUid, variant = this.positionVariant, identity = this.profileIdentity;
+                const previous = this.positionWrite || Promise.resolve();
+                this.positionWrite = previous.catch(() => {}).then(async() => {
+                    if (uid !== this.bookUid || variant !== this.positionVariant || identity !== this.profileIdentity || this.positionConflict) return;
+                    const result = await this.$root.api.audioPosition(uid, variant, {...position, baseRevision: this.serverPosition.revision || 0});
+                    if (uid !== this.bookUid || variant !== this.positionVariant || identity !== this.profileIdentity) return;
+                    this.serverPosition = result.progress || {};
+                    if (this.serverPosition.conflict) {
+                        this.positionConflict = true;
+                        if (this.$refs.audio) this.$refs.audio.pause();
+                        this.error = 'На другом устройстве сохранена новая позиция. Закройте и откройте плеер, чтобы продолжить с неё.';
+                    }
+                }).catch(() => { this.error = 'Позиция сохранена в браузере. Сервер временно недоступен.'; });
+            }
             this.updateMediaPosition();
         },
         applyRate() {

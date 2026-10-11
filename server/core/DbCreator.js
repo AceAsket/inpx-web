@@ -38,15 +38,25 @@ class DbCreator {
     //процедура формировани БД несколько усложнена, в целях экономии памяти
     async run(db, callback) {
         const config = this.config;
+        const inpxHashCreator = new InpxHashCreator(config);
+        const sourceHash = await inpxHashCreator.getHash();
 
         callback({jobStepCount: 5});
         callback({job: 'load inpx', jobMessage: 'Загрузка INPX', jobStep: 1, progress: 0});
 
         //временная таблица
-        await db.create({
-            table: 'book',
-            cacheSize: (config.lowMemoryMode ? 5 : 500),
-        });        
+        const incremental = await db.tableExists({table: 'book'});
+        if (!incremental) await db.create({table: 'book', cacheSize: (config.lowMemoryMode ? 5 : 500)});
+        else await db.open({table: 'book'});
+        if (incremental && (await db.getDbInfo({table: 'book'})).book.hash.some(hash => hash.field === '_uid'))
+            await db.drop({in: 'book', hash: {field: '_uid'}});
+        const previous = new Map();
+        let lastBookId = 0;
+        if (incremental) {
+            const rows = await db.select({table: 'book', map: '(row) => ({uid: row._uid, id: row.id, hash: row._recordHash})'});
+            for (const row of rows) { previous.set(row.uid, row); lastBookId = Math.max(lastBookId, row.id); }
+        }
+        let recordsChanged = 0;
 
         //поисковые таблицы, позже сохраним в БД
         let authorMap = new Map();//авторы
@@ -67,6 +77,8 @@ class DbCreator {
         let librateArr = [];
         let extMap = new Map();//тип файла
         let extArr = [];
+        const wordMap = new Map();
+        let wordArr = [];
 
         let uidSet = new Set();//уникальные идентификаторы
 
@@ -186,6 +198,10 @@ class DbCreator {
         };        
 
         const parseBookRec = (rec) => {
+            for (const field of ['title', 'author', 'series']) {
+                for (const word of new Set(require('./CatalogSearch').words(rec[field]).map(require('./CatalogSearch').root)))
+                    parseField(`${field}:${word}`, wordMap, wordArr, rec.id);
+            }
             //авторы
             const author = splitAuthor(rec.author);
 
@@ -230,7 +246,7 @@ class DbCreator {
         };
 
         //основная процедура парсинга
-        let id = 0;
+        let id = lastBookId;
         const parsedCallback = async(chunk) => {
             let filtered = false;
             for (const rec of chunk) {
@@ -245,7 +261,9 @@ class DbCreator {
                     continue;
                 }
 
-                rec.id = ++id;
+                const prior = previous.get(rec._uid);
+                rec._recordHash = require('crypto').createHash('sha256').update(JSON.stringify(rec)).digest('hex');
+                rec.id = prior ? prior.id : ++id;
                 uidSet.add(rec._uid);
 
                 if (!rec.del) {
@@ -266,7 +284,10 @@ class DbCreator {
                 saveChunk = chunk;
             }
 
-            await db.insert({table: 'book', rows: saveChunk});
+            saveChunk = saveChunk.filter(rec => !previous.has(rec._uid) || previous.get(rec._uid).hash !== rec._recordHash);
+            if (saveChunk.length) await db.insert({table: 'book', rows: saveChunk, replace: true});
+            recordsChanged += saveChunk.length;
+            callback({recordsChanged, incremental});
 
             recsLoaded += chunk.length;
             callback({recsLoaded});
@@ -289,7 +310,7 @@ class DbCreator {
                 sourceName: source.name,
             });
 
-            const parser = new InpxParser();
+            const parser = source.type === 'folder' ? new (require('./FolderIndexer').FolderIndexer)(source, config) : new InpxParser();
             await parser.parse(source.inpxFile || source.inpx, readFileCallback, parsedCallback);
             parserInfos.push({
                 id: source.id,
@@ -299,6 +320,10 @@ class DbCreator {
                 info: parser.info,
             });
         }
+
+        const removed = [...previous.values()].filter(row => !uidSet.has(row.uid)).map(row => row.id);
+        for (let offset = 0; offset < removed.length; offset += 10000)
+            await db.delete({table: 'book', where: `@@id(${db.esc(removed.slice(offset, offset + 10000))})`});
 
         //чистка памяти, ибо жрет как не в себя
         authorMap = null;
@@ -449,6 +474,7 @@ class DbCreator {
 
         //ext
         await saveTable('ext', extArr, () => {extArr = null});
+        await saveTable('word', wordArr, () => {wordArr = null});
 
         //кэш-таблицы запросов
         await db.create({table: 'query_cache'});
@@ -489,7 +515,8 @@ class DbCreator {
         utils.freeMemory();
 
         //config сохраняем в самом конце, нет конфига - с базой что-то не так
-        const inpxHashCreator = new InpxHashCreator(config);
+        if (sourceHash !== await inpxHashCreator.getHash())
+            throw new Error('Источники изменились во время индексации. Повторите обновление.');
 
         await db.create({
             table: 'config'
@@ -521,7 +548,8 @@ class DbCreator {
         await db.insert({table: 'config', rows: [
             {id: 'inpxInfo', value: inpxInfo},
             {id: 'stats', value: stats},
-            {id: 'inpxHash', value: await inpxHashCreator.getHash()},
+            {id: 'inpxHash', value: sourceHash},
+            {id: 'indexUpdate', value: {incremental, recordsChanged, recordsRemoved: removed.length, updatedAt: new Date().toISOString()}},
         ]});
 
         callback({job: 'done', jobMessage: ''});
@@ -644,7 +672,7 @@ class DbCreator {
         }
 
         callback({progress: 1});
-        await fs.writeFile(`${this.config.dataDir}/db/${from}_id.map`, JSON.stringify(idMap));
+        await fs.writeFile(`${this.config.indexDbPath || `${this.config.dataDir}/db`}/${from}_id.map`, JSON.stringify(idMap));
 
         bookId2RecId = null;
         utils.freeMemory();

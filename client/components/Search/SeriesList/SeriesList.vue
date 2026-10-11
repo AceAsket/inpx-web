@@ -28,6 +28,7 @@
                 </div>
 
                 <div class="series-read-actions">
+                    <q-btn outline dense no-caps icon="la la-download" label="ZIP серии" :loading="batchSeries === item.series" :disable="!!batchSeries" @click.stop="downloadSeries(item)" />
                     <q-btn flat dense no-caps icon="la la-check-circle" @click.stop="markSeriesRead(item, true)">
                         Прочитана
                     </q-btn>
@@ -124,6 +125,7 @@ import * as utils from '../../../share/utils';
 import _ from 'lodash';
 
 class SeriesList extends BaseList {
+    batchSeries = '';
     get foundCountMessage() {
         return `${this.list.totalFound} сери${utils.wordEnding(this.list.totalFound, 1)}`;
     }
@@ -201,6 +203,13 @@ class SeriesList extends BaseList {
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
+    }
+
+    async downloadSeries(item) {
+        this.batchSeries = item.series;
+        try { await this.api.downloadBatch({series: item.series}); }
+        catch (error) { this.$root.stdDialog.alert(error.message, 'Ошибка'); }
+        finally { this.batchSeries = ''; }
     }
 
     async updateTableData() {

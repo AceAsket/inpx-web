@@ -421,14 +421,15 @@
                             <div v-for="(source, index) in adminSources" :key="index" class="admin-source-row">
                                 <q-checkbox v-model="source.enabled" size="32px" />
                                 <q-input v-model="source.name" outlined dense :label="adminUi.sourceName" />
-                                <q-input v-model="source.inpx" outlined dense :label="adminUi.sourceInpx" />
+                                <q-select v-model="source.type" outlined dense emit-value map-options label="Тип" :options="[{label: 'INPX', value: 'inpx'}, {label: 'Папка FB2/EPUB', value: 'folder'}]" />
+                                <q-input v-if="source.type !== 'folder'" v-model="source.inpx" outlined dense :label="adminUi.sourceInpx" />
                                 <q-input v-model="source.libDir" outlined dense :label="adminUi.sourceLibDir" />
                                 <q-btn flat dense round color="primary" icon="la la-search" :loading="source.diagnosticsLoading" @click="diagnoseAdminSource(index)">
                                     <q-tooltip>{{ adminUi.checkSource }}</q-tooltip>
                                 </q-btn>
                                 <q-btn flat dense round color="negative" icon="la la-trash" @click="removeAdminSource(index)" />
                                 <div class="admin-source-diagnostics">
-                                    <span :class="source.inpxExists ? 'text-positive' : 'text-negative'">INPX</span>
+                                    <span v-if="source.type !== 'folder'" :class="source.inpxExists ? 'text-positive' : 'text-negative'">INPX</span>
                                     <span :class="source.libDirExists ? 'text-positive' : 'text-negative'">{{ adminUi.folder }}</span>
                                     <span>{{ adminUi.archives }}: {{ source.archiveCount || 0 }}{{ source.archiveCountTruncated ? '+' : '' }}</span>
                                     <span>covers: {{ source.hasCovers ? 'ok' : '-' }}</span>
@@ -1513,6 +1514,7 @@ class SettingsDialog {
 
     normalizeAdminSourceForCompare(source = {}) {
         return {
+            type: source.type === 'folder' ? 'folder' : 'inpx',
             id: String(source.id || '').trim(),
             name: String(source.name || '').trim(),
             inpx: String(source.inpx || '').trim(),
@@ -1527,6 +1529,7 @@ class SettingsDialog {
             id: source.id || '',
             name: source.name || '',
             inpx: source.inpx || '',
+            type: source.type === 'folder' ? 'folder' : 'inpx',
             libDir: source.libDir || '',
             enabled: source.enabled !== false,
             inpxExists: source.inpxExists === true,
@@ -1702,6 +1705,7 @@ class SettingsDialog {
 
     addAdminSource() {
         this.adminSources.push({
+            type: 'inpx',
             id: '',
             name: '',
             inpx: '',
