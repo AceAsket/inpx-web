@@ -78,6 +78,13 @@ async function testFolderIncrementalSearchAndSmartShelves() {
                 const populated = await worker.getReadingList(currentUser.id, shelf.list.id);
                 assert.strictEqual(populated.books.length, 1);
                 assert.strictEqual(populated.list.bookCount, 1);
+                assert.strictEqual(populated.books[0]._readerProgress, null);
+                await worker.readingListStore.updateReaderProgress(currentUser.id, uid, {percent: 0.2, baseRevision: 0});
+                const continued = await worker.getReadingList(currentUser.id, shelf.list.id);
+                assert.deepStrictEqual(continued.books[0]._readerProgress, {percent: 0.2, started: true});
+                const other = await worker.readingListStore.createUser({name: 'Другой читатель'});
+                const shared = await worker.getReadingList(other.id, shelf.list.id, {allowForeign: true});
+                assert.strictEqual(shared.books[0]._readerProgress, null, 'Reading position belongs to the viewer, not the shelf owner');
                 const marked = await worker.setReadingListBookRead(currentUser.id, shelf.list.id, uid, true);
                 assert.strictEqual(marked.list.bookCount, 0, 'Marking read immediately refreshes an unread smart shelf');
                 assert.strictEqual((await worker.getReadingList(currentUser.id, shelf.list.id)).books.length, 0);

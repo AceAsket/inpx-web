@@ -377,6 +377,14 @@
                             </template>
                         </DivBtn>
 
+                        <DivBtn v-if="config.onlineReaderEnabled" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-book-open" round role="button" aria-label="Читалка" tabindex="0" @click.stop.prevent="openReaderLibrary" @keydown.enter.stop.prevent="openReaderLibrary" @keydown.space.stop.prevent="openReaderLibrary">
+                            <template #tooltip>
+                                <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
+                                    Читалка
+                                </q-tooltip>
+                            </template>
+                        </DivBtn>
+
                         <DivBtn v-if="!config.freeAccess" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-sign-out-alt" round @click.stop.prevent="logout">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
@@ -500,6 +508,30 @@
             @navigate="bookInfoNavigate"
         />
         <ReadingListsDialog v-model="readingListsDialogVisible" :book="readingListsDialogBook" />
+        <Dialog v-model="saveShelfDialogVisible">
+            <template #header>Создать умную полку</template>
+            <form class="save-shelf-form" @submit.prevent="createSearchShelf">
+                <q-input
+                    v-model="shelfName"
+                    outlined dense autofocus maxlength="200"
+                    label="Название полки"
+                    :disable="shelfSaving"
+                />
+                <q-checkbox v-model="shelfUnreadOnly" label="Только непрочитанные" :disable="shelfSaving" />
+                <div class="save-shelf-description">
+                    Книги на полке обновляются автоматически по текущим фильтрам поиска.
+                </div>
+                <div v-if="shelfError" role="alert" class="text-negative">{{ shelfError }}</div>
+            </form>
+            <template #footer>
+                <q-btn flat no-caps label="Отмена" :disable="shelfSaving" @click="saveShelfDialogVisible = false" />
+                <q-btn
+                    color="primary" no-caps label="Создать полку"
+                    :loading="shelfSaving" :disable="!shelfName.trim() || shelfSaving"
+                    @click="createSearchShelf"
+                />
+            </template>
+        </Dialog>
         <UserProfilesDialog v-model="userProfilesDialogVisible" />
         <SelectExtSearchDialog v-model="selectExtSearchDialogVisible" v-model:ext-search="extSearch" />        
     </div>
@@ -643,10 +675,9 @@ const componentOptions = {
 
                 if (this.prevList.totalFound != newValue.totalFound) {
                     this.updatePageCount();
-                    if (this.$refs.list)
-                        this.foundCountMessage = this.$refs.list.foundCountMessage;
-                    else
-                        this.foundCountMessage = '';
+                    this.$nextTick(() => {
+                        this.foundCountMessage = this.$refs.list ? this.$refs.list.foundCountMessage : '';
+                    });
                 }
 
                 this.prevList = _.cloneDeep(newValue);
@@ -763,6 +794,12 @@ class Search {
 
     bookInfo = {};
     readingListsDialogBook = null;
+    saveShelfDialogVisible = false;
+    shelfName = '';
+    shelfUnreadOnly = true;
+    shelfSaving = false;
+    shelfError = '';
+    shelfFilters = {};
     discoveryShelves = [];
     discoveryShelvesLoading = false;
     discoveryShelvesError = '';
@@ -1813,19 +1850,37 @@ class Search {
         }
     }
 
+    openReaderLibrary() {
+        this.$router.push({path: '/reader'});
+    }
+
     openReadingLists(book = null) {
         this.readingListsDialogBook = (book || null);
         this.readingListsDialogVisible = true;
     }
 
-    async saveSearchShelf() {
-        const result = await this.$root.stdDialog.prompt('Название умной полки:', 'Сохранить поиск', {inputValue: ''});
-        if (!result || !String(result.value || '').trim()) return;
+    saveSearchShelf() {
+        this.shelfName = '';
+        this.shelfUnreadOnly = true;
+        this.shelfError = '';
+        this.shelfFilters = {...this.search};
+        this.saveShelfDialogVisible = true;
+    }
+
+    async createSearchShelf() {
+        const name = this.shelfName.trim();
+        if (!name || this.shelfSaving) return;
+        this.shelfSaving = true;
+        this.shelfError = '';
         try {
-            const unreadOnly = await this.$root.stdDialog.confirm('Показывать только непрочитанные книги?', 'Умная полка');
-            await this.$root.api.createReadingListWithVisibility(result.value, 'private', {...this.search, unreadOnly});
+            await this.$root.api.createReadingListWithVisibility(name, 'private', {...this.shelfFilters, unreadOnly: this.shelfUnreadOnly});
+            this.saveShelfDialogVisible = false;
             this.openReadingLists();
-        } catch (error) { this.$root.stdDialog.alert(error.message, 'Ошибка'); }
+        } catch (error) {
+            this.shelfError = error.message;
+        } finally {
+            this.shelfSaving = false;
+        }
     }
 
     hideDiscoveryShelf(shelfId = '') {
@@ -2445,6 +2500,18 @@ export default vueComponent(Search);
 </script>
 
 <style scoped>
+.save-shelf-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(380px, calc(100vw - 64px));
+    padding: 8px 0;
+}
+
+.save-shelf-description {
+    color: var(--app-muted);
+}
+
 .root {
 }
 

@@ -143,21 +143,29 @@
                                         {{ bookItem.author }}
                                     </div>
                                 </div>
-                                <q-checkbox
-                                    :model-value="bookItem.read"
-                                    dense
-                                    :label="readBookLabel"
-                                    @update:model-value="toggleBookItemRead(item, bookItem, $event)"
-                                />
-                                <q-btn
-                                    v-if="!item.filters"
-                                    flat
-                                    dense
-                                    round
-                                    color="negative"
-                                    icon="la la-times"
-                                    @click="removeBookFromList(item, bookItem)"
-                                />
+                                <div class="list-book-actions">
+                                    <q-btn
+                                        v-if="config.onlineReaderEnabled && bookItem.ext === 'fb2'"
+                                        outline dense no-caps icon="la la-book-open"
+                                        :label="bookItem.started && bookItem.percent < 0.999 ? 'Продолжить читать' : 'Читать'"
+                                        @click="readBook(bookItem)"
+                                    />
+                                    <q-checkbox
+                                        :model-value="bookItem.read"
+                                        dense
+                                        :label="readBookLabel"
+                                        @update:model-value="toggleBookItemRead(item, bookItem, $event)"
+                                    />
+                                    <q-btn
+                                        v-if="!item.filters"
+                                        flat
+                                        dense
+                                        round
+                                        color="negative"
+                                        icon="la la-times"
+                                        @click="removeBookFromList(item, bookItem)"
+                                    />
+                                </div>
                             </div>
                         </div>
                         <div v-else class="list-books-state text-grey-7">
@@ -463,6 +471,9 @@ class ReadingListsDialog {
                 bookUid: String(book.bookUid || book._uid || '').trim(),
                 title: String(book.title || '').trim(),
                 author: String(book.author || '').trim(),
+                ext: String(book.ext || '').trim().toLowerCase(),
+                started: !!(book._readerProgress && book._readerProgress.started),
+                percent: Number(book._readerProgress && book._readerProgress.percent) || 0,
                 read: !!(book._readingListRead || book.read),
             }));
             item.booksLoaded = true;
@@ -475,6 +486,11 @@ class ReadingListsDialog {
         } finally {
             item.booksLoading = false;
         }
+    }
+
+    async readBook(bookItem) {
+        this.dialogVisible = false;
+        await this.$router.push({path: '/reader', query: {bookUid: bookItem.bookUid}});
     }
 
     async removeBookFromList(list, bookItem) {
@@ -619,7 +635,7 @@ export default vueComponent(ReadingListsDialog);
 
 <style scoped>
 .dialog-box {
-    width: min(640px, 92vw);
+    width: min(640px, calc(100vw - 64px));
     max-height: min(72vh, 760px);
     padding: 8px 10px 10px;
     overflow: auto;
@@ -675,10 +691,9 @@ export default vueComponent(ReadingListsDialog);
 }
 
 .list-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
     gap: 10px;
     padding: 10px 12px;
     border: 1px solid var(--app-border);
@@ -725,15 +740,20 @@ export default vueComponent(ReadingListsDialog);
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
 }
 
 .list-books {
+    grid-column: 1 / -1;
     width: 100%;
     display: flex;
     flex-direction: column;
     gap: 8px;
     padding-top: 4px;
+}
+
+.list-actions > .q-btn:nth-child(2) {
+    width: 100px;
 }
 
 .list-books-items {
@@ -749,7 +769,7 @@ export default vueComponent(ReadingListsDialog);
 
 .list-book-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto 32px;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
@@ -759,6 +779,12 @@ export default vueComponent(ReadingListsDialog);
 
 .list-book-main {
     min-width: 0;
+}
+
+.list-book-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .list-book-title {
@@ -778,16 +804,25 @@ export default vueComponent(ReadingListsDialog);
         flex-direction: column;
         align-items: stretch;
     }
-}
 
-@media (max-width: 560px) {
     .list-row {
-        align-items: flex-start;
-        flex-direction: column;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
     }
 
     .list-actions {
         width: 100%;
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 560px) {
+    .list-book-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .list-book-actions {
+        flex-wrap: wrap;
     }
 }
 </style>

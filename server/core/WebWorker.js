@@ -4876,6 +4876,8 @@ class WebWorker {
             throw new Error('Список не найден');
 
         const listEntries = item.filters ? await this.smartShelfEntries(userId, item) : this.readingListStore.normalizeEntries(item.books);
+        const {user} = await this.readingListStore.resolveUser(userId);
+        const progressByBook = user.readerProgress || {};
         const books = [];
         for (let offset = 0; offset < listEntries.length; offset += 500) {
             const chunk = listEntries.slice(offset, offset + 500);
@@ -4883,6 +4885,8 @@ class WebWorker {
             const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(chunk.map(entry => entry.bookUid))})`});
             for (const book of rows) {
                 book._readingListRead = read.get(book._uid);
+                const progress = progressByBook[book._uid];
+                book._readerProgress = progress ? {percent: progress.percent, started: !!progress.updatedAt} : null;
                 books.push(book);
             }
         }
