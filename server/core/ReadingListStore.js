@@ -6,6 +6,14 @@ const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 
 const readerPreferencesVersion = 2;
 
+function logWarning(message) {
+    try {
+        new (require('./AppLogger'))().log(LM_WARN, message);
+    } catch (e) {
+        console.warn(message);
+    }
+}
+
 class ReadingListStore {
     constructor(config) {
         this.config = config;
@@ -77,8 +85,22 @@ class ReadingListStore {
         return this.validateLogin(this.config.adminLogin || 'admin');
     }
 
+    // Without a configured password the admin gets a random one, printed once to the log:
+    // a fixed default would let anyone who reaches the server in as admin.
     adminPassword() {
-        return String(this.config.adminPassword || 'admin');
+        if (!this.config.adminPassword) {
+            this.config.adminPassword = crypto.randomBytes(12).toString('base64url');
+            logWarning(`Admin profile "${this.adminLogin()}" password: ${this.config.adminPassword} `
+                + '(generated; set INPX_ADMIN_PASSWORD or --admin-password to choose one)');
+        }
+        return String(this.config.adminPassword);
+    }
+
+    // Installs made before the random default still have admin/admin.
+    async warnIfDefaultAdminPassword() {
+        const admin = (await this.load()).users.find(item => item.isAdmin);
+        if (admin && admin.passwordHash && await profilePassword.verify(admin.passwordHash, admin.login, 'admin'))
+            logWarning(`Admin profile "${admin.login}" still uses the password "admin": change it in the profile settings`);
     }
 
     makeAdminUser() {
@@ -738,11 +760,22 @@ class ReadingListStore {
         };
     }
 
+    // Parsing and normalizing the whole file costs tens of milliseconds on a few MB of reading
+    // state, and nearly every request loads it. Reuse the last result while the file is unchanged;
+    // a write anywhere (atomic rename) changes its inode. Callers get a copy they may mutate.
     async load() {
         await this.ensureData();
+        const stat = await fs.stat(this.file);
+        const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+        if (this.loaded && this.loaded.stamp === stamp && !this.config.resetAdminPassword)
+            return structuredClone(this.loaded.data);
+        this.loaded = null;
         let raw = null;
+        let reset = false;
+        // A read error (EMFILE, EACCES, EIO) is not a broken file: let it fail this request
+        // instead of replacing every profile with an empty store.
+        const text = await fs.readFile(this.file, 'utf8');
         try {
-            const text = await fs.readFile(this.file, 'utf8');
             const normalized = String(text || '').trim();
             if (!normalized)
                 throw new Error('reading-lists.json is empty');
@@ -751,12 +784,16 @@ class ReadingListStore {
             await this.backupBrokenStore(e);
             raw = this.makeDefaultData();
             await this.save(raw);
+            reset = true;
         }
 
         const {data, changed} = await this.applyAdminBootstrap(raw);
         if (changed)
             await this.writeData(data);
         this.config.resetAdminPassword = false;
+        // After a write the stamp read above is stale: the next load reads the file again.
+        if (!changed && !reset)
+            this.loaded = {stamp, data: structuredClone(data)};
         return data;
     }
 

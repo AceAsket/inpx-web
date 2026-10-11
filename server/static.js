@@ -685,7 +685,8 @@ module.exports = (app, config, webWorker = null, security = null) => {
             const fileName = req.params.fileName;
             const fileType = req.params.fileType;
 
-            if (path.extname(fileName) === '') {//восстановление файлов {hash}.raw, {hash}.zip
+            // Cache names are hex hashes; anything else (an encoded "..") must never reach fs.remove below.
+            if (/^[0-9a-f]+$/i.test(fileName)) {//восстановление файлов {hash}.raw, {hash}.zip
                 let bookFile = `${config.bookDir}/${fileName}`;
                 const bookFileDesc = `${bookFile}.d.json`;
 

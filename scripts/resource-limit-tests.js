@@ -149,5 +149,30 @@ async function testConversionPublishesOnlyCompletedFiles() {
     } finally { await fs.remove(dir); }
 }
 
-module.exports = [testConversionQueueLimitsAndRecovery, testConverterProcessTimeoutAndBoundedErrors,
-    testOpdsAuthenticationRateLimit, testConversionPublishesOnlyCompletedFiles];
+// A valid access token rides on every WebSocket message, and a user may log in to their own
+// profile between guesses: neither may reset the failures against another profile.
+async function testProfileLoginRateLimitSurvivesOtherSuccesses() {
+    const security = new Security({loginRateLimitMaxAttempts: 3});
+    const req = {headers: {}, socket: {remoteAddress: '10.0.0.5'}};
+    for (let i = 0; i < 3; i++) {
+        security.checkLoginRate(req, 'profile');
+        security.recordLoginAttempt(req, false, 'profile');
+        security.recordLoginAttempt(req, true, 'access');
+        security.recordLoginAttempt(req, true, 'profile');
+    }
+    assert.throws(() => security.checkLoginRate(req, 'profile'), error => error.code === 'INPX_LOGIN_RATE_LIMIT');
+    assert.doesNotThrow(() => security.checkLoginRate(req, 'access'));
+}
+
+// Behind nginx with $proxy_add_x_forwarded_for the client controls the first entries.
+async function testClientIpIgnoresSpoofedForwardedFor() {
+    const security = new Security({trustProxy: true, trustedProxyCidrs: ['172.18.0.0/16']});
+    const viaProxy = header => ({headers: {'x-forwarded-for': header}, socket: {remoteAddress: '172.18.0.2'}});
+    assert.strictEqual(security.clientIp(viaProxy('1.2.3.4, 203.0.113.9')), '203.0.113.9');
+    assert.strictEqual(security.clientIp(viaProxy('1.2.3.4, 203.0.113.9, 172.18.0.7')), '203.0.113.9');
+    assert.strictEqual(security.clientIp(viaProxy('203.0.113.9')), '203.0.113.9');
+    assert.strictEqual(security.clientIp({headers: {'x-forwarded-for': '1.2.3.4'}, socket: {remoteAddress: '198.51.100.1'}}), '198.51.100.1');
+}
+
+module.exports = [testClientIpIgnoresSpoofedForwardedFor, testConversionQueueLimitsAndRecovery, testConverterProcessTimeoutAndBoundedErrors,
+    testOpdsAuthenticationRateLimit, testProfileLoginRateLimitSurvivesOtherSuccesses, testConversionPublishesOnlyCompletedFiles];

@@ -123,7 +123,7 @@ module.exports = {
     updateChannel: process.env.INPX_UPDATE_CHANNEL || 'auto',
     installMode: process.env.INPX_INSTALL_MODE || '',
     adminLogin: process.env.INPX_ADMIN_LOGIN || 'admin',
-    adminPassword: process.env.INPX_ADMIN_PASSWORD || 'admin',
+    adminPassword: process.env.INPX_ADMIN_PASSWORD || '',
     resetAdminPassword: process.env.INPX_RESET_ADMIN_PASSWORD === 'true',
     conversionEnabled: process.env.INPX_ENABLE_CONVERSION !== 'false',
     conversionConcurrency: 2,

@@ -229,6 +229,13 @@ function cleanDirMaxSize(value) {
     return (Number.isFinite(maxSize) && maxSize >= 0 ? maxSize : null);
 }
 
+// A book read to 99.9% or more counts as read, not in progress.
+const READ_PERCENT = 0.999;
+
+function isReadingInProgress(progress) {
+    return !!progress && progress.hidden !== true && !((Number(progress.percent) || 0) >= READ_PERCENT);
+}
+
 function cleanDirTargetRatio(value) {
     const ratio = Number(value);
     if (!Number.isFinite(ratio) || ratio <= 0)
@@ -3357,7 +3364,7 @@ class WebWorker {
                 bookUid: String(bookUid || '').trim(),
                 progress: Object.assign({percent: 0, sectionId: '', updatedAt: '', hidden: false}, progress || {}),
             }))
-            .filter((item) => item.bookUid && item.progress.hidden !== true)
+            .filter((item) => item.bookUid && isReadingInProgress(item.progress))
             .sort((a, b) => String(b.progress.updatedAt || '').localeCompare(String(a.progress.updatedAt || '')))
             .slice(0, Math.max(0, limit));
 
@@ -3384,7 +3391,7 @@ class WebWorker {
         }
 
         return {
-            count: Object.values(progressMap).filter(progress => progress && progress.hidden !== true).length,
+            count: Object.values(progressMap).filter(isReadingInProgress).length,
             items: result,
         };
     }
@@ -3416,7 +3423,7 @@ class WebWorker {
                 const normalizedProgress = Object.assign({percent: 0, sectionId: '', updatedAt: '', hidden: false}, progress || {});
                 const percent = Math.max(0, Math.min(1, Number(normalizedProgress.percent || 0) || 0));
                 const hidden = normalizedProgress.hidden === true;
-                const rowState = hidden ? 'hidden' : (percent >= 0.999 ? 'read' : 'reading');
+                const rowState = hidden ? 'hidden' : (percent >= READ_PERCENT ? 'read' : 'reading');
                 counters.all++;
                 counters[rowState]++;
                 return {
@@ -3499,7 +3506,7 @@ class WebWorker {
                     isAdmin: !!item.isAdmin,
                     opdsEnabled: item.opdsEnabled !== false,
                     opdsAuthEnabled: item.opdsAuthEnabled === true,
-                    currentReadingCount: Object.values(item.readerProgress || {}).filter(progress => progress && progress.hidden !== true).length,
+                    currentReadingCount: Object.values(item.readerProgress || {}).filter(isReadingInProgress).length,
                     createdAt: item.createdAt,
                     updatedAt: item.updatedAt,
                 }))

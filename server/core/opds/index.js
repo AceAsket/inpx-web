@@ -15,6 +15,25 @@ const SearchHelpPage = require('./SearchHelpPage');
 
 const log = new (require('../AppLogger'))().log;//singleton
 
+// Profile lookups fall back to the first profile (the admin), and the OPDS auth check skips profiles
+// without OPDS: a ?user= scope must name a profile with OPDS on, or the signed-in profile itself.
+function scopeGuard(getWorker) {
+    return async(req, res, next) => {
+        try {
+            const scopeUser = String((req.query && req.query.user) || '').trim();
+            const identity = req.profileAccessIdentity;
+            if (scopeUser && !(identity && identity.user && identity.user.id === scopeUser)
+                && !await getWorker().readingListStore.getOpdsUser(scopeUser)) {
+                res.set('Cache-Control', 'no-store');
+                return res.status(404).send('Profile not found');
+            }
+            next();
+        } catch (error) {
+            next(error);
+        }
+    };
+}
+
 module.exports = function(app, config, security = new (require('../Security'))(config)) {
     if (!config.opds || !config.opds.enabled)
         return;
@@ -86,7 +105,9 @@ module.exports = function(app, config, security = new (require('../Security'))(c
 
     app.use(opdsPaths, new (require('../ProfileAccess'))(config, root.webWorker, security).httpGuard(true));
     app.use(opdsPaths, require('./Auth')(config, (...args) => root.webWorker.verifyOpdsPassword(...args), security));
+    app.use(opdsPaths, scopeGuard(() => root.webWorker));
 
     app.get(opdsPaths, opds);
 };
 
+module.exports.scopeGuard = scopeGuard;

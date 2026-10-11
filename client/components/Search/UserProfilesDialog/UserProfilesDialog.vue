@@ -358,8 +358,11 @@
                             </q-input>
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
                             <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
-                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
-                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
+                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :disable="!!currentProfile.isAdmin" :label="uiText.showProfileInOpds" />
+                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!!currentProfile.isAdmin || !editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
+                            <div v-if="currentProfile.isAdmin" class="profile-backup-hint profile-opds-admin-note">
+                                {{ uiText.adminNotInOpds }}
+                            </div>
                         </div>
 
                         <div v-else-if="currentProfileTab === 'backup'" class="profile-backup-panel">
@@ -499,6 +502,7 @@ class UserProfilesDialog {
             showProfileInOpds: '\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044c \u0432 OPDS',
             requireOpdsAuth: '\u0422\u0440\u0435\u0431\u043e\u0432\u0430\u0442\u044c \u043f\u0430\u0440\u043e\u043b\u044c \u0434\u043b\u044f OPDS',
             opdsAuthHint: '\u0412 OPDS-\u0447\u0438\u0442\u0430\u043b\u043a\u0435 \u0443\u043a\u0430\u0436\u0438\u0442\u0435 \u043b\u043e\u0433\u0438\u043d \u0438 \u043f\u0430\u0440\u043e\u043b\u044c \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u043e\u0444\u0438\u043b\u044f.',
+            adminNotInOpds: '\u041f\u0440\u043e\u0444\u0438\u043b\u044c \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0430 \u043d\u0435 \u043f\u0443\u0431\u043b\u0438\u043a\u0443\u0435\u0442\u0441\u044f \u0432 OPDS.',
             create: '\u0421\u043e\u0437\u0434\u0430\u0442\u044c',
             adminOnly: '\u0421\u043e\u0437\u0434\u0430\u0432\u0430\u0442\u044c \u0438 \u0443\u0434\u0430\u043b\u044f\u0442\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u0438 \u043c\u043e\u0436\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440.',
             availableProfiles: '\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u0440\u043e\u0444\u0438\u043b\u0438',
@@ -1210,6 +1214,10 @@ export default vueComponent(UserProfilesDialog);
     color: var(--app-muted);
     font-size: 12px;
     line-height: 1.35;
+}
+
+.profile-opds-admin-note {
+    grid-column: 1 / -1;
 }
 
 .profile-backup-actions {

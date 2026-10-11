@@ -81,7 +81,7 @@ Options:
   --inpx=<filepath>    Set INPX collection file, default: the one that found in library dir
   --library-sources=<json> Set multiple INPX sources, JSON array or "name|inpx|libDir;..."
   --admin-login=<str>  Set admin profile login, default: ${defaultConfig.adminLogin}
-  --admin-password=<str> Set admin profile password, default: ${defaultConfig.adminPassword}
+  --admin-password=<str> Set admin profile password, default: random, printed to the log on first start
   --reset-admin-password Force reset of admin login/password on start
   --recreate           Force recreation of the search database on start
   --unsafe-filter      Use filter config at your own risk
@@ -216,6 +216,10 @@ async function main() {
 
     //server
     const app = express();
+    // First, so every request is logged, not only unmatched ones.
+    // The development build has its own request logger.
+    if (config.logQueries && branch !== 'development')
+        logQueries(app);
     const security = new (require('./core/Security'))(config);
     await security.init();
     if (config.trustProxy)
@@ -250,6 +254,8 @@ async function main() {
 
     const { WebSocketController } = require('./controllers');
     const webSocketController = new WebSocketController(wss, webAccess, config, security);
+    await webSocketController.webWorker.readingListStore.warnIfDefaultAdminPassword()
+        .catch(e => log(LM_WARN, `Cannot check the admin password: ${e.message}`));
 
     require('./core/AudiobookshelfProvider').init(app, config, webSocketController.webWorker, security);
 
@@ -258,10 +264,6 @@ async function main() {
 
     const initStatic = require('./static');
     initStatic(app, config, webSocketController.webWorker, security);
-
-    if (config.logQueries) {
-        logQueries(app);
-    }
 
     if (devModule) {
         devModule.logErrors(app);

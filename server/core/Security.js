@@ -463,9 +463,13 @@ class Security {
     }
 
     clientIp(req) {
-        return this.forwardedHeader(req, 'x-forwarded-for')
-            || (req.socket && req.socket.remoteAddress)
-            || '';
+        // Proxies append the address they saw ($proxy_add_x_forwarded_for), so the first entries
+        // are whatever the client sent. Take the rightmost one that is not a trusted proxy.
+        const chain = (this.isTrustedProxy(req) ? String(req.headers['x-forwarded-for'] || '') : '')
+            .split(',').map(item => item.trim()).filter(Boolean);
+        while (chain.length > 1 && this.isTrustedProxyAddress(chain[chain.length - 1]))
+            chain.pop();
+        return chain.pop() || (req.socket && req.socket.remoteAddress) || '';
     }
 
     normalizeLoginKind(kind = 'access') {
@@ -474,8 +478,8 @@ class Security {
     }
 
     loginAttemptKey(req, kind) {
-        const ip = this.clientIp(req) || 'unknown';
-        return kind === 'opds' ? `opds:${ip}` : ip;
+        // One counter per kind: a success of one kind must not clear the failures of another.
+        return `${this.normalizeLoginKind(kind)}:${this.clientIp(req) || 'unknown'}`;
     }
 
     incrementLoginMetric(kind = 'access', result = 'failure') {
@@ -524,8 +528,9 @@ class Security {
             return;
 
         if (success) {
-            // A known account must not erase failures against other OPDS profiles.
-            if (kind !== 'opds')
+            // Only the shared access password is one secret. Logging in to a known profile must
+            // not erase failures against other profiles (the admin's among them).
+            if (this.normalizeLoginKind(kind) === 'access')
                 this.loginAttempts.delete(ip);
             return;
         }

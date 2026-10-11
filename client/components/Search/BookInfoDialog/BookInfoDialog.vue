@@ -85,7 +85,7 @@
                                         <div v-if="authorInfo.photo" class="author-photo-box">
                                             <img :src="authorInfo.photo" class="author-photo" />
                                         </div>
-                                        <div class="col author-info-html" v-html="authorInfo.html"></div>
+                                        <div class="col author-info-html" v-html="authorInfoHtml"></div>
                                     </div>
                                 </div>
 
@@ -282,6 +282,7 @@ import vueComponent from '../../vueComponent.js';
 
 import Dialog from '../../share/Dialog.vue';
 import Fb2Parser from '../../../../server/core/fb2/Fb2Parser';
+const {escapeHtml, safeHtml} = require('../../../../shared/safeHtml');
 import * as utils from '../../../share/utils';
 import _ from 'lodash';
 
@@ -518,13 +519,9 @@ class BookInfoDialog {
         return result.join(', ');
     }
 
-    escapeHtml(value = '') {
-        return String(value)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+    // Author bios come from the library's HTML files.
+    get authorInfoHtml() {
+        return safeHtml((this.authorInfo && this.authorInfo.html) || '');
     }
 
     renderTokenLinks(values = [], type = '') {
@@ -534,7 +531,7 @@ class BookInfoDialog {
                 if (!text)
                     return '';
 
-                const safeText = this.escapeHtml(text);
+                const safeText = escapeHtml(text);
                 return `<span class="info-token-link" data-nav-type="${type}" data-nav-value="${safeText}">${safeText}</span>`;
             })
             .filter(Boolean)
@@ -594,12 +591,6 @@ class BookInfoDialog {
             if (nodePath == 'titleInfo/author')
                 return value.split(',').join(', ');
 
-            if (nodePath == 'titleInfo/genre')
-                return this.renderTokenLinks(this.convertGenres(value.split(',')).split(',').map(item => item.trim()).filter(Boolean), 'genreName');
-
-            if (nodePath == 'titleInfo/keywords')
-                return this.renderKeywordLinks(value);
-
             if (nodePath == 'titleInfo/librate' && !value)
                 return null;
 
@@ -607,6 +598,18 @@ class BookInfoDialog {
                 return value;
 
             return (value && value.toString ? value.toString() : '');
+        };
+
+        // Shown with v-html: library values are text, only the genre and keyword links are markup.
+        const valueToHtml = (value, nodePath, b) => {
+            if (nodePath == 'titleInfo/genre')
+                return this.renderTokenLinks(this.convertGenres(value.split(',')).split(',').map(item => item.trim()).filter(Boolean), 'genreName');
+
+            if (nodePath == 'titleInfo/keywords')
+                return this.renderKeywordLinks(value);
+
+            const text = valueToString(value, nodePath, b);
+            return (text ? escapeHtml(text) : text);
         };
 
         const result = [];
@@ -620,7 +623,7 @@ class BookInfoDialog {
                 const subItemOut = {
                     name: subItem.name,
                     label: subItem.label,
-                    value: valueToString(book[subItem.name], `${item.name}/${subItem.name}`, book)
+                    value: valueToHtml(book[subItem.name], `${item.name}/${subItem.name}`, book)
                 };
                 if (subItemOut.value)
                     itemOut.value.push(subItemOut);
@@ -694,18 +697,19 @@ class BookInfoDialog {
         return result.slice(0, 18);
     }
 
-    replaceInlineFb2Images(html) {
-        if (!html || !this.fb2Images.length)
-            return html;
-
+    // FB2 annotation and history markup, cleaned like any library HTML. Inline images become markers
+    // first, so they come back as our own <img> with the book's image data.
+    fb2Html(html = '', paragraphClass = '') {
+        const ids = [];
+        const marked = String(html).replace(/[\uE000\uE001]/g, '')
+            .replace(/<image\b[^>]*href=["']#([^"']+)["'][^>]*\/?>/gi, (match, id) => `\uE000${ids.push(id) - 1}\uE001`);
         const imageMap = new Map(this.fb2Images.map(item => [String(item.id), item.src]));
-        return html.replace(/<image\b[^>]*href=["']#([^"']+)["'][^>]*\/?>/gi, (match, id) => {
-            const src = imageMap.get(String(id));
-            if (!src)
-                return '';
-
-            return `<img src="${src}" class="fb2-inline-image" alt="fb2-${id}">`;
-        });
+        return safeHtml(marked)
+            .replace(/\uE000(\d+)\uE001/g, (match, index) => {
+                const src = imageMap.get(String(ids[index]));
+                return (src && /^data:image\/[\w.+-]+;base64,[\w+/=\s]+$/.test(src) ? `<img src="${src}" class="fb2-inline-image" alt="">` : '');
+            })
+            .replace(/<p>/g, `<p class="${paragraphClass}">`);
     }
 
     parseBookInfo() {
@@ -725,17 +729,14 @@ class BookInfoDialog {
 
             if (infoObj.titleInfo) {
                 let ann = infoObj.titleInfo.annotationHtml;
-                if (ann) {
-                    ann = this.replaceInlineFb2Images(ann);
-                    ann = ann.replace(/<p>/g, `<p class="p-annotation">`);
-                    this.annotation = ann;
-                }
+                if (ann)
+                    this.annotation = this.fb2Html(ann, 'p-annotation');
             }
 
             this.fb2 = parser.bookInfoList(infoObj, {
                 valueToString: (value, nodePath, origVTS) => {
                     if (nodePath == 'documentInfo/historyHtml' && value)
-                        return this.replaceInlineFb2Images(value).replace(/<p>/g, `<p class="p-history">`);
+                        return this.fb2Html(value, 'p-history');
 
                     if ((nodePath == 'titleInfo/genre' || nodePath == 'srcTitleInfo/genre') && value)
                         return this.renderTokenLinks(this.convertGenres(value).split(',').map(item => item.trim()).filter(Boolean), 'genreName');
@@ -743,7 +744,8 @@ class BookInfoDialog {
                     if ((nodePath == 'titleInfo/keywords' || nodePath == 'srcTitleInfo/keywords') && value)
                         return this.renderKeywordLinks(value);
 
-                    return origVTS(value, nodePath);
+                    const text = origVTS(value, nodePath);
+                    return (text ? escapeHtml(text) : text);
                 },
             });
 

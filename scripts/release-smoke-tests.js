@@ -1055,6 +1055,19 @@ async function testUserBackupExportsAndRestoresReaderState() {
     });
 }
 
+async function testProfileReadingSummaryLeavesOutReadBooks() {
+    const worker = makeWorker();
+    worker.getBookRecordByUid = async() => ({title: 'Книга', author: 'Автор', ext: 'fb2'});
+    const summary = await worker.buildUserReadingSummary({readerProgress: {
+        reading: {percent: 0.5},
+        finished: {percent: 1},
+        almost: {percent: 0.9995},
+        hidden: {percent: 0.3, hidden: true},
+    }}, 48);
+    assert.deepStrictEqual(summary.items.map(book => book.bookUid), ['reading']);
+    assert.strictEqual(summary.count, 1);
+}
+
 async function testReaderHomeKeepsUnavailableProgressVisible() {
     const worker = makeWorker();
     worker.getBookRecordByUid = async(uid) => uid === 'available'
@@ -1730,6 +1743,7 @@ const tests = [
     testAdminBackupArchiveAndDownload,
     testUserBackupExportsAndRestoresReaderState,
     testReaderProgressResetAndHiddenState,
+    testProfileReadingSummaryLeavesOutReadBooks,
     testReaderHomeKeepsUnavailableProgressVisible,
     testDiscoveryFeedbackAndEventsPersist,
     testCoverCacheRoutesAndCleaner,

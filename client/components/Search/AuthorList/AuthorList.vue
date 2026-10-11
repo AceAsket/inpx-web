@@ -183,6 +183,7 @@ import authorBooksStorage from '../authorBooksStorage';
 import * as utils from '../../../share/utils';
 
 import _ from 'lodash';
+const {safeHtml} = require('../../../../shared/safeHtml');
 
 class AuthorList extends BaseList {
     cachedAuthors = {};
@@ -310,8 +311,8 @@ class AuthorList extends BaseList {
     }
 
     getAuthorInfoHtml(item) {
-        const rawHtml = String((item && item.authorInfo && item.authorInfo.html) || '');
-        return rawHtml
+        // Bios come from the library's HTML files: clean them before adding our own markup.
+        return safeHtml((item && item.authorInfo && item.authorInfo.html) || '')
             .replace(/\[(h[1-6])\]([\s\S]*?)\[\/\1\]/gi, '<$1>$2</$1>')
             .replace(/\[b\]([\s\S]*?)\[\/b\]/gi, '<b>$1</b>')
             .replace(/\[i\]([\s\S]*?)\[\/i\]/gi, '<i>$1</i>')

@@ -221,6 +221,82 @@ async function testDownloaderVerifiesTlsCertificates() {
     }
 }
 
-module.exports = [testConcurrentSecretKeyCreation, testConcurrentStoreMutations, testAtomicConfigSave,
+async function testBookRouteRejectsTraversal() {
+    await temporary(async(dir) => {
+        const config = {dataDir: path.join(dir, 'data'), rootPathStatic: '', bookPathStatic: '/book',
+            publicDir: path.join(dir, 'data', 'public'), bookDir: path.join(dir, 'data', 'public-files', 'book')};
+        await fs.ensureDir(config.bookDir);
+        await fs.outputFile(path.join(config.dataDir, 'reading-lists.json'), '{}');
+        const app = require('express')();
+        require('../server/static')(app, config);
+        const server = http.createServer(app);
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        try {
+            // Raw paths: fetch() would normalize the encoded dots away.
+            for (const url of ['/book/%2E%2E', '/book/..%2F..', '/book/..%2F..%2Fraw', '/book/..%2F../zip']) {
+                await new Promise((resolve, reject) => http.get({host: '127.0.0.1', port: server.address().port, path: url},
+                    res => res.resume().on('end', resolve)).on('error', reject));
+            }
+            assert.ok(await fs.pathExists(path.join(config.dataDir, 'reading-lists.json')), 'Data dir must survive');
+            assert.ok(await fs.pathExists(config.bookDir), 'Book cache must survive');
+        } finally {
+            await new Promise(resolve => server.close(resolve));
+        }
+    });
+}
+
+async function testAdminGetsRandomPasswordByDefault() {
+    await temporary(async(dataDir) => {
+        const config = {dataDir, adminLogin: 'admin', adminPassword: ''};
+        const store = new ReadingListStore(config);
+        const admin = (await store.load()).users.find(user => user.isAdmin);
+        assert.ok(config.adminPassword.length >= 16, 'A random password must be generated');
+        assert.ok(await store.verifyUserPassword(admin.id, config.adminPassword));
+        assert.strictEqual(await store.verifyUserPassword(admin.id, 'admin'), false);
+    });
+}
+
+async function testStoreReadErrorKeepsData() {
+    await temporary(async(dataDir) => {
+        const store = new ReadingListStore({dataDir, adminPassword: 'fixture'});
+        await store.createList('default', 'Keep me');
+        const before = await fs.readFile(store.file, 'utf8');
+        const readFile = fs.readFile;
+        fs.readFile = async() => { throw Object.assign(new Error('EMFILE: too many open files'), {code: 'EMFILE'}); };
+        try {
+            await assert.rejects(store.load(), /EMFILE/);
+        } finally {
+            fs.readFile = readFile;
+        }
+        assert.strictEqual(await fs.readFile(store.file, 'utf8'), before, 'A read error must not reset the store');
+    });
+}
+
+async function testStoreLoadCacheStaysCurrent() {
+    await temporary(async(dataDir) => {
+        const [first, second] = [new ReadingListStore({dataDir, adminPassword: 'fixture'}), new ReadingListStore({dataDir, adminPassword: 'fixture'})];
+        await first.load();
+        const copy = await first.load();
+        copy.lists.push({id: 'leaked'});
+        assert.strictEqual((await first.load()).lists.length, 0, 'Mutating a loaded copy must not reach the cache');
+        await second.createList('default', 'From another instance');
+        assert.deepStrictEqual((await first.load()).lists.map(list => list.name), ['From another instance']);
+    });
+}
+
+// Author bios and FB2 annotations come from library files and are shown with v-html.
+async function testLibraryHtmlIsCleaned() {
+    const {safeHtml} = require('../shared/safeHtml');
+    assert.strictEqual(safeHtml('<P align="justify">Bio <b>bold</b><br/>&nbsp;&#171;q&#187;</P>'),
+        '<p>Bio <b>bold</b><br>&nbsp;&#171;q&#187;</p>');
+    assert.strictEqual(safeHtml('<subtitle>Part 1</subtitle>'), 'Part 1', 'Unknown tags are dropped, text stays');
+    assert.strictEqual(safeHtml('&lt;b&gt; and a < b'), '&lt;b&gt; and a &lt; b', 'Escaped text stays text');
+    for (const hostile of ['<img src=x onerror=alert(1)>', '<svg/onload=alert(1)>', '<p onclick="alert(1)">x</p>',
+        '<a href="javascript:alert(1)">x</a>', '<b\nonmouseover=alert(1)>x</b>', '<scr<script>ipt>alert(1)</script>',
+        '<p title="a>b" onmouseover="alert(1)">x</p>', '<iframe srcdoc="<script>alert(1)</script>">'])
+        assert.ok(!/<(?!\/?(p|br|b|i|u|em|strong|h[1-6]|sub|sup|ul|ol|li|blockquote|div|span)>)/i.test(safeHtml(hostile)), hostile);
+}
+
+module.exports = [testBookRouteRejectsTraversal, testLibraryHtmlIsCleaned, testStoreLoadCacheStaysCurrent, testStoreReadErrorKeepsData, testAdminGetsRandomPasswordByDefault, testConcurrentSecretKeyCreation, testConcurrentStoreMutations, testAtomicConfigSave,
     testSessionLifetimeAndMalformedCookies, testProfileCredentialChangesRevokeSessions,
     testDownloaderClosesFailedTransfers, testDownloaderVerifiesTlsCertificates];

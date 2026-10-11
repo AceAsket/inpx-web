@@ -98,4 +98,18 @@ async function testPreparedBookSizeAppearsInCatalogAcrossRestart() {
     });
 }
 
-module.exports = [testCatalogLanguageListsAndCollidingBookNumbers, testPreparedBookSizeAppearsInCatalogAcrossRestart];
+// JS regular expressions cannot be interrupted: patterns that backtrack per title are refused.
+async function testRegExpSearchRefusesBacktrackingPatterns() {
+    await database(async(dir, db) => {
+        await db.insert({table: 'book', rows: [{id: 1, _uid: 'hope', author: 'Huh Christopher', title: 'Keeping My Hope',
+            series: '', serno: 0, size: 42, librate: 0, del: 0, sourceId: 'main', insno: 0, folder: 'a.zip', file: '1',
+            libid: '1', ext: 'epub', lang: 'en'}]});
+        const value = searcher(db);
+        assert.deepStrictEqual((await value.bookSearch({title: '~^keeping.*hope$'})).found.map(book => book._uid), ['hope']);
+        for (const title of ['~.*.*hope', '~(.*.*)*q', '~(a|a)+q', '~(k)\\1'])
+            await assert.rejects(value.bookSearch({title}), /слишком сложное/, title);
+        await assert.rejects(value.bookSearch({author: 'huh', title: '~.{0,99}.{0,99}q'}), /слишком сложное/);
+    });
+}
+
+module.exports = [testRegExpSearchRefusesBacktrackingPatterns, testCatalogLanguageListsAndCollidingBookNumbers, testPreparedBookSizeAppearsInCatalogAcrossRestart];

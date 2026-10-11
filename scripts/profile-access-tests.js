@@ -43,6 +43,7 @@ async function fixture(options, test) {
     require('../server/static')(app, config, worker, security);
     app.use('/opds', access.httpGuard(true), require('../server/core/opds/Auth')(config,
         (...args) => worker.verifyOpdsPassword(...args), security));
+    app.use('/opds', require('../server/core/opds').scopeGuard(() => worker));
     app.get('/opds', (req, res) => res.json({user: req.query.user || ''}));
     for (const [url, name] of [['/opds/reading-profiles', 'ReadingProfilesPage'], ['/opds/reading-lists/list', 'ReadingListPage']]) {
         const page = Object.create(require(`../server/core/opds/${name}`).prototype);
@@ -230,5 +231,22 @@ async function testLegacyAccessAndGlobalOpdsCredentials() {
     });
 }
 
-module.exports = [testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
+// Profile lookups fall back to the admin: an unknown or OPDS-disabled ?user= must not reach its lists.
+async function testOpdsScopeNeedsAnOpdsProfile() {
+    await fixture({}, async({worker, bob, request}) => {
+        const store = worker.readingListStore;
+        const admin = (await store.load()).users.find(user => user.isAdmin);
+        const adminList = await store.createList(admin.id, 'Admin OPDS list', 'opds');
+        const bobList = await store.createList(bob.id, 'Bob OPDS list', 'opds');
+        const list = (user, id) => request(`/opds/reading-lists/list?user=${encodeURIComponent(user)}&id=${encodeURIComponent(id)}`);
+        assert.strictEqual((await list('no-such-user', adminList.id)).status, 404);
+        assert.strictEqual((await list(admin.id, adminList.id)).status, 404, 'OPDS is off for the admin');
+        assert.strictEqual((await list(bob.id, bobList.id)).status, 200);
+        assert.strictEqual((await list('bob', bobList.id)).status, 200, 'A login names the profile too');
+        await store.updateUser(bob.id, {opdsEnabled: false});
+        assert.strictEqual((await list(bob.id, bobList.id)).status, 404, 'A profile that turned OPDS off');
+    });
+}
+
+module.exports = [testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
     testProxyProfileBindingAndIdentityChange, testLegacyAccessAndGlobalOpdsCredentials];

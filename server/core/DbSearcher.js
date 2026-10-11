@@ -118,6 +118,7 @@ class DbSearcher {
             })`;
         } else if (a[0] == '~') {//RegExp
             a = a.substring(1);
+            utils.checkSearchRegExp(a);
             where = `
                 await (async() => {
                     const re = new RegExp(${db.esc(a)}, 'i');
@@ -749,6 +750,7 @@ class DbSearcher {
                     return `(row.${bookField} === '' || (!enru.has(row.${bookField}.toLowerCase()[0]) && row.${bookField}.toLowerCase().indexOf(${db.esc(searchValue)}) >= 0))`;
                 } else if (searchValue[0] == '~') {//RegExp
                     searchValue = searchValue.substring(1);
+                    utils.checkSearchRegExp(searchValue);
 
                     return `
                         (() => {

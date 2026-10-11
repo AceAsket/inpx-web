@@ -1,5 +1,6 @@
 const _ = require('lodash');
 const he = require('he');
+const utils = require('../utils');
 
 const WebWorker = require('../WebWorker');//singleton
 const XmlParser = require('../xml/XmlParser');
@@ -300,7 +301,7 @@ class BasePage {
             } else if (searchValue[0] == '~') {//RegExp
 
                 searchValue = searchValue.substring(1);
-                const re = new RegExp(searchValue, 'i');
+                const re = utils.checkSearchRegExp(searchValue);
                 return re.test(bookValue);
             } else {
                 if (options.looseTitlePrefix) {
