@@ -238,13 +238,43 @@ function cutString(data, len = 500) {
 
 // A "~" search runs the user's pattern against every value in the index, and JS regular expressions
 // have no timeout: "(.*.*)*q" never finishes on an 18-character title, ".*.*.*q" takes ms per title.
-// Allow at most one variable quantifier (*, +, {n,m}), no repeated groups and no back-references.
+// Allow at most one variable quantifier (*, +, ?, {n,m}), no repeated groups or back-references.
 function checkSearchRegExp(pattern = '') {
     const value = String(pattern);
-    const variable = (value.replace(/\\./g, '').match(/[*+]|\{\d*,\d*\}/g) || []).length;
-    if (value.length > 100 || variable > 1 || /\)[*+?{]/.test(value) || /\\[1-9]|\\k</.test(value))
-        throw new Error('Регулярное выражение слишком сложное: не больше 100 символов и одного "*" или "+", без повторяемых групп');
-    return new RegExp(value, 'i');
+    const tooComplex = () => new Error('Регулярное выражение слишком сложное: не больше 100 символов '
+        + 'и одного повторения (*, +, ?, {n,m}), без повторяемых групп и обратных ссылок');
+    if (value.length > 100)
+        throw tooComplex();
+    const re = new RegExp(value, 'i');
+    // Escapes and character classes are atoms, not operators. Keep a placeholder so removing
+    // an escaped literal cannot accidentally join a group closing with a later quantifier.
+    let syntax = '';
+    let inClass = false;
+    for (let i = 0; i < value.length; i++) {
+        const char = value[i];
+        if (char === '\\') {
+            const next = value[++i];
+            if (!inClass && (/[1-9]/.test(next) || (next === 'k' && value[i + 1] === '<')))
+                throw tooComplex();
+            if (!inClass)
+                syntax += '_';
+        } else if (inClass) {
+            if (char === ']')
+                inClass = false;
+        } else if (char === '[') {
+            inClass = true;
+            syntax += '_';
+        } else {
+            syntax += char;
+        }
+    }
+    // The ? introducing a group and the ? marking a lazy quantifier do not add repetitions.
+    const operators = syntax.replace(/\(\?(?::|[=!]|<[=!]|<[^>]+>)/g, '(')
+        .replace(/([*+?]|\{\d+(?:,\d*)?\})\?/g, '$1');
+    const variable = (operators.match(/[*+?]|\{\d*,\d*\}/g) || []).length;
+    if (variable > 1 || /\)[*+?{]/.test(operators))
+        throw tooComplex();
+    return re;
 }
 
 module.exports = {

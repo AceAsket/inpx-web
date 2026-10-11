@@ -22,10 +22,15 @@ function scopeGuard(getWorker) {
         try {
             const scopeUser = String((req.query && req.query.user) || '').trim();
             const identity = req.profileAccessIdentity;
-            if (scopeUser && !(identity && identity.user && identity.user.id === scopeUser)
-                && !await getWorker().readingListStore.getOpdsUser(scopeUser)) {
-                res.set('Cache-Control', 'no-store');
-                return res.status(404).send('Profile not found');
+            if (scopeUser) {
+                const user = (identity && identity.user && identity.user.id === scopeUser ? identity.user
+                    : await getWorker().readingListStore.getOpdsUser(scopeUser));
+                if (!user) {
+                    res.set('Cache-Control', 'no-store');
+                    return res.status(404).send('Profile not found');
+                }
+                // Every page and generated link must refer to the profile checked above.
+                req.query.user = user.id;
             }
             next();
         } catch (error) {

@@ -37,6 +37,8 @@ module.exports = function opdsAuth(config, verifyPassword, security) {
                 // store is being read. Do not reveal more guesses from that batch.
                 if (attempted)
                     security.checkLoginRate(req, 'opds');
+                if (auth.user)
+                    req.query.user = auth.user.id;
                 if (!auth.user || auth.user.opdsAuthEnabled !== true)
                     return next();
                 authorized = auth.authorized;

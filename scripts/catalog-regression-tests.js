@@ -105,10 +105,23 @@ async function testRegExpSearchRefusesBacktrackingPatterns() {
             series: '', serno: 0, size: 42, librate: 0, del: 0, sourceId: 'main', insno: 0, folder: 'a.zip', file: '1',
             libid: '1', ext: 'epub', lang: 'en'}]});
         const value = searcher(db);
-        assert.deepStrictEqual((await value.bookSearch({title: '~^keeping.*hope$'})).found.map(book => book._uid), ['hope']);
-        for (const title of ['~.*.*hope', '~(.*.*)*q', '~(a|a)+q', '~(k)\\1'])
+        for (const title of ['~^keeping.*hope$', '~^keeping.*?hope$', '~^keeping my ho?pe$', '~^keeping my ho??pe$',
+            '~^keeping (?:my|our) hope$', '~^keepin[g+*?()]+ my hope$', '~^keepin[g+*?()]+? my hope$',
+            '~^(?=keeping)keeping.*hope$', '~(?<word>hope)'])
+            assert.deepStrictEqual((await value.bookSearch({title})).found.map(book => book._uid), ['hope'], title);
+        for (const title of ['~.*.*hope', '~(.*.*)*q', '~(a|a)+q', '~(k)\\1',
+            '~' + 'a?'.repeat(45) + 'a{45}b', '~a?b?q', '~a{0,1}b?q', '~a?b*q', '~a?b+q', '~a?b{1,2}q',
+            '~(?:a|aa)?b', '~(?<a>a)\\k<a>', '~[)]*a?q'])
             await assert.rejects(value.bookSearch({title}), /слишком сложное/, title);
         await assert.rejects(value.bookSearch({author: 'huh', title: '~.{0,99}.{0,99}q'}), /слишком сложное/);
+        const {checkSearchRegExp} = require('../server/core/utils');
+        assert.ok(checkSearchRegExp('^a\\?b?$').test('a?b'), 'Escaped question marks are literals');
+        assert.ok(checkSearchRegExp('^(a)\\)?$').test('a)'), 'An escaped closing parenthesis is an atom');
+        assert.ok(checkSearchRegExp('^[a\\]?]+$').test('a]?'), 'An escaped class closing does not end the class');
+        assert.throws(() => checkSearchRegExp('a'.repeat(101)), /слишком сложное/);
+        const page = Object.create(require('../server/core/opds/BasePage').prototype);
+        assert.throws(() => page.filterBooks([{title: 'a'.repeat(70)}], {title: '~' + 'a?'.repeat(45) + 'a{45}b'}),
+            /слишком сложное/, 'OPDS must reject the same expensive pattern before matching');
     });
 }
 

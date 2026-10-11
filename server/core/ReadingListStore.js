@@ -1044,7 +1044,9 @@ class ReadingListStore {
             return null;
 
         const data = await this.load();
-        const user = data.users.find((item) => item.id === normalized || item.login === normalized);
+        // Match resolveUser: an exact ID must win over another profile's login.
+        const user = data.users.find((item) => item.id === normalized)
+            || data.users.find((item) => item.login === normalized);
         if (!user || user.opdsEnabled === false)
             return null;
 

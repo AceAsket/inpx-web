@@ -45,7 +45,8 @@ async function fixture(options, test) {
         (...args) => worker.verifyOpdsPassword(...args), security));
     app.use('/opds', require('../server/core/opds').scopeGuard(() => worker));
     app.get('/opds', (req, res) => res.json({user: req.query.user || ''}));
-    for (const [url, name] of [['/opds/reading-profiles', 'ReadingProfilesPage'], ['/opds/reading-lists/list', 'ReadingListPage']]) {
+    for (const [url, name] of [['/opds/reading-profiles', 'ReadingProfilesPage'], ['/opds/reading-lists', 'ReadingListsPage'],
+        ['/opds/reading-lists/list', 'ReadingListPage']]) {
         const page = Object.create(require(`../server/core/opds/${name}`).prototype);
         Object.assign(page, {config, webWorker: worker, opdsRoot: '/opds', rootTag: 'feed', id: name, title: name});
         app.get(url, async(req, res) => {
@@ -248,5 +249,30 @@ async function testOpdsScopeNeedsAnOpdsProfile() {
     });
 }
 
-module.exports = [testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
+async function testOpdsScopeCanonicalizesProfileIds() {
+    await fixture({}, async({worker, bob, request}) => {
+        const store = worker.readingListStore;
+        const hidden = await store.createUser({name: 'Hidden profile', login: 'hidden', opdsEnabled: false,
+            opdsAuthEnabled: true, passwordHash: await worker.hashProfilePassword('hidden', 'hidden-fixture')});
+        const hiddenList = await store.createList(hidden.id, 'Hidden shelf', 'opds');
+        const bobList = await store.createList(bob.id, 'Public shelf', 'opds');
+        await store.updateUser(bob.id, {login: hidden.id});
+        const lists = user => request(`/opds/reading-lists?user=${encodeURIComponent(user)}`);
+        const list = (user, id) => request(`/opds/reading-lists/list?user=${encodeURIComponent(user)}&id=${encodeURIComponent(id)}`);
+        assert.strictEqual((await lists(hidden.id)).status, 404, 'An ID takes precedence over another profile login');
+        assert.strictEqual((await list(hidden.id, hiddenList.id)).status, 404);
+        await store.updateUser(hidden.id, {opdsEnabled: true});
+        assert.strictEqual((await lists(hidden.id)).status, 401, 'The ID owner password must be required');
+        await store.updateUser(bob.id, {login: 'bob'});
+        const response = await lists('bob');
+        assert.strictEqual(response.status, 200);
+        const body = await response.text();
+        assert.ok(body.includes('Public shelf'));
+        assert.ok(body.includes(`user=${bob.id}`), 'Navigation uses the checked profile canonical ID');
+        assert.strictEqual((await list('bob', bobList.id)).status, 200);
+        assert.strictEqual((await list('bob', hiddenList.id)).status, 404, 'A public profile cannot read foreign lists');
+    });
+}
+
+module.exports = [testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
     testProxyProfileBindingAndIdentityChange, testLegacyAccessAndGlobalOpdsCredentials];
