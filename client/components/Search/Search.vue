@@ -3,7 +3,7 @@
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
             <div class="q-px-md q-py-xs">
-                <q-btn outline dense no-caps icon="la la-bookmark" label="Сохранить поиск как полку" @click="saveSearchShelf" />
+                <q-btn outline dense no-caps padding="6px 12px" icon="la la-bookmark" label="Сохранить поиск как полку" @click="saveSearchShelf" />
             </div>
             <div ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
                 <!-- Обновление -->

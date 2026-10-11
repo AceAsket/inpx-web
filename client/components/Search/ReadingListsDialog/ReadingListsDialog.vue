@@ -98,7 +98,7 @@
                     </div>
 
                     <div class="list-actions">
-                        <q-btn outline dense no-caps icon="la la-download" label="ZIP" :loading="batchListId === item.id" :disable="!!batchListId" @click="downloadList(item)" />
+                        <q-btn outline dense no-caps padding="6px 12px" icon="la la-download" label="ZIP" :loading="batchListId === item.id" :disable="!!batchListId" @click="downloadList(item)" />
                         <q-btn
                             flat
                             dense
