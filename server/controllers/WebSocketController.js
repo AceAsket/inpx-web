@@ -204,8 +204,21 @@ class WebSocketController {
                     await this.previewReaderVoice(req, ws); break;
                 case 'get-user-reading-library':
                     await this.getUserReadingLibrary(req, ws); break;
+                case 'search-reader-replacement': {
+                    await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+                    const title = String(req.title || '').trim().slice(0, 200);
+                    const author = String(req.author || '').trim().slice(0, 200);
+                    if (!title && !author) throw new Error('Укажите название или автора');
+                    this.send(await this.webWorker.bookSearch({title, author, ext: 'fb2', del: '0', limit: 20, offset: 0}), req, ws);
+                    break;
+                }
                 case 'update-reader-progress':
                     await this.updateReaderProgress(req, ws); break;
+                case 'relink-reader-book': {
+                    const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+                    this.send(await this.webWorker.relinkReaderBook(user.id, req.bookUid, req.replacementBookUid, req.baseRevision), req, ws);
+                    break;
+                }
                 case 'get-audio-position':
                 case 'update-audio-position': {
                     const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
@@ -333,6 +346,7 @@ class WebSocketController {
             'import-admin-settings',
             'import-admin-backup',
             'update-reader-progress',
+            'relink-reader-book',
             'update-audio-position',
             'prepare-batch-download',
             'prepare-reader-audio',

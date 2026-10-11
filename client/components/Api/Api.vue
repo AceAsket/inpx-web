@@ -533,6 +533,14 @@ class Api {
         return await this.request({action: 'update-reader-progress', bookUid, progress}, 120, options);
     }
 
+    async relinkReaderBook(bookUid, replacementBookUid, baseRevision) {
+        return await this.request({action: 'relink-reader-book', bookUid, replacementBookUid, baseRevision}, 120);
+    }
+
+    async searchReaderReplacement(title, author) {
+        return await this.request({action: 'search-reader-replacement', title, author}, 30);
+    }
+
     async deleteReaderProgress(bookUid) {
         return await this.request({action: 'delete-reader-progress', bookUid}, 120);
     }

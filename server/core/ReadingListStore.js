@@ -488,6 +488,7 @@ class ReadingListStore {
                 hidden: (row.hidden === true),
                 generation: Math.max(0, parseInt(row.generation, 10) || 0),
                 revision: Math.max(0, parseInt(row.revision, 10) || 0),
+                ...(row.relinkedTo ? {relinkedTo: this.normalizeBookUid(row.relinkedTo)} : {}),
             };
         }
         return result;
@@ -1428,6 +1429,8 @@ class ReadingListStore {
             target.readerProgress = {};
 
         const current = target.readerProgress[normalizedBookUid] || {};
+        if (current.relinkedTo)
+            return {...current, conflict: true};
         const percent = Number(utilsHasProp(patch, 'percent') ? patch.percent : current.percent);
         const sectionId = String(utilsHasProp(patch, 'sectionId') ? patch.sectionId : current.sectionId || '').trim();
         const pageIndex = Number(utilsHasProp(patch, 'pageIndex') ? patch.pageIndex : current.pageIndex);
@@ -1489,6 +1492,34 @@ class ReadingListStore {
 
         await this.save(data);
         return target.readerProgress[normalizedBookUid];
+    }
+
+    async relinkReaderBook(userId, bookUid, replacementBookUid, baseRevision) {
+        return await this.withProgressMutation(async() => {
+            const {data, user} = await this.resolveUser(userId);
+            const sourceUid = this.normalizeBookUid(bookUid);
+            const targetUid = this.normalizeBookUid(replacementBookUid);
+            if (!sourceUid || !targetUid || sourceUid === targetUid)
+                throw new Error('Выберите другую книгу');
+            const source = user.readerProgress[sourceUid];
+            if (!source || source.relinkedTo || Number(baseRevision) !== (Number(source.revision) || 0))
+                throw new Error('Прогресс изменился. Обновите список и повторите выбор книги');
+            if (user.readerProgress[targetUid] || (user.readerBookmarks[targetUid] || []).length)
+                throw new Error('У выбранной книги уже есть прогресс или закладки. Перенос отменён');
+            const updatedAt = this.nowIso();
+            const progress = {...source, sectionId: '', pageIndex: 0, textOffset: -1,
+                hidden: false, updatedAt, revision: 1,
+                generation: Math.max(0, Number(user.readerProgressGeneration) || 0)};
+            user.readerProgress[targetUid] = progress;
+            user.readerBookmarks[targetUid] = (user.readerBookmarks[sourceUid] || [])
+                .map(bookmark => ({...bookmark, sectionId: ''}));
+            // Keep the original position and notes; stale devices cannot revive this entry.
+            user.readerProgress[sourceUid] = {...source, hidden: true, relinkedTo: targetUid,
+                updatedAt, revision: (Number(source.revision) || 0) + 1};
+            user.updatedAt = updatedAt;
+            await this.save(data);
+            return {bookUid: targetUid, progress};
+        });
     }
 
     async deleteReaderProgress(userId = '', bookUid = '') {

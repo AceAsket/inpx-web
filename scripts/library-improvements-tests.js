@@ -41,6 +41,61 @@ async function testReadingAndAudioRevisionConflicts() {
         assert.strictEqual((await store.audioPosition(uid, 'book', 'voice-1', {time: 10, baseRevision: oldAudioRevision})).conflict, true);
     });
 }
+async function testReaderBookReplacement() {
+    await temporary(async dir => {
+        const store = new ReadingListStore({dataDir: dir});
+        const {currentUser} = await store.getUsers();
+        const uid = currentUser.id;
+        const other = await store.createUser({name: 'Другой читатель'});
+        const worker = Object.create(require('../server/core/WebWorker').prototype);
+        worker.checkMyState = () => {};
+        worker.readingListStore = store;
+        worker.getBookRecordByUid = async bookUid => bookUid === 'new' || bookUid === 'occupied'
+            ? {_uid: bookUid, title: 'Книга', ext: 'fb2'} : bookUid === 'epub' ? {ext: 'epub'} : null;
+        const source = await store.updateReaderProgress(uid, 'missing', {percent: 0.52, sectionId: 'old-section',
+            pageIndex: 52, textOffset: 8000, textSnippet: 'Место чтения', baseRevision: 0});
+        await store.addReaderBookmark(uid, 'missing', {title: 'Закладка', note: 'Сохранить заметку', percent: 0.4, sectionId: 'old-section'});
+        await store.audioPosition(uid, 'missing', 'voice', {chapter: 2, time: 43, baseRevision: 0});
+        await store.updateReaderProgress(other.id, 'missing', {percent: 0.2, baseRevision: 0});
+        await store.updateReaderProgress(uid, 'occupied', {percent: 0.1, baseRevision: 0});
+        await assert.rejects(() => worker.relinkReaderBook(uid, 'missing', 'epub', source.revision), /FB2/);
+        await assert.rejects(() => worker.relinkReaderBook(uid, 'new', 'occupied', 0), /доступна/);
+        await assert.rejects(() => worker.relinkReaderBook(uid, 'missing', 'new', source.revision + 1), /изменился/);
+        await assert.rejects(() => worker.relinkReaderBook(uid, 'missing', 'occupied', source.revision), /уже есть/);
+        const [first, second] = await Promise.allSettled([
+            worker.relinkReaderBook(uid, 'missing', 'new', source.revision),
+            worker.relinkReaderBook(uid, 'missing', 'new', source.revision),
+        ]);
+        assert.strictEqual(first.status, 'fulfilled');
+        assert.strictEqual(second.status, 'rejected');
+        const reopened = new ReadingListStore({dataDir: dir});
+        const state = await reopened.getReaderState(uid, 'new');
+        assert.strictEqual(state.progress.percent, 0.52);
+        assert.strictEqual(state.progress.textSnippet, 'Место чтения');
+        assert.strictEqual(state.progress.sectionId, '');
+        assert.strictEqual(state.progress.pageIndex, 0);
+        assert.strictEqual(state.progress.textOffset, -1);
+        assert.strictEqual(state.bookmarks[0].note, 'Сохранить заметку');
+        assert.strictEqual(state.bookmarks[0].percent, 0.4);
+        assert.strictEqual(state.bookmarks[0].sectionId, '');
+        assert.strictEqual((await reopened.getReaderState(uid, 'missing')).progress.relinkedTo, 'new');
+        const stale = await reopened.updateReaderProgress(uid, 'missing', {percent: 0.8, hidden: false, force: true});
+        assert.strictEqual(stale.conflict, true);
+        assert.strictEqual((await reopened.getReaderState(other.id, 'missing')).progress.percent, 0.2);
+        assert.strictEqual((await reopened.audioPosition(uid, 'missing', 'voice')).time, 43);
+        assert.strictEqual((await reopened.audioPosition(uid, 'new', 'voice')).revision, 0);
+        const {user} = await reopened.resolveUser(uid);
+        const library = await worker.getUserReadingLibrary(user, {state: 'all'});
+        assert.strictEqual(library.counters.all, 2);
+        assert.deepStrictEqual(library.items.map(book => book.bookUid).sort(), ['new', 'occupied']);
+        assert.strictEqual(library.items.find(book => book.bookUid === 'new').revision, 1);
+        await store.updateReaderProgress(uid, 'another-missing', {baseRevision: 0});
+        worker.getBookRecordByUid = async bookUid => bookUid === 'notes-only' ? {ext: 'fb2'} : null;
+        await store.addReaderBookmark(uid, 'notes-only', {note: 'Не перезаписывать'});
+        await assert.rejects(() => worker.relinkReaderBook(uid, 'another-missing', 'notes-only', 1), /закладки/);
+    });
+}
+
 async function testFolderIncrementalSearchAndSmartShelves() {
     await temporary(async dir => {
         const library = path.join(dir, 'library');
@@ -225,7 +280,7 @@ async function testFolderEpubAndConcurrentChanges() {
         } finally { await db.unlock(); }
     });
 }
-module.exports = [testReadingAndAudioRevisionConflicts, testFolderIncrementalSearchAndSmartShelves, testBatchDownloadScopeAndArchive, testFolderBootAndFailedRefreshKeepsIndex, testFolderEpubAndConcurrentChanges];
+module.exports = [testReadingAndAudioRevisionConflicts, testReaderBookReplacement, testFolderIncrementalSearchAndSmartShelves, testBatchDownloadScopeAndArchive, testFolderBootAndFailedRefreshKeepsIndex, testFolderEpubAndConcurrentChanges];
 if (require.main === module) {
     require('../server/core/Logger');
     (async() => {

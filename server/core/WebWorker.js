@@ -3441,7 +3441,7 @@ class WebWorker {
         const rows = Object.entries(progressMap)
             .map(([bookUid, progress]) => {
                 bookUid = String(bookUid || '').trim();
-                if (!bookUid)
+                if (!bookUid || (progress && progress.relinkedTo))
                     return null;
                 const normalizedProgress = Object.assign({percent: 0, sectionId: '', updatedAt: '', hidden: false}, progress || {});
                 const percent = Math.max(0, Math.min(1, Number(normalizedProgress.percent || 0) || 0));
@@ -3474,6 +3474,8 @@ class WebWorker {
                 hidden: item.progress.hidden === true,
                 state: item.state,
                 sectionId: String(item.progress.sectionId || '').trim(),
+                revision: Number(item.progress.revision) || 0,
+                textSnippet: String(item.progress.textSnippet || '').trim().slice(0, 240),
                 updatedAt: String(item.progress.updatedAt || '').trim(),
             };
             if (query) {
@@ -4824,6 +4826,16 @@ class WebWorker {
         } finally {
             await fs.remove(folder);
         }
+    }
+
+    async relinkReaderBook(userId, bookUid, replacementBookUid, baseRevision) {
+        this.checkMyState();
+        if (await this.getBookRecordByUid(bookUid))
+            throw new Error('Исходная книга доступна. Перенос не требуется');
+        const replacement = await this.getBookRecordByUid(replacementBookUid);
+        if (!replacement || String(replacement.ext || '').toLowerCase() !== 'fb2')
+            throw new Error('Выберите доступную книгу в формате FB2');
+        return await this.readingListStore.relinkReaderBook(userId, bookUid, replacementBookUid, baseRevision);
     }
 
     async updateReaderProgress(userId = '', bookUid = '', patch = {}) {

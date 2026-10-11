@@ -722,6 +722,11 @@
                         </div>
                         <div class="reader-home-book-actions">
                             <q-btn
+                                v-if="book.unavailable" outline no-caps icon="la la-search"
+                                class="reader-home-action-btn reader-home-action-btn--primary"
+                                @click="openReaderReplacement(book)"
+                            >Найти книгу</q-btn>
+                            <q-btn
                                 v-if="!book.hidden && !book.unavailable"
                                 flat
                                 no-caps
@@ -1528,6 +1533,39 @@
             ref="audioPlayer" :book-uid="bookUid" :title="title" :author="authorLine" :cover="coverSrc"
         />
 
+        <q-dialog v-model="readerReplacementOpen" :persistent="readerReplacementSaving">
+            <div class="reader-dialog reader-dialog--composer std-dialog-card--reader" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
+                <div class="reader-dialog-header">
+                    <div class="reader-dialog-title">Найти книгу</div>
+                    <q-btn flat dense round icon="la la-times" aria-label="Закрыть" :disable="readerReplacementSaving" @click="readerReplacementOpen = false" />
+                </div>
+                <div class="reader-dialog-body reader-replacement-body">
+                    <div>Сохранено {{ formatReaderHomePercent(readerReplacementSource && readerReplacementSource.percent) }}% чтения. Выберите эту же книгу в текущей библиотеке.</div>
+                    <div v-if="readerReplacementSource && readerReplacementSource.textSnippet" class="reader-compose-excerpt">{{ readerReplacementSource.textSnippet }}</div>
+                    <form class="reader-replacement-search" @submit.prevent="searchReaderReplacement">
+                        <q-input v-model="readerReplacementTitle" outlined label="Название" :disable="readerReplacementBusy || readerReplacementSaving" />
+                        <q-input v-model="readerReplacementAuthor" outlined label="Автор" :disable="readerReplacementBusy || readerReplacementSaving" />
+                        <q-btn outline no-caps type="submit" icon="la la-search" label="Найти" :loading="readerReplacementBusy" :disable="readerReplacementSaving || (!readerReplacementTitle.trim() && !readerReplacementAuthor.trim())" />
+                    </form>
+                    <div v-if="readerReplacementError" role="alert" class="reader-replacement-error">{{ readerReplacementError }}</div>
+                    <div v-if="readerReplacementSearched && !readerReplacementBusy">Найдено: {{ readerReplacementTotal }}<span v-if="readerReplacementTotal > 20">. Первые 20 книг; уточните поиск.</span></div>
+                    <button
+                        v-for="candidate in readerReplacementBooks" :key="candidate._uid" type="button"
+                        class="reader-dialog-link reader-replacement-result"
+                        :class="{'reader-replacement-result--selected': readerReplacementSelected === candidate._uid}"
+                        :aria-pressed="readerReplacementSelected === candidate._uid" :disabled="readerReplacementSaving"
+                        @click="readerReplacementSelected = candidate._uid; readerReplacementError = ''"
+                    >
+                        <strong>{{ candidate.title }}</strong>
+                        <span>{{ candidate.author }}</span>
+                        <span v-if="candidate.series">{{ candidate.series }}<span v-if="candidate.serno"> #{{ candidate.serno }}</span></span>
+                    </button>
+                    <div v-if="readerReplacementSelected" class="reader-replacement-hint">Перенесём позицию и закладки. В другом издании место чтения может немного отличаться. Позиция аудио остаётся у старой записи.</div>
+                    <q-btn v-if="readerReplacementSelected" outline no-caps icon="la la-exchange-alt" label="Перенести прогресс" :loading="readerReplacementSaving" :disable="readerReplacementBusy" @click="saveReaderReplacement" />
+                </div>
+            </div>
+        </q-dialog>
+
         <q-dialog v-model="bookmarkComposerOpen">
             <div class="reader-dialog reader-dialog--composer std-dialog-card--reader" :class="readerThemeClass" :style="readerDialogSurfaceStyle">
                 <div class="reader-dialog-header">
@@ -1662,6 +1700,18 @@ class Reader {
     readerHomeLoading = false;
     readerHomeResetting = false;
     readerHomeBooks = [];
+    readerReplacementOpen = false;
+    readerReplacementSource = null;
+    readerReplacementProfile = '';
+    readerReplacementTitle = '';
+    readerReplacementAuthor = '';
+    readerReplacementBooks = [];
+    readerReplacementSelected = '';
+    readerReplacementTotal = 0;
+    readerReplacementSearched = false;
+    readerReplacementBusy = false;
+    readerReplacementSaving = false;
+    readerReplacementError = '';
     readerHomeCounters = {all: 0, reading: 0, read: 0, hidden: 0};
     readerHomeFilter = 'reading';
     readerHomeSort = 'updatedDesc';
@@ -3820,6 +3870,61 @@ class Reader {
             this.error = e.message || String(e);
         } finally {
             this.readerHomeLoading = false;
+        }
+    }
+
+    openReaderReplacement(book) {
+        this.readerReplacementSource = {...book};
+        this.readerReplacementProfile = this.currentUserId;
+        this.readerReplacementTitle = '';
+        this.readerReplacementAuthor = '';
+        this.readerReplacementBooks = [];
+        this.readerReplacementSelected = '';
+        this.readerReplacementTotal = 0;
+        this.readerReplacementSearched = false;
+        this.readerReplacementError = '';
+        this.readerReplacementOpen = true;
+    }
+
+    async searchReaderReplacement() {
+        if (this.readerReplacementBusy || this.readerReplacementSaving) return;
+        const source = this.readerReplacementSource;
+        this.readerReplacementBusy = true;
+        this.readerReplacementError = '';
+        this.readerReplacementBooks = [];
+        this.readerReplacementSelected = '';
+        this.readerReplacementSearched = false;
+        try {
+            const result = await this.$root.api.searchReaderReplacement(this.readerReplacementTitle, this.readerReplacementAuthor);
+            if (source !== this.readerReplacementSource || this.readerReplacementProfile !== this.currentUserId) return;
+            this.readerReplacementBooks = Array.isArray(result.found) ? result.found.filter(book => book._uid !== source.bookUid) : [];
+            this.readerReplacementTotal = Number(result.totalFound) || 0;
+            this.readerReplacementSearched = true;
+        } catch (e) {
+            if (source === this.readerReplacementSource) this.readerReplacementError = e.message || String(e);
+        } finally {
+            this.readerReplacementBusy = false;
+        }
+    }
+
+    async saveReaderReplacement() {
+        if (this.readerReplacementSaving || !this.readerReplacementSelected) return;
+        if (this.readerReplacementProfile !== this.currentUserId) {
+            this.readerReplacementError = 'Профиль изменился. Закройте окно и повторите выбор книги';
+            return;
+        }
+        this.readerReplacementSaving = true;
+        this.readerReplacementError = '';
+        try {
+            const source = this.readerReplacementSource;
+            await this.$root.api.relinkReaderBook(source.bookUid, this.readerReplacementSelected, source.revision);
+            this.readerReplacementOpen = false;
+            await this.loadReaderHome();
+            this.$root.notify.success('Позиция чтения и закладки перенесены', '', this.readerNotifyOptions);
+        } catch (e) {
+            this.readerReplacementError = e.message || String(e);
+        } finally {
+            this.readerReplacementSaving = false;
         }
     }
 
@@ -13009,6 +13114,39 @@ export default vueComponent(Reader);
 
 .reader-dialog--composer {
     width: min(92vw, 520px);
+}
+
+.reader-replacement-body,
+.reader-replacement-search {
+    gap: 12px;
+}
+
+.reader-replacement-search,
+.reader-replacement-result {
+    display: flex;
+    flex-direction: column;
+}
+
+.reader-replacement-result {
+    gap: 4px;
+    overflow-wrap: anywhere;
+}
+
+.reader-replacement-result--selected {
+    border-color: var(--reader-text);
+    box-shadow: inset 0 0 0 1px var(--reader-text);
+}
+
+.reader-replacement-hint,
+.reader-replacement-result span {
+    color: var(--reader-muted);
+    font-size: 13px;
+}
+
+.reader-replacement-error {
+    color: var(--reader-text);
+    border-left: 3px solid currentColor;
+    padding: 8px 12px;
 }
 
 .reader-compose-title {
