@@ -1,5 +1,5 @@
 <template>
-    <aside v-show="visible" class="reader-audio" :class="{'reader-audio--minimized': minimized}" aria-label="Озвучка книги">
+    <aside v-show="visible" class="reader-audio" :class="{'reader-audio--minimized': minimized}" aria-label="Озвучка книги" @keydown.stop>
         <div v-show="!minimized" class="reader-audio-panel">
             <div class="reader-audio-header">
                 <div class="reader-audio-title">
