@@ -102,21 +102,17 @@
                                         </template>
                                     </DivBtn>
 
-                                    <DivBtn
+                                    <q-btn
                                         v-if="isCompactMobile"
-                                        class="q-ml-xs mobile-filter-toggle text-grey-5 bg-yellow-1"
-                                        :size="28"
-                                        :icon-size="22"
+                                        class="q-ml-xs mobile-filter-toggle"
+                                        flat dense round
                                         :icon="mobileFiltersCollapsed ? 'la la-angle-down' : 'la la-angle-up'"
-                                        round
+                                        :aria-label="mobileFiltersCollapsed ? 'Развернуть поиск' : 'Свернуть поиск'"
+                                        :aria-expanded="!mobileFiltersCollapsed"
                                         @click.stop.prevent="toggleMobileFilters"
                                     >
-                                        <template #tooltip>
-                                            <q-tooltip :delay="800" anchor="bottom middle" content-style="font-size: 80%" max-width="320px">
-                                                {{ mobileFiltersCollapsed ? 'Развернуть фильтры' : 'Свернуть фильтры' }}
-                                            </q-tooltip>
-                                        </template>
-                                    </DivBtn>
+                                        <q-tooltip :delay="800">{{ mobileFiltersCollapsed ? 'Развернуть поиск' : 'Свернуть поиск' }}</q-tooltip>
+                                    </q-btn>
                                 </div>
                             </div>
 
@@ -124,11 +120,11 @@
                                 <div class="collection-label q-mr-xs">
                                     Коллекция
                                 </div>
-                                <div class="clickable" @click.stop.prevent="showCollectionInfo">
+                                <div class="collection-name clickable" @click.stop.prevent="showCollectionInfo">
                                     {{ collection }}
                                 </div>
 
-                                <DivBtn class="q-ml-sm text-grey-5 bg-yellow-1" :size="28" :icon-size="24" icon="la la-question" round @click.stop.prevent="showSearchHelp">
+                                <DivBtn class="collection-help q-ml-sm text-grey-5 bg-yellow-1" :size="28" :icon-size="24" icon="la la-question" round role="button" aria-label="Памятка поиска" tabindex="0" @click.stop.prevent="showSearchHelp" @keydown.enter.stop.prevent="showSearchHelp" @keydown.space.stop.prevent="showSearchHelp">
                                     <template #tooltip>
                                         <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                             Памятка
@@ -137,10 +133,10 @@
                                 </DivBtn>
                             </div>
                         </div>
-                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList" class="search-fields search-fields--main row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 ref="authorInput" v-model="search.author" :maxlength="5000" :debounce="inputDebounce"
-                                class="q-mt-xs col-3" :bg-color="inputBgColor('author')" style="min-width: 140px" label="Автор" stack-label outlined dense clearable
+                                class="search-field--author q-mt-xs col-3" :bg-color="inputBgColor('author')" style="min-width: 140px" label="Автор" stack-label outlined dense clearable
                             >
                                 <q-tooltip v-if="search.author" :delay="500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     {{ search.author }}
@@ -148,8 +144,9 @@
                             </q-input>
                             <div class="q-mx-xs" />
                             <q-input
+                                v-show="!isCompactMobile || mobileExtraFiltersOpen"
                                 v-model="search.series" :maxlength="inputMaxLength" :debounce="inputDebounce"
-                                class="q-mt-xs col-3" :bg-color="inputBgColor('series')" style="min-width: 140px" label="Серия" stack-label outlined dense clearable
+                                class="search-field--series q-mt-xs col-3" :bg-color="inputBgColor('series')" style="min-width: 140px" label="Серия" stack-label outlined dense clearable
                             >
                                 <q-tooltip v-if="search.series" :delay="500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     {{ search.series }}
@@ -158,7 +155,7 @@
                             <div class="q-mx-xs" />
                             <q-input
                                 v-model="search.title" :maxlength="inputMaxLength" :debounce="inputDebounce"
-                                class="q-mt-xs col-3" :bg-color="inputBgColor('title')" style="min-width: 140px;" label="Название" stack-label outlined dense clearable
+                                class="search-field--title q-mt-xs col-3" :bg-color="inputBgColor('title')" style="min-width: 140px;" label="Название" stack-label outlined dense clearable
                             >
                                 <q-tooltip v-if="search.title" :delay="500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     {{ search.title }}
@@ -166,8 +163,9 @@
                             </q-input>
                             <div class="q-mx-xs" />
                             <q-input
+                                v-show="!isCompactMobile || mobileExtraFiltersOpen"
                                 v-model="search.lang" :maxlength="inputMaxLength" :debounce="inputDebounce"
-                                class="q-mt-xs col-1" :bg-color="inputBgColor()" input-style="cursor: pointer" style="min-width: 90px;" label="Язык" stack-label outlined dense clearable readonly
+                                class="search-field--lang q-mt-xs col-1" :bg-color="inputBgColor()" input-style="cursor: pointer" style="min-width: 90px;" label="Язык" stack-label outlined dense clearable readonly
                                 @click.stop.prevent="selectLang"
                             >
                                 <template v-if="search.lang" #append>
@@ -179,7 +177,7 @@
                                 </q-tooltip>
                             </q-input>
                         </div>
-                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && extendedParams" class="search-fields row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && (isCompactMobile ? mobileExtraFiltersOpen : extendedParams)" class="search-fields search-fields--extra row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-input
                                 v-model="search.keywords" :maxlength="inputMaxLength" :debounce="inputDebounce"
                                 class="q-mt-xs col-3" :bg-color="inputBgColor()" style="min-width: 140px;" label="Ключевые слова" stack-label outlined dense clearable readonly
@@ -269,11 +267,11 @@
                                 </q-tooltip>
                             </q-input>                            
                         </div>
-                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && !extendedParams" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
+                        <div v-show="!isCompactMobile && showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && !extendedParams" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
                             +{{ collapsedExtendedParamsLabel }}
                         </div>
 
-                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && showLibrarySourceFilters" class="search-fields source-filter-row row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
+                        <div v-show="showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && showLibrarySourceFilters && (!isCompactMobile || mobileExtraFiltersOpen)" class="search-fields source-filter-row row q-mx-sm q-mb-xs items-center" style="max-width: 1024px">
                             <q-select
                                 v-model="search.sourceId"
                                 class="q-mt-xs col"
@@ -361,6 +359,15 @@
                     <!-- 1-2 -->
                     <div class="toolbar-actions q-mx-sm">
                         <div style="height: 3px" />
+                        <q-btn
+                            v-if="isCompactMobile && showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList"
+                            outline dense no-caps icon="la la-sliders-h" class="mobile-extra-filters-toggle"
+                            :aria-expanded="mobileExtraFiltersOpen"
+                            @click="mobileExtraFiltersOpen = !mobileExtraFiltersOpen"
+                        >
+                            {{ mobileExtraFiltersOpen ? 'Скрыть фильтры' : 'Фильтры' }}
+                            <q-badge v-if="mobileExtraFilterCount" class="q-ml-xs" color="primary">{{ mobileExtraFilterCount }}</q-badge>
+                        </q-btn>
                         <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-cog" round @click.stop.prevent="settingsDialogVisible = true">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
@@ -395,7 +402,7 @@
                     </div><!-- 1-2 -->
                 </div><!-- 1 -->
                 <!-- 2 -->
-                <div v-show="showMobileFiltersBody" class="column">
+                <div v-show="!isCompactMobile && showMobileFiltersBody" class="column">
                     <DivBtn
                         v-show="!isExtendedSearch && !isDiscoveryList"
                         class="text-grey-6" :size="16" :icon-size="14"
@@ -734,6 +741,7 @@ class Search {
     userProfilesDialogVisible = false;
     selectExtSearchDialogVisible = false;
     mobileFiltersCollapsed = false;
+    mobileExtraFiltersOpen = false;
 
     pageCount = 1;    
 
@@ -1034,7 +1042,12 @@ class Search {
     }
 
     get isCompactMobile() {
-        return !!this.$root.isMobileDevice;
+        return !!(this.$q && this.$q.screen && this.$q.screen.width <= 640);
+    }
+
+    get mobileExtraFilterCount() {
+        return ['series', 'lang', 'keywords', 'genre', 'date', 'librate', 'ext', 'sourceId', 'hideCopies']
+            .filter(field => !!this.search[field]).length;
     }
 
     get showMobileFiltersBody() {
@@ -2891,7 +2904,35 @@ export default vueComponent(Search);
 
     .collection-title {
         width: 100%;
-        row-gap: 6px;
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 36px;
+        grid-template-areas: 'label help' 'name help';
+        gap: 2px 8px;
+        font-size: 14px !important;
+    }
+
+    .collection-label {
+        grid-area: label;
+        font-size: 12px;
+    }
+
+    .collection-name {
+        grid-area: name;
+        min-width: 0;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+    }
+
+    .collection-help {
+        grid-area: help;
+        margin-left: 0 !important;
+        align-self: center;
+        min-width: 36px !important;
+        height: 36px !important;
     }
 
     .search-fields {
@@ -2905,6 +2946,40 @@ export default vueComponent(Search);
 
     .search-fields :deep(.q-field__control) {
         min-height: 46px;
+    }
+
+    .search-fields--main,
+    .search-fields--extra {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+    }
+
+    .search-fields--main > .q-mx-xs,
+    .search-fields--extra > .q-mx-xs {
+        display: none;
+    }
+
+    .search-fields--main :deep(.q-field),
+    .search-fields--extra :deep(.q-field) {
+        width: 100%;
+        margin-top: 0 !important;
+    }
+
+    .search-field--author { order: 1; }
+    .search-field--title { order: 2; }
+    .search-field--series { order: 3; }
+    .search-field--lang { order: 4; }
+
+    .mobile-extra-filters-toggle {
+        min-height: 36px;
+        padding: 4px 10px;
+        margin-right: auto;
+    }
+
+    .toolbar-actions :deep(.button) {
+        min-width: 36px !important;
+        height: 36px !important;
     }
 
     .result-bar {
