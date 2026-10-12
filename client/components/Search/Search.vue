@@ -2,7 +2,7 @@
     <div class="root column fit" style="position: relative">
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
-            <div class="q-px-md q-py-xs">
+            <div v-if="config.profileAuthorized && !isCompactMobile" class="q-px-md q-py-xs">
                 <q-btn outline dense no-caps padding="6px 12px" icon="la la-bookmark" label="Сохранить поиск как полку" @click="saveSearchShelf" />
             </div>
             <div ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
@@ -421,13 +421,22 @@
             <!-- Tool Panel end -->
 
             <div v-if="!isDiscoveryList" class="result-bar row items-center q-ml-lg q-mt-sm">
-                <div class="result-scroller-wrap">
-                    <PageScroller v-show="pageCount > 1" ref="pageScroller1" v-model="search.page" :page-count="pageCount" />
+                <div v-show="pageCount > 1" class="result-scroller-wrap">
+                    <PageScroller ref="pageScroller1" v-model="search.page" :page-count="pageCount" />
                 </div>
 
                 <div v-show="list.totalFound > 0" class="text-bold" style="font-size: 120%; padding-bottom: 2px">
                     {{ foundCountMessage }}
                 </div>
+
+                <q-btn
+                    v-if="isCompactMobile && config.profileAuthorized && list.totalFound > 0"
+                    outline dense no-caps padding="4px 10px" icon="la la-bookmark"
+                    class="mobile-save-shelf" label="В полку" aria-label="Сохранить поиск как полку"
+                    @click="saveSearchShelf"
+                >
+                    <q-tooltip :delay="700">Сохранить поиск как умную полку</q-tooltip>
+                </q-btn>
 
                 <div v-show="list.totalFound > 0 && isExtendedSearch" class="q-ml-md">
                     <q-checkbox v-model="showJson" size="36px" label="Показывать JSON" />
@@ -2994,6 +3003,12 @@ export default vueComponent(Search);
 
     .result-scroller-wrap {
         width: 100%;
+    }
+
+    .mobile-save-shelf {
+        margin-left: auto;
+        min-height: 36px;
+        font-size: 13px;
     }
 
     .bottom-scroller-bar {
