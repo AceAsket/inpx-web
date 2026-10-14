@@ -8,7 +8,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v1.7.9-rc.15
+        default: v1.7.9-rc.16
       metadata_only:
         description: Update Docker Hub description without rebuilding images
         type: boolean
