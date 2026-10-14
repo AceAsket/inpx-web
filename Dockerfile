@@ -2,7 +2,7 @@
 
 ARG NODE_IMAGE=node:24-bookworm-slim
 ARG RUNTIME_IMAGE=debian:bookworm-slim
-ARG FB2CNG_VERSION=v1.2.3
+ARG FB2CNG_VERSION=v1.9.0
 ARG FB2CNG_ARCH=linux-amd64
 
 FROM ${NODE_IMAGE} AS build-deps

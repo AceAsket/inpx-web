@@ -157,9 +157,8 @@ class BookPage extends BasePage {
 
                 //format
                 const ext = bookInfo.book.ext;
-                const fileNameInUrl = encodeURIComponent(bookInfo.downFileName || `${bookInfo.book.title || 'book'}.${ext}`);
                 const directHref = `${this.config.bookPathStatic}/by-uid?uid=${encodeURIComponent(bookUid)}`;
-                const rawHref = directDownload ? `${directHref}&format=raw` : `${bookInfo.link}/raw/${fileNameInUrl}`;
+                const rawHref = `${directHref}&format=raw`;
                 const links = [];
                 const addLink = (href, type) => {
                     links.push({href, type});
@@ -174,7 +173,7 @@ class BookPage extends BasePage {
                     addLink(rawHref, 'application/x-mobipocket-ebook');
                 } else {
                     addLink(rawHref, `application/${ext}`);
-                    addLink(directDownload ? `${directHref}&zip=1` : `${bookInfo.link}/zip`, 'application/zip');
+                    addLink(`${directHref}&zip=1`, 'application/zip');
                 }
 
                 //entry

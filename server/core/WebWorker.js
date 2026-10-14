@@ -26,6 +26,7 @@ const externalTools = require('./ExternalTools');
 const libraryReviews = require('./LibraryReviews');
 const bookAssets = require('./BookAssets');
 const bookConverter = require('./BookConverter');
+const bookNaming = require('./BookNaming');
 const runtimeMetrics = require('./RuntimeMetrics');
 
 const asyncExit = new (require('./AsyncExit'))();
@@ -5783,7 +5784,7 @@ class WebWorker {
         }
 
         const assetVersion = assetVersionFor(path.extname(libFile).slice(1));
-        await fs.writeFile(bookFileDesc, JSON.stringify({libFolder, libFile, sourceLibDir, downFileName, size, assetVersion}));
+        await fs.writeFile(bookFileDesc, JSON.stringify({bookUid, libFolder, libFile, sourceLibDir, downFileName, size, assetVersion}));
         this.scheduleCacheClean('после подготовки книги');
 
         await db.insert({
@@ -5831,6 +5832,8 @@ class WebWorker {
             const ext = `.${book.ext}`;
             if (downFileName.substring(downFileName.length - ext.length) != ext)
                 downFileName += ext;
+            const defaultDownFileName = downFileName;
+            downFileName = bookNaming.filename(book, downFileName, book.ext, this.config);
 
             const libFolder = book.folder;
             const libFile = `${book.file}${ext}`;
@@ -5862,7 +5865,7 @@ class WebWorker {
                 const pending = this.pendingBookRestores;
                 const key = JSON.stringify([bookUid, libFolder, libFile, sourceLibDir, this.libraryAssetGeneration]);
                 if (!pending.has(key)) {
-                    pending.set(key, this.restoreBook(bookUid, libFolder, libFile, downFileName, sourceLibDir)
+                    pending.set(key, this.restoreBook(bookUid, libFolder, libFile, defaultDownFileName, sourceLibDir)
                         .finally(() => pending.delete(key)));
                 }
                 link = await pending.get(key);
@@ -5909,6 +5912,7 @@ class WebWorker {
                 format: targetFormat,
                 sourceFileName: downFileName,
                 downFileName,
+                book: rows[0],
                 config: this.config,
                 unsupportedMessage: `Неподдерживаемый формат отправки: ${targetFormat}`,
                 disabledMessage: 'Конвертация книг отключена в текущем образе.',

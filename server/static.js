@@ -8,6 +8,8 @@ const utils = require('./core/utils');
 const ZipReader = require('./core/ZipReader');
 const imageUtils = require('./core/ImageUtils');
 const bookConverter = require('./core/BookConverter');
+const bookNaming = require('./core/BookNaming');
+const crypto = require('crypto');
 const webAppDir = require('../build/appdir');
 const externalTools = require('./core/ExternalTools');
 const {getEnabledLibrarySources} = require('./core/LibrarySources');
@@ -670,7 +672,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
             else if (zip)
                 href += '/zip';
 
-            res.redirect(302, href);
+            res.redirect(302, `${href}?uid=${encodeURIComponent(bookUid)}`);
         } catch(e) {
             log(LM_ERR, `book by uid error: ${e.message}`);
             res.status(e.message && e.message.indexOf('404') >= 0 ? 404 : 500).send(e.message);
@@ -698,6 +700,9 @@ module.exports = (app, config, webWorker = null, security = null) => {
 
                     const desc = await fs.readJson(bookFileDesc);
                     let downFileName = desc.downFileName;
+                    const book = (config.bookFilenameTemplate || config.bookTitleTemplate)
+                        ? await bookNaming.cachedBook(webWorker, desc, fileName, String(req.query.uid || '').trim()) : {};
+                    downFileName = bookNaming.filename(book, downFileName, book.ext || path.extname(downFileName).slice(1), config);
                     let gzipped = true;
 
                     if (!req.acceptsEncodings('gzip') || fileType) {
@@ -712,7 +717,8 @@ module.exports = (app, config, webWorker = null, security = null) => {
                         } else if (fileType === 'zip') {
                             //создаем zip-файл
                             // Older ZIP caches may contain an incomplete download.
-                            bookFile += '.download-v2.zip';
+                            const nameHash = crypto.createHash('sha256').update(downFileName).digest('hex').slice(0, 16);
+                            bookFile += `.download-v3-${nameHash}.zip`;
                             await utils.prepareCachedFile(bookFile, outputFile => generateZip(outputFile, rawFile, downFileName));
                             downFileName += '.zip';
                         } else if (bookConverter.canConvertTo(fileType)) {
@@ -722,6 +728,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
                                 format: fileType,
                                 sourceFileName: downFileName,
                                 downFileName,
+                                book,
                                 config,
                             });
                             bookFile = prepared.filePath;
@@ -747,8 +754,8 @@ module.exports = (app, config, webWorker = null, security = null) => {
             }
         } catch(e) {
             log(LM_ERR, e.message);
-            if (bookConverter.canConvertTo(req.params.fileType)) {
-                res.status(500).send(e.message);
+            if (bookConverter.canConvertTo(req.params.fileType) || config.bookFilenameTemplate || config.bookTitleTemplate) {
+                res.status(e.message && e.message.includes('404') ? 404 : 500).send(e.message);
                 return;
             }
         }

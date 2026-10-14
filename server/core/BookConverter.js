@@ -5,6 +5,8 @@ const {ConversionRuntime, runProcess: run} = require('./ConversionRuntime');
 const runtime = new ConversionRuntime();
 const externalTools = require('./ExternalTools');
 const {bundledBinDir} = externalTools;
+const bookNaming = require('./BookNaming');
+const yaml = require('js-yaml');
 
 const pending = new Map();
 const validatedFb2cngConfigs = new Set();
@@ -161,7 +163,7 @@ async function validateFb2cngConfig(configInfo, converterPaths = null, runner = 
         return;
 
     try {
-        await runner(commands, ['--config', configInfo.path, 'dumpconfig']);
+        await runner(commands, ['--config', configInfo.path, 'dumpconfig'], {cwd: path.dirname(configInfo.path)});
     } catch (err) {
         if (err.code === 'INPX_CONVERSION_TIMEOUT' || err.code === 'INPX_CONVERTER_NOT_FOUND')
             throw err;
@@ -170,7 +172,7 @@ async function validateFb2cngConfig(configInfo, converterPaths = null, runner = 
     validatedFb2cngConfigs.add(validationKey);
 }
 
-async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFileName = '', format, config = {}}) {
+async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFileName = '', format, config = {}, book = {}}) {
     const normalizedFormat = String(format || '').toLowerCase();
     const sourceExt = path.extname(sourceFileName || inputFile).toLowerCase();
     if (!cacheBasePath)
@@ -183,6 +185,7 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
         ? await readFb2cngConfig(config.fb2cngConfigPath)
         : {path: '', fingerprint: 'not-used'};
     const fb2cngArgs = usesFb2cng ? readFb2cngArgs(config.fb2cngArgs) : [];
+    const bookTitle = usesFb2cng ? bookNaming.title(book, getConvertedExtension(normalizedFormat), config) : null;
     const signature = stableStringify({
         schema: conversionCacheSchema,
         format: normalizedFormat,
@@ -191,6 +194,7 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
         fb2cngVersion: usesFb2cng ? String(config.fb2cngVersion || '') : '',
         converterPaths: config.converterPaths || {},
         ...(fb2cngArgs.length ? {fb2cngArgs} : {}),
+        ...(bookTitle !== null ? {bookTitleTemplate: config.bookTitleTemplate, bookTitle} : {}),
         ...(Object.keys(config.converterPaths || {}).length ? {configuredToolPolicy: 'strict-v1'} : {}),
     });
     const fingerprint = crypto.createHash('sha256').update(signature).digest('hex').slice(0, 20);
@@ -204,6 +208,7 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
         sourceExt,
         usesFb2cng,
         fb2cngArgs,
+        bookTitle,
     };
 }
 
@@ -270,21 +275,38 @@ async function runCalibre(args, converterPaths = null) {
     await runFirst(calibreCommandCandidates(converterPaths), args, {env: await buildCalibreEnv()});
 }
 
-async function convertWithFb2cng(inputFile, outputFile, format, converterPaths = null, fb2cngConfigPath = null, extraArgs = []) {
+async function convertWithFb2cng(inputFile, outputFile, format, converterPaths = null, fb2cngConfigPath = null, extraArgs = [], bookTitle = null) {
     const outputDir = `${outputFile}.fb2cng`;
     const fb2cngFormat = fb2cngFormats.get(format);
     const configInfo = await readFb2cngConfig(fb2cngConfigPath);
     const conversionArgs = readFb2cngArgs(extraArgs);
     await validateFb2cngConfig(configInfo, converterPaths);
-    const fb2cngArgs = [
-        ...(configInfo.path ? ['--config', configInfo.path] : []),
-        'convert', '--to', fb2cngFormat, '--overwrite', ...conversionArgs, inputFile, outputDir,
-    ];
-
-    await fs.remove(outputDir);
-    await fs.ensureDir(outputDir);
+    let titleConfigDir = '';
     try {
-        await runFirst(fb2cngCommandCandidates(converterPaths), fb2cngArgs);
+        let effectiveConfig = configInfo.path;
+        if (bookTitle !== null) {
+            titleConfigDir = await fs.mkdtemp(path.join(require('os').tmpdir(), 'inpx-fbc-title-'));
+            effectiveConfig = path.join(titleConfigDir, 'config.yaml');
+            let data = {};
+            if (configInfo.path) {
+                // Keep the original working directory for dump and conversion:
+                // fbc leaves relative CSS/font paths relative in its dumped YAML.
+                await runFirst(fb2cngCommandCandidates(converterPaths), ['--config', configInfo.path, 'dumpconfig', effectiveConfig], {cwd: path.dirname(configInfo.path)});
+                data = yaml.load(await fs.readFile(effectiveConfig, 'utf8'), {schema: yaml.CORE_SCHEMA}) || {};
+            }
+            data.document = data.document || {};
+            data.document.metainformation = data.document.metainformation || {};
+            // A Go string literal keeps quotes and template-like book text literal.
+            data.document.metainformation.title_template = `{{ ${JSON.stringify(String(bookTitle))} }}`;
+            await fs.writeFile(effectiveConfig, yaml.dump(data, {schema: yaml.CORE_SCHEMA, noRefs: true, lineWidth: -1}), {mode: 0o600});
+        }
+        const fb2cngArgs = [
+            ...(effectiveConfig ? ['--config', effectiveConfig] : []),
+            'convert', '--to', fb2cngFormat, '--overwrite', ...conversionArgs, path.resolve(inputFile), path.resolve(outputDir),
+        ];
+        await fs.remove(outputDir);
+        await fs.ensureDir(outputDir);
+        await runFirst(fb2cngCommandCandidates(converterPaths), fb2cngArgs, {cwd: configInfo.path ? path.dirname(configInfo.path) : undefined});
 
         const outputExtension = `.${getConvertedExtension(format)}`;
         const firstMatchedFile = (await fs.readdir(outputDir))
@@ -297,6 +319,7 @@ async function convertWithFb2cng(inputFile, outputFile, format, converterPaths =
         await fs.move(converted, outputFile, {overwrite: true});
     } finally {
         await fs.remove(outputDir);
+        if (titleConfigDir) await fs.remove(titleConfigDir);
     }
 }
 
@@ -321,9 +344,9 @@ async function convertWithCalibre(inputFile, outputFile, format, converterPaths 
     }
 }
 
-async function convertPrepared(convertInput, outputFile, format, converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = []) {
+async function convertPrepared(convertInput, outputFile, format, converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null) {
     if (fb2cngFormats.has(format) && path.extname(convertInput).toLowerCase() === '.fb2') {
-        await convertWithFb2cng(convertInput, outputFile, format, converterPaths, fb2cngConfigPath, fb2cngArgs);
+        await convertWithFb2cng(convertInput, outputFile, format, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle);
         return;
     }
 
@@ -335,7 +358,7 @@ async function convertPrepared(convertInput, outputFile, format, converterPaths 
     await convertWithCalibre(convertInput, outputFile, format, converterPaths);
 }
 
-async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = []}) {
+async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null}) {
     format = String(format || '').toLowerCase();
     const sourceExt = path.extname(sourceFileName || inputFile).toLowerCase();
     if (!canConvertSourceTo(sourceExt, format))
@@ -358,7 +381,7 @@ async function convert({inputFile, outputFile, format, sourceFileName = '', conv
                 await fs.copyFile(inputFile, tempInput);
                 convertInput = tempInput;
             }
-            await convertPrepared(convertInput, workingOutput, format, converterPaths, fb2cngConfigPath, fb2cngArgs);
+            await convertPrepared(convertInput, workingOutput, format, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle);
             await fs.rename(workingOutput, outputFile);
         } finally {
             await fs.remove(workingOutput);
@@ -382,6 +405,7 @@ async function prepareConvertedFile({
     sourceFileName,
     downFileName,
     config,
+    book = {},
     unsupportedMessage = '',
     disabledMessage = '',
 }) {
@@ -398,6 +422,7 @@ async function prepareConvertedFile({
         sourceFileName,
         format,
         config,
+        book,
     });
 
     const created = !await fs.pathExists(cacheInfo.filePath);
@@ -410,12 +435,13 @@ async function prepareConvertedFile({
             converterPaths: config.converterPaths,
             fb2cngConfigPath: config.fb2cngConfigPath,
             fb2cngArgs: cacheInfo.fb2cngArgs,
+            bookTitle: cacheInfo.bookTitle,
         });
     }
 
     return {
         filePath: cacheInfo.filePath,
-        downloadName: getConvertedFileName(downFileName, cacheInfo.format),
+        downloadName: bookNaming.filename(book, getConvertedFileName(downFileName, cacheInfo.format), getConvertedExtension(cacheInfo.format), config),
         created,
     };
 }

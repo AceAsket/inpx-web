@@ -8,7 +8,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v1.7.9-rc.16
+        default: v1.7.9-rc.17
       metadata_only:
         description: Update Docker Hub description without rebuilding images
         type: boolean
@@ -83,6 +83,16 @@ jobs:
         env:
           IMAGE: ${{ steps.version.outputs.image }}
         run: node scripts/binary-smoke-test.js --image "$IMAGE"
+      - name: Test image fb2cng conversion and naming
+        if: matrix.component == 'web'
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+        run: |
+          test_root=$(mktemp -d "$RUNNER_TEMP/fbc-tests.XXXXXX")
+          trap 'rm -rf "$test_root"' EXIT
+          printf '#!/bin/sh\nexec docker run --rm -v "%s:%s" -w "$PWD" --entrypoint /usr/local/bin/fbc "%s" "$@"\n' "$test_root" "$test_root" "$IMAGE" > "$test_root/fbc"
+          chmod +x "$test_root/fbc"
+          TMPDIR="$test_root" node scripts/fb2cng-integration-tests.js --fbc "$test_root/fbc"
       - name: Test Silero text preparation and real audio
         if: matrix.component == 'silero'
         env:

@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const yazl = require('yazl');
 const {pipeline} = require('stream/promises');
+const bookNaming = require('./BookNaming');
 
 const tickets = new Map();
 let running = false;
@@ -45,6 +46,7 @@ async function create(worker, userId, selection) {
         complete.catch(() => {});
         zip.on('error', error => zip.outputStream.destroy(error));
         let bytes = 0;
+        const names = new Set();
         try {
             for (let index = 0; index < uids.length; index++) {
                 const prepared = await worker.getPreparedBookFile(uids[index]);
@@ -54,7 +56,15 @@ async function create(worker, userId, selection) {
                 const folder = safeName(book.series, 'Вне серий');
                 const name = safeName(`${book.serno ? `${book.serno}. ` : ''}${book.author} — ${book.title}`, `Книга-${index + 1}`);
                 const ext = String(book.ext || '').replace(/[^a-z0-9]/gi, '');
-                zip.addFile(prepared.rawFile, `${folder}/${String(index + 1).padStart(3, '0')}_${name}.${ext}`);
+                const fileName = bookNaming.filename(book, `${String(index + 1).padStart(3, '0')}_${name}.${ext}`, ext, worker.config);
+                let entry = `${folder}/${fileName}`;
+                let duplicate = 1;
+                while (names.has(entry.toLowerCase())) {
+                    duplicate++;
+                    entry = `${folder}/${path.basename(fileName, `.${ext}`)}_${duplicate}.${ext}`;
+                }
+                names.add(entry.toLowerCase());
+                zip.addFile(prepared.rawFile, entry);
             }
             zip.end();
             await complete;
