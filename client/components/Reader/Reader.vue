@@ -9021,7 +9021,7 @@ class Reader {
                 });
             } else {
                 const [bookResponse, stateResponseRaw] = await Promise.all([
-                    api.getBookInfo(this.bookUid),
+                    api.getReaderBook(this.bookUid),
                     api.getReaderState(this.bookUid, {suppressProfileLogin: true}).catch(() => ({preferences: {}, progress: {}})),
                 ]);
                 const stateResponse = (stateResponseRaw || {preferences: {}, progress: {}});

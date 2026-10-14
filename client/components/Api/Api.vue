@@ -521,6 +521,10 @@ class Api {
         return await this.request({action: 'get-book-info', bookUid}, 120);
     }
 
+    async getReaderBook(bookUid) {
+        return await this.request({action: 'get-book-info', bookUid, readerOnly: true}, 300);
+    }
+
     async getReaderState(bookUid, options = {}) {
         return await this.request({action: 'get-reader-state', bookUid}, 120, options);
     }

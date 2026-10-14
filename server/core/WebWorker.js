@@ -6343,7 +6343,7 @@ class WebWorker {
         return ratings;
     }
 
-    async getBookInfo(bookUid) {
+    async getBookInfo(bookUid, options = {}) {
         this.checkMyState();
 
         try {
@@ -6359,8 +6359,11 @@ class WebWorker {
                 throw new Error('404 Файл не найден');
             const book = {...rows[0]};
             this.applyPreparedBookSize(book, bookInfo.size);
-            const reviewState = await this.getReviewArchiveState(book.sourceLibDir);
+            // Reader opening only needs the document. Review archives may be
+            // large and have their own cold-cache indexing cost.
+            const reviewState = options.readerOnly === true ? null : await this.getReviewArchiveState(book.sourceLibDir);
             const refreshReviews = async(info) => {
+                if (!reviewState) return;
                 [info.reviews, info.libraryRating] = await Promise.all([
                     this.getBookReviews(book, reviewState), this.getBookLibraryRating(book, reviewState),
                 ]);
@@ -6420,7 +6423,7 @@ class WebWorker {
                 } else {
                     bookInfo = tmpInfo;
                     bookInfo.book = book;
-                    if (tmpInfo.reviewSignature !== reviewState.signature) {
+                    if (reviewState && tmpInfo.reviewSignature !== reviewState.signature) {
                         await refreshReviews(bookInfo);
                         await fs.writeJson(bookFileInfo, bookInfo);
                     }

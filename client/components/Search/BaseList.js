@@ -272,6 +272,11 @@ export default class BaseList {
         })();
 
         try {
+            if (action === 'readBook' && this.config.onlineReaderEnabled && String(book.ext || '').toLowerCase() === 'fb2') {
+                await this.$router.push({path: '/reader', query: {bookUid: book._uid}});
+                return;
+            }
+
             if (action == 'bookInfo' || action == 'authorInfo') {
                 const response = await this.api.getBookInfo(book._uid);
                 if (response.bookInfo && response.bookInfo.book && response.bookInfo.book.size > 0)
@@ -333,9 +338,7 @@ export default class BaseList {
 поэтому повторная попытка должна быть успешной.`, 'Ошибка');
             } else if (action == 'readBook') {
                 //читать
-                if (this.config.onlineReaderEnabled && String(book.ext || '').toLowerCase() === 'fb2') {
-                    this.$router.push({path: '/reader', query: {bookUid: book._uid}});
-                } else if (this.list.liberamaReady) {
+                if (this.list.liberamaReady) {
                     this.$emit('listEvent', {action: 'submitUrl', data: href});
                 } else {
                     const bookReadLink = this.config.bookReadLink;

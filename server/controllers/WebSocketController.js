@@ -698,7 +698,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error(`bookUid is empty`);
 
-        const result = await this.webWorker.getBookInfo(req.bookUid);
+        const result = await this.webWorker.getBookInfo(req.bookUid, {readerOnly: req.readerOnly === true});
 
         this.send(result, req, ws);
     }
