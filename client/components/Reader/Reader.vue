@@ -4973,12 +4973,16 @@ class Reader {
             return stageRect;
 
         const measureWidth = Math.max(280, this.pageMeasureFrameWidth || stageRect.width);
+        // Vue may still show the previous stage height while the viewport
+        // preferences already describe the new layout (initial load/fullscreen).
+        // Width and height must both use that same canonical layout.
+        const measureHeight = Math.max(1, Number(this.pageMinHeight || stageRect.height) || stageRect.height);
         measureHost.style.width = `${measureWidth}px`;
         measureHost.style.maxWidth = `${measureWidth}px`;
         measureHost.style.minWidth = `${measureWidth}px`;
-        measureHost.style.height = `${stageRect.height}px`;
-        measureHost.style.minHeight = `${stageRect.height}px`;
-        return Object.assign({}, stageRect, {measureWidth});
+        measureHost.style.height = `${measureHeight}px`;
+        measureHost.style.minHeight = `${measureHeight}px`;
+        return Object.assign({}, stageRect, {height: measureHeight, measureWidth});
     }
 
     async waitForReaderFontsReady(timeoutMs = 1800) {
@@ -6603,13 +6607,13 @@ class Reader {
         if (!measureHost || typeof window === 'undefined' || !window.getComputedStyle)
             return 0;
 
+        const syncedStageRect = this.syncMeasureHostToStage();
         const measureHtml = measureHost.querySelector('.reader-html');
         const htmlRect = (measureHtml && typeof measureHtml.getBoundingClientRect === 'function'
             ? measureHtml.getBoundingClientRect()
             : {height: 0});
         const hostStyle = window.getComputedStyle(measureHost);
         const htmlStyle = (measureHtml ? window.getComputedStyle(measureHtml) : null);
-        const syncedStageRect = this.syncMeasureHostToStage();
         const hostRect = (typeof measureHost.getBoundingClientRect === 'function'
             ? measureHost.getBoundingClientRect()
             : {height: 0});
