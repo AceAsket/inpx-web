@@ -50,6 +50,7 @@ docker stop inpx-web && docker rm inpx-web &&
 docker run -d --name inpx-web --restart unless-stopped --network inpx-tts \
   -p 12380:12380 --env-file "$inpx_env_file" \
   -e INPX_ABS_ENABLED=true \
+  -e INPX_FB2CNG_VERSION=v1.9.0 \
   -e INPX_TTS_ENABLED=true -e INPX_TTS_URL=http://silero:8000 \
   -e INPX_TTS_MODEL=v5_5_ru \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
