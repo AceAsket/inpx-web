@@ -1715,6 +1715,7 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
 }
 
 const tests = [
+    ...require('./converter-options-tests'),
     ...require('./reader-opening-tests'),
     ...require('./library-improvements-tests'),
     ...require('./fb2-encoding-tests'),

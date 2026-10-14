@@ -59,6 +59,7 @@ const propsToSave = [
     'lowMemoryMode',
     'fullOptimization',
     'converterPaths',
+    'fb2cngArgs',
     'conversionConcurrency',
     'conversionQueueLimit',
     'conversionTimeoutMs',

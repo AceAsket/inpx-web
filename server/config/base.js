@@ -132,6 +132,7 @@ module.exports = {
     conversionQueueTimeoutMs: 120000,
     conversionFormats: String(process.env.INPX_CONVERSION_FORMATS || 'epub,epub3,kepub,kfx,azw8,pdf').split(',').map(item => item.trim().toLowerCase()).filter(Boolean),
     converterPaths: {},
+    fb2cngArgs: [],
     fb2cngConfigPath: process.env.INPX_FB2CNG_CONFIG || process.env.FB2CNG_CONFIG || '',
     fb2cngVersion: process.env.INPX_FB2CNG_VERSION || '',
     telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN),

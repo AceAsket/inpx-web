@@ -4636,6 +4636,7 @@ class WebWorker {
             'lowMemoryMode',
             'fullOptimization',
             'converterPaths',
+            'fb2cngArgs',
             'server',
             'opds',
             'telegramShareEnabled',

@@ -24,8 +24,8 @@
 | --- | --- |
 | `1.7.8` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.7.8`. |
-| `1.7.9-rc.14` | Текущий предварительный релиз для проверки новых возможностей. |
-| `1.7.9-rc.14-silero` | Отдельный сервис озвучки для предварительного релиза. |
+| `1.7.9-rc.15` | Текущий предварительный релиз для проверки новых возможностей. |
+| `1.7.9-rc.15-silero` | Отдельный сервис озвучки для предварительного релиза. |
 | `lite`, `*-lite` | Облегчённые сборки без конвертации; их версии могут отставать от основного образа. |
 
 Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md).
@@ -46,13 +46,13 @@ docker run -d \
   aceasket/inpx-web-7z:1.7.8
 ```
 
-Откройте `http://SERVER_IP:12380`. Пути `INPX` и `LIBDIR` указываются **внутри контейнера**. При первом запуске дождитесь индексации; её продолжительность зависит от размера библиотеки. Свой начальный пароль администратора задаётся через `INPX_ADMIN_PASSWORD`. Без этой настройки в стабильной `1.7.8` используется `admin/admin`, а на новой установке RC14 пароль генерируется и выводится в журнал запуска.
+Откройте `http://SERVER_IP:12380`. Пути `INPX` и `LIBDIR` указываются **внутри контейнера**. При первом запуске дождитесь индексации; её продолжительность зависит от размера библиотеки. Свой начальный пароль администратора задаётся через `INPX_ADMIN_PASSWORD`. Без этой настройки в стабильной `1.7.8` используется `admin/admin`, а на новой установке RC15 пароль генерируется и выводится в журнал запуска.
 
 Каталог `/usr/local/bin/.inpx-web` должен быть постоянным: в нём хранятся настройки, профили, позиции чтения, закладки, списки, индекс и кэш. Книги монтируются отдельно, обычно только для чтения. При обновлении пересоздайте контейнер с новым тегом, сохранив свои тома, порты, сеть и переменные окружения.
 
 ### Папки и несколько библиотек
 
-В RC14 можно индексировать обычную папку FB2/EPUB без INPX. Добавьте к запуску образа `1.7.9-rc.14`:
+В RC15 можно индексировать обычную папку FB2/EPUB без INPX. Добавьте к запуску образа `1.7.9-rc.15`:
 
 ```sh
 -e INPX_LIBRARY_SOURCES='[{"id":"own","name":"Мои книги","type":"folder","libDir":"/library"}]'
@@ -66,7 +66,7 @@ docker run -d \
 
 Это параметры `docker run`, их нужно вставить перед именем образа. После изменения источников выполните переиндексацию. [Настройка библиотек и Docker Compose](https://github.com/AceAsket/inpx-web/blob/develop/README.md).
 
-### Озвучка Silero в RC14
+### Озвучка Silero в RC15
 
 Озвучка **выключена по умолчанию** и включается переменными запуска основного контейнера:
 
@@ -75,7 +75,7 @@ docker run -d \
 -e INPX_TTS_URL=http://silero:8000
 ```
 
-Silero запускается отдельным CPU-контейнером `aceasket/inpx-web-7z:1.7.9-rc.14-silero`. Оба контейнера должны находиться в одной пользовательской Docker-сети. Смонтируйте постоянный том в `/models`; модели загружаются при первом синтезе. Расстановка ударений через silero-stress включена по умолчанию. Текст передаётся вашему сервису Silero.
+Silero запускается отдельным CPU-контейнером `aceasket/inpx-web-7z:1.7.9-rc.15-silero`. Оба контейнера должны находиться в одной пользовательской Docker-сети. Смонтируйте постоянный том в `/models`; модели загружаются при первом синтезе. Расстановка ударений через silero-stress включена по умолчанию. Текст передаётся вашему сервису Silero.
 
 [Готовые команды и Compose для Silero](https://github.com/AceAsket/inpx-web/blob/develop/docs/silero-tts.md).
 
@@ -120,8 +120,8 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 | --- | --- |
 | `1.7.8` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.7.8`. |
-| `1.7.9-rc.14` | Current prerelease for testing new features. |
-| `1.7.9-rc.14-silero` | Separate speech service for the prerelease. |
+| `1.7.9-rc.15` | Current prerelease for testing new features. |
+| `1.7.9-rc.15-silero` | Separate speech service for the prerelease. |
 | `lite`, `*-lite` | Smaller builds without conversion; their versions may lag behind the main image. |
 
 Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md) for changes.
@@ -142,13 +142,13 @@ docker run -d \
   aceasket/inpx-web-7z:1.7.8
 ```
 
-Open `http://SERVER_IP:12380`. `INPX` and `LIBDIR` must refer to paths **inside the container**. Wait for initial indexing; the time required depends on the library size. Set `INPX_ADMIN_PASSWORD` to supply your own initial admin password. Without this setting, stable `1.7.8` uses `admin/admin`, while a new RC14 installation generates a password and prints it in the startup log.
+Open `http://SERVER_IP:12380`. `INPX` and `LIBDIR` must refer to paths **inside the container**. Wait for initial indexing; the time required depends on the library size. Set `INPX_ADMIN_PASSWORD` to supply your own initial admin password. Without this setting, stable `1.7.8` uses `admin/admin`, while a new RC15 installation generates a password and prints it in the startup log.
 
 Keep `/usr/local/bin/.inpx-web` in a persistent volume: it stores settings, profiles, reading positions, bookmarks, lists, the index and caches. Mount your books separately, normally read-only. To update, recreate the container with the new image tag while preserving your volumes, ports, network and environment variables.
 
 ### Folders and multiple libraries
 
-RC14 can index a folder of FB2/EPUB files without INPX. Add this option when running `1.7.9-rc.14`:
+RC15 can index a folder of FB2/EPUB files without INPX. Add this option when running `1.7.9-rc.15`:
 
 ```sh
 -e INPX_LIBRARY_SOURCES='[{"id":"own","name":"My books","type":"folder","libDir":"/library"}]'
@@ -162,7 +162,7 @@ For multiple INPX libraries, specify an array of sources:
 
 These are `docker run` options; insert them before the image name. Reindex after changing sources. [Library configuration and Docker Compose](https://github.com/AceAsket/inpx-web/blob/develop/README.md).
 
-### Silero speech in RC14
+### Silero speech in RC15
 
 Speech is **disabled by default**. Enable it through the main container's startup environment:
 
@@ -171,7 +171,7 @@ Speech is **disabled by default**. Enable it through the main container's startu
 -e INPX_TTS_URL=http://silero:8000
 ```
 
-Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.7.9-rc.14-silero`. Place both containers on the same user-defined Docker network. Mount a persistent volume at `/models`; models are downloaded on the first synthesis request. Stress placement with silero-stress is enabled by default. Book text is sent to your own Silero service.
+Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.7.9-rc.15-silero`. Place both containers on the same user-defined Docker network. Mount a persistent volume at `/models`; models are downloaded on the first synthesis request. Stress placement with silero-stress is enabled by default. Book text is sent to your own Silero service.
 
 [Silero commands and Compose instructions](https://github.com/AceAsket/inpx-web/blob/develop/docs/silero-tts.md).
 

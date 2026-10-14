@@ -47,8 +47,9 @@ function localToolPath(fileName) {
 const fbcFileName = process.platform === 'win32' ? 'fbc.exe' : 'fbc';
 const mutoolFileName = process.platform === 'win32' ? 'mutool.exe' : 'mutool';
 function fb2cngCommandCandidates(converterPaths = null) {
+    const configured = externalTools.configuredToolCandidates(externalTools.resolveConverterPaths(converterPaths), ['fb2cng', 'fbc']);
+    if (configured.length) return configured;
     return [
-        ...externalTools.configuredToolCandidates(externalTools.resolveConverterPaths(converterPaths), ['fb2cng', 'fbc']),
         bundledToolPath(fbcFileName),
         localToolPath(fbcFileName),
         'fbc',
@@ -58,8 +59,9 @@ function fb2cngCommandCandidates(converterPaths = null) {
 }
 
 function mutoolCommandCandidates(converterPaths = null) {
+    const configured = externalTools.configuredToolCandidates(externalTools.resolveConverterPaths(converterPaths), ['mutool', 'mupdf']);
+    if (configured.length) return configured;
     return [
-        ...externalTools.configuredToolCandidates(externalTools.resolveConverterPaths(converterPaths), ['mutool', 'mupdf']),
         bundledToolPath(mutoolFileName),
         localToolPath(mutoolFileName),
         'mutool',
@@ -69,8 +71,9 @@ function mutoolCommandCandidates(converterPaths = null) {
 }
 
 function calibreCommandCandidates(converterPaths = null) {
+    const configured = externalTools.configuredToolCandidates(externalTools.resolveConverterPaths(converterPaths), ['calibre', 'ebookConvert', 'ebook-convert']);
+    if (configured.length) return configured;
     return [
-        ...externalTools.configuredToolCandidates(externalTools.resolveConverterPaths(converterPaths), ['calibre', 'ebookConvert', 'ebook-convert']),
         'ebook-convert',
         '/usr/bin/ebook-convert',
         '/usr/local/bin/ebook-convert',
@@ -87,6 +90,23 @@ function stableStringify(value) {
             .join(',')}}`;
     }
     return JSON.stringify(value);
+}
+
+function readFb2cngArgs(value = []) {
+    const error = message => Object.assign(new Error(`Неверные аргументы fb2cng: ${message}`), {code: 'INPX_INVALID_FB2CNG_ARGS'});
+    if (process.env.INPX_FB2CNG_ARGS !== undefined) {
+        try {
+            value = process.env.INPX_FB2CNG_ARGS.trim() ? JSON.parse(process.env.INPX_FB2CNG_ARGS) : [];
+        } catch (err) {
+            throw error('INPX_FB2CNG_ARGS должен содержать JSON-массив строк.');
+        }
+    }
+    if (!Array.isArray(value) || value.some(arg => typeof arg !== 'string' || !arg.trim() || arg.includes('\0')))
+        throw error('fb2cngArgs должен быть массивом непустых строк, например ["--no-cover"].');
+    const managed = new Set(['--config', '-c', '--to', '--output-file', '-o', '--overwrite', '--']);
+    if (value.some(arg => managed.has(arg.split('=')[0]) || /^-[co].+/.test(arg)))
+        throw error('формат, конфиг и пути файлов задаёт приложение; служебные флаги нельзя переопределять через fb2cngArgs.');
+    return value.slice();
 }
 
 function fb2cngConfigError(configPath, message) {
@@ -143,7 +163,7 @@ async function validateFb2cngConfig(configInfo, converterPaths = null, runner = 
     try {
         await runner(commands, ['--config', configInfo.path, 'dumpconfig']);
     } catch (err) {
-        if (err.code === 'INPX_CONVERSION_TIMEOUT')
+        if (err.code === 'INPX_CONVERSION_TIMEOUT' || err.code === 'INPX_CONVERTER_NOT_FOUND')
             throw err;
         throw fb2cngConfigError(configInfo.path, err.message);
     }
@@ -162,6 +182,7 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
     const fb2cngConfig = usesFb2cng
         ? await readFb2cngConfig(config.fb2cngConfigPath)
         : {path: '', fingerprint: 'not-used'};
+    const fb2cngArgs = usesFb2cng ? readFb2cngArgs(config.fb2cngArgs) : [];
     const signature = stableStringify({
         schema: conversionCacheSchema,
         format: normalizedFormat,
@@ -169,6 +190,8 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
         fb2cngConfigFingerprint: fb2cngConfig.fingerprint,
         fb2cngVersion: usesFb2cng ? String(config.fb2cngVersion || '') : '',
         converterPaths: config.converterPaths || {},
+        ...(fb2cngArgs.length ? {fb2cngArgs} : {}),
+        ...(Object.keys(config.converterPaths || {}).length ? {configuredToolPolicy: 'strict-v1'} : {}),
     });
     const fingerprint = crypto.createHash('sha256').update(signature).digest('hex').slice(0, 20);
     const extension = getConvertedExtension(normalizedFormat);
@@ -180,6 +203,7 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
         format: normalizedFormat,
         sourceExt,
         usesFb2cng,
+        fb2cngArgs,
     };
 }
 
@@ -234,6 +258,11 @@ async function runFirst(commands, args, options = {}) {
         }
     }
 
+    if (lastError && lastError.code === 'ENOENT') {
+        throw Object.assign(new Error(`Не найден конвертер: ${commands.join(', ')}. ` +
+            'В converterPaths укажите путь к исполняемому файлу без аргументов. Дополнительные флаги fb2cng задаются в fb2cngArgs.'),
+        {code: 'INPX_CONVERTER_NOT_FOUND'});
+    }
     throw (lastError || new Error('converter not found'));
 }
 
@@ -241,14 +270,15 @@ async function runCalibre(args, converterPaths = null) {
     await runFirst(calibreCommandCandidates(converterPaths), args, {env: await buildCalibreEnv()});
 }
 
-async function convertWithFb2cng(inputFile, outputFile, format, converterPaths = null, fb2cngConfigPath = null) {
+async function convertWithFb2cng(inputFile, outputFile, format, converterPaths = null, fb2cngConfigPath = null, extraArgs = []) {
     const outputDir = `${outputFile}.fb2cng`;
     const fb2cngFormat = fb2cngFormats.get(format);
     const configInfo = await readFb2cngConfig(fb2cngConfigPath);
+    const conversionArgs = readFb2cngArgs(extraArgs);
     await validateFb2cngConfig(configInfo, converterPaths);
     const fb2cngArgs = [
         ...(configInfo.path ? ['--config', configInfo.path] : []),
-        'convert', '--to', fb2cngFormat, '--overwrite', inputFile, outputDir,
+        'convert', '--to', fb2cngFormat, '--overwrite', ...conversionArgs, inputFile, outputDir,
     ];
 
     await fs.remove(outputDir);
@@ -291,9 +321,9 @@ async function convertWithCalibre(inputFile, outputFile, format, converterPaths 
     }
 }
 
-async function convertPrepared(convertInput, outputFile, format, converterPaths = null, fb2cngConfigPath = null) {
+async function convertPrepared(convertInput, outputFile, format, converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = []) {
     if (fb2cngFormats.has(format) && path.extname(convertInput).toLowerCase() === '.fb2') {
-        await convertWithFb2cng(convertInput, outputFile, format, converterPaths, fb2cngConfigPath);
+        await convertWithFb2cng(convertInput, outputFile, format, converterPaths, fb2cngConfigPath, fb2cngArgs);
         return;
     }
 
@@ -305,7 +335,7 @@ async function convertPrepared(convertInput, outputFile, format, converterPaths 
     await convertWithCalibre(convertInput, outputFile, format, converterPaths);
 }
 
-async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null}) {
+async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = []}) {
     format = String(format || '').toLowerCase();
     const sourceExt = path.extname(sourceFileName || inputFile).toLowerCase();
     if (!canConvertSourceTo(sourceExt, format))
@@ -328,7 +358,7 @@ async function convert({inputFile, outputFile, format, sourceFileName = '', conv
                 await fs.copyFile(inputFile, tempInput);
                 convertInput = tempInput;
             }
-            await convertPrepared(convertInput, workingOutput, format, converterPaths, fb2cngConfigPath);
+            await convertPrepared(convertInput, workingOutput, format, converterPaths, fb2cngConfigPath, fb2cngArgs);
             await fs.rename(workingOutput, outputFile);
         } finally {
             await fs.remove(workingOutput);
@@ -379,6 +409,7 @@ async function prepareConvertedFile({
             sourceFileName,
             converterPaths: config.converterPaths,
             fb2cngConfigPath: config.fb2cngConfigPath,
+            fb2cngArgs: cacheInfo.fb2cngArgs,
         });
     }
 
@@ -400,6 +431,7 @@ module.exports = {
     prepareConvertedFile,
     readFb2cngConfig,
     validateFb2cngConfig,
+    readFb2cngArgs,
     getConversionCacheInfo,
     getConvertedFileName,
     getConvertedExtension,
