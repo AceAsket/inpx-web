@@ -16,16 +16,15 @@
 - Отправка книг в Telegram и по электронной почте при настройке доставки.
 - Панель администратора, журнал событий, резервное копирование и восстановление, управление источниками, health checks и метрики Prometheus.
 
-**В предварительной ветке 1.7.9:** компактный мобильный поиск, библиотеки из обычных папок FB2/EPUB без INPX, умные полки по фильтрам, ZIP-скачивание подборок, защита прогресса от устаревшего устройства, перенос позиции недоступной книги на выбранную замену и провайдер метаданных Audiobookshelf. Опциональная серверная озвучка русских FB2 через Silero: по главам, проба голоса, настройка пауз, высоты голоса и произношения, сохранение позиции аудио, скорость воспроизведения в плеере.
+**В версии 1.7.9:** компактный мобильный поиск, библиотеки из обычных папок FB2/EPUB без INPX, умные полки по фильтрам, ZIP-скачивание подборок, защита прогресса от устаревшего устройства, перенос позиции недоступной книги на выбранную замену и провайдер метаданных Audiobookshelf. Опциональная серверная озвучка русских FB2 через Silero: по главам, проба голоса, настройка пауз, высоты голоса и произношения, сохранение позиции аудио, скорость воспроизведения в плеере.
 
 ### Образы и версии
 
 | Тег | Назначение |
 | --- | --- |
-| `1.7.8` | Стабильный релиз с конвертацией книг. |
-| `latest` | Стабильный основной образ; сейчас соответствует `1.7.8`. |
-| `1.7.9-rc.17` | Текущий предварительный релиз для проверки новых возможностей. |
-| `1.7.9-rc.17-silero` | Отдельный сервис озвучки для предварительного релиза. |
+| `1.7.9` | Стабильный релиз с конвертацией книг. |
+| `latest` | Стабильный основной образ; сейчас соответствует `1.7.9`. |
+| `1.7.9-silero` | Отдельный сервис озвучки для стабильной версии. |
 | `lite`, `*-lite` | Облегчённые сборки без конвертации; их версии могут отставать от основного образа. |
 
 Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md).
@@ -43,16 +42,16 @@ docker run -d \
   -e LIBDIR=/library \
   -v /path/to/data:/usr/local/bin/.inpx-web \
   -v /path/to/library:/library:ro \
-  aceasket/inpx-web-7z:1.7.8
+  aceasket/inpx-web-7z:1.7.9
 ```
 
-Откройте `http://SERVER_IP:12380`. Пути `INPX` и `LIBDIR` указываются **внутри контейнера**. При первом запуске дождитесь индексации; её продолжительность зависит от размера библиотеки. Свой начальный пароль администратора задаётся через `INPX_ADMIN_PASSWORD`. Без этой настройки в стабильной `1.7.8` используется `admin/admin`, а на новой установке RC17 пароль генерируется и выводится в журнал запуска.
+Откройте `http://SERVER_IP:12380`. Пути `INPX` и `LIBDIR` указываются **внутри контейнера**. При первом запуске дождитесь индексации; её продолжительность зависит от размера библиотеки. Свой начальный пароль администратора задаётся через `INPX_ADMIN_PASSWORD`. На новой установке без этой настройки пароль генерируется и выводится в журнал запуска. При обновлении пароль существующего профиля сохраняется.
 
 Каталог `/usr/local/bin/.inpx-web` должен быть постоянным: в нём хранятся настройки, профили, позиции чтения, закладки, списки, индекс и кэш. Книги монтируются отдельно, обычно только для чтения. При обновлении пересоздайте контейнер с новым тегом, сохранив свои тома, порты, сеть и переменные окружения.
 
 ### Папки и несколько библиотек
 
-В RC17 можно индексировать обычную папку FB2/EPUB без INPX. Добавьте к запуску образа `1.7.9-rc.17`:
+В 1.7.9 можно индексировать обычную папку FB2/EPUB без INPX. Добавьте к запуску образа `1.7.9`:
 
 ```sh
 -e INPX_LIBRARY_SOURCES='[{"id":"own","name":"Мои книги","type":"folder","libDir":"/library"}]'
@@ -66,7 +65,7 @@ docker run -d \
 
 Это параметры `docker run`, их нужно вставить перед именем образа. После изменения источников выполните переиндексацию. [Настройка библиотек и Docker Compose](https://github.com/AceAsket/inpx-web/blob/develop/README.md).
 
-### Имена файлов и заголовки в RC17
+### Имена файлов и заголовки в 1.7.9
 
 Основной образ включает fbc **1.9.0**. Добавьте параметры запуска, чтобы получить имя файла и заголовок книги для Kindle вида `02 - Доктор Гарин`:
 
@@ -77,7 +76,7 @@ docker run -d \
 
 Номер берётся из каталога. Для книги без номера блок с дефисом исчезнет. Для одного названия используйте `'${TITLE}'`. Первая настройка меняет имя файла, вторая — заголовок внутри EPUB/EPUB3/KEPUB/KFX/AZW8 при конвертации FB2. Без настроек сохраняется прежнее поведение. [Все поля шаблонов и настройки fbc](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
 
-### Озвучка Silero в RC17
+### Озвучка Silero в 1.7.9
 
 Озвучка **выключена по умолчанию** и включается переменными запуска основного контейнера:
 
@@ -86,7 +85,7 @@ docker run -d \
 -e INPX_TTS_URL=http://silero:8000
 ```
 
-Silero запускается отдельным CPU-контейнером `aceasket/inpx-web-7z:1.7.9-rc.17-silero`. Оба контейнера должны находиться в одной пользовательской Docker-сети. Смонтируйте постоянный том в `/models`; модели загружаются при первом синтезе. Расстановка ударений через silero-stress включена по умолчанию. Текст передаётся вашему сервису Silero.
+Silero запускается отдельным CPU-контейнером `aceasket/inpx-web-7z:1.7.9-silero`. Оба контейнера должны находиться в одной пользовательской Docker-сети. Смонтируйте постоянный том в `/models`; модели загружаются при первом синтезе. Расстановка ударений через silero-stress включена по умолчанию. Текст передаётся вашему сервису Silero.
 
 [Готовые команды и Compose для Silero](https://github.com/AceAsket/inpx-web/blob/develop/docs/silero-tts.md).
 
@@ -96,11 +95,11 @@ Silero запускается отдельным CPU-контейнером `ace
 | --- | --- |
 | `DATA_DIR` | Данные приложения; по умолчанию `/usr/local/bin/.inpx-web`. |
 | `INPX`, `LIBDIR` | INPX-индекс и архивы одной библиотеки. |
-| `INPX_LIBRARY_SOURCES` | Несколько источников; в RC также папки FB2/EPUB. |
+| `INPX_LIBRARY_SOURCES` | Несколько источников INPX и папки FB2/EPUB. |
 | `INPX_ADMIN_PASSWORD` | Пароль администратора при создании профиля. |
 | `INPX_COVER_CACHE_SIZE_MB` | Лимит кэша обложек; по умолчанию `512` МБ. |
-| `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Включение Silero и адрес сервиса в RC. |
-| `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Включение и токен провайдера Audiobookshelf в RC. |
+| `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Включение Silero и адрес сервиса. |
+| `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Включение и токен провайдера Audiobookshelf. |
 | `INPX_METRICS_ENABLED` | Метрики Prometheus при значении `true`. |
 
 OPDS: `http://SERVER_IP:12380/opds`. Проверка состояния: `/health`, `/ready`, `/api/index-status`; метрики: `/metrics`, если включены. Для внешнего доступа поддерживается авторизация за доверенным reverse proxy — [документация](https://github.com/AceAsket/inpx-web/blob/develop/README.md).
@@ -123,16 +122,15 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 - Send books through Telegram or email when delivery is configured.
 - Admin dashboard, event log, backup/restore, source management, health checks and Prometheus metrics.
 
-**In the 1.7.9 prerelease branch:** compact mobile search, index folders of FB2/EPUB files without INPX, filter-based smart shelves, ZIP downloads of book selections, protection against stale progress updates, manual replacement of unavailable books while keeping reading positions, and an Audiobookshelf metadata provider. Optional server-side Russian FB2 speech using Silero includes chapter playback, voice previews, pause/pitch/pronunciation settings, saved audio positions and playback speed control in the player.
+**In version 1.7.9:** compact mobile search, index folders of FB2/EPUB files without INPX, filter-based smart shelves, ZIP downloads of book selections, protection against stale progress updates, manual replacement of unavailable books while keeping reading positions, and an Audiobookshelf metadata provider. Optional server-side Russian FB2 speech using Silero includes chapter playback, voice previews, pause/pitch/pronunciation settings, saved audio positions and playback speed control in the player.
 
 ### Images and versions
 
 | Tag | Purpose |
 | --- | --- |
-| `1.7.8` | Stable release with book conversion. |
-| `latest` | Stable main image; currently points to `1.7.8`. |
-| `1.7.9-rc.17` | Current prerelease for testing new features. |
-| `1.7.9-rc.17-silero` | Separate speech service for the prerelease. |
+| `1.7.9` | Stable release with book conversion. |
+| `latest` | Stable main image; currently points to `1.7.9`. |
+| `1.7.9-silero` | Separate speech service for the stable release. |
 | `lite`, `*-lite` | Smaller builds without conversion; their versions may lag behind the main image. |
 
 Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md) for changes.
@@ -150,16 +148,16 @@ docker run -d \
   -e LIBDIR=/library \
   -v /path/to/data:/usr/local/bin/.inpx-web \
   -v /path/to/library:/library:ro \
-  aceasket/inpx-web-7z:1.7.8
+  aceasket/inpx-web-7z:1.7.9
 ```
 
-Open `http://SERVER_IP:12380`. `INPX` and `LIBDIR` must refer to paths **inside the container**. Wait for initial indexing; the time required depends on the library size. Set `INPX_ADMIN_PASSWORD` to supply your own initial admin password. Without this setting, stable `1.7.8` uses `admin/admin`, while a new RC17 installation generates a password and prints it in the startup log.
+Open `http://SERVER_IP:12380`. `INPX` and `LIBDIR` must refer to paths **inside the container**. Wait for initial indexing; the time required depends on the library size. Set `INPX_ADMIN_PASSWORD` to supply your own initial admin password. On a new installation without this setting, a password is generated and printed in the startup log. Existing profile passwords are preserved on upgrade.
 
 Keep `/usr/local/bin/.inpx-web` in a persistent volume: it stores settings, profiles, reading positions, bookmarks, lists, the index and caches. Mount your books separately, normally read-only. To update, recreate the container with the new image tag while preserving your volumes, ports, network and environment variables.
 
 ### Folders and multiple libraries
 
-RC17 can index a folder of FB2/EPUB files without INPX. Add this option when running `1.7.9-rc.17`:
+1.7.9 can index a folder of FB2/EPUB files without INPX. Add this option when running `1.7.9`:
 
 ```sh
 -e INPX_LIBRARY_SOURCES='[{"id":"own","name":"My books","type":"folder","libDir":"/library"}]'
@@ -173,7 +171,7 @@ For multiple INPX libraries, specify an array of sources:
 
 These are `docker run` options; insert them before the image name. Reindex after changing sources. [Library configuration and Docker Compose](https://github.com/AceAsket/inpx-web/blob/develop/README.md).
 
-### Filenames and book titles in RC17
+### Filenames and book titles in 1.7.9
 
 The main image includes fbc **1.9.0**. Add these launch options to get a filename and Kindle book title such as `02 - Доктор Гарин`:
 
@@ -184,7 +182,7 @@ The main image includes fbc **1.9.0**. Add these launch options to get a filenam
 
 The series number comes from the catalogue. The number and separator disappear for unnumbered books. Use `'${TITLE}'` for the title alone. The first option changes download filenames; the second changes internal EPUB/EPUB3/KEPUB/KFX/AZW8 titles when converting FB2. Existing behavior is preserved when these options are unset. [Template fields and fbc settings](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
 
-### Silero speech in RC17
+### Silero speech in 1.7.9
 
 Speech is **disabled by default**. Enable it through the main container's startup environment:
 
@@ -193,7 +191,7 @@ Speech is **disabled by default**. Enable it through the main container's startu
 -e INPX_TTS_URL=http://silero:8000
 ```
 
-Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.7.9-rc.17-silero`. Place both containers on the same user-defined Docker network. Mount a persistent volume at `/models`; models are downloaded on the first synthesis request. Stress placement with silero-stress is enabled by default. Book text is sent to your own Silero service.
+Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.7.9-silero`. Place both containers on the same user-defined Docker network. Mount a persistent volume at `/models`; models are downloaded on the first synthesis request. Stress placement with silero-stress is enabled by default. Book text is sent to your own Silero service.
 
 [Silero commands and Compose instructions](https://github.com/AceAsket/inpx-web/blob/develop/docs/silero-tts.md).
 
@@ -203,11 +201,11 @@ Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.7.9-rc.17-sil
 | --- | --- |
 | `DATA_DIR` | App data; defaults to `/usr/local/bin/.inpx-web`. |
 | `INPX`, `LIBDIR` | INPX index and archives for a single library. |
-| `INPX_LIBRARY_SOURCES` | Multiple sources; RC also supports FB2/EPUB folders. |
+| `INPX_LIBRARY_SOURCES` | Multiple INPX sources and FB2/EPUB folders. |
 | `INPX_ADMIN_PASSWORD` | Initial admin profile password. |
 | `INPX_COVER_CACHE_SIZE_MB` | Cover cache limit; defaults to `512` MB. |
-| `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Enable Silero and set its service URL in RC. |
-| `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Enable the Audiobookshelf provider and set its token in RC. |
+| `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Enable Silero and set its service URL. |
+| `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Enable the Audiobookshelf provider and set its token. |
 | `INPX_METRICS_ENABLED` | Enable Prometheus metrics with `true`. |
 
 OPDS: `http://SERVER_IP:12380/opds`. Health endpoints: `/health`, `/ready`, `/api/index-status`; metrics: `/metrics` when enabled. Authentication behind a trusted reverse proxy is supported for external access — see the [documentation](https://github.com/AceAsket/inpx-web/blob/develop/README.md).

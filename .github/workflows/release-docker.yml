@@ -8,7 +8,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v1.7.9-rc.17
+        default: v1.7.9
       metadata_only:
         description: Update Docker Hub description without rebuilding images
         type: boolean
@@ -123,6 +123,28 @@ jobs:
         env:
           IMAGE: ${{ steps.version.outputs.image }}
         run: docker push "$IMAGE"
+
+  promote-stable:
+    name: Promote stable image to latest
+    needs: publish
+    if: (github.event_name != 'workflow_dispatch' || !inputs.metadata_only) && !contains(github.event.inputs.tag || github.ref_name, '-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish tested stable image as latest
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          docker pull "aceasket/inpx-web-7z:$version"
+          docker tag "aceasket/inpx-web-7z:$version" aceasket/inpx-web-7z:latest
+          docker push aceasket/inpx-web-7z:latest
 
   metadata:
     if: github.event_name == 'workflow_dispatch' && inputs.metadata_only
