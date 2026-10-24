@@ -4,6 +4,7 @@ const utils = require('../utils');
 
 const WebWorker = require('../WebWorker');//singleton
 const XmlParser = require('../xml/XmlParser');
+const {match: catalogMatch} = require('../../../shared/CatalogSearch');
 
 const spaceChar = String.fromCodePoint(0x00B7);
 const emptyFieldValue = '?';
@@ -258,7 +259,6 @@ class BasePage {
     //скопировано из BaseList.js, часть функционала не используется
     filterBooks(books, query = {}) {
         const s = query;
-        const titleSearchLeadingPattern = /^[\s«"'„“”‘’`()\[\]{}]+/;
 
         const splitAuthor = (author) => {
             if (!author) {
@@ -272,7 +272,7 @@ class BasePage {
             return result;
         };
 
-        const filterBySearch = (bookValue, searchValue, options = {}) => {
+        const filterBySearch = (bookValue, searchValue) => {
             if (!searchValue)
                 return true;
 
@@ -303,13 +303,11 @@ class BasePage {
                 searchValue = searchValue.substring(1);
                 const re = utils.checkSearchRegExp(searchValue);
                 return re.test(bookValue);
-            } else {
-                if (options.looseTitlePrefix) {
-                    const normalizedTitle = bookValue.replace(titleSearchLeadingPattern, '');
-                    return bookValue.indexOf(searchValue) === 0 || normalizedTitle.indexOf(searchValue) === 0;
-                }
-                //where = `@dirtyIndexLR('value', ${db.esc(a)}, ${db.esc(a + maxUtf8Char)})`;
+            } else if (searchValue[0] == emptyFieldValue) {
                 return bookValue.localeCompare(searchValue) >= 0 && bookValue.localeCompare(searchValue + maxUtf8Char) <= 0;
+            } else {
+                //те же правила, что и в DbSearcher: слова с окончаниями, «ё/е», смешанные латиница и кириллица
+                return catalogMatch(bookValue, searchValue);
             }
         };
 
@@ -367,7 +365,7 @@ class BasePage {
             return (this.showDeleted || !book.del)
                 && authorFound
                 && filterBySearch(book.series, s.series)
-                && filterBySearch(book.title, s.title, {looseTitlePrefix: true})
+                && filterBySearch(book.title, s.title)
                 && genreFound
                 && langFound
                 && dateFound

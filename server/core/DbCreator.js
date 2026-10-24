@@ -199,7 +199,7 @@ class DbCreator {
 
         const parseBookRec = (rec) => {
             for (const field of ['title', 'author', 'series']) {
-                for (const word of new Set(require('./CatalogSearch').words(rec[field]).map(require('./CatalogSearch').root)))
+                for (const word of new Set(require('../../shared/CatalogSearch').words(rec[field]).map(require('../../shared/CatalogSearch').root)))
                     parseField(`${field}:${word}`, wordMap, wordArr, rec.id);
             }
             //авторы

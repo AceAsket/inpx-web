@@ -7,6 +7,7 @@ import authorBooksStorage from './authorBooksStorage';
 import BookView from './BookView/BookView.vue';
 import LoadingMessage from './LoadingMessage/LoadingMessage.vue';
 import * as utils from '../../share/utils';
+const {match: catalogMatch} = require('../../../shared/CatalogSearch');
 
 const showMoreCount = 100;//значение для "Показать еще"
 const maxItemCount = 500;//выше этого значения показываем "Загрузка"
@@ -562,7 +563,6 @@ export default class BaseList {
         const ruAlphabet = 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя';
         const enAlphabet = 'abcdefghijklmnopqrstuvwxyz';
         const enru = new Set((ruAlphabet + enAlphabet).split(''));
-        const titleSearchLeadingPattern = /^[\s«"'„“”‘’`()\[\]{}]+/;
 
         const splitAuthor = (author) => {
             if (!author) {
@@ -576,7 +576,7 @@ export default class BaseList {
             return result;
         };
 
-        const filterBySearch = (bookValue, searchValue, options = {}) => {
+        const filterBySearch = (bookValue, searchValue) => {
             if (!searchValue)
                 return true;
 
@@ -607,12 +607,11 @@ export default class BaseList {
                 searchValue = searchValue.substring(1);
                 const re = new RegExp(searchValue, 'i');
                 return re.test(bookValue);
-            } else {
-                if (options.looseTitlePrefix) {
-                    const normalizedTitle = bookValue.replace(titleSearchLeadingPattern, '');
-                    return bookValue.indexOf(searchValue) === 0 || normalizedTitle.indexOf(searchValue) === 0;
-                }
+            } else if (searchValue[0] == emptyFieldValue) {
                 return bookValue.indexOf(searchValue) === 0;
+            } else {
+                //те же правила, что и на сервере: слова с окончаниями, «ё/е», смешанные латиница и кириллица
+                return catalogMatch(bookValue, searchValue);
             }
         };
 
@@ -677,7 +676,7 @@ export default class BaseList {
             return (this.showDeleted || !book.del)
                 && authorFound
                 && filterBySearch(book.series, s.series)
-                && filterBySearch(book.title, s.title, {looseTitlePrefix: true})
+                && filterBySearch(book.title, s.title)
                 && genreFound
                 && langFound
                 && dateFound
