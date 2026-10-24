@@ -133,7 +133,7 @@ class DbSearcher {
 
     async wordBookIds(field, query) {
         if (/^[=*#~?]/.test(query) || !await this.db.tableExists({table: 'word'})) return null;
-        const search = require('./CatalogSearch');
+        const search = require('../../shared/CatalogSearch');
         const tokens = [...new Set(search.words(query).map(search.root))];
         if (!tokens.length) return new Uint32Array();
         let matches = null;
@@ -484,7 +484,7 @@ class DbSearcher {
 
             if (authorIds === null) {
                 const where = /^[=*#~?]/.test(query.author) ? this.getWhere(query.author)
-                    : `@indexIter('value', (value) => ${require('./CatalogSearch').expression('value', query.author)})`;
+                    : `@indexIter('value', (value) => ${require('../../shared/CatalogSearch').expression('value', query.author)})`;
                 const rows = await this.db.select({
                     table: 'author',
                     rawResult: true,
@@ -774,7 +774,7 @@ class DbSearcher {
                         })()
                     `;
                 } else if (['title', 'author', 'series', 'keywords'].includes(bookField)) {
-                    return require('./CatalogSearch').expression(`row.${bookField}`, searchValue);
+                    return require('../../shared/CatalogSearch').expression(`row.${bookField}`, searchValue);
                 } else {
                     return `(row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)}) >= 0 ` +
                         `&& row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)} + ${db.esc(maxUtf8Char)}) <= 0)`;

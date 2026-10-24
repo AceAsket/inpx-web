@@ -280,7 +280,42 @@ async function testFolderEpubAndConcurrentChanges() {
         } finally { await db.unlock(); }
     });
 }
-module.exports = [testReadingAndAudioRevisionConflicts, testReaderBookReplacement, testFolderIncrementalSearchAndSmartShelves, testBatchDownloadScopeAndArchive, testFolderBootAndFailedRefreshKeepsIndex, testFolderEpubAndConcurrentChanges];
+// Сервер ищет название по словам, а списки повторно фильтруют книги каждой строки. Если правила
+// расходятся, строка без книг исчезает и первая страница («Волчья стая» раньше «Стая») пустеет.
+async function testTitleWordMatchesSurviveListFilters() {
+    await temporary(async dir => {
+        const library = path.join(dir, 'library');
+        await fs.ensureDir(library);
+        await fs.writeFile(path.join(library, 'a.fb2'), fb2('Волчья стая'));
+        await fs.writeFile(path.join(library, 'b.fb2'), fb2('Стая', 2));
+        await fs.writeFile(path.join(library, 'c.fb2'), fb2('Солярис', 3));
+        const config = {dataDir: path.join(dir, 'data'), inpxFilterFile: path.join(dir, 'no-filter.json'),
+            libDir: library, dbVersion: 1, dbCacheSize: 10, fullOptimization: false,
+            librarySources: [{id: 'own', name: 'Свои книги', type: 'folder', libDir: library, enabled: true}]};
+        await fs.ensureDir(config.dataDir);
+        const db = new JembaDb();
+        await db.lock({dbPath: path.join(config.dataDir, 'db'), create: true});
+        try {
+            await new DbCreator(config).run(db, () => {});
+            await db.openAll();
+            const searcher = new DbSearcher(config, db);
+            await searcher.init();
+            try {
+                const opds = Object.create(require('../server/core/opds/BasePage').prototype);
+                for (const offset of [0, 1]) {
+                    const query = {title: 'стая', del: '0', limit: 1, offset};
+                    const result = await searcher.search('title', query);
+                    assert.strictEqual(result.totalFound, 2);
+                    assert.strictEqual(opds.filterBooks(result.found[0].books, query).length, 1,
+                        `OPDS must keep the books of title "${result.found[0].title}"`);
+                }
+            } finally { await searcher.close(); }
+        } finally { await db.unlock(); }
+    });
+    const source = await fs.readFile(path.join(__dirname, '../client/components/Search/BaseList.js'), 'utf8');
+    assert.match(source, /return catalogMatch\(bookValue, searchValue\);/, 'Web lists must filter with the server word rule');
+}
+module.exports = [testReadingAndAudioRevisionConflicts, testTitleWordMatchesSurviveListFilters, testReaderBookReplacement, testFolderIncrementalSearchAndSmartShelves, testBatchDownloadScopeAndArchive, testFolderBootAndFailedRefreshKeepsIndex, testFolderEpubAndConcurrentChanges];
 if (require.main === module) {
     require('../server/core/Logger');
     (async() => {
