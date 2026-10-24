@@ -308,12 +308,14 @@ async function testTitleWordMatchesSurviveListFilters() {
                     assert.strictEqual(result.totalFound, 2);
                     assert.strictEqual(opds.filterBooks(result.found[0].books, query).length, 1,
                         `OPDS must keep the books of title "${result.found[0].title}"`);
+                    const web = require('./catalog-list-filter-tests').createWebList();
+                    web.search = query;
+                    assert.strictEqual(web.filterBooks(result.found[0].books).length, 1,
+                        `Web must keep the books of title "${result.found[0].title}"`);
                 }
             } finally { await searcher.close(); }
         } finally { await db.unlock(); }
     });
-    const source = await fs.readFile(path.join(__dirname, '../client/components/Search/BaseList.js'), 'utf8');
-    assert.match(source, /return catalogMatch\(bookValue, searchValue\);/, 'Web lists must filter with the server word rule');
 }
 module.exports = [testReadingAndAudioRevisionConflicts, testTitleWordMatchesSurviveListFilters, testReaderBookReplacement, testFolderIncrementalSearchAndSmartShelves, testBatchDownloadScopeAndArchive, testFolderBootAndFailedRefreshKeepsIndex, testFolderEpubAndConcurrentChanges];
 if (require.main === module) {
