@@ -52,6 +52,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: npm audit --omit=dev --audit-level=moderate
       - run: sudo apt-get update && sudo apt-get install -y p7zip-full
       - run: npm run test:release
       - run: npm run test:tts
