@@ -70,6 +70,7 @@ function sevenZipCommandCandidates(converterPaths = null) {
     ] : [
         '7z',
         '7za',
+        '7zz',//так называется 7-Zip из Homebrew (sevenzip) и из архива для Linux с 7-zip.org
     ]);
 
     return [...configured, ...local, ...system];

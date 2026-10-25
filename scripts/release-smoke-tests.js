@@ -1405,6 +1405,8 @@ async function testConfiguredConverterPathsHavePriority() {
     };
 
     assert.strictEqual(externalTools.sevenZipCommandCandidates(configured)[0], configured.sevenZip);
+    if (process.platform !== 'win32')
+        assert.deepStrictEqual(externalTools.sevenZipCommandCandidates({}).slice(-3), ['7z', '7za', '7zz']);
     assert.strictEqual(externalTools.djxlCommandCandidates([], configured)[0], configured.djxl);
     assert.strictEqual(externalTools.dwebpCommandCandidates([], configured)[0], configured.dwebp);
     assert.strictEqual(bookConverter.fb2cngCommandCandidates(configured)[0], configured.fb2cng);
