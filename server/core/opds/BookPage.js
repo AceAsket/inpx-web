@@ -176,6 +176,9 @@ class BookPage extends BasePage {
                     addLink(`${directHref}&zip=1`, 'application/zip');
                 }
 
+                if (this.config.conversionEnabled && this.config.mobiEnabled && ['fb2', 'epub'].includes(ext))
+                    addLink(`${directHref}&format=mobi`, 'application/x-mobipocket-ebook');
+
                 //entry
                 const e = this.makeEntry({
                     id: bookUid,

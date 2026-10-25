@@ -16,7 +16,7 @@ jobs:
   validate:
     name: Test and package ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -45,3 +45,9 @@ jobs:
         run: docker build --target runtime-lite -t inpx-web:ci .
       - if: matrix.target == 'linux'
         run: node scripts/binary-smoke-test.js --image inpx-web:ci
+      - name: Build full image with static MOBI converter
+        if: matrix.target == 'linux'
+        run: docker build --target runtime -t inpx-web:ci-full .
+      - name: Test real image converters
+        if: matrix.target == 'linux'
+        run: bash scripts/test-image-converters.sh inpx-web:ci-full

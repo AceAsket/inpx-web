@@ -7,11 +7,12 @@ const externalTools = require('./ExternalTools');
 const {bundledBinDir} = externalTools;
 const bookNaming = require('./BookNaming');
 const yaml = require('js-yaml');
+const {validateMobi} = require('./MobiValidation');
 
 const pending = new Map();
 const validatedFb2cngConfigs = new Set();
 const conversionCacheSchema = 'v2';
-const targetFormats = new Set(['epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf']);
+const targetFormats = new Set(['epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf', 'mobi']);
 const fb2cngFormats = new Map([
     ['epub', 'epub2'],
     ['epub3', 'epub3'],
@@ -81,6 +82,12 @@ function calibreCommandCandidates(converterPaths = null) {
         '/usr/local/bin/ebook-convert',
         'C:\\Program Files\\Calibre2\\ebook-convert.exe',
     ].filter(Boolean);
+}
+
+function kindlingCommandCandidates(configuredPath = '') {
+    if (String(configuredPath || '').trim()) return [String(configuredPath).trim()];
+    const file = process.platform === 'win32' ? 'kindling.exe' : 'kindling';
+    return [bundledToolPath(file), localToolPath(file), 'kindling', '/usr/local/bin/kindling', '/usr/bin/kindling'].filter(Boolean);
 }
 
 function stableStringify(value) {
@@ -180,7 +187,7 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
     if (!canConvertSourceTo(sourceExt, normalizedFormat))
         throw new Error(`Unsupported convert format: ${sourceExt || 'unknown'} -> ${normalizedFormat}`);
 
-    const usesFb2cng = sourceExt === '.fb2' && fb2cngFormats.has(normalizedFormat);
+    const usesFb2cng = sourceExt === '.fb2' && (fb2cngFormats.has(normalizedFormat) || normalizedFormat === 'mobi');
     const fb2cngConfig = usesFb2cng
         ? await readFb2cngConfig(config.fb2cngConfigPath)
         : {path: '', fingerprint: 'not-used'};
@@ -193,6 +200,7 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
         fb2cngConfigFingerprint: fb2cngConfig.fingerprint,
         fb2cngVersion: usesFb2cng ? String(config.fb2cngVersion || '') : '',
         converterPaths: config.converterPaths || {},
+        ...(normalizedFormat === 'mobi' ? {mobiProfile: 'dual-v1', kindlingVersion: config.kindlingVersion || 'v0.45.6', kindlingPath: config.kindlingPath || ''} : {}),
         ...(fb2cngArgs.length ? {fb2cngArgs} : {}),
         ...(bookTitle !== null ? {bookTitleTemplate: config.bookTitleTemplate, bookTitle} : {}),
         ...(Object.keys(config.converterPaths || {}).length ? {configuredToolPolicy: 'strict-v1'} : {}),
@@ -225,7 +233,7 @@ function canConvertSourceTo(sourceExt, format) {
     if (sourceExt === 'fb2')
         return true;
 
-    return sourceExt === 'epub' && format === 'pdf';
+    return sourceExt === 'epub' && ['pdf', 'mobi'].includes(format);
 }
 
 async function buildCalibreEnv() {
@@ -344,7 +352,29 @@ async function convertWithCalibre(inputFile, outputFile, format, converterPaths 
     }
 }
 
-async function convertPrepared(convertInput, outputFile, format, converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null) {
+async function convertWithKindling(inputFile, outputFile, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle, kindlingPath) {
+    const dir = await fs.mkdtemp(path.join(require('os').tmpdir(), 'inpx-mobi-'));
+    try {
+        const intermediate = path.join(dir, 'book.epub');
+        if (path.extname(inputFile).toLowerCase() === '.fb2')
+            await convertWithFb2cng(inputFile, intermediate, 'epub', converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle);
+        else
+            await fs.copyFile(inputFile, intermediate);
+        // The KDP publishing preflight rejects fbc's Amazon-specific CSS media
+        // queries. Sideloading does not need KDP rules; preserve the stylesheet
+        // and keep Kindling's separate structural self-check enabled.
+        await runFirst(kindlingCommandCandidates(kindlingPath), ['build', intermediate, '--legacy-mobi', '--no-embed-source', '--no-validate', '-o', path.resolve(outputFile)], {cwd: dir});
+        await validateMobi(outputFile);
+    } finally {
+        await fs.remove(dir);
+    }
+}
+
+async function convertPrepared(convertInput, outputFile, format, converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null, kindlingPath = '') {
+    if (format === 'mobi') {
+        await convertWithKindling(convertInput, outputFile, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle, kindlingPath);
+        return;
+    }
     if (fb2cngFormats.has(format) && path.extname(convertInput).toLowerCase() === '.fb2') {
         await convertWithFb2cng(convertInput, outputFile, format, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle);
         return;
@@ -358,8 +388,10 @@ async function convertPrepared(convertInput, outputFile, format, converterPaths 
     await convertWithCalibre(convertInput, outputFile, format, converterPaths);
 }
 
-async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null}) {
+async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null, mobiEnabled = false, kindlingPath = ''}) {
     format = String(format || '').toLowerCase();
+    if (format === 'mobi' && mobiEnabled !== true)
+        throw new Error('Конвертация в MOBI выключена. Для включения задайте INPX_MOBI_ENABLED=true при запуске.');
     const sourceExt = path.extname(sourceFileName || inputFile).toLowerCase();
     if (!canConvertSourceTo(sourceExt, format))
         throw new Error(`Unsupported convert format: ${sourceExt || 'unknown'} -> ${format}`);
@@ -381,7 +413,7 @@ async function convert({inputFile, outputFile, format, sourceFileName = '', conv
                 await fs.copyFile(inputFile, tempInput);
                 convertInput = tempInput;
             }
-            await convertPrepared(convertInput, workingOutput, format, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle);
+            await convertPrepared(convertInput, workingOutput, format, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle, kindlingPath);
             await fs.rename(workingOutput, outputFile);
         } finally {
             await fs.remove(workingOutput);
@@ -416,6 +448,9 @@ async function prepareConvertedFile({
     if (!config.conversionEnabled)
         throw new Error(disabledMessage || 'Book conversion is disabled');
 
+    if (String(format).toLowerCase() === 'mobi' && config.mobiEnabled !== true)
+        throw new Error('Конвертация в MOBI выключена. Для включения задайте INPX_MOBI_ENABLED=true при запуске.');
+
     const cacheInfo = await getConversionCacheInfo({
         cacheBasePath,
         inputFile,
@@ -436,6 +471,8 @@ async function prepareConvertedFile({
             fb2cngConfigPath: config.fb2cngConfigPath,
             fb2cngArgs: cacheInfo.fb2cngArgs,
             bookTitle: cacheInfo.bookTitle,
+            mobiEnabled: config.mobiEnabled,
+            kindlingPath: config.kindlingPath,
         });
     }
 
@@ -453,6 +490,7 @@ module.exports = {
     fb2cngCommandCandidates,
     mutoolCommandCandidates,
     calibreCommandCandidates,
+    kindlingCommandCandidates,
     convert,
     prepareConvertedFile,
     readFb2cngConfig,

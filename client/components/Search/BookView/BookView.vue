@@ -470,7 +470,7 @@ class BookView {
         if (currentExt === 'fb2')
             return formats;
         if (currentExt === 'epub')
-            return formats.filter(format => format === 'pdf');
+            return formats.filter(format => format === 'pdf' || format === 'mobi');
 
         return [];
     }

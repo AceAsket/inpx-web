@@ -5,6 +5,23 @@ ARG RUNTIME_IMAGE=debian:bookworm-slim
 ARG FB2CNG_VERSION=v1.9.0
 ARG FB2CNG_ARCH=linux-amd64
 
+FROM rust:1.99.1-alpine3.23 AS kindling-build
+
+RUN apk add --no-cache build-base nasm
+# Pinned upstream source and locked Rust dependencies; musl avoids a glibc
+# version requirement in the standalone Linux and Synology packages.
+ADD --checksum=sha256:6b85364aa51c041c2920fade89f2695a3037bda607bb71051df0ca5f25e9d0b3 https://codeload.github.com/ciscoriordan/kindling/tar.gz/refs/tags/v0.45.6 /tmp/kindling.tar.gz
+WORKDIR /kindling
+RUN tar -xzf /tmp/kindling.tar.gz --strip-components=1 \
+    && cargo build --locked --release \
+    && strip target/release/kindling-cli \
+    && mkdir /out \
+    && cp target/release/kindling-cli /out/kindling \
+    && cp LICENSE /out/LICENSE.kindling
+
+FROM scratch AS kindling-tools
+COPY --from=kindling-build /out/ /
+
 FROM ${NODE_IMAGE} AS build-deps
 
 WORKDIR /app
@@ -86,6 +103,8 @@ ENV INPX_CONVERSION_FORMATS=epub,epub3,kepub,kfx,azw8,pdf
 ENV INPX_FB2CNG_VERSION=${FB2CNG_VERSION}
 
 COPY --from=fb2cng-tools /fb2cng-runtime/fbc /usr/local/bin/fbc
+COPY --from=kindling-tools /kindling /usr/local/bin/kindling
+COPY --from=kindling-tools /LICENSE.kindling /usr/local/share/licenses/kindling/LICENSE
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \

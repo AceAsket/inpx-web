@@ -130,3 +130,4 @@ async function testFb2cngArgumentsValidationAndConfigPersistence() {
 }
 
 module.exports = [testCustomConvertersFailWithoutDefaultFallback, testFb2cngArgumentsReachConversionAndSeparateCache, testFb2cngArgumentsValidationAndConfigPersistence];
+module.exports.isolatedConverter = isolatedConverter;

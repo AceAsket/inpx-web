@@ -9,7 +9,7 @@ on:
       tag:
         description: 'Git tag to build and publish'
         required: true
-        default: 'v1.8.1-rc.1'
+        default: 'v1.8.1-rc.2'
 
 permissions:
   actions: read
@@ -164,6 +164,13 @@ jobs:
       - name: Test bundled fb2cng conversion and naming
         shell: bash
         run: node scripts/fb2cng-integration-tests.js --fbc dist/${{ matrix.target }}/bin/${{ matrix.target == 'win' && 'fbc.exe' || 'fbc' }}
+
+      - name: Bundle pinned Kindling converter
+        run: node scripts/bundle-kindling.js ${{ matrix.target }}
+
+      - name: Test real MOBI conversion
+        shell: bash
+        run: node scripts/mobi-integration-tests.js --fbc dist/${{ matrix.target }}/bin/${{ matrix.target == 'win' && 'fbc.exe' || 'fbc' }} --kindling dist/${{ matrix.target }}/bin/${{ matrix.target == 'win' && 'kindling.exe' || 'kindling' }}
 
       - name: Archive release payload
         shell: pwsh
