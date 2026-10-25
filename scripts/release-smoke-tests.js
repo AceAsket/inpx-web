@@ -1721,6 +1721,7 @@ const tests = [
     ...require('./reader-measurement-tests'),
     ...require('./converter-options-tests'),
     ...require('./mobi-tests'),
+    ...require('./mobi-epub-tests'),
     ...require('./reader-opening-tests'),
     ...require('./library-improvements-tests'),
     ...require('./catalog-list-filter-tests'),

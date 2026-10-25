@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const {isolatedConverter} = require('./converter-options-tests');
 const {validateMobi} = require('../server/core/MobiValidation');
+const {epubFixture} = require('./mobi-epub-tests');
 
 function fixtureMobi() {
     const count = 5, first = 78 + count * 8;
@@ -51,14 +52,15 @@ async function testMobiRequiresLaunchFlagAndDoesNotPersist() {
 async function testMobiPipelineUsesOneSlotAndCachesValidatedOutput() {
     await withFixture(async dir => {
         const calls = [];
+        const epubData = await epubFixture();
         const converter = await isolatedConverter(async(command, args, options) => {
             calls.push({command, args, options});
             if (command === 'fbc-test') {
                 assert.ok(args.includes('epub2'));
-                await fs.outputFile(path.join(args.at(-1), 'book.epub'), 'EPUB content');
+                await fs.outputFile(path.join(args.at(-1), 'book.epub'), epubData);
             } else {
                 assert.strictEqual(command, 'kindling-test');
-                assert.strictEqual(await fs.readFile(args[1], 'utf8'), 'EPUB content');
+                assert.deepStrictEqual(await fs.readFile(args[1]), epubData);
                 assert.ok(args.includes('--legacy-mobi'));
                 assert.ok(args.includes('--no-embed-source'));
                 assert.ok(!args.includes('--no-self-check'));
@@ -78,7 +80,7 @@ async function testMobiPipelineUsesOneSlotAndCachesValidatedOutput() {
         assert.strictEqual(await fs.pathExists(calls[1].options.cwd), false, 'Intermediate directory removed');
         assert.strictEqual(await fs.readFile(inputFile, 'utf8'), 'original FB2');
         const epub = {...options, sourceFileName:'book.epub', config:{...options.config, fb2cngConfigPath:'/missing/unused.yaml', fb2cngArgs:'unused'}};
-        await fs.writeFile(inputFile, 'EPUB content');
+        await fs.writeFile(inputFile, epubData);
         await converter.prepareConvertedFile(epub);
         assert.strictEqual(calls.length, 3, 'Existing EPUB must not launch fbc or read its config');
         assert.ok(!(await fs.readdir(dir)).some(name => /\.work-|\.input-|\.fb2cng$/.test(name)));
@@ -120,7 +122,7 @@ async function testMobiRejectsCorruptAndAzw3OnlyResults() {
                 if (failure === 'timeout') throw Object.assign(new Error('timeout'), {code:'INPX_CONVERSION_TIMEOUT'});
             });
             const inputFile = path.join(dir, 'source.epub');
-            await fs.writeFile(inputFile, 'original'); await fs.writeFile(file, good);
+            await fs.writeFile(inputFile, await epubFixture()); await fs.writeFile(file, good);
             await assert.rejects(converter.convert({inputFile, outputFile:file, format:'mobi', mobiEnabled:true, kindlingPath:'missing-explicit'}),
                 {code: failure === 'corrupt' ? 'INPX_INVALID_MOBI' : failure === 'missing' ? 'INPX_CONVERTER_NOT_FOUND' : 'INPX_CONVERSION_TIMEOUT'});
             assert.deepStrictEqual(await fs.readFile(file), good, 'Previous completed output survives failure');

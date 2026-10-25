@@ -8,6 +8,7 @@ const {bundledBinDir} = externalTools;
 const bookNaming = require('./BookNaming');
 const yaml = require('js-yaml');
 const {validateMobi} = require('./MobiValidation');
+const {validateEpubForMobi} = require('./MobiEpubValidation');
 
 const pending = new Map();
 const validatedFb2cngConfigs = new Set();
@@ -360,10 +361,17 @@ async function convertWithKindling(inputFile, outputFile, converterPaths, fb2cng
             await convertWithFb2cng(inputFile, intermediate, 'epub', converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle);
         else
             await fs.copyFile(inputFile, intermediate);
+        await validateEpubForMobi(intermediate);
         // The KDP publishing preflight rejects fbc's Amazon-specific CSS media
         // queries. Sideloading does not need KDP rules; preserve the stylesheet
         // and keep Kindling's separate structural self-check enabled.
-        await runFirst(kindlingCommandCandidates(kindlingPath), ['build', intermediate, '--legacy-mobi', '--no-embed-source', '--no-validate', '-o', path.resolve(outputFile)], {cwd: dir});
+        try {
+            await runFirst(kindlingCommandCandidates(kindlingPath), ['build', intermediate, '--legacy-mobi', '--no-embed-source', '--no-validate', '-o', path.resolve(outputFile)], {cwd: dir});
+        } catch (error) {
+            if (error.code === 'INPX_CONVERTER_NOT_FOUND')
+                throw Object.assign(new Error('Не найден Kindling. Укажите INPX_KINDLING_PATH при запуске или положите kindling / kindling.exe в bin рядом с приложением.'), {code:error.code});
+            throw error;
+        }
         await validateMobi(outputFile);
     } finally {
         await fs.remove(dir);
