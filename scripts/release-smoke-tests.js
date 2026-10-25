@@ -1723,6 +1723,7 @@ const tests = [
     ...require('./reader-opening-tests'),
     ...require('./library-improvements-tests'),
     ...require('./catalog-list-filter-tests'),
+    ...require('./search-navigation-tests'),
     ...require('./fb2-encoding-tests'),
     ...require('./audiobookshelf-tests'),
     ...require('./catalog-regression-tests'),

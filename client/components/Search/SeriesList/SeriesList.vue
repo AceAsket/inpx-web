@@ -122,7 +122,6 @@ import BaseList from '../BaseList';
 
 import * as utils from '../../../share/utils';
 
-import _ from 'lodash';
 
 class SeriesList extends BaseList {
     batchSeries = '';
@@ -212,7 +211,7 @@ class SeriesList extends BaseList {
         finally { this.batchSeries = ''; }
     }
 
-    async updateTableData() {
+    async updateTableData(request = null) {
         let result = [];
 
         const expandedSet = new Set(this.expandedSeries);
@@ -252,6 +251,7 @@ class SeriesList extends BaseList {
             result.push(item);
         }
 
+        if (request && !this.isCurrentSearch(request)) return;
         if (result.length == 1 && !this.isExpandedSeries(result[0])) {
             this.expandSeries(result[0]);
         }
@@ -260,59 +260,7 @@ class SeriesList extends BaseList {
     }
 
     async refresh() {
-        //параметры запроса
-        const newQuery = this.getQuery();
-        if (_.isEqual(newQuery, this.prevQuery))
-            return;
-        this.prevQuery = newQuery;
-
-        this.queryExecute = newQuery;
-
-        if (this.refreshing)
-            return;
-
-        this.error = '';
-        this.refreshing = true;
-
-        (async() => {
-            await utils.sleep(500);
-            if (this.refreshing)
-                this.loadingMessage = 'Поиск серий...';
-        })();
-
-        try {
-            while (this.queryExecute) {
-                const query = this.queryExecute;
-                this.queryExecute = null;
-
-                try {
-                    const response = await this.api.search('series', query);
-
-                    this.list.queryFound = response.found.length;
-                    this.list.totalFound = response.totalFound;
-                    this.list.inpxHash = response.inpxHash;
-
-                    this.searchResult = response;
-
-                    await utils.sleep(1);
-                    if (!this.queryExecute) {
-                        await this.updateTableData();
-                        this.scrollToTop();
-                        this.highlightPageScroller(query);
-                    }
-                } catch (e) {
-                    this.list.queryFound = 0;
-                    this.list.totalFound = 0;
-                    this.searchResult = {found: []};
-                    await this.updateTableData();
-                    //this.$root.stdDialog.alert(e.message, 'Ошибка');
-                    this.error = `Ошибка: ${e.message}`;
-                }
-            }
-        } finally {
-            this.refreshing = false;
-            this.loadingMessage = '';
-        }
+        await this.refreshSearch('series', 'Поиск серий...');
     }
 }
 

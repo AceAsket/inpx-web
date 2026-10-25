@@ -67,7 +67,6 @@ import BaseList from '../BaseList';
 
 import * as utils from '../../../share/utils';
 
-import _ from 'lodash';
 
 class TitleList extends BaseList {
     get foundCountMessage() {
@@ -159,59 +158,7 @@ class TitleList extends BaseList {
     }
 
     async refresh() {
-        //параметры запроса
-        const newQuery = this.getQuery();
-        if (_.isEqual(newQuery, this.prevQuery))
-            return;
-        this.prevQuery = newQuery;
-
-        this.queryExecute = newQuery;
-
-        if (this.refreshing)
-            return;
-
-        this.error = '';
-        this.refreshing = true;
-
-        (async() => {
-            await utils.sleep(500);
-            if (this.refreshing)
-                this.loadingMessage = 'Поиск книг...';
-        })();
-
-        try {
-            while (this.queryExecute) {
-                const query = this.queryExecute;
-                this.queryExecute = null;
-
-                try {
-                    const response = await this.api.search('title', query);
-
-                    this.list.queryFound = response.found.length;
-                    this.list.totalFound = response.totalFound;
-                    this.list.inpxHash = response.inpxHash;
-
-                    this.searchResult = response;
-
-                    await utils.sleep(1);
-                    if (!this.queryExecute) {
-                        await this.updateTableData();
-                        this.scrollToTop();
-                        this.highlightPageScroller(query);
-                    }
-                } catch (e) {
-                    this.list.queryFound = 0;
-                    this.list.totalFound = 0;
-                    this.searchResult = {found: []};
-                    await this.updateTableData();
-                    //this.$root.stdDialog.alert(e.message, 'Ошибка');
-                    this.error = `Ошибка: ${e.message}`;
-                }
-            }
-        } finally {
-            this.refreshing = false;
-            this.loadingMessage = '';
-        }
+        await this.refreshSearch('title', 'Поиск книг...');
     }
 }
 

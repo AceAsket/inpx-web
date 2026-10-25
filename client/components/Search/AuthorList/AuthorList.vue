@@ -454,7 +454,7 @@ class AuthorList extends BaseList {
         }
     }
 
-    async updateTableData() {
+    async updateTableData(request = null) {
         let result = [];
 
         const expandedSet = new Set(this.expandedAuthor);
@@ -490,6 +490,7 @@ class AuthorList extends BaseList {
                     this.getAuthorBooks(item);//no await
                 else 
                     if (await this.getAuthorBooks(item) === false) {
+                        if (request && !this.isCurrentSearch(request)) return;
                         this.tableData = [];
                         return;
                     }
@@ -500,6 +501,7 @@ class AuthorList extends BaseList {
             result.push(item);
         }
 
+        if (request && !this.isCurrentSearch(request)) return;
         if (result.length == 1 && !this.isExpandedAuthor(result[0])) {
             this.expandAuthor(result[0]);
         }
@@ -508,77 +510,18 @@ class AuthorList extends BaseList {
     }
 
     async refresh() {
-        //параметры запроса
-        const newQuery = this.getQuery();
-        if (_.isEqual(newQuery, this.prevQuery))
-            return;
-        this.prevQuery = newQuery;
+        await this.refreshSearch('author', 'Поиск авторов...');
+    }
 
-        //оптимизация, вместо запроса к серверу, берем из кеша
-        if (this.abCacheEnabled && this.search.author && this.search.author[0] == '=') {
-            const authorSearch = this.search.author.substring(1);
-            const author = this.cachedAuthors[authorSearch];
-
-            if (author) {
-                const key = `author-${author.id}-${this.list.inpxHash}`;
-                let data = await authorBooksStorage.getData(key);
-
-                if (data) {
-                    this.list.queryFound = 1;
-                    this.list.totalFound = 1;
-                    this.searchResult = {found: [author]};
-                    await this.updateTableData();
-                    return;
-                }
-            }
-        }
-
-        this.queryExecute = newQuery;
-
-        if (this.refreshing)
-            return;
-
-        this.error = '';
-        this.refreshing = true;
-
-        (async() => {
-            await utils.sleep(500);
-            if (this.refreshing)
-                this.loadingMessage = 'Поиск авторов...';
-        })();
-
+    async getCachedSearchResult(query) {
+        if (!this.abCacheEnabled || !query.author || query.author[0] !== '=') return null;
+        const author = this.cachedAuthors[query.author.substring(1)];
+        if (!author) return null;
         try {
-            while (this.queryExecute) {
-                const query = this.queryExecute;
-                this.queryExecute = null;
-
-                try {
-                    const response = await this.api.search('author', query);
-
-                    this.list.queryFound = response.found.length;
-                    this.list.totalFound = response.totalFound;
-                    this.list.inpxHash = response.inpxHash;
-
-                    this.searchResult = response;
-
-                    await utils.sleep(1);
-                    if (!this.queryExecute) {
-                        await this.updateTableData();
-                        this.scrollToTop();
-                        this.highlightPageScroller(query);
-                    }
-                } catch (e) {
-                    this.list.queryFound = 0;
-                    this.list.totalFound = 0;
-                    this.searchResult = {found: []};
-                    await this.updateTableData();
-                    //this.$root.stdDialog.alert(e.message, 'Ошибка');
-                    this.error = `Ошибка: ${e.message}`;
-                }
-            }
-        } finally {
-            this.refreshing = false;
-            this.loadingMessage = '';
+            const data = await authorBooksStorage.getData('author-' + author.id + '-' + this.list.inpxHash);
+            return data ? {found: [author], totalFound: 1, inpxHash: this.list.inpxHash} : null;
+        } catch (error) {
+            return null;
         }
     }
 }

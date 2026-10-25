@@ -26,14 +26,6 @@ const componentOptions = {
     components: {
         NumInput
     },
-    watch: {
-        modelValue(newValue) {
-            this.page = newValue;
-        },
-        page(newValue) {
-            this.$emit('update:modelValue', newValue);
-        },
-    }
 };
 class PageScroller {
     _options = componentOptions;
@@ -43,7 +35,13 @@ class PageScroller {
         pageCount: Number,
     };
 
-    page = 1;
+    get page() {
+        return this.modelValue || 1;
+    }
+
+    set page(value) {
+        this.$emit('update:modelValue', value);
+    }
     highlight = false;
 
     created() {

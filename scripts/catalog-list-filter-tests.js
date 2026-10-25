@@ -157,3 +157,4 @@ async function testCatalogTitlePaginationRendersEveryMatchedRow() {
 module.exports = [testCatalogWebAndOpdsWordFilters, testCatalogWebAndOpdsOperatorsAndMetadataFilters,
     testCatalogTitlePaginationRendersEveryMatchedRow];
 module.exports.createWebList = createWebList;
+module.exports.loadClient = loadClient;

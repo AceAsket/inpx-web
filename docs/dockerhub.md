@@ -27,6 +27,8 @@
 | `1.8.0` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.0`. |
 | `1.8.0-silero` | Отдельный сервис озвучки для стабильной версии. |
+| `1.8.1-rc.1` | Проверка исправлений страницы поиска, истории переходов, очереди запросов и поддержки `7zz`. |
+| `1.8.1-rc.1-silero` | Сервис озвучки для RC; существующий Silero из 1.8.0 совместим. |
 | `lite`, `*-lite` | Облегчённые сборки без конвертации; их версии могут отставать от основного образа. |
 
 Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md).
@@ -135,6 +137,8 @@ Version 1.8.0 fixes empty search-result pages: web lists and OPDS use the same w
 | `1.8.0` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.0`. |
 | `1.8.0-silero` | Separate speech service for the stable release. |
+| `1.8.1-rc.1` | Test search pagination, navigation history, request isolation and `7zz` support. |
+| `1.8.1-rc.1-silero` | Speech service for the RC; existing Silero 1.8.0 remains compatible. |
 | `lite`, `*-lite` | Smaller builds without conversion; their versions may lag behind the main image. |
 
 Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md) for changes.

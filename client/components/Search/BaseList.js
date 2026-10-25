@@ -11,6 +11,7 @@ const {match: catalogMatch} = require('../../../shared/CatalogSearch');
 
 const showMoreCount = 100;//значение для "Показать еще"
 const maxItemCount = 500;//выше этого значения показываем "Загрузка"
+let nextSearchRequestId = 0;
 
 const componentOptions = {
     components: {
@@ -67,6 +68,10 @@ export default class BaseList {
 
     //stuff
     refreshing = false;
+    requestedSearch = null;
+    queuedSearch = null;
+    searchRequestId = 0;
+    searchDisposed = false;
 
     showMoreCount = showMoreCount;
     maxItemCount = maxItemCount;
@@ -84,6 +89,90 @@ export default class BaseList {
 
     mounted() {
         this.refresh();//no await
+    }
+
+    beforeUnmount() {
+        this.searchDisposed = true;
+        this.queuedSearch = null;
+        if (this.list.searchRequestId === this.searchRequestId)
+            this.list.searchRequestId = ++nextSearchRequestId;
+    }
+
+    getPaginationContext(query = this.getQuery()) {
+        return _.omit(query, ['page', 'limit', 'offset']);
+    }
+
+    isCurrentSearch(request) {
+        return !this.searchDisposed && this.list.searchRequestId === request.id && _.isEqual(this.getQuery(), request.query);
+    }
+
+    async getCachedSearchResult() {
+        return null;
+    }
+
+    async refreshSearch(kind, message) {
+        const query = this.getQuery();
+        if (this.searchDisposed)
+            return;
+        if (this.requestedSearch && this.isCurrentSearch(this.requestedSearch))
+            return;
+        if (_.isEqual(query, this.prevQuery) && !this.error && this.list.totalFound >= 0 && this.list.searchRequestId === this.searchRequestId)
+            return;
+
+        const request = {id: ++nextSearchRequestId, query};
+        this.searchRequestId = request.id;
+        this.requestedSearch = request;
+        this.queuedSearch = request;
+        this.list.searchRequestId = request.id;
+        this.list.totalFound = -1;
+        this.error = '';
+        if (this.refreshing)
+            return;
+
+        this.refreshing = true;
+        const timer = setTimeout(() => {
+            if (!this.searchDisposed) this.loadingMessage = message;
+        }, 500);
+        try {
+            while (this.queuedSearch) {
+                const current = this.queuedSearch;
+                this.queuedSearch = null;
+                try {
+                    const cached = await this.getCachedSearchResult(current.query);
+                    if (!this.isCurrentSearch(current)) continue;
+                    const response = cached || await (kind === 'books'
+                        ? this.api.bookSearch(current.query) : this.api.search(kind, current.query));
+                    if (!this.isCurrentSearch(current)) continue;
+                    this.error = '';
+                    this.prevQuery = _.cloneDeep(current.query);
+                    this.searchResult = response;
+                    this.list.queryContext = this.getPaginationContext(current.query);
+                    this.list.queryFound = response.found.length;
+                    this.list.totalFound = response.totalFound;
+                    if (response.inpxHash !== undefined) this.list.inpxHash = response.inpxHash;
+                    await utils.sleep(1);
+                    if (!this.isCurrentSearch(current)) continue;
+                    await this.updateTableData(current);
+                    if (!this.isCurrentSearch(current)) continue;
+                    this.scrollToTop();
+                    this.highlightPageScroller(current.query);
+                } catch (error) {
+                    if (!this.isCurrentSearch(current)) continue;
+                    this.prevQuery = null;
+                    this.error = `Ошибка: ${error.message}`;
+                    this.searchResult = {found: []};
+                    this.list.queryFound = 0;
+                    // A failed request has no known count: do not clamp the page.
+                    this.list.totalFound = -1;
+                    await this.updateTableData(current);
+                }
+            }
+        } finally {
+            clearTimeout(timer);
+            this.requestedSearch = null;
+            this.refreshing = false;
+            this.loadingMessage = '';
+        }
     }
 
     loadSettings() {

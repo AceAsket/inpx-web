@@ -581,7 +581,6 @@ import DivBtn from '../share/DivBtn.vue';
 import Dialog from '../share/Dialog.vue';
 
 import * as utils from '../../share/utils';
-import diffUtils from '../../share/diffUtils';
 
 import _ from 'lodash';
 
@@ -641,9 +640,6 @@ const componentOptions = {
             handler(newValue) {
                 this.limit = newValue.limit;
 
-                if (this.pageCount > 1)
-                    this.prevPage = this.search.page;
-
                 this.makeTitle();
                 this.updateRouteQueryFromSearch();
                 this.updateSearchDate(true);
@@ -689,7 +685,7 @@ const componentOptions = {
             handler(newValue) {
                 this.updateGenreTreeIfNeeded();
 
-                if (this.prevList.totalFound != newValue.totalFound) {
+                if (this.prevList.totalFound != newValue.totalFound || this.prevList.searchRequestId !== newValue.searchRequestId) {
                     this.updatePageCount();
                     this.$nextTick(() => {
                         this.foundCountMessage = this.$refs.list ? this.$refs.list.foundCountMessage : '';
@@ -703,7 +699,8 @@ const componentOptions = {
         selectedList(newValue) {
             if (this.selectedListComponent) {
                 this.pageCount = 1;
-                this.list.totalFound = 0;
+                this.list.totalFound = -1;
+                this.list.searchRequestId = 0;
             }
 
             this.selectedListComponent = this.getSelectedListComponent(newValue);
@@ -840,8 +837,10 @@ class Search {
             for (const f of fields)
                 self[f] = value[f] || '';
 
-            self.page = value.page || 1;
-            self.limit = value.limit || 50;
+            const page = parseInt(value.page, 10);
+            const limit = parseInt(value.limit, 10);
+            self.page = Number.isSafeInteger(page) && page > 0 ? page : 1;
+            self.limit = Math.max(1, Math.min(maxLimit, Number.isFinite(limit) ? limit : 50));
         };
     }
 
@@ -1825,14 +1824,13 @@ class Search {
         if (this.list.totalFound < 0)
             return;
 
-        const prevPageCount = this.pageCount;
+        const activeList = this.$refs.list;
+        if (!activeList || typeof activeList.getPaginationContext !== 'function' || this.list.searchRequestId !== activeList.searchRequestId ||
+            !_.isEqual(this.list.queryContext, activeList.getPaginationContext()))
+            return;
 
         this.pageCount = Math.ceil(this.list.totalFound/this.limit);
         this.pageCount = (this.pageCount < 1 ? 1 : this.pageCount);
-
-        if (this.prevPage && prevPageCount == 1 && this.pageCount > 1 && this.prevPage <= this.pageCount) {
-            this.search.page = this.prevPage;
-        }
 
         if (this.search.page > this.pageCount)
             this.search.page = 1;
@@ -2294,9 +2292,6 @@ class Search {
         if (this.list.liberamaReady)
             this.sendCurrentUrl();
 
-        if (this.routeUpdating)
-            return;
-
         const query = to.query;
 
         this.search.setDefaults(this.search, {
@@ -2339,42 +2334,35 @@ class Search {
         if (!this.isSearchRoute(this.$route))
             return;
 
-        this.routeUpdating = true;
-        try {
-            const oldQuery = this.$route.query;
-            let query = {};
+        const oldQuery = this.$route.query;
+        let query = {};
 
-            const cloned = {};
-            this.search.setDefaults(cloned, this.search);
+        const cloned = {};
+        this.search.setDefaults(cloned, this.search);
 
-            query = _.pickBy(cloned);
+        query = _.pickBy(cloned);
 
-            if (this.search.lang == this.langDefault) {
-                delete query.lang;
-            } else {
-                query.lang = this.search.lang;
-            }
+        if (this.search.lang == this.langDefault) {
+            delete query.lang;
+        } else {
+            query.lang = this.search.lang;
+        }
 
-            if (this.search.hideCopies)
-                query.hideCopies = '1';
-            else
-                delete query.hideCopies;
+        if (this.search.hideCopies)
+            query.hideCopies = '1';
+        else
+            delete query.hideCopies;
 
-            for (const f of this.recStruct) {
-                const field = `ex_${f.field}`;
-                if (this.extSearch[f.field])
-                    query[field] = this.extSearch[f.field];
-            }
+        for (const f of this.recStruct) {
+            const field = `ex_${f.field}`;
+            if (this.extSearch[f.field])
+                query[field] = this.extSearch[f.field];
+        }
 
-            const diff = diffUtils.getObjDiff(oldQuery, query);
-            if (!diffUtils.isEmptyObjDiff(diff)) {
-                this.$router.replace({path: this.selectedList, query});
-            }
-        } finally {
-            (async() => {
-                await utils.sleep(100);
-                this.routeUpdating = false;
-            })();
+        const normalize = value => Object.fromEntries(Object.entries(value).map(([key, item]) =>
+            [key, Array.isArray(item) ? item.map(String) : item === null ? null : String(item)]));
+        if (!_.isEqual(normalize(oldQuery), normalize(query))) {
+            this.$router.replace({path: this.selectedList, query});
         }
     }
 

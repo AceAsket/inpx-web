@@ -131,7 +131,7 @@ function missingSevenZipMessage() {
         return `Не найден 7-Zip CLI для чтения 7z-архивов с обложками. Установите 7-Zip или положите 7za.exe/7z.exe в каталог bin рядом с inpx-web.exe. Ссылка: ${SEVEN_ZIP_DOWNLOAD_URL}`;
     }
 
-    return `Не найден 7-Zip CLI для чтения 7z-архивов с обложками. Установите 7z/7za через пакетный менеджер вашей системы. Ссылка: ${SEVEN_ZIP_DOWNLOAD_URL}`;
+    return `Не найден 7-Zip CLI для чтения 7z-архивов с обложками. Установите 7z/7za/7zz через пакетный менеджер вашей системы. Ссылка: ${SEVEN_ZIP_DOWNLOAD_URL}`;
 }
 
 function missingDjxlMessage() {
