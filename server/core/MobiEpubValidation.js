@@ -76,8 +76,11 @@ async function validateEpubForMobi(file) {
             const check = value => checkReference(value, directory === '.' ? '' : directory);
             // Inspect every UTF-8 resource, regardless of its extension: OPF can
             // declare HTML or CSS under an arbitrary archive filename.
-            for (const match of content.matchAll(/\b(?:[\w-]+:)?(?:href|src|full-path|poster|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+))/gi))
-                check(match[1] ?? match[2] ?? match[3]);
+            for (const match of content.matchAll(/\b(?:[\w-]+:)?(?:href|src|full-path|poster|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+))/gi)) {
+                const value = match[1] ?? match[2] ?? match[3];
+                if (/\bfull-path\s*=/i.test(match[0])) checkReference(value, '');
+                else check(value);
+            }
             const css = he.decode(content).replace(/\/\*[\s\S]*?\*\//g, '')
                 .replace(/\\([0-9a-f]{1,6})\s?|\\([^\r\n])/gi, (_, hex, char) => hex ? String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff)) : char);
             for (const match of css.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)|@import\s+(?:"([^"]*)"|'([^']*)')/gi))
