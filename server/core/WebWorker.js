@@ -57,6 +57,20 @@ const bookAssetVersion = 'fblibrary-assets-v5';
 const fb2AssetVersion = 'fb2-encoding-v6';
 const bookInfoVersion = 'fb2-encoding-v8';
 
+//fn для каждого элемента, не больше limit одновременно; результаты в порядке items
+async function mapLimit(items, limit, fn) {
+    const results = new Array(items.length);
+    let next = 0;
+    const worker = async() => {
+        while (next < items.length) {
+            const i = next++;
+            results[i] = await fn(items[i], i);
+        }
+    };
+    await Promise.all(Array.from({length: Math.min(limit, items.length)}, worker));
+    return results;
+}
+
 function assetVersionFor(ext) {
     return String(ext || '').toLowerCase() === 'fb2' ? fb2AssetVersion : bookAssetVersion;
 }
@@ -902,6 +916,7 @@ class WebWorker {
             this.setMyState(ssNormal);
 
             log('Searcher DB ready');
+            this.warmReviewIndexes();
             this.logServerStats();
         } catch (e) {
             log(LM_FATAL, e.message);            
@@ -6284,34 +6299,34 @@ class WebWorker {
         const reviews = [];
         const seen = new Set();
 
-        for (const match of matches) {
+        //каждый архив отзывов читается отдельным процессом 7-Zip, поэтому параллельно
+        const lists = await mapLimit(matches, os.availableParallelism(), async(match) => {
             const zipReader = new ZipReader(this.config);
             try {
                 await zipReader.open(match.archive, false);
-                const raw = await zipReader.extractToBuf(match.entryName);
-                const parsed = JSON.parse(decodeArchiveText(raw));
-                if (!Array.isArray(parsed))
-                    continue;
-
-                for (const item of parsed) {
-                    if (!item || typeof(item) !== 'object')
-                        continue;
-
-                    const review = {
-                        name: String(item.name || '').trim() || 'Аноним',
-                        time: String(item.time || '').trim(),
-                        text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
-                    };
-                    const key = JSON.stringify(review);
-                    if (!seen.has(key)) {
-                        seen.add(key);
-                        reviews.push(review);
-                    }
-                }
+                const parsed = JSON.parse(decodeArchiveText(await zipReader.extractToBuf(match.entryName)));
+                return (Array.isArray(parsed) ? parsed : []);
             } catch(e) {
                 log(LM_WARN, `review entry ${match.archive}:${match.entryName}: ${e.message}`);
+                return [];
             } finally {
                 await zipReader.close();
+            }
+        });
+
+        for (const item of lists.flat()) {
+            if (!item || typeof(item) !== 'object')
+                continue;
+
+            const review = {
+                name: String(item.name || '').trim() || 'Аноним',
+                time: String(item.time || '').trim(),
+                text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
+            };
+            const key = JSON.stringify(review);
+            if (!seen.has(key)) {
+                seen.add(key);
+                reviews.push(review);
             }
         }
 
@@ -6449,6 +6464,22 @@ class WebWorker {
             if (e.message.indexOf('ENOENT') >= 0)
                 throw new Error('404 Файл не найден');
             throw e;
+        }
+    }
+
+    //Индекс отзывов строится долго (сотни архивов), поэтому строим его при запуске,
+    //а не при открытии первой карточки
+    warmReviewIndexes() {
+        const dirs = new Set([this.config.libDir, ...getEnabledLibrarySources(this.config).map(source => source.libDir)].filter(Boolean));
+        for (const dir of dirs) {
+            (async() => {
+                const state = await this.getReviewArchiveState(dir);
+                await this.ensureReviewIndex(dir, state);
+                if (!state.ratingsPromise)
+                    state.ratingsPromise = this.readLibraryRatings(state.archives);
+                await state.ratingsPromise;
+                log(`Review index ready: ${dir}`);
+            })().catch(e => log(LM_WARN, `review index ${dir}: ${e.message}`));
         }
     }
 
