@@ -567,14 +567,22 @@ module.exports = (app, config, webWorker = null, security = null) => {
             const cacheKey = require('./core/BookAssets').coverCacheKey(book);
             if (await sendCachedCover(res, cacheDir, cacheKey))
                 return;
-            const cover = await webWorker.getBookCover(book);
-            if (!cover) {
-                res.sendStatus(404);
-                return;
-            }
-            await writeCachedCover(cacheDir, cacheKey, cover);
-            res.set('Cache-Control', 'public, max-age=2592000, immutable');
-            res.type(cover.contentType).send(cover.data);
+            //Обложки списка - фоновая работа: они не должны задерживать открытую карточку.
+            //Пока запрос ждёт очереди, обложку мог сохранить в кэш другой запрос
+            await webWorker.runBackground(async() => {
+                if (await sendCachedCover(res, cacheDir, cacheKey))
+                    return;
+                const cover = await webWorker.getBookCover(book);
+                if (!cover) {
+                    //без кэша браузер снова запрашивает обложку, которой нет, при каждом показе списка
+                    res.set('Cache-Control', 'public, max-age=86400');
+                    res.sendStatus(404);
+                    return;
+                }
+                await writeCachedCover(cacheDir, cacheKey, cover);
+                res.set('Cache-Control', 'public, max-age=2592000, immutable');
+                res.type(cover.contentType).send(cover.data);
+            }, () => req.socket.destroyed);
         } catch (error) {
             if (externalTools.isMissingToolError(error)) {
                 logRuntimeWarningOnce(error.message);
