@@ -96,6 +96,7 @@ class AuthorPage extends BasePage {
                             id: 'all_series_books',
                             title: '[Все книги серии]',
                             link: this.navLink({
+                                req,
                                 href: `/${this.id}?author=${encodeURIComponent(query.author)}` +
                                     `&series=${encodeURIComponent(query.series)}&all=1`}),
                         })
@@ -109,7 +110,7 @@ class AuthorPage extends BasePage {
                         this.makeEntry({
                             id: book._uid,
                             title,
-                            link: this.acqLink({href: `/book?uid=${encodeURIComponent(book._uid)}`}),
+                            link: this.acqLink({req, href: `/book?uid=${encodeURIComponent(book._uid)}`}),
                             content: {
                                 '*ATTRS': {type: 'text'},
                                 '*TEXT': this.bookAuthor(book.author),
@@ -133,6 +134,7 @@ class AuthorPage extends BasePage {
                                 id: b.book._uid,
                                 title: `Серия: ${b.book.series}`,
                                 link: this.navLink({
+                                    req,
                                     href: `/${this.id}?author=${encodeURIComponent(query.author)}` +
                                         `&series=${encodeURIComponent(b.book.series)}&genre=${encodeURIComponent(query.genre)}`}),
                                 content: {
@@ -147,7 +149,7 @@ class AuthorPage extends BasePage {
                             this.makeEntry({
                                 id: b.book._uid,
                                 title,
-                                link: this.acqLink({href: `/book?uid=${encodeURIComponent(b.book._uid)}`}),
+                                link: this.acqLink({req, href: `/book?uid=${encodeURIComponent(b.book._uid)}`}),
                                 content: {
                                     '*ATTRS': {type: 'text'},
                                     '*TEXT': this.bookAuthor(b.book.author),
@@ -163,7 +165,7 @@ class AuthorPage extends BasePage {
                     this.makeEntry({
                         id: 'select_genre',
                         title: '[Выбрать жанр]',
-                        link: this.navLink({href: `/genre?from=${this.id}`}),
+                        link: this.navLink({req, href: `/genre?from=${this.id}`}),
                     })
                 );
             }
@@ -175,7 +177,7 @@ class AuthorPage extends BasePage {
                 const e = {
                     id: rec.id,
                     title: this.bookAuthor(rec.title),
-                    link: this.navLink({href: `/${this.id}?author=${rec.q}&genre=${encodeURIComponent(query.genre)}`}),
+                    link: this.navLink({req, href: `/${this.id}?author=${rec.q}&genre=${encodeURIComponent(query.genre)}`}),
                 };
 
                 let countStr = '';

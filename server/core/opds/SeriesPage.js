@@ -56,6 +56,7 @@ class SeriesPage extends BasePage {
                             id: 'all_series_books',
                             title: '[Все книги серии]',
                             link: this.navLink({
+                                req,
                                 href: `/${this.id}?series=${encodeURIComponent(query.series)}&all=1`}),
                         })
                     );
@@ -68,7 +69,7 @@ class SeriesPage extends BasePage {
                         this.makeEntry({
                             id: book._uid,
                             title,
-                            link: this.acqLink({href: `/book?uid=${encodeURIComponent(book._uid)}`}),
+                            link: this.acqLink({req, href: `/book?uid=${encodeURIComponent(book._uid)}`}),
                             content: {
                                 '*ATTRS': {type: 'text'},
                                 '*TEXT': this.bookAuthor(book.author),
@@ -83,7 +84,7 @@ class SeriesPage extends BasePage {
                     this.makeEntry({
                         id: 'select_genre',
                         title: '[Выбрать жанр]',
-                        link: this.navLink({href: `/genre?from=${this.id}`}),
+                        link: this.navLink({req, href: `/genre?from=${this.id}`}),
                     })
                 );
             }
@@ -95,7 +96,7 @@ class SeriesPage extends BasePage {
                 const e = {
                     id: rec.id,
                     title: (rec.count ? rec.title : `Серия: ${rec.title}`),
-                    link: this.navLink({href: `/${this.id}?series=${rec.q}&genre=${encodeURIComponent(query.genre)}`}),
+                    link: this.navLink({req, href: `/${this.id}?series=${rec.q}&genre=${encodeURIComponent(query.genre)}`}),
                 };
 
                 let countStr = '';

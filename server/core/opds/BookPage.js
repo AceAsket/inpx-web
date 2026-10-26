@@ -4,6 +4,10 @@ const dayjs = require('dayjs');
 
 const BasePage = require('./BasePage');
 const Fb2Parser = require('../fb2/Fb2Parser');
+const {safeHtml} = require('../../../shared/safeHtml');
+const he = require('he');
+
+const navigationType = 'application/atom+xml;profile=opds-catalog;kind=navigation';
 
 class BookPage extends BasePage {
     constructor(config) {
@@ -61,6 +65,8 @@ class BookPage extends BasePage {
         ];
 
         const valueToString = (value, nodePath, b) => {//eslint-disable-line no-unused-vars
+            if (value === undefined || value === null)
+                return '';
             if (nodePath == 'fileInfo/file')
                 return `${value}.${b.ext}`;
 
@@ -116,17 +122,40 @@ class BookPage extends BasePage {
         return result;
     }    
 
-    htmlInfo(title, infoList) {
+    catalogHref(kind, value, req) {
+        return this.scopedHref(`${this.opdsRoot}/${kind}`, req, {[kind]: `=${value}`});
+    }
+
+    catalogAnchor(kind, value, label, req) {
+        const href = this.catalogHref(kind, value, req);
+        return `<a href="${this.escape(href)}" type="${navigationType}">${this.escape(String(label || value))}</a>`;
+    }
+
+    authorNames(value) {
+        return (Array.isArray(value) ? value : String(value || '').split(','))
+            .map(name => String(name || '').trim()).filter(Boolean);
+    }
+
+    authorsHtml(value, req) {
+        return this.authorNames(value).map(name => this.catalogAnchor('author', name, name, req)).join(', ');
+    }
+
+    seriesHtml(value, number, req) {
+        const name = String(value || '').trim();
+        return name ? this.catalogAnchor('series', name, [name, number].filter(Boolean).join(' #'), req) : '';
+    }
+
+    htmlInfo(title, infoList, renderValue = null) {
         let info = '';
         for (const part of infoList) {
             if (part.value.length)
-                info += `<h3>${part.label}</h3>`;
+                info += `<h3>${this.escape(part.label)}</h3>`;
             for (const rec of part.value)
-                info += `<p>${rec.label}: ${rec.value}</p>`;
+                info += `<p>${this.escape(rec.label)}: ${renderValue ? renderValue(rec, part) : this.escape(String(rec.value))}</p>`;
         }
 
         if (info)
-            info = `<h2>${title}</h2>${info}`;
+            info = `<h2>${this.escape(title)}</h2>${info}`;
 
         return info;
     }
@@ -186,8 +215,11 @@ class BookPage extends BasePage {
                 });
 
                 //author bookInfo
-                if (bookInfo.book.author) {
-                    e.author = bookInfo.book.author.split(',').map(a => ({name: a}));
+                const atomAuthors = names => this.authorNames(names).map(name => ({
+                    name: this.escape(name), uri: this.escape(this.catalogHref('author', name, req)),
+                }));
+                if (this.authorNames(bookInfo.book.author).length) {
+                    e.author = atomAuthors(bookInfo.book.author);
                 }
 
                 e['dc:language'] = bookInfo.book.lang;
@@ -201,7 +233,7 @@ class BookPage extends BasePage {
                     e['dc:format'] = `application/${ext}`;
 
                 //genre
-                const genre = bookInfo.book.genre.split(',');
+                const genre = String(bookInfo.book.genre || '').split(',');
                 for (const g of genre) {
                     const genreName = genreMap.get(g);
                     if (genreName) {
@@ -224,10 +256,10 @@ class BookPage extends BasePage {
                     if (infoObj.titleInfo) {
                         //author fb2Info
                         if (!e.author && infoObj.titleInfo.author.length) {
-                            e.author = infoObj.titleInfo.author.map(a => ({name: a}));
+                            e.author = atomAuthors(infoObj.titleInfo.author.map(name => he.decode(name)));
                         }
 
-                        ann = infoObj.titleInfo.annotationHtml || '';
+                        ann = safeHtml(infoObj.titleInfo.annotationHtml || '');
                         const self = this;
                         const infoList = parser.bookInfoList(infoObj, {
                             valueToString(value, nodePath, origVTS) {//eslint-disable-line no-unused-vars
@@ -239,17 +271,32 @@ class BookPage extends BasePage {
                             },
                         });
 
-                        info += this.htmlInfo('Fb2 инфо', infoList);
+                        info += this.htmlInfo('Fb2 инфо', infoList, (rec, part) => {
+                            const value = infoObj[part.name][rec.name];
+                            if (rec.name === 'author' && ['titleInfo', 'srcTitleInfo'].includes(part.name))
+                                return this.authorsHtml(value.map(name => he.decode(name)), req);
+                            if (rec.name === 'sequence')
+                                return value.map(series => this.seriesHtml(he.decode(series.name || ''), series.num, req)).filter(Boolean).join(', ');
+                            if (rec.name === 'historyHtml')
+                                return safeHtml(rec.value);
+                            return this.escape(he.decode(String(rec.value)));
+                        });
                     }
                 }
 
                 //content
-                info += this.htmlInfo('Inpx инфо', this.inpxInfo(bookInfo.book));
+                info += this.htmlInfo('Inpx инфо', this.inpxInfo(bookInfo.book), (rec, part) => {
+                    if (part.name === 'titleInfo' && rec.name === 'author')
+                        return this.authorsHtml(bookInfo.book.author, req);
+                    if (part.name === 'titleInfo' && rec.name === 'series')
+                        return this.seriesHtml(bookInfo.book.series, bookInfo.book.serno, req);
+                    return this.escape(String(rec.value));
+                });
 
                 content = `${ann}${info}`;
                 if (content) {
                     e.content = {
-                        '*ATTRS': {type: 'text/html'},
+                        '*ATTRS': {type: 'html'},
                         '*TEXT': this.escape(content),
                     };
                 }
@@ -258,6 +305,16 @@ class BookPage extends BasePage {
                 e.link = [];
                 for (const item of links)
                     e.link.push(this.downLink(item));
+
+                // Atom author URIs and collection relations complement the
+                // description links for clients that hide HTML navigation.
+                const collections = new Map();
+                for (const name of this.authorNames(bookInfo.book.author))
+                    collections.set(this.catalogHref('author', name, req), `Книги автора: ${name}`);
+                if (String(bookInfo.book.series || '').trim())
+                    collections.set(this.catalogHref('series', bookInfo.book.series.trim(), req), `Серия: ${bookInfo.book.series}`);
+                for (const [href, title] of collections)
+                    e.link.push(this.makeLink({href, rel: 'collection', type: navigationType, title: this.escape(title)}));
 
                 let coverHref = bookInfo.cover || '';
                 let coverType = 'image/jpeg';

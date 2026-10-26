@@ -148,6 +148,7 @@ async function testMobiAvailabilityInWebAndOpds() {
         for (const enabled of [true, false]) {
             const book = {_uid:'test', ext, title:'Книга', genre:'', author:'Автор'};
             const page = Object.create(BookPage.prototype);
+            page.opdsRoot = '/opds';
             page.config = {conversionEnabled:true, mobiEnabled:enabled, bookPathStatic:'/book'};
             page.webWorker = {getGenreMap:async() => new Map(), getBookRecordByUid:async() => book,
                 applyMetadataOverridesToSearchResult:async() => {}, getBookInfo:async() => ({bookInfo:{book, fb2:false}})};
@@ -155,9 +156,10 @@ async function testMobiAvailabilityInWebAndOpds() {
             page.makeBody = value => value; page.downLink = value => value; page.imgLink = value => value;
             page.inpxInfo = () => []; page.htmlInfo = () => '';
             const result = await page.body({query:{uid:'test'}});
-            const converted = result.entry[0].link.filter(link => link.href.includes('format=mobi'));
+            const links = result.entry[0].link.map(link => link['*ATTRS'] || link);
+            const converted = links.filter(link => link.href.includes('format=mobi'));
             assert.strictEqual(converted.length, enabled && ext !== 'mobi' ? 1 : 0);
-            assert.ok(result.entry[0].link.some(link => link.href.includes('format=raw')), 'Original link remains first-class');
+            assert.ok(links.some(link => link.href.includes('format=raw')), 'Original link remains first-class');
         }
     }
 }
