@@ -499,7 +499,39 @@ async function testEpubReusesImageArchiveReadersAndClosesOnFailure() {
     });
 }
 
+async function testFb2ImagesDecodeInParallelAndKeepOrder() {
+    await temporary(async dir => {
+        const source = path.join(dir, 'source');
+        const folder = 'f.fb2-12000-12999.7z';
+        const count = 12;
+        await fs.outputFile(path.join(source, folder), '');
+        await archive(path.join(source, 'images', 'f.fb2-12000-12999.zip'),
+            Object.fromEntries(Array.from({length: count}, (_, num) => [`12345/${num}`, `image-${num}`])));
+        const worker = Object.create(require('../server/core/WebWorker').prototype);
+        worker.config = {libDir: source, tempDir: path.join(dir, 'tmp')};
+        const imageUtils = require('../server/core/ImageUtils');
+        const original = imageUtils.normalizeForFb2;
+        let active = 0, maxActive = 0;
+        // Ранние картинки декодируются дольше поздних, чтобы порядок завершения отличался от порядка в книге.
+        imageUtils.normalizeForFb2 = async data => {
+            maxActive = Math.max(maxActive, ++active);
+            await new Promise(resolve => setTimeout(resolve, (count - Number(data.toString().split('-')[1])) * 5));
+            active--;
+            return {data, contentType: 'image/png'};
+        };
+        try {
+            const images = await worker.getFblibraryImages(12345, source, folder);
+            assert.deepStrictEqual(images.map(image => image.id), Array.from({length: count}, (_, num) => String(num)));
+            assert.deepStrictEqual(images.map(image => image.data.toString()), Array.from({length: count}, (_, num) => `image-${num}`));
+            if (os.availableParallelism() > 1)
+                assert.ok(maxActive > 1, 'Картинки FB2 должны декодироваться параллельно');
+        } finally {
+            imageUtils.normalizeForFb2 = original;
+        }
+    });
+}
+
 module.exports = [testAtomicBookCacheFilesAndRecovery, testJxlCodestreamAndContainerImagesAreRecognized, testCompressedEpubDownloadsRestoreImagesAndInvalidateCache,
     testEpubContainersPreserveResourcesAndOrdinaryEpubBytes, testInvalidCompressedEpubDoesNotPublishPartialResults,
     testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads, testSolidEpubExtractsAllChaptersOnce,
-    testEpubReusesImageArchiveReadersAndClosesOnFailure];
+    testEpubReusesImageArchiveReadersAndClosesOnFailure, testFb2ImagesDecodeInParallelAndKeepOrder];

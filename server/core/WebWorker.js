@@ -56,6 +56,20 @@ const bookAssetVersion = 'fblibrary-assets-v5';
 const fb2AssetVersion = 'fb2-encoding-v6';
 const bookInfoVersion = 'fb2-encoding-v8';
 
+//fn для каждого элемента, не больше limit одновременно; результаты в порядке items
+async function mapLimit(items, limit, fn) {
+    const results = new Array(items.length);
+    let next = 0;
+    const worker = async() => {
+        while (next < items.length) {
+            const i = next++;
+            results[i] = await fn(items[i], i);
+        }
+    };
+    await Promise.all(Array.from({length: Math.min(limit, items.length)}, worker));
+    return results;
+}
+
 function assetVersionFor(ext) {
     return String(ext || '').toLowerCase() === 'fb2' ? fb2AssetVersion : bookAssetVersion;
 }
@@ -5336,20 +5350,23 @@ class WebWorker {
                         return ai - bi;
                     });
 
-                const result = [];
-                for (const entryName of entryNames) {
+                //djxl запускается отдельным процессом на каждую картинку, поэтому
+                //декодируем параллельно по числу ядер
+                const images = await mapLimit(entryNames, os.availableParallelism(), async(entryName) => {
                     const id = entryName.substring(prefix.length);
                     if (!id)
-                        continue;
+                        return null;
 
                     try {
                         const data = await zipReader.extractToBuf(entryName);
-                        result.push(Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir), this.config.converterPaths)));
+                        return Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir), this.config.converterPaths));
                     } catch(e) {
                         log(LM_ERR, `image ${entryName}: ${e.message}`);
+                        return null;
                     }
-                }
+                });
 
+                const result = images.filter(Boolean);
                 if (result.length)
                     return result;
             } finally {
