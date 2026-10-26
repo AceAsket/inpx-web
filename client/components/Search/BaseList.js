@@ -346,6 +346,11 @@ export default class BaseList {
     }
 
     async download(book, action, format = '') {
+        if (action == 'bookInfo' || action == 'authorInfo') {
+            await this.openBookCard(book, (action == 'authorInfo' ? 'author' : 'fb2'));
+            return;
+        }
+
         if (this.downloadFlag)
             return;
 
@@ -364,18 +369,6 @@ export default class BaseList {
         try {
             if (action === 'readBook' && this.config.onlineReaderEnabled && String(book.ext || '').toLowerCase() === 'fb2') {
                 await this.$router.push({path: '/reader', query: {bookUid: book._uid}});
-                return;
-            }
-
-            if (action == 'bookInfo' || action == 'authorInfo') {
-                const response = await this.api.getBookInfo(book._uid);
-                if (response.bookInfo && response.bookInfo.book && response.bookInfo.book.size > 0)
-                    book.size = response.bookInfo.book.size;
-                this.$emit('listEvent', {
-                    action: 'bookInfo',
-                    data: response.bookInfo,
-                    tab: (action == 'authorInfo' ? 'author' : 'fb2'),
-                });
                 return;
             }
 
@@ -457,6 +450,22 @@ export default class BaseList {
             this.downloadFlag = false;
             this.loadingMessage2 = '';
         }
+    }
+
+    //Карточка открывается сразу с данными строки списка, описание FB2 и отзывы приходят позже
+    async openBookCard(book, tab) {
+        this.$emit('listEvent', {action: 'bookInfo', data: {book, loading: true}, tab});
+
+        let data = {book};
+        try {
+            const response = await this.api.getBookCard(book._uid);
+            data = response.bookInfo || data;
+            if (data.book && data.book.size > 0)
+                book.size = data.book.size;
+        } catch(e) {
+            this.$root.stdDialog.alert(await this.getErrorMessage(e), 'Ошибка');
+        }
+        this.$emit('listEvent', {action: 'bookInfoLoaded', data, bookUid: book._uid});
     }
 
     getBookUid(book = {}) {

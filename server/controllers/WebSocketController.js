@@ -192,6 +192,8 @@ class WebSocketController {
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
                     await this.getBookInfo(req, ws); break;
+                case 'get-book-gallery':
+                    await this.getBookGallery(req, ws); break;
                 case 'get-reader-state':
                     await this.getReaderState(req, ws); break;
                 case 'prepare-reader-audio':
@@ -698,9 +700,17 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error(`bookUid is empty`);
 
-        const result = await this.webWorker.getBookInfo(req.bookUid, {readerOnly: req.readerOnly === true});
+        const result = (req.card === true ? await this.webWorker.getBookCardInfo(req.bookUid)
+            : await this.webWorker.getBookInfo(req.bookUid, {readerOnly: req.readerOnly === true}));
 
         this.send(result, req, ws);
+    }
+
+    async getBookGallery(req, ws) {
+        if (!utils.hasProp(req, 'bookUid'))
+            throw new Error(`bookUid is empty`);
+
+        this.send(await this.webWorker.getBookGallery(req.bookUid), req, ws);
     }
 
     async getReadingLists(req, ws) {

@@ -1865,6 +1865,11 @@ class Search {
                 this.bookInfoDialogTab = (event.tab || 'fb2');
                 this.bookInfoDialogVisible = true;
                 break;
+            case 'bookInfoLoaded':
+                //пользователь мог закрыть карточку или открыть другую
+                if (this.bookInfoDialogVisible && this.bookInfo.book && this.bookInfo.book._uid === event.bookUid)
+                    this.bookInfo = event.data;
+                break;
             case 'manageReadingLists':
                 this.openReadingLists(event.book || null);
                 break;

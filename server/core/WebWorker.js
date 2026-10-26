@@ -10,6 +10,7 @@ const nodemailer = require('nodemailer');
 const yazl = require('yazl');
 
 const ZipReader = require('./ZipReader');
+const LockQueue = require('./LockQueue');
 const WorkerState = require('./WorkerState');//singleton
 const { JembaDb, JembaDbThread } = require('jembadb');
 const DbCreator = require('./DbCreator');
@@ -37,6 +38,7 @@ const log = appLogger.log;
 const utils = require('./utils');
 const genreTree = require('./genres');
 const Fb2Helper = require('./fb2/Fb2Helper');
+const Fb2Parser = require('./fb2/Fb2Parser');
 const ConfigManager = require('../config');
 const {getEnabledLibrarySources} = require('./LibrarySources');
 
@@ -57,6 +59,8 @@ const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
 const fb2AssetVersion = 'fb2-encoding-v6';
 const bookInfoVersion = 'fb2-encoding-v8';
+const bookCardVersion = 'card-v1';
+const bookGalleryLimit = 18;
 
 function assetVersionFor(ext) {
     return String(ext || '').toLowerCase() === 'fb2' ? fb2AssetVersion : bookAssetVersion;
@@ -5804,7 +5808,23 @@ class WebWorker {
         return link;
     }
 
+    //одновременные запросы одной книги (карточка в фоне, «Читать», «Скачать»)
+    //ждут одну подготовку
     async getBookLink(bookUid) {
+        if (!this.bookLinkJobs)
+            this.bookLinkJobs = new Map();
+
+        let job = this.bookLinkJobs.get(bookUid);
+        if (!job) {
+            job = this.prepareBookLink(bookUid).finally(() => this.bookLinkJobs.delete(bookUid));
+            this.bookLinkJobs.set(bookUid, job);
+        }
+
+        //вызывающие дополняют результат, поэтому каждому своя копия
+        return Object.assign({}, await job);
+    }
+
+    async prepareBookLink(bookUid) {
         this.checkMyState();
 
         try {
@@ -6463,6 +6483,150 @@ class WebWorker {
                 throw new Error('404 Файл не найден');
             throw e;
         }
+    }
+
+    //Полная подготовка книги в фоне, по одной книге за раз
+    prepareBookInBackground(bookUid) {
+        if (!this.backgroundBookQueue)
+            this.backgroundBookQueue = new LockQueue(8);
+
+        (async() => {
+            await this.backgroundBookQueue.get();
+            try {
+                await this.getBookLink(bookUid);
+            } finally {
+                this.backgroundBookQueue.ret();
+            }
+        })().catch(e => log(LM_WARN, `background book preparation ${bookUid}: ${e.message}`));
+    }
+
+    //Карточке книги нужны описание FB2, содержание и отзывы. Иллюстрации и обложку
+    //не извлекаем: обложку клиент берёт из /cover/by-uid, иллюстрации - из getBookGallery
+    async getBookCardInfo(bookUid) {
+        this.checkMyState();
+
+        const db = this.db;
+        const rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
+        if (!rows.length)
+            throw new Error('404 Файл не найден');
+        const book = {...rows[0]};
+        if (String(book.ext).toLowerCase() !== 'fb2' || this.remoteLib)
+            return await this.getBookInfo(bookUid);
+
+        const cardFile = `${this.config.bookDir}/${utils.getBufHash(bookUid, 'sha256', 'hex')}.card.json`;
+        let card = await fs.readJson(cardFile).catch(() => null);
+        let changed = false;
+        if (!card || card.bookId !== book.id || card.version !== bookCardVersion) {
+            card = Object.assign({bookId: book.id, version: bookCardVersion}, await this.readBookCardFb2(book));
+            changed = true;
+        }
+
+        const reviewState = await this.getReviewArchiveState(book.sourceLibDir);
+        if (card.reviewSignature !== reviewState.signature) {
+            [card.reviews, card.libraryRating] = await Promise.all([
+                this.getBookReviews(book, reviewState), this.getBookLibraryRating(book, reviewState),
+            ]);
+            card.reviewSignature = reviewState.signature;
+            changed = true;
+        }
+
+        if (changed)
+            await fs.writeJson(cardFile, card);
+        else
+            await utils.touchFile(cardFile);
+
+        await this.applyPreparedBookSizesToRows([book]);
+        this.applyMetadataOverrideToBook(book, await this.readingListStore.getMetadataOverrides());
+        //после карточки, чтобы не читать архив книги одновременно с ней
+        this.prepareBookInBackground(bookUid);
+
+        return {bookInfo: {
+            book,
+            cover: '',
+            fb2: card.fb2,
+            contents: card.contents,
+            annotationMeta: card.annotationMeta,
+            galleryCount: Math.min(card.imageCount, bookGalleryLimit),
+            reviews: card.reviews || [],
+            libraryRating: card.libraryRating || null,
+        }};
+    }
+
+    async readBookCardFb2(book) {
+        const extractedFile = await this.extractBook(book.folder, `${book.file}.${book.ext}`, book.sourceLibDir);
+        try {
+            const data = this.fb2Helper.checkEncoding(await this.fb2Helper.decompressIfNeeded(await fs.readFile(extractedFile)));
+            const parser = new Fb2Parser();
+            parser.fromString(data.toString(), {lowerCase: true});
+
+            //в репаках FLibrary иллюстраций в FB2 нет, считаем ссылки на них в тексте
+            const coverId = this.getFb2CoverId(parser);
+            const hrefAttr = `${parser.xlinkNS}:href`;
+            const binaryIds = new Set();
+            for (const node of parser.$$array('/binary')) {
+                const attrs = node.attrs() || {};
+                if (attrs.id && attrs.id !== coverId && String(attrs['content-type'] || '').toLowerCase().startsWith('image/'))
+                    binaryIds.add(attrs.id);
+            }
+            const refIds = new Set();
+            for (const body of parser.$$array('/body')) {
+                body.eachDeepSelf((node) => {
+                    const attrs = (node.name === 'image' ? node.attrs() : null);//Map
+                    const href = (attrs ? String(attrs.get(hrefAttr) || '') : '');
+                    if (href)
+                        refIds.add(href.replace(/^#/, ''));
+                });
+            }
+
+            const result = {
+                contents: this.extractFb2Contents(parser),
+                annotationMeta: this.extractFb2AnnotationMeta(parser),
+                imageCount: binaryIds.size || refIds.size,
+            };
+            if (!result.annotationMeta.stats.images)
+                result.annotationMeta.stats.images = result.imageCount;
+
+            //клиенту и OPDS нужен только <description>
+            parser.remove('body');
+            parser.remove('binary');
+            result.fb2 = parser.rawNodes;
+
+            return result;
+        } finally {
+            await fs.remove(extractedFile);
+        }
+    }
+
+    getFb2CoverId(parser) {
+        const coverImage = parser.$$('/description/title-info/coverpage/image');
+        const href = (coverImage.count ? String((coverImage.attrs() || {})[`${parser.xlinkNS}:href`] || '') : '');
+        return href.replace(/^#/, '');
+    }
+
+    //Первые иллюстрации для галереи карточки. Ждёт полной подготовки книги.
+    async getBookGallery(bookUid) {
+        const {bookInfo} = await this.getBookInfo(bookUid, {readerOnly: true});
+        const images = [];
+        if (!bookInfo.fb2)
+            return {images};
+
+        const parser = new Fb2Parser(bookInfo.fb2);
+        const coverId = this.getFb2CoverId(parser);
+        for (const node of parser.$$array('/binary')) {
+            const attrs = node.attrs() || {};
+            let contentType = String(attrs['content-type'] || '').toLowerCase();
+            if (contentType === 'image/jpg' || contentType === 'application/octet-stream')
+                contentType = 'image/jpeg';
+            const data = node.text();
+            if (!attrs.id || attrs.id === coverId || !data || !contentType.startsWith('image/'))
+                continue;
+
+            images.push({id: attrs.id, contentType, data});
+            if (images.length >= bookGalleryLimit)
+                break;
+        }
+
+        return {images};
     }
 
     //Индекс отзывов строится долго (сотни архивов), поэтому строим его при запуске,
