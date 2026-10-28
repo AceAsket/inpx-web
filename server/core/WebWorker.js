@@ -21,6 +21,7 @@ const ReadingListStore = require('./ReadingListStore');
 const {withFileTransaction} = require('./FilePersistence');
 const sessionLifetime = require('./SessionLifetime');
 const imageUtils = require('./ImageUtils');
+const imageRuntime = require('./ImageRuntime');
 const epubRestorer = require('./EpubRestorer');
 const externalTools = require('./ExternalTools');
 const libraryReviews = require('./LibraryReviews');
@@ -5336,20 +5337,23 @@ class WebWorker {
                         return ai - bi;
                     });
 
-                const result = [];
-                for (const entryName of entryNames) {
+                // Include archive extraction in the shared image budget: a 7z
+                // sidecar starts an external extractor for each illustration.
+                const images = await imageRuntime.map(entryNames, async(entryName) => {
                     const id = entryName.substring(prefix.length);
                     if (!id)
-                        continue;
+                        return null;
 
                     try {
                         const data = await zipReader.extractToBuf(entryName);
-                        result.push(Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir), this.config.converterPaths)));
+                        return Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir), this.config.converterPaths));
                     } catch(e) {
                         log(LM_ERR, `image ${entryName}: ${e.message}`);
+                        return null;
                     }
-                }
+                });
 
+                const result = images.filter(Boolean);
                 if (result.length)
                     return result;
             } finally {

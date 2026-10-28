@@ -4,6 +4,15 @@ const axios = require('axios');
 const FormData = require('form-data');
 const nodemailer = require('nodemailer');
 
+async function testQsCommaSerializationHandlesUntrustedElements() {
+    const qs = require('qs');
+    const value = JSON.parse('{"a":[{"toString":"x"}]}');
+    for (const options of [{arrayFormat:'comma'}, {arrayFormat:'comma', encodeValuesOnly:true}])
+        assert.doesNotThrow(() => qs.stringify(value, options), 'Do not restore the vulnerable qs comma serializer');
+    assert.deepStrictEqual(qs.parse('author=Name%20%26%20Other&filter[lang]=ru&filter[genre]=sf'),
+        {author:'Name & Other', filter:{lang:'ru', genre:'sf'}});
+}
+
 async function testMultipartUploadWithUpdatedAxios() {
     let received;
     const server = http.createServer((req, res) => {
@@ -54,4 +63,4 @@ async function testMailAttachmentWithUpdatedNodemailer() {
     }
 }
 
-module.exports = [testMultipartUploadWithUpdatedAxios, testMailAttachmentWithUpdatedNodemailer];
+module.exports = [testMultipartUploadWithUpdatedAxios, testMailAttachmentWithUpdatedNodemailer, testQsCommaSerializationHandlesUntrustedElements];
