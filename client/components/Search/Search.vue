@@ -503,11 +503,21 @@
                 <PageScroller v-show="pageCount > 1" v-model="search.page" :page-count="pageCount" />
             </div>
 
-            <div class="row justify-center">
-                <div class="project-pill q-mb-lg q-px-sm q-py-xs bg-cyan-2 clickable2" style="border: 1px solid #aaaaaa; border-radius: 6px; white-space: nowrap;" @click.stop.prevent="openReleasePage">
+            <footer class="catalog-footer">
+                <button type="button" class="project-pill bg-cyan-2" @click.stop.prevent="openReleasePage">
                     {{ projectName }}
-                </div>
-            </div>
+                </button>
+                <a
+                    class="community-link"
+                    href="https://t.me/inpxweb"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Сообщество INPX Web в Telegram (откроется в новой вкладке)"
+                >
+                    <q-icon name="lab la-telegram-plane" size="18px" aria-hidden="true" />
+                    <span>Сообщество в Telegram</span>
+                </a>
+            </footer>
         </div>
 
         <SettingsDialog v-model="settingsDialogVisible" />
@@ -2725,10 +2735,53 @@ export default vueComponent(Search);
     flex-wrap: wrap;
 }
 
+.catalog-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px 12px;
+    padding: 12px 16px 24px;
+    font-size: 13px;
+}
+
+.project-pill,
+.community-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 0;
+    min-height: 40px;
+    max-width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--app-border);
+    border-radius: 6px;
+    font: inherit;
+    line-height: 1.4;
+    text-align: center;
+    cursor: pointer;
+}
+
 .project-pill {
     color: var(--app-muted);
-    border-color: var(--app-border) !important;
     box-shadow: 0 2px 8px rgba(23, 32, 42, 0.06);
+}
+
+.community-link {
+    color: var(--app-link);
+    text-decoration: none;
+}
+
+.project-pill:hover,
+.community-link:hover {
+    border-color: var(--app-link);
+}
+
+.project-pill:focus-visible,
+.community-link:focus-visible {
+    outline: 2px solid var(--app-link);
+    outline-offset: 3px;
 }
 
 .clickable {
