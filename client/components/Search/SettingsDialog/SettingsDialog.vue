@@ -254,6 +254,8 @@
                             </div>
                         </section>
 
+                        <PerformancePanel v-if="dialogVisible && adminExpanded" />
+
                         <section class="admin-dashboard-section admin-dashboard-section--wide">
                             <div class="admin-dashboard-section-title">Качество рекомендаций</div>
                             <div class="admin-dashboard-grid admin-dashboard-grid--runtime">
@@ -580,11 +582,13 @@ import vueComponent from '../../vueComponent.js';
 
 import Dialog from '../../share/Dialog.vue';
 import DiscoverySourceDialog from '../DiscoverySourceDialog/DiscoverySourceDialog.vue';
+import PerformancePanel from './PerformancePanel.vue';
 
 const componentOptions = {
     components: {
         Dialog,
         DiscoverySourceDialog,
+        PerformancePanel,
     },
     watch: {
         modelValue(newValue) {

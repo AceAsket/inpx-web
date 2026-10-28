@@ -198,7 +198,13 @@ class ConfigManager {
     get config() {
         if (!this.inited)
             throw new Error('not inited');
-        return _.cloneDeep(this._config);
+        const result = _.cloneDeep(this._config);
+        // Resource policy is launch-only and cannot be replaced by saved settings
+        // or an administrator's imported configuration.
+        result.conversionConcurrency = require('../core/ResourceRuntime').settings.limits.conversions;
+        result.conversionTimeoutMs = require('../core/ResourceRuntime').settings.taskTimeoutMs;
+        result.conversionQueueTimeoutMs = require('../core/ResourceRuntime').settings.taskTimeoutMs;
+        return result;
     }
 
     set config(value) {

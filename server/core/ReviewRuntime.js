@@ -1,31 +1,45 @@
 const {AsyncLocalStorage} = require('async_hooks');
+const resourceRuntime = require('./ResourceRuntime');
 
 // Reviews have their own I/O budget: startup indexing, ratings and every book
 // request share these slots, independently of the image decoder pool.
-const maxConcurrency = 4;
+const maxConcurrency = 16;
 
 class ReviewRuntime {
-    constructor(concurrency = maxConcurrency) {
+    constructor(concurrency = resourceRuntime.settings.limits.reviews) {
         this.concurrency = Math.max(1, Math.min(maxConcurrency, Math.floor(Number(concurrency)) || 1));
         this.active = 0;
+        this.backgroundActive = 0;
+        this.foregroundStreak = 0;
         this.queue = [];
     }
 
     run(task) {
         return new Promise((resolve, reject) => {
-            this.queue.push({task, resolve, reject, runInContext:AsyncLocalStorage.snapshot()});
+            this.queue.push({task, resolve, reject, background:resourceRuntime.isBackground(), runInContext:AsyncLocalStorage.snapshot()});
             this.drain();
         });
     }
 
     drain() {
         while (this.active < this.concurrency && this.queue.length) {
-            const entry = this.queue.shift();
+            const background = this.backgroundActive < resourceRuntime.settings.limits.background
+                ? this.queue.find(item => item.background) : null;
+            const foreground = this.queue.find(item => !item.background);
+            const entry = this.foregroundStreak >= 8 && background ? background : foreground || background;
+            if (!entry) return;
+            this.queue.splice(this.queue.indexOf(entry), 1);
+            this.foregroundStreak = entry.background ? 0 : this.foregroundStreak + 1;
             this.active++;
+            if (entry.background) this.backgroundActive++;
             entry.runInContext(async() => {
                 try { entry.resolve(await entry.task()); }
                 catch (error) { entry.reject(error); }
-                finally { this.active--; this.drain(); }
+                finally {
+                    this.active--;
+                    if (entry.background) this.backgroundActive--;
+                    this.drain();
+                }
             });
         }
     }

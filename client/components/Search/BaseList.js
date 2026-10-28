@@ -12,6 +12,7 @@ const {match: catalogMatch} = require('../../../shared/CatalogSearch');
 const showMoreCount = 100;//значение для "Показать еще"
 const maxItemCount = 500;//выше этого значения показываем "Загрузка"
 let nextSearchRequestId = 0;
+let nextBookCardRequestId = 0;
 
 const componentOptions = {
     components: {
@@ -454,18 +455,18 @@ export default class BaseList {
 
     //Карточка открывается сразу с данными строки списка, описание FB2 и отзывы приходят позже
     async openBookCard(book, tab) {
-        this.$emit('listEvent', {action: 'bookInfo', data: {book, loading: true}, tab});
+        const requestId = ++nextBookCardRequestId;
+        this.$emit('listEvent', {action: 'bookInfo', data: {book, loading: true}, tab, requestId});
 
         let data = {book};
+        let error = '';
         try {
             const response = await this.api.getBookCard(book._uid);
             data = response.bookInfo || data;
-            if (data.book && data.book.size > 0)
-                book.size = data.book.size;
         } catch(e) {
-            this.$root.stdDialog.alert(await this.getErrorMessage(e), 'Ошибка');
+            error = await this.getErrorMessage(e);
         }
-        this.$emit('listEvent', {action: 'bookInfoLoaded', data, bookUid: book._uid});
+        this.$emit('listEvent', {action: 'bookInfoLoaded', data, bookUid: book._uid, requestId, error});
     }
 
     getBookUid(book = {}) {

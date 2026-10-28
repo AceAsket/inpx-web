@@ -1,17 +1,18 @@
-const os = require('os');
 const {AsyncLocalStorage} = require('async_hooks');
+const resourceRuntime = require('./ResourceRuntime');
 
 // Share a small budget across books, covers and EPUB image decoders. Limiting
 // each book separately multiplies native processes by the number of readers.
 class ImageRuntime {
-    constructor(concurrency = Math.min(2, os.availableParallelism())) {
-        this.concurrency = Math.max(1, Math.min(2, Math.floor(Number(concurrency)) || 1));
+    constructor(concurrency = resourceRuntime.settings.limits.images) {
+        this.concurrency = Math.max(1, Math.min(16, Math.floor(Number(concurrency)) || 1));
         this.active = 0;
         this.queue = [];
         this.context = new AsyncLocalStorage();
     }
 
     run(task) {
+        if (resourceRuntime.isBenchmark()) return Promise.resolve().then(task);
         // An FB2 image job already holds a slot during extraction. Its single
         // decoder must reuse that slot, including when concurrency is one.
         if (this.context.getStore()?.active)

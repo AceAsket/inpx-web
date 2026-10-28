@@ -85,6 +85,15 @@ async function main() {
         assert.strictEqual(await fs.readFile(customPath, 'utf8'), custom);
         console.log('ok: title override preserves custom YAML and relative CSS');
 
+        const parallel = await Promise.all(Array.from({length:3}, (_, index) =>
+            prepare('epub', {fb2cngConfigPath:customPath}, {...book, title:`Параллельная книга ${index}`})));
+        for (let index = 0; index < parallel.length; index++) {
+            const actual = await epubContents(parallel[index].filePath);
+            assert.strictEqual(actual.title, `02 - Параллельная книга ${index}`);
+            assert.ok(Object.values(actual.contents).some(text => text.includes('#123456')));
+        }
+        console.log('ok: concurrent custom YAML conversions preserve relative CSS without shared-log conflicts');
+
         const noCover = await prepare('epub', {fb2cngArgs:['--no-cover']});
         assert.doesNotMatch((await epubContents(noCover.filePath)).opf, /<meta[^>]*name="cover"/);
         assert.strictEqual(await fs.readFile(source, 'utf8'), original);

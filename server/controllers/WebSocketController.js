@@ -158,6 +158,12 @@ class WebSocketController {
                     await this.getAdminDashboard(req, ws); break;
                 case 'get-admin-dashboard-metrics':
                     await this.getAdminDashboardMetrics(req, ws); break;
+                case 'get-admin-performance':
+                    this.send(await this.webWorker.getAdminPerformance(req.userId, req.profileAccessToken), req, ws); break;
+                case 'start-admin-benchmark':
+                    this.send(await this.webWorker.startAdminBenchmark(req.userId, req.profileAccessToken, req.options || {}), req, ws); break;
+                case 'cancel-admin-benchmark':
+                    this.send(await this.webWorker.cancelAdminBenchmark(req.userId, req.profileAccessToken), req, ws); break;
                 case 'get-admin-events':
                     await this.getAdminEvents(req, ws); break;
                 case 'update-admin-event-log':
@@ -336,6 +342,8 @@ class WebSocketController {
             'update-shared-discovery-config',
             'update-admin-integrations',
             'update-admin-opds',
+            'start-admin-benchmark',
+            'cancel-admin-benchmark',
             'update-admin-event-log',
             'add-admin-test-event',
             'update-admin-library-sources',

@@ -111,6 +111,7 @@ async function testBookCardSkipsIllustrationsAndPreparesBookInBackground() {
         worker.db = {esc: JSON.stringify, select: async() => [record]};
         worker.readingListStore = {getMetadataOverrides: async() => ({})};
         worker.applyPreparedBookSizesToRows = async() => {};
+        worker.dbConfig = async() => ({inpxHash: 'card-index-v1'});
         worker.getReviewArchiveState = async() => ({signature: 'reviews-v1'});
         worker.getBookReviews = async() => [{text: 'Отзыв'}];
         worker.getBookLibraryRating = async() => null;
@@ -145,7 +146,7 @@ async function testBookCardSkipsIllustrationsAndPreparesBookInBackground() {
         assert.strictEqual(await preparedOnce, record._uid, 'The full book is prepared in the background');
 
         // Reading and downloading during the background preparation wait for the same work.
-        await worker.bookLinkJobs.get(record._uid);
+        await Promise.all(worker.bookLinkJobs.values());
         const [first, second] = await Promise.all([worker.getBookLink(record._uid), worker.getBookLink(record._uid)]);
         assert.strictEqual(preparations, 2, 'Two parallel requests prepare the book once');
         assert.notStrictEqual(first, second);

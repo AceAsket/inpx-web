@@ -69,7 +69,7 @@ async function testReviewReadsShareBudgetWithWarmupAndRatings() {
             for (let i = 0; i < ids.length; i++) assert.deepStrictEqual(results[i + 1], [common,
                 ...Array.from({length:count}, (_, n) => ({...common, text:`${ids[i]}/${n}`})),
             ]);
-            assert.strictEqual(peak, 4, 'Several books, sources and ratings must share exactly four archive slots');
+            assert.strictEqual(peak, runtime.concurrency, 'Several books, sources and ratings must share the configured archive budget');
             assert.strictEqual(active, 0);
             assert.strictEqual(opened, closed, 'Every archive is closed before its slot is released');
             assert.deepStrictEqual(ratingsReads.sort(), dirs.map(libDir => path.join(libDir, 'reviews', 'additional.zip')).sort());
