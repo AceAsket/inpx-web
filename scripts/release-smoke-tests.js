@@ -1733,6 +1733,7 @@ const tests = [
     ...require('./library-metadata-tests'),
     ...require('./epub-archive-tests'),
     ...require('./image-runtime-tests'),
+    ...require('./review-runtime-tests'),
     ...require('./profile-access-tests'),
     ...require('./audit-stage4-tests'),
     ...require('./resource-limit-tests'),
