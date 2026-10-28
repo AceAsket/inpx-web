@@ -21,6 +21,7 @@ const ReadingListStore = require('./ReadingListStore');
 const {withFileTransaction} = require('./FilePersistence');
 const sessionLifetime = require('./SessionLifetime');
 const imageUtils = require('./ImageUtils');
+const imageRuntime = require('./ImageRuntime');
 const epubRestorer = require('./EpubRestorer');
 const externalTools = require('./ExternalTools');
 const libraryReviews = require('./LibraryReviews');
@@ -55,20 +56,6 @@ const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
 const fb2AssetVersion = 'fb2-encoding-v6';
 const bookInfoVersion = 'fb2-encoding-v8';
-
-//fn для каждого элемента, не больше limit одновременно; результаты в порядке items
-async function mapLimit(items, limit, fn) {
-    const results = new Array(items.length);
-    let next = 0;
-    const worker = async() => {
-        while (next < items.length) {
-            const i = next++;
-            results[i] = await fn(items[i], i);
-        }
-    };
-    await Promise.all(Array.from({length: Math.min(limit, items.length)}, worker));
-    return results;
-}
 
 function assetVersionFor(ext) {
     return String(ext || '').toLowerCase() === 'fb2' ? fb2AssetVersion : bookAssetVersion;
@@ -5350,9 +5337,9 @@ class WebWorker {
                         return ai - bi;
                     });
 
-                //djxl запускается отдельным процессом на каждую картинку, поэтому
-                //декодируем параллельно по числу ядер
-                const images = await mapLimit(entryNames, os.availableParallelism(), async(entryName) => {
+                // Include archive extraction in the shared image budget: a 7z
+                // sidecar starts an external extractor for each illustration.
+                const images = await imageRuntime.map(entryNames, async(entryName) => {
                     const id = entryName.substring(prefix.length);
                     if (!id)
                         return null;

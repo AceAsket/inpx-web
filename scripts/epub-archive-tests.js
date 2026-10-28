@@ -525,6 +525,7 @@ async function testFb2ImagesDecodeInParallelAndKeepOrder() {
             assert.deepStrictEqual(images.map(image => image.data.toString()), Array.from({length: count}, (_, num) => `image-${num}`));
             if (os.availableParallelism() > 1)
                 assert.ok(maxActive > 1, 'Картинки FB2 должны декодироваться параллельно');
+            assert.ok(maxActive <= 2, 'Общий бюджет изображений должен ограничивать число декодеров');
         } finally {
             imageUtils.normalizeForFb2 = original;
         }

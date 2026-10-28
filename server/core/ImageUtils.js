@@ -1,6 +1,7 @@
 const fs = require('fs-extra');
 const path = require('path');
-const {spawn} = require('child_process');
+const {runProcess} = require('./ConversionRuntime');
+const imageRuntime = require('./ImageRuntime');
 
 const utils = require('./utils');
 const externalTools = require('./ExternalTools');
@@ -28,35 +29,17 @@ function contentType(buf) {
     return 'application/octet-stream';
 }
 
-function run(command, args, toolCode = '', helpMessage = '') {
-    return new Promise((resolve, reject) => {
-        const child = spawn(command, args, {stdio: ['ignore', 'ignore', 'pipe']});
-        let stderr = '';
-
-        child.stderr.on('data', data => {
-            stderr += data.toString();
-        });
-
-        child.on('error', (err) => {
-            err.command = command;
-            if (err && err.code === 'ENOENT' && toolCode && helpMessage) {
-                reject(externalTools.createMissingToolError(toolCode, helpMessage));
-                return;
-            }
-
-            reject(err);
-        });
-        child.on('close', code => {
-            if (code === 0)
-                resolve();
-            else {
-                const err = new Error(`${command} failed with exit code ${code}: ${stderr.trim()}`);
-                err.command = command;
-                err.stderr = stderr;
-                reject(err);
-            }
-        });
-    });
+async function run(command, args, toolCode = '', helpMessage = '') {
+    try {
+        // Reuse bounded stderr, process-tree termination and the conversion
+        // deadline so a stuck native decoder cannot hold a shared slot forever.
+        await runProcess(command, args);
+    } catch (error) {
+        error.command = command;
+        if (error.code === 'ENOENT' && toolCode && helpMessage)
+            throw externalTools.createMissingToolError(toolCode, helpMessage);
+        throw error;
+    }
 }
 
 function shouldSkipToolError(err, command) {
@@ -75,6 +58,10 @@ function shouldSkipToolError(err, command) {
 }
 
 async function jxlToImage(buf, tempDir, toolDirs = [], converterPaths = null, extension = 'png') {
+    return await imageRuntime.run(() => decodeJxl(buf, tempDir, toolDirs, converterPaths, extension));
+}
+
+async function decodeJxl(buf, tempDir, toolDirs, converterPaths, extension) {
     const id = utils.randomHexString(30);
     const inputFile = `${tempDir}/${id}.jxl`;
     const outputFile = `${tempDir}/${id}.${extension}`;
@@ -89,7 +76,7 @@ async function jxlToImage(buf, tempDir, toolDirs = [], converterPaths = null, ex
                 if (shouldSkipToolError(null, command))
                     continue;
 
-                await run(command, [inputFile, outputFile], 'INPX_MISSING_DJXL', externalTools.missingDjxlMessage());
+                await run(command, [inputFile, outputFile, '--num_threads=1'], 'INPX_MISSING_DJXL', externalTools.missingDjxlMessage());
                 return await fs.readFile(outputFile);
             } catch (err) {
                 lastError = err;
@@ -125,6 +112,10 @@ async function normalizeForEpub(buf, fileName, tempDir, toolDirs = [], converter
 }
 
 async function webpToPng(buf, tempDir, toolDirs = [], converterPaths = null) {
+    return await imageRuntime.run(() => decodeWebp(buf, tempDir, toolDirs, converterPaths));
+}
+
+async function decodeWebp(buf, tempDir, toolDirs, converterPaths) {
     const id = utils.randomHexString(30);
     const inputFile = `${tempDir}/${id}.webp`;
     const outputFile = `${tempDir}/${id}.png`;
