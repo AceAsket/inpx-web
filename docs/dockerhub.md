@@ -20,13 +20,15 @@
 
 В 1.8.0 исправлены пустые страницы результатов поиска: списки веб-интерфейса и OPDS используют те же правила поиска по словам, что и сервер.
 
-**Для проверки MOBI в 1.8.1-rc.6:** используйте этот тег основного образа и добавьте `-e INPX_MOBI_ENABLED=true` перед именем образа. Лёгкий Kindling уже включён в образ; Calibre не требуется. FB2 конвертируется через промежуточный EPUB, готовый EPUB — напрямую. По умолчанию опция выключена, настраивается только при запуске. Результат содержит MOBI7/KF8; совместимость с конкретным Kindle экспериментальная. [Параметры и ограничения](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
+**Для проверки MOBI в 1.8.1-rc.7:** используйте этот тег основного образа и добавьте `-e INPX_MOBI_ENABLED=true` перед именем образа. Лёгкий Kindling уже включён в образ; Calibre не требуется. FB2 конвертируется через промежуточный EPUB, готовый EPUB — напрямую. По умолчанию опция выключена, настраивается только при запуске. Результат содержит MOBI7/KF8; совместимость с конкретным Kindle экспериментальная. [Параметры и ограничения](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
 
 **Начиная с RC5:** внизу каталога рядом с версией добавлена ссылка на [Telegram-сообщество форка](https://t.me/inpxweb), доступная также на мобильных экранах.
 
-**В RC6:** профили ресурсов `auto`, `economy`, `balanced`, `performance`, общий бюджет архивов, изображений и конвертации и ручной бенчмарк с рекомендуемым пресетом. Настройки задаются через `INPX_RESOURCE_*` при запуске контейнера; интерфейс готовит параметры Docker/Compose. [Настройка и ограничения](https://github.com/AceAsket/inpx-web/blob/develop/docs/resource-profiles.md).
+**Начиная с RC6:** профили ресурсов `auto`, `economy`, `balanced`, `performance`, общий бюджет архивов, изображений и конвертации и ручной бенчмарк с рекомендуемым пресетом. Настройки задаются через `INPX_RESOURCE_*` при запуске контейнера; интерфейс готовит параметры Docker/Compose. [Настройка и ограничения](https://github.com/AceAsket/inpx-web/blob/develop/docs/resource-profiles.md).
 
 **Начиная с RC3:** авторы и серии в описании книги OPDS стали ссылками на соответствующие разделы каталога. Выбранный профиль сохраняется при переходах; поддерживаются соавторы, несколько серий FB2 и ссылки в метаданных Atom.
+
+**В RC7:** карточка FB2 открывается сразу, описание и отзывы загружаются отдельно, галерея — при прокрутке к ней. Кэш учитывает обновление индекса и источника; фоновая подготовка соблюдает ресурсные лимиты, устаревшие ответы закрытых карточек игнорируются.
 
 ### Образы и версии
 
@@ -35,8 +37,8 @@
 | `1.8.0` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.0`. |
 | `1.8.0-silero` | Отдельный сервис озвучки для стабильной версии. |
-| `1.8.1-rc.6` | Профили ресурсов, общий бюджет и бенчмарк; включает OPDS-ссылки, MOBI и ссылку на сообщество. |
-| `1.8.1-rc.6-silero` | Сервис озвучки для RC; существующий Silero из 1.8.0 совместим. |
+| `1.8.1-rc.7` | Быстрые карточки и ленивая галерея; включает профили ресурсов, бенчмарк, OPDS и MOBI. |
+| `1.8.1-rc.7-silero` | Сервис озвучки для RC; существующий Silero из 1.8.0 совместим. |
 | `lite`, `*-lite` | Облегчённые сборки без конвертации; их версии могут отставать от основного образа. |
 
 Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md).
@@ -136,15 +138,17 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 **In version 1.8.0:** compact mobile search, index folders of FB2/EPUB files without INPX, filter-based smart shelves, ZIP downloads of book selections, protection against stale progress updates, manual replacement of unavailable books while keeping reading positions, and an Audiobookshelf metadata provider. Optional server-side Russian FB2 speech using Silero includes chapter playback, voice previews, pause/pitch/pronunciation settings, saved audio positions and playback speed control in the player.
 
-**Test MOBI in 1.8.1-rc.6:** use that main image tag and add `-e INPX_MOBI_ENABLED=true` before the image name. The bundled lightweight Kindling converter needs no Calibre. FB2 uses an intermediate EPUB; existing EPUB converts directly. This launch-only option is off by default. Output contains both MOBI7 and KF8; compatibility with your particular Kindle remains experimental. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
+**Test MOBI in 1.8.1-rc.7:** use that main image tag and add `-e INPX_MOBI_ENABLED=true` before the image name. The bundled lightweight Kindling converter needs no Calibre. FB2 uses an intermediate EPUB; existing EPUB converts directly. This launch-only option is off by default. Output contains both MOBI7 and KF8; compatibility with your particular Kindle remains experimental. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
 
 Version 1.8.0 fixes empty search-result pages: web lists and OPDS use the same word-matching rules as the server.
 
 **Since RC5:** the catalog footer includes a link to the [fork’s Telegram community](https://t.me/inpxweb), also available on mobile screens.
 
-**RC6:** launch-time resource profiles (`auto`, `economy`, `balanced`, `performance`), a shared budget for archives, images and conversion, and a manual benchmark with preset recommendations. Configure `INPX_RESOURCE_*` when starting the container; the admin panel prepares Docker/Compose parameters. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/develop/docs/resource-profiles.md).
+**Since RC6:** launch-time resource profiles (`auto`, `economy`, `balanced`, `performance`), a shared budget for archives, images and conversion, and a manual benchmark with preset recommendations. Configure `INPX_RESOURCE_*` when starting the container; the admin panel prepares Docker/Compose parameters. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/develop/docs/resource-profiles.md).
 
 **Since RC3:** authors and series in OPDS book descriptions link to their catalog feeds. Navigation preserves the selected profile and supports coauthors, multiple FB2 series and Atom metadata links.
+
+**RC7:** FB2 cards open immediately, descriptions and reviews load separately, and the gallery loads when scrolled into view. Card caches track index/source changes, background preparation respects resource limits, and closed cards discard stale responses.
 
 ### Images and versions
 
@@ -153,8 +157,8 @@ Version 1.8.0 fixes empty search-result pages: web lists and OPDS use the same w
 | `1.8.0` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.0`. |
 | `1.8.0-silero` | Separate speech service for the stable release. |
-| `1.8.1-rc.6` | Resource profiles, shared budget and benchmark; includes OPDS links, MOBI and the community link. |
-| `1.8.1-rc.6-silero` | Speech service for the RC; existing Silero 1.8.0 remains compatible. |
+| `1.8.1-rc.7` | Fast book cards and lazy gallery; includes resource profiles, benchmark, OPDS and MOBI. |
+| `1.8.1-rc.7-silero` | Speech service for the RC; existing Silero 1.8.0 remains compatible. |
 | `lite`, `*-lite` | Smaller builds without conversion; their versions may lag behind the main image. |
 
 Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md) for changes.
