@@ -28,7 +28,7 @@ function fixture(options = {}) {
         getGenreTree:async() => ({genreTree:[]}),
         getBookRecordByUid:async uid => books.find(item => item._uid === uid),
         applyMetadataOverridesToSearchResult:async() => {},
-        getBookInfo:async uid => {calls.info++; return {bookInfo:{book:books.find(item => item._uid === uid), fb2:options.fb2 || false}};},
+        getBookCardInfo:async uid => {calls.info++; return {bookInfo:{book:books.find(item => item._uid === uid), fb2:options.fb2 || false}};},
         getAuthorBookList:async(id, name) => {calls.authors.push(name); return {books:books.filter(item => item.author.split(',').includes(name))};},
         getSeriesBookList:async name => {calls.series.push(name); return {books:books.filter(item => item.series === name)};},
     };

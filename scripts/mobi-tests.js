@@ -151,7 +151,7 @@ async function testMobiAvailabilityInWebAndOpds() {
             page.opdsRoot = '/opds';
             page.config = {conversionEnabled:true, mobiEnabled:enabled, bookPathStatic:'/book'};
             page.webWorker = {getGenreMap:async() => new Map(), getBookRecordByUid:async() => book,
-                applyMetadataOverridesToSearchResult:async() => {}, getBookInfo:async() => ({bookInfo:{book, fb2:false}})};
+                applyMetadataOverridesToSearchResult:async() => {}, getBookCardInfo:async() => ({bookInfo:{book, fb2:false}})};
             page.baseLinks = () => []; page.getGenres = async() => ({genreMap:new Map()});
             page.makeBody = value => value; page.downLink = value => value; page.imgLink = value => value;
             page.inpxInfo = () => []; page.htmlInfo = () => '';

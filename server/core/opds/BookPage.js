@@ -178,7 +178,7 @@ class BookPage extends BasePage {
                 // loading reviews here can time out before Kindle gets a link.
                 bookInfo = {book: record, cover: '', fb2: false};
             } else if (record) {
-                ({bookInfo} = await this.webWorker.getBookInfo(bookUid));
+                ({bookInfo} = await this.webWorker.getBookCardInfo(bookUid));
             }
 
             if (bookInfo) {

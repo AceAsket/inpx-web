@@ -529,8 +529,12 @@ class Api {
         return await this.request({action: 'get-book-link', bookUid}, 120);
     }
 
-    async getBookInfo(bookUid) {
-        return await this.request({action: 'get-book-info', bookUid}, 120);
+    async getBookCard(bookUid) {
+        return await this.request({action: 'get-book-info', bookUid, card: true}, 120);
+    }
+
+    async getBookGallery(bookUid) {
+        return await this.request({action: 'get-book-gallery', bookUid}, 300);
     }
 
     async getReaderBook(bookUid) {

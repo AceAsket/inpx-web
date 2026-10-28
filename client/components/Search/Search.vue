@@ -752,6 +752,7 @@ class Search {
     selectDateDialogVisible = false;
     selectExtDialogVisible = false;
     bookInfoDialogVisible = false;
+    bookInfoRequestId = 0;
     bookInfoDialogTab = 'fb2';
     readingListsDialogVisible = false;
     userProfilesDialogVisible = false;
@@ -1861,9 +1862,21 @@ class Search {
                 this.sendMessage({type: 'submitUrl', data: event.data});
                 break;
             case 'bookInfo':
+                this.bookInfoRequestId = event.requestId;
                 this.bookInfo = event.data;
                 this.bookInfoDialogTab = (event.tab || 'fb2');
                 this.bookInfoDialogVisible = true;
+                break;
+            case 'bookInfoLoaded':
+                //пользователь мог закрыть карточку или открыть другую
+                if (this.bookInfoDialogVisible && event.requestId === this.bookInfoRequestId
+                    && this.bookInfo.book && this.bookInfo.book._uid === event.bookUid) {
+                    if (event.data.book && event.data.book.size > 0)
+                        this.bookInfo.book.size = event.data.book.size;
+                    this.bookInfo = event.data;
+                    if (event.error)
+                        this.$root.stdDialog.alert(event.error, 'Ошибка');
+                }
                 break;
             case 'manageReadingLists':
                 this.openReadingLists(event.book || null);
