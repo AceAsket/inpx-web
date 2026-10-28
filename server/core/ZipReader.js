@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs-extra');
-const {spawn} = require('child_process');
+const {runProcess} = require('./ConversionRuntime');
 const StreamUnzip = require('node-stream-zip');
 const externalTools = require('./ExternalTools');
 
@@ -10,6 +10,7 @@ class ZipReader {
         this.archiveFile = '';
         this.archiveType = '';
         this.converterPaths = config.converterPaths || null;
+        this.maxOutputBytes = config.resourceMaxOutputBytes || 0;
     }
 
     get sevenZipCommands() {
@@ -21,133 +22,20 @@ class ZipReader {
             throw new Error('Archive closed');
     }
 
-    run7z(args, outputFile = '') {
-        return new Promise((resolve, reject) => {
-            let index = 0;
-
-            const tryRun = () => {
-                const commands = this.sevenZipCommands;
-                const command = commands[index++];
-                const child = spawn(command, args, {stdio: ['ignore', 'pipe', 'pipe']});
-                let stderr = '';
-                let output = null;
-                let settled = false;
-                let outputFinished = !outputFile;
-
-                const nextOrReject = (err) => {
-                    if (settled)
-                        return;
-                    settled = true;
-
-                    if (output)
-                        output.destroy();
-
-                    if (err && err.code === 'ENOENT' && index < commands.length) {
-                        tryRun();
-                    } else if (err && err.code === 'ENOENT') {
-                        reject(externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage()));
-                    } else {
-                        reject(err);
-                    }
-                };
-
-                child.on('error', nextOrReject);
-
-                child.on('spawn', () => {
-                    if (outputFile) {
-                        output = fs.createWriteStream(outputFile);
-                        output.on('error', nextOrReject);
-                        output.on('finish', () => {
-                            outputFinished = true;
-                        });
-                        child.stdout.pipe(output);
-                    } else {
-                        child.stdout.resume();
-                    }
-                });
-
-                child.stderr.on('data', data => {
-                    stderr += data.toString();
-                });
-
-                child.on('close', code => {
-                    if (settled)
-                        return;
-
-                    if (code !== 0) {
-                        settled = true;
-                        reject(new Error(`7z failed with exit code ${code}: ${stderr.trim()}`));
-                        return;
-                    }
-
-                    const finish = () => {
-                        if (settled)
-                            return;
-                        settled = true;
-                        resolve();
-                    };
-
-                    if (!output || outputFinished)
-                        finish();
-                    else
-                        output.on('finish', finish);
-                });
-            };
-
-            tryRun();
-        });
+    async run7z(args, outputFile = '') {
+        return await this.run7zCommand(args, {outputFile});
     }
 
-    run7zStdout(args) {
-        return new Promise((resolve, reject) => {
-            let index = 0;
+    async run7zStdout(args) {
+        return await this.run7zCommand(args, {captureStdout:true, maxOutputBytes:this.maxOutputBytes});
+    }
 
-            const tryRun = () => {
-                const commands = this.sevenZipCommands;
-                const command = commands[index++];
-                const child = spawn(command, args, {stdio: ['ignore', 'pipe', 'pipe']});
-                const stdout = [];
-                let stderr = '';
-                let settled = false;
-
-                const nextOrReject = (err) => {
-                    if (settled)
-                        return;
-                    settled = true;
-
-                    if (err && err.code === 'ENOENT' && index < commands.length) {
-                        tryRun();
-                    } else if (err && err.code === 'ENOENT') {
-                        reject(externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage()));
-                    } else {
-                        reject(err);
-                    }
-                };
-
-                child.on('error', nextOrReject);
-                child.stdout.on('data', data => {
-                    stdout.push(data);
-                });
-                child.stderr.on('data', data => {
-                    stderr += data.toString();
-                });
-                child.on('close', code => {
-                    if (settled)
-                        return;
-
-                    if (code !== 0) {
-                        settled = true;
-                        reject(new Error(`7z failed with exit code ${code}: ${stderr.trim()}`));
-                        return;
-                    }
-
-                    settled = true;
-                    resolve(Buffer.concat(stdout));
-                });
-            };
-
-            tryRun();
-        });
+    async run7zCommand(args, options) {
+        for (const command of this.sevenZipCommands) {
+            try { return await runProcess(command, args, {...options, resourceKind:'reviews'}); }
+            catch (error) { if (error.code !== 'ENOENT') throw error; }
+        }
+        throw externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage());
     }
 
     parse7zEntries(listing) {

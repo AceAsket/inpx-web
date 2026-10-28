@@ -453,6 +453,18 @@ class Api {
         return await this.request({action: 'get-admin-dashboard-metrics'}, 120);
     }
 
+    async getAdminPerformance() {
+        return await this.request({action:'get-admin-performance'}, 30);
+    }
+
+    async startAdminBenchmark(options = {}) {
+        return await this.request({action:'start-admin-benchmark', options}, 30);
+    }
+
+    async cancelAdminBenchmark() {
+        return await this.request({action:'cancel-admin-benchmark'}, 30);
+    }
+
     async getAdminEvents(options = {}) {
         return await this.request({action: 'get-admin-events', options}, 120);
     }

@@ -33,7 +33,7 @@ async function run(command, args, toolCode = '', helpMessage = '') {
     try {
         // Reuse bounded stderr, process-tree termination and the conversion
         // deadline so a stuck native decoder cannot hold a shared slot forever.
-        await runProcess(command, args);
+        await runProcess(command, args, {resourceKind:'images'});
     } catch (error) {
         error.command = command;
         if (error.code === 'ENOENT' && toolCode && helpMessage)

@@ -9,6 +9,7 @@ const bookNaming = require('./BookNaming');
 const yaml = require('js-yaml');
 const {validateMobi} = require('./MobiValidation');
 const {validateEpubForMobi} = require('./MobiEpubValidation');
+const {withFileTransaction} = require('./FilePersistence');
 
 const pending = new Map();
 const validatedFb2cngConfigs = new Set();
@@ -52,7 +53,7 @@ const fbcFileName = process.platform === 'win32' ? 'fbc.exe' : 'fbc';
 const mutoolFileName = process.platform === 'win32' ? 'mutool.exe' : 'mutool';
 function fb2cngCommandCandidates(converterPaths = null) {
     const configured = externalTools.configuredToolCandidates(externalTools.resolveConverterPaths(converterPaths), ['fb2cng', 'fbc']);
-    if (configured.length) return configured;
+    if (configured.length) return configured.map(command => /[\\/]/.test(command) && !path.isAbsolute(command) ? path.resolve(command) : command);
     return [
         bundledToolPath(fbcFileName),
         localToolPath(fbcFileName),
@@ -285,9 +286,16 @@ async function runCalibre(args, converterPaths = null) {
 }
 
 async function convertWithFb2cng(inputFile, outputFile, format, converterPaths = null, fb2cngConfigPath = null, extraArgs = [], bookTitle = null) {
+    const configInfo = await readFb2cngConfig(fb2cngConfigPath);
+    const task = () => convertWithFb2cngIsolated(inputFile, outputFile, format, converterPaths, configInfo, extraArgs, bookTitle);
+    // Custom YAML may reference relative CSS/fonts. Keep that working directory
+    // and serialize its fbc processes, whose panic logs otherwise conflict.
+    return configInfo.path ? await withFileTransaction(path.join(path.dirname(configInfo.path), '.inpx-fbc-runtime'), task) : await task();
+}
+
+async function convertWithFb2cngIsolated(inputFile, outputFile, format, converterPaths, configInfo, extraArgs, bookTitle) {
     const outputDir = `${outputFile}.fb2cng`;
     const fb2cngFormat = fb2cngFormats.get(format);
-    const configInfo = await readFb2cngConfig(fb2cngConfigPath);
     const conversionArgs = readFb2cngArgs(extraArgs);
     await validateFb2cngConfig(configInfo, converterPaths);
     let titleConfigDir = '';
@@ -315,7 +323,9 @@ async function convertWithFb2cng(inputFile, outputFile, format, converterPaths =
         ];
         await fs.remove(outputDir);
         await fs.ensureDir(outputDir);
-        await runFirst(fb2cngCommandCandidates(converterPaths), fb2cngArgs, {cwd: configInfo.path ? path.dirname(configInfo.path) : undefined});
+        // Default conversions have a private working directory for fbc.log and
+        // fbc-panic.log; they must not race in the application's directory.
+        await runFirst(fb2cngCommandCandidates(converterPaths), fb2cngArgs, {cwd: configInfo.path ? path.dirname(configInfo.path) : outputDir});
 
         const outputExtension = `.${getConvertedExtension(format)}`;
         const firstMatchedFile = (await fs.readdir(outputDir))

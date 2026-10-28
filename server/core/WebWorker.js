@@ -30,6 +30,8 @@ const bookAssets = require('./BookAssets');
 const bookConverter = require('./BookConverter');
 const bookNaming = require('./BookNaming');
 const runtimeMetrics = require('./RuntimeMetrics');
+const resourceRuntime = require('./ResourceRuntime');
+const {isResourceError} = require('./ResourcePolicy');
 
 const asyncExit = new (require('./AsyncExit'))();
 const appLogger = new (require('./AppLogger'))();//singleton
@@ -4089,6 +4091,30 @@ class WebWorker {
         });
     }
 
+    getResourceBenchmark() {
+        if (!this.resourceBenchmark) this.resourceBenchmark = new (require('./ResourceBenchmark').ResourceBenchmark)(this.config, {
+            probe:async() => {this.checkMyState(); await this.db.select({table:'book', limit:1});},
+        });
+        this.resourceBenchmark.config = this.config;
+        return this.resourceBenchmark;
+    }
+
+    async getAdminPerformance(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+        return await this.getResourceBenchmark().snapshot();
+    }
+
+    async startAdminBenchmark(userId = '', profileAccessToken = '', options = {}) {
+        await this.requireAdmin(userId, profileAccessToken);
+        this.checkMyState();
+        return await this.getResourceBenchmark().start(options);
+    }
+
+    async cancelAdminBenchmark(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+        return this.getResourceBenchmark().cancel();
+    }
+
     async getAdminEvents(userId = '', profileAccessToken = '', options = {}) {
         await this.requireAdmin(userId, profileAccessToken);
 
@@ -5350,6 +5376,7 @@ class WebWorker {
                         const data = await zipReader.extractToBuf(entryName);
                         return Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir), this.config.converterPaths));
                     } catch(e) {
+                        if (isResourceError(e)) throw e;
                         log(LM_ERR, `image ${entryName}: ${e.message}`);
                         return null;
                     }
@@ -5444,6 +5471,7 @@ class WebWorker {
                 }
                 data = await reader.extractToBuf(num === -1 ? String(libid) : `${libid}/${num}`);
             } catch (error) {
+                if (isResourceError(error)) throw error;
                 if (externalTools.isMissingToolError(error))
                     throw error;
                 log(LM_WARN, `EPUB image ${archive.file}: ${error.message}`);
@@ -6245,7 +6273,7 @@ class WebWorker {
     async ensureReviewIndex(sourceLibDir = '', state = null) {
         state = state || await this.getReviewArchiveState(sourceLibDir);
         if (!state.indexPromise)
-            state.indexPromise = this.createReviewIndex(state.archives);
+            state.indexPromise = this.createReviewIndex(state.archives).catch(error => {state.indexPromise = null; throw error;});
         return state.indexPromise;
     }
 
@@ -6271,6 +6299,7 @@ class WebWorker {
                         reviewToArchives.set(key, list);
                     }
                 } catch(e) {
+                    if (isResourceError(e)) throw e;
                     log(LM_WARN, `review archive ${archive.file}: ${e.message}`);
                 } finally {
                     await zipReader.close();
@@ -6311,6 +6340,7 @@ class WebWorker {
                 }
                 return normalized;
             } catch(e) {
+                if (isResourceError(e)) throw e;
                 log(LM_WARN, `review entry ${match.archive}:${match.entryName}: ${e.message}`);
                 return [];
             } finally {
@@ -6331,10 +6361,14 @@ class WebWorker {
 
     async getBookLibraryRating(book, state = null) {
         state = state || await this.getReviewArchiveState(book.sourceLibDir);
-        if (!state.ratingsPromise)
-            state.ratingsPromise = this.readLibraryRatings(state.archives);
-        const ratings = await state.ratingsPromise;
+        const ratings = await this.ensureLibraryRatings(state);
         return ratings.get(libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`)) || null;
+    }
+
+    ensureLibraryRatings(state) {
+        if (!state.ratingsPromise) state.ratingsPromise = this.readLibraryRatings(state.archives)
+            .catch(error => {state.ratingsPromise = null; throw error;});
+        return state.ratingsPromise;
     }
 
     async readLibraryRatings(archives) {
@@ -6356,6 +6390,7 @@ class WebWorker {
                             ratings.set(key, {value: row.sum / row.count, count: row.count});
                     }
                 } catch (error) {
+                    if (isResourceError(error)) throw error;
                     log(LM_WARN, `library ratings ${archive.file}: ${error.message}`);
                 } finally {
                     await reader.close();
@@ -6469,18 +6504,16 @@ class WebWorker {
     //а не при открытии первой карточки
     warmReviewIndexes() {
         const dirs = new Set([this.config.libDir, ...getEnabledLibrarySources(this.config).map(source => source.libDir)].filter(Boolean));
-        return Promise.all([...dirs].map(async(dir) => {
+        return resourceRuntime.withBackground(() => Promise.all([...dirs].map(async(dir) => {
             try {
                 const state = await this.getReviewArchiveState(dir);
                 await this.ensureReviewIndex(dir, state);
-                if (!state.ratingsPromise)
-                    state.ratingsPromise = this.readLibraryRatings(state.archives);
-                await state.ratingsPromise;
+                await this.ensureLibraryRatings(state);
                 log(`Review index ready: ${dir}`);
             } catch (error) {
                 log(LM_WARN, `review index ${dir}: ${error.message}`);
             }
-        }));
+        })));
     }
 
     async getInpxFile(params) {
