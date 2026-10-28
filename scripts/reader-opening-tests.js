@@ -151,8 +151,11 @@ async function testBookCardSkipsIllustrationsAndPreparesBookInBackground() {
         assert.notStrictEqual(first, second);
         assert.deepStrictEqual(first, second);
 
-        await worker.getBookCardInfo(record._uid);
+        worker.getReviewArchiveState = async() => { throw new Error('Broken review archive'); };
+        const cached = (await worker.getBookCardInfo(record._uid)).bookInfo;
         assert.strictEqual(extractions, 1, 'The second card opening uses the card cache');
+        assert.strictEqual(cached.book.title, 'Карточка', 'A review failure does not block the card');
+        assert.deepStrictEqual(cached.reviews, [{text: 'Отзыв'}]);
         assert.ok(!(await fs.readdir(dir)).some(name => name.startsWith('extracted-')), 'Extracted FB2 files are removed');
     } finally {
         await fs.remove(dir);

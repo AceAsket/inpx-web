@@ -19,7 +19,7 @@ const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
 const FileDownloader = require('./FileDownloader');
 const ReadingListStore = require('./ReadingListStore');
-const {withFileTransaction} = require('./FilePersistence');
+const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const sessionLifetime = require('./SessionLifetime');
 const imageUtils = require('./ImageUtils');
 const imageRuntime = require('./ImageRuntime');
@@ -6521,17 +6521,23 @@ class WebWorker {
             changed = true;
         }
 
-        const reviewState = await this.getReviewArchiveState(book.sourceLibDir);
-        if (card.reviewSignature !== reviewState.signature) {
-            [card.reviews, card.libraryRating] = await Promise.all([
-                this.getBookReviews(book, reviewState), this.getBookLibraryRating(book, reviewState),
-            ]);
-            card.reviewSignature = reviewState.signature;
-            changed = true;
+        //ошибка отзывов не мешает показать описание; без reviewSignature отзывы перечитаются при следующем открытии
+        try {
+            const reviewState = await this.getReviewArchiveState(book.sourceLibDir);
+            if (card.reviewSignature !== reviewState.signature) {
+                [card.reviews, card.libraryRating] = await Promise.all([
+                    this.getBookReviews(book, reviewState), this.getBookLibraryRating(book, reviewState),
+                ]);
+                card.reviewSignature = reviewState.signature;
+                changed = true;
+            }
+        } catch (error) {
+            log(LM_WARN, `book card reviews ${bookUid}: ${error.message}`);
         }
 
         if (changed)
-            await fs.writeJson(cardFile, card);
+            //параллельное открытие той же карточки не должно прочитать недописанный файл
+            await writeFileAtomic(cardFile, JSON.stringify(card));
         else
             await utils.touchFile(cardFile);
 
