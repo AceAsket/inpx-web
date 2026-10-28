@@ -1,0 +1,28 @@
+plugins { id 'com.android.application' }
+
+def inpxAbi = providers.gradleProperty('inpxAbi').getOrElse('arm64-v8a')
+if (!(inpxAbi in ['arm64-v8a', 'armeabi-v7a'])) throw new GradleException("Unsupported Android ABI: ${inpxAbi}")
+
+android {
+    namespace 'ru.inpx.server'
+    compileSdk 36
+    ndkVersion '28.2.13676358'
+    defaultConfig {
+        applicationId 'ru.inpx.server'
+        minSdk 28
+        targetSdk 36
+        versionCode 5
+        versionName '0.5.0-prototype'
+        testInstrumentationRunner 'ru.inpx.server.UiSmokeInstrumentation'
+        ndk { abiFilters inpxAbi }
+        externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_shared' } }
+    }
+    externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt'; version '3.22.1' } }
+    packaging { jniLibs { useLegacyPackaging = true } }
+    buildTypes { debug { debuggable true } }
+}
+
+dependencies {
+    implementation 'com.hierynomus:smbj:0.15.0'
+    implementation 'com.google.zxing:core:3.5.3'
+}

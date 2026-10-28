@@ -1,0 +1,10 @@
+**/.gradle/
+**/.cxx/
+/**/build/
+/local.properties
+/app/src/main/assets/runtime.zip
+/app/src/main/assets/runtime.sha256
+/app/src/main/assets/demo/
+/app/src/main/jniLibs/
+/libnode/
+/vendor/

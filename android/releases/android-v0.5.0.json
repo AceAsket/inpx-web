@@ -1,0 +1,37 @@
+{
+  "tag": "android-v0.5.0",
+  "applicationId": "ru.inpx.server",
+  "versionName": "0.5.0-prototype",
+  "versionCode": 5,
+  "minSdk": 28,
+  "targetSdk": 36,
+  "signing": "debug",
+  "signingCertificateSha256": "a1678205a058b9e2d4b50e138b28d54cd68e0f638d061fe04a3eda0876241b66",
+  "assets": [
+    {
+      "name": "inpx-server-0.5.0-arm32-debug.apk",
+      "abi": "armeabi-v7a",
+      "cpuRequirement": "ARMv7 with NEON",
+      "bytes": 106386347,
+      "sha256": "88bb2ccf006865c70c8d0a24551b73e64774fbbec488134bf21bd841b3ad06e3",
+      "deviceTested": false
+    },
+    {
+      "name": "inpx-server-0.5.0-arm64-debug.apk",
+      "abi": "arm64-v8a",
+      "bytes": 107646185,
+      "sha256": "6437d902d02ae91ae2df58738be4d0820910defd05c561f356ae4779c6a31384",
+      "deviceTested": true,
+      "testDevice": "Lenovo TB321FU, Android 16 / API 36"
+    }
+  ],
+  "backendVersion": "1.8.1-rc.4",
+  "backendSourceRef": "fd1df1ab",
+  "nodeVersion": "24.22.1",
+  "sevenZipVersion": "26.03",
+  "converters": {
+    "fb2cng": "1.9.0",
+    "mupdf": "1.27.0",
+    "kindling": "0.45.6"
+  }
+}

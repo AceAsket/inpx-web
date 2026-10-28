@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true">
+        <activity android:name="ru.inpx.server.FixtureGrantActivity" android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+        <!-- Test APK only. Exposes generated fixtures, never user-selected files. -->
+        <provider android:name="ru.inpx.server.FaultDocumentsProvider"
+            android:authorities="ru.inpx.server.test.storage" android:exported="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS"
+            android:grantUriPermissions="true" />
+    </application>
+</manifest>
