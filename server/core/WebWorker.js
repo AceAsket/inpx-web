@@ -25,6 +25,7 @@ const imageRuntime = require('./ImageRuntime');
 const epubRestorer = require('./EpubRestorer');
 const externalTools = require('./ExternalTools');
 const libraryReviews = require('./LibraryReviews');
+const reviewRuntime = require('./ReviewRuntime');
 const bookAssets = require('./BookAssets');
 const bookConverter = require('./BookConverter');
 const bookNaming = require('./BookNaming');
@@ -56,20 +57,6 @@ const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
 const fb2AssetVersion = 'fb2-encoding-v6';
 const bookInfoVersion = 'fb2-encoding-v8';
-
-//fn для каждого элемента, не больше limit одновременно; результаты в порядке items
-async function mapLimit(items, limit, fn) {
-    const results = new Array(items.length);
-    let next = 0;
-    const worker = async() => {
-        while (next < items.length) {
-            const i = next++;
-            results[i] = await fn(items[i], i);
-        }
-    };
-    await Promise.all(Array.from({length: Math.min(limit, items.length)}, worker));
-    return results;
-}
 
 function assetVersionFor(ext) {
     return String(ext || '').toLowerCase() === 'fb2' ? fb2AssetVersion : bookAssetVersion;
@@ -6268,25 +6255,27 @@ class WebWorker {
         for (const archive of archives) {
             if (archive.id.toLowerCase() === 'additional')
                 continue;
-            const zipReader = new ZipReader(this.config);
-            try {
-                await zipReader.open(archive.file);
-                for (const item of Object.values(zipReader.entries || {})) {
-                    const entryName = String(item.name || '').replace(/\\/g, '/');
-                    if (!entryName || item.isDirectory)
-                        continue;
+            await reviewRuntime.run(async() => {
+                const zipReader = new ZipReader(this.config);
+                try {
+                    await zipReader.open(archive.file);
+                    for (const item of Object.values(zipReader.entries || {})) {
+                        const entryName = String(item.name || '').replace(/\\/g, '/');
+                        if (!entryName || item.isDirectory)
+                            continue;
 
-                    const key = libraryReviews.normalizeEntryKey(entryName);
-                    if (!key) continue;
-                    const list = reviewToArchives.get(key) || [];
-                    list.push({archive: archive.file, entryName});
-                    reviewToArchives.set(key, list);
+                        const key = libraryReviews.normalizeEntryKey(entryName);
+                        if (!key) continue;
+                        const list = reviewToArchives.get(key) || [];
+                        list.push({archive: archive.file, entryName});
+                        reviewToArchives.set(key, list);
+                    }
+                } catch(e) {
+                    log(LM_WARN, `review archive ${archive.file}: ${e.message}`);
+                } finally {
+                    await zipReader.close();
                 }
-            } catch(e) {
-                log(LM_WARN, `review archive ${archive.file}: ${e.message}`);
-            } finally {
-                await zipReader.close();
-            }
+            });
         }
 
         return reviewToArchives;
@@ -6299,13 +6288,28 @@ class WebWorker {
         const reviews = [];
         const seen = new Set();
 
-        //каждый архив отзывов читается отдельным процессом 7-Zip, поэтому параллельно
-        const lists = await mapLimit(matches, os.availableParallelism(), async(match) => {
+        const lists = await reviewRuntime.map(matches, async(match) => {
             const zipReader = new ZipReader(this.config);
             try {
                 await zipReader.open(match.archive, false);
                 const parsed = JSON.parse(decodeArchiveText(await zipReader.extractToBuf(match.entryName)));
-                return (Array.isArray(parsed) ? parsed : []);
+                const normalized = [];
+                for (const item of (Array.isArray(parsed) ? parsed : [])) {
+                    if (!item || typeof(item) !== 'object' || Array.isArray(item))
+                        continue;
+                    // A malformed field must not discard this archive's other
+                    // reviews or make the entire book information unavailable.
+                    try {
+                        normalized.push({
+                            name: String(item.name || '').trim() || 'Аноним',
+                            time: String(item.time || '').trim(),
+                            text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
+                        });
+                    } catch (error) {
+                        log(LM_WARN, `review item ${match.archive}:${match.entryName}: ${error.message}`);
+                    }
+                }
+                return normalized;
             } catch(e) {
                 log(LM_WARN, `review entry ${match.archive}:${match.entryName}: ${e.message}`);
                 return [];
@@ -6314,15 +6318,7 @@ class WebWorker {
             }
         });
 
-        for (const item of lists.flat()) {
-            if (!item || typeof(item) !== 'object')
-                continue;
-
-            const review = {
-                name: String(item.name || '').trim() || 'Аноним',
-                time: String(item.time || '').trim(),
-                text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
-            };
+        for (const review of lists.flat()) {
             const key = JSON.stringify(review);
             if (!seen.has(key)) {
                 seen.add(key);
@@ -6344,25 +6340,27 @@ class WebWorker {
     async readLibraryRatings(archives) {
         const ratings = new Map();
         for (const archive of archives.filter(item => item.id.toLowerCase() === 'additional')) {
-            const reader = new ZipReader(this.config);
-            try {
-                await reader.open(archive.file, false);
-                const rows = JSON.parse(decodeArchiveText(await reader.extractToBuf('books.json')));
-                if (!Array.isArray(rows)) continue;
-                for (const row of rows) {
-                    if (!row || typeof row.folder !== 'string' || typeof row.file !== 'string'
-                        || !Number.isFinite(row.sum) || !Number.isSafeInteger(row.count)
-                        || row.count <= 0 || row.sum <= 0 || row.sum > row.count * 5)
-                        continue;
-                    const key = libraryReviews.entryKey(row.folder, row.file);
-                    if (!ratings.has(key))
-                        ratings.set(key, {value: row.sum / row.count, count: row.count});
+            await reviewRuntime.run(async() => {
+                const reader = new ZipReader(this.config);
+                try {
+                    await reader.open(archive.file, false);
+                    const rows = JSON.parse(decodeArchiveText(await reader.extractToBuf('books.json')));
+                    if (!Array.isArray(rows)) return;
+                    for (const row of rows) {
+                        if (!row || typeof row.folder !== 'string' || typeof row.file !== 'string'
+                            || !Number.isFinite(row.sum) || !Number.isSafeInteger(row.count)
+                            || row.count <= 0 || row.sum <= 0 || row.sum > row.count * 5)
+                            continue;
+                        const key = libraryReviews.entryKey(row.folder, row.file);
+                        if (!ratings.has(key))
+                            ratings.set(key, {value: row.sum / row.count, count: row.count});
+                    }
+                } catch (error) {
+                    log(LM_WARN, `library ratings ${archive.file}: ${error.message}`);
+                } finally {
+                    await reader.close();
                 }
-            } catch (error) {
-                log(LM_WARN, `library ratings ${archive.file}: ${error.message}`);
-            } finally {
-                await reader.close();
-            }
+            });
         }
         return ratings;
     }
@@ -6471,16 +6469,18 @@ class WebWorker {
     //а не при открытии первой карточки
     warmReviewIndexes() {
         const dirs = new Set([this.config.libDir, ...getEnabledLibrarySources(this.config).map(source => source.libDir)].filter(Boolean));
-        for (const dir of dirs) {
-            (async() => {
+        return Promise.all([...dirs].map(async(dir) => {
+            try {
                 const state = await this.getReviewArchiveState(dir);
                 await this.ensureReviewIndex(dir, state);
                 if (!state.ratingsPromise)
                     state.ratingsPromise = this.readLibraryRatings(state.archives);
                 await state.ratingsPromise;
                 log(`Review index ready: ${dir}`);
-            })().catch(e => log(LM_WARN, `review index ${dir}: ${e.message}`));
-        }
+            } catch (error) {
+                log(LM_WARN, `review index ${dir}: ${error.message}`);
+            }
+        }));
     }
 
     async getInpxFile(params) {
