@@ -163,6 +163,37 @@ async function testBookCardSkipsIllustrationsAndPreparesBookInBackground() {
     }
 }
 
+async function testBackgroundLibraryWorkWaitsForUser() {
+    const worker = Object.create(require('../server/core/WebWorker').prototype);
+    const events = [];
+    let finishCard;
+    const card = worker.runForeground(() => new Promise(resolve => { finishCard = resolve; }));
+
+    const covers = [1, 2, 3].map(n => worker.runBackground(async() => { events.push(`cover ${n}`); }));
+    const cancelled = worker.runBackground(async() => { events.push('closed cover'); }, () => true);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepStrictEqual(events, [], 'Covers wait while the user waits for the card');
+
+    finishCard();
+    await card;
+    await Promise.all([...covers, cancelled]);
+    assert.deepStrictEqual(events, ['cover 1', 'cover 2', 'cover 3'], 'Covers run after the card, a closed request is skipped');
+
+    // Background reads use the profile limit and the shared background mark;
+    // the book preparation inside them does not stop other background work.
+    const resourceRuntime = require('../server/core/ResourceRuntime');
+    let active = 0, maxActive = 0;
+    await Promise.all(Array.from({length: 5}, () => worker.runBackground(async() => {
+        assert.ok(resourceRuntime.isBackground());
+        await worker.runForeground(async() => {});
+        maxActive = Math.max(maxActive, ++active);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active--;
+    })));
+    assert.strictEqual(maxActive, resourceRuntime.settings.limits.background);
+    assert.strictEqual(worker.foregroundJobs, 0);
+}
+
 async function testBookGalleryReturnsFirstImagesWithoutCover() {
     const Fb2Parser = require('../server/core/fb2/Fb2Parser');
     const parser = new Fb2Parser();
@@ -182,4 +213,4 @@ async function testBookGalleryReturnsFirstImagesWithoutCover() {
 }
 
 module.exports = [testReaderColdDocumentDoesNotWaitForReviewIndex, testCatalogOpensReaderBeforeColdFilePreparation,
-    testBookCardSkipsIllustrationsAndPreparesBookInBackground, testBookGalleryReturnsFirstImagesWithoutCover];
+    testBookCardSkipsIllustrationsAndPreparesBookInBackground, testBackgroundLibraryWorkWaitsForUser, testBookGalleryReturnsFirstImagesWithoutCover];

@@ -12,6 +12,7 @@ const bookNaming = require('./core/BookNaming');
 const crypto = require('crypto');
 const webAppDir = require('../build/appdir');
 const externalTools = require('./core/ExternalTools');
+const {isResourceError} = require('./core/ResourcePolicy');
 const {getEnabledLibrarySources} = require('./core/LibrarySources');
 const Fb2Helper = require('./core/fb2/Fb2Helper');
 
@@ -557,6 +558,10 @@ module.exports = (app, config, webWorker = null, security = null) => {
     };
 
     app.get(`${config.rootPathStatic || ''}/cover/by-uid`, async(req, res) => {
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        const close = () => {if (!res.writableFinished) abort();};
+        req.once('aborted', abort); res.once('close', close);
         try {
             const book = await webWorker.getBookRecordByUid(String(req.query.uid || '').trim());
             if (!book) {
@@ -567,21 +572,36 @@ module.exports = (app, config, webWorker = null, security = null) => {
             const cacheKey = require('./core/BookAssets').coverCacheKey(book);
             if (await sendCachedCover(res, cacheDir, cacheKey))
                 return;
-            const cover = await webWorker.getBookCover(book);
-            if (!cover) {
-                res.sendStatus(404);
-                return;
-            }
-            await writeCachedCover(cacheDir, cacheKey, cover);
-            res.set('Cache-Control', 'public, max-age=2592000, immutable');
-            res.type(cover.contentType).send(cover.data);
+            //Обложки списка - фоновая работа: они не должны задерживать открытую карточку.
+            //Пока запрос ждёт очереди, обложку мог сохранить в кэш другой запрос
+            await webWorker.runBackground(async() => {
+                if (await sendCachedCover(res, cacheDir, cacheKey))
+                    return;
+                const cover = await webWorker.getBookCover(book);
+                if (!cover) {
+                    //без кэша браузер снова запрашивает обложку, которой нет, при каждом показе списка
+                    res.set('Cache-Control', 'public, max-age=86400');
+                    res.sendStatus(404);
+                    return;
+                }
+                await writeCachedCover(cacheDir, cacheKey, cover);
+                res.set('Cache-Control', 'public, max-age=2592000, immutable');
+                res.type(cover.contentType).send(cover.data);
+            }, () => req.socket.destroyed || res.destroyed, controller.signal);
         } catch (error) {
-            if (externalTools.isMissingToolError(error)) {
+            if (res.destroyed) return;
+            if (isResourceError(error)) {
+                res.set('Cache-Control', 'no-store');
+                res.set('Retry-After', '1');
+                res.status(503).type('text/plain; charset=utf-8').send(error.message);
+            } else if (externalTools.isMissingToolError(error)) {
                 logRuntimeWarningOnce(error.message);
                 res.status(503).type('text/plain; charset=utf-8').send(error.message);
             } else {
                 res.sendStatus(404);
             }
+        } finally {
+            req.removeListener('aborted', abort); res.removeListener('close', close);
         }
     });
 

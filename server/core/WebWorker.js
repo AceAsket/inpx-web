@@ -939,6 +939,34 @@ class WebWorker {
         this.authorToArchive = null;
         this.reviewArchiveStates = new Map();
         this.preparedBookSizes = new Map();
+        this.libraryDirListings = new Map();
+    }
+
+    //Чтение папок библиотеки на сетевом диске медленное, а параллельные чтения
+    //выполняются по очереди. Кэшируем список файлов до сброса кэшей библиотеки.
+    readLibraryDirCached(dir) {
+        if (!this.libraryDirListings)
+            this.libraryDirListings = new Map();
+
+        const listings = this.libraryDirListings;
+        let listing = listings.get(dir);
+        if (!listing || listing.expiresAt <= Date.now()) {
+            listing = {expiresAt:Infinity};
+            listing.promise = fs.readdir(dir).then(names => {
+                if (!names.length) listing.expiresAt = Date.now() + 1000;
+                return names;
+            }).catch((e) => {
+                if (e.code === 'ENOENT' || e.code === 'ENOTDIR') {
+                    listing.expiresAt = Date.now() + 1000;
+                    return [];
+                }
+                if (listings.get(dir) === listing) listings.delete(dir);
+                throw e;
+            });
+            listings.set(dir, listing);
+        }
+
+        return listing.promise;
     }
 
     async dbConfig() {
@@ -5239,11 +5267,11 @@ class WebWorker {
 
         const dir = path.dirname(filePath);
         const baseName = path.basename(filePath).toLowerCase();
-        if (!dir || !baseName || !await fs.pathExists(dir))
+        if (!dir || !baseName)
             return '';
 
         try {
-            const entries = await fs.readdir(dir);
+            const entries = await this.readLibraryDirCached(dir);
             const match = entries.find(item => item.toLowerCase() === baseName);
             return match ? path.join(dir, match) : '';
         } catch(e) {
@@ -5350,6 +5378,73 @@ class WebWorker {
             });
     }
 
+    //Работа, которую ждёт пользователь (карточка, чтение, скачивание). Пока она идёт,
+    //фоновые задачи не начинают новых чтений библиотеки: сетевой диск выполняет
+    //параллельные чтения по очереди, и 100 обложек списка задерживают карточку на секунды
+    async runForeground(fn) {
+        if (resourceRuntime.isBackground())
+            return await fn();
+
+        this.foregroundJobs = (this.foregroundJobs || 0) + 1;
+        try {
+            return await fn();
+        } finally {
+            this.foregroundJobs--;
+            this.wakeBackgroundJobs();
+        }
+    }
+
+    //Чтения библиотеки для фона (обложки списка, фоновая подготовка книг), не больше
+    //лимита фоновых задач профиля. isCancelled: результат больше не нужен (браузер закрыл запрос)
+    async runBackground(fn, isCancelled = () => false, signal) {
+        const cancelled = () => signal?.aborted || isCancelled();
+        if (cancelled())
+            return null;
+        const deadline = Date.now() + resourceRuntime.settings.taskTimeoutMs;
+        while (this.foregroundJobs || (this.backgroundJobs || 0) >= resourceRuntime.settings.limits.background) {
+            if (!await this.waitBackgroundTurn(signal, deadline) || cancelled())
+                return null;
+        }
+
+        this.backgroundJobs = (this.backgroundJobs || 0) + 1;
+        try {
+            return await resourceRuntime.withBackground(fn);
+        } finally {
+            this.backgroundJobs--;
+            this.wakeBackgroundJobs();
+        }
+    }
+
+    waitBackgroundTurn(signal, deadline = Date.now() + resourceRuntime.settings.taskTimeoutMs) {
+        if (!this.backgroundWaiters)
+            this.backgroundWaiters = [];
+        if (signal?.aborted) return Promise.resolve(false);
+        if (this.backgroundWaiters.length >= 256)
+            return Promise.reject(Object.assign(new Error('Очередь обложек заполнена. Повторите позже.'), {code:'INPX_RESOURCE_IO_QUEUE_FULL'}));
+        return new Promise((resolve, reject) => {
+            const entry = {};
+            const remove = () => {
+                const index = this.backgroundWaiters.indexOf(entry);
+                if (index < 0) return false;
+                this.backgroundWaiters.splice(index, 1);
+                clearTimeout(entry.timer); signal?.removeEventListener('abort', entry.abort);
+                return true;
+            };
+            entry.finish = value => {if (remove()) resolve(value);};
+            entry.abort = () => entry.finish(false);
+            entry.timer = setTimeout(() => {
+                if (remove()) reject(Object.assign(new Error('Истекло время ожидания обложки.'), {code:'INPX_RESOURCE_IO_QUEUE_TIMEOUT'}));
+            }, Math.max(1, deadline - Date.now()));
+            this.backgroundWaiters.push(entry);
+            signal?.addEventListener('abort', entry.abort, {once:true});
+        });
+    }
+
+    wakeBackgroundJobs() {
+        for (const entry of [...(this.backgroundWaiters || [])])
+            entry.finish(true);
+    }
+
     async getFblibraryImages(libid, sourceLibDir = '', libFolder = '') {
         const archives = libFolder ? await this.getBookAssetArchives('images', libFolder, sourceLibDir)
             : await this.getFblibraryArchives('images', libid, sourceLibDir);
@@ -5429,9 +5524,7 @@ class WebWorker {
         ]));
         const exact = [];
         for (const dir of dirs) {
-            if (!await fs.pathExists(dir))
-                continue;
-            for (const name of await fs.readdir(dir)) {
+            for (const name of await this.readLibraryDirCached(dir)) {
                 if (['.zip', '.7z'].includes(path.extname(name).toLowerCase())
                     && path.basename(name, path.extname(name)).toLowerCase() === baseName.toLowerCase())
                     exact.push({file: path.join(dir, name)});
@@ -5839,23 +5932,25 @@ class WebWorker {
     //одновременные запросы одной книги (карточка в фоне, «Читать», «Скачать»)
     //ждут одну подготовку
     async getBookLink(bookUid) {
-        this.checkMyState();
-        const generation = this.libraryAssetGeneration;
-        const db = this.db;
-        if (!this.bookLinkJobs)
-            this.bookLinkJobs = new Map();
+        return await this.runForeground(async() => {
+            this.checkMyState();
+            const generation = this.libraryAssetGeneration;
+            const db = this.db;
+            if (!this.bookLinkJobs)
+                this.bookLinkJobs = new Map();
 
-        const key = JSON.stringify([bookUid, generation || 0]);
-        let job = this.bookLinkJobs.get(key);
-        if (!job) {
-            job = this.prepareBookLink(bookUid).finally(() => this.bookLinkJobs.delete(key));
-            this.bookLinkJobs.set(key, job);
-        }
+            const key = JSON.stringify([bookUid, generation || 0]);
+            let job = this.bookLinkJobs.get(key);
+            if (!job) {
+                job = this.prepareBookLink(bookUid).finally(() => this.bookLinkJobs.delete(key));
+                this.bookLinkJobs.set(key, job);
+            }
 
-        //вызывающие дополняют результат, поэтому каждому своя копия
-        const result = await job;
-        this.checkLibraryAssetState(generation, db);
-        return Object.assign({}, result);
+            //вызывающие дополняют результат, поэтому каждому своя копия
+            const result = await job;
+            this.checkLibraryAssetState(generation, db);
+            return Object.assign({}, result);
+        });
     }
 
     checkLibraryAssetState(generation, db) {
@@ -6543,7 +6638,7 @@ class WebWorker {
             try {
                 if (generation !== this.libraryAssetGeneration)
                     return;
-                await this.getBookLink(bookUid);
+                await this.runBackground(() => generation === this.libraryAssetGeneration ? this.getBookLink(bookUid) : null);
             } finally {
                 this.backgroundBookQueue.ret();
             }
@@ -6553,6 +6648,10 @@ class WebWorker {
     //Карточке книги нужны описание FB2, содержание и отзывы. Иллюстрации и обложку
     //не извлекаем: обложку клиент берёт из /cover/by-uid, иллюстрации - из getBookGallery
     async getBookCardInfo(bookUid) {
+        return await this.runForeground(() => this.buildBookCard(bookUid));
+    }
+
+    async buildBookCard(bookUid) {
         this.checkMyState();
 
         const db = this.db;
