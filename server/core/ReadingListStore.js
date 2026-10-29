@@ -2,6 +2,7 @@ const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
 const profilePassword = require('./ProfilePassword');
+const bookFormats = require('../../shared/BookFormats');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 
 const readerPreferencesVersion = 2;
@@ -656,6 +657,7 @@ class ReadingListStore {
         normalized.passwordHash = String(normalized.passwordHash || '').trim();
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
+        normalized.defaultDownloadFormat = bookFormats.normalize(normalized.defaultDownloadFormat);
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
         normalized.opdsAuthEnabled = (normalized.opdsAuthEnabled === true);
         normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
@@ -1131,6 +1133,7 @@ class ReadingListStore {
             passwordHash: String(profile.passwordHash || '').trim(),
             emailTo: profile.emailTo,
             telegramChatId: profile.telegramChatId,
+            defaultDownloadFormat: profile.defaultDownloadFormat,
             opdsEnabled: profile.opdsEnabled,
             opdsAuthEnabled: profile.opdsAuthEnabled,
             isAdmin: false,
@@ -1165,6 +1168,8 @@ class ReadingListStore {
             target.emailTo = String(patch.emailTo || '').trim();
         if (utilsHasProp(patch, 'telegramChatId'))
             target.telegramChatId = String(patch.telegramChatId || '').trim();
+        if (utilsHasProp(patch, 'defaultDownloadFormat'))
+            target.defaultDownloadFormat = bookFormats.normalize(patch.defaultDownloadFormat);
         if (utilsHasProp(patch, 'opdsEnabled'))
             target.opdsEnabled = (patch.opdsEnabled !== false);
         if (utilsHasProp(patch, 'opdsAuthEnabled'))
@@ -1943,6 +1948,7 @@ class ReadingListStore {
                 name: user.name,
                 emailTo: user.emailTo,
                 telegramChatId: user.telegramChatId,
+                defaultDownloadFormat: bookFormats.normalize(user.defaultDownloadFormat),
                 opdsEnabled: user.opdsEnabled,
                 opdsAuthEnabled: user.opdsAuthEnabled,
                 readerPreferences: this.normalizeReaderPreferences(user.readerPreferences),
@@ -1986,6 +1992,8 @@ class ReadingListStore {
                 target.emailTo = String(incomingUser.emailTo || '').trim();
             if (utilsHasProp(incomingUser, 'telegramChatId'))
                 target.telegramChatId = String(incomingUser.telegramChatId || '').trim();
+            if (utilsHasProp(incomingUser, 'defaultDownloadFormat'))
+                target.defaultDownloadFormat = bookFormats.normalize(incomingUser.defaultDownloadFormat);
             if (utilsHasProp(incomingUser, 'opdsEnabled'))
                 target.opdsEnabled = (incomingUser.opdsEnabled !== false);
             if (utilsHasProp(incomingUser, 'opdsAuthEnabled'))

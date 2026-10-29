@@ -8,6 +8,7 @@ import BookView from './BookView/BookView.vue';
 import LoadingMessage from './LoadingMessage/LoadingMessage.vue';
 import * as utils from '../../share/utils';
 const {match: catalogMatch} = require('../../../shared/CatalogSearch');
+const bookFormats = require('../../../shared/BookFormats');
 
 const showMoreCount = 100;//значение для "Показать еще"
 const maxItemCount = 500;//выше этого значения показываем "Загрузка"
@@ -259,6 +260,7 @@ export default class BaseList {
     }
 
     getActionLoadingMessage(action, format = '') {
+        if (format === 'raw') format = '';
         if (action == 'bookInfo')
             return 'Загрузка информации о книге...';
 
@@ -316,6 +318,7 @@ export default class BaseList {
     }
 
     getDirectBookDownloadHref(book, format = '') {
+        format = bookFormats.resolve(book.ext, this.config, bookFormats.profilePreference(this.config), format);
         const bookUid = this.getBookUid(book);
         const root = String(this.config.rootPathStatic || '').replace(/\/$/, '');
         const params = new URLSearchParams();
@@ -355,7 +358,9 @@ export default class BaseList {
         if (this.downloadFlag)
             return;
 
-        if (format && this.config.conversionEnabled === false) {
+        if (['download', 'copyLink', 'sendTelegram', 'sendEmail'].includes(action))
+            format = bookFormats.resolve(book.ext, this.config, bookFormats.profilePreference(this.config), format);
+        if (format && format !== 'raw' && this.config.conversionEnabled === false) {
             this.$root.stdDialog.alert('Конвертация книг отключена в текущем образе.', 'Информация');
             return;
         }
@@ -375,13 +380,13 @@ export default class BaseList {
 
             if (action == 'sendTelegram') {
                 await this.api.sendBookTelegram(book._uid, format);
-                this.$root.notify.success(`Книга отправлена в Telegram${format ? ` (${format.toUpperCase()})` : ''}`);
+                this.$root.notify.success(`Книга отправлена в Telegram${format && format !== 'raw' ? ` (${format.toUpperCase()})` : ''}`);
                 return;
             }
 
             if (action == 'sendEmail') {
                 await this.api.sendBookEmail(book._uid, format);
-                this.$root.notify.success(`Книга отправлена на email${format ? ` (${format.toUpperCase()})` : ''}`);
+                this.$root.notify.success(`Книга отправлена на email${format && format !== 'raw' ? ` (${format.toUpperCase()})` : ''}`);
                 return;
             }
 

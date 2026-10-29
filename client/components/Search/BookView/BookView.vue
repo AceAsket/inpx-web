@@ -373,6 +373,7 @@
 </template>
 
 <script>
+const bookFormats = require('../../../../shared/BookFormats');
 //-----------------------------------------------------------------------------
 import vueComponent from '../../vueComponent.js';
 
@@ -464,15 +465,7 @@ class BookView {
     }
 
     get availableConversionFormats() {
-        const currentExt = (this.book.ext || '').toLowerCase();
-        const formats = this.conversionFormats;
-
-        if (currentExt === 'fb2')
-            return formats;
-        if (currentExt === 'epub')
-            return formats.filter(format => format === 'pdf' || format === 'mobi');
-
-        return [];
+        return bookFormats.available(this.book.ext, this.config);
     }
 
     get telegramShareEnabled() {
@@ -614,8 +607,9 @@ class BookView {
     }
 
     get downloadLabel() {
-        if (this.book.ext)
-            return `${this.downloadBase} ${this.book.ext.toUpperCase()}`;
+        const format = this.preferredDownloadFormat || this.book.ext;
+        if (format)
+            return `${this.downloadBase} ${format.toUpperCase()}`;
 
         return this.downloadBase;
     }
@@ -771,7 +765,12 @@ class BookView {
         if (!this.conversionEnabled)
             return [];
 
-        return this.availableConversionFormats.filter(format => format !== currentExt);
+        const primary = this.preferredDownloadFormat || currentExt;
+        return [...new Set([currentExt, ...this.availableConversionFormats])].filter(format => format && format !== primary);
+    }
+
+    get preferredDownloadFormat() {
+        return bookFormats.resolve(this.book.ext, this.config, bookFormats.profilePreference(this.config));
     }
 
     get formatDropdownLabel() {
@@ -863,6 +862,7 @@ class BookView {
     }
 
     getDirectBookDownloadHref(format = '') {
+        format = bookFormats.resolve(this.book.ext, this.config, bookFormats.profilePreference(this.config), format);
         const bookUid = this.getBookUid();
         const root = String(this.config.rootPathStatic || '').replace(/\/$/, '');
         const params = new URLSearchParams();
@@ -929,6 +929,8 @@ class BookView {
     }
 
     emit(action, format = '') {
+        if (['download', 'copyLink', 'sendTelegram', 'sendEmail'].includes(action))
+            format = bookFormats.resolve(this.book.ext, this.config, bookFormats.profilePreference(this.config), format);
         this.$emit('bookEvent', {action, format, book: this.book});
     }
 

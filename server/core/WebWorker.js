@@ -30,6 +30,7 @@ const reviewRuntime = require('./ReviewRuntime');
 const bookAssets = require('./BookAssets');
 const bookConverter = require('./BookConverter');
 const bookNaming = require('./BookNaming');
+const bookFormats = require('../../shared/BookFormats');
 const runtimeMetrics = require('./RuntimeMetrics');
 const resourceRuntime = require('./ResourceRuntime');
 const {isResourceError} = require('./ResourcePolicy');
@@ -3659,6 +3660,7 @@ class WebWorker {
                 isAdmin: !!user.isAdmin,
                 emailTo: (profileAuthorized ? user.emailTo || '' : ''),
                 telegramChatId: (profileAuthorized ? user.telegramChatId || '' : ''),
+                defaultDownloadFormat: profileAuthorized ? bookFormats.normalize(user.defaultDownloadFormat) : 'original',
                 opdsEnabled: user.opdsEnabled !== false,
                 opdsAuthEnabled: user.opdsAuthEnabled === true,
                 readerPreferences: (profileAuthorized ? this.readingListStore.normalizeReaderPreferences(user.readerPreferences) : null),
@@ -6046,7 +6048,7 @@ class WebWorker {
         }
     }
 
-    async getPreparedBookFile(bookUid, format = '') {
+    async getPreparedBookFile(bookUid, format = '', preference = 'original') {
         const {link, downFileName, size} = await this.getBookLink(bookUid);
         const hash = path.basename(link);
         const gzipFile = `${this.config.bookDir}/${hash}`;
@@ -6063,8 +6065,9 @@ class WebWorker {
 
         let preparedFile = rawFile;
         let preparedFileName = downFileName;
-        const targetFormat = String(format || '').toLowerCase();
         const sourceFormat = String(rows[0].ext || '').toLowerCase();
+        const selected = bookFormats.resolve(sourceFormat, this.config, preference, format);
+        const targetFormat = selected === 'raw' ? '' : selected;
 
         if (targetFormat && targetFormat !== sourceFormat) {
             const prepared = await bookConverter.prepareConvertedFile({
@@ -6105,7 +6108,7 @@ class WebWorker {
         if (!chatId)
             throw new Error('Telegram chat id не указан в текущем профиле пользователя');
 
-        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
+        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format, currentUser?.defaultDownloadFormat);
         this.addAdminEvent('info', 'delivery', `Отправка книги в Telegram: ${book.title || downFileName}`);
         const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
         const form = new FormData();
@@ -6134,10 +6137,10 @@ class WebWorker {
         if (!this.config.emailShareEnabled || !this.config.smtpHost || !emailTo)
             throw new Error('Отправка на email не настроена');
 
-        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
+        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format, currentUser?.defaultDownloadFormat);
         this.addAdminEvent('info', 'delivery', `Отправка книги на email: ${book.title || downFileName}`, {
             to: emailTo,
-            format: format || book.ext || '',
+            format: path.extname(downFileName).slice(1) || book.ext || '',
         });
         const transporter = nodemailer.createTransport(this.buildSmtpTransportOptions());
 

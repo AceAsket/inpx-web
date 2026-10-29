@@ -358,6 +358,15 @@
                             </q-input>
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
                             <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
+                            <div class="profile-format-setting">
+                                <q-select
+                                    v-model="editableProfile.defaultDownloadFormat"
+                                    :options="downloadFormatOptions"
+                                    emit-value map-options outlined dense
+                                    label="Формат скачивания и отправки"
+                                    hint="Для скачивания, Email и Telegram. Если формат недоступен для книги, используется исходный."
+                                />
+                            </div>
                             <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :disable="!!currentProfile.isAdmin" :label="uiText.showProfileInOpds" />
                             <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!!currentProfile.isAdmin || !editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
                             <div v-if="currentProfile.isAdmin" class="profile-backup-hint profile-opds-admin-note">
@@ -415,6 +424,7 @@
 import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
 import ReadingListsDialog from '../ReadingListsDialog/ReadingListsDialog.vue';
+const bookFormats = require('../../../../shared/BookFormats');
 
 const componentOptions = {
     components: {
@@ -468,6 +478,15 @@ class UserProfilesDialog {
 
     get currentProfile() {
         return this.config.currentUserProfile || {};
+    }
+
+    get downloadFormatOptions() {
+        const options = [{value:'original', label:'Исходный формат'},
+            ...bookFormats.configured(this.config).map(value => ({value, label:value.toUpperCase()}))];
+        const current = bookFormats.normalize(this.editableProfile.defaultDownloadFormat);
+        if (!options.some(option => option.value === current))
+            options.push({value:current, label:`${current.toUpperCase()} (недоступен)`, disable:true});
+        return options;
     }
 
     get canManageProfiles() {
@@ -585,6 +604,7 @@ class UserProfilesDialog {
             password: '',
             emailTo: '',
             telegramChatId: '',
+            defaultDownloadFormat: 'original',
             opdsEnabled: true,
             opdsAuthEnabled: false,
         };
@@ -603,6 +623,7 @@ class UserProfilesDialog {
             password: '',
             emailTo: current.emailTo || '',
             telegramChatId: current.telegramChatId || '',
+            defaultDownloadFormat: bookFormats.normalize(current.defaultDownloadFormat),
             opdsEnabled: current.opdsEnabled !== false,
             opdsAuthEnabled: current.opdsAuthEnabled === true,
         };
@@ -931,7 +952,7 @@ class UserProfilesDialog {
         try {
             await this.api.updateUserProfile(this.currentUserId, this.editableProfile);
             this.editableProfile.password = '';
-            await this.loadProfiles();
+            await this.loadProfiles({preserveState: true});
             this.$root.notify.success(this.uiText.profileSaved);
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
@@ -1104,6 +1125,10 @@ export default vueComponent(UserProfilesDialog);
 
 .profile-edit-grid {
     margin-top: 6px;
+}
+
+.profile-format-setting {
+    grid-column: 1 / -1;
 }
 
 .profile-toggle {
