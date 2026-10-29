@@ -61,12 +61,14 @@ final class ServerControl {
   }
 
   static void start(Context context, boolean demo, int port) throws Exception {
+    String sourceVersion = demo ? "" : SourceVersion.of(Vault.read(context));
     transaction(
         context,
         s -> {
           s.put("requested", true)
               .put("demo", demo)
               .put("port", port)
+              .put("sourceVersion", sourceVersion)
               .put("explicitStart", System.currentTimeMillis())
               .put("attempts", 0)
               .put("attemptWindow", 0)

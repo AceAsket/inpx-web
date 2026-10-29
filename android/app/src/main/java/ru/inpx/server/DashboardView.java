@@ -17,8 +17,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.json.JSONArray;
-import org.json.JSONObject;
+import ru.inpx.server.presentation.DashboardState;
+import ru.inpx.server.presentation.SourceInfo;
 
 /**
  * Two native layouts sharing actions and state. Status updates never rebuild focusable controls.
@@ -57,7 +57,7 @@ final class DashboardView {
 
     void mode();
 
-    void source(int index);
+    void source(String id);
   }
 
   final Context context;
@@ -65,13 +65,14 @@ final class DashboardView {
   final View root;
   final Map<String, Button> controls = new LinkedHashMap<>();
   final List<Button> left = new ArrayList<>(), right = new ArrayList<>();
-  final TextView badge, headline, summary, address, sourceCount;
+  final TextView badge, headline, summary, address, sourceCount, nextStep;
   private final Button primary;
   private final QrView qr;
   private final Map<String, String> sourceLabels = new LinkedHashMap<>();
   private String focusKey = "primary";
 
-  DashboardView(Context context, boolean tv, String modeLabel, JSONArray sources, Actions actions) {
+  DashboardView(
+      Context context, boolean tv, String modeLabel, List<SourceInfo> sources, Actions actions) {
     this.context = context;
     this.tv = tv;
     LinearLayout screen = column();
@@ -137,6 +138,10 @@ final class DashboardView {
             false);
     hint.setPadding(0, dp(7), 0, 0);
     hero.addView(hint);
+    nextStep = text("", 13, MUTED, false);
+    nextStep.setTag("dashboard-next-step");
+    nextStep.setPadding(0, dp(12), 0, 0);
+    hero.addView(nextStep);
 
     primary = button("primary", "Запустить сервер", true, actions::toggle);
     left.add(primary);
@@ -152,7 +157,7 @@ final class DashboardView {
     TextView title = text("Источники книг", tv ? 20 : 21, TEXT, true);
     sectionHeader.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
     sourceCount =
-        text(String.format(java.util.Locale.ROOT, "%02d", sources.length()), 18, MINT, true);
+        text(String.format(java.util.Locale.ROOT, "%02d", sources.size()), 18, MINT, true);
     sectionHeader.addView(sourceCount);
     library.addView(sectionHeader);
     TextView explanation = text("Папка с INPX и архивами или библиотека на NAS.", 13, MUTED, false);
@@ -164,31 +169,25 @@ final class DashboardView {
     Button smb = button("smb", "＋  Сетевая папка SMB", false, actions::smb);
     right.add(smb);
     addControl(library, smb);
-    if (sources.length() == 0) {
+    if (sources.size() == 0) {
       TextView empty =
           text("Пока нет источников\nДобавьте библиотеку или начните с демо.", 13, MUTED, false);
       empty.setPadding(dp(4), dp(16), dp(4), dp(8));
       library.addView(empty);
     }
-    for (int i = 0; i < sources.length(); i++) {
-      final int index = i;
-      JSONObject source = sources.optJSONObject(i);
-      if (source == null) continue;
-      String kind =
-          source.optString("kind").equals("smb")
-              ? "SMB · " + source.optString("host")
-              : "SD / USB · Папка";
+    for (int i = 0; i < sources.size(); i++) {
+      SourceInfo source = sources.get(i);
+      String kind = source.kind.equals("smb") ? "SMB · " + source.location : "SD / USB · Папка";
       Button entry =
           button(
-              "source:" + source.optString("id"),
-              source.optString("name", "Библиотека") + "\n" + kind + "   ›",
+              "source:" + source.id,
+              source.name + "\n" + kind + "   ›",
               false,
-              () -> actions.source(index));
+              () -> actions.source(source.id));
       entry.setTextSize(14);
       entry.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
       entry.setMaxLines(3);
-      sourceLabels.put(
-          source.optString("id"), source.optString("name", "Библиотека") + "\n" + kind);
+      sourceLabels.put(source.id, source.name + "\n" + kind);
       right.add(entry);
       addControl(library, entry, 88);
     }
@@ -246,7 +245,7 @@ final class DashboardView {
       TextView help =
           text(
               "↑ ↓ ← →  Выбор     OK  Открыть     Назад  Вернуться                         ANDROID"
-                  + " TV · 0.5",
+                  + " TV · 0.6",
               11,
               MUTED,
               false);
@@ -278,7 +277,7 @@ final class DashboardView {
       LinearLayout.LayoutParams opt = new LinearLayout.LayoutParams(-1, -2);
       opt.topMargin = dp(10);
       content.addView(options, opt);
-      TextView footer = text("INPX SERVER  /  ANDROID 9+  /  0.5", 11, MUTED, false);
+      TextView footer = text("INPX SERVER  /  ANDROID 9+  /  0.6", 11, MUTED, false);
       footer.setTag("dashboard-footer");
       footer.setGravity(Gravity.CENTER);
       footer.setPadding(0, dp(24), 0, dp(10));
@@ -451,32 +450,90 @@ final class DashboardView {
     return focusKey;
   }
 
-  void updateSources(JSONArray health, boolean running) {
-    for (Map.Entry<String, String> source : sourceLabels.entrySet()) {
-      JSONObject status = SourceHealth.find(health, source.getKey());
-      String label = SourceHealth.label(status);
-      if (running && status.optBoolean("online") && status.optBoolean("restartRequired"))
+  void update(DashboardState state) {
+    boolean online = state.online(), busy = state.busy(), empty = state.sources.isEmpty();
+    for (SourceInfo source : state.sources) {
+      Button button = controls.get("source:" + source.id);
+      if (button == null) continue;
+      String label = source.label;
+      if ((online || busy) && source.online && source.restartRequired)
         label = "Доступен · перезапустите сервер";
-      Button button = controls.get("source:" + source.getKey());
-      button.setText(source.getValue() + "\n" + label + "   ›");
-      button.setContentDescription(source.getValue().replace('\n', ' ') + ". " + label);
+      button.setText(sourceLabels.get(source.id) + "\n" + label + "   ›");
+      button.setContentDescription(sourceLabels.get(source.id).replace('\n', ' ') + ". " + label);
     }
-  }
-
-  void update(
-      boolean online, boolean busy, String detail, String url, String metric, boolean shareable) {
     badge.setText(
-        online ? "●  СЕРВЕР В СЕТИ" : busy ? "●  ПОДГОТОВКА БИБЛИОТЕКИ" : "○  СЕРВЕР ОСТАНОВЛЕН");
-    badge.setTextColor(online ? MINT : busy ? AMBER : MUTED);
+        online
+            ? "●  СЕРВЕР В СЕТИ"
+            : state.phase == DashboardState.Phase.STOPPING
+                ? "●  ЗАВЕРШЕНИЕ РАБОТЫ"
+                : busy
+                    ? "●  ПОДГОТОВКА БИБЛИОТЕКИ"
+                    : state.phase == DashboardState.Phase.ERROR
+                        ? "!  НУЖНО ВНИМАНИЕ"
+                        : empty ? "1 / 3  ·  ПОДКЛЮЧИТЕ КНИГИ" : "2 / 3  ·  ВСЁ ГОТОВО К ЗАПУСКУ");
+    badge.setTextColor(
+        online ? MINT : busy || state.phase == DashboardState.Phase.ERROR ? AMBER : MUTED);
     headline.setText(
         online
             ? "Всё готово\nк чтению"
-            : busy ? "Готовим книги\nк встрече" : "Библиотека\nв вашей сети");
-    summary.setText(online ? metric : detail);
-    address.setText(online ? url : "Доступен после запуска");
-    primary.setText(online ? "Остановить сервер" : busy ? "Запускаем сервер…" : "Запустить сервер");
-    if (online && shareable && !url.isEmpty()) {
-      qr.setUrl(url);
+            : state.phase == DashboardState.Phase.STOPPING
+                ? "Завершаем\nработу"
+                : busy
+                    ? "Готовим вашу\nбиблиотеку"
+                    : empty ? "Начните со\nсвоих книг" : "Библиотека\nв вашей сети");
+    int count = state.sources.size();
+    int digit = count % 10, lastTwo = count % 100;
+    String noun =
+        digit == 1 && lastTwo != 11
+            ? " источник"
+            : digit >= 2 && digit <= 4 && (lastTwo < 12 || lastTwo > 14)
+                ? " источника"
+                : " источников";
+    summary.setText(
+        online
+            ? (state.demo
+                ? "Демо-библиотека · две книги для знакомства"
+                : count + noun + " · Каталог и OPDS в домашней сети")
+            : busy || state.phase == DashboardState.Phase.ERROR
+                ? state.detail
+                : empty
+                    ? "Подключите папку с INPX и архивами или библиотеку на NAS."
+                    : "Настройки сохранены. Запустите сервер и откройте каталог.");
+    address.setText(
+        online
+            ? state.url().isEmpty() ? "Подключите Wi-Fi или Ethernet" : state.url()
+            : "Адрес появится после запуска");
+    nextStep.setText(
+        state.restartRequired
+            ? "Есть изменения. Остановите и запустите сервер, чтобы применить их."
+            : online
+                ? "3 / 3  ·  Откройте каталог здесь или сканируйте QR-код телефоном."
+                : busy
+                    ? "Экран можно выключить. Состояние обновится автоматически."
+                    : empty
+                        ? "Добавить библиотеку → Запустить сервер → Открыть каталог"
+                        : "Следующий шаг — нажмите «Запустить сервер».");
+    nextStep.setTextColor(state.restartRequired ? AMBER : MUTED);
+    primary.setText(
+        online
+            ? "Остановить сервер"
+            : state.phase == DashboardState.Phase.LOADING
+                ? "Читаем настройки…"
+                : state.phase == DashboardState.Phase.STOPPING
+                    ? "Останавливаем сервер…"
+                    : busy
+                        ? "Запускаем сервер…"
+                        : empty ? "Добавить библиотеку" : "Запустить сервер");
+    primary.setAlpha(busy ? .65f : 1f);
+    controls.get("catalog").setAlpha(online ? 1f : .6f);
+    controls
+        .get("demo")
+        .setText(
+            online && state.demo
+                ? "Сейчас работает демо-библиотека"
+                : "Попробовать демо-библиотеку");
+    if (online && !state.url().isEmpty()) {
+      qr.setUrl(state.url());
       qr.setVisibility(View.VISIBLE);
     } else qr.setVisibility(View.GONE);
   }

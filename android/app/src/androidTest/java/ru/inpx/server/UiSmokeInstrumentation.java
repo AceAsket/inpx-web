@@ -48,6 +48,9 @@ public final class UiSmokeInstrumentation extends Instrumentation {
         finish(report.optBoolean("passed") ? Activity.RESULT_OK : Activity.RESULT_CANCELED, result);
         return;
       }
+      JSONObject repositoryReport = RepositoryChecks.run(getTargetContext());
+      require(
+          repositoryReport.optBoolean("passed"), "Isolated repository checks: " + repositoryReport);
       open(preferences, "tv");
       noOverlay("TV home keeps controls inside the content area");
       require("primary".equals(focused()), "TV starts with visible focus on primary action");
@@ -86,6 +89,8 @@ public final class UiSmokeInstrumentation extends Instrumentation {
       key(KeyEvent.KEYCODE_DPAD_DOWN);
       require("power".equals(focused()), "D-pad reaches background settings");
       key(KeyEvent.KEYCODE_DPAD_CENTER);
+      require(
+          awaitFocusedClass("CheckBox"), "Background settings load without blocking the screen");
       screenshot("power-open");
       require(
           activeFocusedClass().contains("CheckBox"),
@@ -164,7 +169,13 @@ public final class UiSmokeInstrumentation extends Instrumentation {
       while (!choice.isClickable() && choice.getParent() != null) choice = choice.getParent();
       choice.performAction(AccessibilityNodeInfo.ACTION_CLICK);
       waitForIdleSync();
-      SystemClock.sleep(200);
+      long modeDeadline = SystemClock.elapsedRealtime() + 3000;
+      while (SystemClock.elapsedRealtime() < modeDeadline
+          && (!"tv".equals(preferences.getString("ui_mode", ""))
+              || !"mode".equals(focused())
+              || !String.valueOf(find("mode").getContentDescription()).contains("ТВ")))
+        SystemClock.sleep(50);
+      waitForIdleSync();
       require(
           "tv".equals(preferences.getString("ui_mode", "")), "Manual switch persists TV choice");
       require("mode".equals(focused()), "Switching layout restores focus to mode control");
@@ -214,7 +225,16 @@ public final class UiSmokeInstrumentation extends Instrumentation {
             new Intent(getTargetContext(), MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
     waitForIdleSync();
-    SystemClock.sleep(400);
+    long deadline = SystemClock.elapsedRealtime() + 5000;
+    String modeLabel = mode.equals("tv") ? "ТВ" : "Сенсор";
+    while (SystemClock.elapsedRealtime() < deadline) {
+      View modeControl = find("mode");
+      if (modeControl != null
+          && String.valueOf(modeControl.getContentDescription()).contains(modeLabel)
+          && (!mode.equals("tv") || "primary".equals(focused()))) break;
+      SystemClock.sleep(50);
+    }
+    waitForIdleSync();
   }
 
   private View find(String key) {
