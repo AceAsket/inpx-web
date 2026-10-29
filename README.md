@@ -1,13 +1,15 @@
 inpx-web-7z
 ===========
 
+[![Telegram — сообщество INPX Web](https://img.shields.io/badge/Telegram-INPX_Web-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/inpxweb) [![Android 9+ — скачать APK](https://img.shields.io/badge/Android-9%2B_APK-2E7D32?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
+
 Стабильная версия — **1.8.0**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.0), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.0`. Для разработки используется ветка `develop`.
 
 <a id="ключевые-отличия" />
 
 ## Что это за форк
 
-Форк [`bookpauk/inpx-web`](https://github.com/bookpauk/inpx-web) для self-hosted библиотек с упором на большие `.7z` / `.zip` / `fLibrary` коллекции, Docker-развёртывание и обновлённую встроенную FB2-читалку. README ниже в первую очередь описывает сценарий `Docker / сервер`, но также покрывает standalone-бинарники и запуск из исходников через Node.js.
+Форк [`bookpauk/inpx-web`](https://github.com/bookpauk/inpx-web) для self-hosted библиотек с упором на большие `.7z` / `.zip` / `fLibrary` коллекции, Docker-развёртывание и обновлённую встроенную FB2-читалку. README ниже описывает запуск в Docker, standalone-бинарники, сервер на Android и запуск из исходников через Node.js.
 
 Ключевое в этом форке:
 
@@ -21,19 +23,22 @@ inpx-web-7z
 * отправка и конвертация книг в `epub`, `epub3`, `kepub`, `kfx`, `azw8` и `pdf`, а также отправка через Telegram и email
 * многопользовательские профили, личные списки чтения, `Telegram chat id`, email и публикация через OPDS
 * админский дашборд, журнал событий, управление источниками из UI, health-checks и Prometheus-метрики
+* отдельное Android-приложение для планшетов и ТВ-приставок: Android 9+, ARM32 / ARM64, управление касаниями или пультом, библиотеки через SD / USB и SMB
 
 ## Какой сценарий выбрать
 
 1. `Docker / сервер` — основной и рекомендуемый вариант для домашнего сервера, NAS, unRAID, Proxmox LXC, VPS и постоянного web-доступа к библиотеке.
 2. `Standalone-бинарник` — локальный запуск без Docker, если нужен один готовый `.exe` / исполняемый файл.
 3. `Запуск через Node.js` — режим для разработки, отладки и ручного старта из исходников.
+4. `Android` — сервер на планшете или ТВ-приставке с Android 9+: готовые APK для ARM32 и ARM64, без Root и Termux.
 
-Если нужен серверный каталог, переходите к разделам про Docker. Если нужен готовый исполняемый файл, используйте GitHub Releases. Если работаете с исходниками, смотрите раздел про Node.js ниже.
+Для домашнего сервера переходите к разделам про Docker, для планшета или приставки — к [серверу на Android](#сервер-на-android). Готовые standalone-бинарники доступны в GitHub Releases; запуск из исходников описан в разделе про Node.js ниже.
 
 ## Быстрая навигация
 
 * [Что это за форк](#ключевые-отличия)
 * [Какой сценарий выбрать](#какой-сценарий-выбрать)
+* [Сервер на Android: ARM32 / ARM64](#сервер-на-android)
 * [Сборка Docker-контейнера](#сборка-docker-контейнера)
 * [Быстрый старт через docker run](#быстрый-старт-через-docker-run)
 * [Авторизация и мониторинг](#авторизация-и-мониторинг)
@@ -59,6 +64,28 @@ inpx-web-7z
 * [Релизные проверки](#релизные-проверки)
 * [Proxmox LXC](#proxmox-lxc)
 * [Обратная связь](#обратная-связь)
+
+## Сервер на Android
+
+Библиотеку можно запустить прямо на планшете, телефоне или ТВ-приставке с **Android 9 и новее**, без Root и Termux. Android-приложение опубликовано отдельно: [предрелиз 0.5.0 и контрольные суммы](https://github.com/AceAsket/inpx-web/releases/tag/android-v0.5.0).
+
+| Android на устройстве | Скачать |
+| --- | --- |
+| **ARM32** — 32-битная прошивка, ARMv7 с NEON | [APK для ARM32](https://github.com/AceAsket/inpx-web/releases/download/android-v0.5.0/inpx-server-0.5.0-arm32-debug.apk) |
+| **ARM64** — 64-битная прошивка, arm64-v8a | [APK для ARM64](https://github.com/AceAsket/inpx-web/releases/download/android-v0.5.0/inpx-server-0.5.0-arm64-debug.apk) |
+
+Выбирайте APK по разрядности **Android**, а не только процессора: на 64-битной приставке с 32-битной прошивкой нужен ARM32.
+
+* Два режима панели: сенсорный и ТВ с управлением стрелками, OK и «Назад».
+* Папки библиотеки через системный выбор SD / USB и сетевые источники SMB2 / SMB3.
+* Фоновая служба, настройки сна и автозапуска, диагностика и переподключение источников.
+* В обеих сборках включены конвертеры в EPUB, EPUB3, KEPUB, KFX, AZW8, PDF и MOBI.
+
+После установки добавьте папку или SMB-источник и запустите сервер. Каталог открывается в браузере на любом устройстве локальной сети; адрес и QR-код показаны в приложении.
+
+Это предрелиз с debug-подписью. ARM64 проверен на планшете с Android 16; запуск ARM32 и Android 9–11 ещё требует проверки на реальном устройстве. SD / USB должны распознаваться системой и быть доступны в выборе папки.
+
+[Инструкция и сборка](https://github.com/AceAsket/inpx-web/blob/android/android/README.md) · [Исходники: ветка android](https://github.com/AceAsket/inpx-web/tree/android) · [Результаты проверок](https://github.com/AceAsket/inpx-web/blob/android/android/TEST-RESULTS.md)
 
 ## Сборка Docker-контейнера
 
@@ -1454,5 +1481,6 @@ pct set <CTID> -features nesting=1,keyctl=1
 
 ### Обратная связь
 
-По вопросам этого форка используйте Issues в репозитории:
-https://github.com/AceAsket/inpx-web/issues
+Новости, вопросы и обсуждение — в [Telegram-сообществе INPX Web · @inpxweb](https://t.me/inpxweb).
+
+Сообщить об ошибке или предложить улучшение можно через [GitHub Issues](https://github.com/AceAsket/inpx-web/issues).
