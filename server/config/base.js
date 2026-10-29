@@ -116,6 +116,7 @@ module.exports = {
         user: '',
         password: '',
         root: '/opds',
+        compatibility: process.env.INPX_OPDS_COMPATIBILITY === 'tolino' ? 'tolino' : 'standard',
     },
 
     latestReleaseLink: 'https://github.com/AceAsket/inpx-web/releases/latest',

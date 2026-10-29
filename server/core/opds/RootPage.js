@@ -50,6 +50,11 @@ class RootPage extends BasePage {
                 this.readingProgressPage.myEntry(req, 'hidden', readingLibrary.counters.hidden || 0),
             );
             resultEntry.push(this.readingListsPage.myEntry(req));
+            const lists = await this.webWorker.readingListStore.getLists(userId, {visibility:'opds'});
+            for (const list of lists.filter(item => item.opds?.pinned)) {
+                resultEntry.push(this.makeEntry({id:`shelf:${list.id}`, title:list.name,
+                    link:this.navLink({href:`/reading-lists/list?id=${encodeURIComponent(list.id)}`, req})}));
+            }
         } else {
             const publicUsers = await this.webWorker.getOpdsUsers();
             if (publicUsers.length)

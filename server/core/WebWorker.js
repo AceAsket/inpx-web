@@ -906,6 +906,8 @@ class WebWorker {
             db.wwCache = {};            
             this.db = db;
 
+            this.dbSearcher.ratingIndex = new (require('./LibraryRatingIndex'))(this);
+
             this.resetLibraryAssetCaches();
             this.setMyState(ssNormal);
 
@@ -4982,6 +4984,7 @@ class WebWorker {
                 name: item.name,
                 visibility: item.visibility,
                 filters: item.filters || null,
+                opds: require('./opds/ShelfOptions').normalize(item.opds),
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
                 bookCount: listEntries.length,
@@ -4996,7 +4999,7 @@ class WebWorker {
         const {user} = await this.readingListStore.resolveUser(userId);
         const lists = await this.readingListStore.getLists(userId);
         const read = this.getPersonalReadBookSet(user, lists);
-        const ids = await this.dbSearcher.bookSearchIds(filters);
+        const ids = await this.dbSearcher.bookSearchIds(require('./SmartShelf').query(filters));
         const entries = [];
         for (let offset = 0; offset < ids.length; offset += 1000) {
             const rows = await this.db.select({table: 'book', where: `@@id(${this.db.esc(Array.from(ids.slice(offset, offset + 1000)))})`, map: '(row) => ({_uid: row._uid})'});
@@ -5023,9 +5026,9 @@ class WebWorker {
         return {list: this.readingListStore.listStats(item)};
     }
 
-    async setReadingListVisibility(userId = '', listId, visibility) {
+    async setReadingListVisibility(userId = '', listId, visibility, opds) {
         this.checkMyState();
-        const item = await this.readingListStore.setListVisibility(userId, listId, visibility);
+        const item = await this.readingListStore.setListVisibility(userId, listId, visibility, opds);
         return {list: this.readingListStore.listStats(item)};
     }
 
@@ -5783,7 +5786,7 @@ class WebWorker {
         if (this.authorInfoCache.has(cacheKey))
             return {authorInfo: this.authorInfoCache.get(cacheKey)};
 
-        const authorInfo = await this.findAuthorInfo(authorName);
+        const authorInfo = this.remoteLib?.metadata ? await this.remoteLib.metadata.author(authorName) : await this.findAuthorInfo(authorName);
         this.authorInfoCache.set(cacheKey, authorInfo);
         return {authorInfo};
     }
@@ -6310,6 +6313,10 @@ class WebWorker {
     }
 
     async getReviewArchiveState(sourceLibDir = '') {
+        if (this.remoteLib?.metadata) {
+            const remote = await this.remoteLib.metadata.ratingIndex();
+            return {signature:`remote:${remote.signature}`, archives:[]};
+        }
         const libDir = sourceLibDir || this.config.libDir;
         const dirs = [
             ...await this.resolveLibraryAssetDirs('reviews', libDir),
@@ -6454,6 +6461,7 @@ class WebWorker {
     }
 
     async getBookReviews(book, state = null) {
+        if (this.remoteLib?.metadata) return this.remoteLib.metadata.reviews(book._uid);
         const entryKey = libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`);
         const reviewIndex = await this.ensureReviewIndex(book.sourceLibDir, state);
         const matches = reviewIndex.get(entryKey) || [];
@@ -6503,6 +6511,7 @@ class WebWorker {
     }
 
     async getBookLibraryRating(book, state = null) {
+        if (this.remoteLib?.metadata) return this.remoteLib.metadata.rating(book._uid);
         state = state || await this.getReviewArchiveState(book.sourceLibDir);
         const ratings = await this.ensureLibraryRatings(state);
         return ratings.get(libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`)) || null;
@@ -6824,7 +6833,10 @@ class WebWorker {
             } catch (error) {
                 log(LM_WARN, `review index ${dir}: ${error.message}`);
             }
-        })));
+        }))).then(async result => {
+            if (this.dbSearcher?.ratingIndex) await this.dbSearcher.ratingIndex.load();
+            return result;
+        }).catch(error => log(LM_WARN, `rating index: ${error.message}`));
     }
 
     async getInpxFile(params) {

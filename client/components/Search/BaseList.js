@@ -228,6 +228,7 @@ export default class BaseList {
         return [
             query.sourceId ? `source=${query.sourceId}` : '',
             query.hideCopies ? 'hideCopies=1' : '',
+            query.ratingCount ? `votes=${query.ratingCount}` : '',
         ].filter(Boolean).join('|');
     }
 
@@ -577,7 +578,7 @@ export default class BaseList {
         try {
             let result;
 
-            if (this.abCacheEnabled) {
+            if (this.abCacheEnabled && !this.getQuery().ratingCount) {
                 const key = `author-${authorId}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
@@ -600,7 +601,7 @@ export default class BaseList {
         try {
             let result;
 
-            if (this.abCacheEnabled) {
+            if (this.abCacheEnabled && !this.getQuery().ratingCount) {
                 const key = `author-${authorId}-series-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
@@ -623,7 +624,7 @@ export default class BaseList {
         try {
             let result;
 
-            if (this.abCacheEnabled) {
+            if (this.abCacheEnabled && !this.getQuery().ratingCount) {
                 const key = `series-${series}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {

@@ -129,6 +129,14 @@
                         <q-btn flat dense round icon="la la-trash" color="negative" @click="deleteList(item)" />
                     </div>
 
+                    <div v-if="item.visibility === 'opds' && item.opds" class="list-opds-options">
+                        <q-checkbox v-model="item.opds.pinned" dense label="В корне OPDS" @update:model-value="changeVisibility(item, item.visibility)" />
+                        <q-select
+                            v-model="item.opds.grouping" dense outlined emit-value map-options label="Группировка OPDS"
+                            :options="[{label:'Книги', value:'books'}, {label:'Авторы', value:'authors'}, {label:'Серии', value:'series'}]"
+                            @update:model-value="changeVisibility(item, item.visibility)"
+                        />
+                    </div>
                     <div v-if="isListExpanded(item.id)" class="list-books">
                         <div v-if="item.booksLoading" class="list-books-state text-grey-7">
                             {{ loadingBooksLabel }}
@@ -350,14 +358,14 @@ class ReadingListsDialog {
     }
 
     shelfDescription(filters) {
-        const labels = {title: 'Название', author: 'Автор', series: 'Серия', genre: 'Жанр', lang: 'Язык', ext: 'Формат', date: 'Дата', librate: 'Оценка', keywords: 'Ключевые слова'};
+        const labels = {title:'Название', author:'Автор', series:'Серия', genre:'Жанр', lang:'Язык', ext:'Формат', date:'Дата', librate:'Оценка', ratingCount:'Голоса', keywords:'Ключевые слова'};
         return Object.entries(labels).filter(([key]) => filters[key]).map(([key, label]) => `${label}: ${filters[key]}`)
             .concat(filters.unreadOnly ? ['Непрочитанные'] : []).join(' · ');
     }
 
     async changeVisibility(item, visibility) {
         try {
-            await this.api.setReadingListVisibility(item.id, visibility);
+            await this.api.setReadingListVisibility(item.id, visibility, item.opds);
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
             await this.loadLists();
@@ -741,6 +749,20 @@ export default vueComponent(ReadingListsDialog);
     gap: 6px;
     flex-shrink: 0;
     flex-wrap: nowrap;
+}
+
+.list-opds-options {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+
+.list-opds-options .q-select {
+    flex: 1;
+    min-width: 160px;
+    max-width: 280px;
 }
 
 .list-books {

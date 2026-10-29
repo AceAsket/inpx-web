@@ -18,6 +18,11 @@ let branch = '';
 const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'library-sources', 'admin-login', 'admin-password'];
 
 function applyEnvSecurityOverrides(targetConfig) {
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_OPDS_COMPATIBILITY')) {
+        const compatibility = process.env.INPX_OPDS_COMPATIBILITY;
+        if (!['standard', 'tolino'].includes(compatibility)) throw new Error('INPX_OPDS_COMPATIBILITY: standard или tolino');
+        targetConfig.opds = {...targetConfig.opds, compatibility};
+    }
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_ALLOW_ANONYMOUS_ACCESS'))
         targetConfig.allowAnonymousAccess = process.env.INPX_ALLOW_ANONYMOUS_ACCESS !== 'false';
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_PROXY_BIND_PROFILE'))

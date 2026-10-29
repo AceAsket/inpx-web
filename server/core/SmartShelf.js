@@ -1,4 +1,4 @@
-const fields = ['author', 'title', 'series', 'genre', 'lang', 'ext', 'date', 'librate', 'keywords', 'sourceId'];
+const fields = ['author', 'title', 'series', 'genre', 'lang', 'ext', 'date', 'librate', 'ratingCount', 'keywords', 'sourceId'];
 
 function normalize(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -11,10 +11,21 @@ function normalize(value) {
         }
     }
     if (!Object.keys(result).length) throw new Error('Задайте хотя бы один фильтр умной полки');
+    if (result.ratingCount) require('../../shared/RatingCount').parse(result.ratingCount);
     result.unreadOnly = value.unreadOnly === true;
     result.hideCopies = value.hideCopies === true || value.hideCopies === 'true';
     result.del = '0';
     return result;
 }
 
-module.exports = {normalize};
+function query(filters) {
+    const result = {...filters};
+    const periods = {today:[0, 'day'], '3days':[3, 'day'], week:[1, 'week'], '2weeks':[2, 'week'], month:[1, 'month'], '2months':[2, 'month'], '3months':[3, 'month']};
+    if (periods[result.date]) {
+        const [amount, unit] = periods[result.date];
+        result.date = require('dayjs')().subtract(amount, unit).format('YYYY-MM-DD');
+    }
+    return result;
+}
+
+module.exports = {normalize, query};

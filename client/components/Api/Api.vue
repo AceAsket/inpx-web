@@ -636,8 +636,8 @@ class Api {
         return await this.request({action: 'rename-reading-list', listId, name}, 120);
     }
 
-    async setReadingListVisibility(listId, visibility) {
-        return await this.request({action: 'set-reading-list-visibility', listId, visibility}, 120);
+    async setReadingListVisibility(listId, visibility, opds) {
+        return await this.request({action: 'set-reading-list-visibility', listId, visibility, opds}, 120);
     }
 
     async deleteReadingList(listId) {

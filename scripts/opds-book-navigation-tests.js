@@ -42,7 +42,8 @@ function fixture(options = {}) {
         const source = await pages.get('book').body(request('book', {uid:book._uid, ...query}));
         const xml = readXml(source), entry = xml.$$('feed/entry/');
         const html = he.decode(entry.text('content') || '');
-        return {source, xml, entry, html, links:anchors(html)};
+        const allLinks = anchors(html);
+        return {source, xml, entry, html, links:allLinks.filter(link => /\/(author|series)\?/.test(link.href)), extras:allLinks.filter(link => /\/book\/(reviews|authors)\?/.test(link.href))};
     };
     return {root, book, books, calls, pages, request, detail};
 }
@@ -50,6 +51,12 @@ function fixture(options = {}) {
 async function testOpdsBookDescriptionLinksAndAuthorUris() {
     const value = fixture(), user = 'profile & один';
     const result = await value.detail({user});
+    assert.deepStrictEqual(result.extras.map(link => link.label), ['Отзывы', 'Об авторах']);
+    for (const link of result.extras) {
+        const url = new URL(link.href, 'http://example.test');
+        assert.strictEqual(url.searchParams.get('user'), user);
+        assert.strictEqual(url.searchParams.get('uid'), value.book._uid);
+    }
     assert.strictEqual(value.calls.info, 0, 'EPUB description must stay independent of extraction and reviews');
     assert.strictEqual(result.entry.attrs('content').type, 'html');
     assert.deepStrictEqual(result.links.map(link => link.label), ['Стругацкий Аркадий', 'Стругацкий Борис', 'Мир & «Полдень» #2']);

@@ -124,6 +124,8 @@ class WebSocketController {
                     await this.logout(req, ws); break;
                 case 'get-config':
                     await this.getConfig(req, ws); break;
+                case 'get-library-metadata':
+                    this.send(await require('../core/LibraryExchange').respond(this.webWorker, req), req, ws); break;
                 case 'get-worker-state':
                     await this.getWorkerState(req, ws); break;
                 case 'search':
@@ -431,6 +433,7 @@ class WebSocketController {
             return;
         }
         const config = _.pick(this.config, this.config.webConfigParams);
+        config.libraryProtocol = require('../core/LibraryExchange').protocol;
         config.ttsEnabled = Boolean(this.config.ttsEnabled && this.config.ttsUrl);
         config.profileLoginRequired = this.config.allowAnonymousAccess === false;
         config.profileBoundId = req.profileBoundId || '';
@@ -936,7 +939,7 @@ class WebSocketController {
             throw new Error('listId is empty');
 
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-        const result = await this.webWorker.setReadingListVisibility(user.id, req.listId, req.visibility);
+        const result = await this.webWorker.setReadingListVisibility(user.id, req.listId, req.visibility, req.opds);
         this.send(result, req, ws);
     }
 

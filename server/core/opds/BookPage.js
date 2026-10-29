@@ -275,6 +275,10 @@ class BookPage extends BasePage {
                 });
 
                 content = `${ann}${info}`;
+                for (const [kind, label] of [['reviews', 'Отзывы'], ['authors', 'Об авторах']]) {
+                    const href = this.scopedHref(`${this.opdsRoot}/book/${kind}`, req, {uid:bookUid});
+                    content += `<p><a href="${this.escape(href)}">${label}</a></p>`;
+                }
                 if (content) {
                     e.content = {
                         '*ATTRS': {type: 'html'},
@@ -286,6 +290,10 @@ class BookPage extends BasePage {
                 e.link = [];
                 for (const item of links)
                     e.link.push(this.downLink(item));
+                for (const [kind, title] of [['reviews', 'Отзывы'], ['authors', 'Об авторах']]) {
+                    e.link.push(this.makeLink({href:this.scopedHref(`${this.opdsRoot}/book/${kind}`, req, {uid:bookUid}),
+                        rel:'related', type:navigationType, title}));
+                }
 
                 // Atom author URIs and collection relations complement the
                 // description links for clients that hide HTML navigation.

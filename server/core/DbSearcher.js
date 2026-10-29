@@ -11,6 +11,7 @@ const enAlphabet = 'abcdefghijklmnopqrstuvwxyz';
 const enruArr = (ruAlphabet + enAlphabet).split('');
 const titleSearchLeadingChars = ['«', '"', "'", '„', '“', '”', '‘', '’', '`', '(', '[', '{'];
 const copyDedupeVersion = 'copy-dedupe-v5-catalog-words';
+const ratingSelection = Symbol('ratingSelection');
 
 class DbSearcher {
     constructor(config, db) {
@@ -47,8 +48,16 @@ class DbSearcher {
         result.push(String(q.sourceId || '').trim());
         result.push(q.hideCopies === true || q.hideCopies === 'true' || q.hideCopies === '1' ? '1' : '');
         result.push(copyDedupeVersion);
+        result.push(String(q.ratingCount || '').trim(), q[ratingSelection]?.signature || '');
 
         return JSON.stringify(result);
+    }
+
+    async prepareRatingQuery(query) {
+        if (!String(query.ratingCount ?? '').trim() || query[ratingSelection]) return query;
+        require('../../shared/RatingCount').parse(query.ratingCount);
+        if (!this.ratingIndex) throw new Error('Фильтр числа голосов недоступен для этой библиотеки');
+        return {...query, [ratingSelection]:await this.ratingIndex.select(query.ratingCount)};
     }
 
     getTitleSearchPrefixCandidates(value = '') {
@@ -148,6 +157,7 @@ class DbSearcher {
     }
 
     async selectBookIds(query) {
+        query = await this.prepareRatingQuery(query);
         const db = this.db;
 
         const idsArr = [];
@@ -419,6 +429,7 @@ class DbSearcher {
             idsArr.push(ids);
         }
 
+        if (query[ratingSelection]) idsArr.push(query[ratingSelection].ids);
         if (idsArr.length > 1) {
             //ищем пересечение множеств
             let proc = 0;
@@ -503,6 +514,7 @@ class DbSearcher {
     }
 
     async selectTableIds(from, query) {
+        query = await this.prepareRatingQuery(query);
         const db = this.db;
         const queryKey = this.queryKey(query);
         const tableKey = `${from}-table-ids-${queryKey}`;
@@ -607,13 +619,17 @@ class DbSearcher {
     filterRestoredRows(rows, query = {}) {
         const sourceId = String(query.sourceId || '').trim();
         const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
-        if (!sourceId && !hideCopies)
+        if (!sourceId && !hideCopies && !query[ratingSelection])
             return rows;
 
         return rows.map((row) => {
             let books = Array.isArray(row.books) ? row.books : [];
             if (sourceId)
                 books = books.filter(book => String((book && book.sourceId) || '').trim() === sourceId);
+            if (query[ratingSelection]) {
+                const selected = new Set(query[ratingSelection].ids);
+                books = books.filter(book => selected.has(book.id));
+            }
 
             if (hideCopies) {
                 const deduped = new Map();
@@ -630,6 +646,7 @@ class DbSearcher {
     }
 
     async restoreBooks(from, ids, query = {}) {
+        query = await this.prepareRatingQuery(query);
         const db = this.db;
         const bookTable = `${from}_book`;
 
@@ -691,6 +708,7 @@ class DbSearcher {
     }
 
     async search(from, query) {
+        query = await this.prepareRatingQuery(query);
         if (this.closed)
             throw new Error('DbSearcher closed');
 
@@ -718,6 +736,18 @@ class DbSearcher {
                 where: `@@id(${db.esc(Array.from(slice))})`
             });
 
+            if (query[ratingSelection]) {
+                const counts = new Map(found.map(row => [row.id, {bookCount:0, bookDelCount:0}]));
+                const mapping = this.bookIdMap[from];
+                for (const id of await this.selectBookIds(query)) {
+                    for (const tableId of mapping.arr[id] ? [mapping.arr[id]] : mapping.map.get(id) || []) {
+                        const count = counts.get(tableId);
+                        if (count) count[query[ratingSelection].deletedIds.has(id) ? 'bookDelCount' : 'bookCount']++;
+                    }
+                }
+                for (const row of found) Object.assign(row, counts.get(row.id));
+            }
+
             //для title восстановим books
             if (from == 'title') {
                 const bookIds = found.map(r => r.id);
@@ -740,6 +770,7 @@ class DbSearcher {
     }
 
     async bookSearchIds(query) {
+        query = await this.prepareRatingQuery(query);
         const queryKey = this.queryKey(query);
         const bookKey = `book-search-ids-${queryKey}`;
         let bookIds = await this.getCached(bookKey);
@@ -838,10 +869,14 @@ class DbSearcher {
             const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
             const hasNarrowingFilter = !!String(query.sourceId || '').trim()
                 || this.recStruct.some(f => f.field !== 'del' && !!query[f.field]);
-            const candidateIds = hideCopies && hasNarrowingFilter
+            let candidateIds = hideCopies && hasNarrowingFilter
                 ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}))
                 : ['title', 'author', 'series'].some(field => query[field] && !/^[=*#~?]/.test(query[field])) && await db.tableExists({table: 'word'})
                     ? await this.selectBookIds(query) : null;
+            if (query[ratingSelection]) {
+                const selected = new Set(query[ratingSelection].ids);
+                candidateIds = candidateIds ? candidateIds.filter(id => selected.has(id)) : query[ratingSelection].ids;
+            }
             const iterator = candidateIds ? db.esc(Array.from(candidateIds)) : '@all()';
             const rows = await db.select({
                 table: 'book',
@@ -995,6 +1030,7 @@ class DbSearcher {
     }
 
     async opdsQuery(from, query) {
+        query = await this.prepareRatingQuery(query);
         if (this.closed)
             throw new Error('DbSearcher closed');
 

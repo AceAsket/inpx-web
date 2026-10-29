@@ -265,7 +265,14 @@
                                 <q-tooltip v-if="search.ext && showTooltips" :delay="500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     {{ search.ext }}
                                 </q-tooltip>
-                            </q-input>                            
+                            </q-input>
+                            <div class="q-mx-xs" />
+                            <q-input
+                                v-model="search.ratingCount" :maxlength="30" :debounce="inputDebounce"
+                                class="q-mt-xs col-2" :bg-color="inputBgColor('ratingCount')"
+                                style="min-width: 140px" label="Число голосов" placeholder="20.. или 10..100"
+                                stack-label outlined dense clearable
+                            />
                         </div>
                         <div v-show="!isCompactMobile && showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && !extendedParams" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
                             +{{ collapsedExtendedParamsLabel }}
@@ -859,7 +866,7 @@ class Search {
         this.commit = this.$store.commit;
         this.api = this.$root.api;
 
-        this.generateDefaults(this.search, ['author', 'series', 'title', 'keywords', 'genre', 'lang', 'date', 'librate', 'ext', 'sourceId', 'hideCopies']);
+        this.generateDefaults(this.search, ['author', 'series', 'title', 'keywords', 'genre', 'lang', 'date', 'librate', 'ratingCount', 'ext', 'sourceId', 'hideCopies']);
         this.search.setDefaults(this.search);
 
         this.loadSettings();
@@ -1065,7 +1072,7 @@ class Search {
     }
 
     get mobileExtraFilterCount() {
-        return ['series', 'lang', 'keywords', 'genre', 'date', 'librate', 'ext', 'sourceId', 'hideCopies']
+        return ['series', 'lang', 'keywords', 'genre', 'date', 'librate', 'ratingCount', 'ext', 'sourceId', 'hideCopies']
             .filter(field => !!this.search[field]).length;
     }
 
@@ -1189,6 +1196,7 @@ class Search {
         result.push(s.genre ? 'Жанр' : '');
         result.push(s.date ? 'Дата поступления' : '');
         result.push(s.librate ? 'Оценка' : '');
+        result.push(s.ratingCount ? 'Число голосов' : '');
         result.push(s.ext ? 'Тип файла' : '');
 
         return result.filter(s => s).join(', ');
@@ -1275,6 +1283,7 @@ class Search {
             || (search.lang && search.lang !== this.langDefault)
             || search.date
             || search.librate
+            || search.ratingCount
             || search.ext
             || search.sourceId
             || search.hideCopies
@@ -2326,6 +2335,7 @@ class Search {
             lang: (typeof(query.lang) == 'string' ? query.lang : this.langDefault),
             date: query.date,
             librate: query.librate,
+            ratingCount: query.ratingCount,
             ext: query.ext,
             sourceId: query.sourceId,
             hideCopies: query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1',

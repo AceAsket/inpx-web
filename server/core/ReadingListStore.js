@@ -689,6 +689,7 @@ class ReadingListStore {
         normalized.updatedAt = normalized.updatedAt || now;
         normalized.books = this.normalizeEntries(normalized.books);
         normalized.filters = require('./SmartShelf').normalize(normalized.filters);
+        normalized.opds = require('./opds/ShelfOptions').normalize(normalized.opds);
         return normalized;
     }
 
@@ -1690,6 +1691,7 @@ class ReadingListStore {
             containsBook: !!currentEntry,
             readBook: !!(currentEntry && currentEntry.read),
             filters: item.filters || null,
+            opds: require('./opds/ShelfOptions').normalize(item.opds),
         };
     }
 
@@ -1770,13 +1772,14 @@ class ReadingListStore {
         return item;
     }
 
-    async setListVisibility(userId = '', listId, visibility) {
+    async setListVisibility(userId = '', listId, visibility, opds) {
         const {data, user} = await this.resolveUser(userId);
         const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
 
         item.visibility = this.normalizeVisibility(visibility);
+        if (opds !== undefined) item.opds = require('./opds/ShelfOptions').normalize(opds);
         item.updatedAt = this.nowIso();
 
         await this.save(data);
@@ -1985,6 +1988,7 @@ class ReadingListStore {
                 updatedAt: item.updatedAt,
                 books: this.normalizeEntries(item.books),
                 filters: item.filters || null,
+                opds: require('./opds/ShelfOptions').normalize(item.opds),
             })),
         };
     }
@@ -2074,6 +2078,7 @@ class ReadingListStore {
                 visibility: incoming.visibility,
                 books: incoming.books,
                 filters: incoming.filters,
+                opds: incoming.opds,
                 createdAt: incoming.createdAt,
                 updatedAt: incoming.updatedAt,
                 userId: user.id,
@@ -2110,6 +2115,7 @@ class ReadingListStore {
 
             item.books = Array.from(existing.values());
             item.filters = normalizedIncoming.filters;
+            if (utilsHasProp(incoming, 'opds')) item.opds = normalizedIncoming.opds;
             item.updatedAt = this.nowIso();
         }
 
