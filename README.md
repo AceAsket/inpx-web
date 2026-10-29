@@ -1,7 +1,7 @@
 inpx-web-7z
 ===========
 
-Ветка `develop` содержит **1.8.1-rc.10**: [предварительный релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1-rc.10), [история изменений](./CHANGELOG.md). Стабильная версия — [1.8.0](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.0). Основные Docker-примеры используют стабильный образ; примеры сборки из исходников — тег `v1.8.1-rc.10`.
+Ветка `develop` содержит **1.8.1-rc.11**: [предварительный релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1-rc.11), [история изменений](./CHANGELOG.md). Стабильная версия — [1.8.0](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.0). Основные Docker-примеры используют стабильный образ; примеры сборки из исходников — тег `v1.8.1-rc.11`.
 
 <a id="ключевые-отличия" />
 
@@ -10,7 +10,7 @@ RC10 сохраняет данные перед обновлением; для �
 
 ## Что это за форк
 
-В `develop` после RC10 добавлены [задачи, избранные авторы и серии, проверка библиотеки, таймер сна и переходы между текстом и аудио](./docs/library-tools.md). Они войдут в следующий релиз.
+В RC11 добавлены [задачи, избранные авторы и серии, проверка библиотеки, таймер сна и переходы между текстом и аудио](./docs/library-tools.md).
 
 Форк [`bookpauk/inpx-web`](https://github.com/bookpauk/inpx-web) для self-hosted библиотек с упором на большие `.7z` / `.zip` / `fLibrary` коллекции, Docker-развёртывание и обновлённую встроенную FB2-читалку. README ниже в первую очередь описывает сценарий `Docker / сервер`, но также покрывает standalone-бинарники и запуск из исходников через Node.js.
 
@@ -80,7 +80,7 @@ RC10 сохраняет данные перед обновлением; для �
 Для самостоятельной сборки сначала получите исходники релиза:
 
 ```sh
-git clone --branch v1.8.1-rc.10 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.8.1-rc.11 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 ```
 
@@ -126,7 +126,7 @@ docker compose up -d
 
 В RC2 добавлен опциональный [Kindling v0.45.6](https://github.com/ciscoriordan/kindling/releases/tag/v0.45.6). Он создаёт двойной MOBI7/KF8 для скачивания и передачи на Kindle: FB2 сначала проходит через встроенный fbc в EPUB, готовый EPUB конвертируется напрямую. Calibre, Python и Qt не требуются.
 
-По умолчанию MOBI выключен. Для проверки на стенде используйте `aceasket/inpx-web-7z:1.8.1-rc.10` и добавьте к `docker run` перед именем образа:
+По умолчанию MOBI выключен. Для проверки на стенде используйте `aceasket/inpx-web-7z:1.8.1-rc.11` и добавьте к `docker run` перед именем образа:
 
 ```sh
 -e INPX_MOBI_ENABLED=true
@@ -895,7 +895,7 @@ http://127.0.0.1:12380/#/reader-lab?sample=night-watch.fb2&debugReader=1&debugRe
 Сборка на машине с архитектурой целевой платформы предпочтительна; CI использует отдельный ARM64 runner. Для кросс-сборки linux-arm64 на x64 потребуется [QEMU](https://wiki.debian.org/QemuUserEmulation). Linux-бинарники используют glibc; для Alpine используйте Docker-образ на Debian.
 
 ```sh
-git clone --branch v1.8.1-rc.10 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.8.1-rc.11 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 npm ci
 npm run release:linux
@@ -958,7 +958,7 @@ sudo apt install -y nodejs
 node --version
 
 # подготовка
-git clone --branch v1.8.1-rc.10 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.8.1-rc.11 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 npm ci
 npm run build:client
