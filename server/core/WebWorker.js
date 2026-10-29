@@ -948,18 +948,25 @@ class WebWorker {
         if (!this.libraryDirListings)
             this.libraryDirListings = new Map();
 
-        let listing = this.libraryDirListings.get(dir);
-        if (!listing) {
-            listing = fs.readdir(dir).catch((e) => {
-                if (e.code === 'ENOENT' || e.code === 'ENOTDIR')
+        const listings = this.libraryDirListings;
+        let listing = listings.get(dir);
+        if (!listing || listing.expiresAt <= Date.now()) {
+            listing = {expiresAt:Infinity};
+            listing.promise = fs.readdir(dir).then(names => {
+                if (!names.length) listing.expiresAt = Date.now() + 1000;
+                return names;
+            }).catch((e) => {
+                if (e.code === 'ENOENT' || e.code === 'ENOTDIR') {
+                    listing.expiresAt = Date.now() + 1000;
                     return [];
-                this.libraryDirListings.delete(dir);
+                }
+                if (listings.get(dir) === listing) listings.delete(dir);
                 throw e;
             });
-            this.libraryDirListings.set(dir, listing);
+            listings.set(dir, listing);
         }
 
-        return listing;
+        return listing.promise;
     }
 
     async dbConfig() {
@@ -5389,11 +5396,15 @@ class WebWorker {
 
     //Чтения библиотеки для фона (обложки списка, фоновая подготовка книг), не больше
     //лимита фоновых задач профиля. isCancelled: результат больше не нужен (браузер закрыл запрос)
-    async runBackground(fn, isCancelled = () => false) {
-        while (this.foregroundJobs || (this.backgroundJobs || 0) >= resourceRuntime.settings.limits.background)
-            await this.waitBackgroundTurn();
-        if (isCancelled())
+    async runBackground(fn, isCancelled = () => false, signal) {
+        const cancelled = () => signal?.aborted || isCancelled();
+        if (cancelled())
             return null;
+        const deadline = Date.now() + resourceRuntime.settings.taskTimeoutMs;
+        while (this.foregroundJobs || (this.backgroundJobs || 0) >= resourceRuntime.settings.limits.background) {
+            if (!await this.waitBackgroundTurn(signal, deadline) || cancelled())
+                return null;
+        }
 
         this.backgroundJobs = (this.backgroundJobs || 0) + 1;
         try {
@@ -5404,17 +5415,34 @@ class WebWorker {
         }
     }
 
-    waitBackgroundTurn() {
+    waitBackgroundTurn(signal, deadline = Date.now() + resourceRuntime.settings.taskTimeoutMs) {
         if (!this.backgroundWaiters)
             this.backgroundWaiters = [];
-        return new Promise(resolve => this.backgroundWaiters.push(resolve));
+        if (signal?.aborted) return Promise.resolve(false);
+        if (this.backgroundWaiters.length >= 256)
+            return Promise.reject(Object.assign(new Error('Очередь обложек заполнена. Повторите позже.'), {code:'INPX_RESOURCE_IO_QUEUE_FULL'}));
+        return new Promise((resolve, reject) => {
+            const entry = {};
+            const remove = () => {
+                const index = this.backgroundWaiters.indexOf(entry);
+                if (index < 0) return false;
+                this.backgroundWaiters.splice(index, 1);
+                clearTimeout(entry.timer); signal?.removeEventListener('abort', entry.abort);
+                return true;
+            };
+            entry.finish = value => {if (remove()) resolve(value);};
+            entry.abort = () => entry.finish(false);
+            entry.timer = setTimeout(() => {
+                if (remove()) reject(Object.assign(new Error('Истекло время ожидания обложки.'), {code:'INPX_RESOURCE_IO_QUEUE_TIMEOUT'}));
+            }, Math.max(1, deadline - Date.now()));
+            this.backgroundWaiters.push(entry);
+            signal?.addEventListener('abort', entry.abort, {once:true});
+        });
     }
 
     wakeBackgroundJobs() {
-        const waiters = this.backgroundWaiters || [];
-        this.backgroundWaiters = [];
-        for (const resolve of waiters)
-            resolve();
+        for (const entry of [...(this.backgroundWaiters || [])])
+            entry.finish(true);
     }
 
     async getFblibraryImages(libid, sourceLibDir = '', libFolder = '') {
@@ -6610,7 +6638,7 @@ class WebWorker {
             try {
                 if (generation !== this.libraryAssetGeneration)
                     return;
-                await this.runBackground(() => this.getBookLink(bookUid));
+                await this.runBackground(() => generation === this.libraryAssetGeneration ? this.getBookLink(bookUid) : null);
             } finally {
                 this.backgroundBookQueue.ret();
             }

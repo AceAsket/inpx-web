@@ -1725,6 +1725,7 @@ const tests = [
     ...require('./opds-book-navigation-tests'),
     ...require('./reader-opening-tests'),
     ...require('./book-card-tests'),
+    ...require('./library-io-tests'),
     ...require('./library-improvements-tests'),
     ...require('./catalog-list-filter-tests'),
     ...require('./search-navigation-tests'),
