@@ -131,7 +131,8 @@ async function testAnonymousAccessDisabledHttpAndWebSocket() {
         const state = await call({action: 'get-worker-state', workerId: 'server_state'});
         assert.strictEqual(state.state, 'normal');
         assert.strictEqual(state.fileName, undefined);
-        for (const action of ['search', 'get-library-metadata', 'get-user-profiles', 'get-reading-lists', 'create-reading-list', 'get-admin-dashboard']) {
+        for (const action of ['search', 'get-library-metadata', 'get-user-profiles', 'get-reading-lists', 'create-reading-list', 'get-admin-dashboard',
+            'get-background-tasks','get-library-follows','change-library-follow','start-library-audit','cancel-library-audit','get-rating-index-status']) {
             const response = await call({action, userId: bob.id, csrfToken: config.csrfToken});
             assert.strictEqual(response.error, 'need_profile_login', action);
         }

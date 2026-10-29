@@ -672,6 +672,7 @@ class ReadingListStore {
         normalized.readerProgressResetAt = String(normalized.readerProgressResetAt || '').trim();
         normalized.readerBookmarks = this.normalizeReaderBookmarks(normalized.readerBookmarks);
         normalized.discoveryPreferences = this.normalizeDiscoveryPreferences(normalized.discoveryPreferences);
+        normalized.libraryFollows = require('../../shared/LibraryFollows').normalize(normalized.libraryFollows);
         normalized.isAdmin = !!normalized.isAdmin;
         normalized.createdAt = normalized.createdAt || now;
         normalized.updatedAt = normalized.updatedAt || now;
@@ -1214,6 +1215,34 @@ class ReadingListStore {
             progressResetAt: String(user.readerProgressResetAt || '').trim(),
             bookmarks: (user.readerBookmarks && Array.isArray(user.readerBookmarks[normalizedBookUid]) ? user.readerBookmarks[normalizedBookUid] : []),
         };
+    }
+
+    async changeLibraryFollow(userId, operation, patch = {}) {
+        const {data, user} = await this.resolveUser(userId);
+        const target = data.users.find(row => row.id === user.id);
+        const normalize = require('../../shared/LibraryFollows').normalize;
+        const follows = normalize(target.libraryFollows);
+        if (operation === 'add') {
+            if (!['author','series'].includes(patch.kind) || typeof patch.value !== 'string' || !patch.value.trim() || patch.value.length > 200)
+                throw new Error('Некорректная подписка');
+            if (follows.some(row => row.kind === patch.kind && row.value.toLowerCase() === patch.value.trim().toLowerCase())) return follows;
+            if (follows.length >= 20) throw new Error('Можно добавить до 20 авторов и серий');
+            follows.push({...patch,id:this.makeId(),createdAt:this.nowIso(),revision:1,newUids:[]});
+        } else {
+            const index = follows.findIndex(row => row.id === patch.id);
+            if (index < 0) return follows;
+            if (operation === 'remove') follows.splice(index,1);
+            else if (operation === 'seen') {follows[index].newUids = []; follows[index].revision++;}
+            else if (operation === 'snapshot' && follows[index].revision === patch.revision) {
+                const candidate = normalize([{...follows[index],knownUids:patch.knownUids,newUids:patch.newUids}])[0];
+                if (JSON.stringify(candidate) === JSON.stringify(follows[index])) return follows;
+                Object.assign(follows[index],{knownUids:patch.knownUids,newUids:patch.newUids,revision:patch.revision + 1});
+            } else return follows;
+        }
+        target.libraryFollows = normalize(follows);
+        target.updatedAt = this.nowIso();
+        await this.save(data);
+        return target.libraryFollows;
     }
 
     async updateReaderPreferences(userId = '', patch = {}) {
@@ -1980,6 +2009,7 @@ class ReadingListStore {
                 audioProgress: this.normalizeAudioProgress(user.audioProgress),
                 readerBookmarks: this.normalizeReaderBookmarks(user.readerBookmarks),
                 discoveryPreferences: this.normalizeDiscoveryPreferences(user.discoveryPreferences),
+                libraryFollows: require('../../shared/LibraryFollows').normalize(user.libraryFollows),
             },
             lists: lists.map((item) => ({
                 name: item.name,
@@ -2033,6 +2063,8 @@ class ReadingListStore {
                 target.readerPreferences = this.normalizeReaderPreferences(incomingUser.readerPreferences);
             if (utilsHasProp(incomingUser, 'discoveryPreferences'))
                 target.discoveryPreferences = this.normalizeDiscoveryPreferences(incomingUser.discoveryPreferences);
+            if (utilsHasProp(incomingUser, 'libraryFollows'))
+                target.libraryFollows = require('../../shared/LibraryFollows').normalize(incomingUser.libraryFollows);
 
             if (utilsHasProp(incomingUser, 'audioProgress')) {
                 const progress = this.normalizeAudioProgress(incomingUser.audioProgress);

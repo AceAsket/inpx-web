@@ -418,7 +418,11 @@ async function convert({inputFile, outputFile, format, sourceFileName = '', conv
     if (pending.has(key))
         return await pending.get(key);
 
-    const job = runtime.run(async() => {
+    const tasks = require('./BackgroundTasks');
+    const taskId = tasks.start('conversion', `Конвертация ${format.toUpperCase()}`);
+    tasks.update(taskId, {state:'queued',phase:'Ожидание очереди конвертации'});
+    const job = runtime.run(() => require('./ResourceRuntime').withTask(taskId, async() => {
+        tasks.update(taskId, {state:'running',phase:'Конвертация файла'});
         await fs.ensureDir(path.dirname(outputFile));
         let convertInput = inputFile;
         let tempInput = '';
@@ -438,11 +442,15 @@ async function convert({inputFile, outputFile, format, sourceFileName = '', conv
             if (tempInput)
                 await fs.remove(tempInput);
         }
-    });
+    }));
 
     pending.set(key, job);
     try {
         await job;
+        tasks.finish(taskId);
+    } catch (error) {
+        tasks.finish(taskId,error);
+        throw error;
     } finally {
         pending.delete(key);
     }

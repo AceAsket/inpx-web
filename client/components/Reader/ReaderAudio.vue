@@ -34,6 +34,26 @@
                     </select>
                 </label>
             </div>
+            <div class="reader-audio-links">
+                <q-btn no-caps dense outline label="Слушать отсюда" :disable="busy" @click="$emit('listen-here')" />
+                <q-btn v-if="src && !isPreview && mode !== 'book'" no-caps dense outline label="Читать отсюда" @click="readHere">
+                    <q-tooltip>С начала текущего фрагмента</q-tooltip>
+                </q-btn>
+            </div>
+            <div class="reader-audio-options">
+                <label>Таймер сна
+                    <select v-model="sleepChoice" @change="setSleep">
+                        <option value="off">Выключен</option><option value="15">15 минут</option>
+                        <option value="30">30 минут</option><option value="60">60 минут</option><option value="chapter">Конец главы</option>
+                    </select>
+                </label>
+                <label>После паузы
+                    <select v-model.number="rewindSeconds"><option :value="0">Без перемотки</option><option :value="5">Назад на 5 сек</option><option :value="10">Назад на 10 сек</option></select>
+                </label>
+            </div>
+            <p v-if="sleepChoice !== 'off'" class="reader-audio-hint" role="status">
+                {{ sleepTimer.kind === 'chapter' ? 'Остановится в конце главы' : `Таймер сна: ${Math.max(0, Math.ceil((sleepTimer.deadline - sleepNow) / 60000))} мин` }}
+            </p>
             <details class="reader-audio-tuning">
                 <summary>
                     <i class="la la-sliders-h" aria-hidden="true" />
@@ -96,7 +116,7 @@
             <audio
                 v-show="src" ref="audio" :src="src || undefined" controls preload="metadata"
                 @loadedmetadata="restorePosition" @play="onPlay" @pause="onPause"
-                @timeupdate="savePosition(false)" @seeked="savePosition(true)" @ended="onEnded" @error="onAudioError"
+                @timeupdate="onTimeUpdate" @seeked="savePosition(true)" @ended="onEnded" @error="onAudioError"
             />
             <audio ref="preloadAudio" class="reader-audio-preload" :src="nextSrc || undefined" preload="auto" aria-hidden="true" />
             <p v-if="src" class="reader-audio-hint">
@@ -109,6 +129,7 @@
 
 <script>
 const {defaultSpeechOptions, normalizeSpeechOptions, hasSpeechOptions} = require('../../../shared/speechOptions');
+const sleep = require('../../../shared/AudioSleepTimer');
 let mediaOwner = null;
 const mediaActions = ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'stop'];
 
@@ -120,9 +141,11 @@ export default {
         author: {type: String, default: ''},
         cover: {type: String, default: ''},
     },
+    emits: ['read-here','listen-here'],
     data() {
         return {
             visible: false, minimized: false, speaker: 'xenia', rate: 1, mode: 'online',
+            sleepChoice:'off', sleepTimer:sleep.arm('off'), sleepNow:Date.now(), sleepInterval:null, rewindSeconds:0, pausedAt:0, skipRestoreOnce:false,
             speechOptions: defaultSpeechOptions(), draftOptions: defaultSpeechOptions(), loadedTuningKey: '', engineId: '',
             sampleText: 'Гермиона открыла книгу и устроилась поудобнее. За окном тихо шумел дождь.\n\nКаждая новая история — это путешествие. Послушайте мой голос и выберите удобную скорость чтения.',
             pauseControls: [
@@ -133,6 +156,8 @@ export default {
             state: '', src: '', error: '', jobId: '', generation: 0,
             pollTimer: null, storageKey: '', lastSaved: 0, pageHideHandler: null,
             serverPosition: {}, positionVariant: '', positionWrite: null, positionConflict: false,
+            positionProfileIdentity: '',
+            positionBookUid: '',
             chapters: [], chapterIndex: 0, activeChapter: 0, estimate: null, planLoading: false, planGeneration: 0,
             isPreview: false, autoPlay: false, nextSrc: '', nextJob: null, nextTimer: null, nextError: '',
             progress: 0, remainingSeconds: null, queuePosition: 0, phase: '',
@@ -169,14 +194,51 @@ export default {
         window.addEventListener('pagehide', this.pageHideHandler);
     },
     beforeUnmount() {
+        this.disarmSleep();
         this.clearAudio();
         window.removeEventListener('pagehide', this.pageHideHandler);
     },
     deactivated() { this.close(); },
     methods: {
         open() { this.loadTuning(); this.visible = true; this.minimized = false; if (!this.src) this.loadPlan(); },
-        close() { this.clearAudio(); this.visible = false; },
-        reset() { this.close(); this.planGeneration++; this.chapters = []; this.chapterIndex = 0; this.estimate = null; this.planLoading = false; this.loadedTuningKey = ''; },
+        close() { this.disarmSleep(); this.clearAudio(); this.visible = false; },
+        setSleep() {
+            clearInterval(this.sleepInterval);
+            this.sleepTimer = sleep.arm(this.sleepChoice);
+            this.sleepNow = Date.now();
+            if (this.sleepTimer.kind === 'time') this.sleepInterval = setInterval(() => this.checkSleep(),1000);
+        },
+        disarmSleep() {clearInterval(this.sleepInterval); this.sleepInterval = null; this.sleepTimer = sleep.arm('off'); this.sleepChoice = 'off';},
+        checkSleep() {
+            this.sleepNow = Date.now();
+            if (!sleep.expired(this.sleepTimer,this.sleepNow)) return false;
+            this.stopForSleep(); return true;
+        },
+        stopForSleep() {this.autoPlay = false; this.$refs.audio?.pause(); this.savePosition(true); this.disarmSleep();},
+        onTimeUpdate() {if (!this.isPreview) this.checkSleep(); this.savePosition(false);},
+        readHere() {
+            if (this.positionProfileIdentity && this.positionProfileIdentity !== this.profileIdentity) return;
+            if (this.positionBookUid && this.positionBookUid !== this.bookUid) return;
+            const anchor = this.chapters[this.activeChapter]?.anchor;
+            if (!anchor) return;
+            this.$refs.audio?.pause(); this.savePosition(true);
+            this.minimized = true;
+            this.$emit('read-here',anchor);
+        },
+        async openAt(anchor) {
+            this.clearAudio(); this.open();
+            if (this.mode === 'book') {this.mode = 'online'; await this.$nextTick();}
+            const result = await this.loadPlan(anchor);
+            if (!result || !Number.isInteger(result.startChapter)) return;
+            this.chapterIndex = result.startChapter; this.skipRestoreOnce = true;
+            await this.prepare(false,true);
+        },
+        reset() {
+            this.close(); this.planGeneration++; this.chapters = []; this.chapterIndex = 0;
+            this.estimate = null; this.planLoading = false; this.loadedTuningKey = '';
+            this.serverPosition = {}; this.positionVariant = ''; this.positionProfileIdentity = '';
+            this.positionBookUid = '';
+        },
         tuningKey() {
             const settings = this.$store.state.settings || {}, config = this.$store.state.config || {};
             return `inpx.speech-options.v1:${config.rootPathStatic || '/'}:${settings.currentUserId || config.currentUserId}:${this.bookUid}`;
@@ -210,11 +272,11 @@ export default {
             return hasSpeechOptions(this.speechOptions) ? `${engineKey}:speech-v1:${JSON.stringify(this.speechOptions)}` : engineKey;
         },
         audioVariant() { return JSON.stringify([this.engineId, this.speaker, this.mode, this.speechOptions]); },
-        async loadPlan() {
+        async loadPlan(anchor = null) {
             const generation = ++this.planGeneration;
             this.planLoading = true;
             try {
-                const result = await this.$root.api.getReaderAudioPlan(this.bookUid, this.mode);
+                const result = await this.$root.api.getReaderAudioPlan(this.bookUid, this.mode, anchor);
                 if (generation !== this.planGeneration) return;
                 this.chapters = result.chapters; this.estimate = result.estimate;
                 this.engineId = result.engineId || '';
@@ -222,6 +284,8 @@ export default {
                 const position = await this.$root.api.audioPosition(this.bookUid, variant);
                 if (generation !== this.planGeneration) return;
                 this.positionVariant = variant; this.serverPosition = position.progress || {}; this.positionConflict = false;
+                this.positionProfileIdentity = this.profileIdentity;
+                this.positionBookUid = this.bookUid;
                 if (!this.src && Number.isInteger(this.serverPosition.chapter) && this.serverPosition.chapter < this.chapters.length)
                     this.chapterIndex = this.serverPosition.chapter;
                 if (!this.src && this.serverPosition.rate) this.rate = this.serverPosition.rate;
@@ -230,6 +294,7 @@ export default {
                     if (!this.serverPosition.revision && !this.src && Number.isInteger(saved.chapter) && saved.chapter >= 0 && saved.chapter < this.chapters.length) this.chapterIndex = saved.chapter;
                     if (!this.serverPosition.revision && !this.src && [0.75, 1, 1.25, 1.5, 2].includes(saved.rate)) this.rate = saved.rate;
                 } catch { /* Storage is optional. */ }
+                return result;
             } catch (error) { if (generation === this.planGeneration) this.fail(error); }
             finally { if (generation === this.planGeneration) this.planLoading = false; }
         },
@@ -241,6 +306,7 @@ export default {
             this.savePosition(true);
             const audio = this.$refs.audio;
             if (audio) { audio.pause(); audio.removeAttribute('src'); audio.load(); }
+            this.pausedAt = 0;
             const preload = this.$refs.preloadAudio;
             if (preload) { preload.removeAttribute('src'); preload.load(); }
             this.releaseMediaSession();
@@ -312,17 +378,21 @@ export default {
             if (!this.src || !audio) return;
             try {
                 const saved = this.serverPosition.revision ? this.serverPosition : JSON.parse(localStorage.getItem(this.storageKey) || '{}');
-                if (saved.chapter === this.activeChapter && !this.isPreview && Number.isFinite(saved.time) && saved.time >= 0 && saved.time < audio.duration)
+                if (!this.skipRestoreOnce && saved.chapter === this.activeChapter && !this.isPreview && Number.isFinite(saved.time) && saved.time >= 0 && saved.time < audio.duration)
                     audio.currentTime = saved.time;
             } catch { /* Storage is optional. */ }
+            this.skipRestoreOnce = false;
             this.applyRate();
             if (this.autoPlay) {
                 this.autoPlay = false;
+                if (!this.isPreview && this.checkSleep()) return;
                 audio.play().catch(() => { this.error = 'Нажмите ▶ в плеере, чтобы начать воспроизведение.'; });
             }
         },
         savePosition(force) {
             const audio = this.$refs.audio;
+            if (this.positionProfileIdentity && this.positionProfileIdentity !== this.profileIdentity) return;
+            if (this.positionBookUid && this.positionBookUid !== this.bookUid) return;
             if (!this.storageKey || !this.src || !audio || !Number.isFinite(audio.currentTime)) return;
             if (!force && Date.now() - this.lastSaved < 3000) return;
             this.lastSaved = Date.now();
@@ -351,6 +421,10 @@ export default {
             this.savePosition(true);
         },
         onPlay() {
+            if (!this.isPreview && this.checkSleep()) return;
+            if (!this.isPreview && this.rewindSeconds && this.pausedAt && Date.now() - this.pausedAt > 10000)
+                this.seek(-this.rewindSeconds);
+            this.pausedAt = 0;
             if (!('mediaSession' in navigator)) return;
             mediaOwner = this;
             const session = navigator.mediaSession;
@@ -373,10 +447,13 @@ export default {
             this.updateMediaPosition();
         },
         onPause() {
+            this.pausedAt = Date.now();
             this.savePosition(true);
             if (mediaOwner === this && navigator.mediaSession) navigator.mediaSession.playbackState = 'paused';
         },
         onEnded() {
+            const stopAtEnd = !this.isPreview && sleep.chapterEnded(this.sleepTimer,this.chapters[this.activeChapter]);
+            if (stopAtEnd) this.stopForSleep();
             if (this.$refs.audio) this.$refs.audio.currentTime = 0;
             this.savePosition(true);
             if (!this.isPreview && this.activeChapter + 1 < this.chapters.length) {
@@ -390,9 +467,9 @@ export default {
                     clearTimeout(this.nextTimer);
                     const next = this.nextSrc;
                     this.generation++; this.activeChapter = this.chapterIndex;
-                    this.nextSrc = ''; this.nextJob = null; this.nextError = ''; this.autoPlay = true; this.src = next;
-                    this.prefetchNext(this.generation);
-                } else this.prepare(false, true);
+                    this.nextSrc = ''; this.nextJob = null; this.nextError = ''; this.autoPlay = !stopAtEnd; this.src = next;
+                    if (!stopAtEnd) this.prefetchNext(this.generation);
+                } else this.prepare(false, !stopAtEnd);
             } else { this.releaseMediaSession(); if (this.isPreview) this.loadPlan(); }
         },
         seek(offset) { this.seekTo(this.$refs.audio.currentTime + offset); },
@@ -428,6 +505,7 @@ export default {
 </script>
 
 <style scoped>
+.reader-audio-links { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
 .reader-audio {
     position: fixed; z-index: 2100; right: max(12px, env(safe-area-inset-right));
     bottom: max(12px, env(safe-area-inset-bottom)); width: min(420px, calc(100vw - 24px));

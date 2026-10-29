@@ -1,5 +1,6 @@
 <template>
     <div class="root column fit" style="position: relative">
+        <LibraryTools :author="search.author || ''" :series="search.series || ''" />
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
             <div v-if="config.profileAuthorized && !isCompactMobile" class="q-px-md q-py-xs">
@@ -580,6 +581,7 @@ import TitleList from './TitleList/TitleList.vue';
 import AllBooksList from './AllBooksList/AllBooksList.vue';
 import ExtendedList from './ExtendedList/ExtendedList.vue';
 import DiscoveryShelves from './DiscoveryShelves/DiscoveryShelves.vue';
+import LibraryTools from './LibraryTools.vue';
 
 import PageScroller from './PageScroller/PageScroller.vue';
 import SettingsDialog from './SettingsDialog/SettingsDialog.vue';
@@ -624,6 +626,7 @@ const componentOptions = {
         AllBooksList,
         ExtendedList,
         DiscoveryShelves,
+        LibraryTools,
         PageScroller,
         SettingsDialog,
         SelectGenreDialog,

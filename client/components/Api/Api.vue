@@ -86,6 +86,8 @@ class Api {
     currentUserId = '';
     profileAccessToken = '';
     profileLoginPromise = null;
+    indexWaitMessage = '';
+    ratingIndexWait = null;
 
     created() {
         this.commit = this.$store.commit;
@@ -390,18 +392,47 @@ class Api {
     }
 
     async search(from, query) {
+        await this.waitForRatingIndex(query);
         return await this.request({action: 'search', from, query}, 30);
     }
 
     async bookSearch(query) {
+        await this.waitForRatingIndex(query);
         return await this.request({action: 'bookSearch', query}, 30);
     }
 
+    async waitForRatingIndex(query) {
+        if (!String(query?.ratingCount || '').trim()) return;
+        require('../../../shared/RatingCount').parse(query.ratingCount);
+        if (this.ratingIndexWait) return this.ratingIndexWait;
+        const wait = async() => {
+            try {
+                for (;;) {
+                    const status = await this.request({action:'get-rating-index-status'},10);
+                    if (status.state === 'ready') return;
+                    if (status.state === 'error') throw new Error(status.error || 'Не удалось подготовить индекс голосов');
+                    this.indexWaitMessage = `Индекс голосов готовится${status.total ? ` · ${status.done.toLocaleString()} из ${status.total.toLocaleString()}` : ''}. Поиск продолжится автоматически.`;
+                    await new Promise(resolve => setTimeout(resolve,2000));
+                }
+            } finally {this.indexWaitMessage = ''; this.ratingIndexWait = null;}
+        };
+        return (this.ratingIndexWait = wait());
+    }
+
+    async getBackgroundTasks() {return this.request({action:'get-background-tasks'},15);}
+    async libraryFollows(operation = 'list', payload = {}) {
+        return this.request(operation === 'list' ? {action:'get-library-follows',options:payload} : {action:'change-library-follow',operation,payload},30);
+    }
+    async startLibraryAudit(options) {return this.request({action:'start-library-audit',options},15);}
+    async cancelLibraryAudit() {return this.request({action:'cancel-library-audit'},15);}
+
     async getAuthorBookList(authorId, query = {}) {
+        await this.waitForRatingIndex(query);
         return await this.request({action: 'get-author-book-list', authorId, query});
     }
 
     async getAuthorSeriesList(authorId, query = {}) {
+        await this.waitForRatingIndex(query);
         return await this.request({action: 'get-author-series-list', authorId, query});
     }
 
@@ -410,6 +441,7 @@ class Api {
     }
 
     async getSeriesBookList(series, query = {}) {
+        await this.waitForRatingIndex(query);
         return await this.request({action: 'get-series-book-list', series, query});
     }
 
@@ -684,8 +716,8 @@ class Api {
         return await this.request({action: 'prepare-reader-audio', bookUid, speaker, mode, chapterIndex, options}, 120);
     }
 
-    async getReaderAudioPlan(bookUid, mode) {
-        return await this.request({action: 'get-reader-audio-plan', bookUid, mode}, 120);
+    async getReaderAudioPlan(bookUid, mode, anchor = null) {
+        return await this.request({action: 'get-reader-audio-plan', bookUid, mode, anchor}, 120);
     }
 
     async previewReaderVoice(speaker, options, sampleText) {

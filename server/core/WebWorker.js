@@ -3636,6 +3636,37 @@ class WebWorker {
         return requestedUser;
     }
 
+    async getBackgroundTasks(userId, token) {
+        const user = await this.requireAuthorizedUser(userId,token);
+        const tasks = require('./BackgroundTasks').list(user);
+        const {getReaderSpeech} = require('./ReaderSpeech');
+        const speech = getReaderSpeech(this.config);
+        for (const job of speech.jobs.values()) {
+            if (!user.isAdmin && !job.users.has(user.id)) continue;
+            const state = speech.describe(job);
+            tasks.push({id:job.id,kind:'speech',title:'Озвучка книги',state:state.state,phase:state.phase,
+                progress:state.progress,remainingSeconds:state.remainingSeconds,queuePosition:state.queuePosition,error:state.error});
+        }
+        return {tasks,resources:user.isAdmin ? require('./ResourceRuntime').snapshot() : null,
+            audit:user.isAdmin ? this.libraryAudit?.describe() || null : null,isAdmin:!!user.isAdmin};
+    }
+
+    async libraryFollowAction(userId, token, operation, payload = {}) {
+        const user = await this.requireAuthorizedUser(userId,token);
+        this.checkMyState();
+        if (!this.libraryFollows) this.libraryFollows = new (require('./LibraryFollows'))(this);
+        return operation === 'list' ? this.libraryFollows.list(user.id,payload.refresh === true) : this.libraryFollows.change(user.id,operation,payload);
+    }
+
+    async auditLibrary(userId, token, operation, options = {}) {
+        await this.requireAdmin(userId,token);
+        this.checkMyState();
+        if (!this.libraryAudit) this.libraryAudit = new (require('./LibraryAudit'))(this);
+        if (operation === 'start') return this.libraryAudit.start(options);
+        if (operation === 'cancel') return this.libraryAudit.cancel();
+        throw new Error('Неизвестное действие проверки библиотеки');
+    }
+
     async requireAdmin(userId = '', profileAccessToken = '') {
         const user = await this.requireAuthorizedUser(userId, profileAccessToken);
         if (!user.isAdmin)

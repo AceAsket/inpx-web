@@ -27,6 +27,7 @@ const defaultCoverCacheSize = sizeFromEnv('INPX_COVER_CACHE_SIZE', 'INPX_COVER_C
 module.exports = {
     branch: 'unknown',
     version: pckg.version,
+    auditMaxBookBytes: Math.max(MB, sizeFromEnv('INPX_AUDIT_MAX_BOOK_BYTES','INPX_AUDIT_MAX_BOOK_MB',64 * MB)),
     latestVersion: '',
     name: pckg.name,
 

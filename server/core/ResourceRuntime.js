@@ -1,5 +1,6 @@
 const {AsyncLocalStorage} = require('async_hooks');
 const policy = require('./ResourcePolicy');
+const tasks = require('./BackgroundTasks');
 
 const context = new AsyncLocalStorage();
 const failure = (code, message) => Object.assign(new Error(message), {code});
@@ -26,11 +27,12 @@ class ResourceRuntime {
         if (this.queue.length >= 256) return Promise.reject(failure('INPX_RESOURCE_QUEUE_FULL', 'Очередь обработки заполнена. Повторите позже.'));
         return new Promise((resolve, reject) => {
             const entry = {task, resolve, reject, group, limits, kind, background, signal, deadline,
-                queuedAt:Date.now(), runInContext:AsyncLocalStorage.snapshot()};
+                queuedAt:Date.now(), taskId:scope.taskId, runInContext:AsyncLocalStorage.snapshot()};
+            if (entry.taskId) tasks.update(entry.taskId,{waitingReason:'Ожидание общих ресурсов сервера'});
             const remove = error => {
                 const index = this.queue.indexOf(entry);
                 if (index < 0) return;
-                this.queue.splice(index, 1); this.clear(entry); reject(error); this.drain();
+                this.queue.splice(index, 1); this.clear(entry); if (entry.taskId) tasks.update(entry.taskId,{waitingReason:''}); reject(error); this.drain();
             };
             entry.abort = () => remove(failure('ABORT_ERR', 'Проверка отменена'));
             entry.timer = setTimeout(() => remove(failure('INPX_RESOURCE_QUEUE_TIMEOUT', 'Истекло время ожидания обработки.')), Math.max(1, deadline - Date.now()));
@@ -58,6 +60,7 @@ class ResourceRuntime {
             const entry = this.foregroundStreak >= 8 && background ? background : foreground || background;
             this.foregroundStreak = entry.background ? 0 : this.foregroundStreak + 1;
             this.queue.splice(this.queue.indexOf(entry), 1); this.clear(entry);
+            if (entry.taskId) tasks.update(entry.taskId,{waitingReason:''});
             this.active++; entry.group.active++;
             entry.group.kinds[entry.kind] = (entry.group.kinds[entry.kind] || 0) + 1;
             if (entry.background) entry.group.background++;
@@ -86,6 +89,8 @@ class ResourceRuntime {
     }
 
     withBackground(task) {return context.run({...context.getStore(), priority:'background'}, task);}
+    withTask(taskId, task) {return context.run({...context.getStore(),taskId}, task);}
+    withSignal(signal, task) {return context.run({...context.getStore(), signal, priority:'background'}, task);}
     withBenchmark(limits, signal, task) {
         return context.run({group:{active:0, kinds:{}, background:0}, limits, signal, priority:'background'}, task);
     }

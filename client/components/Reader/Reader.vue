@@ -1531,6 +1531,7 @@
         <reader-audio
             v-if="bookUid && config.ttsEnabled && !isStandaloneMode"
             ref="audioPlayer" :book-uid="bookUid" :title="title" :author="authorLine" :cover="coverSrc"
+            @listen-here="listenFromReader" @read-here="readFromAudio"
         />
 
         <q-dialog v-model="readerReplacementOpen" :persistent="readerReplacementSaving">
@@ -10932,6 +10933,35 @@ class Reader {
     async openReaderAudio() {
         if (await this.ensureReaderProfileReady())
             this.$refs.audioPlayer?.open();
+    }
+
+    async listenFromReader() {
+        if (!await this.ensureReaderProfileReady()) return;
+        let anchor;
+        if (this.isPagedMode) {
+            anchor = this.capturePagedReflowAnchor();
+            const {key} = require('../../../shared/SpeechAnchor');
+            anchor.sourceOffset = this.pagedPages.slice(0,anchor.pageIndex)
+                .reduce((sum,page,index) => sum + key(this.getPagedPageSearchText(index)).length,0);
+        } else anchor = require('../../../shared/VisibleTextAnchor').capture(this.$refs.scroller);
+        if (!anchor) {this.$root.stdDialog.alert('Не удалось определить место в тексте'); return;}
+        await this.$refs.audioPlayer?.openAt({...anchor,percent:this.progress.percent});
+    }
+
+    readFromAudio(anchor) {
+        if (!anchor?.textSnippet) return;
+        if (!this.isPagedMode) {
+            const scroller = this.$refs.scroller, target = require('../../../shared/VisibleTextAnchor').find(scroller,anchor);
+            if (!target) {this.$root.stdDialog.alert('Фрагмент не найден в тексте книги'); return;}
+            scroller.scrollTop = Math.max(0,scroller.scrollTop + target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8);
+            this.updateCurrentSectionFromScroll(); this.queuePersistProgress();
+            return;
+        }
+        let pageIndex;
+        try {pageIndex = require('../../../shared/SpeechAnchor').locate(this.pagedPages.map((page,index) => ({text:this.getPagedPageSearchText(index)})),anchor);}
+        catch {this.$root.stdDialog.alert('Фрагмент не найден в тексте книги'); return;}
+        const restored = this.restoreReaderReflowAnchor({...anchor,mode:'paged',pageIndex});
+        if (restored) {this.scheduleReaderReflowAnchorHighlight(anchor); this.queuePersistProgress();}
     }
 
     async ensureReaderProfileReady() {

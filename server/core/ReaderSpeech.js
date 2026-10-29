@@ -171,8 +171,16 @@ class ReaderSpeech {
         return extractSpeechChapters(bookInfo.fb2, mode === 'online' ? 700 : chapterLimit);
     }
 
-    async plan(bookInfo, mode) {
-        const chapters = this.parts(bookInfo, mode).map(({index, title, text}) => ({index, title, characters: text.length}));
+    async plan(bookInfo, mode, anchor = null) {
+        const parts = this.parts(bookInfo, mode);
+        const startChapter = anchor ? require('../../shared/SpeechAnchor').locate(parts,anchor) : null;
+        let sourceOffset = 0;
+        const chapters = parts.map(({index, title, text, chapterEnd}) => {
+            const result = {index,title,characters:text.length,chapterEnd:chapterEnd !== false,
+                anchor:{textSnippet:text.replace(/\s+/g,' ').trim().slice(0,180),textOffset:-1,sourceOffset}};
+            sourceOffset += require('../../shared/SpeechAnchor').key(text).length;
+            return result;
+        });
         const characters = chapters.reduce((sum, part) => sum + part.characters, 0);
         let estimate, engineId = '';
         try {
@@ -189,7 +197,7 @@ class ReaderSpeech {
         } catch { /* Older/offline services cannot estimate; preparation reports the actual error. */ }
         const queuedCharacters = Array.from(this.jobs.values()).filter(job => ['queued', 'generating'].includes(job.state))
             .reduce((sum, job) => sum + Math.max(0, job.characters - (job.processedCharacters || 0)), 0);
-        return {chapters, characters, engineId, estimate: estimate ? {
+        return {chapters, characters, startChapter, engineId, estimate: estimate ? {
             charactersPerSecond: estimate.charactersPerSecond, warmupSeconds: estimate.warmupSeconds,
             firstSeconds: Math.ceil(chapters[0].characters / estimate.charactersPerSecond + estimate.warmupSeconds),
             totalSeconds: Math.ceil(characters / estimate.charactersPerSecond + estimate.warmupSeconds),

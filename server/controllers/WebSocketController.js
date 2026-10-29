@@ -124,6 +124,19 @@ class WebSocketController {
                     await this.logout(req, ws); break;
                 case 'get-config':
                     await this.getConfig(req, ws); break;
+                case 'get-rating-index-status':
+                    this.send(this.webWorker.dbSearcher?.ratingIndex ? await this.webWorker.dbSearcher.ratingIndex.status()
+                        : {state:'error',error:'Библиотека ещё не готова'},req,ws); break;
+                case 'get-background-tasks':
+                    this.send(await this.webWorker.getBackgroundTasks(req.userId,req.profileAccessToken),req,ws); break;
+                case 'get-library-follows':
+                    this.send(await this.webWorker.libraryFollowAction(req.userId,req.profileAccessToken,'list',req.options),req,ws); break;
+                case 'change-library-follow':
+                    this.send(await this.webWorker.libraryFollowAction(req.userId,req.profileAccessToken,req.operation,req.payload),req,ws); break;
+                case 'start-library-audit':
+                    this.send({audit:await this.webWorker.auditLibrary(req.userId,req.profileAccessToken,'start',req.options)},req,ws); break;
+                case 'cancel-library-audit':
+                    this.send({audit:await this.webWorker.auditLibrary(req.userId,req.profileAccessToken,'cancel')},req,ws); break;
                 case 'get-library-metadata':
                     this.send(await require('../core/LibraryExchange').respond(this.webWorker, req), req, ws); break;
                 case 'get-worker-state':
@@ -334,6 +347,10 @@ class WebSocketController {
     isCsrfProtectedAction(action = '') {
         return new Set([
             'logout',
+            'change-library-follow',
+            'get-library-follows',
+            'start-library-audit',
+            'cancel-library-audit',
             'login-user-profile',
             'logout-user-profile',
             'create-user-profile',
@@ -744,7 +761,7 @@ class WebSocketController {
         const speech = getReaderSpeech(this.config);
         if (!speech.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!req.bookUid) throw new Error('bookUid is empty');
-        const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid);
+        const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid, {readerOnly:true});
         const result = req.mode ? await speech.preparePart(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.mode, req.chapterIndex, req.options)
             : await speech.prepare(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.options);
         this.send(result, req, ws);
@@ -753,8 +770,8 @@ class WebSocketController {
     async getReaderAudioPlan(req, ws) {
         await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
         if (!req.bookUid) throw new Error('bookUid is empty');
-        const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid);
-        this.send(await getReaderSpeech(this.config).plan(bookInfo, req.mode || 'online'), req, ws);
+        const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid, {readerOnly:true});
+        this.send(await getReaderSpeech(this.config).plan(bookInfo, req.mode || 'online', req.anchor || null), req, ws);
     }
 
     async previewReaderVoice(req, ws) {
