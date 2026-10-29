@@ -358,8 +358,10 @@ export default class BaseList {
         if (this.downloadFlag)
             return;
 
-        if (['download', 'copyLink', 'sendTelegram', 'sendEmail'].includes(action))
-            format = bookFormats.resolve(book.ext, this.config, bookFormats.profilePreference(this.config), format);
+        if (['download', 'copyLink', 'sendTelegram', 'sendEmail'].includes(action)) {
+            const channel = action === 'sendTelegram' ? 'telegram' : action === 'sendEmail' ? 'email' : 'download';
+            format = bookFormats.resolve(book.ext, this.config, bookFormats.profilePreference(this.config, channel), format);
+        }
         if (format && format !== 'raw' && this.config.conversionEnabled === false) {
             this.$root.stdDialog.alert('Конвертация книг отключена в текущем образе.', 'Информация');
             return;

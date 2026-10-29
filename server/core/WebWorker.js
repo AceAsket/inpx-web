@@ -3661,6 +3661,11 @@ class WebWorker {
                 emailTo: (profileAuthorized ? user.emailTo || '' : ''),
                 telegramChatId: (profileAuthorized ? user.telegramChatId || '' : ''),
                 defaultDownloadFormat: profileAuthorized ? bookFormats.normalize(user.defaultDownloadFormat) : 'original',
+                defaultEmailFormat: profileAuthorized ? bookFormats.preference(user, 'email') : 'original',
+                defaultTelegramFormat: profileAuthorized ? bookFormats.preference(user, 'telegram') : 'original',
+                defaultOpdsFormat: profileAuthorized ? bookFormats.preference(user, 'opds') : 'original',
+                emailAsZip: profileAuthorized && user.emailAsZip === true,
+                telegramAsZip: profileAuthorized && user.telegramAsZip === true,
                 opdsEnabled: user.opdsEnabled !== false,
                 opdsAuthEnabled: user.opdsAuthEnabled === true,
                 readerPreferences: (profileAuthorized ? this.readingListStore.normalizeReaderPreferences(user.readerPreferences) : null),
@@ -6098,6 +6103,14 @@ class WebWorker {
         };
     }
 
+    async getDeliveryBookFile(bookUid, format, user, channel) {
+        const prepared = await this.getPreparedBookFile(bookUid, format, bookFormats.preference(user, channel));
+        if (user?.[`${channel}AsZip`] !== true) return prepared;
+        const archived = await require('./BookDeliveryArchive').prepare(prepared);
+        this.scheduleCacheClean('после подготовки ZIP для отправки');
+        return archived;
+    }
+
     async sendBookToTelegram(bookUid, format = '', userId = '') {
         const {currentUser} = await this.readingListStore.getUsers(userId);
         const chatId = String((currentUser && currentUser.telegramChatId) || '').trim();
@@ -6108,7 +6121,7 @@ class WebWorker {
         if (!chatId)
             throw new Error('Telegram chat id не указан в текущем профиле пользователя');
 
-        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format, currentUser?.defaultDownloadFormat);
+        const {book, rawFile, downFileName} = await this.getDeliveryBookFile(bookUid, format, currentUser, 'telegram');
         this.addAdminEvent('info', 'delivery', `Отправка книги в Telegram: ${book.title || downFileName}`);
         const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
         const form = new FormData();
@@ -6137,7 +6150,7 @@ class WebWorker {
         if (!this.config.emailShareEnabled || !this.config.smtpHost || !emailTo)
             throw new Error('Отправка на email не настроена');
 
-        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format, currentUser?.defaultDownloadFormat);
+        const {book, rawFile, downFileName} = await this.getDeliveryBookFile(bookUid, format, currentUser, 'email');
         this.addAdminEvent('info', 'delivery', `Отправка книги на email: ${book.title || downFileName}`, {
             to: emailTo,
             format: path.extname(downFileName).slice(1) || book.ext || '',

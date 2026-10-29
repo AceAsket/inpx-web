@@ -31,6 +31,7 @@ function scopeGuard(getWorker) {
                 }
                 // Every page and generated link must refer to the profile checked above.
                 req.query.user = user.id;
+                req.opdsUser = user;
             }
             next();
         } catch (error) {

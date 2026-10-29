@@ -1,5 +1,6 @@
 const formats = ['epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf', 'mobi'];
 const defaults = formats.filter(format => format !== 'mobi');
+const preferenceFields = {download:'defaultDownloadFormat', email:'defaultEmailFormat', telegram:'defaultTelegramFormat', opds:'defaultOpdsFormat'};
 
 function normalize(value) {
     const format = String(value || '').trim().toLowerCase();
@@ -8,7 +9,7 @@ function normalize(value) {
 
 function configured(config = {}) {
     if (config.conversionEnabled === false) return [];
-    const source = Array.isArray(config.conversionFormats) ? config.conversionFormats : defaults;
+    const source = Array.isArray(config.conversionFormats) ? config.conversionFormats : [...defaults, ...(config.mobiEnabled === true ? ['mobi'] : [])];
     return [...new Set(source.map(value => String(value).toLowerCase()))]
         .filter(format => formats.includes(format) && (format !== 'mobi' || config.mobiEnabled !== false));
 }
@@ -27,8 +28,14 @@ function resolve(ext, config = {}, preference = 'original', explicit = '') {
     return available(ext, config).includes(preferred) ? preferred : '';
 }
 
-function profilePreference(config = {}) {
-    return config.profileAuthorized ? normalize(config.currentUserProfile?.defaultDownloadFormat) : 'original';
+function preference(profile = {}, channel = 'download') {
+    const value = profile[preferenceFields[channel] || preferenceFields.download];
+    // RC8 used one preference for web downloads and both delivery channels.
+    return normalize(value === undefined && ['email', 'telegram'].includes(channel) ? profile.defaultDownloadFormat : value);
 }
 
-module.exports = {formats, normalize, configured, available, resolve, profilePreference};
+function profilePreference(config = {}, channel = 'download') {
+    return config.profileAuthorized ? preference(config.currentUserProfile || {}, channel) : 'original';
+}
+
+module.exports = {formats, normalize, configured, available, resolve, preference, preferenceFields, profilePreference};

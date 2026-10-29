@@ -658,6 +658,11 @@ class ReadingListStore {
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
         normalized.defaultDownloadFormat = bookFormats.normalize(normalized.defaultDownloadFormat);
+        normalized.defaultEmailFormat = bookFormats.preference(normalized, 'email');
+        normalized.defaultTelegramFormat = bookFormats.preference(normalized, 'telegram');
+        normalized.defaultOpdsFormat = bookFormats.preference(normalized, 'opds');
+        normalized.emailAsZip = normalized.emailAsZip === true;
+        normalized.telegramAsZip = normalized.telegramAsZip === true;
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
         normalized.opdsAuthEnabled = (normalized.opdsAuthEnabled === true);
         normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
@@ -1134,6 +1139,11 @@ class ReadingListStore {
             emailTo: profile.emailTo,
             telegramChatId: profile.telegramChatId,
             defaultDownloadFormat: profile.defaultDownloadFormat,
+            defaultEmailFormat: profile.defaultEmailFormat,
+            defaultTelegramFormat: profile.defaultTelegramFormat,
+            defaultOpdsFormat: profile.defaultOpdsFormat,
+            emailAsZip: profile.emailAsZip,
+            telegramAsZip: profile.telegramAsZip,
             opdsEnabled: profile.opdsEnabled,
             opdsAuthEnabled: profile.opdsAuthEnabled,
             isAdmin: false,
@@ -1170,6 +1180,12 @@ class ReadingListStore {
             target.telegramChatId = String(patch.telegramChatId || '').trim();
         if (utilsHasProp(patch, 'defaultDownloadFormat'))
             target.defaultDownloadFormat = bookFormats.normalize(patch.defaultDownloadFormat);
+        for (const field of ['defaultEmailFormat', 'defaultTelegramFormat', 'defaultOpdsFormat']) {
+            if (utilsHasProp(patch, field)) target[field] = bookFormats.normalize(patch[field]);
+        }
+        for (const field of ['emailAsZip', 'telegramAsZip']) {
+            if (utilsHasProp(patch, field)) target[field] = patch[field] === true;
+        }
         if (utilsHasProp(patch, 'opdsEnabled'))
             target.opdsEnabled = (patch.opdsEnabled !== false);
         if (utilsHasProp(patch, 'opdsAuthEnabled'))
@@ -1949,6 +1965,11 @@ class ReadingListStore {
                 emailTo: user.emailTo,
                 telegramChatId: user.telegramChatId,
                 defaultDownloadFormat: bookFormats.normalize(user.defaultDownloadFormat),
+                defaultEmailFormat: bookFormats.preference(user, 'email'),
+                defaultTelegramFormat: bookFormats.preference(user, 'telegram'),
+                defaultOpdsFormat: bookFormats.preference(user, 'opds'),
+                emailAsZip: user.emailAsZip === true,
+                telegramAsZip: user.telegramAsZip === true,
                 opdsEnabled: user.opdsEnabled,
                 opdsAuthEnabled: user.opdsAuthEnabled,
                 readerPreferences: this.normalizeReaderPreferences(user.readerPreferences),
@@ -1994,6 +2015,12 @@ class ReadingListStore {
                 target.telegramChatId = String(incomingUser.telegramChatId || '').trim();
             if (utilsHasProp(incomingUser, 'defaultDownloadFormat'))
                 target.defaultDownloadFormat = bookFormats.normalize(incomingUser.defaultDownloadFormat);
+            for (const field of ['defaultEmailFormat', 'defaultTelegramFormat', 'defaultOpdsFormat']) {
+                if (utilsHasProp(incomingUser, field)) target[field] = bookFormats.normalize(incomingUser[field]);
+            }
+            for (const field of ['emailAsZip', 'telegramAsZip']) {
+                if (utilsHasProp(incomingUser, field)) target[field] = incomingUser[field] === true;
+            }
             if (utilsHasProp(incomingUser, 'opdsEnabled'))
                 target.opdsEnabled = (incomingUser.opdsEnabled !== false);
             if (utilsHasProp(incomingUser, 'opdsAuthEnabled'))

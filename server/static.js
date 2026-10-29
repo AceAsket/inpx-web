@@ -51,6 +51,8 @@ function getBookDownloadMimeType(fileName) {
         return 'application/x-mobipocket-ebook';
     case '.azw':
     case '.azw3':
+    case '.azw8':
+    case '.kfx':
         return 'application/vnd.amazon.ebook';
     case '.doc':
         return 'application/msword';

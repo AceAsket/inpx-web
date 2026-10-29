@@ -119,6 +119,7 @@ class BasePage {
             href: attrs.href,
             rel: 'http://opds-spec.org/acquisition',
             type: attrs.type,
+            ...(attrs.title ? {title:this.escape(attrs.title)} : {}),
         });
     }
 

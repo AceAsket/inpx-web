@@ -359,13 +359,23 @@
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
                             <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
                             <div class="profile-format-setting">
-                                <q-select
-                                    v-model="editableProfile.defaultDownloadFormat"
-                                    :options="downloadFormatOptions"
-                                    emit-value map-options outlined dense
-                                    label="Формат скачивания и отправки"
-                                    hint="Для скачивания, Email и Telegram. Если формат недоступен для книги, используется исходный."
-                                />
+                                <div class="profile-format-title">
+                                    Форматы книг
+                                </div>
+                                <div v-for="formatSetting in formatFields" :key="formatSetting.field" class="profile-format-row">
+                                    <q-select
+                                        v-model="editableProfile[formatSetting.field]"
+                                        :options="formatOptions(formatSetting.field)"
+                                        emit-value map-options outlined dense :label="formatSetting.label"
+                                    />
+                                    <q-checkbox v-if="formatSetting.archive" v-model="editableProfile[formatSetting.archive]" dense label="Отправлять ZIP" class="q-mt-sm" />
+                                </div>
+                                <div class="profile-format-hint profile-backup-hint">
+                                    Если формат недоступен для книги, используется исходный. В ZIP упаковывается книга в выбранном формате.
+                                </div>
+                                <div class="profile-format-hint profile-backup-hint">
+                                    В персональном OPDS выбранный формат предлагается первым. Клиент OPDS может использовать свои предпочтения.
+                                </div>
                             </div>
                             <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :disable="!!currentProfile.isAdmin" :label="uiText.showProfileInOpds" />
                             <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!!currentProfile.isAdmin || !editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
@@ -481,9 +491,22 @@ class UserProfilesDialog {
     }
 
     get downloadFormatOptions() {
+        return this.formatOptions('defaultDownloadFormat');
+    }
+
+    get formatFields() {
+        return [
+            {field:'defaultDownloadFormat', label:'Скачивание'},
+            {field:'defaultOpdsFormat', label:'OPDS'},
+            {field:'defaultEmailFormat', label:'Email', archive:'emailAsZip'},
+            {field:'defaultTelegramFormat', label:'Telegram', archive:'telegramAsZip'},
+        ];
+    }
+
+    formatOptions(field) {
         const options = [{value:'original', label:'Исходный формат'},
             ...bookFormats.configured(this.config).map(value => ({value, label:value.toUpperCase()}))];
-        const current = bookFormats.normalize(this.editableProfile.defaultDownloadFormat);
+        const current = bookFormats.normalize(this.editableProfile[field]);
         if (!options.some(option => option.value === current))
             options.push({value:current, label:`${current.toUpperCase()} (недоступен)`, disable:true});
         return options;
@@ -605,6 +628,11 @@ class UserProfilesDialog {
             emailTo: '',
             telegramChatId: '',
             defaultDownloadFormat: 'original',
+            defaultEmailFormat: 'original',
+            defaultTelegramFormat: 'original',
+            defaultOpdsFormat: 'original',
+            emailAsZip: false,
+            telegramAsZip: false,
             opdsEnabled: true,
             opdsAuthEnabled: false,
         };
@@ -624,6 +652,11 @@ class UserProfilesDialog {
             emailTo: current.emailTo || '',
             telegramChatId: current.telegramChatId || '',
             defaultDownloadFormat: bookFormats.normalize(current.defaultDownloadFormat),
+            defaultEmailFormat: bookFormats.preference(current, 'email'),
+            defaultTelegramFormat: bookFormats.preference(current, 'telegram'),
+            defaultOpdsFormat: bookFormats.preference(current, 'opds'),
+            emailAsZip: current.emailAsZip === true,
+            telegramAsZip: current.telegramAsZip === true,
             opdsEnabled: current.opdsEnabled !== false,
             opdsAuthEnabled: current.opdsAuthEnabled === true,
         };
@@ -1129,6 +1162,24 @@ export default vueComponent(UserProfilesDialog);
 
 .profile-format-setting {
     grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.profile-format-title,
+.profile-format-hint {
+    grid-column: 1 / -1;
+}
+
+.profile-format-title {
+    font-weight: 600;
+}
+
+@media (max-width: 600px) {
+    .profile-format-setting {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 .profile-toggle {

@@ -929,8 +929,10 @@ class BookView {
     }
 
     emit(action, format = '') {
-        if (['download', 'copyLink', 'sendTelegram', 'sendEmail'].includes(action))
-            format = bookFormats.resolve(this.book.ext, this.config, bookFormats.profilePreference(this.config), format);
+        if (['download', 'copyLink', 'sendTelegram', 'sendEmail'].includes(action)) {
+            const channel = action === 'sendTelegram' ? 'telegram' : action === 'sendEmail' ? 'email' : 'download';
+            format = bookFormats.resolve(this.book.ext, this.config, bookFormats.profilePreference(this.config, channel), format);
+        }
         this.$emit('bookEvent', {action, format, book: this.book});
     }
 

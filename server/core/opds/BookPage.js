@@ -6,6 +6,7 @@ const BasePage = require('./BasePage');
 const Fb2Parser = require('../fb2/Fb2Parser');
 const {safeHtml} = require('../../../shared/safeHtml');
 const he = require('he');
+const acquisitionLinks = require('./AcquisitionLinks');
 
 const navigationType = 'application/atom+xml;profile=opds-catalog;kind=navigation';
 
@@ -186,27 +187,7 @@ class BookPage extends BasePage {
 
                 //format
                 const ext = bookInfo.book.ext;
-                const directHref = `${this.config.bookPathStatic}/by-uid?uid=${encodeURIComponent(bookUid)}`;
-                const rawHref = `${directHref}&format=raw`;
-                const links = [];
-                const addLink = (href, type) => {
-                    links.push({href, type});
-                };
-
-                if (ext === 'fb2') {
-                    addLink(rawHref, 'application/fb2+xml');
-                    addLink(rawHref, 'application/x-fictionbook+xml');
-                } else if (ext === 'epub') {
-                    addLink(rawHref, 'application/epub+zip');
-                } else if (ext === 'mobi') {
-                    addLink(rawHref, 'application/x-mobipocket-ebook');
-                } else {
-                    addLink(rawHref, `application/${ext}`);
-                    addLink(`${directHref}&zip=1`, 'application/zip');
-                }
-
-                if (this.config.conversionEnabled && this.config.mobiEnabled && ['fb2', 'epub'].includes(ext))
-                    addLink(`${directHref}&format=mobi`, 'application/x-mobipocket-ebook');
+                const links = acquisitionLinks.forBook({...bookInfo.book, _uid:bookUid}, this.config, req.opdsUser);
 
                 //entry
                 const e = this.makeEntry({
