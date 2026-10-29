@@ -220,6 +220,7 @@ class ConfigManager {
             if (await fs.pathExists(this._config.configFile))
                 recoveryDir = (await fs.readJson(this._config.configFile)).dataDir || recoveryDir;
             await require('../core/BackupTransaction').recover({...this._config, dataDir: recoveryDir});
+            await require('../core/UpgradeSnapshot').prepare({...this._config, dataDir: recoveryDir});
 
             if (await fs.pathExists(this._config.configFile)) {
                 const data = JSON.parse(await fs.readFile(this._config.configFile, 'utf8'));

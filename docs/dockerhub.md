@@ -20,7 +20,7 @@
 
 В 1.8.0 исправлены пустые страницы результатов поиска: списки веб-интерфейса и OPDS используют те же правила поиска по словам, что и сервер.
 
-**Для проверки MOBI в 1.8.1-rc.9:** используйте этот тег основного образа и добавьте `-e INPX_MOBI_ENABLED=true` перед именем образа. Лёгкий Kindling уже включён в образ; Calibre не требуется. FB2 конвертируется через промежуточный EPUB, готовый EPUB — напрямую. По умолчанию опция выключена, настраивается только при запуске. Результат содержит MOBI7/KF8; совместимость с конкретным Kindle экспериментальная. [Параметры и ограничения](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
+**Для проверки MOBI в 1.8.1-rc.10:** используйте этот тег основного образа и добавьте `-e INPX_MOBI_ENABLED=true` перед именем образа. Лёгкий Kindling уже включён в образ; Calibre не требуется. FB2 конвертируется через промежуточный EPUB, готовый EPUB — напрямую. По умолчанию опция выключена, настраивается только при запуске. Результат содержит MOBI7/KF8; совместимость с конкретным Kindle экспериментальная. [Параметры и ограничения](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
 
 **Начиная с RC5:** внизу каталога рядом с версией добавлена ссылка на [Telegram-сообщество форка](https://t.me/inpxweb), доступная также на мобильных экранах.
 
@@ -41,8 +41,8 @@
 | `1.8.0` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.0`. |
 | `1.8.0-silero` | Отдельный сервис озвучки для стабильной версии. |
-| `1.8.1-rc.9` | Четыре независимых формата, ZIP для Email/Telegram и предпочтения OPDS; включает быстрые карточки, бенчмарк и MOBI. |
-| `1.8.1-rc.9-silero` | Сервис озвучки для RC; существующий Silero из 1.8.0 совместим. |
+| `1.8.1-rc.10` | Фильтр числа голосов, полки и отзывы OPDS, Tolino, совместимость удалённых библиотек и резервная копия перед обновлением. |
+| `1.8.1-rc.10-silero` | Сервис озвучки для RC; существующий Silero из 1.8.0 совместим. |
 | `lite`, `*-lite` | Облегчённые сборки без конвертации; их версии могут отставать от основного образа. |
 
 Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md).
@@ -142,7 +142,7 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 **In version 1.8.0:** compact mobile search, index folders of FB2/EPUB files without INPX, filter-based smart shelves, ZIP downloads of book selections, protection against stale progress updates, manual replacement of unavailable books while keeping reading positions, and an Audiobookshelf metadata provider. Optional server-side Russian FB2 speech using Silero includes chapter playback, voice previews, pause/pitch/pronunciation settings, saved audio positions and playback speed control in the player.
 
-**Test MOBI in 1.8.1-rc.9:** use that main image tag and add `-e INPX_MOBI_ENABLED=true` before the image name. The bundled lightweight Kindling converter needs no Calibre. FB2 uses an intermediate EPUB; existing EPUB converts directly. This launch-only option is off by default. Output contains both MOBI7 and KF8; compatibility with your particular Kindle remains experimental. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
+**Test MOBI in 1.8.1-rc.10:** use that main image tag and add `-e INPX_MOBI_ENABLED=true` before the image name. The bundled lightweight Kindling converter needs no Calibre. FB2 uses an intermediate EPUB; existing EPUB converts directly. This launch-only option is off by default. Output contains both MOBI7 and KF8; compatibility with your particular Kindle remains experimental. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
 
 Version 1.8.0 fixes empty search-result pages: web lists and OPDS use the same word-matching rules as the server.
 
@@ -165,8 +165,8 @@ Version 1.8.0 fixes empty search-result pages: web lists and OPDS use the same w
 | `1.8.0` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.0`. |
 | `1.8.0-silero` | Separate speech service for the stable release. |
-| `1.8.1-rc.9` | Four independent formats, ZIP for Email/Telegram and OPDS preferences; includes fast cards, benchmark and MOBI. |
-| `1.8.1-rc.9-silero` | Speech service for the RC; existing Silero 1.8.0 remains compatible. |
+| `1.8.1-rc.10` | Vote count filters, OPDS shelves and reviews, Tolino, remote library compatibility and pre-upgrade snapshots. |
+| `1.8.1-rc.10-silero` | Speech service for the RC; existing Silero 1.8.0 remains compatible. |
 | `lite`, `*-lite` | Smaller builds without conversion; their versions may lag behind the main image. |
 
 Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md) for changes.

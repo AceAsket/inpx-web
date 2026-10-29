@@ -42,7 +42,12 @@ class RemoteLib {
         return instance;
     }
 
+    async ensureConnection() {
+        this.metadata.setConnection(await this.wsc._open());
+    }
+
     async wsRequest(query, recurse = false) {
+        await this.ensureConnection();
         if (this.accessToken)
             query.accessToken = this.accessToken;
 
@@ -50,6 +55,7 @@ class RemoteLib {
             await this.wsc.send(query),
             120
         );
+        this.metadata.setConnection(this.wsc.ws);
 
         if (!recurse && response && response.error == 'need_access_token' && this.config.remoteLib.accessPassword) {
             this.accessToken = utils.getBufHash(this.config.remoteLib.accessPassword + response.salt, 'sha256', 'hex');
