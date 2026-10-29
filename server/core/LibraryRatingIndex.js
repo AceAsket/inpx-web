@@ -7,6 +7,7 @@ const {getEnabledLibrarySources} = require('./LibrarySources');
 class LibraryRatingIndex {
     constructor(worker) {
         this.worker = worker;
+        this.instanceId = crypto.randomBytes(16).toString('hex');
         this.cached = null;
         this.pending = new Map();
     }
@@ -16,7 +17,7 @@ class LibraryRatingIndex {
         const remote = worker.remoteLib?.metadata ? await worker.remoteLib.metadata.ratingIndex() : null;
         const dirs = [...new Set([worker.config.libDir, ...getEnabledLibrarySources(worker.config).map(source => source.libDir)].filter(Boolean).map(dir => path.resolve(dir)))];
         const states = remote ? [] : await Promise.all(dirs.map(dir => worker.getReviewArchiveState(dir)));
-        const signature = crypto.createHash('sha256').update(JSON.stringify([generation, remote?.signature, states.map(state => state.signature)])).digest('hex');
+        const signature = crypto.createHash('sha256').update(JSON.stringify([this.instanceId, generation, remote?.signature, states.map(state => state.signature)])).digest('hex');
         if (this.cached?.signature === signature) return this.cached;
         if (this.pending.size && !this.pending.has(signature)) {
             await Promise.allSettled(this.pending.values());

@@ -70,7 +70,9 @@ async function testRatingIndexSeparatesSourcesAndRejectsObsoleteBuilds() {
     await started; worker.libraryAssetGeneration++;
     const rejection = assert.rejects(pending, /Библиотека обновилась/), newest = index.select('50..');
     release(); await rejection;
-    assert.deepStrictEqual(Array.from((await newest).ids), [2]);
+    const current = await newest;
+    assert.deepStrictEqual(Array.from(current.ids), [2]);
+    assert.notStrictEqual((await new Index(worker).select('50..')).signature,current.signature, 'A restarted provider cannot continue an old snapshot');
 }
 
 async function testOpdsShelfSettingsPersistAndAreProtectedByOwnership() {
