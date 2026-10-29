@@ -1,7 +1,13 @@
+<p align="center">
+  <a href="https://t.me/inpxweb">
+    <img src="./docs/images/telegram-community.svg" width="420" alt="Наше сообщество в Telegram — @inpxweb">
+  </a>
+</p>
+
 inpx-web-7z
 ===========
 
-[![Telegram — сообщество INPX Web](https://img.shields.io/badge/Telegram-INPX_Web-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/inpxweb) [![Android 9+ — скачать APK](https://img.shields.io/badge/Android-9%2B_APK-2E7D32?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
+[![Android 9+ — скачать APK](https://img.shields.io/badge/Android-9%2B_APK-2E7D32?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
 
 Стабильная версия — **1.8.0**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.0), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.0`. Для разработки используется ветка `develop`.
 
