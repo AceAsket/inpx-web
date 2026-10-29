@@ -63,7 +63,8 @@ async function testRatingIndexSeparatesSourcesAndRejectsObsoleteBuilds() {
     const started = new Promise(resolve => {entered = resolve;});
     const gate = new Promise(resolve => {release = resolve;});
     const worker = {config:{libDir:a,librarySources:[{id:'a',libDir:a},{id:'b',libDir:b}]},libraryAssetGeneration:1,
-        db:{select:async() => [{id:1,folder:'books.zip',file:'one',ext:'fb2',sourceLibDir:a},{id:2,folder:'books.7z',file:'one',ext:'fb2',sourceLibDir:b}]},
+        db:{esc:JSON.stringify, select:async query => query.rawResult ? [{rawResult:[1,2]}]
+            : [{id:1,folder:'books.zip',file:'one',ext:'fb2',sourceLibDir:a},{id:2,folder:'books.7z',file:'one',ext:'fb2',sourceLibDir:b}]},
         getReviewArchiveState:async dir => ({signature:dir}),
         ensureLibraryRatings:async state => {entered(); await gate; return new Map([['books.zip#one.fb2',{count:state.signature === a ? 10 : 100}]]);}};
     const index = new Index(worker), pending = index.select('50..');
@@ -73,6 +74,36 @@ async function testRatingIndexSeparatesSourcesAndRejectsObsoleteBuilds() {
     const current = await newest;
     assert.deepStrictEqual(Array.from(current.ids), [2]);
     assert.notStrictEqual((await new Index(worker).select('50..')).signature,current.signature, 'A restarted provider cannot continue an old snapshot');
+}
+
+async function testRatingIndexReadsEachBookOnceAcrossMultipleBatches() {
+    await temporary(async dir => {
+        const db = new (require('jembadb').JembaDb)();
+        await db.lock({dbPath:dir,create:true});
+        try {
+            await db.create({table:'book'});
+            const books = Array.from({length:10003}, (_, i) => ({id:i * 2 + 1,folder:'books.zip',file:String(i),ext:'fb2'}));
+            await db.insert({table:'book',rows:books});
+            const rows = db.table.get('book').rowsInterface, getRow = rows.getRow.bind(rows);
+            let reads = 0, largestBatch = 0;
+            rows.getRow = async id => {reads++; return getRow(id);};
+            const select = db.select.bind(db);
+            db.select = async query => {
+                const before = reads, result = await select(query);
+                largestBatch = Math.max(largestBatch, reads - before);
+                return result;
+            };
+            const worker = {db,config:{libDir:dir},libraryAssetGeneration:1,
+                getReviewArchiveState:async() => ({signature:'same'}),
+                ensureLibraryRatings:async() => new Map([['books.zip#0.fb2',{count:10}],['books.zip#10002.fb2',{count:30}]])};
+            const index = new (require('../server/core/LibraryRatingIndex'))(worker);
+            assert.deepStrictEqual(Array.from((await index.select('10..')).ids), [1,20005]);
+            assert.strictEqual(reads, books.length, 'Offset pagination must never reload the entire library for every batch');
+            assert(largestBatch <= 5000, 'Limit selected IDs before JembaDb loads and clones rows');
+            assert.deepStrictEqual(Array.from((await index.select('20..')).ids), [20005]);
+            assert.strictEqual(reads, books.length, 'Subsequent ranges reuse the index without reading books again');
+        } finally {await db.unlock();}
+    });
 }
 
 async function testOpdsShelfSettingsPersistAndAreProtectedByOwnership() {
@@ -298,6 +329,7 @@ async function testVoteFilteredClientListsAvoidPersistentStaleMetadata() {
 }
 
 module.exports = [testRatingCountRangesUseAnIndexAndInvalidateSearchCaches, testRatingIndexSeparatesSourcesAndRejectsObsoleteBuilds,
+    testRatingIndexReadsEachBookOnceAcrossMultipleBatches,
     testOpdsShelfSettingsPersistAndAreProtectedByOwnership, testOpdsShelfPagesPreserveGroupsProfilesAndEveryBook,
     testOpdsExtrasEscapeMetadataAndKeepPersonalFormatLinks, testTolinoCompatibilityPreservesAuthAndDoesNotChangeStandardFeeds,
     testWebAppUpdatesPreserveCustomFilesAndCleanOnlyManagedAssets, testRemoteMetadataNegotiatesVersionsAndValidatesPaginatedSnapshots,
