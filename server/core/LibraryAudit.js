@@ -36,7 +36,7 @@ class LibraryAudit {
         const job = this.job;
         this.pending = runtime.withSignal(job.controller.signal, () => runtime.withTask(id, () => this.run(job))).catch(error => {
             job.error = job.controller.signal.aborted ? 'Проверка отменена' : error.message;
-            tasks.finish(id, error);
+            tasks.finish(id, job.controller.signal.aborted ? null : error);
         }).finally(() => {
             job.finishedAt = Date.now();
             if (job.controller.signal.aborted) tasks.update(id, {state:'cancelled', phase:'Проверка отменена'});

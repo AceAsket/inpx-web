@@ -158,6 +158,9 @@ async function testLibraryAuditCancellationAndSourceChangesAreNotCorruption() {
             release(); await audit.pending;
             assert.strictEqual(reads,1); assert.strictEqual(audit.describe().damaged,0);
             assert.match(audit.describe().error,cancel ? /отменена/ : /обновилась/);
+            const task = require('../server/core/BackgroundTasks').tasks.get(audit.describe().id);
+            assert.strictEqual(task.state,cancel ? 'cancelled' : 'error');
+            assert.strictEqual(task.error,cancel ? '' : audit.describe().error,'Cancellation is a normal task outcome; real failures retain their error');
         }
     });
 }
