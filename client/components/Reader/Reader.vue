@@ -5917,17 +5917,70 @@ class Reader {
             return null;
 
         const contentRoot = scroller.querySelector('.reader-html');
-        const focusNode = this.findTopLeftReaderContentNode(contentRoot);
-        const focusId = this.getReaderNodeAnchorId(focusNode);
-        const focusText = this.getReaderNodeTextSnippet(focusNode);
+        const textAnchor = this.captureVisibleScrollTextAnchor(contentRoot, scroller);
 
         return {
             mode: 'scroll',
             sectionId: String(this.currentSectionId || '').trim(),
-            id: focusId,
-            textSnippet: focusText,
+            id: textAnchor.id || '',
+            textSnippet: textAnchor.textSnippet || '',
+            textOffset: -1,
             scrollTop: Math.max(0, Number(scroller.scrollTop || 0) || 0),
         };
+    }
+
+    captureVisibleScrollTextAnchor(root = null, scroller = null) {
+        if (!root || !scroller || typeof document === 'undefined')
+            return {};
+        const viewport = scroller.getBoundingClientRect();
+        const content = root.getBoundingClientRect();
+        const left = Math.max(viewport.left, content.left);
+        const right = Math.min(viewport.right, content.right);
+        if (right <= left)
+            return {};
+        // Hit-test a few points on the first visible line. Walking every Range in a
+        // whole novel on each scroll event causes unnecessary layout work.
+        for (const dy of [8, 18, 32, 52]) {
+            for (const dx of [8, 32, 64]) {
+                const point = this.getReaderTextPositionFromPoint(Math.min(right - 1, left + dx), viewport.top + dy);
+                if (!point || !point.node || !root.contains(point.node) || point.node.nodeType !== Node.TEXT_NODE)
+                    continue;
+                const snippet = this.getReaderTextSnippetFromPosition(root, point.node, point.offset);
+                if (snippet)
+                    return {id: this.getReaderNodeAnchorId(point.node.parentElement), textSnippet: snippet};
+            }
+        }
+        return {};
+    }
+
+    restoreScrollTextAnchor(anchor = {}) {
+        const scroller = this.$refs && this.$refs.scroller;
+        const root = scroller && scroller.querySelector('.reader-html');
+        const snippet = String(anchor.textSnippet || '').trim();
+        if (!root || !snippet || typeof document === 'undefined')
+            return false;
+        let rect;
+        if (snippet.startsWith('image:')) {
+            const image = this.findReaderNodeByImageAnchor(root, snippet);
+            rect = image && image.getBoundingClientRect();
+        } else {
+            const point = this.findReaderTextPositionByDocumentSnippet(root, snippet)
+                || this.findReaderTextPositionBySnippet(root, snippet);
+            if (!point || !point.node)
+                return false;
+            const range = document.createRange();
+            range.setStart(point.node, point.offset);
+            range.setEnd(point.node, Math.min(String(point.node.nodeValue || '').length, point.offset + 1));
+            rect = range.getBoundingClientRect();
+            if (typeof range.detach === 'function')
+                range.detach();
+        }
+        if (!rect || rect.height <= 0)
+            return false;
+        const padding = Math.max(0, Number(this.activePreferences.pagePaddingTop) || 0);
+        scroller.scrollTop = Math.max(0, scroller.scrollTop + rect.top - scroller.getBoundingClientRect().top - padding);
+        this.updateCurrentSectionFromScroll();
+        return true;
     }
 
     findTopLeftReaderContentNode(root = null) {
@@ -6100,6 +6153,9 @@ class Reader {
         const scroller = (this.$refs ? this.$refs.scroller : null);
         if (!scroller)
             return false;
+
+        if (this.restoreScrollTextAnchor(anchor))
+            return true;
 
         let target = null;
         if (anchor.id)
@@ -9173,6 +9229,9 @@ class Reader {
             }
         }
 
+        if (!this.isPagedMode && this.restoreScrollTextAnchor(this.progress))
+            return;
+
         if (this.progress.sectionId) {
             if (this.isPagedMode) {
                 const pageIndex = this.getPageIndexForSection(this.progress.sectionId);
@@ -9300,9 +9359,13 @@ class Reader {
         const currentScroll = scroller.scrollTop;
         const percent = (maxScroll > 0 ? currentScroll / maxScroll : 0);
         this.updateCurrentSectionFromScroll();
+        const anchor = this.captureScrollReflowAnchor() || {};
         this.progress = Object.assign({}, this.progress, {
             percent,
             sectionId: this.currentSectionId || '',
+            textSnippet: anchor.textSnippet || '',
+            textOffset: -1,
+            pageIndex: 0,
             updatedAt: new Date().toISOString(),
         });
         this.writeStoredReaderProgress();

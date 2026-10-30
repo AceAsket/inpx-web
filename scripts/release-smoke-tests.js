@@ -1719,6 +1719,7 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
 const tests = [
     ...require('./book-naming-tests'),
     ...require('./reader-measurement-tests'),
+    ...require('./reader-scroll-anchor-tests'),
     ...require('./converter-options-tests'),
     ...require('./mobi-tests'),
     ...require('./mobi-epub-tests'),
