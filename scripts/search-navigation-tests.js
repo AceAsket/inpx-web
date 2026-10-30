@@ -126,7 +126,7 @@ async function testCatalogSearchIgnoresSupersededResponses() {
             const current = view(name, query, shared);
             const calls = [];
             const api = async(...args) => {
-                calls.push(args.at(-1));
+                calls.push(args[typeof args[0] === 'string' ? 1 : 0]);
                 if (calls.length === 1) {started.resolve(); return first.promise;}
                 return {found: [{title: 'new'}], totalFound: 240, inpxHash: 'new'};
             };
@@ -166,7 +166,7 @@ async function testCatalogSearchRetryAndCoalescing() {
     assert.strictEqual(calls, 2, 'Successful identical queries are deduplicated');
     const first = deferred(), started = deferred(), requests = [];
     current.api.search = async(...args) => {
-        const q = args.at(-1);
+        const q = args[1];
         requests.push(q.title);
         if (requests.length === 1) {started.resolve(); return first.promise;}
         return {found: [{title: q.title}], totalFound: 1};

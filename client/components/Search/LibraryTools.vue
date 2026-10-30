@@ -173,7 +173,10 @@ export default {
         async manageIsbn(operation,force = false) {
             this.stopPolling(); const generation = this.generation; this.isbnBusy = true;
             try {await this.$root.api.manageIsbnIndex(operation,{force}); if (generation === this.generation) await this.loadTasks(generation);}
-            catch (error) {if (generation === this.generation) this.error = error.message;}
+            catch (error) {if (generation === this.generation) {
+                this.error = error.message;
+                if (this.tasksOpen) this.pollTimer = setTimeout(() => this.loadTasks(generation),2000);
+            }}
             finally {if (generation === this.generation) this.isbnBusy = false;}
         },
         async startAudit() {try {await this.$root.api.startLibraryAudit({deep:this.deep}); this.stopPolling(); await this.loadTasks(this.generation);} catch (error) {this.error = error.message;}},
@@ -199,7 +202,7 @@ export default {
         addFollow() {return this.followRequest('add',{kind:this.kind,value:this.value});},
         changeFollow(operation,id) {return this.followRequest(operation,{id});},
         bookHref(book) {return `#/books?title=${encodeURIComponent('=' + book.title)}`;},
-        followHref(follow) {return `#/books?${follow.kind}=${encodeURIComponent('=' + follow.value)}`;},
+        followHref(follow) {return `#/${follow.kind === 'author' ? 'author' : 'books'}?${follow.kind}=${encodeURIComponent('=' + follow.value)}`;},
     },
 };
 </script>

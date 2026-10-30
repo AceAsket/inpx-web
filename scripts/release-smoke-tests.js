@@ -1730,6 +1730,7 @@ const tests = [
     ...require('./channel-format-tests'),
     ...require('./library-feature-tests'),
     ...require('./server-audit-regression-tests'),
+    ...require('./client-audit-regression-tests'),
     ...require('./upgrade-compatibility-tests'),
     ...require('./library-tools-tests'),
     ...require('./isbn-tests'),

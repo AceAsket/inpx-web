@@ -312,6 +312,7 @@ const componentOptions = {
                 this.init();
         },
         dialogVisible(newValue) {
+            if (!newValue) this.invalidateGallery();
             this.$emit('update:modelValue', newValue);
         },
         bookInfo() {
@@ -349,6 +350,7 @@ class BookInfoDialog {
     galleryRequested = false;
     galleryLoading = false;
     galleryError = '';
+    galleryGeneration = 0;
     annotationMeta = null;
     reviews = [];
     libraryRating = null;
@@ -366,7 +368,7 @@ class BookInfoDialog {
     }
 
     beforeUnmount() {
-        this.stopGalleryObserver();
+        this.invalidateGallery();
     }
 
     init() {
@@ -380,7 +382,7 @@ class BookInfoDialog {
         this.galleryRequested = false;
         this.galleryLoading = false;
         this.galleryError = '';
-        this.stopGalleryObserver();
+        this.invalidateGallery();
         this.annotationMeta = null;
         this.reviews = [];
         this.libraryRating = null;
@@ -736,6 +738,11 @@ class BookInfoDialog {
         this.galleryObserver = null;
     }
 
+    invalidateGallery() {
+        this.galleryGeneration++;
+        this.stopGalleryObserver();
+    }
+
     async loadGallery() {
         if (this.galleryRequested)
             return;
@@ -743,20 +750,23 @@ class BookInfoDialog {
         this.galleryRequested = true;
         this.stopGalleryObserver();
         const bookUid = this.bookUid;
+        const generation = this.galleryGeneration;
+        const isCurrent = () => generation === this.galleryGeneration && bookUid === this.bookUid && this.dialogVisible;
         this.galleryLoading = true;
         try {
             const response = await this.api.getBookGallery(bookUid);
-            if (bookUid !== this.bookUid)
+            if (!isCurrent())
                 return;
             this.fb2Images = (response.images || []).map(image => ({
                 id: image.id,
                 src: `data:${image.contentType};base64,${image.data}`,
             }));
+            this.parseBookInfo();
         } catch (e) {
-            if (bookUid === this.bookUid)
+            if (isCurrent())
                 this.galleryError = e.message;
         } finally {
-            if (bookUid === this.bookUid)
+            if (isCurrent())
                 this.galleryLoading = false;
         }
     }

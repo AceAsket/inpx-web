@@ -391,32 +391,62 @@ class Api {
         }
     }
 
-    async search(from, query) {
-        await this.waitForRatingIndex(query);
+    async search(from, query, signal) {
+        await this.waitForRatingIndex(query, signal);
+        if (signal?.aborted) throw signal.reason;
         return await this.request({action: 'search', from, query}, 30);
     }
 
-    async bookSearch(query) {
-        await this.waitForRatingIndex(query);
+    async bookSearch(query, signal) {
+        await this.waitForRatingIndex(query, signal);
+        if (signal?.aborted) throw signal.reason;
         return await this.request({action: 'bookSearch', query}, 30);
     }
 
-    async waitForRatingIndex(query) {
+    async waitForRatingIndex(query, signal) {
+        if (signal?.aborted) throw signal.reason;
         if (!String(query?.ratingCount || '').trim()) return;
         require('../../../shared/RatingCount').parse(query.ratingCount);
-        if (this.ratingIndexWait) return this.ratingIndexWait;
-        const wait = async() => {
-            try {
-                for (;;) {
-                    const status = await this.request({action:'get-rating-index-status'},10);
-                    if (status.state === 'ready') return;
-                    if (status.state === 'error') throw new Error(status.error || 'Не удалось подготовить индекс голосов');
-                    this.indexWaitMessage = `Индекс голосов готовится${status.total ? ` · ${status.done.toLocaleString()} из ${status.total.toLocaleString()}` : ''}. Поиск продолжится автоматически.`;
-                    await new Promise(resolve => setTimeout(resolve,2000));
+        let wait = this.ratingIndexWait;
+        if (!wait) {
+            // Promises remain unproxied in Vue; each consumer can leave the shared poll independently.
+            wait = (async() => {
+                try {
+                    for (;;) {
+                        const status = await this.request({action:'get-rating-index-status'},10);
+                        if (!wait.users || status.state === 'ready') return;
+                        if (status.state === 'error') throw new Error(status.error || 'Не удалось подготовить индекс голосов');
+                        this.indexWaitMessage = `Индекс голосов готовится${status.total ? ` · ${status.done.toLocaleString()} из ${status.total.toLocaleString()}` : ''}. Поиск продолжится автоматически.`;
+                        await new Promise(resolve => {
+                            const timer = setTimeout(resolve,2000);
+                            wait.wake = () => {clearTimeout(timer); resolve();};
+                        });
+                        if (!wait.users) return;
+                    }
+                } finally {
+                    wait?.wake?.();
+                    if (this.ratingIndexWait === wait) {this.indexWaitMessage = ''; this.ratingIndexWait = null;}
                 }
-            } finally {this.indexWaitMessage = ''; this.ratingIndexWait = null;}
-        };
-        return (this.ratingIndexWait = wait());
+            })();
+            wait.users = 0;
+            this.ratingIndexWait = wait;
+        }
+        wait.users++;
+        return new Promise((resolve, reject) => {
+            let settled = false;
+            const finish = error => {
+                if (settled) return;
+                settled = true;
+                signal?.removeEventListener('abort', abort);
+                if (--wait.users === 0 && this.ratingIndexWait === wait) {
+                    this.ratingIndexWait = null; this.indexWaitMessage = ''; wait.wake?.();
+                }
+                if (error) reject(error); else resolve();
+            };
+            const abort = () => finish(signal.reason || new Error('Поиск отменён'));
+            signal?.addEventListener('abort', abort, {once:true});
+            wait.then(() => finish(), finish);
+        });
     }
 
     async getBackgroundTasks() {return this.request({action:'get-background-tasks'},15);}

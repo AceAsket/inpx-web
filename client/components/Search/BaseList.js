@@ -74,6 +74,7 @@ export default class BaseList {
     queuedSearch = null;
     searchRequestId = 0;
     searchDisposed = false;
+    searchAbortController = null;
 
     showMoreCount = showMoreCount;
     maxItemCount = maxItemCount;
@@ -95,6 +96,7 @@ export default class BaseList {
 
     beforeUnmount() {
         this.searchDisposed = true;
+        this.searchAbortController?.abort();
         this.queuedSearch = null;
         if (this.list.searchRequestId === this.searchRequestId)
             this.list.searchRequestId = ++nextSearchRequestId;
@@ -121,6 +123,7 @@ export default class BaseList {
         if (_.isEqual(query, this.prevQuery) && !this.error && this.list.totalFound >= 0 && this.list.searchRequestId === this.searchRequestId)
             return;
 
+        this.searchAbortController?.abort();
         const request = {id: ++nextSearchRequestId, query};
         this.searchRequestId = request.id;
         this.requestedSearch = request;
@@ -142,8 +145,10 @@ export default class BaseList {
                 try {
                     const cached = await this.getCachedSearchResult(current.query);
                     if (!this.isCurrentSearch(current)) continue;
+                    this.searchAbortController = new AbortController();
                     const response = cached || await (kind === 'books'
-                        ? this.api.bookSearch(current.query) : this.api.search(kind, current.query));
+                        ? this.api.bookSearch(current.query, this.searchAbortController.signal)
+                        : this.api.search(kind, current.query, this.searchAbortController.signal));
                     if (!this.isCurrentSearch(current)) continue;
                     this.error = '';
                     this.prevQuery = _.cloneDeep(current.query);
@@ -172,6 +177,7 @@ export default class BaseList {
         } finally {
             clearTimeout(timer);
             this.requestedSearch = null;
+            this.searchAbortController = null;
             this.refreshing = false;
             this.loadingMessage = '';
         }

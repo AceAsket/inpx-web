@@ -158,7 +158,7 @@ export default {
             serverPosition: {}, positionVariant: '', positionWrite: null, positionConflict: false,
             positionProfileIdentity: '',
             positionBookUid: '',
-            chapters: [], chapterIndex: 0, activeChapter: 0, estimate: null, planLoading: false, planGeneration: 0,
+            chapters: [], chapterIndex: 0, activeChapter: 0, estimate: null, planLoading: false, planGeneration: 0, openAtGeneration: 0,
             isPreview: false, autoPlay: false, nextSrc: '', nextJob: null, nextTimer: null, nextError: '',
             progress: 0, remainingSeconds: null, queuePosition: 0, phase: '',
             voices: [
@@ -194,14 +194,16 @@ export default {
         window.addEventListener('pagehide', this.pageHideHandler);
     },
     beforeUnmount() {
-        this.disarmSleep();
-        this.clearAudio();
+        this.close();
         window.removeEventListener('pagehide', this.pageHideHandler);
     },
     deactivated() { this.close(); },
     methods: {
         open() { this.loadTuning(); this.visible = true; this.minimized = false; if (!this.src) this.loadPlan(); },
-        close() { this.disarmSleep(); this.clearAudio(); this.visible = false; },
+        close() {
+            this.openAtGeneration++; this.planGeneration++; this.planLoading = false;
+            this.disarmSleep(); this.clearAudio(); this.visible = false;
+        },
         setSleep() {
             clearInterval(this.sleepInterval);
             this.sleepTimer = sleep.arm(this.sleepChoice);
@@ -226,10 +228,12 @@ export default {
             this.$emit('read-here',anchor);
         },
         async openAt(anchor) {
+            const generation = ++this.openAtGeneration;
             this.clearAudio(); this.open();
             if (this.mode === 'book') {this.mode = 'online'; await this.$nextTick();}
+            if (generation !== this.openAtGeneration || !this.visible) return;
             const result = await this.loadPlan(anchor);
-            if (!result || !Number.isInteger(result.startChapter)) return;
+            if (generation !== this.openAtGeneration || !this.visible || !result || !Number.isInteger(result.startChapter)) return;
             this.chapterIndex = result.startChapter; this.skipRestoreOnce = true;
             await this.prepare(false,true);
         },
