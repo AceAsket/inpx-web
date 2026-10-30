@@ -100,14 +100,14 @@ async function testSessionLifetimeAndMalformedCookies() {
     const security = new Security({});
     security.secret = 'test-secret';
     const middleware = security.middleware();
-    const response = {setHeader: () => assert.fail('Polling or assets must not set cookies')};
+    const response = {setHeader: name => assert.notStrictEqual(name.toLowerCase(), 'set-cookie', 'Polling or assets must not set cookies')};
     for (let i = 0; i < 1000; i++) {
         for (const pathname of ['/health', '/ready', '/metrics', '/app.js'])
             middleware({path: pathname, headers: {}, socket: {}}, response, () => {});
     }
     assert.strictEqual(security.sessions.size, 0);
     let cookie;
-    middleware({path: '/', headers: {}, socket: {}}, {setHeader: (_, value) => { cookie = value; }}, () => {});
+    middleware({path: '/', headers: {}, socket: {}}, {setHeader: (name, value) => { if (name.toLowerCase() === 'set-cookie') cookie = value; }}, () => {});
     assert.ok(cookie.startsWith('inpx_web_session='));
     const request = {headers: {cookie}};
     const session = security.getSession(request);
@@ -126,6 +126,61 @@ async function testSessionLifetimeAndMalformedCookies() {
     for (let i = 0; i < lifetime.maxSessions + 10; i++)
         security.ensureSession({headers: {}});
     assert.strictEqual(security.sessions.size, lifetime.maxSessions);
+}
+
+async function testNoIndexHeadersCoverStaticErrorsAndProtectedResponses() {
+    await temporary(async(dir) => {
+        const config = {dataDir:dir, rootPathStatic:'/library', bookPathStatic:'/book',
+            publicDir:path.join(dir,'public'), bookDir:path.join(dir,'books'),
+            requireAuth:true, authMode:'proxy', trustProxy:true, trustedProxyCidrs:['127.0.0.1/32'], proxyAuthHeader:'Remote-User'};
+        await fs.ensureDir(config.bookDir);
+        await fs.outputFile(path.join(config.publicDir,'index.html'),'<html><body>Library</body></html>');
+        await fs.outputFile(path.join(config.publicDir,'bundle.0123456789abcdef.js'),'console.log("library");');
+        await fs.copy(path.join(__dirname,'../client/assets/robots.txt'),path.join(config.publicDir,'robots.txt'));
+        const security = new Security(config);
+        await security.init();
+        const app = require('express')();
+        app.use(security.middleware());
+        app.use(security.requiredAuthMiddleware());
+        require('../server/static')(app,config,null,security);
+        const server = http.createServer(app);
+        await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
+        const url = `http://127.0.0.1:${server.address().port}`;
+        const headers = {'Remote-User':'reader'};
+        const check = async(route, status, options = {}) => {
+            // Raw HTTP preserves conditional headers without fetch adding Cache-Control: no-cache.
+            const response = await new Promise((resolve,reject) => {
+                const request = http.request(url + route,options,res => {
+                    const chunks = [];
+                    res.on('data',chunk => chunks.push(chunk));
+                    res.on('end',() => resolve({status:res.statusCode,headers:new Headers(res.headers),body:Buffer.concat(chunks).toString()}));
+                    res.on('error',reject);
+                });
+                request.on('error',reject); request.end();
+            });
+            assert.strictEqual(response.status,status,route);
+            assert.strictEqual(response.headers.get('x-robots-tag'),'noindex, nofollow',route);
+            return response;
+        };
+        try {
+            await check('/library/',401);
+            const document = await check('/library/',200,{headers});
+            assert.strictEqual(document.headers.get('cache-control'),'no-store');
+            assert.strictEqual(document.headers.get('strict-transport-security'),null);
+            const script = await check('/library/bundle.0123456789abcdef.js',200,{headers});
+            assert.match(script.headers.get('cache-control'),/immutable/);
+            await check('/library/bundle.0123456789abcdef.js',304,{headers:{...headers,'If-None-Match':script.headers.get('etag')}});
+            assert.strictEqual((await check('/library/bundle.0123456789abcdef.js',200,{method:'HEAD',headers})).body,'');
+            assert.match((await check('/library/robots.txt',200,{headers})).body,/^User-agent: \*\r?\nDisallow: \/\s*$/);
+            await check('/library/missing',404,{headers});
+            const secure = await check('/library/',200,{headers:{...headers,'X-Forwarded-Proto':'https'}});
+            assert.match(secure.headers.get('strict-transport-security'),/max-age=/);
+            security.trustedProxyRanges = [];
+            await check('/library/',403,{headers});
+        } finally {
+            await new Promise(resolve => server.close(resolve));
+        }
+    });
 }
 
 async function testProfileCredentialChangesRevokeSessions() {
@@ -297,6 +352,8 @@ async function testLibraryHtmlIsCleaned() {
         assert.ok(!/<(?!\/?(p|br|b|i|u|em|strong|h[1-6]|sub|sup|ul|ol|li|blockquote|div|span)>)/i.test(safeHtml(hostile)), hostile);
 }
 
-module.exports = [testBookRouteRejectsTraversal, testLibraryHtmlIsCleaned, testStoreLoadCacheStaysCurrent, testStoreReadErrorKeepsData, testAdminGetsRandomPasswordByDefault, testConcurrentSecretKeyCreation, testConcurrentStoreMutations, testAtomicConfigSave,
+module.exports = [testNoIndexHeadersCoverStaticErrorsAndProtectedResponses, testBookRouteRejectsTraversal, testLibraryHtmlIsCleaned,
+    testStoreLoadCacheStaysCurrent, testStoreReadErrorKeepsData, testAdminGetsRandomPasswordByDefault,
+    testConcurrentSecretKeyCreation, testConcurrentStoreMutations, testAtomicConfigSave,
     testSessionLifetimeAndMalformedCookies, testProfileCredentialChangesRevokeSessions,
     testDownloaderClosesFailedTransfers, testDownloaderVerifiesTlsCertificates];
