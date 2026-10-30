@@ -91,8 +91,12 @@ class LibraryAudit {
             const reader = new ZipReader({...this.worker.config,resourceMaxOutputBytes:this.maxBytes});
             try {
                 await fs.outputFile(temporary,data); await reader.open(temporary);
-                const container = reader.entries['META-INF/container.xml'];
-                if (!container || Number(container.size) > 1024 * 1024) throw new Error('Нет корректного META-INF/container.xml');
+                // ZIP entries are keyed by name, while repacked EPUB/7z entries
+                // are keyed by position. Use names for both container formats.
+                const entries = new Map(Object.values(reader.entries).filter(entry => !entry.isDirectory && !entry.isLink).map(entry => [entry.name,entry]));
+                const container = entries.get('META-INF/container.xml');
+                if (!container) throw new Error('Нет корректного META-INF/container.xml');
+                if (Number(container.size) > 1024 * 1024) throw Object.assign(new Error('Контейнер EPUB превышает лимит проверки'),{code:'AUDIT_LIMIT'});
                 const containerData = await reader.extractToBuf('META-INF/container.xml');
                 if (containerData.length > 1024 * 1024) throw Object.assign(new Error('Контейнер EPUB превышает лимит проверки'),{code:'AUDIT_LIMIT'});
                 const containerXml = validateXml(containerData,'container');
@@ -101,8 +105,9 @@ class LibraryAudit {
                 parser.onerror = error => {throw error;};
                 parser.onopentag = node => {if (node.name.split(':').pop() === 'rootfile' && !packagePath) packagePath = node.attributes['full-path'] || '';};
                 parser.write(containerXml).close();
-                if (!packagePath || path.isAbsolute(packagePath) || packagePath.split('/').includes('..') || !reader.entries[packagePath]) throw new Error('Пакет EPUB отсутствует');
-                if (Number(reader.entries[packagePath].size) > 4 * 1024 * 1024) throw Object.assign(new Error('Пакет EPUB превышает лимит проверки'),{code:'AUDIT_LIMIT'});
+                const packageEntry = entries.get(packagePath);
+                if (!packagePath || path.isAbsolute(packagePath) || packagePath.split('/').includes('..') || !packageEntry) throw new Error('Пакет EPUB отсутствует');
+                if (Number(packageEntry.size) > 4 * 1024 * 1024) throw Object.assign(new Error('Пакет EPUB превышает лимит проверки'),{code:'AUDIT_LIMIT'});
                 const packageData = await reader.extractToBuf(packagePath);
                 if (packageData.length > 4 * 1024 * 1024) throw Object.assign(new Error('Пакет EPUB превышает лимит проверки'),{code:'AUDIT_LIMIT'});
                 validateXml(packageData,'package');

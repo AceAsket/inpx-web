@@ -4,30 +4,43 @@ const resourceRuntime = require('./ResourceRuntime');
 // Share a small budget across books, covers and EPUB image decoders. Limiting
 // each book separately multiplies native processes by the number of readers.
 class ImageRuntime {
-    constructor(concurrency = resourceRuntime.settings.limits.images) {
+    constructor(concurrency = resourceRuntime.settings.limits.images, resources = resourceRuntime) {
         this.concurrency = Math.max(1, Math.min(16, Math.floor(Number(concurrency)) || 1));
+        this.resources = resources;
+        this.backgroundConcurrency = Math.min(resources.settings.limits.background, Math.max(1, this.concurrency - 1));
         this.active = 0;
+        this.backgroundActive = 0;
+        this.foregroundStreak = 0;
         this.queue = [];
         this.context = new AsyncLocalStorage();
     }
 
     run(task) {
-        if (resourceRuntime.isBenchmark()) return Promise.resolve().then(task);
+        if (this.resources.isBenchmark()) return Promise.resolve().then(task);
         // An FB2 image job already holds a slot during extraction. Its single
         // decoder must reuse that slot, including when concurrency is one.
         if (this.context.getStore()?.active)
             return Promise.resolve().then(task);
         return new Promise((resolve, reject) => {
-            this.queue.push({task, resolve, reject, runInContext:AsyncLocalStorage.snapshot()});
+            this.queue.push({task, resolve, reject, background:this.resources.isBackground(), runInContext:AsyncLocalStorage.snapshot()});
             this.drain();
         });
     }
 
     drain() {
         while (this.active < this.concurrency && this.queue.length) {
-            const entry = this.queue.shift();
+            // Background jobs waiting for the shared process budget must not
+            // reserve every image slot before a reader reaches this queue.
+            const background = this.backgroundActive < this.backgroundConcurrency
+                ? this.queue.find(entry => entry.background) : null;
+            const foreground = this.queue.find(entry => !entry.background);
+            const entry = this.foregroundStreak >= 8 && background ? background : foreground || background;
+            if (!entry) return;
+            this.queue.splice(this.queue.indexOf(entry), 1);
+            this.foregroundStreak = entry.background ? 0 : this.foregroundStreak + 1;
             const lease = {active:true};
             this.active++;
+            if (entry.background) this.backgroundActive++;
             // Preserve the queued caller's other async contexts (in particular
             // conversion deadlines), rather than inheriting the previous job's.
             entry.runInContext(() => this.context.run(lease, async() => {
@@ -36,6 +49,7 @@ class ImageRuntime {
                 finally {
                     lease.active = false;
                     this.active--;
+                    if (entry.background) this.backgroundActive--;
                     this.drain();
                 }
             }));

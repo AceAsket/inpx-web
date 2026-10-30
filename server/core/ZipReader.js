@@ -52,6 +52,7 @@ class ZipReader {
                 name: entry.name.replace(/\\/g, '/'),
                 isDirectory: !!entry.isDirectory,
                 isLink: !!entry.isLink,
+                size: entry.size,
             };
         };
 
@@ -80,6 +81,8 @@ class ZipReader {
 
             if (key === 'Path')
                 entry.name = value;
+            else if (key === 'Size')
+                entry.size = Number(value);
             else if (key === 'Folder')
                 entry.isDirectory = value === '+';
             else if (key === 'Attributes' && /^D/.test(value))

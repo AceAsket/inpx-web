@@ -636,12 +636,12 @@ class DbSearcher {
         if (!sourceId && !hideCopies && !query[ratingSelection])
             return rows;
 
+        const selected = query[ratingSelection] ? new Set(query[ratingSelection].ids) : null;
         return rows.map((row) => {
             let books = Array.isArray(row.books) ? row.books : [];
             if (sourceId)
                 books = books.filter(book => String((book && book.sourceId) || '').trim() === sourceId);
-            if (query[ratingSelection]) {
-                const selected = new Set(query[ratingSelection].ids);
+            if (selected) {
                 books = books.filter(book => selected.has(book.id));
             }
 

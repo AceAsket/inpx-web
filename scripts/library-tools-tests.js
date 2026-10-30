@@ -56,7 +56,7 @@ async function testBackgroundTaskVisibilityAndIndexReadiness() {
 async function testLibraryFollowsDetectOnlyNewBooksAndSurviveBackup() {
     await fixture(async worker => {
         const store = worker.readingListStore, owner = await store.createUser({name:'Owner'}), other = await store.createUser({name:'Other'});
-        worker.dbSearcher = {bookSearchIds:async query => {
+        worker.dbSearcher = {selectBookIds:async query => {
             const rows = await worker.db.select({table:'book'});
             return rows.filter(row => query.author ? row.author === query.author.slice(1) : row.series === query.series.slice(1)).map(row => row.id);
         }};

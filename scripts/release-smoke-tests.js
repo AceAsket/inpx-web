@@ -1729,6 +1729,7 @@ const tests = [
     ...require('./download-preference-tests'),
     ...require('./channel-format-tests'),
     ...require('./library-feature-tests'),
+    ...require('./server-audit-regression-tests'),
     ...require('./upgrade-compatibility-tests'),
     ...require('./library-tools-tests'),
     ...require('./isbn-tests'),

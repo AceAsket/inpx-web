@@ -6,7 +6,9 @@ class LibraryFollows {
         if (!['author','series'].includes(kind) || typeof value !== 'string' || !value.trim() || value.length > 200)
             throw new Error('Укажите автора или серию (до 200 символов)');
         const db = this.worker.db;
-        const ids = await this.worker.dbSearcher.bookSearchIds({[kind]:'=' + value.trim(),del:'0'});
+        // The author index contains individual coauthors; bookSearchIds compares
+        // an exact author filter with the book's entire comma-separated field.
+        const ids = await this.worker.dbSearcher.selectBookIds({[kind]:'=' + value.trim(),del:'0'});
         if (ids.length > 5000) throw new Error('Слишком много книг для одной подписки (лимит 5000)');
         const books = [];
         for (let offset = 0; offset < ids.length; offset += 1000) books.push(...await db.select({table:'book',
