@@ -20,7 +20,7 @@
 
 В 1.8.0 исправлены пустые страницы результатов поиска: списки веб-интерфейса и OPDS используют те же правила поиска по словам, что и сервер.
 
-**Для проверки MOBI в 1.8.1-rc.13:** используйте этот тег основного образа и добавьте `-e INPX_MOBI_ENABLED=true` перед именем образа. Лёгкий Kindling уже включён в образ; Calibre не требуется. FB2 конвертируется через промежуточный EPUB, готовый EPUB — напрямую. По умолчанию опция выключена, настраивается только при запуске. Результат содержит MOBI7/KF8; совместимость с конкретным Kindle экспериментальная. [Параметры и ограничения](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
+**Для проверки MOBI в 1.8.1-rc.14:** используйте этот тег основного образа и добавьте `-e INPX_MOBI_ENABLED=true` перед именем образа. Лёгкий Kindling уже включён в образ; Calibre не требуется. FB2 конвертируется через промежуточный EPUB, готовый EPUB — напрямую. По умолчанию опция выключена, настраивается только при запуске. Результат содержит MOBI7/KF8; совместимость с конкретным Kindle экспериментальная. [Параметры и ограничения](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
 
 **Начиная с RC5:** внизу каталога рядом с версией добавлена ссылка на [Telegram-сообщество форка](https://t.me/inpxweb), доступная также на мобильных экранах.
 
@@ -36,7 +36,9 @@
 
 **В RC12:** поиск ISBN-10/13 с ручной подготовкой индекса в «Задачи», отменой и продолжением. Прогрев отзывов при старте выключен, индекс путей отзывов ограничен, оценки читаются потоком. Для малого объёма ОЗУ доступен `INPX_LOW_MEMORY_MODE=true`. [Поиск ISBN](https://github.com/AceAsket/inpx-web/blob/develop/docs/isbn-search.md).
 
-**В RC13:** устранены задержки фильтра по голосам/ISBN на больших выборках, исправлены приоритеты очереди изображений, подписки на книги с соавторами и проверка EPUB в контейнерах 7z. Добавлены шесть регрессионных проверок; релизный набор содержит 215 тестов.
+**В RC13:** исправлены серверные фильтры голосов/ISBN, очередь изображений, подписки на соавторов и проверка EPUB/7z.
+
+**В RC14:** исправлены ожидание поиска, запуск звука после закрытия, ответы галереи, иллюстрации FB2, ссылки подписок и обновление задач после ошибки ISBN. Девять новых тестов; всего 224.
 
 ### Образы и версии
 
@@ -45,8 +47,8 @@
 | `1.8.0` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.0`. |
 | `1.8.0-silero` | Отдельный сервис озвучки для стабильной версии. |
-| `1.8.1-rc.13` | Исправления серверного аудита: фильтры голосов/ISBN, приоритет изображений, соавторы в подписках и проверка EPUB/7z. |
-| `1.8.1-rc.13-silero` | Сервис озвучки для RC; существующий Silero из 1.8.0 совместим. |
+| `1.8.1-rc.14` | Исправления клиентского аудита: поиск, плеер, галерея, иллюстрации FB2, подписки и статусы задач. |
+| `1.8.1-rc.14-silero` | Сервис озвучки для RC; существующий Silero из 1.8.0 совместим. |
 | `lite`, `*-lite` | Облегчённые сборки без конвертации; их версии могут отставать от основного образа. |
 
 Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md).
@@ -146,7 +148,7 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 **In version 1.8.0:** compact mobile search, index folders of FB2/EPUB files without INPX, filter-based smart shelves, ZIP downloads of book selections, protection against stale progress updates, manual replacement of unavailable books while keeping reading positions, and an Audiobookshelf metadata provider. Optional server-side Russian FB2 speech using Silero includes chapter playback, voice previews, pause/pitch/pronunciation settings, saved audio positions and playback speed control in the player.
 
-**Test MOBI in 1.8.1-rc.13:** use that main image tag and add `-e INPX_MOBI_ENABLED=true` before the image name. The bundled lightweight Kindling converter needs no Calibre. FB2 uses an intermediate EPUB; existing EPUB converts directly. This launch-only option is off by default. Output contains both MOBI7 and KF8; compatibility with your particular Kindle remains experimental. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
+**Test MOBI in 1.8.1-rc.14:** use that main image tag and add `-e INPX_MOBI_ENABLED=true` before the image name. The bundled lightweight Kindling converter needs no Calibre. FB2 uses an intermediate EPUB; existing EPUB converts directly. This launch-only option is off by default. Output contains both MOBI7 and KF8; compatibility with your particular Kindle remains experimental. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/develop/README.md#лёгкая-конвертация-mobi-181-rc2).
 
 Version 1.8.0 fixes empty search-result pages: web lists and OPDS use the same word-matching rules as the server.
 
@@ -164,7 +166,9 @@ Version 1.8.0 fixes empty search-result pages: web lists and OPDS use the same w
 
 **RC12:** ISBN-10/13 search with a manually prepared, resumable index under Tasks. Startup review warmup is disabled, the review path index is bounded, and ratings are parsed as a stream. Set `INPX_LOW_MEMORY_MODE=true` to reduce the book table cache on low-memory hosts. [ISBN search](https://github.com/AceAsket/inpx-web/blob/develop/docs/isbn-search.md).
 
-**RC13:** fixes large vote/ISBN selection delays, image queue priorities, coauthored books in author follows and deep checks of EPUB/7z containers. Six regression checks extend the release suite to 215 tests.
+**RC13:** server fixes for vote/ISBN filters, image priorities, coauthor follows and EPUB/7z checks.
+
+**RC14:** fixes search waits, playback after close, stale galleries, inline FB2 images, follow links and task polling after ISBN errors. Nine new tests; 224 total.
 
 ### Images and versions
 
@@ -173,8 +177,8 @@ Version 1.8.0 fixes empty search-result pages: web lists and OPDS use the same w
 | `1.8.0` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.0`. |
 | `1.8.0-silero` | Separate speech service for the stable release. |
-| `1.8.1-rc.13` | Server audit fixes: vote/ISBN filters, image priorities, coauthor follows and EPUB/7z checks. |
-| `1.8.1-rc.13-silero` | Speech service for the RC; existing Silero 1.8.0 remains compatible. |
+| `1.8.1-rc.14` | Client audit fixes: search, player, gallery, inline FB2 images, follows and task status updates. |
+| `1.8.1-rc.14-silero` | Speech service for the RC; existing Silero 1.8.0 remains compatible. |
 | `lite`, `*-lite` | Smaller builds without conversion; their versions may lag behind the main image. |
 
 Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md) for changes.
