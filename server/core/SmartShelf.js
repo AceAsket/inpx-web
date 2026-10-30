@@ -1,4 +1,4 @@
-const fields = ['author', 'title', 'series', 'genre', 'lang', 'ext', 'date', 'librate', 'ratingCount', 'keywords', 'sourceId'];
+const fields = ['author', 'title', 'series', 'genre', 'lang', 'ext', 'date', 'librate', 'ratingCount', 'keywords', 'sourceId', 'isbn'];
 
 function normalize(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -12,6 +12,7 @@ function normalize(value) {
     }
     if (!Object.keys(result).length) throw new Error('Задайте хотя бы один фильтр умной полки');
     if (result.ratingCount) require('../../shared/RatingCount').parse(result.ratingCount);
+    if (result.isbn) result.isbn = require('../../shared/Isbn').normalize(result.isbn);
     result.unreadOnly = value.unreadOnly === true;
     result.hideCopies = value.hideCopies === true || value.hideCopies === 'true';
     result.del = '0';

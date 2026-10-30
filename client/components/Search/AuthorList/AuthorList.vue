@@ -514,7 +514,7 @@ class AuthorList extends BaseList {
     }
 
     async getCachedSearchResult(query) {
-        if (!this.abCacheEnabled || query.ratingCount || !query.author || query.author[0] !== '=') return null;
+        if (!this.abCacheEnabled || query.ratingCount || query.isbn || !query.author || query.author[0] !== '=') return null;
         const author = this.cachedAuthors[query.author.substring(1)];
         if (!author) return null;
         try {

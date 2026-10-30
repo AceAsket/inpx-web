@@ -49,15 +49,29 @@ class DbSearcher {
         result.push(q.hideCopies === true || q.hideCopies === 'true' || q.hideCopies === '1' ? '1' : '');
         result.push(copyDedupeVersion);
         result.push(String(q.ratingCount || '').trim(), q[ratingSelection]?.signature || '');
+        result.push(String(q.isbn || '').trim());
 
         return JSON.stringify(result);
     }
 
     async prepareRatingQuery(query) {
-        if (!String(query.ratingCount ?? '').trim() || query[ratingSelection]) return query;
-        require('../../shared/RatingCount').parse(query.ratingCount);
-        if (!this.ratingIndex) throw new Error('Фильтр числа голосов недоступен для этой библиотеки');
-        return {...query, [ratingSelection]:await this.ratingIndex.select(query.ratingCount)};
+        if (query[ratingSelection]) return query;
+        const selections = [];
+        if (String(query.ratingCount ?? '').trim()) {
+            require('../../shared/RatingCount').parse(query.ratingCount);
+            if (!this.ratingIndex) throw new Error('Фильтр числа голосов недоступен для этой библиотеки');
+            selections.push(await this.ratingIndex.select(query.ratingCount));
+        }
+        if (String(query.isbn ?? '').trim()) {
+            require('../../shared/Isbn').normalize(query.isbn);
+            if (!this.isbnIndex) throw new Error('Поиск ISBN недоступен для этой библиотеки');
+            selections.push(await this.isbnIndex.select(query.isbn));
+        }
+        if (!selections.length) return query;
+        const [first, second] = selections;
+        const selected = second ? new Set(second.ids) : null;
+        return {...query,[ratingSelection]:{ids:selected ? first.ids.filter(id => selected.has(id)) : first.ids,
+            deletedIds:first.deletedIds,signature:selections.map(selection => selection.signature).join(':')}};
     }
 
     getTitleSearchPrefixCandidates(value = '') {

@@ -45,6 +45,28 @@
                     <p v-if="resources" class="library-tools-hint">
                         Обрабатывается: {{ resources.active }} · в очереди: {{ resources.queued }}. Лимиты задаются при запуске контейнера.
                     </p>
+                    <section v-if="isAdmin && isbnIndex" class="library-audit">
+                        <h3>Индекс ISBN</h3>
+                        <p>Номера ISBN берутся из каталога и файлов FB2/EPUB. Первая подготовка большой коллекции может занять много времени; обычный поиск продолжает работать.</p>
+                        <p v-if="isbnIndex.remote">
+                            Подготовка выполняется на сервере с исходными книгами.
+                        </p>
+                        <p v-else role="status">
+                            {{ isbnStateLabel }}.
+                            Обработано {{ isbnIndex.checked }} / {{ isbnIndex.total }} · с ISBN: {{ isbnIndex.found }} · не прочитано: {{ isbnIndex.errors }} · пропущено: {{ isbnIndex.skipped }}
+                        </p>
+                        <p v-if="isbnIndex.error" class="text-negative">
+                            {{ isbnIndex.error }}
+                        </p>
+                        <div v-if="!isbnIndex.remote" class="library-tools-buttons">
+                            <q-btn
+                                v-if="isbnIndex.state !== 'running' && isbnIndex.state !== 'ready'" outline no-caps
+                                label="Подготовить ISBN" :disable="loading || isbnBusy" @click="manageIsbn('start')"
+                            />
+                            <q-btn v-if="isbnIndex.state === 'running'" outline no-caps label="Отменить подготовку ISBN" :disable="isbnBusy" @click="manageIsbn('cancel')" />
+                            <q-btn v-if="isbnIndex.state !== 'running'" flat no-caps label="Перестроить ISBN полностью" :disable="loading || isbnBusy" @click="manageIsbn('start',true)" />
+                        </div>
+                    </section>
                     <section v-if="isAdmin" class="library-audit">
                         <h3>Проверка библиотеки</h3>
                         <p>Проверяет наличие архивов и книг. Исходные файлы не изменяются.</p>
@@ -124,15 +146,16 @@ export default {
     name:'LibraryTools',
     props:{author:{type:String,default:''},series:{type:String,default:''}},
     data() {return {tasksOpen:false,followsOpen:false,tasks:[],resources:null,audit:null,isAdmin:false,deep:false,
-        loading:false,error:'',pollTimer:null,generation:0,follows:[],books:[],truncated:false,kind:'author',value:'',busy:false,followError:''};},
+        isbnIndex:null,isbnBusy:false,loading:false,error:'',pollTimer:null,generation:0,follows:[],books:[],truncated:false,kind:'author',value:'',busy:false,followError:''};},
     computed:{
         authorized() {return !!this.$store.state.config.profileAuthorized;},
         identity() {return `${this.$store.state.settings.currentUserId}:${this.$store.state.settings.profileAccessToken}:${this.authorized}`;},
         auditRunning() {return !!this.audit && !this.audit.finishedAt;},
+        isbnStateLabel() {return {ready:'Индекс готов',running:'Подготовка',paused:'Подготовка приостановлена',empty:'Нужна подготовка индекса'}[this.isbnIndex?.state] || '';},
     },
     watch:{identity() {
         this.stopPolling(); this.tasksOpen = this.followsOpen = false;
-        this.tasks = []; this.follows = []; this.books = []; this.audit = null;
+        this.tasks = []; this.follows = []; this.books = []; this.audit = null; this.isbnIndex = null; this.isbnBusy = false;
         this.isAdmin = this.busy = this.loading = false; this.resources = null; this.error = this.followError = '';
     }},
     beforeUnmount() {this.stopPolling();},
@@ -143,9 +166,15 @@ export default {
         async loadTasks(generation) {
             this.loading = true;
             try {const result = await this.$root.api.getBackgroundTasks(); if (generation !== this.generation) return;
-                Object.assign(this,{tasks:result.tasks,resources:result.resources,audit:result.audit,isAdmin:result.isAdmin,error:''});
+                Object.assign(this,{tasks:result.tasks,resources:result.resources,audit:result.audit,isbnIndex:result.isbnIndex,isAdmin:result.isAdmin,error:''});
             } catch (error) {if (generation === this.generation) this.error = error.message;}
             finally {if (generation === this.generation) {this.loading = false; if (this.tasksOpen) this.pollTimer = setTimeout(() => this.loadTasks(generation),2000);}}
+        },
+        async manageIsbn(operation,force = false) {
+            this.stopPolling(); const generation = this.generation; this.isbnBusy = true;
+            try {await this.$root.api.manageIsbnIndex(operation,{force}); if (generation === this.generation) await this.loadTasks(generation);}
+            catch (error) {if (generation === this.generation) this.error = error.message;}
+            finally {if (generation === this.generation) this.isbnBusy = false;}
         },
         async startAudit() {try {await this.$root.api.startLibraryAudit({deep:this.deep}); this.stopPolling(); await this.loadTasks(this.generation);} catch (error) {this.error = error.message;}},
         async cancelAudit() {try {await this.$root.api.cancelLibraryAudit(); this.stopPolling(); await this.loadTasks(this.generation);} catch (error) {this.error = error.message;}},

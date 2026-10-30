@@ -578,7 +578,7 @@ export default class BaseList {
         try {
             let result;
 
-            if (this.abCacheEnabled && !this.getQuery().ratingCount) {
+            if (this.abCacheEnabled && !this.getQuery().ratingCount && !this.getQuery().isbn) {
                 const key = `author-${authorId}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
@@ -601,7 +601,7 @@ export default class BaseList {
         try {
             let result;
 
-            if (this.abCacheEnabled && !this.getQuery().ratingCount) {
+            if (this.abCacheEnabled && !this.getQuery().ratingCount && !this.getQuery().isbn) {
                 const key = `author-${authorId}-series-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
@@ -624,7 +624,7 @@ export default class BaseList {
         try {
             let result;
 
-            if (this.abCacheEnabled && !this.getQuery().ratingCount) {
+            if (this.abCacheEnabled && !this.getQuery().ratingCount && !this.getQuery().isbn) {
                 const key = `series-${series}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {

@@ -321,6 +321,10 @@ async function testVoteFilteredClientListsAvoidPersistentStaleMetadata() {
     assert.deepStrictEqual(await list.loadAuthorBooks(1),books);
     assert.deepStrictEqual(await list.loadSeriesBooks('Saga'),books);
     assert.deepStrictEqual(await list.loadAuthorSeries(1),series);
+    list.getQuery = () => ({isbn:'0306406152'});
+    assert.deepStrictEqual(await list.loadAuthorBooks(1),books);
+    assert.deepStrictEqual(await list.loadSeriesBooks('Saga'),books);
+    assert.deepStrictEqual(await list.loadAuthorSeries(1),series);
     const {bookUrl} = require('../server/core/RemoteLib');
     for (const link of ['/library/book/abcdef','book/abcdef','https://example.test/library/book/abcdef'])
         assert.deepStrictEqual(bookUrl('https://example.test','/library',link),{url:'https://example.test/library/book/abcdef',hash:'abcdef'});

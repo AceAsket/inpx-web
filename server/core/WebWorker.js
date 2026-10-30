@@ -907,6 +907,7 @@ class WebWorker {
             this.db = db;
 
             this.dbSearcher.ratingIndex = new (require('./LibraryRatingIndex'))(this);
+            this.dbSearcher.isbnIndex = this.getIsbnIndex();
 
             this.resetLibraryAssetCaches();
             this.setMyState(ssNormal);
@@ -3648,7 +3649,22 @@ class WebWorker {
                 progress:state.progress,remainingSeconds:state.remainingSeconds,queuePosition:state.queuePosition,error:state.error});
         }
         return {tasks,resources:user.isAdmin ? require('./ResourceRuntime').snapshot() : null,
-            audit:user.isAdmin ? this.libraryAudit?.describe() || null : null,isAdmin:!!user.isAdmin};
+            audit:user.isAdmin ? this.libraryAudit?.describe() || null : null,
+            isbnIndex:user.isAdmin && this.db ? await this.getIsbnIndex().status() : null,isAdmin:!!user.isAdmin};
+    }
+
+    getIsbnIndex() {
+        if (!this.libraryIsbnIndex) this.libraryIsbnIndex = new (require('./LibraryIsbnIndex'))(this);
+        return this.libraryIsbnIndex;
+    }
+
+    async manageIsbnIndex(userId, token, operation, options = {}) {
+        await this.requireAdmin(userId,token);
+        this.checkMyState();
+        const index = this.getIsbnIndex();
+        if (operation === 'start') return index.start(options);
+        if (operation === 'cancel') {index.cancel(); return index.status();}
+        throw new Error('Неизвестное действие индекса ISBN');
     }
 
     async libraryFollowAction(userId, token, operation, payload = {}) {
@@ -6460,8 +6476,10 @@ class WebWorker {
 
     async createReviewIndex(archives) {
         const reviewToArchives = new Map();
+        const limit = Math.max(1, Number(this.config.reviewIndexMaxEntries) || 100000);
+        let stored = 0;
 
-        for (const archive of archives) {
+        for (const [archiveIndex,archive] of archives.entries()) {
             if (archive.id.toLowerCase() === 'additional')
                 continue;
             await reviewRuntime.run(async() => {
@@ -6475,9 +6493,14 @@ class WebWorker {
 
                         const key = libraryReviews.normalizeEntryKey(entryName);
                         if (!key) continue;
+                        if (stored >= limit) {
+                            reviewToArchives.fallbackArchives = archives.slice(archiveIndex).filter(item => item.id.toLowerCase() !== 'additional');
+                            break;
+                        }
                         const list = reviewToArchives.get(key) || [];
                         list.push({archive: archive.file, entryName});
                         reviewToArchives.set(key, list);
+                        stored++;
                     }
                 } catch(e) {
                     if (isResourceError(e)) throw e;
@@ -6486,6 +6509,7 @@ class WebWorker {
                     await zipReader.close();
                 }
             });
+            if (reviewToArchives.fallbackArchives) break;
         }
 
         return reviewToArchives;
@@ -6495,11 +6519,29 @@ class WebWorker {
         if (this.remoteLib?.metadata) return this.remoteLib.metadata.reviews(book._uid);
         const entryKey = libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`);
         const reviewIndex = await this.ensureReviewIndex(book.sourceLibDir, state);
-        const matches = reviewIndex.get(entryKey) || [];
+        const matches = [...reviewIndex.get(entryKey) || []];
+        // Once the memory budget is reached, find this book in the remaining
+        // archives on demand rather than retaining every book's review paths.
+        for (const archive of reviewIndex.fallbackArchives || []) {
+            await reviewRuntime.run(async() => {
+                const reader = new ZipReader(this.config);
+                try {
+                    await reader.open(archive.file);
+                    for (const item of Object.values(reader.entries || {})) {
+                        if (!item.isDirectory && libraryReviews.normalizeEntryKey(item.name) === entryKey)
+                            matches.push({archive:archive.file,entryName:item.name});
+                    }
+                } catch (error) {
+                    if (isResourceError(error)) throw error;
+                    log(LM_WARN, `review archive ${archive.file}: ${error.message}`);
+                } finally {await reader.close();}
+            });
+        }
+        const uniqueMatches = [...new Map(matches.map(match => [JSON.stringify([match.archive,match.entryName]),match])).values()];
         const reviews = [];
         const seen = new Set();
 
-        const lists = await reviewRuntime.map(matches, async(match) => {
+        const lists = await reviewRuntime.map(uniqueMatches, async(match) => {
             const zipReader = new ZipReader(this.config);
             try {
                 await zipReader.open(match.archive, false);
@@ -6561,17 +6603,14 @@ class WebWorker {
                 const reader = new ZipReader(this.config);
                 try {
                     await reader.open(archive.file, false);
-                    const rows = JSON.parse(decodeArchiveText(await reader.extractToBuf('books.json')));
-                    if (!Array.isArray(rows)) return;
-                    for (const row of rows) {
+                    await libraryReviews.ratingRows(reader,row => {
                         if (!row || typeof row.folder !== 'string' || typeof row.file !== 'string'
                             || !Number.isFinite(row.sum) || !Number.isSafeInteger(row.count)
                             || row.count <= 0 || row.sum <= 0 || row.sum > row.count * 5)
-                            continue;
+                            return;
                         const key = libraryReviews.entryKey(row.folder, row.file);
-                        if (!ratings.has(key))
-                            ratings.set(key, {value: row.sum / row.count, count: row.count});
-                    }
+                        if (!ratings.has(key)) ratings.set(key, {value: row.sum / row.count, count: row.count});
+                    },this.config.tempDir);
                 } catch (error) {
                     if (isResourceError(error)) throw error;
                     log(LM_WARN, `library ratings ${archive.file}: ${error.message}`);
@@ -6851,11 +6890,11 @@ class WebWorker {
         return {images};
     }
 
-    //Индекс отзывов строится долго (сотни архивов), поэтому строим его при запуске,
-    //а не при открытии первой карточки
+    // Opt-in startup warmup; large collections keep lazy, bounded indexes by default.
     warmReviewIndexes() {
+        if (this.config.reviewWarmupEnabled !== true) return Promise.resolve();
         const dirs = new Set([this.config.libDir, ...getEnabledLibrarySources(this.config).map(source => source.libDir)].filter(Boolean));
-        return resourceRuntime.withBackground(() => Promise.all([...dirs].map(async(dir) => {
+        return resourceRuntime.withBackground(async() => {for (const dir of dirs) {
             try {
                 const state = await this.getReviewArchiveState(dir);
                 await this.ensureReviewIndex(dir, state);
@@ -6864,7 +6903,7 @@ class WebWorker {
             } catch (error) {
                 log(LM_WARN, `review index ${dir}: ${error.message}`);
             }
-        }))).then(async result => {
+        }}).then(async result => {
             if (this.dbSearcher?.ratingIndex) await this.dbSearcher.ratingIndex.load();
             return result;
         }).catch(error => log(LM_WARN, `rating index: ${error.message}`));

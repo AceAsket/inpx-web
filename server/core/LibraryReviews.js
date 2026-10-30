@@ -44,4 +44,33 @@ async function snapshot(dirs) {
     return {archives, signature};
 }
 
-module.exports = {entryKey, normalizeEntryKey, snapshot};
+async function ratingRows(reader, consume, tempDir) {
+    const {pipeline} = require('stream/promises');
+    const {Transform} = require('stream');
+    const iconv = require('iconv-lite');
+    let temporary;
+    try {
+        if (reader.archiveType === '7z') {
+            temporary = path.join(tempDir || require('os').tmpdir(),`ratings-${crypto.randomBytes(12).toString('hex')}.json`);
+            await fs.ensureDir(path.dirname(temporary));
+            await reader.extractToFile('books.json',temporary);
+        }
+        for (const encoding of ['utf8','win1251']) {
+            const source = temporary ? fs.createReadStream(temporary) : await reader.zip.stream('books.json');
+            const decoded = iconv.decodeStream(encoding);
+            const verify = new Transform({decodeStrings:false, transform(chunk, unused, callback) {
+                if (encoding === 'utf8' && String(chunk).includes('\uFFFD')) return callback(Object.assign(new Error('Invalid UTF-8'),{code:'INVALID_RATING_ENCODING'}));
+                callback(null,chunk);
+            }});
+            try {
+                const parser = new (require('@streamparser/json-node').JSONParser)({paths:['$.*'],keepStack:false,stringBufferSize:64 * 1024});
+                await pipeline(source,decoded,verify,parser,async rows => {
+                    for await (const row of rows) consume(row.value);
+                });
+                return;
+            } catch (error) {if (error.code !== 'INVALID_RATING_ENCODING' || encoding !== 'utf8') throw error;}
+        }
+    } finally {if (temporary) await fs.remove(temporary);}
+}
+
+module.exports = {entryKey, normalizeEntryKey, snapshot, ratingRows};

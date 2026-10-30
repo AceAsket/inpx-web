@@ -4,11 +4,6 @@ const tasks = require('./BackgroundTasks');
 const runtime = require('./ResourceRuntime');
 const ZipReader = require('./ZipReader');
 
-function contained(root, target) {
-    const relative = path.relative(root, target);
-    return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
-}
-
 function validateXml(buffer, root) {
     const text = new (require('./fb2/Fb2Helper'))().checkEncoding(buffer).toString('utf8');
     const parser = require('sax').parser(true, {strictEntities:true});
@@ -83,54 +78,10 @@ class LibraryAudit {
         } finally {for (const state of cache.values()) if (state.reader) await state.reader.close().catch(() => {});}
     }
     async check(book, job, cache) {
-        const source = path.resolve(book.sourceLibDir || this.worker.config.libDir);
-        const folder = path.resolve(source, book.folder || '.');
-        if (!contained(source, folder)) throw new Error('Путь архива выходит за пределы источника');
-        const name = `${book.file}.${book.ext}`;
-        if (path.isAbsolute(name) || name.replace(/\\/g,'/').split('/').includes('..')) throw new Error('Недопустимое имя файла');
-        const key = source + '\0' + folder;
-        if (!cache.has(key)) {
-            // Bound open archives, including failed/missing archive lookups.
-            if (cache.size >= 4) {const [oldKey, old] = cache.entries().next().value; await old.reader?.close(); cache.delete(oldKey);}
-            try {
-                await fs.access(source).catch(() => {throw Object.assign(new Error('Источник библиотеки недоступен. Повторите проверку после подключения'),{code:'AUDIT_SOURCE_UNAVAILABLE'});});
-                const resolved = await this.worker.resolveLibraryArchivePath(folder, source);
-                const sourceReal = await fs.realpath(source);
-                if (!contained(sourceReal, await fs.realpath(resolved))) throw new Error('Ссылка ведёт за пределы источника');
-                const stat = await fs.stat(resolved);
-                const state = {resolved,sourceReal,directory:stat.isDirectory()};
-                if (!state.directory) {state.reader = new ZipReader({...this.worker.config,resourceMaxOutputBytes:this.maxBytes});
-                    try {await state.reader.open(resolved);} catch (error) {await state.reader.close().catch(() => {}); throw error;}}
-                cache.set(key,state);
-            } catch (error) {cache.set(key,{error});}
-        }
-        const state = cache.get(key);
-        if (state.error) throw state.error;
-        let entry, file;
-        if (state.directory) {
-            file = path.resolve(state.resolved,name);
-            if (!contained(state.sourceReal, await fs.realpath(file))) throw new Error('Ссылка ведёт за пределы источника');
-            entry = await fs.stat(file);
-            if (!entry.isFile()) throw new Error('Вместо книги найден каталог');
-        } else {
-            entry = state.reader.entries[name] || Object.values(state.reader.entries).find(row => row.name === name);
-            if (!entry) throw Object.assign(new Error('Файл отсутствует в архиве'),{code:'ENOENT'});
-            if (entry.isDirectory || entry.isLink) throw new Error('Недопустимый тип записи архива');
-        }
+        const supported = ['fb2','epub'].includes(String(book.ext).toLowerCase());
+        const data = await require('./LibraryBookData').read(this.worker, book, cache, job.controller.signal, this.maxBytes, job.deep && supported);
         if (!job.deep) return;
-        if (!['fb2','epub'].includes(String(book.ext).toLowerCase())) return this.issue(job,book,'skipped','Проверка содержимого доступна для FB2 и EPUB');
-        if (Number(entry.size) > this.maxBytes) throw Object.assign(new Error('Файл превышает лимит проверки содержимого'),{code:'AUDIT_LIMIT'});
-        const read = async() => {
-            if (state.reader?.archiveType === '7z') return state.reader.extractToBuf(name);
-            const stream = file ? fs.createReadStream(file) : await state.reader.zip.stream(name);
-            const chunks = []; let size = 0;
-            try {for await (const chunk of stream) {job.controller.signal.throwIfAborted(); size += chunk.length;
-                if (size > this.maxBytes) throw Object.assign(new Error('Файл превышает лимит проверки'),{code:'AUDIT_LIMIT'});
-                chunks.push(chunk);}
-            } finally {stream.destroy();}
-            return Buffer.concat(chunks);
-        };
-        const data = state.reader?.archiveType === '7z' ? await read() : await runtime.run(read,{kind:'reviews',signal:job.controller.signal});
+        if (!supported) return this.issue(job,book,'skipped','Проверка содержимого доступна для FB2 и EPUB');
         if (String(book.ext).toLowerCase() === 'fb2') {
             let xml = data;
             if (data[0] === 0x1f && data[1] === 0x8b) xml = require('zlib').gunzipSync(data,{maxOutputLength:this.maxBytes});

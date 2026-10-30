@@ -135,6 +135,10 @@ class WebSocketController {
                     this.send(await this.webWorker.libraryFollowAction(req.userId,req.profileAccessToken,req.operation,req.payload),req,ws); break;
                 case 'start-library-audit':
                     this.send({audit:await this.webWorker.auditLibrary(req.userId,req.profileAccessToken,'start',req.options)},req,ws); break;
+                case 'start-isbn-index':
+                    this.send(await this.webWorker.manageIsbnIndex(req.userId,req.profileAccessToken,'start',req.options),req,ws); break;
+                case 'cancel-isbn-index':
+                    this.send(await this.webWorker.manageIsbnIndex(req.userId,req.profileAccessToken,'cancel'),req,ws); break;
                 case 'cancel-library-audit':
                     this.send({audit:await this.webWorker.auditLibrary(req.userId,req.profileAccessToken,'cancel')},req,ws); break;
                 case 'get-library-metadata':
@@ -350,6 +354,8 @@ class WebSocketController {
             'change-library-follow',
             'get-library-follows',
             'start-library-audit',
+            'start-isbn-index',
+            'cancel-isbn-index',
             'cancel-library-audit',
             'login-user-profile',
             'logout-user-profile',

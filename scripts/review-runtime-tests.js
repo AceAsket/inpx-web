@@ -32,6 +32,48 @@ function worker(config) {
     return value;
 }
 
+async function testReviewWarmupDoesNotAllocateIndexesByDefault() {
+    for (const reviewWarmupEnabled of [undefined,false]) {
+        const value = worker({libDir:'/large-library',reviewWarmupEnabled});
+        value.getReviewArchiveState = async() => assert.fail('Startup must not enumerate review archives by default');
+        value.dbSearcher = {ratingIndex:{load:async() => assert.fail('Startup must not scan the entire book database')}};
+        await value.warmReviewIndexes();
+    }
+}
+
+async function testRatingsStreamInASmallHeapAndKeepLegacyEncoding() {
+    await temporary(async dir => {
+        const file = path.join(dir,'books.json');
+        const handle = await require('fs/promises').open(file,'w');
+        try {
+            await handle.write('[');
+            const padding = 'x'.repeat(128 * 1024);
+            for (let i = 0; i < 600; i++) await handle.write((i ? ',' : '') + JSON.stringify({folder:'books.zip',file:`${i}.fb2`,sum:4,count:1,padding}));
+            await handle.write(']');
+        } finally {await handle.close();}
+        const script = `const fs=require('fs-extra');
+            (async()=>{let count=0;
+            await require(process.argv[1]).ratingRows({archiveType:'zip',zip:{stream:async()=>fs.createReadStream(process.argv[2])}},()=>count++);
+            if(count!==600)throw new Error('Incomplete stream');console.log(JSON.stringify({count,rss:process.memoryUsage().rss}));
+            })().catch(e=>{console.error(e);process.exitCode=1});`;
+        const execFile = require('util').promisify(require('child_process').execFile);
+        const result = await execFile(process.execPath,['--max-old-space-size=64','-e',script,require.resolve('../server/core/LibraryReviews'),file],{timeout:60000});
+        assert.strictEqual(JSON.parse(result.stdout).count,600,'A 75 MiB JSON array must work in a 64 MiB JS heap');
+        assert((await fs.stat(file)).size > 75 * 1024 * 1024);
+        const raw = require('iconv-lite').encode(JSON.stringify([{folder:'Книги.zip',file:'one.fb2',sum:4,count:1}]),'win1251');
+        await fs.writeFile(file,raw);
+        const rows = [];
+        await require('../server/core/LibraryReviews').ratingRows({archiveType:'zip',zip:{stream:async() => fs.createReadStream(file)}},row => rows.push(row));
+        assert.strictEqual(rows.length,1); assert.strictEqual(rows[0].folder,'Книги.zip');
+        const reader = {archiveType:'7z',extractToFile:async(name,target) => {
+            assert.strictEqual(name,'books.json'); await fs.writeFile(target,raw);
+        },extractToBuf:() => assert.fail('7z ratings must use a temporary file instead of buffering stdout')};
+        const temporaryDir = path.join(dir,'tmp');
+        await require('../server/core/LibraryReviews').ratingRows(reader,() => {},temporaryDir);
+        assert.deepStrictEqual(await fs.readdir(temporaryDir),[]);
+    });
+}
+
 async function testReviewReadsShareBudgetWithWarmupAndRatings() {
     await temporary(async dir => {
         const dirs = ['first','second','third'].map(name => path.join(dir, name, 'books'));
@@ -46,7 +88,7 @@ async function testReviewReadsShareBudgetWithWarmupAndRatings() {
                 {folder:'collection.zip', file:'123.fb2', sum:9, count:2},
             ])});
         }
-        const value = worker({libDir:dirs[0], librarySources:dirs.map(libDir => ({libDir}))});
+        const value = worker({reviewWarmupEnabled:true,libDir:dirs[0], librarySources:dirs.map(libDir => ({libDir}))});
         const original = {open:ZipReader.prototype.open, close:ZipReader.prototype.close, cpu:os.availableParallelism};
         let active = 0, peak = 0, opened = 0, closed = 0;
         const ratingsReads = [];
@@ -86,6 +128,28 @@ async function testReviewReadsShareBudgetWithWarmupAndRatings() {
     });
 }
 
+async function testBoundedReviewIndexKeepsAllMatchesWithLazyArchiveFallback() {
+    await temporary(async dir => {
+        await fs.ensureDir(dir);
+        for (let i = 0; i < 5; i++) await archive(path.join(dir,'reviews',`${i}.zip`),{
+            'collection.zip#1.fb2':JSON.stringify([{...common,text:'First ' + i}]),
+            'collection.zip#2.fb2':JSON.stringify([{...common,text:'Second ' + i}]),
+            'collection.7z#3.fb2':JSON.stringify([{...common,text:'Third ' + i}]),
+        });
+        const value = worker({libDir:dir,reviewIndexMaxEntries:2});
+        const state = await value.getReviewArchiveState(dir);
+        const index = await value.ensureReviewIndex(dir,state);
+        assert.strictEqual([...index.values()].reduce((total,rows) => total + rows.length,0),2);
+        assert.strictEqual(index.fallbackArchives.length,5);
+        for (let id = 1; id <= 3; id++) {
+            const result = await value.getBookReviews({folder:'collection.zip',file:String(id),ext:'fb2'},state);
+            const prefix = ['First','Second','Third'][id - 1];
+            assert.deepStrictEqual(result.map(row => row.text),Array.from({length:5},(_,i) => prefix + ' ' + i));
+        }
+        assert.strictEqual([...index.values()].reduce((total,rows) => total + rows.length,0),2,'Reading fallback books does not grow the index');
+    });
+}
+
 async function testMalformedReviewsDoNotBreakBookInformation() {
     await temporary(async dir => {
         const config = {libDir:path.join(dir, 'books'), bookDir:path.join(dir, 'cache'), branch:'test'};
@@ -118,7 +182,7 @@ async function testMalformedReviewsDoNotBreakBookInformation() {
 }
 
 async function testReviewWarmupIsBackgroundAndIsolatesSourceFailures() {
-    const value = worker({libDir:'/broken', librarySources:[
+    const value = worker({reviewWarmupEnabled:true,libDir:'/broken', librarySources:[
         {libDir:'/broken'}, {libDir:'/healthy'}, {libDir:'/disabled', enabled:false},
     ]});
     let release;
@@ -188,6 +252,8 @@ async function testReviewMapWaitsForReadersAndRecoversAfterFailure() {
     assert.deepStrictEqual(await pool.map([], () => assert.fail('Empty input')), []);
 }
 
-module.exports = [testReviewReadsShareBudgetWithWarmupAndRatings, testMalformedReviewsDoNotBreakBookInformation,
+module.exports = [testBoundedReviewIndexKeepsAllMatchesWithLazyArchiveFallback,testRatingsStreamInASmallHeapAndKeepLegacyEncoding,
+    testReviewWarmupDoesNotAllocateIndexesByDefault,
+    testReviewReadsShareBudgetWithWarmupAndRatings, testMalformedReviewsDoNotBreakBookInformation,
     testReviewWarmupIsBackgroundAndIsolatesSourceFailures, testReviewPoolDoesNotWaitForImageDecoders,
     testReviewQueuePreservesCallerContext, testReviewMapWaitsForReadersAndRecoversAfterFailure];

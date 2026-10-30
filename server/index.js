@@ -18,6 +18,10 @@ let branch = '';
 const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'library-sources', 'admin-login', 'admin-password'];
 
 function applyEnvSecurityOverrides(targetConfig) {
+    targetConfig.reviewWarmupEnabled = process.env.INPX_REVIEWS_WARMUP === 'true';
+    targetConfig.reviewIndexMaxEntries = Math.max(1, parseInt(process.env.INPX_REVIEW_INDEX_MAX_ENTRIES || '100000',10) || 100000);
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_LOW_MEMORY_MODE'))
+        targetConfig.lowMemoryMode = process.env.INPX_LOW_MEMORY_MODE === 'true';
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_OPDS_COMPATIBILITY')) {
         const compatibility = process.env.INPX_OPDS_COMPATIBILITY;
         if (!['standard', 'tolino'].includes(compatibility)) throw new Error('INPX_OPDS_COMPATIBILITY: standard или tolino');

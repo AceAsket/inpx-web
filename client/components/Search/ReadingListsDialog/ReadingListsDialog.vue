@@ -358,7 +358,8 @@ class ReadingListsDialog {
     }
 
     shelfDescription(filters) {
-        const labels = {title:'Название', author:'Автор', series:'Серия', genre:'Жанр', lang:'Язык', ext:'Формат', date:'Дата', librate:'Оценка', ratingCount:'Голоса', keywords:'Ключевые слова'};
+        const labels = {title:'Название', author:'Автор', series:'Серия', genre:'Жанр', lang:'Язык', ext:'Формат', date:'Дата',
+            librate:'Оценка', ratingCount:'Голоса', keywords:'Ключевые слова',isbn:'ISBN'};
         return Object.entries(labels).filter(([key]) => filters[key]).map(([key, label]) => `${label}: ${filters[key]}`)
             .concat(filters.unreadOnly ? ['Непрочитанные'] : []).join(' · ');
     }

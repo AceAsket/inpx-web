@@ -1731,6 +1731,7 @@ const tests = [
     ...require('./library-feature-tests'),
     ...require('./upgrade-compatibility-tests'),
     ...require('./library-tools-tests'),
+    ...require('./isbn-tests'),
     ...require('./library-improvements-tests'),
     ...require('./catalog-list-filter-tests'),
     ...require('./search-navigation-tests'),

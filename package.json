@@ -1,6 +1,6 @@
 {
   "name": "inpx-web",
-  "version": "1.8.1-rc.11",
+  "version": "1.8.1-rc.12",
   "author": "AceAsket",
   "license": "CC0-1.0",
   "repository": "AceAsket/inpx-web",
@@ -86,6 +86,7 @@
     "ws": "^8.21.3",
     "yazl": "^2.5.1",
     "js-yaml": "4.3.2",
-    "sax": "^1.6.1"
+    "sax": "^1.6.1",
+    "@streamparser/json-node": "0.0.26"
   }
 }
