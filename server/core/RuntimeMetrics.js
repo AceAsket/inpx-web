@@ -29,6 +29,7 @@ function normalizeActionLabel(action = '') {
 class RuntimeMetrics {
     constructor() {
         this.actionStats = new Map();
+        this.clientStats = new Map();
         this.totalActions = 0;
         this.inFlightActions = 0;
         this.lastEventLoopLagMs = 0;
@@ -57,11 +58,12 @@ class RuntimeMetrics {
         sample();
     }
 
-    beginAction(action = '') {
+    beginAction(action = '', client = {}) {
         this.totalActions++;
         this.inFlightActions++;
         return {
             action: normalizeActionLabel(action),
+            client: client.type === 'android' ? `android:${client.version || 'unknown'}` : 'web',
             startedAt: process.hrtime.bigint(),
         };
     }
@@ -73,6 +75,14 @@ class RuntimeMetrics {
         this.inFlightActions = Math.max(0, this.inFlightActions - 1);
         const durationMs = Number(process.hrtime.bigint() - token.startedAt) / 1000000;
         const action = token.action || 'unknown';
+        const clientKey=token.client||'web';
+        let client=this.clientStats.get(clientKey);
+        if(!client){
+            if(this.clientStats.size>=24)this.clientStats.delete(this.clientStats.keys().next().value);
+            client={count:0,errors:0,totalMs:0,samples:[]};this.clientStats.set(clientKey,client);
+        }
+        client.count++;if(!ok)client.errors++;client.totalMs+=durationMs;
+        pushBounded(client.samples,durationMs,ACTION_SAMPLE_LIMIT);
         const stats = this.getOrCreateActionStats(action);
         stats.count++;
         if (!ok)
@@ -140,6 +150,8 @@ class RuntimeMetrics {
             eventLoopLagP95Ms: quantile(this.eventLoopLagSamples, 0.95),
             lastSlowAction: this.lastSlowAction,
             slowestActions: actions.slice(0, 8),
+            clients:Array.from(this.clientStats,([client,stats])=>({client,count:stats.count,errors:stats.errors,
+                avgMs:stats.count?Number((stats.totalMs/stats.count).toFixed(2)):0,p95Ms:quantile(stats.samples,0.95)})),
         };
     }
 }

@@ -47,6 +47,7 @@
                                 />
 
                                 <div class="row no-wrap items-center profile-controls">
+                                    <AppConnection class="q-ml-xs" :root-path="config.rootPathStatic || ''" />
                                     <q-select
                                         :model-value="currentUserId"
                                         class="q-ml-sm profile-select"
@@ -593,6 +594,7 @@ import AllBooksList from './AllBooksList/AllBooksList.vue';
 import ExtendedList from './ExtendedList/ExtendedList.vue';
 import DiscoveryShelves from './DiscoveryShelves/DiscoveryShelves.vue';
 import LibraryTools from './LibraryTools.vue';
+import AppConnection from './AppConnection.vue';
 
 import PageScroller from './PageScroller/PageScroller.vue';
 import SettingsDialog from './SettingsDialog/SettingsDialog.vue';
@@ -638,6 +640,7 @@ const componentOptions = {
         ExtendedList,
         DiscoveryShelves,
         LibraryTools,
+        AppConnection,
         PageScroller,
         SettingsDialog,
         SelectGenreDialog,

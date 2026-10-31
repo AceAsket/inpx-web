@@ -1191,9 +1191,18 @@ class WebWorker {
         if (cached && Date.now() - cached.time < ttl)
             return _.cloneDeep(cached.value);
 
-        const value = await loader();
-        this.discoveryCache.set(key, {time: Date.now(), value: _.cloneDeep(value)});
-        return value;
+        if(!this.discoveryInFlight)this.discoveryInFlight=new Map();
+        let pending=this.discoveryInFlight.get(key);
+        if(!pending){
+            pending=Promise.resolve().then(loader).then(value=>{
+                this.discoveryCache.set(key,{time:Date.now(),value:_.cloneDeep(value)});
+                while(this.discoveryCache.size>256)this.discoveryCache.delete(this.discoveryCache.keys().next().value);
+                return value;
+            });
+            this.discoveryInFlight.set(key,pending);
+            pending.then(()=>this.discoveryInFlight.delete(key),()=>this.discoveryInFlight.delete(key));
+        }
+        return _.cloneDeep(await pending);
     }
 
     getDiscoveryAgeLabel(dateValue = '') {
@@ -1475,8 +1484,7 @@ class WebWorker {
                     deduped.set(key, existing ? pickBetterRow(existing, row) : row);
                 }
 
-                const result = Array.from(deduped.values());
-                result.sort((a, b) => {
+                const compare = (a, b) => {
                     if (mode === 'popular') {
                         const popularityCmp = (((popularityMap[b._uid] || {}).score) || 0) - (((popularityMap[a._uid] || {}).score) || 0);
                         if (popularityCmp)
@@ -1502,30 +1510,8 @@ class WebWorker {
                     if (cmp === 0)
                         cmp = a.id - b.id;
                     return cmp;
-                });
-
-                const filtered = [];
-                const authorCounts = new Map();
-                const seriesCounts = new Map();
-
-                for (const row of result) {
-                    const authorKey = String(row.author || '').trim().toLowerCase();
-                    const seriesKey = String(row.series || '').trim().toLowerCase();
-                    if (authorKey && (authorCounts.get(authorKey) || 0) >= 2)
-                        continue;
-                    if (seriesKey && (seriesCounts.get(seriesKey) || 0) >= 2)
-                        continue;
-
-                    filtered.push(row);
-                    if (authorKey)
-                        authorCounts.set(authorKey, (authorCounts.get(authorKey) || 0) + 1);
-                    if (seriesKey)
-                        seriesCounts.set(seriesKey, (seriesCounts.get(seriesKey) || 0) + 1);
-                    if (filtered.length >= limit)
-                        break;
-                }
-
-                return filtered;
+                };
+                return (${require('./DiscoverySelection').selectDiverseBest.toString()})(deduped,compare,limit);
             `
         });
 

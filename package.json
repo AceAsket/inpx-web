@@ -87,6 +87,7 @@
     "yazl": "^2.5.1",
     "js-yaml": "4.3.2",
     "sax": "^1.6.1",
-    "@streamparser/json-node": "0.0.26"
+    "@streamparser/json-node": "0.0.26",
+    "qrcode": "1.5.4"
   }
 }

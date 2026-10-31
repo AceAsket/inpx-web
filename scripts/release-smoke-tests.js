@@ -1731,6 +1731,7 @@ const tests = [
     ...require('./library-feature-tests'),
     ...require('./server-audit-regression-tests'),
     ...require('./client-audit-regression-tests'),
+    ...require('./native-client-tests'),
     ...require('./upgrade-compatibility-tests'),
     ...require('./library-tools-tests'),
     ...require('./isbn-tests'),

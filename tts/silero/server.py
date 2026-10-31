@@ -30,6 +30,7 @@ MODEL = None
 STRESS = StressProcessor(os.environ.get("SILERO_STRESS_ENABLED", "true").lower() == "true")
 STATE_LOCK = threading.Lock()
 JOBS = {}
+CANCELLATIONS = {}
 SPEED = max(1.0, float(os.environ.get("SILERO_ESTIMATED_CHARS_PER_SECOND", "15")))
 SPEED_MEASURED = False
 
@@ -42,9 +43,28 @@ def update_job(request_id, **values):
             for key, job in list(JOBS.items()):
                 if len(JOBS) < 128:
                     break
-                if job.get("state") in ("ready", "error"):
+                if job.get("state") in ("ready", "error", "cancelled"):
                     del JOBS[key]
+                    CANCELLATIONS.pop(key, None)
         JOBS.setdefault(request_id, {}).update(values)
+
+
+class SynthesisCancelled(Exception):
+    pass
+
+
+def check_cancelled(request_id):
+    with STATE_LOCK:
+        cancelled = request_id and CANCELLATIONS.get(request_id, False)
+    if cancelled:
+        raise SynthesisCancelled()
+
+
+def cancel_job(request_id):
+    # The cancel request can arrive before POST /synthesize is dispatched.
+    update_job(request_id, state="cancelled", remainingSeconds=None)
+    with STATE_LOCK:
+        CANCELLATIONS[request_id] = True
 
 
 def normalize_numbers(text):
@@ -109,8 +129,10 @@ def load_model():
 
 def synthesize(text, speaker, directory, request_id="", options=None, segments=None):
     global SPEED, SPEED_MEASURED
+    check_cancelled(request_id)
     update_job(request_id, state="loading", progress=0, remainingSeconds=None)
     model = load_model()
+    check_cancelled(request_id)
     custom = options is not None
     started = time.monotonic()
     accentuate = STRESS if STRESS.enabled else None
@@ -121,6 +143,7 @@ def synthesize(text, speaker, directory, request_id="", options=None, segments=N
     if STRESS.enabled:
         update_job(request_id, state="preparing", progress=0, remainingSeconds=None)
     for chunk, count in source:
+        check_cancelled(request_id)
         total += count
         if total > MAX_TEXT:
             raise ValueError("Normalized text exceeds synthesis limit")
@@ -142,6 +165,7 @@ def synthesize(text, speaker, directory, request_id="", options=None, segments=N
     try:
         with torch.inference_mode():
             for chunk, count in chunks:
+                check_cancelled(request_id)
                 generated_characters += count
                 if generated_characters > MAX_TEXT:
                     raise ValueError("Normalized text exceeds synthesis limit")
@@ -149,6 +173,7 @@ def synthesize(text, speaker, directory, request_id="", options=None, segments=N
                 audio = model.apply_tts(**({"ssml_text": chunk} if custom else {"text": chunk}),
                                         speaker=speaker, sample_rate=SAMPLE_RATE, put_accent=not STRESS.enabled, put_yo=not STRESS.enabled,
                                         **({"put_stress_homo": False, "put_yo_homo": False, "stress_single_vowel": False} if STRESS.enabled else {}))
+                check_cancelled(request_id)
                 pcm = (audio.detach().cpu().clamp(-1, 1) * 32767).to(torch.int16)
                 encoder.stdin.write(pcm.numpy().astype("<i2", copy=False).tobytes())
                 if silence_ms:
@@ -165,6 +190,7 @@ def synthesize(text, speaker, directory, request_id="", options=None, segments=N
             encoder.wait(timeout=10)
         if not encoder.stdin.closed:
             encoder.stdin.close()
+    check_cancelled(request_id)
     elapsed = max(0.01, time.monotonic() - started)
     with STATE_LOCK:
         observed = total / elapsed
@@ -206,6 +232,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(404, "Job not found")
         elif self.path == "/health":
             result = {"ok": True, "model": MODEL_ID, "loaded": MODEL is not None, "cacheIdentity": STRESS.cache_identity,
+                      "cancelAudio": True,
                       "stressEnabled": STRESS.enabled, "stressVersion": STRESS_VERSION if STRESS.enabled else None, "stressLoaded": STRESS.model is not None}
         else:
             return self.reply(404, "Not found")
@@ -219,10 +246,14 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_POST(self):
-        if self.path != "/synthesize":
-            return self.reply(404, "Not found")
         if API_KEY and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {API_KEY}"):
             return self.reply(401, "Unauthorized")
+        match = re.fullmatch(r"/jobs/([a-f0-9]{64})/cancel", self.path)
+        if match:
+            cancel_job(match[1])
+            return self.reply(200, "Cancelled")
+        if self.path != "/synthesize":
+            return self.reply(404, "Not found")
         try:
             self.connection.settimeout(30)
             length = int(self.headers.get("Content-Length", "0"))
@@ -258,6 +289,9 @@ class Handler(BaseHTTPRequestHandler):
                 with audio.open("rb") as source:
                     shutil.copyfileobj(source, self.wfile)
                 self.close_connection = True
+        except SynthesisCancelled:
+            update_job(request_id, state="cancelled", remainingSeconds=None)
+            self.reply(409, "Synthesis cancelled")
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception:
