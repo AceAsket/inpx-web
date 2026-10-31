@@ -9,7 +9,7 @@ on:
       tag:
         description: 'Git tag to build and publish'
         required: true
-        default: 'v1.8.1-rc.14'
+        default: 'v1.8.1-rc.15'
 
 permissions:
   actions: read
