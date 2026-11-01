@@ -106,7 +106,7 @@ async function testCatalogTitlePaginationRendersEveryMatchedRow() {
         for (const [index, title] of titles.entries()) {
             await fs.writeFile(path.join(library, `${index}.fb2`), `<?xml version="1.0" encoding="UTF-8"?>
 <FictionBook><description><title-info><genre>sf</genre><author><last-name>Петров</last-name><first-name>Иван</first-name></author>
-<book-title>${title}</book-title><lang>ru</lang></title-info></description><body><section><p>Текст.</p></section></body></FictionBook>`);
+<book-title>${title}</book-title><keywords>волки</keywords><lang>ru</lang></title-info></description><body><section><p>Текст.</p></section></body></FictionBook>`);
         }
         const config = {dataDir: path.join(dir, 'data'), libDir: library, inpxFilterFile: path.join(dir, 'no-filter'),
             dbVersion: 14, dbCacheSize: 10, fullOptimization: false,
@@ -136,6 +136,23 @@ async function testCatalogTitlePaginationRendersEveryMatchedRow() {
         assert.strictEqual(new Set(pagedTitles).size, 72, 'No duplicate or lost titles between pages');
         const all = await searcher.search('title', {title: 'стая', del: '0', limit: 100, offset: 0});
         assert.deepStrictEqual(pagedTitles, all.found.map(row => row.title));
+        assert.strictEqual(await db.tableExists({table: 'word'}), true);
+        for (const ext of ['fb2', 'fb2,epub', 'fb2|epub', '~^(fb2|epub)$']) {
+            const query = {title: 'стая', author: 'петров', keywords: 'волки', ext, lang: 'ru', del: '0', limit: 20, offset: 40};
+            for (const hideCopies of [false, true]) {
+                const result = await searcher.bookSearch({...query, hideCopies});
+                assert.strictEqual(result.totalFound, 72, `Compound keyword/format search: ${ext}, copies=${hideCopies}`);
+                assert.strictEqual(result.found.length, 20);
+                assert(result.found.every(book => book.ext === 'fb2' && book.keywords.includes('волки')));
+            }
+        }
+        for (const ext of ['epub', 'epub,pdf']) {
+            assert.strictEqual((await searcher.bookSearch({title: 'стая', keywords: 'волки', ext})).totalFound, 0);
+        }
+        assert.strictEqual((await searcher.search('title', {title: 'ста', author: 'петр', ext: 'fb2|epub'})).totalFound, 72,
+            'Partial author and title must match together in the web catalogue');
+        assert.strictEqual((await searcher.bookSearch({title: 'ста', author: 'петр', keywords: 'вол', ext: 'fb2,epub'})).totalFound, 72,
+            'Partial values must also combine in direct book search');
         for (const title of ['солярис', '=Волчья стая 01']) {
             const query = {title, del: '0', limit: 20, offset: 0};
             const result = await searcher.search('title', query);

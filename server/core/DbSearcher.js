@@ -786,7 +786,7 @@ class DbSearcher {
     async bookSearchIds(query) {
         query = await this.prepareRatingQuery(query);
         const queryKey = this.queryKey(query);
-        const bookKey = `book-search-ids-${queryKey}`;
+        const bookKey = `book-search-ids-v2-formats-${queryKey}`;
         let bookIds = await this.getCached(bookKey);
 
         if (bookIds === null) {
@@ -852,8 +852,8 @@ class DbSearcher {
                         continue;
                     }
                     if (f.type === 'S') {
-                        if (['lang', 'ext'].includes(f.field) && searchValue.includes(',') && !/^[=*#~]/.test(searchValue)) {
-                            const values = searchValue.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+                        if (['lang', 'ext'].includes(f.field) && (searchValue.includes(',') || f.field === 'ext' && searchValue.includes('|')) && !/^[=*#~]/.test(searchValue)) {
+                            const values = searchValue.split(f.field === 'ext' ? /[,|]/ : ',').map(value => value.trim().toLowerCase()).filter(Boolean);
                             checks.push(`(${db.esc(values)}.includes(String(row.${f.field} || '').toLowerCase())
                                 || (${values.includes(emptyFieldValue)} && !row.${f.field}))`);
                         } else {
@@ -883,10 +883,15 @@ class DbSearcher {
             const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
             const hasNarrowingFilter = !!String(query.sourceId || '').trim()
                 || this.recStruct.some(f => f.field !== 'del' && !!query[f.field]);
+            // The indexed catalogue uses | for formats; direct book predicates also accept commas.
+            // Explicit expressions stay in checkBook rather than becoming literal index keys.
+            const indexedQuery = {...query};
+            if (/^[=*#~?]/.test(String(query.ext || ''))) delete indexedQuery.ext;
+            else if (query.ext) indexedQuery.ext = query.ext.replace(/,/g, '|');
             let candidateIds = hideCopies && hasNarrowingFilter
                 ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}))
                 : ['title', 'author', 'series'].some(field => query[field] && !/^[=*#~?]/.test(query[field])) && await db.tableExists({table: 'word'})
-                    ? await this.selectBookIds(query) : null;
+                    ? await this.selectBookIds(indexedQuery) : null;
             if (query[ratingSelection]) {
                 const selected = new Set(query[ratingSelection].ids);
                 candidateIds = candidateIds ? candidateIds.filter(id => selected.has(id)) : query[ratingSelection].ids;

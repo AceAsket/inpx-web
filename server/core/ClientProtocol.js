@@ -1,4 +1,4 @@
-const info = Object.freeze({version:1, features:['resumeSession','readerEvents','mobileHome','requestBudget','cancelAudio']});
+const info = Object.freeze({version:1, features:['resumeSession','readerEvents','mobileHome','requestBudget','cancelAudio','bookSearchFormats']});
 const expensive = new Set(['search','bookSearch','get-author-book-list','get-author-series-list','get-series-book-list','get-discovery-shelves']);
 const readerChanges = new Set(['update-reader-progress','delete-reader-progress','clear-reader-progress','update-reader-preferences',
     'add-reader-bookmark','delete-reader-bookmark','import-reading-lists','import-user-backup','mark-reader-books-read','mark-series-read']);
