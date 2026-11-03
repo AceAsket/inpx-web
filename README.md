@@ -7,7 +7,10 @@
 inpx-web-7z
 ===========
 
-[![Android 9+ — скачать APK](https://img.shields.io/badge/Android-9%2B_APK-2E7D32?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
+[![INPX Reader — скачать читалку для Android](https://img.shields.io/badge/INPX_Reader-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK-0F766E?style=for-the-badge&logo=android&logoColor=white)](https://github.com/AceAsket/inpx-reader-releases/releases/latest)
+[![INPX Server — сервер для Android](https://img.shields.io/badge/INPX_Server-%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%20%D0%B4%D0%BB%D1%8F%20Android-455A64?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
+
+> **Читать и слушать на Android:** [скачайте INPX Reader](https://github.com/AceAsket/inpx-reader-releases/releases/latest) — наше клиентское приложение для подключения к вашей библиотеке INPX Web.
 
 Стабильная версия — **1.8.1**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.1`. Для разработки используется ветка `develop`.
 
@@ -36,6 +39,7 @@ inpx-web-7z
 * отправка и конвертация книг в `epub`, `epub3`, `kepub`, `kfx`, `azw8` и `pdf`, а также отправка через Telegram и email
 * многопользовательские профили, личные списки чтения, `Telegram chat id`, email и публикация через OPDS
 * админский дашборд, журнал событий, управление источниками из UI, health-checks и Prometheus-метрики
+* клиентская читалка [INPX Reader для Android](https://github.com/AceAsket/inpx-reader-releases) с офлайн-книгами и скачанной озвучкой Silero
 * отдельное Android-приложение для планшетов и ТВ-приставок: Android 9+, ARM32 / ARM64, управление касаниями или пультом, библиотеки через SD / USB и SMB
 
 ## Какой сценарий выбрать
@@ -51,6 +55,7 @@ inpx-web-7z
 
 * [Что это за форк](#ключевые-отличия)
 * [Какой сценарий выбрать](#какой-сценарий-выбрать)
+* [Читалка INPX Reader для Android](#читалка-inpx-reader-для-android)
 * [Сервер на Android: ARM32 / ARM64](#сервер-на-android)
 * [Сборка Docker-контейнера](#сборка-docker-контейнера)
 * [Быстрый старт через docker run](#быстрый-старт-через-docker-run)
@@ -77,6 +82,21 @@ inpx-web-7z
 * [Релизные проверки](#релизные-проверки)
 * [Proxmox LXC](#proxmox-lxc)
 * [Обратная связь](#обратная-связь)
+
+## Читалка INPX Reader для Android
+
+**[Скачать последнюю версию APK](https://github.com/AceAsket/inpx-reader-releases/releases/latest)** · [Страница приложения](https://github.com/AceAsket/inpx-reader-releases)
+
+**INPX Reader** — приложение для чтения и прослушивания книг из вашей библиотеки INPX Web на **Android 9 и новее**.
+
+- Поиск по каталогу и подключение к серверу по адресу или QR-коду из шапки веб-каталога.
+- Скачивание FB2/EPUB и готовой озвучки Silero в MP3 для чтения и прослушивания без сети.
+- Общие с веб-читалкой позиции, закладки и заметки при подключении к тому же серверу и профилю.
+- Свои полки, подборки и настраиваемая главная страница.
+
+Установите APK, добавьте адрес своего INPX Web или отсканируйте его QR-код и войдите под своим профилем. Для доступа без сети заранее скачайте нужные книги и аудио.
+
+На странице релиза опубликованы APK и контрольная сумма SHA-256. Следующие версии можно устанавливать поверх приложения с сохранением книг и настроек; проверка обновлений доступна в «Профиль → Обновления приложения».
 
 ## Сервер на Android
 
