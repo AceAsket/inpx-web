@@ -13,7 +13,10 @@ services:
       INPX_COVER_CACHE_SIZE_MB: "512"
       # Optional custom fb2cng YAML. Mount its whole directory read-only below.
       # INPX_FB2CNG_CONFIG: /config/fb2cng/config.yaml
+      # Optional shared OPDS shelves (1.8.2-rc.1+), configured through a mounted directory.
+      # INPX_OPDS_FEEDS_FILE: /config/opds/feeds.json
     volumes:
       - ./library:/library:ro
       - ./data:/usr/local/bin/.inpx-web
       # - ./fb2cng-config:/config/fb2cng:ro
+      # - ./opds-config:/config/opds:ro

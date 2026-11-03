@@ -30,6 +30,7 @@ module.exports = {
     auditMaxBookBytes: Math.max(MB, sizeFromEnv('INPX_AUDIT_MAX_BOOK_BYTES','INPX_AUDIT_MAX_BOOK_MB',64 * MB)),
     isbnMaxBookBytes: Math.max(MB, sizeFromEnv('INPX_ISBN_MAX_BOOK_BYTES','INPX_ISBN_MAX_BOOK_MB',64 * MB)),
     reviewWarmupEnabled: process.env.INPX_REVIEWS_WARMUP === 'true',
+    opdsFeedsFile: String(process.env.INPX_OPDS_FEEDS_FILE || '').trim(),
     reviewIndexMaxEntries: Math.max(1, parseInt(process.env.INPX_REVIEW_INDEX_MAX_ENTRIES || '100000',10) || 100000),
     latestVersion: '',
     name: pckg.name,

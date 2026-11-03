@@ -29,4 +29,4 @@ function query(filters) {
     return result;
 }
 
-module.exports = {normalize, query};
+module.exports = {normalize, query, fields};

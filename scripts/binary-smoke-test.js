@@ -31,6 +31,9 @@ async function createFixture(dir) {
     const ratingDone = require('stream/promises').pipeline(ratings.outputStream,ratingOutput);
     ratings.addBuffer(Buffer.from(JSON.stringify([{folder:'smoke.zip',file:'1.fb2',sum:5,count:1}])),'books.json');
     ratings.end(); await ratingDone;
+    await fs.writeJson(path.join(dir, 'opds-feeds.json'), {version:1, shelves:[
+        {id:'smoke', name:'Shared smoke shelf', filters:{lang:'en'}},
+    ]});
     await fs.writeJson(path.join(dir, 'config.json'), {
         loggingEnabled: false,
         opds: {enabled: true, auth: false},
@@ -96,6 +99,7 @@ async function main() {
             command = 'docker';
             args = ['run', '--rm', '--name', containerName,
                 '-p', `127.0.0.1:${port}:12380`, '--tmpfs', '/data',
+                '-e', 'INPX_OPDS_FEEDS_FILE=/library/opds-feeds.json',
                 '--mount', `type=bind,source=${library},target=/library,readonly`, imageName,
                 'sh', '-c', 'cp /library/config.json /data/config.json && exec inpx-web --data-dir=/data --config=/data/config.json --lib-dir=/library --host=0.0.0.0 --port=12380'];
         } else {
@@ -104,6 +108,7 @@ async function main() {
                 `--config=${path.join(library, 'config.json')}`, '--host=127.0.0.1', `--port=${port}`];
         }
         const env = {...process.env, INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
+            INPX_OPDS_FEEDS_FILE:path.join(library, 'opds-feeds.json'),
             INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true', INPX_ENABLE_CONVERSION: 'false'};
         child = spawn(command, args, {env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
         exited = new Promise(resolve => {
@@ -136,7 +141,10 @@ async function main() {
         assert.match(await (await fetch(`${url}/robots.txt`)).text(),/Disallow: \/\s*$/);
         const opds = await fetch(`${url}/opds`);
         assert.strictEqual(opds.status, 200);
-        assert.match(await opds.text(), /<feed/);
+        assert.match(await opds.text(), /Shared smoke shelf/);
+        const shelf = await fetch(`${url}/opds/catalog-shelves?id=smoke`);
+        assert.strictEqual(shelf.status, 200);
+        assert.match(await shelf.text(), /Packaged smoke book/);
         await checkWebSocket(url);
         console.log(`ok packaged application: indexing, health, web UI, OPDS, WebSocket (${target === '--image' ? imageName : target})`);
     } finally {

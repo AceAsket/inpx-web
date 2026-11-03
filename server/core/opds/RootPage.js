@@ -41,6 +41,18 @@ class RootPage extends BasePage {
             this.genrePage.myEntry(req),
         ];
 
+        try {
+            const shelves = await require('./CatalogShelves').load(this.config);
+            for (const shelf of shelves.values()) {
+                resultEntry.push(this.makeEntry({id:`catalog-shelf:${shelf.id}`, title:shelf.name,
+                    link:this.navLink({href:'/catalog-shelves', req, query:{id:shelf.id}})}));
+            }
+        } catch (error) {
+            if (error.code !== 'OPDS_SHELVES_UNAVAILABLE') throw error;
+            resultEntry.push(this.makeEntry({id:'catalog-shelves-unavailable', title:'Общие подборки временно недоступны',
+                link:this.navLink({href:'/catalog-shelves', req})}));
+        }
+
         const userId = this.getScopeUserId(req);
         if (userId) {
             const readingLibrary = await this.webWorker.getOpdsUserReadingLibrary(userId, {state: 'all', limit: 1});

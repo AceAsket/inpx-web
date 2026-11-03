@@ -229,12 +229,17 @@ class BookPage extends BasePage {
                 let content = '';
                 let ann = '';
                 let info = '';
+                const collections = new Map();
                 //fb2 info
                 if (bookInfo.fb2) {
                     const parser = new Fb2Parser(bookInfo.fb2);
                     const infoObj = parser.bookInfo();
 
                     if (infoObj.titleInfo) {
+                        for (const series of infoObj.titleInfo.sequence || []) {
+                            const name = he.decode(series.name || '').trim();
+                            if (name) collections.set(this.catalogHref('series', name, req), `Серия: ${name}`);
+                        }
                         //author fb2Info
                         if (!e.author && infoObj.titleInfo.author.length) {
                             e.author = atomAuthors(infoObj.titleInfo.author.map(name => he.decode(name)));
@@ -297,13 +302,14 @@ class BookPage extends BasePage {
 
                 // Atom author URIs and collection relations complement the
                 // description links for clients that hide HTML navigation.
-                const collections = new Map();
-                for (const name of this.authorNames(bookInfo.book.author))
-                    collections.set(this.catalogHref('author', name, req), `Книги автора: ${name}`);
+                for (const author of e.author || [])
+                    collections.set(he.decode(author.uri), `Книги автора: ${he.decode(author.name)}`);
                 if (String(bookInfo.book.series || '').trim())
                     collections.set(this.catalogHref('series', bookInfo.book.series.trim(), req), `Серия: ${bookInfo.book.series}`);
-                for (const [href, title] of collections)
-                    e.link.push(this.makeLink({href, rel: 'collection', type: navigationType, title: this.escape(title)}));
+                for (const [href, title] of collections) {
+                    for (const rel of ['collection', 'related'])
+                        e.link.push(this.makeLink({href, rel, type: navigationType, title: this.escape(title)}));
+                }
 
                 let coverHref = bookInfo.cover || '';
                 let coverType = 'image/jpeg';

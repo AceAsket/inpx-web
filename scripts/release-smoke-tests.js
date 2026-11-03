@@ -1723,6 +1723,7 @@ const tests = [
     ...require('./mobi-tests'),
     ...require('./mobi-epub-tests'),
     ...require('./opds-book-navigation-tests'),
+    ...require('./opds-catalog-shelves-tests'),
     ...require('./reader-opening-tests'),
     ...require('./book-card-tests'),
     ...require('./library-io-tests'),

@@ -79,6 +79,8 @@ async function testOpdsBookDescriptionLinksAndAuthorUris() {
     assert.strictEqual(collections.length, 3);
     assert.deepStrictEqual(collections.map(link => he.decode(link.href)), result.links.map(link => link.href));
     assert.ok(collections.every(link => link.type.includes('profile=opds-catalog')));
+    const related = result.entry.$$array('link').map(link => link.attrs()).filter(link => link.rel === 'related' && /\/(author|series)\?/.test(he.decode(link.href)));
+    assert.deepStrictEqual(related, collections.map(link => ({...link, rel:'related'})), 'Related links cover every coauthor and series without changing acquisitions');
     assert.ok(result.source.includes('rel="http://opds-spec.org/acquisition"'));
     assert.ok(!result.links.some(link => link.href.includes('/#/')), 'Description links must open OPDS, not the web app');
 }
@@ -135,6 +137,8 @@ async function testOpdsFb2AuthorsAndMultipleSeriesAreClickable() {
     assert.ok(result.html.includes('<b>жирная</b>'), 'Annotation formatting retained');
     assert.ok(!result.html.includes('javascript:'));
     assert.strictEqual(he.decode(result.entry.$$array('author')[0].text('/name')), 'Тестов Автор');
+    const related = result.entry.$$array('link').map(link => link.attrs()).filter(link => link.rel === 'related' && /\/(author|series)\?/.test(he.decode(link.href)));
+    assert.deepStrictEqual(new Set(related.map(link => he.decode(link.href))), new Set(result.links.map(link => link.href)));
 }
 
 async function testOpdsBookNavigationEscapesMetadataAndHandlesMissingValues() {

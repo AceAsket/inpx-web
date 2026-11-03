@@ -6,6 +6,7 @@ const GenrePage = require('./GenrePage');
 const BookPage = require('./BookPage');
 const ReadingListsPage = require('./ReadingListsPage');
 const ReadingListPage = require('./ReadingListPage');
+const CatalogShelfPage = require('./CatalogShelfPage');
 const ReadingProfilesPage = require('./ReadingProfilesPage');
 const ReadingProgressPage = require('./ReadingProgressPage');
 
@@ -58,6 +59,7 @@ module.exports = function(app, config, security = new (require('../Security'))(c
     const authors = new BookExtrasPage(config, 'authors');
     const readingLists = new ReadingListsPage(config);
     const readingList = new ReadingListPage(config);
+    const catalogShelf = new CatalogShelfPage(config);
     const readingProfiles = new ReadingProfilesPage(config);
     const readingProgress = new ReadingProgressPage(config);
 
@@ -77,6 +79,7 @@ module.exports = function(app, config, security = new (require('../Security'))(c
         ['/book/authors', authors],
         ['/reading-lists', readingLists],
         ['/reading-lists/list', readingList],
+        ['/catalog-shelves', catalogShelf],
         ['/reading-profiles', readingProfiles],
         ['/reading-progress', readingProgress],
 

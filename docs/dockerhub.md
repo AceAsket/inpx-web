@@ -8,6 +8,8 @@
 
 ### Возможности
 
+**Для тестирования: 1.8.2-rc.1.** Общие подборки в корне OPDS без выбора профиля: фильтры задаются подключённым JSON-файлом через `INPX_OPDS_FEEDS_FILE`, изменения применяются без перезапуска. Действующая авторизация сохраняется. Добавлены ссылки `related` на соавторов и серии. [Примеры Unraid и Compose](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.1/docs/opds-catalog-shelves.md).
+
 - Поиск по автору, названию, серии, жанру, языку и источнику; несколько библиотек в одном каталоге.
 - Обложки и их кэширование, поддержка WebP и JXL.
 - Чтение FB2 в браузере: темы, шрифты, закладки, заметки, сохранение позиции и отдельный PWA-ярлык читалки.
@@ -28,6 +30,8 @@ Android-клиент подключается по QR с адресом без �
 
 | Тег | Назначение |
 | --- | --- |
+| `1.8.2-rc.1` | Предварительная сборка с общими подборками OPDS. |
+| `1.8.2-rc.1-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
 | `1.8.1` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.1`. |
 | `1.8.1-silero` | Отдельный сервис озвучки для стабильной версии. |
@@ -120,6 +124,8 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 ### Features
 
+**For testing: 1.8.2-rc.1.** Shared shelves appear at the OPDS root without selecting a profile. Set `INPX_OPDS_FEEDS_FILE` to a mounted JSON configuration; edits take effect without restarting. Existing authentication still applies. Adds `related` links to coauthors and series. [Unraid and Compose examples](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.1/docs/opds-catalog-shelves.md).
+
 - Search by author, title, series, genre, language and source; multiple libraries in one catalog.
 - Cover extraction and caching, including WebP and JXL support.
 - Browser-based FB2 reading with themes, fonts, bookmarks, notes, saved positions and a dedicated reader PWA shortcut.
@@ -140,6 +146,8 @@ Connect Android through a QR containing the server address without credentials. 
 
 | Tag | Purpose |
 | --- | --- |
+| `1.8.2-rc.1` | Prerelease with shared OPDS shelves. |
+| `1.8.2-rc.1-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
 | `1.8.1` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.1`. |
 | `1.8.1-silero` | Separate speech service for the stable release. |
