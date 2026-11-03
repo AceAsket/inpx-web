@@ -1,5 +1,6 @@
 <template>
     <div class="root column fit" style="position: relative">
+        <LibraryTools :author="search.author || ''" :series="search.series || ''" />
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
             <div v-if="config.profileAuthorized && !isCompactMobile" class="q-px-md q-py-xs">
@@ -46,6 +47,7 @@
                                 />
 
                                 <div class="row no-wrap items-center profile-controls">
+                                    <AppConnection class="q-ml-xs" :root-path="config.rootPathStatic || ''" />
                                     <q-select
                                         :model-value="currentUserId"
                                         class="q-ml-sm profile-select"
@@ -265,7 +267,25 @@
                                 <q-tooltip v-if="search.ext && showTooltips" :delay="500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     {{ search.ext }}
                                 </q-tooltip>
-                            </q-input>                            
+                            </q-input>
+                            <div class="q-mx-xs" />
+                            <q-input
+                                v-model="search.ratingCount" :maxlength="30" :debounce="inputDebounce"
+                                class="q-mt-xs col-2" :bg-color="inputBgColor('ratingCount')"
+                                style="min-width: 140px" label="Число голосов" placeholder="20.. или 10..100"
+                                stack-label outlined dense clearable
+                            />
+                            <div class="q-mx-xs" />
+                            <q-input
+                                v-model="search.isbn" :maxlength="100" :debounce="inputDebounce"
+                                class="q-mt-xs col-2" :bg-color="inputBgColor('isbn')"
+                                style="min-width: 180px" label="ISBN" placeholder="978-… или ISBN-10"
+                                stack-label outlined dense clearable
+                            >
+                                <q-tooltip :delay="500">
+                                    Поиск по подготовленному индексу ISBN. Подготовка: Задачи → Индекс ISBN.
+                                </q-tooltip>
+                            </q-input>
                         </div>
                         <div v-show="!isCompactMobile && showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList && !extendedParams" class="row q-mx-sm items-center clickable" @click.stop.prevent="extendedParams = true">
                             +{{ collapsedExtendedParamsLabel }}
@@ -573,6 +593,8 @@ import TitleList from './TitleList/TitleList.vue';
 import AllBooksList from './AllBooksList/AllBooksList.vue';
 import ExtendedList from './ExtendedList/ExtendedList.vue';
 import DiscoveryShelves from './DiscoveryShelves/DiscoveryShelves.vue';
+import LibraryTools from './LibraryTools.vue';
+import AppConnection from './AppConnection.vue';
 
 import PageScroller from './PageScroller/PageScroller.vue';
 import SettingsDialog from './SettingsDialog/SettingsDialog.vue';
@@ -617,6 +639,8 @@ const componentOptions = {
         AllBooksList,
         ExtendedList,
         DiscoveryShelves,
+        LibraryTools,
+        AppConnection,
         PageScroller,
         SettingsDialog,
         SelectGenreDialog,
@@ -752,6 +776,7 @@ class Search {
     selectDateDialogVisible = false;
     selectExtDialogVisible = false;
     bookInfoDialogVisible = false;
+    bookInfoRequestId = 0;
     bookInfoDialogTab = 'fb2';
     readingListsDialogVisible = false;
     userProfilesDialogVisible = false;
@@ -858,7 +883,7 @@ class Search {
         this.commit = this.$store.commit;
         this.api = this.$root.api;
 
-        this.generateDefaults(this.search, ['author', 'series', 'title', 'keywords', 'genre', 'lang', 'date', 'librate', 'ext', 'sourceId', 'hideCopies']);
+        this.generateDefaults(this.search, ['author', 'series', 'title', 'keywords', 'genre', 'lang', 'date', 'librate', 'ratingCount', 'isbn', 'ext', 'sourceId', 'hideCopies']);
         this.search.setDefaults(this.search);
 
         this.loadSettings();
@@ -1064,7 +1089,7 @@ class Search {
     }
 
     get mobileExtraFilterCount() {
-        return ['series', 'lang', 'keywords', 'genre', 'date', 'librate', 'ext', 'sourceId', 'hideCopies']
+        return ['series', 'lang', 'keywords', 'genre', 'date', 'librate', 'ratingCount', 'isbn', 'ext', 'sourceId', 'hideCopies']
             .filter(field => !!this.search[field]).length;
     }
 
@@ -1188,6 +1213,8 @@ class Search {
         result.push(s.genre ? 'Жанр' : '');
         result.push(s.date ? 'Дата поступления' : '');
         result.push(s.librate ? 'Оценка' : '');
+        result.push(s.ratingCount ? 'Число голосов' : '');
+        result.push(s.isbn ? 'ISBN' : '');
         result.push(s.ext ? 'Тип файла' : '');
 
         return result.filter(s => s).join(', ');
@@ -1274,6 +1301,8 @@ class Search {
             || (search.lang && search.lang !== this.langDefault)
             || search.date
             || search.librate
+            || search.ratingCount
+            || search.isbn
             || search.ext
             || search.sourceId
             || search.hideCopies
@@ -1861,9 +1890,21 @@ class Search {
                 this.sendMessage({type: 'submitUrl', data: event.data});
                 break;
             case 'bookInfo':
+                this.bookInfoRequestId = event.requestId;
                 this.bookInfo = event.data;
                 this.bookInfoDialogTab = (event.tab || 'fb2');
                 this.bookInfoDialogVisible = true;
+                break;
+            case 'bookInfoLoaded':
+                //пользователь мог закрыть карточку или открыть другую
+                if (this.bookInfoDialogVisible && event.requestId === this.bookInfoRequestId
+                    && this.bookInfo.book && this.bookInfo.book._uid === event.bookUid) {
+                    if (event.data.book && event.data.book.size > 0)
+                        this.bookInfo.book.size = event.data.book.size;
+                    this.bookInfo = event.data;
+                    if (event.error)
+                        this.$root.stdDialog.alert(event.error, 'Ошибка');
+                }
                 break;
             case 'manageReadingLists':
                 this.openReadingLists(event.book || null);
@@ -2313,6 +2354,8 @@ class Search {
             lang: (typeof(query.lang) == 'string' ? query.lang : this.langDefault),
             date: query.date,
             librate: query.librate,
+            ratingCount: query.ratingCount,
+            isbn: query.isbn,
             ext: query.ext,
             sourceId: query.sourceId,
             hideCopies: query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1',

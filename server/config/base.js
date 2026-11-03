@@ -27,6 +27,11 @@ const defaultCoverCacheSize = sizeFromEnv('INPX_COVER_CACHE_SIZE', 'INPX_COVER_C
 module.exports = {
     branch: 'unknown',
     version: pckg.version,
+    auditMaxBookBytes: Math.max(MB, sizeFromEnv('INPX_AUDIT_MAX_BOOK_BYTES','INPX_AUDIT_MAX_BOOK_MB',64 * MB)),
+    isbnMaxBookBytes: Math.max(MB, sizeFromEnv('INPX_ISBN_MAX_BOOK_BYTES','INPX_ISBN_MAX_BOOK_MB',64 * MB)),
+    reviewWarmupEnabled: process.env.INPX_REVIEWS_WARMUP === 'true',
+    opdsFeedsFile: String(process.env.INPX_OPDS_FEEDS_FILE || '').trim(),
+    reviewIndexMaxEntries: Math.max(1, parseInt(process.env.INPX_REVIEW_INDEX_MAX_ENTRIES || '100000',10) || 100000),
     latestVersion: '',
     name: pckg.name,
 
@@ -90,7 +95,7 @@ module.exports = {
     adminEventLogEnabled: true,
     adminEventLogSize: 300,
     inpxCheckInterval: 60,//minutes
-    lowMemoryMode: false,
+    lowMemoryMode: process.env.INPX_LOW_MEMORY_MODE === 'true',
     fullOptimization: false,
 
     webConfigParams: ['name', 'version', 'latestVersion', 'branch', 'bookReadLink', 'dbVersion', 'extendedSearch', 'latestReleaseLink', 'rootPathStatic', 'conversionEnabled', 'conversionFormats', 'telegramShareEnabled', 'emailShareEnabled', 'onlineReaderEnabled', 'updateChannel', 'installMode', 'uiDefaults', 'discovery', 'librarySources'],
@@ -116,6 +121,7 @@ module.exports = {
         user: '',
         password: '',
         root: '/opds',
+        compatibility: process.env.INPX_OPDS_COMPATIBILITY === 'tolino' ? 'tolino' : 'standard',
     },
 
     latestReleaseLink: 'https://github.com/AceAsket/inpx-web/releases/latest',

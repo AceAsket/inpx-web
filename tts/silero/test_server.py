@@ -195,6 +195,60 @@ class TextPreparationTests(unittest.TestCase):
             server.API_KEY = original
             server.JOBS.pop(request_id, None)
 
+    def test_cancel_before_start_and_between_chunks_releases_encoder(self):
+        original = (server.MODEL, server.STRESS)
+        request_id = "c" * 64
+        calls = []
+        class Tts:
+            def apply_tts(self, **kwargs):
+                calls.append(kwargs)
+                server.cancel_job(request_id)
+                return server.torch.zeros(10)
+        try:
+            server.MODEL = Tts()
+            server.STRESS = StressProcessor(False)
+            server.cancel_job(request_id)
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(server.SynthesisCancelled):
+                    server.synthesize("Русский текст", "xenia", directory, request_id)
+                self.assertEqual(calls, [])
+                server.CANCELLATIONS.pop(request_id)
+                with patch("server.subprocess.Popen") as encoder:
+                    encoder.return_value.poll.return_value = None
+                    with self.assertRaises(server.SynthesisCancelled):
+                        server.synthesize("Русский текст. " * 200, "xenia", directory, request_id)
+                    self.assertEqual(len(calls), 1, "Cancellation must prevent the next expensive model call")
+                    encoder.return_value.kill.assert_called_once()
+                    encoder.return_value.wait.assert_called_once_with(timeout=10)
+        finally:
+            server.MODEL, server.STRESS = original
+            server.CANCELLATIONS.pop(request_id, None)
+            server.JOBS.pop(request_id, None)
+
+    def test_cancel_endpoint_requires_key_and_records_early_cancellation(self):
+        original = server.API_KEY
+        server.API_KEY = "cancel-test-key"
+        http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        thread = threading.Thread(target=http.serve_forever, daemon=True)
+        thread.start()
+        request_id = "d" * 64
+        url = f"http://127.0.0.1:{http.server_address[1]}/jobs/{request_id}/cancel"
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(urllib.request.Request(url, data=b""))
+            self.assertEqual(error.exception.code, 401)
+            with urllib.request.urlopen(urllib.request.Request(url, data=b"", headers={"Authorization": "Bearer cancel-test-key"})) as response:
+                self.assertEqual(response.status, 200)
+            with self.assertRaises(server.SynthesisCancelled):
+                server.check_cancelled(request_id)
+        finally:
+            http.shutdown()
+            http.server_close()
+            thread.join(timeout=2)
+            server.API_KEY = original
+            server.CANCELLATIONS.pop(request_id, None)
+            server.JOBS.pop(request_id, None)
+
 
 if __name__ == "__main__":
     unittest.main()

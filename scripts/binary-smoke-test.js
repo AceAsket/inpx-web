@@ -25,6 +25,15 @@ async function createFixture(dir) {
     zip.addBuffer(Buffer.from(row.join('\x04') + '\n'), 'smoke.inp');
     zip.end();
     await complete;
+    const ratings = new yazl.ZipFile();
+    await fs.ensureDir(path.join(dir,'reviews'));
+    const ratingOutput = fs.createWriteStream(path.join(dir,'reviews','additional.zip'));
+    const ratingDone = require('stream/promises').pipeline(ratings.outputStream,ratingOutput);
+    ratings.addBuffer(Buffer.from(JSON.stringify([{folder:'smoke.zip',file:'1.fb2',sum:5,count:1}])),'books.json');
+    ratings.end(); await ratingDone;
+    await fs.writeJson(path.join(dir, 'opds-feeds.json'), {version:1, shelves:[
+        {id:'smoke', name:'Shared smoke shelf', filters:{lang:'en'}},
+    ]});
     await fs.writeJson(path.join(dir, 'config.json'), {
         loggingEnabled: false,
         opds: {enabled: true, auth: false},
@@ -57,8 +66,13 @@ async function checkWebSocket(url) {
                 const response = JSON.parse(raw);
                 if (response._rok) return;
                 assert.ok(!response.error, response.error);
-                assert.match(response.message, /inpx-web/);
-                finish();
+                if (response.requestId === 'smoke') {
+                    assert.match(response.message, /inpx-web/);
+                    socket.send(JSON.stringify({action:'search',from:'title',query:{ratingCount:'1'},requestId:'ratings'}));
+                } else if (response.requestId === 'ratings') {
+                    assert.strictEqual(response.totalFound,1,'Packaged ratings search must load its streaming JSON dependency');
+                    finish();
+                }
             } catch (error) {
                 finish(error);
             }
@@ -68,8 +82,8 @@ async function checkWebSocket(url) {
 
 async function main() {
     const [target, imageName] = process.argv.slice(2);
-    if (!target || (target === '--image' && !imageName))
-        throw new Error('Usage: node scripts/binary-smoke-test.js <binary> | --image <local-image>');
+    if (!target || (['--image', '--runtime'].includes(target) && !imageName))
+        throw new Error('Usage: node scripts/binary-smoke-test.js <binary> | --image <local-image> | --runtime <runtime-directory>');
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-binary-smoke-'));
     const library = path.join(dir, 'library');
     const containerName = `inpx-smoke-${process.pid}-${Date.now()}`;
@@ -85,15 +99,19 @@ async function main() {
             command = 'docker';
             args = ['run', '--rm', '--name', containerName,
                 '-p', `127.0.0.1:${port}:12380`, '--tmpfs', '/data',
+                '-e', 'INPX_OPDS_FEEDS_FILE=/library/opds-feeds.json',
                 '--mount', `type=bind,source=${library},target=/library,readonly`, imageName,
                 'sh', '-c', 'cp /library/config.json /data/config.json && exec inpx-web --data-dir=/data --config=/data/config.json --lib-dir=/library --host=0.0.0.0 --port=12380'];
         } else {
-            command = path.resolve(target);
+            command = target === '--runtime' ? process.execPath : path.resolve(target);
             args = [`--data-dir=${path.join(dir, 'data')}`, `--lib-dir=${library}`,
                 `--config=${path.join(library, 'config.json')}`, '--host=127.0.0.1', `--port=${port}`];
+            if (target === '--runtime') args.unshift(path.resolve(imageName, 'server/index.js'));
         }
         const env = {...process.env, INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
-            INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ENABLE_CONVERSION: 'false'};
+            INPX_OPDS_FEEDS_FILE:path.join(library, 'opds-feeds.json'),
+            INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true', INPX_ENABLE_CONVERSION: 'false'};
+        if (target === '--runtime') delete env.NODE_PATH;
         child = spawn(command, args, {env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
         exited = new Promise(resolve => {
             child.once('exit', resolve);
@@ -120,10 +138,15 @@ async function main() {
         assert.strictEqual((await health.json()).version, require('../package.json').version);
         const home = await fetch(url);
         assert.strictEqual(home.status, 200);
+        assert.strictEqual(home.headers.get('x-robots-tag'),'noindex, nofollow');
         assert.match(await home.text(), /<html/i);
+        assert.match(await (await fetch(`${url}/robots.txt`)).text(),/Disallow: \/\s*$/);
         const opds = await fetch(`${url}/opds`);
         assert.strictEqual(opds.status, 200);
-        assert.match(await opds.text(), /<feed/);
+        assert.match(await opds.text(), /Shared smoke shelf/);
+        const shelf = await fetch(`${url}/opds/catalog-shelves?id=smoke`);
+        assert.strictEqual(shelf.status, 200);
+        assert.match(await shelf.text(), /Packaged smoke book/);
         await checkWebSocket(url);
         console.log(`ok packaged application: indexing, health, web UI, OPDS, WebSocket (${target === '--image' ? imageName : target})`);
     } finally {

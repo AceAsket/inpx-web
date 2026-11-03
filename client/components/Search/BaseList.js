@@ -8,10 +8,12 @@ import BookView from './BookView/BookView.vue';
 import LoadingMessage from './LoadingMessage/LoadingMessage.vue';
 import * as utils from '../../share/utils';
 const {match: catalogMatch} = require('../../../shared/CatalogSearch');
+const bookFormats = require('../../../shared/BookFormats');
 
 const showMoreCount = 100;//значение для "Показать еще"
 const maxItemCount = 500;//выше этого значения показываем "Загрузка"
 let nextSearchRequestId = 0;
+let nextBookCardRequestId = 0;
 
 const componentOptions = {
     components: {
@@ -72,6 +74,7 @@ export default class BaseList {
     queuedSearch = null;
     searchRequestId = 0;
     searchDisposed = false;
+    searchAbortController = null;
 
     showMoreCount = showMoreCount;
     maxItemCount = maxItemCount;
@@ -93,6 +96,7 @@ export default class BaseList {
 
     beforeUnmount() {
         this.searchDisposed = true;
+        this.searchAbortController?.abort();
         this.queuedSearch = null;
         if (this.list.searchRequestId === this.searchRequestId)
             this.list.searchRequestId = ++nextSearchRequestId;
@@ -119,6 +123,7 @@ export default class BaseList {
         if (_.isEqual(query, this.prevQuery) && !this.error && this.list.totalFound >= 0 && this.list.searchRequestId === this.searchRequestId)
             return;
 
+        this.searchAbortController?.abort();
         const request = {id: ++nextSearchRequestId, query};
         this.searchRequestId = request.id;
         this.requestedSearch = request;
@@ -140,8 +145,10 @@ export default class BaseList {
                 try {
                     const cached = await this.getCachedSearchResult(current.query);
                     if (!this.isCurrentSearch(current)) continue;
+                    this.searchAbortController = new AbortController();
                     const response = cached || await (kind === 'books'
-                        ? this.api.bookSearch(current.query) : this.api.search(kind, current.query));
+                        ? this.api.bookSearch(current.query, this.searchAbortController.signal)
+                        : this.api.search(kind, current.query, this.searchAbortController.signal));
                     if (!this.isCurrentSearch(current)) continue;
                     this.error = '';
                     this.prevQuery = _.cloneDeep(current.query);
@@ -170,6 +177,7 @@ export default class BaseList {
         } finally {
             clearTimeout(timer);
             this.requestedSearch = null;
+            this.searchAbortController = null;
             this.refreshing = false;
             this.loadingMessage = '';
         }
@@ -226,6 +234,7 @@ export default class BaseList {
         return [
             query.sourceId ? `source=${query.sourceId}` : '',
             query.hideCopies ? 'hideCopies=1' : '',
+            query.ratingCount ? `votes=${query.ratingCount}` : '',
         ].filter(Boolean).join('|');
     }
 
@@ -258,6 +267,7 @@ export default class BaseList {
     }
 
     getActionLoadingMessage(action, format = '') {
+        if (format === 'raw') format = '';
         if (action == 'bookInfo')
             return 'Загрузка информации о книге...';
 
@@ -315,6 +325,7 @@ export default class BaseList {
     }
 
     getDirectBookDownloadHref(book, format = '') {
+        format = bookFormats.resolve(book.ext, this.config, bookFormats.profilePreference(this.config), format);
         const bookUid = this.getBookUid(book);
         const root = String(this.config.rootPathStatic || '').replace(/\/$/, '');
         const params = new URLSearchParams();
@@ -346,10 +357,19 @@ export default class BaseList {
     }
 
     async download(book, action, format = '') {
+        if (action == 'bookInfo' || action == 'authorInfo') {
+            await this.openBookCard(book, (action == 'authorInfo' ? 'author' : 'fb2'));
+            return;
+        }
+
         if (this.downloadFlag)
             return;
 
-        if (format && this.config.conversionEnabled === false) {
+        if (['download', 'copyLink', 'sendTelegram', 'sendEmail'].includes(action)) {
+            const channel = action === 'sendTelegram' ? 'telegram' : action === 'sendEmail' ? 'email' : 'download';
+            format = bookFormats.resolve(book.ext, this.config, bookFormats.profilePreference(this.config, channel), format);
+        }
+        if (format && format !== 'raw' && this.config.conversionEnabled === false) {
             this.$root.stdDialog.alert('Конвертация книг отключена в текущем образе.', 'Информация');
             return;
         }
@@ -367,27 +387,15 @@ export default class BaseList {
                 return;
             }
 
-            if (action == 'bookInfo' || action == 'authorInfo') {
-                const response = await this.api.getBookInfo(book._uid);
-                if (response.bookInfo && response.bookInfo.book && response.bookInfo.book.size > 0)
-                    book.size = response.bookInfo.book.size;
-                this.$emit('listEvent', {
-                    action: 'bookInfo',
-                    data: response.bookInfo,
-                    tab: (action == 'authorInfo' ? 'author' : 'fb2'),
-                });
-                return;
-            }
-
             if (action == 'sendTelegram') {
                 await this.api.sendBookTelegram(book._uid, format);
-                this.$root.notify.success(`Книга отправлена в Telegram${format ? ` (${format.toUpperCase()})` : ''}`);
+                this.$root.notify.success(`Книга отправлена в Telegram${format && format !== 'raw' ? ` (${format.toUpperCase()})` : ''}`);
                 return;
             }
 
             if (action == 'sendEmail') {
                 await this.api.sendBookEmail(book._uid, format);
-                this.$root.notify.success(`Книга отправлена на email${format ? ` (${format.toUpperCase()})` : ''}`);
+                this.$root.notify.success(`Книга отправлена на email${format && format !== 'raw' ? ` (${format.toUpperCase()})` : ''}`);
                 return;
             }
 
@@ -457,6 +465,22 @@ export default class BaseList {
             this.downloadFlag = false;
             this.loadingMessage2 = '';
         }
+    }
+
+    //Карточка открывается сразу с данными строки списка, описание FB2 и отзывы приходят позже
+    async openBookCard(book, tab) {
+        const requestId = ++nextBookCardRequestId;
+        this.$emit('listEvent', {action: 'bookInfo', data: {book, loading: true}, tab, requestId});
+
+        let data = {book};
+        let error = '';
+        try {
+            const response = await this.api.getBookCard(book._uid);
+            data = response.bookInfo || data;
+        } catch(e) {
+            error = await this.getErrorMessage(e);
+        }
+        this.$emit('listEvent', {action: 'bookInfoLoaded', data, bookUid: book._uid, requestId, error});
     }
 
     getBookUid(book = {}) {
@@ -560,7 +584,7 @@ export default class BaseList {
         try {
             let result;
 
-            if (this.abCacheEnabled) {
+            if (this.abCacheEnabled && !this.getQuery().ratingCount && !this.getQuery().isbn) {
                 const key = `author-${authorId}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
@@ -583,7 +607,7 @@ export default class BaseList {
         try {
             let result;
 
-            if (this.abCacheEnabled) {
+            if (this.abCacheEnabled && !this.getQuery().ratingCount && !this.getQuery().isbn) {
                 const key = `author-${authorId}-series-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
@@ -606,7 +630,7 @@ export default class BaseList {
         try {
             let result;
 
-            if (this.abCacheEnabled) {
+            if (this.abCacheEnabled && !this.getQuery().ratingCount && !this.getQuery().isbn) {
                 const key = `series-${series}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
                 const data = await authorBooksStorage.getData(key);
                 if (data) {

@@ -2,6 +2,7 @@ const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
 const profilePassword = require('./ProfilePassword');
+const bookFormats = require('../../shared/BookFormats');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 
 const readerPreferencesVersion = 2;
@@ -656,6 +657,12 @@ class ReadingListStore {
         normalized.passwordHash = String(normalized.passwordHash || '').trim();
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
+        normalized.defaultDownloadFormat = bookFormats.normalize(normalized.defaultDownloadFormat);
+        normalized.defaultEmailFormat = bookFormats.preference(normalized, 'email');
+        normalized.defaultTelegramFormat = bookFormats.preference(normalized, 'telegram');
+        normalized.defaultOpdsFormat = bookFormats.preference(normalized, 'opds');
+        normalized.emailAsZip = normalized.emailAsZip === true;
+        normalized.telegramAsZip = normalized.telegramAsZip === true;
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
         normalized.opdsAuthEnabled = (normalized.opdsAuthEnabled === true);
         normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
@@ -665,6 +672,7 @@ class ReadingListStore {
         normalized.readerProgressResetAt = String(normalized.readerProgressResetAt || '').trim();
         normalized.readerBookmarks = this.normalizeReaderBookmarks(normalized.readerBookmarks);
         normalized.discoveryPreferences = this.normalizeDiscoveryPreferences(normalized.discoveryPreferences);
+        normalized.libraryFollows = require('../../shared/LibraryFollows').normalize(normalized.libraryFollows);
         normalized.isAdmin = !!normalized.isAdmin;
         normalized.createdAt = normalized.createdAt || now;
         normalized.updatedAt = normalized.updatedAt || now;
@@ -682,6 +690,7 @@ class ReadingListStore {
         normalized.updatedAt = normalized.updatedAt || now;
         normalized.books = this.normalizeEntries(normalized.books);
         normalized.filters = require('./SmartShelf').normalize(normalized.filters);
+        normalized.opds = require('./opds/ShelfOptions').normalize(normalized.opds);
         return normalized;
     }
 
@@ -1131,6 +1140,12 @@ class ReadingListStore {
             passwordHash: String(profile.passwordHash || '').trim(),
             emailTo: profile.emailTo,
             telegramChatId: profile.telegramChatId,
+            defaultDownloadFormat: profile.defaultDownloadFormat,
+            defaultEmailFormat: profile.defaultEmailFormat,
+            defaultTelegramFormat: profile.defaultTelegramFormat,
+            defaultOpdsFormat: profile.defaultOpdsFormat,
+            emailAsZip: profile.emailAsZip,
+            telegramAsZip: profile.telegramAsZip,
             opdsEnabled: profile.opdsEnabled,
             opdsAuthEnabled: profile.opdsAuthEnabled,
             isAdmin: false,
@@ -1165,6 +1180,14 @@ class ReadingListStore {
             target.emailTo = String(patch.emailTo || '').trim();
         if (utilsHasProp(patch, 'telegramChatId'))
             target.telegramChatId = String(patch.telegramChatId || '').trim();
+        if (utilsHasProp(patch, 'defaultDownloadFormat'))
+            target.defaultDownloadFormat = bookFormats.normalize(patch.defaultDownloadFormat);
+        for (const field of ['defaultEmailFormat', 'defaultTelegramFormat', 'defaultOpdsFormat']) {
+            if (utilsHasProp(patch, field)) target[field] = bookFormats.normalize(patch[field]);
+        }
+        for (const field of ['emailAsZip', 'telegramAsZip']) {
+            if (utilsHasProp(patch, field)) target[field] = patch[field] === true;
+        }
         if (utilsHasProp(patch, 'opdsEnabled'))
             target.opdsEnabled = (patch.opdsEnabled !== false);
         if (utilsHasProp(patch, 'opdsAuthEnabled'))
@@ -1192,6 +1215,34 @@ class ReadingListStore {
             progressResetAt: String(user.readerProgressResetAt || '').trim(),
             bookmarks: (user.readerBookmarks && Array.isArray(user.readerBookmarks[normalizedBookUid]) ? user.readerBookmarks[normalizedBookUid] : []),
         };
+    }
+
+    async changeLibraryFollow(userId, operation, patch = {}) {
+        const {data, user} = await this.resolveUser(userId);
+        const target = data.users.find(row => row.id === user.id);
+        const normalize = require('../../shared/LibraryFollows').normalize;
+        const follows = normalize(target.libraryFollows);
+        if (operation === 'add') {
+            if (!['author','series'].includes(patch.kind) || typeof patch.value !== 'string' || !patch.value.trim() || patch.value.length > 200)
+                throw new Error('Некорректная подписка');
+            if (follows.some(row => row.kind === patch.kind && row.value.toLowerCase() === patch.value.trim().toLowerCase())) return follows;
+            if (follows.length >= 20) throw new Error('Можно добавить до 20 авторов и серий');
+            follows.push({...patch,id:this.makeId(),createdAt:this.nowIso(),revision:1,newUids:[]});
+        } else {
+            const index = follows.findIndex(row => row.id === patch.id);
+            if (index < 0) return follows;
+            if (operation === 'remove') follows.splice(index,1);
+            else if (operation === 'seen') {follows[index].newUids = []; follows[index].revision++;}
+            else if (operation === 'snapshot' && follows[index].revision === patch.revision) {
+                const candidate = normalize([{...follows[index],knownUids:patch.knownUids,newUids:patch.newUids}])[0];
+                if (JSON.stringify(candidate) === JSON.stringify(follows[index])) return follows;
+                Object.assign(follows[index],{knownUids:patch.knownUids,newUids:patch.newUids,revision:patch.revision + 1});
+            } else return follows;
+        }
+        target.libraryFollows = normalize(follows);
+        target.updatedAt = this.nowIso();
+        await this.save(data);
+        return target.libraryFollows;
     }
 
     async updateReaderPreferences(userId = '', patch = {}) {
@@ -1669,6 +1720,7 @@ class ReadingListStore {
             containsBook: !!currentEntry,
             readBook: !!(currentEntry && currentEntry.read),
             filters: item.filters || null,
+            opds: require('./opds/ShelfOptions').normalize(item.opds),
         };
     }
 
@@ -1749,13 +1801,14 @@ class ReadingListStore {
         return item;
     }
 
-    async setListVisibility(userId = '', listId, visibility) {
+    async setListVisibility(userId = '', listId, visibility, opds) {
         const {data, user} = await this.resolveUser(userId);
         const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
 
         item.visibility = this.normalizeVisibility(visibility);
+        if (opds !== undefined) item.opds = require('./opds/ShelfOptions').normalize(opds);
         item.updatedAt = this.nowIso();
 
         await this.save(data);
@@ -1943,6 +1996,12 @@ class ReadingListStore {
                 name: user.name,
                 emailTo: user.emailTo,
                 telegramChatId: user.telegramChatId,
+                defaultDownloadFormat: bookFormats.normalize(user.defaultDownloadFormat),
+                defaultEmailFormat: bookFormats.preference(user, 'email'),
+                defaultTelegramFormat: bookFormats.preference(user, 'telegram'),
+                defaultOpdsFormat: bookFormats.preference(user, 'opds'),
+                emailAsZip: user.emailAsZip === true,
+                telegramAsZip: user.telegramAsZip === true,
                 opdsEnabled: user.opdsEnabled,
                 opdsAuthEnabled: user.opdsAuthEnabled,
                 readerPreferences: this.normalizeReaderPreferences(user.readerPreferences),
@@ -1950,6 +2009,7 @@ class ReadingListStore {
                 audioProgress: this.normalizeAudioProgress(user.audioProgress),
                 readerBookmarks: this.normalizeReaderBookmarks(user.readerBookmarks),
                 discoveryPreferences: this.normalizeDiscoveryPreferences(user.discoveryPreferences),
+                libraryFollows: require('../../shared/LibraryFollows').normalize(user.libraryFollows),
             },
             lists: lists.map((item) => ({
                 name: item.name,
@@ -1958,6 +2018,7 @@ class ReadingListStore {
                 updatedAt: item.updatedAt,
                 books: this.normalizeEntries(item.books),
                 filters: item.filters || null,
+                opds: require('./opds/ShelfOptions').normalize(item.opds),
             })),
         };
     }
@@ -1986,6 +2047,14 @@ class ReadingListStore {
                 target.emailTo = String(incomingUser.emailTo || '').trim();
             if (utilsHasProp(incomingUser, 'telegramChatId'))
                 target.telegramChatId = String(incomingUser.telegramChatId || '').trim();
+            if (utilsHasProp(incomingUser, 'defaultDownloadFormat'))
+                target.defaultDownloadFormat = bookFormats.normalize(incomingUser.defaultDownloadFormat);
+            for (const field of ['defaultEmailFormat', 'defaultTelegramFormat', 'defaultOpdsFormat']) {
+                if (utilsHasProp(incomingUser, field)) target[field] = bookFormats.normalize(incomingUser[field]);
+            }
+            for (const field of ['emailAsZip', 'telegramAsZip']) {
+                if (utilsHasProp(incomingUser, field)) target[field] = incomingUser[field] === true;
+            }
             if (utilsHasProp(incomingUser, 'opdsEnabled'))
                 target.opdsEnabled = (incomingUser.opdsEnabled !== false);
             if (utilsHasProp(incomingUser, 'opdsAuthEnabled'))
@@ -1994,6 +2063,8 @@ class ReadingListStore {
                 target.readerPreferences = this.normalizeReaderPreferences(incomingUser.readerPreferences);
             if (utilsHasProp(incomingUser, 'discoveryPreferences'))
                 target.discoveryPreferences = this.normalizeDiscoveryPreferences(incomingUser.discoveryPreferences);
+            if (utilsHasProp(incomingUser, 'libraryFollows'))
+                target.libraryFollows = require('../../shared/LibraryFollows').normalize(incomingUser.libraryFollows);
 
             if (utilsHasProp(incomingUser, 'audioProgress')) {
                 const progress = this.normalizeAudioProgress(incomingUser.audioProgress);
@@ -2039,6 +2110,7 @@ class ReadingListStore {
                 visibility: incoming.visibility,
                 books: incoming.books,
                 filters: incoming.filters,
+                opds: incoming.opds,
                 createdAt: incoming.createdAt,
                 updatedAt: incoming.updatedAt,
                 userId: user.id,
@@ -2075,6 +2147,7 @@ class ReadingListStore {
 
             item.books = Array.from(existing.values());
             item.filters = normalizedIncoming.filters;
+            if (utilsHasProp(incoming, 'opds')) item.opds = normalizedIncoming.opds;
             item.updatedAt = this.nowIso();
         }
 

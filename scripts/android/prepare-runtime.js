@@ -41,18 +41,26 @@ async function main() {
     await fs.remove(publicZip);
 
     // Copy only backend dependency trees. Resolve from the installed lockfile tree, including nested versions.
-    const pending = ['axios', 'chardet', 'dayjs', 'express', 'express-basic-auth', 'form-data', 'fs-extra', 'he', 'iconv-lite', 'jembadb', 'lodash', 'minimist', 'node-stream-zip', 'nodemailer', 'safe-buffer', 'ws', 'yazl', 'js-yaml'].map(name => [name, root]);
+    const backendPackages = ['axios', 'chardet', 'dayjs', 'express', 'express-basic-auth', 'form-data', 'fs-extra', 'he', 'iconv-lite', 'jembadb', 'lodash',
+        'minimist', 'node-stream-zip', 'nodemailer', 'safe-buffer', 'ws', 'yazl', 'js-yaml', 'sax', '@streamparser/json-node', 'qrcode'];
+    const pending = backendPackages.map(name => [name, root]);
     const copied = new Set();
     while (pending.length) {
         const [name, from] = pending.pop();
-        let location;
-        try { location = require.resolve(`${name}/package.json`, {paths: [from]}); }
-        catch {
-            location = require.resolve(name, {paths: [from]});
-            while (!await fs.pathExists(path.join(path.dirname(location), 'package.json'))) location = path.dirname(location);
-            location = path.join(path.dirname(location), 'package.json');
+        let location, directory;
+        try {directory = path.dirname(require.resolve(`${name}/package.json`, {paths:[from]}));}
+        catch {directory = path.dirname(require.resolve(name, {paths:[from]}));}
+        // Exports can redirect even "package.json" to an internal type-only manifest.
+        while (true) {
+            const candidate = path.join(directory, 'package.json');
+            if (await fs.pathExists(candidate) && (await fs.readJson(candidate)).name === name) {
+                location = candidate;
+                break;
+            }
+            const parent = path.dirname(directory);
+            if (parent === directory) throw new Error(`Package root not found: ${name}`);
+            directory = parent;
         }
-        const directory = path.dirname(location);
         if (copied.has(directory)) continue; copied.add(directory);
         const relative = path.relative(root, directory);
         if (relative.startsWith('..') || !relative.startsWith('node_modules')) throw new Error(`Dependency outside workspace: ${name}`);
@@ -60,6 +68,9 @@ async function main() {
         const pkg = await fs.readJson(location);
         for (const dependency of Object.keys(pkg.dependencies || {})) pending.push([dependency, directory]);
     }
+    await fs.outputJson(path.join(stage, 'runtime-manifest.json'), {backendVersion:require('../../package.json').version,
+        sourceCommit:execFileSync('git', ['rev-parse', 'HEAD'], {cwd:root, encoding:'utf8'}).trim(),
+        nodeVersion:require('../../android/runtime.lock.json').version, backendPackages}, {spaces:2});
     const demo = path.join(stage, 'demo'); await fs.ensureDir(demo);
     const book = n => `<?xml version="1.0" encoding="utf-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>comp_soft</genre><author><first-name>INPX</first-name><last-name>Android</last-name></author><book-title>Проверка ${n === 1 ? 'ZIP' : '7z'} на Android</book-title><lang>ru</lang></title-info><document-info><author><nickname>INPX</nickname></author><date>2026-10-28</date><id>inpx-android-demo-${n}</id><version>1.0</version></document-info></description><body><section><title><p>Библиотека работает</p></title><p>Эта книга создана для проверки сервера на Android. Каталог, извлечение архива и читалка работают на устройстве.</p>${'<p>Проверка чтения и перелистывания страниц.</p>'.repeat(60)}</section></body></FictionBook>`;
     await zip(path.join(demo, 'zip-books.zip'), {'1.fb2': book(1)});

@@ -55,7 +55,7 @@
                             mobile-arrows
                             class="bg-grey-4 text-grey-7 info-tabs"
                         >
-                            <q-tab v-if="fb2.length" name="fb2" label="Fb2 info" />
+                            <q-tab v-if="fb2.length || detailsLoading" name="fb2" label="Fb2 info" />
                             <q-tab name="inpx" label="Inpx info" />
                             <q-tab v-if="contents.length" name="contents" label="Содержание" />
                             <q-tab v-if="hasAuthorTab" name="author" :label="authorTabLabel" />
@@ -115,6 +115,10 @@
                         </template>
 
                         <template v-else>
+                            <div v-if="selectedTab == 'fb2' && detailsLoading" class="row items-center no-wrap q-ma-sm text-grey-7">
+                                <q-spinner size="20px" class="q-mr-sm" />
+                                Загрузка описания книги...
+                            </div>
                             <div v-for="item in info" :key="item.name">
                                 <div class="row q-ml-sm q-mt-sm items-center">
                                     <div class="text-blue section-label">
@@ -148,11 +152,21 @@
                                 </div>
                             </div>
 
-                            <div v-if="selectedTab == 'fb2' && fb2Images.length" class="fb2-gallery q-mx-sm q-mt-md q-mb-sm">
+                            <div v-if="selectedTab == 'fb2' && galleryCount" ref="gallery" class="fb2-gallery q-mx-sm q-mt-md q-mb-sm">
                                 <div class="text-blue section-label q-mb-sm">
                                     Иллюстрации
                                 </div>
-                                <div class="fb2-gallery-grid">
+                                <div v-if="galleryLoading" class="row items-center no-wrap text-grey-7">
+                                    <q-spinner size="20px" class="q-mr-sm" />
+                                    Загрузка иллюстраций: {{ galleryCount }}
+                                </div>
+                                <div v-else-if="galleryError" class="text-red-8">
+                                    Не удалось загрузить иллюстрации: {{ galleryError }}
+                                </div>
+                                <div v-else-if="galleryRequested && !fb2Images.length" class="text-grey-7">
+                                    Иллюстрации не найдены
+                                </div>
+                                <div v-else class="fb2-gallery-grid">
                                     <img
                                         v-for="image in fb2Images"
                                         :key="image.id"
@@ -298,7 +312,15 @@ const componentOptions = {
                 this.init();
         },
         dialogVisible(newValue) {
+            if (!newValue) this.invalidateGallery();
             this.$emit('update:modelValue', newValue);
+        },
+        bookInfo() {
+            //описание приходит после открытия карточки
+            if (this.dialogVisible) {
+                this.parseBookInfo();
+                this.leaveEmptyFb2Tab();
+            }
         },
     }
 };
@@ -324,6 +346,11 @@ class BookInfoDialog {
     fb2 = [];
     contents = [];
     fb2Images = [];
+    galleryCount = 0;
+    galleryRequested = false;
+    galleryLoading = false;
+    galleryError = '';
+    galleryGeneration = 0;
     annotationMeta = null;
     reviews = [];
     libraryRating = null;
@@ -336,6 +363,14 @@ class BookInfoDialog {
         this.api = this.$root.api;
     }
 
+    updated() {
+        this.observeGallery();
+    }
+
+    beforeUnmount() {
+        this.invalidateGallery();
+    }
+
     init() {
         this.coverSrc = '';
         this.coverError = false;
@@ -343,6 +378,11 @@ class BookInfoDialog {
         this.fb2 = [];
         this.contents = [];
         this.fb2Images = [];
+        this.galleryCount = 0;
+        this.galleryRequested = false;
+        this.galleryLoading = false;
+        this.galleryError = '';
+        this.invalidateGallery();
         this.annotationMeta = null;
         this.reviews = [];
         this.libraryRating = null;
@@ -355,9 +395,16 @@ class BookInfoDialog {
         this.parseBookInfo();
         this.selectedTab = this.resolveInitialTab();
         this.loadAuthorInfo();//no await
+        this.leaveEmptyFb2Tab();
+    }
 
-        if (!this.fb2.length && this.selectedTab == 'fb2')
+    leaveEmptyFb2Tab() {
+        if (!this.fb2.length && !this.detailsLoading && this.selectedTab == 'fb2')
             this.selectedTab = 'inpx';
+    }
+
+    get detailsLoading() {
+        return !!(this.bookInfo && this.bookInfo.loading);
     }
 
     get config() {
@@ -665,6 +712,65 @@ class BookInfoDialog {
         return type;
     }
 
+    //галерея загружается, только когда её блок виден
+    observeGallery() {
+        const el = this.$refs.gallery;
+        if (!el || this.galleryRequested || (this.galleryObserver && this.galleryObserver.el === el))
+            return;
+
+        this.stopGalleryObserver();
+        if (!window.IntersectionObserver) {
+            this.loadGallery();//no await
+            return;
+        }
+
+        this.galleryObserver = new IntersectionObserver((entries) => {
+            if (entries.some(entry => entry.isIntersecting))
+                this.loadGallery();//no await
+        });
+        this.galleryObserver.el = el;
+        this.galleryObserver.observe(el);
+    }
+
+    stopGalleryObserver() {
+        if (this.galleryObserver)
+            this.galleryObserver.disconnect();
+        this.galleryObserver = null;
+    }
+
+    invalidateGallery() {
+        this.galleryGeneration++;
+        this.stopGalleryObserver();
+    }
+
+    async loadGallery() {
+        if (this.galleryRequested)
+            return;
+
+        this.galleryRequested = true;
+        this.stopGalleryObserver();
+        const bookUid = this.bookUid;
+        const generation = this.galleryGeneration;
+        const isCurrent = () => generation === this.galleryGeneration && bookUid === this.bookUid && this.dialogVisible;
+        this.galleryLoading = true;
+        try {
+            const response = await this.api.getBookGallery(bookUid);
+            if (!isCurrent())
+                return;
+            this.fb2Images = (response.images || []).map(image => ({
+                id: image.id,
+                src: `data:${image.contentType};base64,${image.data}`,
+            }));
+            this.parseBookInfo();
+        } catch (e) {
+            if (isCurrent())
+                this.galleryError = e.message;
+        } finally {
+            if (isCurrent())
+                this.galleryLoading = false;
+        }
+    }
+
     extractFb2Images(parser) {
         const result = [];
         const coverNode = parser.$$('/description/title-info/coverpage/image');
@@ -714,7 +820,8 @@ class BookInfoDialog {
 
     parseBookInfo() {
         const bookInfo = this.bookInfo || {};
-        this.authorInfo = (bookInfo.authorInfo ? bookInfo.authorInfo : null);
+        if (bookInfo.authorInfo)
+            this.authorInfo = bookInfo.authorInfo;
         this.annotationMeta = (bookInfo.annotationMeta ? bookInfo.annotationMeta : null);
         this.reviews = (Array.isArray(bookInfo.reviews) ? bookInfo.reviews : []);
         this.libraryRating = bookInfo.libraryRating || null;
@@ -725,7 +832,14 @@ class BookInfoDialog {
         if (bookInfo.fb2) {
             const parser = new Fb2Parser(bookInfo.fb2);
             const infoObj = parser.bookInfo();
-            this.fb2Images = this.extractFb2Images(parser);
+            //карточка приходит без иллюстраций, галерея загружается отдельно (loadGallery);
+            //без galleryCount (например, удалённая библиотека) иллюстрации уже в bookInfo.fb2
+            this.galleryCount = bookInfo.galleryCount || 0;
+            if (!this.galleryCount) {
+                this.fb2Images = this.extractFb2Images(parser);
+                this.galleryCount = this.fb2Images.length;
+                this.galleryRequested = true;
+            }
 
             if (infoObj.titleInfo) {
                 let ann = infoObj.titleInfo.annotationHtml;

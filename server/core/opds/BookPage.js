@@ -6,6 +6,7 @@ const BasePage = require('./BasePage');
 const Fb2Parser = require('../fb2/Fb2Parser');
 const {safeHtml} = require('../../../shared/safeHtml');
 const he = require('he');
+const acquisitionLinks = require('./AcquisitionLinks');
 
 const navigationType = 'application/atom+xml;profile=opds-catalog;kind=navigation';
 
@@ -178,7 +179,7 @@ class BookPage extends BasePage {
                 // loading reviews here can time out before Kindle gets a link.
                 bookInfo = {book: record, cover: '', fb2: false};
             } else if (record) {
-                ({bookInfo} = await this.webWorker.getBookInfo(bookUid));
+                ({bookInfo} = await this.webWorker.getBookCardInfo(bookUid));
             }
 
             if (bookInfo) {
@@ -186,27 +187,7 @@ class BookPage extends BasePage {
 
                 //format
                 const ext = bookInfo.book.ext;
-                const directHref = `${this.config.bookPathStatic}/by-uid?uid=${encodeURIComponent(bookUid)}`;
-                const rawHref = `${directHref}&format=raw`;
-                const links = [];
-                const addLink = (href, type) => {
-                    links.push({href, type});
-                };
-
-                if (ext === 'fb2') {
-                    addLink(rawHref, 'application/fb2+xml');
-                    addLink(rawHref, 'application/x-fictionbook+xml');
-                } else if (ext === 'epub') {
-                    addLink(rawHref, 'application/epub+zip');
-                } else if (ext === 'mobi') {
-                    addLink(rawHref, 'application/x-mobipocket-ebook');
-                } else {
-                    addLink(rawHref, `application/${ext}`);
-                    addLink(`${directHref}&zip=1`, 'application/zip');
-                }
-
-                if (this.config.conversionEnabled && this.config.mobiEnabled && ['fb2', 'epub'].includes(ext))
-                    addLink(`${directHref}&format=mobi`, 'application/x-mobipocket-ebook');
+                const links = acquisitionLinks.forBook({...bookInfo.book, _uid:bookUid}, this.config, req.opdsUser);
 
                 //entry
                 const e = this.makeEntry({
@@ -248,12 +229,17 @@ class BookPage extends BasePage {
                 let content = '';
                 let ann = '';
                 let info = '';
+                const collections = new Map();
                 //fb2 info
                 if (bookInfo.fb2) {
                     const parser = new Fb2Parser(bookInfo.fb2);
                     const infoObj = parser.bookInfo();
 
                     if (infoObj.titleInfo) {
+                        for (const series of infoObj.titleInfo.sequence || []) {
+                            const name = he.decode(series.name || '').trim();
+                            if (name) collections.set(this.catalogHref('series', name, req), `Серия: ${name}`);
+                        }
                         //author fb2Info
                         if (!e.author && infoObj.titleInfo.author.length) {
                             e.author = atomAuthors(infoObj.titleInfo.author.map(name => he.decode(name)));
@@ -294,6 +280,10 @@ class BookPage extends BasePage {
                 });
 
                 content = `${ann}${info}`;
+                for (const [kind, label] of [['reviews', 'Отзывы'], ['authors', 'Об авторах']]) {
+                    const href = this.scopedHref(`${this.opdsRoot}/book/${kind}`, req, {uid:bookUid});
+                    content += `<p><a href="${this.escape(href)}">${label}</a></p>`;
+                }
                 if (content) {
                     e.content = {
                         '*ATTRS': {type: 'html'},
@@ -305,16 +295,21 @@ class BookPage extends BasePage {
                 e.link = [];
                 for (const item of links)
                     e.link.push(this.downLink(item));
+                for (const [kind, title] of [['reviews', 'Отзывы'], ['authors', 'Об авторах']]) {
+                    e.link.push(this.makeLink({href:this.scopedHref(`${this.opdsRoot}/book/${kind}`, req, {uid:bookUid}),
+                        rel:'related', type:navigationType, title}));
+                }
 
                 // Atom author URIs and collection relations complement the
                 // description links for clients that hide HTML navigation.
-                const collections = new Map();
-                for (const name of this.authorNames(bookInfo.book.author))
-                    collections.set(this.catalogHref('author', name, req), `Книги автора: ${name}`);
+                for (const author of e.author || [])
+                    collections.set(he.decode(author.uri), `Книги автора: ${he.decode(author.name)}`);
                 if (String(bookInfo.book.series || '').trim())
                     collections.set(this.catalogHref('series', bookInfo.book.series.trim(), req), `Серия: ${bookInfo.book.series}`);
-                for (const [href, title] of collections)
-                    e.link.push(this.makeLink({href, rel: 'collection', type: navigationType, title: this.escape(title)}));
+                for (const [href, title] of collections) {
+                    for (const rel of ['collection', 'related'])
+                        e.link.push(this.makeLink({href, rel, type: navigationType, title: this.escape(title)}));
+                }
 
                 let coverHref = bookInfo.cover || '';
                 let coverType = 'image/jpeg';

@@ -86,6 +86,8 @@ class Api {
     currentUserId = '';
     profileAccessToken = '';
     profileLoginPromise = null;
+    indexWaitMessage = '';
+    ratingIndexWait = null;
 
     created() {
         this.commit = this.$store.commit;
@@ -389,19 +391,79 @@ class Api {
         }
     }
 
-    async search(from, query) {
+    async search(from, query, signal) {
+        await this.waitForRatingIndex(query, signal);
+        if (signal?.aborted) throw signal.reason;
         return await this.request({action: 'search', from, query}, 30);
     }
 
-    async bookSearch(query) {
+    async bookSearch(query, signal) {
+        await this.waitForRatingIndex(query, signal);
+        if (signal?.aborted) throw signal.reason;
         return await this.request({action: 'bookSearch', query}, 30);
     }
 
+    async waitForRatingIndex(query, signal) {
+        if (signal?.aborted) throw signal.reason;
+        if (!String(query?.ratingCount || '').trim()) return;
+        require('../../../shared/RatingCount').parse(query.ratingCount);
+        let wait = this.ratingIndexWait;
+        if (!wait) {
+            // Promises remain unproxied in Vue; each consumer can leave the shared poll independently.
+            wait = (async() => {
+                try {
+                    for (;;) {
+                        const status = await this.request({action:'get-rating-index-status'},10);
+                        if (!wait.users || status.state === 'ready') return;
+                        if (status.state === 'error') throw new Error(status.error || 'Не удалось подготовить индекс голосов');
+                        this.indexWaitMessage = `Индекс голосов готовится${status.total ? ` · ${status.done.toLocaleString()} из ${status.total.toLocaleString()}` : ''}. Поиск продолжится автоматически.`;
+                        await new Promise(resolve => {
+                            const timer = setTimeout(resolve,2000);
+                            wait.wake = () => {clearTimeout(timer); resolve();};
+                        });
+                        if (!wait.users) return;
+                    }
+                } finally {
+                    wait?.wake?.();
+                    if (this.ratingIndexWait === wait) {this.indexWaitMessage = ''; this.ratingIndexWait = null;}
+                }
+            })();
+            wait.users = 0;
+            this.ratingIndexWait = wait;
+        }
+        wait.users++;
+        return new Promise((resolve, reject) => {
+            let settled = false;
+            const finish = error => {
+                if (settled) return;
+                settled = true;
+                signal?.removeEventListener('abort', abort);
+                if (--wait.users === 0 && this.ratingIndexWait === wait) {
+                    this.ratingIndexWait = null; this.indexWaitMessage = ''; wait.wake?.();
+                }
+                if (error) reject(error); else resolve();
+            };
+            const abort = () => finish(signal.reason || new Error('Поиск отменён'));
+            signal?.addEventListener('abort', abort, {once:true});
+            wait.then(() => finish(), finish);
+        });
+    }
+
+    async getBackgroundTasks() {return this.request({action:'get-background-tasks'},15);}
+    async libraryFollows(operation = 'list', payload = {}) {
+        return this.request(operation === 'list' ? {action:'get-library-follows',options:payload} : {action:'change-library-follow',operation,payload},30);
+    }
+    async manageIsbnIndex(operation, options = {}) {return this.request({action:operation === 'cancel' ? 'cancel-isbn-index' : 'start-isbn-index',options},15);}
+    async startLibraryAudit(options) {return this.request({action:'start-library-audit',options},15);}
+    async cancelLibraryAudit() {return this.request({action:'cancel-library-audit'},15);}
+
     async getAuthorBookList(authorId, query = {}) {
+        await this.waitForRatingIndex(query);
         return await this.request({action: 'get-author-book-list', authorId, query});
     }
 
     async getAuthorSeriesList(authorId, query = {}) {
+        await this.waitForRatingIndex(query);
         return await this.request({action: 'get-author-series-list', authorId, query});
     }
 
@@ -410,6 +472,7 @@ class Api {
     }
 
     async getSeriesBookList(series, query = {}) {
+        await this.waitForRatingIndex(query);
         return await this.request({action: 'get-series-book-list', series, query});
     }
 
@@ -451,6 +514,18 @@ class Api {
 
     async getAdminDashboardMetrics() {
         return await this.request({action: 'get-admin-dashboard-metrics'}, 120);
+    }
+
+    async getAdminPerformance() {
+        return await this.request({action:'get-admin-performance'}, 30);
+    }
+
+    async startAdminBenchmark(options = {}) {
+        return await this.request({action:'start-admin-benchmark', options}, 30);
+    }
+
+    async cancelAdminBenchmark() {
+        return await this.request({action:'cancel-admin-benchmark'}, 30);
     }
 
     async getAdminEvents(options = {}) {
@@ -517,8 +592,12 @@ class Api {
         return await this.request({action: 'get-book-link', bookUid}, 120);
     }
 
-    async getBookInfo(bookUid) {
-        return await this.request({action: 'get-book-info', bookUid}, 120);
+    async getBookCard(bookUid) {
+        return await this.request({action: 'get-book-info', bookUid, card: true}, 120);
+    }
+
+    async getBookGallery(bookUid) {
+        return await this.request({action: 'get-book-gallery', bookUid}, 300);
     }
 
     async getReaderBook(bookUid) {
@@ -620,8 +699,8 @@ class Api {
         return await this.request({action: 'rename-reading-list', listId, name}, 120);
     }
 
-    async setReadingListVisibility(listId, visibility) {
-        return await this.request({action: 'set-reading-list-visibility', listId, visibility}, 120);
+    async setReadingListVisibility(listId, visibility, opds) {
+        return await this.request({action: 'set-reading-list-visibility', listId, visibility, opds}, 120);
     }
 
     async deleteReadingList(listId) {
@@ -668,8 +747,8 @@ class Api {
         return await this.request({action: 'prepare-reader-audio', bookUid, speaker, mode, chapterIndex, options}, 120);
     }
 
-    async getReaderAudioPlan(bookUid, mode) {
-        return await this.request({action: 'get-reader-audio-plan', bookUid, mode}, 120);
+    async getReaderAudioPlan(bookUid, mode, anchor = null) {
+        return await this.request({action: 'get-reader-audio-plan', bookUid, mode, anchor}, 120);
     }
 
     async previewReaderVoice(speaker, options, sampleText) {

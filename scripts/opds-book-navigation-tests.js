@@ -28,7 +28,7 @@ function fixture(options = {}) {
         getGenreTree:async() => ({genreTree:[]}),
         getBookRecordByUid:async uid => books.find(item => item._uid === uid),
         applyMetadataOverridesToSearchResult:async() => {},
-        getBookInfo:async uid => {calls.info++; return {bookInfo:{book:books.find(item => item._uid === uid), fb2:options.fb2 || false}};},
+        getBookCardInfo:async uid => {calls.info++; return {bookInfo:{book:books.find(item => item._uid === uid), fb2:options.fb2 || false}};},
         getAuthorBookList:async(id, name) => {calls.authors.push(name); return {books:books.filter(item => item.author.split(',').includes(name))};},
         getSeriesBookList:async name => {calls.series.push(name); return {books:books.filter(item => item.series === name)};},
     };
@@ -42,7 +42,8 @@ function fixture(options = {}) {
         const source = await pages.get('book').body(request('book', {uid:book._uid, ...query}));
         const xml = readXml(source), entry = xml.$$('feed/entry/');
         const html = he.decode(entry.text('content') || '');
-        return {source, xml, entry, html, links:anchors(html)};
+        const allLinks = anchors(html);
+        return {source, xml, entry, html, links:allLinks.filter(link => /\/(author|series)\?/.test(link.href)), extras:allLinks.filter(link => /\/book\/(reviews|authors)\?/.test(link.href))};
     };
     return {root, book, books, calls, pages, request, detail};
 }
@@ -50,6 +51,12 @@ function fixture(options = {}) {
 async function testOpdsBookDescriptionLinksAndAuthorUris() {
     const value = fixture(), user = 'profile & один';
     const result = await value.detail({user});
+    assert.deepStrictEqual(result.extras.map(link => link.label), ['Отзывы', 'Об авторах']);
+    for (const link of result.extras) {
+        const url = new URL(link.href, 'http://example.test');
+        assert.strictEqual(url.searchParams.get('user'), user);
+        assert.strictEqual(url.searchParams.get('uid'), value.book._uid);
+    }
     assert.strictEqual(value.calls.info, 0, 'EPUB description must stay independent of extraction and reviews');
     assert.strictEqual(result.entry.attrs('content').type, 'html');
     assert.deepStrictEqual(result.links.map(link => link.label), ['Стругацкий Аркадий', 'Стругацкий Борис', 'Мир & «Полдень» #2']);
@@ -72,6 +79,8 @@ async function testOpdsBookDescriptionLinksAndAuthorUris() {
     assert.strictEqual(collections.length, 3);
     assert.deepStrictEqual(collections.map(link => he.decode(link.href)), result.links.map(link => link.href));
     assert.ok(collections.every(link => link.type.includes('profile=opds-catalog')));
+    const related = result.entry.$$array('link').map(link => link.attrs()).filter(link => link.rel === 'related' && /\/(author|series)\?/.test(he.decode(link.href)));
+    assert.deepStrictEqual(related, collections.map(link => ({...link, rel:'related'})), 'Related links cover every coauthor and series without changing acquisitions');
     assert.ok(result.source.includes('rel="http://opds-spec.org/acquisition"'));
     assert.ok(!result.links.some(link => link.href.includes('/#/')), 'Description links must open OPDS, not the web app');
 }
@@ -128,6 +137,8 @@ async function testOpdsFb2AuthorsAndMultipleSeriesAreClickable() {
     assert.ok(result.html.includes('<b>жирная</b>'), 'Annotation formatting retained');
     assert.ok(!result.html.includes('javascript:'));
     assert.strictEqual(he.decode(result.entry.$$array('author')[0].text('/name')), 'Тестов Автор');
+    const related = result.entry.$$array('link').map(link => link.attrs()).filter(link => link.rel === 'related' && /\/(author|series)\?/.test(he.decode(link.href)));
+    assert.deepStrictEqual(new Set(related.map(link => he.decode(link.href))), new Set(result.links.map(link => link.href)));
 }
 
 async function testOpdsBookNavigationEscapesMetadataAndHandlesMissingValues() {

@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "shelves": [
+    {
+      "id": "new-fantasy",
+      "name": "Новинки фантастики за месяц",
+      "grouping": "authors",
+      "filters": {
+        "genre": "sf_fantasy",
+        "lang": "ru",
+        "date": "month"
+      }
+    },
+    {
+      "id": "rated-scifi",
+      "name": "Фантастика с 20 и более оценками",
+      "grouping": "series",
+      "filters": {
+        "genre": "sf",
+        "ratingCount": "20.."
+      }
+    },
+    {
+      "id": "english",
+      "name": "Книги на английском",
+      "grouping": "books",
+      "filters": {
+        "lang": "en",
+        "ext": "fb2|epub",
+        "hideCopies": true
+      }
+    }
+  ]
+}

@@ -7,6 +7,7 @@ const log = new (require('../core/AppLogger'))().log;//singleton
 const utils = require('../core/utils');
 const runtimeMetrics = require('../core/RuntimeMetrics');
 const {getReaderSpeech} = require('../core/ReaderSpeech');
+const clientProtocol = require('../core/ClientProtocol');
 
 const cleanPeriod = 1*60*1000;//1 минута
 const closeSocketOnIdle = 5*60*1000;//5 минут
@@ -85,7 +86,7 @@ class WebSocketController {
             req = JSON.parse(message);
             require('../core/RequestLimits').checkRequest(req, messageBytes, this.config);
             req.__startTime = Date.now();
-            metricToken = runtimeMetrics.beginAction(req.action);
+            metricToken = runtimeMetrics.beginAction(req.action, clientProtocol.client(req.client));
             if (!req.profileAccessToken && this.security && ws.req && ws.req.securitySession && ws.req.securitySession.profileAccessToken)
                 req.profileAccessToken = ws.req.securitySession.profileAccessToken;
 
@@ -124,6 +125,31 @@ class WebSocketController {
                     await this.logout(req, ws); break;
                 case 'get-config':
                     await this.getConfig(req, ws); break;
+                case 'resume-user-profile':
+                    await this.resumeUserProfile(req, ws); break;
+                case 'subscribe-client-events':
+                    await this.subscribeClientEvents(req, ws); break;
+                case 'get-mobile-home':
+                    await this.getMobileHome(req, ws); break;
+                case 'get-rating-index-status':
+                    this.send(this.webWorker.dbSearcher?.ratingIndex ? await this.webWorker.dbSearcher.ratingIndex.status()
+                        : {state:'error',error:'Библиотека ещё не готова'},req,ws); break;
+                case 'get-background-tasks':
+                    this.send(await this.webWorker.getBackgroundTasks(req.userId,req.profileAccessToken),req,ws); break;
+                case 'get-library-follows':
+                    this.send(await this.webWorker.libraryFollowAction(req.userId,req.profileAccessToken,'list',req.options),req,ws); break;
+                case 'change-library-follow':
+                    this.send(await this.webWorker.libraryFollowAction(req.userId,req.profileAccessToken,req.operation,req.payload),req,ws); break;
+                case 'start-library-audit':
+                    this.send({audit:await this.webWorker.auditLibrary(req.userId,req.profileAccessToken,'start',req.options)},req,ws); break;
+                case 'start-isbn-index':
+                    this.send(await this.webWorker.manageIsbnIndex(req.userId,req.profileAccessToken,'start',req.options),req,ws); break;
+                case 'cancel-isbn-index':
+                    this.send(await this.webWorker.manageIsbnIndex(req.userId,req.profileAccessToken,'cancel'),req,ws); break;
+                case 'cancel-library-audit':
+                    this.send({audit:await this.webWorker.auditLibrary(req.userId,req.profileAccessToken,'cancel')},req,ws); break;
+                case 'get-library-metadata':
+                    this.send(await require('../core/LibraryExchange').respond(this.webWorker, req), req, ws); break;
                 case 'get-worker-state':
                     await this.getWorkerState(req, ws); break;
                 case 'search':
@@ -158,6 +184,12 @@ class WebSocketController {
                     await this.getAdminDashboard(req, ws); break;
                 case 'get-admin-dashboard-metrics':
                     await this.getAdminDashboardMetrics(req, ws); break;
+                case 'get-admin-performance':
+                    this.send(await this.webWorker.getAdminPerformance(req.userId, req.profileAccessToken), req, ws); break;
+                case 'start-admin-benchmark':
+                    this.send(await this.webWorker.startAdminBenchmark(req.userId, req.profileAccessToken, req.options || {}), req, ws); break;
+                case 'cancel-admin-benchmark':
+                    this.send(await this.webWorker.cancelAdminBenchmark(req.userId, req.profileAccessToken), req, ws); break;
                 case 'get-admin-events':
                     await this.getAdminEvents(req, ws); break;
                 case 'update-admin-event-log':
@@ -192,12 +224,18 @@ class WebSocketController {
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
                     await this.getBookInfo(req, ws); break;
+                case 'get-book-gallery':
+                    await this.getBookGallery(req, ws); break;
                 case 'get-reader-state':
                     await this.getReaderState(req, ws); break;
                 case 'prepare-reader-audio':
                     await this.prepareReaderAudio(req, ws); break;
                 case 'get-reader-audio-status':
                     await this.getReaderAudioStatus(req, ws); break;
+                case 'cancel-reader-audio': {
+                    const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+                    this.send(getReaderSpeech(this.config).cancel(user.id, req.consumerId), req, ws); break;
+                }
                 case 'get-reader-audio-plan':
                     await this.getReaderAudioPlan(req, ws); break;
                 case 'preview-reader-voice':
@@ -292,8 +330,10 @@ class WebSocketController {
                     throw new Error(`Action not found: ${req.action}`);
             }
             metricOk = true;
+            this.publishClientChanges(req,ws);
         } catch (e) {
-            this.send({error: e.message}, req || {}, ws);
+            this.send({error: e.message, errorCode:e.code || e.message,
+                ...(e.retryAfterMs ? {retryAfterMs:e.retryAfterMs} : {})}, req || {}, ws);
         } finally {
             ws.activeRequests--;
             this.activeRequests--;
@@ -324,7 +364,15 @@ class WebSocketController {
     isCsrfProtectedAction(action = '') {
         return new Set([
             'logout',
+            'change-library-follow',
+            'get-library-follows',
+            'start-library-audit',
+            'start-isbn-index',
+            'cancel-isbn-index',
+            'cancel-library-audit',
             'login-user-profile',
+            'resume-user-profile',
+            'subscribe-client-events',
             'logout-user-profile',
             'create-user-profile',
             'update-user-profile',
@@ -334,6 +382,8 @@ class WebSocketController {
             'update-shared-discovery-config',
             'update-admin-integrations',
             'update-admin-opds',
+            'start-admin-benchmark',
+            'cancel-admin-benchmark',
             'update-admin-event-log',
             'add-admin-test-event',
             'update-admin-library-sources',
@@ -350,6 +400,7 @@ class WebSocketController {
             'update-audio-position',
             'prepare-batch-download',
             'prepare-reader-audio',
+            'cancel-reader-audio',
             'preview-reader-voice',
             'delete-reader-progress',
             'clear-reader-progress',
@@ -413,7 +464,7 @@ class WebSocketController {
     async getConfig(req, ws) {
         if (req.profileLoginRequired) {
             const config = _.pick(this.config, ['name', 'version', 'branch', 'dbVersion', 'rootPathStatic']);
-            Object.assign(config, {profileLoginRequired: true, profileAuthorized: false, userProfiles: [],
+            Object.assign(config, {clientApi:clientProtocol.info,profileLoginRequired: true, profileAuthorized: false, userProfiles: [],
                 currentUserId: '', currentUserProfile: null, freeAccess: this.webAccess.freeAccess});
             if (this.security)
                 config.csrfToken = this.security.getCsrfToken(ws.req);
@@ -421,6 +472,8 @@ class WebSocketController {
             return;
         }
         const config = _.pick(this.config, this.config.webConfigParams);
+        config.clientApi = clientProtocol.info;
+        config.libraryProtocol = require('../core/LibraryExchange').protocol;
         config.ttsEnabled = Boolean(this.config.ttsEnabled && this.config.ttsUrl);
         config.profileLoginRequired = this.config.allowAnonymousAccess === false;
         config.profileBoundId = req.profileBoundId || '';
@@ -493,7 +546,7 @@ class WebSocketController {
         if (!req.from)
             throw new Error(`from is empty`);
 
-        const result = await this.webWorker.search(req.from, req.query);
+        const result = await this.readWithBudget(req,ws,()=>this.webWorker.search(req.from, req.query));
 
         this.send(result, req, ws);
     }
@@ -504,19 +557,19 @@ class WebSocketController {
         if (!req.query)
             throw new Error(`query is empty`);
 
-        const result = await this.webWorker.bookSearch(req.query);
+        const result = await this.readWithBudget(req,ws,()=>this.webWorker.bookSearch(req.query));
 
         this.send(result, req, ws);
     }
 
     async getAuthorBookList(req, ws) {
-        const result = await this.webWorker.getAuthorBookList(req.authorId, undefined, req.query);
+        const result = await this.readWithBudget(req,ws,()=>this.webWorker.getAuthorBookList(req.authorId, undefined, req.query));
 
         this.send(result, req, ws);
     }
 
     async getAuthorSeriesList(req, ws) {
-        const result = await this.webWorker.getAuthorSeriesList(req.authorId, req.query);
+        const result = await this.readWithBudget(req,ws,()=>this.webWorker.getAuthorSeriesList(req.authorId, req.query));
 
         this.send(result, req, ws);
     }
@@ -528,7 +581,7 @@ class WebSocketController {
     }
 
     async getSeriesBookList(req, ws) {
-        const result = await this.webWorker.getSeriesBookList(req.series, req.query);
+        const result = await this.readWithBudget(req,ws,()=>this.webWorker.getSeriesBookList(req.series, req.query));
 
         this.send(result, req, ws);
     }
@@ -540,7 +593,7 @@ class WebSocketController {
     }
 
     async getDiscoveryShelves(req, ws) {
-        const result = await this.webWorker.getDiscoveryShelvesV2({
+        const result = await this.readWithBudget(req,ws,()=>this.webWorker.getDiscoveryShelvesV2({
             userId: req.userId,
             profileAccessToken: req.profileAccessToken,
             forceRefresh: req.forceRefresh === true,
@@ -554,7 +607,7 @@ class WebSocketController {
             externalTtlMinutes: req.externalTtlMinutes,
             externalBrowseUrl: req.externalBrowseUrl,
             externalBrowseName: req.externalBrowseName,
-        });
+        }));
 
         this.send(result, req, ws);
     }
@@ -625,6 +678,7 @@ class WebSocketController {
 
     async getAdminDashboardMetrics(req, ws) {
         const result = await this.webWorker.getAdminDashboardMetrics(req.userId, req.profileAccessToken);
+        result.clientRequests = this.clientRequests?.snapshot() || {active:0,queued:0};
         this.send(result, req, ws);
     }
 
@@ -698,9 +752,17 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error(`bookUid is empty`);
 
-        const result = await this.webWorker.getBookInfo(req.bookUid, {readerOnly: req.readerOnly === true});
+        const result = (req.card === true ? await this.webWorker.getBookCardInfo(req.bookUid)
+            : await this.webWorker.getBookInfo(req.bookUid, {readerOnly: req.readerOnly === true}));
 
         this.send(result, req, ws);
+    }
+
+    async getBookGallery(req, ws) {
+        if (!utils.hasProp(req, 'bookUid'))
+            throw new Error(`bookUid is empty`);
+
+        this.send(await this.webWorker.getBookGallery(req.bookUid), req, ws);
     }
 
     async getReadingLists(req, ws) {
@@ -721,24 +783,25 @@ class WebSocketController {
     async prepareReaderAudio(req, ws) {
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
         const speech = getReaderSpeech(this.config);
+        speech.consumer(user.id, req.consumerId);
         if (!speech.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!req.bookUid) throw new Error('bookUid is empty');
-        const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid);
-        const result = req.mode ? await speech.preparePart(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.mode, req.chapterIndex, req.options)
-            : await speech.prepare(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.options);
+        const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid, {readerOnly:true});
+        const result = req.mode ? await speech.preparePart(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.mode, req.chapterIndex, req.options, req.consumerId)
+            : await speech.prepare(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.options, req.consumerId);
         this.send(result, req, ws);
     }
 
     async getReaderAudioPlan(req, ws) {
         await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
         if (!req.bookUid) throw new Error('bookUid is empty');
-        const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid);
-        this.send(await getReaderSpeech(this.config).plan(bookInfo, req.mode || 'online'), req, ws);
+        const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid, {readerOnly:true});
+        this.send(await getReaderSpeech(this.config).plan(bookInfo, req.mode || 'online', req.anchor || null), req, ws);
     }
 
     async previewReaderVoice(req, ws) {
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-        this.send(await getReaderSpeech(this.config).preview(user.id, req.speaker || 'xenia', req.options, req.sampleText), req, ws);
+        this.send(await getReaderSpeech(this.config).preview(user.id, req.speaker || 'xenia', req.options, req.sampleText, req.consumerId), req, ws);
     }
 
     async getReaderAudioStatus(req, ws) {
@@ -827,6 +890,58 @@ class WebSocketController {
                 this.security.recordLoginAttempt(ws.req, false, 'profile');
             throw e;
         }
+    }
+
+    async resumeUserProfile(req,ws) {
+        const id=this.webWorker.getProfileSessionUser(req.profileAccessToken);
+        if(!id)throw Object.assign(new Error('need_profile_login'),{code:'need_profile_login'});
+        const user=await this.webWorker.requireAuthorizedUser(id,req.profileAccessToken);
+        if(req.userId&&req.userId!==user.id)throw new Error('need_profile_login');
+        if(this.security&&ws.req?.securitySession)ws.req.securitySession.profileAccessToken=req.profileAccessToken;
+        ws.userId=user.id;ws.userLastActivity=Date.now();
+        this.send({userId:user.id,profileAccessToken:req.profileAccessToken},req,ws);
+    }
+
+    async subscribeClientEvents(req,ws) {
+        const user=await this.webWorker.requireAuthorizedUser(req.userId,req.profileAccessToken);
+        const enabled=this.webWorker.getProfileSessionUser(req.profileAccessToken)===user.id;
+        ws.clientEvents=enabled?{userId:user.id,token:req.profileAccessToken}:null;
+        this.send({enabled},req,ws);
+    }
+
+    publishClientChanges(req,origin) {
+        const audio=req.action==='update-audio-position';
+        if(!audio&&!clientProtocol.readerChanges.has(req.action))return;
+        const id=this.webWorker.getProfileSessionUser?.(req.profileAccessToken);
+        if(!id)return;
+        for(const socket of this.wss?.clients||[]) {
+            if(socket===origin)continue;
+            const subscription=socket.clientEvents;
+            if(!subscription||subscription.userId!==id||socket.readyState!==WebSocket.OPEN)continue;
+            if(this.webWorker.getProfileSessionUser(subscription.token)!==id){socket.close(1008,'Session expired');continue;}
+            socket.lastActivity=Date.now();
+            socket.send(JSON.stringify({type:'client-event',kind:audio?'audio':'reader',bookUid:String(req.bookUid||'').slice(0,1024)}));
+        }
+    }
+
+    async getMobileHome(req,ws) {
+        const user=await this.webWorker.requireAuthorizedUser(req.userId,req.profileAccessToken);
+        const [reading,lists]=await Promise.all([
+            this.webWorker.getUserReadingLibrary(user,{state:'all',sort:'updatedDesc',limit:Math.max(1,Math.min(300,Number(req.limit)||100))}),
+            this.webWorker.getReadingLists(user.id,'',{}),
+        ]);
+        this.send({profile:_.pick(user,['id','name','login','createdAt','isAdmin']),reading,lists:lists.lists||[],
+            indexGeneration:this.webWorker.libraryAssetGeneration||0},req,ws);
+    }
+
+    readWithBudget(req,ws,work) {
+        if(!this.clientRequests)this.clientRequests=new (require('../core/ClientRequestBudget'))();
+        const user=this.webWorker.getProfileSessionUser?.(req.profileAccessToken);
+        const identity=user?`profile:${user}`:`guest:${ws.req?.socket?.remoteAddress||'local'}`;
+        const payload=_.omit(req,['requestId','accessToken','csrfToken','profileAccessToken','client','__startTime']);
+        const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'
+            ?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+        return this.clientRequests.run(identity,JSON.stringify(canonical(payload)),work,()=>ws.readyState===WebSocket.OPEN);
     }
 
     async logoutUserProfile(req, ws) {
@@ -918,7 +1033,7 @@ class WebSocketController {
             throw new Error('listId is empty');
 
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-        const result = await this.webWorker.setReadingListVisibility(user.id, req.listId, req.visibility);
+        const result = await this.webWorker.setReadingListVisibility(user.id, req.listId, req.visibility, req.opds);
         this.send(result, req, ws);
     }
 

@@ -1,6 +1,6 @@
 const {parseBasicAuth, equal} = require('./opds/Auth');
 
-const bootstrapActions = new Set(['test', 'get-config', 'get-worker-state', 'login-user-profile', 'logout-user-profile', 'logout']);
+const bootstrapActions = new Set(['test', 'get-config', 'get-worker-state', 'login-user-profile', 'resume-user-profile', 'logout-user-profile', 'logout']);
 
 function denied(message = 'need_profile_login', status = 401) {
     const error = new Error(message);

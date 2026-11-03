@@ -131,6 +131,7 @@ class ReaderSpeech {
         this.transport = transport;
         this.jobs = new Map();
         this.pending = new Map();
+        this.consumers = new Map();
         this.queue = [];
         this.running = false;
         this.secret = crypto.randomBytes(32);
@@ -153,14 +154,14 @@ class ReaderSpeech {
         try { return await request; } finally { if (this.engineRequest === request) this.engineRequest = null; }
     }
 
-    async prepare(userId, bookUid, bookInfo, speaker = 'xenia', options) {
+    async prepare(userId, bookUid, bookInfo, speaker = 'xenia', options, consumerId) {
         if (!this.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!speakers.includes(speaker)) throw new Error('Неизвестный голос Silero.');
         if (!bookInfo || !bookInfo.fb2) throw new Error('Озвучка доступна для книг FB2.');
         const text = extractSpeechText(bookInfo.fb2);
         options = normalizeSpeechOptions(options);
         return this.prepareText(userId, bookUid, text, speaker, false, options,
-            hasSpeechOptions(options) ? extractSpeechChapters(bookInfo.fb2) : undefined);
+            hasSpeechOptions(options) ? extractSpeechChapters(bookInfo.fb2) : undefined, consumerId);
     }
 
     parts(bookInfo, mode = 'chapters') {
@@ -171,8 +172,16 @@ class ReaderSpeech {
         return extractSpeechChapters(bookInfo.fb2, mode === 'online' ? 700 : chapterLimit);
     }
 
-    async plan(bookInfo, mode) {
-        const chapters = this.parts(bookInfo, mode).map(({index, title, text}) => ({index, title, characters: text.length}));
+    async plan(bookInfo, mode, anchor = null) {
+        const parts = this.parts(bookInfo, mode);
+        const startChapter = anchor ? require('../../shared/SpeechAnchor').locate(parts,anchor) : null;
+        let sourceOffset = 0;
+        const chapters = parts.map(({index, title, text, chapterEnd}) => {
+            const result = {index,title,characters:text.length,chapterEnd:chapterEnd !== false,
+                anchor:{textSnippet:text.replace(/\s+/g,' ').trim().slice(0,180),textOffset:-1,sourceOffset}};
+            sourceOffset += require('../../shared/SpeechAnchor').key(text).length;
+            return result;
+        });
         const characters = chapters.reduce((sum, part) => sum + part.characters, 0);
         let estimate, engineId = '';
         try {
@@ -189,7 +198,7 @@ class ReaderSpeech {
         } catch { /* Older/offline services cannot estimate; preparation reports the actual error. */ }
         const queuedCharacters = Array.from(this.jobs.values()).filter(job => ['queued', 'generating'].includes(job.state))
             .reduce((sum, job) => sum + Math.max(0, job.characters - (job.processedCharacters || 0)), 0);
-        return {chapters, characters, engineId, estimate: estimate ? {
+        return {chapters, characters, startChapter, engineId, estimate: estimate ? {
             charactersPerSecond: estimate.charactersPerSecond, warmupSeconds: estimate.warmupSeconds,
             firstSeconds: Math.ceil(chapters[0].characters / estimate.charactersPerSecond + estimate.warmupSeconds),
             totalSeconds: Math.ceil(characters / estimate.charactersPerSecond + estimate.warmupSeconds),
@@ -197,31 +206,72 @@ class ReaderSpeech {
         } : null};
     }
 
-    async preparePart(userId, bookUid, bookInfo, speaker, mode, chapterIndex, options) {
+    async preparePart(userId, bookUid, bookInfo, speaker, mode, chapterIndex, options, consumerId) {
         const chapters = this.parts(bookInfo, mode);
         if (!Number.isInteger(chapterIndex) || chapterIndex < 0 || chapterIndex >= chapters.length)
             throw new Error('Глава озвучки не найдена.');
         const chapter = chapters[chapterIndex];
         options = normalizeSpeechOptions(options);
         const segments = hasSpeechOptions(options) ? mode === 'book' ? extractSpeechChapters(bookInfo.fb2) : [chapter] : undefined;
-        return this.prepareText(userId, mode === 'book' ? bookUid : `${bookUid}:${mode}:${chapterIndex}`, chapter.text, speaker, false, options, segments);
+        return this.prepareText(userId, mode === 'book' ? bookUid : `${bookUid}:${mode}:${chapterIndex}`, chapter.text, speaker, false, options, segments, consumerId);
     }
 
-    async preview(userId, speaker, options, sampleText) {
+    async preview(userId, speaker, options, sampleText, consumerId) {
         const text = sampleText === undefined ? voiceSample : sampleText;
         if (typeof text !== 'string' || !text.trim() || text.length > 500 || !/[а-яё]/i.test(text))
             throw new Error('Для пробы введите русский текст, до 500 символов.');
         options = normalizeSpeechOptions(options);
         return this.prepareText(userId, 'voice-preview-v1', text.trim(), speaker, true, options,
-            hasSpeechOptions(options) ? [{text: text.trim(), chapterEnd: true}] : undefined);
+            hasSpeechOptions(options) ? [{text: text.trim(), chapterEnd: true}] : undefined, consumerId);
     }
 
-    async prepareText(userId, bookUid, text, speaker, priority = false, options, segments) {
+    consumer(userId, consumerId) {
+        if (consumerId === undefined) return null; // Legacy clients retain their shared preparation.
+        if (typeof consumerId !== 'string' || !/^[a-zA-Z0-9_-]{16,128}$/.test(consumerId)) throw new Error('Некорректный идентификатор озвучки.');
+        const key = JSON.stringify([userId, consumerId]);
+        for (const [id, value] of this.consumers) {
+            if (Date.now() - value.touched > 24 * 3600000 && !value.jobs.some(job => ['queued','generating'].includes(job.state))) this.consumers.delete(id);
+        }
+        if (!this.consumers.has(key)) {
+            if (this.consumers.size >= 4096) throw new Error('Слишком много запросов озвучки. Повторите позже.');
+            this.consumers.set(key, {key, cancelled:false, touched:Date.now(), jobs:[]});
+        }
+        const result = this.consumers.get(key);
+        result.touched = Date.now();
+        return result;
+    }
+
+    cancel(userId, consumerId) {
+        const consumer = this.consumer(userId, consumerId);
+        if (!consumer) throw new Error('Не указан идентификатор озвучки.');
+        consumer.cancelled = true; // Also covers cancellation while book/engine metadata is loading.
+        for (const job of consumer.jobs) {
+            job.consumers.delete(consumer.key);
+            if (!job.consumers.size && ['queued','generating'].includes(job.state)) {
+                job.state = 'cancelled';
+                this.queue = this.queue.filter(value => value !== job);
+                if (job.attemptId) {
+                    // Wait for the response to release the worker. Older Silero containers may
+                    // lack cancellation; never start another synthesis over their running one.
+                    this.transport.post(`${this.config.ttsUrl.replace(/\/$/, '')}/jobs/${job.attemptId}/cancel`, null, {
+                        timeout:5000, maxRedirects:0,
+                        headers:this.config.ttsApiKey ? {'Authorization':`Bearer ${this.config.ttsApiKey}`} : {},
+                    }).catch(() => {});
+                } else { job.text = ''; job.segments = undefined; job.options = undefined; }
+            }
+        }
+        return {state:'cancelled'};
+    }
+
+    async prepareText(userId, bookUid, text, speaker, priority = false, options, segments, consumerId) {
+        const consumer = this.consumer(userId, consumerId);
+        if (consumer?.cancelled) return {state:'cancelled'};
         if (!this.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!speakers.includes(speaker)) throw new Error('Неизвестный голос Silero.');
         options = normalizeSpeechOptions(options);
         const custom = hasSpeechOptions(options);
         const engineId = await this.engineIdentity();
+        if (consumer?.cancelled) return {state:'cancelled'};
         const cacheKey = [
             'silero-mp3-v1', this.config.ttsModel || 'v5_5_ru', speaker, bookUid, text,
         ];
@@ -236,12 +286,20 @@ class ReaderSpeech {
         }
         const job = await this.pending.get(id);
         job.users.add(userId);
+        const key = consumer?.key || JSON.stringify([userId, 'legacy']);
+        job.consumers.add(key);
+        if (consumer && !consumer.jobs.includes(job)) {
+            consumer.jobs = consumer.jobs.filter(value => ['queued','generating'].includes(value.state));
+            consumer.jobs.push(job);
+        }
+        if (consumer?.cancelled) { this.cancel(userId, consumerId); return {state:'cancelled'}; }
         return this.describe(job);
     }
 
     async prepareJob(id, text, speaker, priority = false, options, segments, engineId = '') {
         const existing = this.jobs.get(id);
-        if (existing && existing.state !== 'error' && (existing.state !== 'ready' || await fs.pathExists(existing.file))) return existing;
+        if (existing?.state === 'cancelled' && existing.completion) await existing.completion;
+        if (existing && !['error','cancelled'].includes(existing.state) && (existing.state !== 'ready' || await fs.pathExists(existing.file))) return existing;
         await fs.ensureDir(this.directory);
         const file = path.join(this.directory, `${id}.mp3`);
         const cached = await fs.pathExists(file);
@@ -250,10 +308,10 @@ class ReaderSpeech {
         // Bound retained status records independently from the on-disk cache.
         for (const [key, value] of this.jobs) {
             if (this.jobs.size < 128) break;
-            if (value.state === 'ready' || value.state === 'error') this.jobs.delete(key);
+            if (['ready','error','cancelled'].includes(value.state)) this.jobs.delete(key);
         }
         const job = {id, file, speaker, text: cached ? '' : text, characters: text.length, processedCharacters: cached ? text.length : 0,
-            options, engineId, segments: cached ? undefined : segments, state: cached ? 'ready' : 'queued', users: new Set(), error: ''};
+            options, engineId, segments: cached ? undefined : segments, state: cached ? 'ready' : 'queued', users: new Set(), consumers:new Set(), error: ''};
         this.jobs.set(id, job);
         if (cached) await fs.utimes(file, new Date(), new Date());
         else {
@@ -331,12 +389,16 @@ class ReaderSpeech {
                 let response;
                 let progressTimer;
                 let finished = false;
+                let complete;
+                job.completion = new Promise(resolve => { complete = resolve; });
                 try {
                     if (!this.enabled) throw new Error('Озвучка выключена в настройках.');
                     if (await this.cleanCache(this.cacheLimit * 0.8) >= this.cacheLimit)
                         throw new Error('Кэш озвучки заполнен. Увеличьте INPX_TTS_CACHE_SIZE_MB или повторите позже.');
+                    if (job.state === 'cancelled') continue;
                     job.state = 'generating';
-                    const progressUrl = `${this.config.ttsUrl.replace(/\/$/, '')}/jobs/${job.id}`;
+                    job.attemptId = crypto.randomBytes(32).toString('hex');
+                    const progressUrl = `${this.config.ttsUrl.replace(/\/$/, '')}/jobs/${job.attemptId}`;
                     const trackProgress = async() => {
                         try {
                             const status = await this.transport.get(progressUrl, {timeout: 3000, maxRedirects: 0,
@@ -351,7 +413,7 @@ class ReaderSpeech {
                     };
                     progressTimer = setTimeout(trackProgress, 1000);
                     response = await this.transport.post(`${this.config.ttsUrl.replace(/\/$/, '')}/synthesize`, {
-                        text: job.text, speaker: job.speaker, model: this.config.ttsModel || 'v5_5_ru', requestId: job.id,
+                        text: job.text, speaker: job.speaker, model: this.config.ttsModel || 'v5_5_ru', requestId: job.attemptId,
                         ...(job.options ? {options: job.options, segments: job.segments?.map(({text, chapterEnd, paragraphEnd}) => ({text, chapterEnd, paragraphEnd}))} : {}),
                     }, {
                         responseType: 'stream', timeout: Number(this.config.ttsTimeoutMs) || 3600000,
@@ -372,19 +434,21 @@ class ReaderSpeech {
                         callback(bytes > maximum ? new Error('Недостаточно места в кэше озвучки.') : null, chunk);
                     }});
                     await pipeline(response.data, limiter, fs.createWriteStream(temp));
+                    if (job.state === 'cancelled') { await fs.remove(temp); continue; }
                     if (!bytes) throw new Error('Silero вернул пустой аудиофайл.');
                     await fs.move(temp, job.file, {overwrite: true});
+                    if (job.state === 'cancelled') { await fs.remove(job.file); continue; }
                     job.state = 'ready';
                 } catch (error) {
                     if (response && response.data) response.data.destroy();
                     if (error.response && error.response.data && error.response.data.destroy) error.response.data.destroy();
                     await fs.remove(temp).catch(() => {});
-                    job.state = 'error';
+                    if (job.state !== 'cancelled') { job.state = 'error';
                     job.error = error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND'
                         ? 'Сервис Silero недоступен. Проверьте контейнер озвучки.'
                         : error.code === 'ECONNABORTED' ? 'Истекло время подготовки аудио.' : error.response
-                            ? `Ошибка сервиса Silero (HTTP ${error.response.status}). Проверьте его журнал.` : error.message;
-                } finally { finished = true; clearTimeout(progressTimer); job.text = ''; job.segments = undefined; job.options = undefined; }
+                            ? `Ошибка сервиса Silero (HTTP ${error.response.status}). Проверьте его журнал.` : error.message; }
+                } finally { finished = true; clearTimeout(progressTimer); job.text = ''; job.segments = undefined; job.options = undefined; complete(); job.completion = null; }
             }
         } finally { this.running = false; }
     }

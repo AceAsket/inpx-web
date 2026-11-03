@@ -11,7 +11,7 @@ android {
         applicationId 'ru.inpx.server'
         minSdk 28
         targetSdk 36
-        versionCode 6
+        versionCode 7
         versionName '0.6.0-prototype'
         testInstrumentationRunner 'ru.inpx.server.UiSmokeInstrumentation'
         ndk { abiFilters inpxAbi }

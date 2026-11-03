@@ -192,6 +192,7 @@ class Security {
     }
 
     applySecurityHeaders(req, res) {
+        res.setHeader('X-Robots-Tag', 'noindex, nofollow');
         if (this.isSecureRequest(req)) {
             res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
             res.setHeader('Content-Security-Policy', 'upgrade-insecure-requests');

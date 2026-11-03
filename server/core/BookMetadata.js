@@ -43,6 +43,7 @@ async function epubMetadata(file, config) {
         if (!containerName)
             return {};
         const container = new XmlParser();
+        if (Number(reader.entries[containerName]?.size) > 1024 * 1024) throw new Error('Метаданные EPUB превышают лимит');
         container.fromString((await reader.extractToBuf(containerName)).toString('utf8'), {lowerCase: true});
         const rootfile = container.$$('/rootfiles/rootfile');
         const packagePath = rootfile && (rootfile.attrs() || {})['full-path'];
@@ -52,6 +53,7 @@ async function epubMetadata(file, config) {
         const name = path.posix.normalize(`${prefix}${packagePath}`);
         if (!names.includes(name))
             return {};
+        if (Number(reader.entries[name]?.size) > 4 * 1024 * 1024) throw new Error('Метаданные EPUB превышают лимит');
         const parser = new XmlParser();
         parser.fromString((await reader.extractToBuf(name)).toString('utf8'), {lowerCase: true});
         const metadata = parser.$$('/metadata/');
@@ -71,12 +73,27 @@ async function epubMetadata(file, config) {
             publisher: plainText(values('publisher')[0]),
             publishedYear: year ? year[0] : '',
             isbn: isbn ? plainText(isbn.text()).replace(/^urn:isbn:/i, '') : '',
+            isbns: [...new Set(identifiers.flatMap(node => require('../../shared/Isbn').extract(plainText(node.text()))))],
             language: plainText(values('language')[0]),
             tags: values('subject').map(value => plainText(value)),
         };
     } finally {
         await reader.close();
     }
+}
+
+async function isbnFromData(data, ext, config, maxBytes) {
+    const {extract} = require('../../shared/Isbn');
+    if (String(ext).toLowerCase() === 'fb2') {
+        if (data[0] === 0x1f && data[1] === 0x8b) data = require('zlib').gunzipSync(data,{maxOutputLength:maxBytes});
+        return extract(fb2Metadata(data).isbn);
+    }
+    const file = path.join(config.tempDir, `isbn-${require('crypto').randomBytes(12).toString('hex')}.epub`);
+    try {
+        await fs.outputFile(file,data);
+        const info = await epubMetadata(file,{...config,resourceMaxOutputBytes:Math.min(maxBytes,4 * 1024 * 1024)});
+        return info.isbns || extract(info.isbn);
+    } finally {await fs.remove(file);}
 }
 
 class BookMetadata {
@@ -185,4 +202,4 @@ class BookMetadata {
     }
 }
 
-module.exports = {BookMetadata, fb2Metadata, epubMetadata, plainText};
+module.exports = {BookMetadata, fb2Metadata, epubMetadata, plainText, isbnFromData};

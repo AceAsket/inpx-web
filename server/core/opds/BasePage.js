@@ -119,6 +119,7 @@ class BasePage {
             href: attrs.href,
             rel: 'http://opds-spec.org/acquisition',
             type: attrs.type,
+            ...(attrs.title ? {title:this.escape(attrs.title)} : {}),
         });
     }
 
@@ -152,6 +153,7 @@ class BasePage {
     }
 
     makeBody(content, req) {
+        content = require('./Compatibility').decorate(content, this.config);
         const base = this.makeEntry({id: this.id, title: this.title});
         base['*ATTRS'] = {
             'xmlns': 'http://www.w3.org/2005/Atom',

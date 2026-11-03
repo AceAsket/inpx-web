@@ -10,6 +10,7 @@ const nodemailer = require('nodemailer');
 const yazl = require('yazl');
 
 const ZipReader = require('./ZipReader');
+const LockQueue = require('./LockQueue');
 const WorkerState = require('./WorkerState');//singleton
 const { JembaDb, JembaDbThread } = require('jembadb');
 const DbCreator = require('./DbCreator');
@@ -18,17 +19,21 @@ const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
 const FileDownloader = require('./FileDownloader');
 const ReadingListStore = require('./ReadingListStore');
-const {withFileTransaction} = require('./FilePersistence');
+const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const sessionLifetime = require('./SessionLifetime');
 const imageUtils = require('./ImageUtils');
 const imageRuntime = require('./ImageRuntime');
 const epubRestorer = require('./EpubRestorer');
 const externalTools = require('./ExternalTools');
 const libraryReviews = require('./LibraryReviews');
+const reviewRuntime = require('./ReviewRuntime');
 const bookAssets = require('./BookAssets');
 const bookConverter = require('./BookConverter');
 const bookNaming = require('./BookNaming');
+const bookFormats = require('../../shared/BookFormats');
 const runtimeMetrics = require('./RuntimeMetrics');
+const resourceRuntime = require('./ResourceRuntime');
+const {isResourceError} = require('./ResourcePolicy');
 
 const asyncExit = new (require('./AsyncExit'))();
 const appLogger = new (require('./AppLogger'))();//singleton
@@ -36,6 +41,7 @@ const log = appLogger.log;
 const utils = require('./utils');
 const genreTree = require('./genres');
 const Fb2Helper = require('./fb2/Fb2Helper');
+const Fb2Parser = require('./fb2/Fb2Parser');
 const ConfigManager = require('../config');
 const {getEnabledLibrarySources} = require('./LibrarySources');
 
@@ -56,6 +62,8 @@ const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
 const fb2AssetVersion = 'fb2-encoding-v6';
 const bookInfoVersion = 'fb2-encoding-v8';
+const bookCardVersion = 'card-v1';
+const bookGalleryLimit = 18;
 
 function assetVersionFor(ext) {
     return String(ext || '').toLowerCase() === 'fb2' ? fb2AssetVersion : bookAssetVersion;
@@ -898,10 +906,14 @@ class WebWorker {
             db.wwCache = {};            
             this.db = db;
 
+            this.dbSearcher.ratingIndex = new (require('./LibraryRatingIndex'))(this);
+            this.dbSearcher.isbnIndex = this.getIsbnIndex();
+
             this.resetLibraryAssetCaches();
             this.setMyState(ssNormal);
 
             log('Searcher DB ready');
+            this.warmReviewIndexes();
             this.logServerStats();
         } catch (e) {
             log(LM_FATAL, e.message);            
@@ -931,6 +943,34 @@ class WebWorker {
         this.authorToArchive = null;
         this.reviewArchiveStates = new Map();
         this.preparedBookSizes = new Map();
+        this.libraryDirListings = new Map();
+    }
+
+    //Чтение папок библиотеки на сетевом диске медленное, а параллельные чтения
+    //выполняются по очереди. Кэшируем список файлов до сброса кэшей библиотеки.
+    readLibraryDirCached(dir) {
+        if (!this.libraryDirListings)
+            this.libraryDirListings = new Map();
+
+        const listings = this.libraryDirListings;
+        let listing = listings.get(dir);
+        if (!listing || listing.expiresAt <= Date.now()) {
+            listing = {expiresAt:Infinity};
+            listing.promise = fs.readdir(dir).then(names => {
+                if (!names.length) listing.expiresAt = Date.now() + 1000;
+                return names;
+            }).catch((e) => {
+                if (e.code === 'ENOENT' || e.code === 'ENOTDIR') {
+                    listing.expiresAt = Date.now() + 1000;
+                    return [];
+                }
+                if (listings.get(dir) === listing) listings.delete(dir);
+                throw e;
+            });
+            listings.set(dir, listing);
+        }
+
+        return listing.promise;
     }
 
     async dbConfig() {
@@ -1151,9 +1191,18 @@ class WebWorker {
         if (cached && Date.now() - cached.time < ttl)
             return _.cloneDeep(cached.value);
 
-        const value = await loader();
-        this.discoveryCache.set(key, {time: Date.now(), value: _.cloneDeep(value)});
-        return value;
+        if(!this.discoveryInFlight)this.discoveryInFlight=new Map();
+        let pending=this.discoveryInFlight.get(key);
+        if(!pending){
+            pending=Promise.resolve().then(loader).then(value=>{
+                this.discoveryCache.set(key,{time:Date.now(),value:_.cloneDeep(value)});
+                while(this.discoveryCache.size>256)this.discoveryCache.delete(this.discoveryCache.keys().next().value);
+                return value;
+            });
+            this.discoveryInFlight.set(key,pending);
+            pending.then(()=>this.discoveryInFlight.delete(key),()=>this.discoveryInFlight.delete(key));
+        }
+        return _.cloneDeep(await pending);
     }
 
     getDiscoveryAgeLabel(dateValue = '') {
@@ -1435,8 +1484,7 @@ class WebWorker {
                     deduped.set(key, existing ? pickBetterRow(existing, row) : row);
                 }
 
-                const result = Array.from(deduped.values());
-                result.sort((a, b) => {
+                const compare = (a, b) => {
                     if (mode === 'popular') {
                         const popularityCmp = (((popularityMap[b._uid] || {}).score) || 0) - (((popularityMap[a._uid] || {}).score) || 0);
                         if (popularityCmp)
@@ -1462,30 +1510,8 @@ class WebWorker {
                     if (cmp === 0)
                         cmp = a.id - b.id;
                     return cmp;
-                });
-
-                const filtered = [];
-                const authorCounts = new Map();
-                const seriesCounts = new Map();
-
-                for (const row of result) {
-                    const authorKey = String(row.author || '').trim().toLowerCase();
-                    const seriesKey = String(row.series || '').trim().toLowerCase();
-                    if (authorKey && (authorCounts.get(authorKey) || 0) >= 2)
-                        continue;
-                    if (seriesKey && (seriesCounts.get(seriesKey) || 0) >= 2)
-                        continue;
-
-                    filtered.push(row);
-                    if (authorKey)
-                        authorCounts.set(authorKey, (authorCounts.get(authorKey) || 0) + 1);
-                    if (seriesKey)
-                        seriesCounts.set(seriesKey, (seriesCounts.get(seriesKey) || 0) + 1);
-                    if (filtered.length >= limit)
-                        break;
-                }
-
-                return filtered;
+                };
+                return (${require('./DiscoverySelection').selectDiverseBest.toString()})(deduped,compare,limit);
             `
         });
 
@@ -3597,6 +3623,52 @@ class WebWorker {
         return requestedUser;
     }
 
+    async getBackgroundTasks(userId, token) {
+        const user = await this.requireAuthorizedUser(userId,token);
+        const tasks = require('./BackgroundTasks').list(user);
+        const {getReaderSpeech} = require('./ReaderSpeech');
+        const speech = getReaderSpeech(this.config);
+        for (const job of speech.jobs.values()) {
+            if (!user.isAdmin && !job.users.has(user.id)) continue;
+            const state = speech.describe(job);
+            tasks.push({id:job.id,kind:'speech',title:'Озвучка книги',state:state.state,phase:state.phase,
+                progress:state.progress,remainingSeconds:state.remainingSeconds,queuePosition:state.queuePosition,error:state.error});
+        }
+        return {tasks,resources:user.isAdmin ? require('./ResourceRuntime').snapshot() : null,
+            audit:user.isAdmin ? this.libraryAudit?.describe() || null : null,
+            isbnIndex:user.isAdmin && this.db ? await this.getIsbnIndex().status() : null,isAdmin:!!user.isAdmin};
+    }
+
+    getIsbnIndex() {
+        if (!this.libraryIsbnIndex) this.libraryIsbnIndex = new (require('./LibraryIsbnIndex'))(this);
+        return this.libraryIsbnIndex;
+    }
+
+    async manageIsbnIndex(userId, token, operation, options = {}) {
+        await this.requireAdmin(userId,token);
+        this.checkMyState();
+        const index = this.getIsbnIndex();
+        if (operation === 'start') return index.start(options);
+        if (operation === 'cancel') {index.cancel(); return index.status();}
+        throw new Error('Неизвестное действие индекса ISBN');
+    }
+
+    async libraryFollowAction(userId, token, operation, payload = {}) {
+        const user = await this.requireAuthorizedUser(userId,token);
+        this.checkMyState();
+        if (!this.libraryFollows) this.libraryFollows = new (require('./LibraryFollows'))(this);
+        return operation === 'list' ? this.libraryFollows.list(user.id,payload.refresh === true) : this.libraryFollows.change(user.id,operation,payload);
+    }
+
+    async auditLibrary(userId, token, operation, options = {}) {
+        await this.requireAdmin(userId,token);
+        this.checkMyState();
+        if (!this.libraryAudit) this.libraryAudit = new (require('./LibraryAudit'))(this);
+        if (operation === 'start') return this.libraryAudit.start(options);
+        if (operation === 'cancel') return this.libraryAudit.cancel();
+        throw new Error('Неизвестное действие проверки библиотеки');
+    }
+
     async requireAdmin(userId = '', profileAccessToken = '') {
         const user = await this.requireAuthorizedUser(userId, profileAccessToken);
         if (!user.isAdmin)
@@ -3623,6 +3695,12 @@ class WebWorker {
                 isAdmin: !!user.isAdmin,
                 emailTo: (profileAuthorized ? user.emailTo || '' : ''),
                 telegramChatId: (profileAuthorized ? user.telegramChatId || '' : ''),
+                defaultDownloadFormat: profileAuthorized ? bookFormats.normalize(user.defaultDownloadFormat) : 'original',
+                defaultEmailFormat: profileAuthorized ? bookFormats.preference(user, 'email') : 'original',
+                defaultTelegramFormat: profileAuthorized ? bookFormats.preference(user, 'telegram') : 'original',
+                defaultOpdsFormat: profileAuthorized ? bookFormats.preference(user, 'opds') : 'original',
+                emailAsZip: profileAuthorized && user.emailAsZip === true,
+                telegramAsZip: profileAuthorized && user.telegramAsZip === true,
                 opdsEnabled: user.opdsEnabled !== false,
                 opdsAuthEnabled: user.opdsAuthEnabled === true,
                 readerPreferences: (profileAuthorized ? this.readingListStore.normalizeReaderPreferences(user.readerPreferences) : null),
@@ -4085,6 +4163,30 @@ class WebWorker {
                 },
             ],
         });
+    }
+
+    getResourceBenchmark() {
+        if (!this.resourceBenchmark) this.resourceBenchmark = new (require('./ResourceBenchmark').ResourceBenchmark)(this.config, {
+            probe:async() => {this.checkMyState(); await this.db.select({table:'book', limit:1});},
+        });
+        this.resourceBenchmark.config = this.config;
+        return this.resourceBenchmark;
+    }
+
+    async getAdminPerformance(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+        return await this.getResourceBenchmark().snapshot();
+    }
+
+    async startAdminBenchmark(userId = '', profileAccessToken = '', options = {}) {
+        await this.requireAdmin(userId, profileAccessToken);
+        this.checkMyState();
+        return await this.getResourceBenchmark().start(options);
+    }
+
+    async cancelAdminBenchmark(userId = '', profileAccessToken = '') {
+        await this.requireAdmin(userId, profileAccessToken);
+        return this.getResourceBenchmark().cancel();
     }
 
     async getAdminEvents(userId = '', profileAccessToken = '', options = {}) {
@@ -4915,6 +5017,7 @@ class WebWorker {
                 name: item.name,
                 visibility: item.visibility,
                 filters: item.filters || null,
+                opds: require('./opds/ShelfOptions').normalize(item.opds),
                 createdAt: item.createdAt,
                 updatedAt: item.updatedAt,
                 bookCount: listEntries.length,
@@ -4929,7 +5032,7 @@ class WebWorker {
         const {user} = await this.readingListStore.resolveUser(userId);
         const lists = await this.readingListStore.getLists(userId);
         const read = this.getPersonalReadBookSet(user, lists);
-        const ids = await this.dbSearcher.bookSearchIds(filters);
+        const ids = await this.dbSearcher.bookSearchIds(require('./SmartShelf').query(filters));
         const entries = [];
         for (let offset = 0; offset < ids.length; offset += 1000) {
             const rows = await this.db.select({table: 'book', where: `@@id(${this.db.esc(Array.from(ids.slice(offset, offset + 1000)))})`, map: '(row) => ({_uid: row._uid})'});
@@ -4956,9 +5059,9 @@ class WebWorker {
         return {list: this.readingListStore.listStats(item)};
     }
 
-    async setReadingListVisibility(userId = '', listId, visibility) {
+    async setReadingListVisibility(userId = '', listId, visibility, opds) {
         this.checkMyState();
-        const item = await this.readingListStore.setListVisibility(userId, listId, visibility);
+        const item = await this.readingListStore.setListVisibility(userId, listId, visibility, opds);
         return {list: this.readingListStore.listStats(item)};
     }
 
@@ -5207,11 +5310,11 @@ class WebWorker {
 
         const dir = path.dirname(filePath);
         const baseName = path.basename(filePath).toLowerCase();
-        if (!dir || !baseName || !await fs.pathExists(dir))
+        if (!dir || !baseName)
             return '';
 
         try {
-            const entries = await fs.readdir(dir);
+            const entries = await this.readLibraryDirCached(dir);
             const match = entries.find(item => item.toLowerCase() === baseName);
             return match ? path.join(dir, match) : '';
         } catch(e) {
@@ -5318,6 +5421,73 @@ class WebWorker {
             });
     }
 
+    //Работа, которую ждёт пользователь (карточка, чтение, скачивание). Пока она идёт,
+    //фоновые задачи не начинают новых чтений библиотеки: сетевой диск выполняет
+    //параллельные чтения по очереди, и 100 обложек списка задерживают карточку на секунды
+    async runForeground(fn) {
+        if (resourceRuntime.isBackground())
+            return await fn();
+
+        this.foregroundJobs = (this.foregroundJobs || 0) + 1;
+        try {
+            return await fn();
+        } finally {
+            this.foregroundJobs--;
+            this.wakeBackgroundJobs();
+        }
+    }
+
+    //Чтения библиотеки для фона (обложки списка, фоновая подготовка книг), не больше
+    //лимита фоновых задач профиля. isCancelled: результат больше не нужен (браузер закрыл запрос)
+    async runBackground(fn, isCancelled = () => false, signal) {
+        const cancelled = () => signal?.aborted || isCancelled();
+        if (cancelled())
+            return null;
+        const deadline = Date.now() + resourceRuntime.settings.taskTimeoutMs;
+        while (this.foregroundJobs || (this.backgroundJobs || 0) >= resourceRuntime.settings.limits.background) {
+            if (!await this.waitBackgroundTurn(signal, deadline) || cancelled())
+                return null;
+        }
+
+        this.backgroundJobs = (this.backgroundJobs || 0) + 1;
+        try {
+            return await resourceRuntime.withBackground(fn);
+        } finally {
+            this.backgroundJobs--;
+            this.wakeBackgroundJobs();
+        }
+    }
+
+    waitBackgroundTurn(signal, deadline = Date.now() + resourceRuntime.settings.taskTimeoutMs) {
+        if (!this.backgroundWaiters)
+            this.backgroundWaiters = [];
+        if (signal?.aborted) return Promise.resolve(false);
+        if (this.backgroundWaiters.length >= 256)
+            return Promise.reject(Object.assign(new Error('Очередь обложек заполнена. Повторите позже.'), {code:'INPX_RESOURCE_IO_QUEUE_FULL'}));
+        return new Promise((resolve, reject) => {
+            const entry = {};
+            const remove = () => {
+                const index = this.backgroundWaiters.indexOf(entry);
+                if (index < 0) return false;
+                this.backgroundWaiters.splice(index, 1);
+                clearTimeout(entry.timer); signal?.removeEventListener('abort', entry.abort);
+                return true;
+            };
+            entry.finish = value => {if (remove()) resolve(value);};
+            entry.abort = () => entry.finish(false);
+            entry.timer = setTimeout(() => {
+                if (remove()) reject(Object.assign(new Error('Истекло время ожидания обложки.'), {code:'INPX_RESOURCE_IO_QUEUE_TIMEOUT'}));
+            }, Math.max(1, deadline - Date.now()));
+            this.backgroundWaiters.push(entry);
+            signal?.addEventListener('abort', entry.abort, {once:true});
+        });
+    }
+
+    wakeBackgroundJobs() {
+        for (const entry of [...(this.backgroundWaiters || [])])
+            entry.finish(true);
+    }
+
     async getFblibraryImages(libid, sourceLibDir = '', libFolder = '') {
         const archives = libFolder ? await this.getBookAssetArchives('images', libFolder, sourceLibDir)
             : await this.getFblibraryArchives('images', libid, sourceLibDir);
@@ -5348,6 +5518,7 @@ class WebWorker {
                         const data = await zipReader.extractToBuf(entryName);
                         return Object.assign({id}, await imageUtils.normalizeForFb2(data, this.config.tempDir, this.libraryToolDirs(sourceLibDir), this.config.converterPaths));
                     } catch(e) {
+                        if (isResourceError(e)) throw e;
                         log(LM_ERR, `image ${entryName}: ${e.message}`);
                         return null;
                     }
@@ -5396,9 +5567,7 @@ class WebWorker {
         ]));
         const exact = [];
         for (const dir of dirs) {
-            if (!await fs.pathExists(dir))
-                continue;
-            for (const name of await fs.readdir(dir)) {
+            for (const name of await this.readLibraryDirCached(dir)) {
                 if (['.zip', '.7z'].includes(path.extname(name).toLowerCase())
                     && path.basename(name, path.extname(name)).toLowerCase() === baseName.toLowerCase())
                     exact.push({file: path.join(dir, name)});
@@ -5442,6 +5611,7 @@ class WebWorker {
                 }
                 data = await reader.extractToBuf(num === -1 ? String(libid) : `${libid}/${num}`);
             } catch (error) {
+                if (isResourceError(error)) throw error;
                 if (externalTools.isMissingToolError(error))
                     throw error;
                 log(LM_WARN, `EPUB image ${archive.file}: ${error.message}`);
@@ -5649,7 +5819,7 @@ class WebWorker {
         if (this.authorInfoCache.has(cacheKey))
             return {authorInfo: this.authorInfoCache.get(cacheKey)};
 
-        const authorInfo = await this.findAuthorInfo(authorName);
+        const authorInfo = this.remoteLib?.metadata ? await this.remoteLib.metadata.author(authorName) : await this.findAuthorInfo(authorName);
         this.authorInfoCache.set(cacheKey, authorInfo);
         return {authorInfo};
     }
@@ -5802,7 +5972,37 @@ class WebWorker {
         return link;
     }
 
+    //одновременные запросы одной книги (карточка в фоне, «Читать», «Скачать»)
+    //ждут одну подготовку
     async getBookLink(bookUid) {
+        return await this.runForeground(async() => {
+            this.checkMyState();
+            const generation = this.libraryAssetGeneration;
+            const db = this.db;
+            if (!this.bookLinkJobs)
+                this.bookLinkJobs = new Map();
+
+            const key = JSON.stringify([bookUid, generation || 0]);
+            let job = this.bookLinkJobs.get(key);
+            if (!job) {
+                job = this.prepareBookLink(bookUid).finally(() => this.bookLinkJobs.delete(key));
+                this.bookLinkJobs.set(key, job);
+            }
+
+            //вызывающие дополняют результат, поэтому каждому своя копия
+            const result = await job;
+            this.checkLibraryAssetState(generation, db);
+            return Object.assign({}, result);
+        });
+    }
+
+    checkLibraryAssetState(generation, db) {
+        this.checkMyState();
+        if (generation !== this.libraryAssetGeneration || db !== this.db)
+            throw Object.assign(new Error('Библиотека обновлена. Повторите открытие книги.'), {code: 'INPX_LIBRARY_CHANGED'});
+    }
+
+    async prepareBookLink(bookUid) {
         this.checkMyState();
 
         try {
@@ -5889,7 +6089,7 @@ class WebWorker {
         }
     }
 
-    async getPreparedBookFile(bookUid, format = '') {
+    async getPreparedBookFile(bookUid, format = '', preference = 'original') {
         const {link, downFileName, size} = await this.getBookLink(bookUid);
         const hash = path.basename(link);
         const gzipFile = `${this.config.bookDir}/${hash}`;
@@ -5906,8 +6106,9 @@ class WebWorker {
 
         let preparedFile = rawFile;
         let preparedFileName = downFileName;
-        const targetFormat = String(format || '').toLowerCase();
         const sourceFormat = String(rows[0].ext || '').toLowerCase();
+        const selected = bookFormats.resolve(sourceFormat, this.config, preference, format);
+        const targetFormat = selected === 'raw' ? '' : selected;
 
         if (targetFormat && targetFormat !== sourceFormat) {
             const prepared = await bookConverter.prepareConvertedFile({
@@ -5938,6 +6139,14 @@ class WebWorker {
         };
     }
 
+    async getDeliveryBookFile(bookUid, format, user, channel) {
+        const prepared = await this.getPreparedBookFile(bookUid, format, bookFormats.preference(user, channel));
+        if (user?.[`${channel}AsZip`] !== true) return prepared;
+        const archived = await require('./BookDeliveryArchive').prepare(prepared);
+        this.scheduleCacheClean('после подготовки ZIP для отправки');
+        return archived;
+    }
+
     async sendBookToTelegram(bookUid, format = '', userId = '') {
         const {currentUser} = await this.readingListStore.getUsers(userId);
         const chatId = String((currentUser && currentUser.telegramChatId) || '').trim();
@@ -5948,7 +6157,7 @@ class WebWorker {
         if (!chatId)
             throw new Error('Telegram chat id не указан в текущем профиле пользователя');
 
-        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
+        const {book, rawFile, downFileName} = await this.getDeliveryBookFile(bookUid, format, currentUser, 'telegram');
         this.addAdminEvent('info', 'delivery', `Отправка книги в Telegram: ${book.title || downFileName}`);
         const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
         const form = new FormData();
@@ -5977,10 +6186,10 @@ class WebWorker {
         if (!this.config.emailShareEnabled || !this.config.smtpHost || !emailTo)
             throw new Error('Отправка на email не настроена');
 
-        const {book, rawFile, downFileName} = await this.getPreparedBookFile(bookUid, format);
+        const {book, rawFile, downFileName} = await this.getDeliveryBookFile(bookUid, format, currentUser, 'email');
         this.addAdminEvent('info', 'delivery', `Отправка книги на email: ${book.title || downFileName}`, {
             to: emailTo,
-            format: format || book.ext || '',
+            format: path.extname(downFileName).slice(1) || book.ext || '',
         });
         const transporter = nodemailer.createTransport(this.buildSmtpTransportOptions());
 
@@ -6137,6 +6346,10 @@ class WebWorker {
     }
 
     async getReviewArchiveState(sourceLibDir = '') {
+        if (this.remoteLib?.metadata) {
+            const remote = await this.remoteLib.metadata.ratingIndex();
+            return {signature:`remote:${remote.signature}`, archives:[]};
+        }
         const libDir = sourceLibDir || this.config.libDir;
         const dirs = [
             ...await this.resolveLibraryAssetDirs('reviews', libDir),
@@ -6243,75 +6456,113 @@ class WebWorker {
     async ensureReviewIndex(sourceLibDir = '', state = null) {
         state = state || await this.getReviewArchiveState(sourceLibDir);
         if (!state.indexPromise)
-            state.indexPromise = this.createReviewIndex(state.archives);
+            state.indexPromise = this.createReviewIndex(state.archives).catch(error => {state.indexPromise = null; throw error;});
         return state.indexPromise;
     }
 
     async createReviewIndex(archives) {
         const reviewToArchives = new Map();
+        const limit = Math.max(1, Number(this.config.reviewIndexMaxEntries) || 100000);
+        let stored = 0;
 
-        for (const archive of archives) {
+        for (const [archiveIndex,archive] of archives.entries()) {
             if (archive.id.toLowerCase() === 'additional')
                 continue;
-            const zipReader = new ZipReader(this.config);
-            try {
-                await zipReader.open(archive.file);
-                for (const item of Object.values(zipReader.entries || {})) {
-                    const entryName = String(item.name || '').replace(/\\/g, '/');
-                    if (!entryName || item.isDirectory)
-                        continue;
+            await reviewRuntime.run(async() => {
+                const zipReader = new ZipReader(this.config);
+                try {
+                    await zipReader.open(archive.file);
+                    for (const item of Object.values(zipReader.entries || {})) {
+                        const entryName = String(item.name || '').replace(/\\/g, '/');
+                        if (!entryName || item.isDirectory)
+                            continue;
 
-                    const key = libraryReviews.normalizeEntryKey(entryName);
-                    if (!key) continue;
-                    const list = reviewToArchives.get(key) || [];
-                    list.push({archive: archive.file, entryName});
-                    reviewToArchives.set(key, list);
+                        const key = libraryReviews.normalizeEntryKey(entryName);
+                        if (!key) continue;
+                        if (stored >= limit) {
+                            reviewToArchives.fallbackArchives = archives.slice(archiveIndex).filter(item => item.id.toLowerCase() !== 'additional');
+                            break;
+                        }
+                        const list = reviewToArchives.get(key) || [];
+                        list.push({archive: archive.file, entryName});
+                        reviewToArchives.set(key, list);
+                        stored++;
+                    }
+                } catch(e) {
+                    if (isResourceError(e)) throw e;
+                    log(LM_WARN, `review archive ${archive.file}: ${e.message}`);
+                } finally {
+                    await zipReader.close();
                 }
-            } catch(e) {
-                log(LM_WARN, `review archive ${archive.file}: ${e.message}`);
-            } finally {
-                await zipReader.close();
-            }
+            });
+            if (reviewToArchives.fallbackArchives) break;
         }
 
         return reviewToArchives;
     }
 
     async getBookReviews(book, state = null) {
+        if (this.remoteLib?.metadata) return this.remoteLib.metadata.reviews(book._uid);
         const entryKey = libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`);
         const reviewIndex = await this.ensureReviewIndex(book.sourceLibDir, state);
-        const matches = reviewIndex.get(entryKey) || [];
+        const matches = [...reviewIndex.get(entryKey) || []];
+        // Once the memory budget is reached, find this book in the remaining
+        // archives on demand rather than retaining every book's review paths.
+        for (const archive of reviewIndex.fallbackArchives || []) {
+            await reviewRuntime.run(async() => {
+                const reader = new ZipReader(this.config);
+                try {
+                    await reader.open(archive.file);
+                    for (const item of Object.values(reader.entries || {})) {
+                        if (!item.isDirectory && libraryReviews.normalizeEntryKey(item.name) === entryKey)
+                            matches.push({archive:archive.file,entryName:item.name});
+                    }
+                } catch (error) {
+                    if (isResourceError(error)) throw error;
+                    log(LM_WARN, `review archive ${archive.file}: ${error.message}`);
+                } finally {await reader.close();}
+            });
+        }
+        const uniqueMatches = [...new Map(matches.map(match => [JSON.stringify([match.archive,match.entryName]),match])).values()];
         const reviews = [];
         const seen = new Set();
 
-        for (const match of matches) {
+        const lists = await reviewRuntime.map(uniqueMatches, async(match) => {
             const zipReader = new ZipReader(this.config);
             try {
                 await zipReader.open(match.archive, false);
-                const raw = await zipReader.extractToBuf(match.entryName);
-                const parsed = JSON.parse(decodeArchiveText(raw));
-                if (!Array.isArray(parsed))
-                    continue;
-
-                for (const item of parsed) {
-                    if (!item || typeof(item) !== 'object')
+                const parsed = JSON.parse(decodeArchiveText(await zipReader.extractToBuf(match.entryName)));
+                const normalized = [];
+                for (const item of (Array.isArray(parsed) ? parsed : [])) {
+                    if (!item || typeof(item) !== 'object' || Array.isArray(item))
                         continue;
-
-                    const review = {
-                        name: String(item.name || '').trim() || 'Аноним',
-                        time: String(item.time || '').trim(),
-                        text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
-                    };
-                    const key = JSON.stringify(review);
-                    if (!seen.has(key)) {
-                        seen.add(key);
-                        reviews.push(review);
+                    // A malformed field must not discard this archive's other
+                    // reviews or make the entire book information unavailable.
+                    try {
+                        normalized.push({
+                            name: String(item.name || '').trim() || 'Аноним',
+                            time: String(item.time || '').trim(),
+                            text: String(item.text || '').replace(/<br\s*\/?>/gi, '\n').trim(),
+                        });
+                    } catch (error) {
+                        log(LM_WARN, `review item ${match.archive}:${match.entryName}: ${error.message}`);
                     }
                 }
+                return normalized;
             } catch(e) {
+                if (isResourceError(e)) throw e;
                 log(LM_WARN, `review entry ${match.archive}:${match.entryName}: ${e.message}`);
+                return [];
             } finally {
                 await zipReader.close();
+            }
+        });
+
+        for (const review of lists.flat()) {
+            const key = JSON.stringify(review);
+            if (!seen.has(key)) {
+                seen.add(key);
+                reviews.push(review);
             }
         }
 
@@ -6319,35 +6570,40 @@ class WebWorker {
     }
 
     async getBookLibraryRating(book, state = null) {
+        if (this.remoteLib?.metadata) return this.remoteLib.metadata.rating(book._uid);
         state = state || await this.getReviewArchiveState(book.sourceLibDir);
-        if (!state.ratingsPromise)
-            state.ratingsPromise = this.readLibraryRatings(state.archives);
-        const ratings = await state.ratingsPromise;
+        const ratings = await this.ensureLibraryRatings(state);
         return ratings.get(libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`)) || null;
+    }
+
+    ensureLibraryRatings(state) {
+        if (!state.ratingsPromise) state.ratingsPromise = this.readLibraryRatings(state.archives)
+            .catch(error => {state.ratingsPromise = null; throw error;});
+        return state.ratingsPromise;
     }
 
     async readLibraryRatings(archives) {
         const ratings = new Map();
         for (const archive of archives.filter(item => item.id.toLowerCase() === 'additional')) {
-            const reader = new ZipReader(this.config);
-            try {
-                await reader.open(archive.file, false);
-                const rows = JSON.parse(decodeArchiveText(await reader.extractToBuf('books.json')));
-                if (!Array.isArray(rows)) continue;
-                for (const row of rows) {
-                    if (!row || typeof row.folder !== 'string' || typeof row.file !== 'string'
-                        || !Number.isFinite(row.sum) || !Number.isSafeInteger(row.count)
-                        || row.count <= 0 || row.sum <= 0 || row.sum > row.count * 5)
-                        continue;
-                    const key = libraryReviews.entryKey(row.folder, row.file);
-                    if (!ratings.has(key))
-                        ratings.set(key, {value: row.sum / row.count, count: row.count});
+            await reviewRuntime.run(async() => {
+                const reader = new ZipReader(this.config);
+                try {
+                    await reader.open(archive.file, false);
+                    await libraryReviews.ratingRows(reader,row => {
+                        if (!row || typeof row.folder !== 'string' || typeof row.file !== 'string'
+                            || !Number.isFinite(row.sum) || !Number.isSafeInteger(row.count)
+                            || row.count <= 0 || row.sum <= 0 || row.sum > row.count * 5)
+                            return;
+                        const key = libraryReviews.entryKey(row.folder, row.file);
+                        if (!ratings.has(key)) ratings.set(key, {value: row.sum / row.count, count: row.count});
+                    },this.config.tempDir);
+                } catch (error) {
+                    if (isResourceError(error)) throw error;
+                    log(LM_WARN, `library ratings ${archive.file}: ${error.message}`);
+                } finally {
+                    await reader.close();
                 }
-            } catch (error) {
-                log(LM_WARN, `library ratings ${archive.file}: ${error.message}`);
-            } finally {
-                await reader.close();
-            }
+            });
         }
         return ratings;
     }
@@ -6450,6 +6706,193 @@ class WebWorker {
                 throw new Error('404 Файл не найден');
             throw e;
         }
+    }
+
+    //Полная подготовка книги в фоне, по одной книге за раз
+    prepareBookInBackground(bookUid) {
+        if (!this.backgroundBookQueue)
+            this.backgroundBookQueue = new LockQueue(8);
+
+        const generation = this.libraryAssetGeneration;
+        return resourceRuntime.withBackground(async() => {
+            await this.backgroundBookQueue.get();
+            try {
+                if (generation !== this.libraryAssetGeneration)
+                    return;
+                await this.runBackground(() => generation === this.libraryAssetGeneration ? this.getBookLink(bookUid) : null);
+            } finally {
+                this.backgroundBookQueue.ret();
+            }
+        }).catch(e => log(LM_WARN, `background book preparation ${bookUid}: ${e.message}`));
+    }
+
+    //Карточке книги нужны описание FB2, содержание и отзывы. Иллюстрации и обложку
+    //не извлекаем: обложку клиент берёт из /cover/by-uid, иллюстрации - из getBookGallery
+    async getBookCardInfo(bookUid) {
+        return await this.runForeground(() => this.buildBookCard(bookUid));
+    }
+
+    async buildBookCard(bookUid) {
+        this.checkMyState();
+
+        const db = this.db;
+        const generation = this.libraryAssetGeneration;
+        const rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
+        if (!rows.length)
+            throw new Error('404 Файл не найден');
+        const book = {...rows[0]};
+        if (String(book.ext).toLowerCase() !== 'fb2' || this.remoteLib)
+            return await this.getBookInfo(bookUid);
+
+        const dbConfig = await this.dbConfig();
+        this.checkLibraryAssetState(generation, db);
+        // Persistent cache identity must survive restarts, but change after a
+        // reindex or source replacement. Separate files also isolate late writes
+        // from a request that started against the previous index.
+        const fingerprint = utils.getBufHash(JSON.stringify([bookUid, dbConfig.inpxHash || '', book._recordHash || '',
+            book.sourceId, book.sourceLibDir || this.config.libDir, book.folder, book.file, book.ext]), 'sha256', 'hex');
+        const cardFile = `${this.config.bookDir}/${fingerprint}.card.json`;
+        let card = await fs.readJson(cardFile).catch(() => null);
+        let changed = false;
+        if (!card || card.bookId !== book.id || card.version !== bookCardVersion) {
+            card = Object.assign({bookId: book.id, version: bookCardVersion}, await this.readBookCardFb2(book));
+            changed = true;
+        }
+
+        //ошибка отзывов не мешает показать описание; без reviewSignature отзывы перечитаются при следующем открытии
+        try {
+            const reviewState = await this.getReviewArchiveState(book.sourceLibDir);
+            if (card.reviewSignature !== reviewState.signature) {
+                [card.reviews, card.libraryRating] = await Promise.all([
+                    this.getBookReviews(book, reviewState), this.getBookLibraryRating(book, reviewState),
+                ]);
+                card.reviewSignature = reviewState.signature;
+                changed = true;
+            }
+        } catch (error) {
+            log(LM_WARN, `book card reviews ${bookUid}: ${error.message}`);
+        }
+
+        this.checkLibraryAssetState(generation, db);
+        if (changed)
+            //параллельное открытие той же карточки не должно прочитать недописанный файл
+            await writeFileAtomic(cardFile, JSON.stringify(card));
+        else
+            await utils.touchFile(cardFile);
+
+        await this.applyPreparedBookSizesToRows([book]);
+        const overrides = await this.readingListStore.getMetadataOverrides();
+        this.checkLibraryAssetState(generation, db);
+        this.applyMetadataOverrideToBook(book, overrides);
+        //после карточки, чтобы не читать архив книги одновременно с ней
+        this.prepareBookInBackground(bookUid);
+
+        return {bookInfo: {
+            book,
+            cover: '',
+            fb2: card.fb2,
+            contents: card.contents,
+            annotationMeta: card.annotationMeta,
+            galleryCount: Math.min(card.imageCount, bookGalleryLimit),
+            reviews: card.reviews || [],
+            libraryRating: card.libraryRating || null,
+        }};
+    }
+
+    async readBookCardFb2(book) {
+        const extractedFile = await this.extractBook(book.folder, `${book.file}.${book.ext}`, book.sourceLibDir);
+        try {
+            const data = this.fb2Helper.checkEncoding(await this.fb2Helper.decompressIfNeeded(await fs.readFile(extractedFile)));
+            const parser = new Fb2Parser();
+            parser.fromString(data.toString(), {lowerCase: true});
+
+            //в репаках FLibrary иллюстраций в FB2 нет, считаем ссылки на них в тексте
+            const coverId = this.getFb2CoverId(parser);
+            const hrefAttr = `${parser.xlinkNS}:href`;
+            const binaryIds = new Set();
+            for (const node of parser.$$array('/binary')) {
+                const attrs = node.attrs() || {};
+                if (attrs.id && attrs.id !== coverId && String(attrs['content-type'] || '').toLowerCase().startsWith('image/'))
+                    binaryIds.add(attrs.id);
+            }
+            const refIds = new Set();
+            for (const body of parser.$$array('/body')) {
+                body.eachDeepSelf((node) => {
+                    const attrs = (node.name === 'image' ? node.attrs() : null);//Map
+                    const href = (attrs ? String(attrs.get(hrefAttr) || '') : '');
+                    if (href)
+                        refIds.add(href.replace(/^#/, ''));
+                });
+            }
+
+            const result = {
+                contents: this.extractFb2Contents(parser),
+                annotationMeta: this.extractFb2AnnotationMeta(parser),
+                imageCount: binaryIds.size || refIds.size,
+            };
+            if (!result.annotationMeta.stats.images)
+                result.annotationMeta.stats.images = result.imageCount;
+
+            //клиенту и OPDS нужен только <description>
+            parser.remove('body');
+            parser.remove('binary');
+            result.fb2 = parser.rawNodes;
+
+            return result;
+        } finally {
+            await fs.remove(extractedFile);
+        }
+    }
+
+    getFb2CoverId(parser) {
+        const coverImage = parser.$$('/description/title-info/coverpage/image');
+        const href = (coverImage.count ? String((coverImage.attrs() || {})[`${parser.xlinkNS}:href`] || '') : '');
+        return href.replace(/^#/, '');
+    }
+
+    //Первые иллюстрации для галереи карточки. Ждёт полной подготовки книги.
+    async getBookGallery(bookUid) {
+        const {bookInfo} = await this.getBookInfo(bookUid, {readerOnly: true});
+        const images = [];
+        if (!bookInfo.fb2)
+            return {images};
+
+        const parser = new Fb2Parser(bookInfo.fb2);
+        const coverId = this.getFb2CoverId(parser);
+        for (const node of parser.$$array('/binary')) {
+            const attrs = node.attrs() || {};
+            let contentType = String(attrs['content-type'] || '').toLowerCase();
+            if (contentType === 'image/jpg' || contentType === 'application/octet-stream')
+                contentType = 'image/jpeg';
+            const data = node.text();
+            if (!attrs.id || attrs.id === coverId || !data || !contentType.startsWith('image/'))
+                continue;
+
+            images.push({id: attrs.id, contentType, data});
+            if (images.length >= bookGalleryLimit)
+                break;
+        }
+
+        return {images};
+    }
+
+    // Opt-in startup warmup; large collections keep lazy, bounded indexes by default.
+    warmReviewIndexes() {
+        if (this.config.reviewWarmupEnabled !== true) return Promise.resolve();
+        const dirs = new Set([this.config.libDir, ...getEnabledLibrarySources(this.config).map(source => source.libDir)].filter(Boolean));
+        return resourceRuntime.withBackground(async() => {for (const dir of dirs) {
+            try {
+                const state = await this.getReviewArchiveState(dir);
+                await this.ensureReviewIndex(dir, state);
+                await this.ensureLibraryRatings(state);
+                log(`Review index ready: ${dir}`);
+            } catch (error) {
+                log(LM_WARN, `review index ${dir}: ${error.message}`);
+            }
+        }}).then(async result => {
+            if (this.dbSearcher?.ratingIndex) await this.dbSearcher.ratingIndex.load();
+            return result;
+        }).catch(error => log(LM_WARN, `rating index: ${error.message}`));
     }
 
     async getInpxFile(params) {

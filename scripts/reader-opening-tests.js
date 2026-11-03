@@ -96,4 +96,121 @@ async function testCatalogOpensReaderBeforeColdFilePreparation() {
     assert.deepStrictEqual(events[1], {name: 'listEvent', event: {action: 'submitUrl', data: 'http://localhost/book/prepared'}});
 }
 
-module.exports = [testReaderColdDocumentDoesNotWaitForReviewIndex, testCatalogOpensReaderBeforeColdFilePreparation];
+async function testBookCardSkipsIllustrationsAndPreparesBookInBackground() {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-book-card-'));
+    try {
+        const record = {id: 7, _uid: 'card-book', ext: 'fb2', file: '12345', folder: 'f.fb2-12000-12999.7z', title: 'Карточка'};
+        const xml = '<FictionBook xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>Карточка</book-title>' +
+            '<annotation><p>Аннотация книги.</p></annotation><coverpage><image l:href="#cover"/></coverpage></title-info></description>' +
+            '<body><section><title><p>Глава 1</p></title><p>Текст <image l:href="#1"/> и <image l:href="#2"/></p>' +
+            Array.from({length: 25}, (_, num) => `<image l:href="#${num + 3}"/>`).join('') + '<image l:href="#1"/></section></body></FictionBook>';
+        const worker = Object.create(require('../server/core/WebWorker').prototype);
+        worker.config = {bookDir: dir};
+        worker.checkMyState = () => {};
+        worker.fb2Helper = new Fb2Helper();
+        worker.db = {esc: JSON.stringify, select: async() => [record]};
+        worker.readingListStore = {getMetadataOverrides: async() => ({})};
+        worker.applyPreparedBookSizesToRows = async() => {};
+        worker.dbConfig = async() => ({inpxHash: 'card-index-v1'});
+        worker.getReviewArchiveState = async() => ({signature: 'reviews-v1'});
+        worker.getBookReviews = async() => [{text: 'Отзыв'}];
+        worker.getBookLibraryRating = async() => null;
+        worker.injectFblibraryImages = async() => { throw new Error('Card must not extract illustrations'); };
+        let extractions = 0;
+        worker.extractBook = async() => {
+            extractions++;
+            const file = path.join(dir, `extracted-${extractions}`);
+            await fs.writeFile(file, xml);
+            return file;
+        };
+        let prepared;
+        const preparedOnce = new Promise(resolve => { prepared = resolve; });
+        let preparations = 0;
+        worker.prepareBookLink = async(bookUid) => {
+            preparations++;
+            await new Promise(resolve => setTimeout(resolve, 20));
+            prepared(bookUid);
+            return {link: '/book/hash', size: 1};
+        };
+
+        const {bookInfo} = await worker.getBookCardInfo(record._uid);
+        assert.strictEqual(bookInfo.book.title, 'Карточка');
+        assert.strictEqual(bookInfo.cover, '');
+        assert.deepStrictEqual(bookInfo.reviews, [{text: 'Отзыв'}]);
+        assert.deepStrictEqual(bookInfo.contents.map(item => item.title), ['Глава 1']);
+        assert.strictEqual(bookInfo.annotationMeta.stats.images, 27, 'Different illustrations referenced in the text');
+        assert.strictEqual(bookInfo.galleryCount, 18);
+        const fb2 = JSON.stringify(bookInfo.fb2);
+        assert.ok(fb2.includes('Аннотация книги.'));
+        assert.ok(!fb2.includes('Текст'), 'The card sends only <description>');
+        assert.strictEqual(await preparedOnce, record._uid, 'The full book is prepared in the background');
+
+        // Reading and downloading during the background preparation wait for the same work.
+        await Promise.all(worker.bookLinkJobs.values());
+        const [first, second] = await Promise.all([worker.getBookLink(record._uid), worker.getBookLink(record._uid)]);
+        assert.strictEqual(preparations, 2, 'Two parallel requests prepare the book once');
+        assert.notStrictEqual(first, second);
+        assert.deepStrictEqual(first, second);
+
+        worker.getReviewArchiveState = async() => { throw new Error('Broken review archive'); };
+        const cached = (await worker.getBookCardInfo(record._uid)).bookInfo;
+        assert.strictEqual(extractions, 1, 'The second card opening uses the card cache');
+        assert.strictEqual(cached.book.title, 'Карточка', 'A review failure does not block the card');
+        assert.deepStrictEqual(cached.reviews, [{text: 'Отзыв'}]);
+        assert.ok(!(await fs.readdir(dir)).some(name => name.startsWith('extracted-')), 'Extracted FB2 files are removed');
+    } finally {
+        await fs.remove(dir);
+    }
+}
+
+async function testBackgroundLibraryWorkWaitsForUser() {
+    const worker = Object.create(require('../server/core/WebWorker').prototype);
+    const events = [];
+    let finishCard;
+    const card = worker.runForeground(() => new Promise(resolve => { finishCard = resolve; }));
+
+    const covers = [1, 2, 3].map(n => worker.runBackground(async() => { events.push(`cover ${n}`); }));
+    const cancelled = worker.runBackground(async() => { events.push('closed cover'); }, () => true);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepStrictEqual(events, [], 'Covers wait while the user waits for the card');
+
+    finishCard();
+    await card;
+    await Promise.all([...covers, cancelled]);
+    assert.deepStrictEqual(events, ['cover 1', 'cover 2', 'cover 3'], 'Covers run after the card, a closed request is skipped');
+
+    // Background reads use the profile limit and the shared background mark;
+    // the book preparation inside them does not stop other background work.
+    const resourceRuntime = require('../server/core/ResourceRuntime');
+    let active = 0, maxActive = 0;
+    await Promise.all(Array.from({length: 5}, () => worker.runBackground(async() => {
+        assert.ok(resourceRuntime.isBackground());
+        await worker.runForeground(async() => {});
+        maxActive = Math.max(maxActive, ++active);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active--;
+    })));
+    assert.strictEqual(maxActive, resourceRuntime.settings.limits.background);
+    assert.strictEqual(worker.foregroundJobs, 0);
+}
+
+async function testBookGalleryReturnsFirstImagesWithoutCover() {
+    const Fb2Parser = require('../server/core/fb2/Fb2Parser');
+    const parser = new Fb2Parser();
+    parser.fromString('<FictionBook xmlns:l="x"><description><title-info><coverpage><image l:href="#cover"/></coverpage></title-info></description>' +
+        '<binary id="cover" content-type="image/png">Y292ZXI=</binary>' +
+        Array.from({length: 20}, (_, num) => `<binary id="${num}" content-type="${num ? 'image/png' : 'image/jpg'}">aW1n</binary>`).join('') +
+        '</FictionBook>', {lowerCase: true});
+    const worker = Object.create(require('../server/core/WebWorker').prototype);
+    worker.getBookInfo = async(bookUid, options) => {
+        assert.deepStrictEqual(options, {readerOnly: true}, 'The gallery does not wait for reviews');
+        return {bookInfo: {fb2: parser.rawNodes}};
+    };
+    const {images} = await worker.getBookGallery('gallery-book');
+    assert.deepStrictEqual(images.map(image => image.id), Array.from({length: 18}, (_, num) => String(num)));
+    assert.strictEqual(images[0].contentType, 'image/jpeg');
+    assert.strictEqual(images[1].data, 'aW1n');
+}
+
+module.exports = [testReaderColdDocumentDoesNotWaitForReviewIndex, testCatalogOpensReaderBeforeColdFilePreparation,
+    testBookCardSkipsIllustrationsAndPreparesBookInBackground, testBackgroundLibraryWorkWaitsForUser, testBookGalleryReturnsFirstImagesWithoutCover];
