@@ -1,0 +1,186 @@
+name: Android server APKs
+
+on:
+  push:
+    branches: [android]
+    tags: ['android-v*']
+  pull_request:
+    branches: [android]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Android server source branch, tag or commit
+        default: android
+        required: true
+      publish:
+        description: Publish a new Android prerelease after all checks pass
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-server-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  validate:
+    name: Validate server and prepare source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      version: ${{ steps.source.outputs.version }}
+      backend: ${{ steps.source.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Pin the same source for both ABIs
+        id: source
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          node <<'NODE'
+          const fs = require('fs');
+          const gradle = fs.readFileSync('android/app/build.gradle', 'utf8');
+          const version = gradle.match(/versionName '([0-9]+\.[0-9]+\.[0-9]+)-prototype'/)?.[1];
+          if (!version) throw new Error('Invalid Android version');
+          if (process.env.GITHUB_REF.startsWith('refs/tags/') && process.env.GITHUB_REF_NAME !== 'android-v' + version)
+              throw new Error('Tag does not match the APK version');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\nbackend=${require('./package.json').version}\n`);
+          NODE
+      - run: npm ci --ignore-scripts
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run test:release
+      - run: npm run test:tts
+      - run: npm run test:android-storage
+
+  build:
+    name: Build and verify ${{ matrix.arch }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: armeabi-v7a
+            arch: arm32
+          - abi: arm64-v8a
+            arch: arm64
+    env:
+      INPX_ANDROID_ABI: ${{ matrix.abi }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - name: Cache pinned native tools and converters
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/inpx-android
+            android/app/src/main/jniLibs
+          key: android-server-${{ runner.os }}-${{ matrix.abi }}-${{ hashFiles('android/runtime.lock.json', 'android/converter-assets.lock.json', 'scripts/android/*.sh') }}
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential curl unzip zip xz-utils python3 p7zip-full
+      - run: npm ci --ignore-scripts
+      - run: bash scripts/android/setup-build-env.sh
+      - run: bash scripts/android/prepare-converter-tools.sh
+      - run: bash scripts/android/build-native.sh
+      - name: Save native cache before APK checks
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/inpx-android
+            android/app/src/main/jniLibs
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - run: npm run build:android:assets
+        env:
+          INPX_7Z: /usr/bin/7z
+      - name: Check isolated packaged server
+        run: node scripts/android/check-runtime.js
+      - name: Restore update-compatible server signing key
+        if: github.event_name != 'pull_request'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_SERVER_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo 'Configure ANDROID_SERVER_DEBUG_KEYSTORE_BASE64'; exit 1; }
+          keystore="$RUNNER_TEMP/inpx-server-debug.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          keytool -exportcert -keystore "$keystore" -storepass android -alias androiddebugkey > "$RUNNER_TEMP/inpx-server-certificate.der"
+          actual=$(sha256sum "$RUNNER_TEMP/inpx-server-certificate.der" | cut -d ' ' -f 1)
+          expected=$(tr -d '\r\n' < android/signing-certificate.sha256)
+          test "$actual" = "$expected" || { echo 'Server keystore certificate mismatch'; exit 1; }
+          echo "INPX_ANDROID_KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
+      - name: Assemble APK, unit tests, instrumentation APK and lint
+        run: bash scripts/android/build-apk.sh testDebugUnitTest assembleDebugAndroidTest lintDebug
+      - name: Verify ABI, runtime and certificate
+        env:
+          BACKEND: ${{ needs.validate.outputs.backend }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          TRUSTED_BUILD: ${{ github.event_name != 'pull_request' }}
+        run: |
+          certificate=()
+          if [ "$TRUSTED_BUILD" = true ]; then certificate=(--certificate "$(cat android/signing-certificate.sha256)"); fi
+          python3 scripts/android/verify-apk.py "dist/android/inpx-server-${{ needs.validate.outputs.version }}-${{ matrix.arch }}-debug.apk" \
+            --abi "$INPX_ANDROID_ABI" --backend "$BACKEND" --source "$SOURCE_SHA" "${certificate[@]}"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: android-server-${{ matrix.arch }}
+          path: |
+            dist/android/*.apk
+            dist/android/*.apk.sha256
+            dist/android/*.metadata.json
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: android-checks-${{ matrix.arch }}
+          path: |
+            android/app/build/reports
+            android/app/build/outputs/androidTest-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  release:
+    name: Publish Android prerelease
+    needs: [validate, build]
+    if: startsWith(github.ref, 'refs/tags/android-v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: android-server-*
+          merge-multiple: true
+          path: release-assets
+      - name: Create release after checking both APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          BACKEND: ${{ needs.validate.outputs.backend }}
+        run: python3 scripts/android/publish-release.py
