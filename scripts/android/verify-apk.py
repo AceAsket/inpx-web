@@ -30,7 +30,8 @@ assert package[3] == re.search(r"versionName '([^']+)'", gradle)[1], "Stale vers
 certificate_info = subprocess.check_output([str(sdk / "apksigner"), "verify", "--print-certs", str(args.apk)], text=True)
 certificate = re.search(r"certificate SHA-256 digest: ([0-9a-fA-F]+)", certificate_info)[1].lower()
 if args.certificate:
-    assert certificate == args.certificate.lower(), "APK cannot update the previous public server APK"
+    expected_certificate = args.certificate.strip().lower()
+    assert certificate == expected_certificate, f"APK certificate {certificate} differs from previous server {expected_certificate}"
 with zipfile.ZipFile(args.apk) as apk:
     names = apk.namelist()
     abis = {name.split("/")[1] for name in names if name.startswith("lib/") and name.endswith(".so")}

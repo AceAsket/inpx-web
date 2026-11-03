@@ -19,6 +19,17 @@ android {
     }
     externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt'; version '3.22.1' } }
     packaging { jniLibs { useLegacyPackaging = true } }
+    signingConfigs {
+        debug {
+            def serverKeystore = System.getenv('INPX_ANDROID_KEYSTORE_FILE')
+            if (serverKeystore) {
+                storeFile file(serverKeystore)
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
+        }
+    }
     buildTypes { debug { debuggable true } }
 }
 

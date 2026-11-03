@@ -19,7 +19,7 @@ Root и Termux не требуются. Это прототип для уста�
 
 ## Автоматическая сборка
 
-[GitHub Actions: Android server APKs](https://github.com/AceAsket/inpx-web/actions/workflows/android-server.yml) проверяет изменения ветки `android` и PR в неё. Собираются ARM32 и ARM64; APK, SHA256 и отчёты доступны в артефактах запуска. Оба APK собираются из одного зафиксированного commit.
+[GitHub Actions: Android server APKs](https://github.com/AceAsket/inpx-web/actions/workflows/android-server.yml) проверяет изменения ветки `android` и PR в неё. Собираются ARM32 и ARM64; APK, SHA256 и отчёты доступны в артефактах запуска в течение семи дней. Опубликованные релизы хранятся отдельно. Оба APK собираются из одного зафиксированного commit.
 
 Перед сборкой выполняются серверные проверки, TTS и тесты слоя хранения. Затем для каждого ABI собираются нативные инструменты, веб-интерфейс и runtime, выполняются JVM-тесты, Android Lint и сборка instrumentation APK. Изолированный запуск runtime проверяет зависимости, индексирование, HTTP/WebSocket и OPDS. После сборки проверяются ELF-архитектуры, версия manifest, содержимое runtime и сертификат APK. Автоматическая проверка не означает запуск на физическом Android-устройстве.
 
