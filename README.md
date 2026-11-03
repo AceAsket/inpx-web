@@ -100,14 +100,16 @@ inpx-web-7z
 
 ## Сервер на Android
 
-Библиотеку можно запустить прямо на планшете, телефоне или ТВ-приставке с **Android 9 и новее**, без Root и Termux. Android-приложение опубликовано отдельно: [предрелиз 0.5.0 и контрольные суммы](https://github.com/AceAsket/inpx-web/releases/tag/android-v0.5.0).
+Библиотеку можно запустить прямо на планшете, телефоне или ТВ-приставке с **Android 9 и новее**, без Root и Termux. Android-приложение опубликовано отдельно: [предрелиз 0.6.0 и контрольные суммы](https://github.com/AceAsket/inpx-web/releases/tag/android-v0.6.0).
 
 | Android на устройстве | Скачать |
 | --- | --- |
-| **ARM32** — 32-битная прошивка, ARMv7 с NEON | [APK для ARM32](https://github.com/AceAsket/inpx-web/releases/download/android-v0.5.0/inpx-server-0.5.0-arm32-debug.apk) |
-| **ARM64** — 64-битная прошивка, arm64-v8a | [APK для ARM64](https://github.com/AceAsket/inpx-web/releases/download/android-v0.5.0/inpx-server-0.5.0-arm64-debug.apk) |
+| **ARM32** — 32-битная прошивка, ARMv7 с NEON | [APK для ARM32](https://github.com/AceAsket/inpx-web/releases/download/android-v0.6.0/inpx-server-0.6.0-arm32-debug.apk) |
+| **ARM64** — 64-битная прошивка, arm64-v8a | [APK для ARM64](https://github.com/AceAsket/inpx-web/releases/download/android-v0.6.0/inpx-server-0.6.0-arm64-debug.apk) |
 
 Выбирайте APK по разрядности **Android**, а не только процессора: на 64-битной приставке с 32-битной прошивкой нужен ARM32.
+
+В Android 0.6.0 включён backend **1.8.2-rc.1**. [Автоматическая сборка ARM32/ARM64](https://github.com/AceAsket/inpx-web/actions/workflows/android-server.yml) проверяет APK и сохраняет прежнюю подпись для обновления поверх 0.5.0.
 
 * Два режима панели: сенсорный и ТВ с управлением стрелками, OK и «Назад».
 * Папки библиотеки через системный выбор SD / USB и сетевые источники SMB2 / SMB3.
