@@ -154,5 +154,17 @@ async function testKoSyncHttpProtocolAndIsolation() {
     });
 }
 
+async function testKoSyncDeletionDuringBridgeCannotWriteGuest() {
+    await fixture(async({service, store, file, worker}) => {
+        const user = await store.createUser({name: 'Removed during sync', login: 'removed-reader'});
+        await service.settings(user, 'enable'); await service.linkDownload(file, 'book', 'fb2');
+        const document = await partialMd5(file);
+        worker.getBookRecordByUid = async() => {await store.deleteUser(user.id); return {_uid: 'book'};};
+        await assert.rejects(service.progress(user, document, {document, progress: '/FictionBook/body/section/p[1]/text().0',
+            percentage: 0.3, device: 'KOReader', device_id: 'one'}), /Unauthorized/);
+        assert.equal((await store.getUser('default')).readerProgress.book, undefined, 'Deletion during document lookup must not redirect a write into the guest');
+    });
+}
+
 module.exports = [testKoSyncPartialHashAndParagraphBridge, testKoSyncCredentialsAndPersistence, testKoSyncBidirectionalProgressAndConflicts,
-    testKoSyncSeparateProfilesAndOneWayFormats, testKoSyncHttpProtocolAndIsolation];
+    testKoSyncSeparateProfilesAndOneWayFormats, testKoSyncHttpProtocolAndIsolation, testKoSyncDeletionDuringBridgeCannotWriteGuest];

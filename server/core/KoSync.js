@@ -172,10 +172,15 @@ class KoSync {
                     }
                     const anchor = index ? position.fromKo(index, patch.progress) : null;
                     if (canBridge && (anchor || book.ext !== 'fb2')) {
-                        const result = await this.worker.updateReaderProgress(user.id, book.bookUid, {
-                            ...(anchor || {textSnippet: '', textOffset: -1, pageIndex: 0, sectionId: ''}),
-                            percent: patch.percentage, hidden: false, updatedAt: new Date().toISOString(),
-                            baseRevision: revision, generation: currentUser.readerProgressGeneration || 0,
+                        const store = this.worker.readingListStore;
+                        const result = await withFileTransaction(store.file, async() => {
+                            const existing = (await store.load()).users.find(row => row.id === user.id);
+                            if (!isPersonalProfile(existing)) throw Object.assign(new Error('Unauthorized'), {status: 401});
+                            return this.worker.updateReaderProgress(user.id, book.bookUid, {
+                                ...(anchor || {textSnippet: '', textOffset: -1, pageIndex: 0, sectionId: ''}),
+                                percent: patch.percentage, hidden: false, updatedAt: new Date().toISOString(),
+                                baseRevision: revision, generation: currentUser.readerProgressGeneration || 0,
+                            });
                         });
                         if (!result.progress.conflict && !result.progress.generationMismatch) {
                             record.bridgeRevision = result.progress.revision;
