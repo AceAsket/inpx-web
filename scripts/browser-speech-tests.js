@@ -16,6 +16,7 @@ async function testBrowserSpeechBoundedPhrases() {
     assert.equal(chunks.map(part => part.replace(/\s/g, '')).join(''), source.replace(/\s/g, ''));
     assert(chunks.every(part => !/[\uD800-\uDBFF]$/.test(part)));
     assert.deepEqual(phrases(' *** '), []);
+    assert.deepEqual(phrases('Число 3.14. Ещё фраза?! Последняя без точки'), ['Число 3.14.', 'Ещё фраза?!', 'Последняя без точки']);
     assert.equal(supported({}), false);
 }
 

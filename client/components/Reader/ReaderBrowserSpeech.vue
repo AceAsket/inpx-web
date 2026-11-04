@@ -167,6 +167,7 @@ export default {
     right: 16px;
     top: 76px;
     width: min(440px,calc(100vw - 32px));
+    max-height: calc(100vh - 104px);
     max-height: calc(100dvh - 104px);
     overflow: auto;
     padding: 16px;
@@ -268,6 +269,7 @@ export default {
         right: 8px;
         width: calc(100vw - 16px);
         padding: 12px;
+        max-height: calc(100vh - 84px);
         max-height: calc(100dvh - 84px);
     }
 }

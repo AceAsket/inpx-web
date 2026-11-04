@@ -6,7 +6,9 @@ function supported(host = typeof window === 'undefined' ? {} : window) {
 
 function phrases(text, max = 220) {
     const result = [];
-    for (let rest of String(text || '').replace(/\s+/g, ' ').trim().split(/(?<=[.!?…])\s+/u)) {
+    const sentences = String(text || '').replace(/\s+/g, ' ').trim().match(/[\s\S]*?[.!?…](?:\s+|$)|[\s\S]+$/g) || [];
+    for (const sentence of sentences) {
+        let rest = sentence.trim();
         while (rest.length > max) {
             let end = rest.lastIndexOf(' ', max);
             if (end < max / 2) end = max;
