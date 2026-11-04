@@ -679,6 +679,10 @@ class Api {
         return await this.request({action: 'update-user-profile', targetUserId, profile}, 120);
     }
 
+    async koSyncSettings(operation = 'status') {
+        return await this.request({action: 'kosync-settings', operation}, 120);
+    }
+
     async deleteUserProfile(targetUserId) {
         return await this.request({action: 'delete-user-profile', targetUserId}, 120);
     }

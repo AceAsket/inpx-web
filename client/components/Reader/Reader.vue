@@ -8,7 +8,7 @@
         <div
             v-show="!readerChromeHidden"
             class="reader-toolbar"
-            :class="{'reader-toolbar--home': !bookUid}"
+            :class="{'reader-toolbar--home': !bookUid && !isStandaloneMode}"
         >
             <div class="reader-toolbar-main">
                 <q-btn
@@ -49,6 +49,7 @@
                     </div>
                 </div>
 
+                <slot name="source-actions" />
                 <button
                     v-if="bookUid && !isStandaloneMode"
                     type="button"
@@ -60,7 +61,7 @@
                     <span>{{ readerProfileChipLabel }}</span>
                 </button>
 
-                <div v-if="bookUid" class="reader-toolbar-quick-actions">
+                <div v-if="bookUid || isStandaloneMode" class="reader-toolbar-quick-actions">
                     <q-btn
                         v-if="hasPrevSection"
                         flat
@@ -122,9 +123,10 @@
                         @click="toggleHelpDialog"
                     />
                     <q-btn
-                        v-if="config.ttsEnabled && !isStandaloneMode"
+                        v-if="canUseReaderAudio"
                         flat dense round icon="la la-headphones" class="reader-icon-btn"
-                        aria-label="Озвучка книги" title="Озвучка книги — Silero"
+                        aria-label="Озвучка книги" title="Озвучка книги"
+                        :disable="loading || !readerHtml"
                         @click="openReaderAudio"
                     />
                     <q-btn
@@ -149,7 +151,7 @@
             </div>
 
             <div
-                v-show="bookUid && showToolbarActions"
+                v-show="(bookUid || isStandaloneMode) && showToolbarActions"
                 ref="readerToolbarActions"
                 class="reader-toolbar-actions"
                 :class="{
@@ -964,7 +966,7 @@
         </template>
 
         <div
-            v-if="bookUid && isCompactLayout && (showCompactStatusBar || !compactChromeHidden || controlsOpen)"
+            v-if="(bookUid || isStandaloneMode) && isCompactLayout && (showCompactStatusBar || !compactChromeHidden || controlsOpen)"
             ref="readerMobileFooter"
             class="reader-mobile-footer"
             :style="readerMobileFooterStyle"
@@ -997,7 +999,7 @@
                 class="reader-mobile-bar"
                 :class="{
                     'reader-mobile-bar--with-contents': hasContentsMenu,
-                    'reader-mobile-bar--tts': config.ttsEnabled && !isStandaloneMode,
+                    'reader-mobile-bar--tts': canUseReaderAudio,
                 }"
             >
                 <q-btn
@@ -1020,9 +1022,10 @@
                     @click="toggleContentsDialog"
                 />
                 <q-btn
-                    v-if="config.ttsEnabled && !isStandaloneMode"
+                    v-if="canUseReaderAudio"
                     flat no-caps stack icon="la la-headphones" label="Озвучка"
                     class="reader-mobile-btn" aria-label="Озвучка книги"
+                    :disable="loading || !readerHtml"
                     @click="openReaderAudio"
                 />
                 <q-btn
@@ -1531,7 +1534,14 @@
         <reader-audio
             v-if="bookUid && config.ttsEnabled && !isStandaloneMode"
             ref="audioPlayer" :book-uid="bookUid" :title="title" :author="authorLine" :cover="coverSrc"
+            :browser-speech-available="browserSpeechSupported" @use-browser="useBrowserAudio"
             @listen-here="listenFromReader" @read-here="readFromAudio"
+        />
+        <reader-browser-speech
+            v-if="(bookUid || isStandaloneMode) && browserSpeechSupported"
+            ref="browserAudio" :html="readerHtml" :source-key="readerSourceKey" :title="title" :language="readerLanguage"
+            :scope-key="`${currentUserId}:${!!config.profileAuthorized}`" :silero-enabled="serverSpeechAvailable"
+            @listen-here="listenFromReader" @use-silero="useSileroAudio"
         />
 
         <q-dialog v-model="readerReplacementOpen" :persistent="readerReplacementSaving">
@@ -1602,6 +1612,7 @@ import readerContent from '../../../server/core/fb2/ReaderContent';
 import _ from 'lodash';
 import he from 'he';
 import ReaderAudio from './ReaderAudio.vue';
+import ReaderBrowserSpeech from './ReaderBrowserSpeech.vue';
 
 const readerPreferencesStorageKey = 'inpx.reader.preferences.v1';
 const readerProgressStorageKey = 'inpx.reader.progress.v1';
@@ -1631,7 +1642,7 @@ const readerDeviceScopedPreferenceKeys = new Set([
 ]);
 
 const componentOptions = {
-    components: {ReaderAudio},
+    components: {ReaderAudio, ReaderBrowserSpeech},
     watch: {
         readerSourceKey: {
             immediate: true,
@@ -1674,6 +1685,8 @@ class Reader {
     coverIntrinsicHeight = 0;
     coverIntrinsicLoadId = 0;
     readerHtml = '';
+    readerLanguage = 'ru';
+    useBrowserSpeech = false;
     readerAnnotationHtml = '';
     readerNotesAnchorId = '';
     readerSearchText = '';
@@ -2094,6 +2107,14 @@ class Reader {
         return !!(this.standaloneSource && String(this.standaloneSource.fb2 || '').trim());
     }
 
+    get browserSpeechSupported() {
+        return typeof window !== 'undefined' && require('./browserSpeech').supported(window);
+    }
+
+    get serverSpeechAvailable() { return !!(this.config.ttsEnabled && !this.isStandaloneMode); }
+
+    get canUseReaderAudio() { return this.browserSpeechSupported || this.serverSpeechAvailable; }
+
     get config() {
         return this.$store.state.config || {};
     }
@@ -2204,11 +2225,11 @@ class Reader {
     }
 
     get readerHeaderTitle() {
-        return this.bookUid ? (this.title || this.uiText.readerHomeTitle) : this.uiText.readerHomeTitle;
+        return this.bookUid || this.isStandaloneMode ? (this.title || this.uiText.readerHomeTitle) : this.uiText.readerHomeTitle;
     }
 
     get readerHeaderSubtitle() {
-        return this.bookUid ? this.authorLine : this.readerHomeSubtitle;
+        return this.bookUid || this.isStandaloneMode ? this.authorLine : this.readerHomeSubtitle;
     }
 
     get readerHomeAuthorized() {
@@ -8851,6 +8872,7 @@ class Reader {
     } = {}) {
         const parser = this.createFb2Parser(fb2);
         const fb2Info = parser.bookInfo();
+        this.readerLanguage = String(book.lang || fb2Info.titleInfo?.lang || 'ru');
         const authorFallback = ((fb2Info.titleInfo && fb2Info.titleInfo.author) ? fb2Info.titleInfo.author.join(', ') : '');
 
         this.title = this.decodeReaderText(book.title || (fb2Info.titleInfo && fb2Info.titleInfo.bookTitle) || 'Без названия');
@@ -8930,6 +8952,8 @@ class Reader {
         this.pagedBuildNeedsRefresh = false;
         this.pagedLayoutSignature = '';
         this.pagedLayoutCache.clear();
+        this.$refs?.browserAudio?.close();
+        this.$refs?.audioPlayer?.close();
         this.progressPersistPendingAfterPagedBuild = false;
         this.compactChromePagedBuildPending = false;
         this.compactChromeAwaitingCalibration = false;
@@ -10931,12 +10955,27 @@ class Reader {
     }
 
     async openReaderAudio() {
+        if (this.browserSpeechSupported && (this.useBrowserSpeech || !this.serverSpeechAvailable)) {
+            this.$refs.browserAudio?.open();
+            return;
+        }
         if (await this.ensureReaderProfileReady())
             this.$refs.audioPlayer?.open();
     }
 
+    useBrowserAudio() {
+        this.$refs.audioPlayer?.close(); this.useBrowserSpeech = true;
+        this.$refs.browserAudio?.open();
+    }
+
+    async useSileroAudio() {
+        this.$refs.browserAudio?.close(); this.useBrowserSpeech = false;
+        await this.openReaderAudio();
+    }
+
     async listenFromReader() {
-        if (!await this.ensureReaderProfileReady()) return;
+        const browserSpeech = this.browserSpeechSupported && (this.useBrowserSpeech || !this.serverSpeechAvailable);
+        if (!browserSpeech && !await this.ensureReaderProfileReady()) return;
         let anchor;
         if (this.isPagedMode) {
             anchor = this.capturePagedReflowAnchor();
@@ -10945,7 +10984,7 @@ class Reader {
                 .reduce((sum,page,index) => sum + key(this.getPagedPageSearchText(index)).length,0);
         } else anchor = require('../../../shared/VisibleTextAnchor').capture(this.$refs.scroller);
         if (!anchor) {this.$root.stdDialog.alert('Не удалось определить место в тексте'); return;}
-        await this.$refs.audioPlayer?.openAt({...anchor,percent:this.progress.percent});
+        await this.$refs[browserSpeech ? 'browserAudio' : 'audioPlayer']?.openAt({...anchor,percent:this.progress.percent});
     }
 
     readFromAudio(anchor) {

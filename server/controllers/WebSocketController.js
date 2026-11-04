@@ -119,6 +119,12 @@ class WebSocketController {
 
             //api
             switch (req.action) {
+                case 'kosync-settings': {
+                    const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+                    if (user.anonymousProfile) throw new Error('Войдите в личный профиль');
+                    const service = this.webWorker.koSync || (this.webWorker.koSync = new (require('../core/KoSync').KoSync)(this.config, this.webWorker));
+                    this.send(await service.settings(user, req.operation), req, ws); break;
+                }
                 case 'test':
                     await this.test(req, ws); break;
                 case 'logout':
@@ -354,7 +360,8 @@ class WebSocketController {
             ws.send(message);
 
             if (this.isDevelopment || this.config.logQueries) {
-                log(`WebSocket-OUT: ${utils.cutString(message)}`);
+                const loggedMessage = req.action === 'kosync-settings' && r.password ? JSON.stringify({...r, password: '[hidden]'}) : message;
+                log(`WebSocket-OUT: ${utils.cutString(loggedMessage)}`);
                 log(`${Date.now() - req.__startTime}ms`);
             }
 
@@ -363,6 +370,7 @@ class WebSocketController {
 
     isCsrfProtectedAction(action = '') {
         return new Set([
+            'kosync-settings',
             'logout',
             'change-library-follow',
             'get-library-follows',

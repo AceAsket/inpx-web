@@ -14,7 +14,7 @@ inpx-web-7z
 
 Стабильная версия — **1.8.1**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.1`. Для разработки используется ветка `develop`.
 
-Тестовая версия — **1.8.2-rc.1**: [релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.1), Docker `aceasket/inpx-web-7z:1.8.2-rc.1`. Добавлены [общие подборки в корне OPDS из файла настроек](./docs/opds-catalog-shelves.md) и дополнительные ссылки на авторов и серии для совместимости с OPDS-читалками. Стабильный тег `latest` остаётся на 1.8.1.
+Тестовая версия — **1.8.2-rc.2**: [релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.2), Docker `aceasket/inpx-web-7z:1.8.2-rc.2`. Добавлены [голоса устройства в веб-читалке](./docs/browser-speech.md) без Silero и [синхронизация с KOReader](./docs/koreader-sync.md). Сохраняются [общие подборки OPDS](./docs/opds-catalog-shelves.md) из RC1. Стабильный тег `latest` остаётся на 1.8.1.
 
 <a id="ключевые-отличия" />
 
@@ -26,6 +26,7 @@ inpx-web-7z
 Подключение Android через QR, совместимость API и отмена озвучки описаны в [контракте приложения](./docs/native-client-protocol.md).
 
 В 1.8.1 добавлены [задачи, избранные авторы и серии, проверка библиотеки, таймер сна и переходы между текстом и аудио](./docs/library-tools.md).
+
 
 Форк [`bookpauk/inpx-web`](https://github.com/bookpauk/inpx-web) для self-hosted библиотек с упором на большие `.7z` / `.zip` / `fLibrary` коллекции, Docker-развёртывание и обновлённую встроенную FB2-читалку. README ниже описывает запуск в Docker, standalone-бинарники, сервер на Android и запуск из исходников через Node.js.
 

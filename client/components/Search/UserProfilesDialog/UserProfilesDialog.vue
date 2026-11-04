@@ -382,6 +382,7 @@
                             <div v-if="currentProfile.isAdmin" class="profile-backup-hint profile-opds-admin-note">
                                 {{ uiText.adminNotInOpds }}
                             </div>
+                            <KoSyncSettings :user-id="currentUserId" />
                         </div>
 
                         <div v-else-if="currentProfileTab === 'backup'" class="profile-backup-panel">
@@ -434,12 +435,14 @@
 import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
 import ReadingListsDialog from '../ReadingListsDialog/ReadingListsDialog.vue';
+import KoSyncSettings from './KoSyncSettings.vue';
 const bookFormats = require('../../../../shared/BookFormats');
 
 const componentOptions = {
     components: {
         Dialog,
         ReadingListsDialog,
+        KoSyncSettings,
     },
     watch: {
         modelValue(newValue) {

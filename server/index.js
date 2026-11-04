@@ -267,6 +267,7 @@ async function main() {
         .catch(e => log(LM_WARN, `Cannot check the admin password: ${e.message}`));
 
     require('./core/AudiobookshelfProvider').init(app, config, webSocketController.webWorker, security);
+    require('./core/KoSync').register(app, config, webSocketController.webWorker, security);
 
     const initHealthRoutes = require('./core/HealthRoutes');
     initHealthRoutes(app, config, webSocketController.webWorker, security, webSocketController);

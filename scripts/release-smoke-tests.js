@@ -544,7 +544,7 @@ async function testReaderBookNotesMenuAndReturnLayout() {
     assert.doesNotMatch(readerSource, /\{\{ readerNoteReturnPoint \? uiText\.noteReturn : uiText\.back \}\}/);
     assert.match(readerSource, /\.reader-back-btn--note-return :deep\(\.block\) \{\s*display: none;/);
     assert.doesNotMatch(readerSource, /class="reader-note-return-btn"/);
-    assert.match(readerSource, /v-if="bookUid && isCompactLayout && \(showCompactStatusBar \|\| !compactChromeHidden \|\| controlsOpen\)"/);
+    assert.match(readerSource, /v-if="\(bookUid \|\| isStandaloneMode\) && isCompactLayout && \(showCompactStatusBar \|\| !compactChromeHidden \|\| controlsOpen\)"/);
     assert.match(readerSource, /v-if="bookUid && showDesktopStatusBar"/);
 
     const goBackStart = readerSource.indexOf('    goBack() {');
@@ -1725,6 +1725,8 @@ const tests = [
     ...require('./opds-book-navigation-tests'),
     ...require('./opds-catalog-shelves-tests'),
     ...require('./reader-opening-tests'),
+    ...require('./browser-speech-tests'),
+    ...require('./kosync-tests'),
     ...require('./book-card-tests'),
     ...require('./library-io-tests'),
     ...require('./download-preference-tests'),

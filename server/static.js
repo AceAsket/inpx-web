@@ -767,6 +767,15 @@ module.exports = (app, config, webWorker = null, security = null) => {
                     const mimeType = getBookDownloadMimeType(downFileName);
                     if (mimeType)
                         res.set('Content-Type', mimeType);
+                    if (config.kosyncEnabled !== false && webWorker?.koSync && fileType !== 'zip'
+                        && ['fb2', 'epub', 'pdf', 'djvu'].includes(path.extname(downFileName).slice(1).toLowerCase())
+                        && await fs.pathExists(webWorker.koSync.file)) {
+                        try {
+                            const syncFile = gzipped ? `${bookFile}.raw` : bookFile;
+                            if (gzipped) await utils.ensureGunzipFile(bookFile, syncFile, desc.size);
+                            await webWorker.koSync.linkDownload(syncFile, desc.bookUid, path.extname(downFileName).slice(1).toLowerCase());
+                        } catch (error) { log(LM_WARN, `KOSync: не удалось связать скачанный файл: ${error.message}`); }
+                    }
                     res.sendFile(bookFile);
                     return;
                 } else {
