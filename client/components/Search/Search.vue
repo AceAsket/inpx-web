@@ -1,11 +1,11 @@
 <template>
     <div class="root column fit" style="position: relative">
-        <LibraryTools :author="search.author || ''" :series="search.series || ''" />
+        <LibraryTools
+            :author="search.author || ''" :series="search.series || ''"
+            :show-save-shelf="!isCompactMobile || list.totalFound > 0" @save-shelf="saveSearchShelf"
+        />
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
-            <div v-if="config.profileAuthorized && !isCompactMobile" class="q-px-md q-py-xs">
-                <q-btn outline dense no-caps padding="6px 12px" icon="la la-bookmark" label="Сохранить поиск как полку" @click="saveSearchShelf" />
-            </div>
             <div ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
                 <!-- Обновление -->
                 <div v-show="showNewReleaseAvailable && newReleaseAvailable" class="row q-py-sm bg-green-4 items-center">
@@ -103,6 +103,8 @@
                                             </q-tooltip>
                                         </template>
                                     </DivBtn>
+
+                                    <ProfileLogout />
 
                                     <q-btn
                                         v-if="isCompactMobile"
@@ -415,7 +417,7 @@
                         <DivBtn v-if="!config.freeAccess" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-sign-out-alt" round @click.stop.prevent="logout">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
-                                    Выход
+                                    Выйти из библиотеки
                                 </q-tooltip>
                             </template>
                         </DivBtn>
@@ -448,15 +450,6 @@
                 <div v-show="list.totalFound > 0" class="text-bold" style="font-size: 120%; padding-bottom: 2px">
                     {{ foundCountMessage }}
                 </div>
-
-                <q-btn
-                    v-if="isCompactMobile && config.profileAuthorized && list.totalFound > 0"
-                    outline dense no-caps padding="4px 10px" icon="la la-bookmark"
-                    class="mobile-save-shelf" label="В полку" aria-label="Сохранить поиск как полку"
-                    @click="saveSearchShelf"
-                >
-                    <q-tooltip :delay="700">Сохранить поиск как умную полку</q-tooltip>
-                </q-btn>
 
                 <div v-show="list.totalFound > 0 && isExtendedSearch" class="q-ml-md">
                     <q-checkbox v-model="showJson" size="36px" label="Показывать JSON" />
@@ -611,6 +604,7 @@ import UserProfilesDialog from './UserProfilesDialog/UserProfilesDialog.vue';
 import authorBooksStorage from './authorBooksStorage';
 import DivBtn from '../share/DivBtn.vue';
 import Dialog from '../share/Dialog.vue';
+import ProfileLogout from '../share/ProfileLogout.vue';
 
 import * as utils from '../../share/utils';
 
@@ -653,6 +647,7 @@ const componentOptions = {
         UserProfilesDialog,
         SelectExtSearchDialog,
         Dialog,
+        ProfileLogout,
         DivBtn
     },
     watch: {
@@ -2934,7 +2929,7 @@ export default vueComponent(Search);
 
     .header > .row.no-wrap.items-center {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: 34px minmax(0, 1fr);
         grid-template-areas:
             'tabs tabs'
             'logo controls';
@@ -2980,7 +2975,7 @@ export default vueComponent(Search);
 
     .profile-controls .profile-select {
         width: auto;
-        min-width: 0;
+        min-width: 0 !important;
         max-width: min(240px, calc(100vw - 96px));
     }
 
@@ -3087,12 +3082,6 @@ export default vueComponent(Search);
 
     .result-scroller-wrap {
         width: 100%;
-    }
-
-    .mobile-save-shelf {
-        margin-left: auto;
-        min-height: 36px;
-        font-size: 13px;
     }
 
     .bottom-scroller-bar {

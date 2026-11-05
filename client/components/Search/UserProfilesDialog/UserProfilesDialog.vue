@@ -69,21 +69,11 @@
             <div v-if="config.profileBoundId" class="admin-note">
                 Профиль выбран по вашему входу через SSO. Для смены пользователя выйдите из SSO.
             </div>
-            <div v-else-if="!canViewAllProfiles" class="profile-session-actions">
-                <q-btn flat dense no-caps color="primary" icon="la la-sign-in-alt" @click="loginOtherProfile">
+            <div v-else class="profile-session-actions">
+                <q-btn v-if="!canViewAllProfiles" flat dense no-caps color="primary" icon="la la-sign-in-alt" @click="loginOtherProfile">
                     {{ uiText.loginOtherProfile }}
                 </q-btn>
-                <q-btn
-                    v-if="config.profileAuthorized"
-                    flat
-                    dense
-                    no-caps
-                    color="warning"
-                    icon="la la-sign-out-alt"
-                    @click="logoutCurrentProfile"
-                >
-                    {{ uiText.logout }}
-                </q-btn>
+                <ProfileLogout :label="uiText.logout" />
             </div>
 
             <div v-if="!profiles.length" class="state-box text-grey-7">
@@ -436,6 +426,7 @@ import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
 import ReadingListsDialog from '../ReadingListsDialog/ReadingListsDialog.vue';
 import KoSyncSettings from './KoSyncSettings.vue';
+import ProfileLogout from '../../share/ProfileLogout.vue';
 const bookFormats = require('../../../../shared/BookFormats');
 
 const componentOptions = {
@@ -443,6 +434,7 @@ const componentOptions = {
         Dialog,
         ReadingListsDialog,
         KoSyncSettings,
+        ProfileLogout,
     },
     watch: {
         modelValue(newValue) {
@@ -1082,20 +1074,6 @@ class UserProfilesDialog {
             if (e.message !== 'Вход в профиль отменён')
                 this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
-    }
-
-    async logoutCurrentProfile() {
-        try {
-            await this.api.logoutUserProfile();
-        } catch (e) {
-            // Ignore stale profile session cleanup errors during profile logout.
-        }
-
-        this.commit('setSettings', {
-            currentUserId: '',
-            profileAccessToken: '',
-        });
-        await this.loadProfiles();
     }
 
     opdsUrl(userId) {

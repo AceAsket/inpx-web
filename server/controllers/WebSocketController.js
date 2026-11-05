@@ -953,12 +953,14 @@ class WebSocketController {
     }
 
     async logoutUserProfile(req, ws) {
-        const result = await this.webWorker.closeProfileSession(req.profileAccessToken);
-        if (this.security && ws.req && ws.req.securitySession)
-            delete ws.req.securitySession.profileAccessToken;
+        const session = this.security && ws.req && ws.req.securitySession;
+        const tokens = new Set([req.profileAccessToken, session && session.profileAccessToken].filter(Boolean));
+        for (const token of tokens) await this.webWorker.closeProfileSession(token);
+        if (session) delete session.profileAccessToken;
         delete ws.userId;
         delete ws.userLastActivity;
-        this.send(result, req, ws);
+        delete ws.clientEvents;
+        this.send({success: true}, req, ws);
     }
 
     async createUserProfile(req, ws) {

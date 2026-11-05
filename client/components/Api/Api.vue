@@ -85,6 +85,7 @@ class Api {
     accessToken = '';
     currentUserId = '';
     profileAccessToken = '';
+    profileSigningOut = false;
     profileLoginPromise = null;
     indexWaitMessage = '';
     ratingIndexWait = null;
@@ -190,9 +191,11 @@ class Api {
     }
 
     async updateConfig(options = {}) {
+        if (this.profileSigningOut) return;
         try {
             this.loadSettings();
             const config = await this.getConfig();
+            if (this.profileSigningOut) return;
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
             if (config.profileLoginRequired && !config.profileAuthorized) {
@@ -234,6 +237,7 @@ class Api {
                 this.writeStoredProfileSession(rememberedUserId, '');
             }
         } catch (e) {
+            if (this.profileSigningOut) return;
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
     }
@@ -331,6 +335,8 @@ class Api {
     async request(params, timeoutSecs = 10, options = {}) {
         let errCount = 0;
         while (1) {// eslint-disable-line
+            if (this.profileSigningOut && params.action !== 'logout-user-profile')
+                throw new Error('Выполняется выход из профиля');
             try {
                 const settings = this.settings;
                 const accessToken = settings.accessToken || this.accessToken;
@@ -348,6 +354,8 @@ class Api {
                     params.csrfToken = csrfToken;
 
                 const response = await wsc.message(await wsc.send(params), timeoutSecs);
+                if (this.profileSigningOut && params.action !== 'logout-user-profile')
+                    throw new Error('Выполняется выход из профиля');
 
                 if (response && response.error == 'need_access_token') {
                     this.accessGranted = false;
@@ -669,6 +677,21 @@ class Api {
 
     async logoutUserProfile() {
         return await this.request({action: 'logout-user-profile'}, 120);
+    }
+
+    async signOutProfile() {
+        if (this.$store.state.config.profileBoundId)
+            throw new Error('Профиль выбран через SSO. Для выхода завершите сеанс SSO.');
+        this.profileSigningOut = true;
+        try { await this.logoutUserProfile(); }
+        catch (error) { this.profileSigningOut = false; throw error; }
+        // Clear the stored credentials before settings watchers can restore them.
+        this.writeStoredProfileSession('', '');
+        this.currentUserId = 'default';
+        this.profileAccessToken = '';
+        this.commit('setSettings', {currentUserId: 'default', profileAccessToken: ''});
+        this.commit('setConfig', {...this.$store.state.config,
+            profileAuthorized: false, currentUserId: 'default', currentUserProfile: null, userProfiles: []});
     }
 
     async createUserProfile(profile) {

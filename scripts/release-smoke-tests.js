@@ -1749,6 +1749,7 @@ const tests = [
     ...require('./image-runtime-tests'),
     ...require('./review-runtime-tests'),
     ...require('./profile-access-tests'),
+    ...require('./profile-logout-tests'),
     ...require('./audit-stage4-tests'),
     ...require('./resource-limit-tests'),
     ...require('./resource-policy-tests'),
