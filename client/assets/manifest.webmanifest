@@ -11,19 +11,19 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "pwa-icon-192.png",
+      "src": "pwa-icon-192.png?v=catalog-icon-5",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "pwa-icon-512.png",
+      "src": "pwa-icon-512.png?v=catalog-icon-5",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "pwa-icon.svg",
+      "src": "pwa-icon.svg?v=catalog-icon-5",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

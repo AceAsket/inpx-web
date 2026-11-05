@@ -105,6 +105,47 @@ async function testLibraryHomeRetainsCachedShelvesOnFailureAndAllowsRetry() {
     assert.equal(repository.state.shelvesError, '');
 }
 
+async function testLibraryHomeShowsSignInForExpiredHistoryAndRecoversWithNewSession() {
+    const {repository, api, config, settings} = fixture();
+    await repository.loadHome();
+    let requests = 0;
+    api.getMobileHome = async() => {requests++; throw new Error('need_profile_login');};
+    await repository.loadReading(true);
+    assert.equal(repository.state.readingLoginRequired, true);
+    assert.equal(repository.state.readingError, '', 'Authorization is not a retryable loading error');
+    assert.equal(repository.state.reading, null); assert.deepEqual(repository.state.lists, []);
+    assert.equal(repository.state.shelves[0].id, 'newest', 'Public shelves stay available');
+    await repository.loadReading(true); assert.equal(requests, 1, 'Do not retry expired credentials in the background');
+    repository.setContext(config, {...settings, profileAccessToken: 'renewed-session'});
+    api.getMobileHome = async() => ({reading: {items: [{bookUid: 'restored'}]}, lists: []});
+    await repository.loadReading();
+    assert.equal(repository.state.readingLoginRequired, false);
+    assert.equal(repository.state.reading.items[0].bookUid, 'restored');
+    api.getMobileHome = async() => {throw new Error('Network unavailable');};
+    await repository.loadReading(true);
+    assert.equal(repository.state.readingLoginRequired, false);
+    assert.equal(repository.state.reading.items[0].bookUid, 'restored', 'Network errors retain cached history');
+    assert.equal(repository.state.readingError, 'Network unavailable');
+}
+
+async function testLibraryHomeRejectsLateLoginFailureAndClearsProtectedShelves() {
+    const {repository, api, config, settings} = fixture(), response = deferred();
+    api.getMobileHome = () => response.promise;
+    const pending = repository.loadReading();
+    repository.setContext({...config, currentUserId: 'two'}, {currentUserId: 'two', profileAccessToken: 'new-session'});
+    api.getMobileHome = async() => ({reading: {items: [{bookUid: 'new-profile'}]}, lists: []});
+    await repository.loadHome();
+    response.reject(Object.assign(new Error('Sign in'), {code: 'need_profile_login'})); await pending;
+    assert.equal(repository.state.readingLoginRequired, false);
+    assert.equal(repository.state.reading.items[0].bookUid, 'new-profile');
+    api.getDiscoveryShelves = async() => {throw Object.assign(new Error('Sign in'), {code: 'need_profile_login'});};
+    await repository.loadShelves(true);
+    assert.equal(repository.state.shelvesLoginRequired, true); assert.equal(repository.state.shelvesError, '');
+    assert.deepEqual(repository.state.shelves, []);
+    assert.equal(repository.state.reading.items[0].bookUid, 'new-profile');
+    repository.setContext(config, settings); assert.equal(repository.state.shelvesLoginRequired, false);
+}
+
 async function testLibraryHomeRejectsLateShelvesAfterOptionsChange() {
     const {repository, api, config, settings} = fixture(), old = deferred();
     api.getDiscoveryShelves = () => old.promise;
@@ -237,6 +278,7 @@ async function testLibraryBookActionsHideUnsupportedReadingAndUnknownSize() {
 module.exports = [testLibraryHomeCachesExpensiveShelvesAndRefreshesReadingIndependently, testLibraryHomeCoalescesConcurrentRefreshes,
     testLibraryHomeClearsPrivateDataAndRejectsLateProfileResponses, testLibraryHomeProtectsProfileSwitchBeforeNewConfigArrives,
     testLibraryHomeFallbackDoesNotOpenLoginAndKeepsHistoryWhenListsFail, testLibraryHomeRetainsCachedShelvesOnFailureAndAllowsRetry,
+    testLibraryHomeShowsSignInForExpiredHistoryAndRecoversWithNewSession, testLibraryHomeRejectsLateLoginFailureAndClearsProtectedShelves,
     testLibraryHomeRejectsLateShelvesAfterOptionsChange, testLibraryHomeDisabledDiscoveryAndProtectedProfileAvoidRequests,
     testLibraryAppearancePreservesCatalogLinksAndReaderRoutes, testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability,
     testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards, testLibraryDialogsSupportLazyInitialOpening,

@@ -719,6 +719,7 @@ const componentOptions = {
 
             this.updateListFromRoute(to);
             this.updateSearchFromRouteQuery(to);
+            this.makeTitle();
         },
         langDefault() {
             this.updateSearchFromRouteQuery(this.$route);
@@ -898,6 +899,10 @@ class Search {
         this.search.setDefaults(this.search);
 
         this.loadSettings();
+    }
+
+    activated() {
+        this.makeTitle();
     }
 
     mounted() {

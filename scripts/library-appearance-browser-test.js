@@ -56,6 +56,32 @@ async function fixture(directory) {
         assert(ready, output);
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [], actions = [];
+        let readingFailure = '';
+        await page.routeWebSocket('**/ws', socket => {
+            const server = socket.connectToServer(), bookRequests = new Set();
+            socket.onMessage(message => {
+                try {
+                    const request = JSON.parse(String(message));
+                    if (readingFailure && ['get-mobile-home', 'get-user-reading-library'].includes(request.action)) {
+                        socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
+                        socket.send(JSON.stringify({requestId: request.requestId, error: readingFailure}));
+                        return;
+                    }
+                    if (request.action === 'bookSearch') bookRequests.add(request.requestId);
+                } catch { /* Forward protocol keepalive frames unchanged. */ }
+                server.send(message);
+            });
+            server.onMessage(message => {
+                try {
+                    const response = JSON.parse(String(message));
+                    if (bookRequests.has(response.requestId) && !response._rok) {
+                        bookRequests.delete(response.requestId);
+                        if (!response.error) {response.totalFound = 661301; socket.send(JSON.stringify(response)); return;}
+                    }
+                } catch { /* Forward non-JSON frames unchanged. */ }
+                socket.send(message);
+            });
+        });
         page.on('pageerror', error => errors.push(error.message));
         page.on('websocket', socket => socket.on('framesent', frame => {try {actions.push(JSON.parse(frame.payload).action);} catch { /* Binary. */ }}));
         const screenshot = async name => {const file = path.join(directory, name + '.png'); await page.screenshot({path: file}); artifacts.push(file);};
@@ -122,7 +148,13 @@ async function fixture(directory) {
                     bodyWidth: document.querySelector('.library-page__body').clientWidth, shelfColumns: getComputedStyle(document.querySelector('.overview-shelves')).gridTemplateColumns.split(' ').length};
             });
             assert(geometry.documentWidth <= width + 1 && geometry.pageWidth <= geometry.mainWidth + 1, JSON.stringify(geometry));
-            if (width >= 1800) {assert(geometry.bodyWidth >= geometry.mainWidth - 80, 'Overview must use the available width'); assert.equal(geometry.shelfColumns, 2);}
+            if (width >= 1800) assert(geometry.bodyWidth >= geometry.mainWidth - 80, 'Overview must use the available width');
+            assert.equal(geometry.shelfColumns, 1, 'Every discovery shelf gets a full row');
+            const recent = page.locator('.book-shelf').filter({has: page.locator('#recent-books-heading')});
+            const heading = await recent.locator('h2').boundingBox(), all = await recent.getByRole('link', {name: 'Все', exact: true}).boundingBox();
+            assert(all.x - heading.x - heading.width < 24, 'All stays next to its shelf title');
+            if (await recent.locator('.book-shelf__strip').evaluate(node => node.scrollWidth <= node.clientWidth + 2))
+                assert.equal(await recent.locator('.book-shelf__actions').count(), 0, 'Short shelves have no detached arrows');
             await screenshot(`shelves-light-${width}`);
         }
         await page.setViewportSize({width: 390, height: 844});
@@ -170,7 +202,64 @@ async function fixture(directory) {
         await page.getByRole('button', {name: 'Обновить', exact: true}).click();
         await page.waitForFunction(() => document.querySelector('.current-book progress')?.value === .52);
 
+        readingFailure = 'temporary_offline';
+        await page.getByRole('button', {name: 'Обновить', exact: true}).click();
+        const notice = page.locator('.library-notice-card');
+        await notice.getByRole('heading', {name: 'Не удалось обновить историю', exact: true}).waitFor();
+        assert(!(await notice.innerText()).includes('temporary_offline'));
+        assert.equal(await page.locator('.current-book').count(), 1, 'Retryable failures retain history');
+        await notice.scrollIntoViewIfNeeded();
+        await screenshot('history-error-dark-390');
+        readingFailure = '';
+        await notice.getByRole('button', {name: 'Повторить', exact: true}).click();
+        await notice.waitFor({state: 'hidden'});
+        readingFailure = 'need_profile_login';
+        await page.getByRole('button', {name: 'Обновить', exact: true}).click();
+        await notice.getByRole('button', {name: 'Войти в профиль', exact: true}).waitFor();
+        assert(!(await notice.innerText()).includes('need_profile_login'));
+        assert.equal(await notice.getByRole('button', {name: 'Повторить', exact: true}).count(), 0);
+        assert.equal(await page.locator('.current-book').count(), 0, 'Expired credentials cannot leave private history visible');
+        assert(await page.locator('.overview-shelves .book-shelf').count() > 0, 'Discovery remains available');
+        await notice.scrollIntoViewIfNeeded();
+        await screenshot('history-login-dark-390');
+        await page.getByRole('link', {name: 'Мои книги', exact: true}).click();
+        await notice.getByRole('button', {name: 'Войти в профиль', exact: true}).waitFor();
+        assert.equal(await page.locator('.books-grid .book-tile').count(), 0, 'My books respects expired history access');
+        await page.getByRole('link', {name: 'Обзор', exact: true}).click();
+        await notice.getByRole('button', {name: 'Войти в профиль', exact: true}).waitFor();
+        await notice.getByRole('button', {name: 'Войти в профиль', exact: true}).click();
+        await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
+        await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('appearance-local-test');
+        readingFailure = '';
+        await page.getByRole('button', {name: 'OK', exact: true}).click();
+        await page.locator('.current-book').waitFor();
+        await notice.waitFor({state: 'hidden'});
+
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
+        await page.locator('.library-result-card').first().waitFor();
+        await page.waitForFunction(() => document.title.startsWith('Все книги:'));
+        assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), 'favicon.ico?v=catalog-icon-5');
+        await page.goBack(); await page.locator('.current-book').waitFor();
+        assert.equal(await page.title(), 'Обзор · INPX Web');
+        await page.goForward(); await page.locator('.library-result-card').first().waitFor();
+        await page.waitForFunction(() => document.title.startsWith('Все книги:'));
+        for (const width of [3415, 1440, 900, 760, 640, 600, 514, 390, 320]) {
+            await page.setViewportSize({width, height: 600}); await pause(150);
+            const bounds = await page.evaluate(() => {
+                const bar = document.querySelector('.result-bar'), rect = bar.getBoundingClientRect();
+                const controls = Array.from(bar.querySelectorAll('.library-pagination, .text-bold')).map(node => node.getBoundingClientRect());
+                const bulk = document.querySelector('.bulk-read-toolbar').getBoundingClientRect();
+                const mode = document.querySelector('.catalog-text-field__mode');
+                const text = mode.querySelector('.q-field__native').getBoundingClientRect(), arrow = mode.querySelector('.q-select__dropdown-icon').getBoundingClientRect();
+                return {bottom: rect.bottom, controlsBottom: Math.max(...controls.map(node => node.bottom)), bulkTop: bulk.top,
+                    modeCenter: text.y + text.height / 2, arrowCenter: arrow.y + arrow.height / 2, width: innerWidth, scroll: document.documentElement.scrollWidth};
+            });
+            assert(bounds.controlsBottom <= bounds.bottom + 1 && bounds.bulkTop >= bounds.bottom - 1, 'Catalog bars overlap: ' + JSON.stringify(bounds));
+            assert(Math.abs(bounds.modeCenter - bounds.arrowCenter) < 2, 'Matching mode and arrow must align: ' + JSON.stringify(bounds));
+            assert(bounds.scroll <= width + 1, 'Catalog must fit the viewport');
+            await screenshot(`pagination-${width}`);
+        }
+        await page.setViewportSize({width: 390, height: 844});
         const paginator = page.getByRole('navigation', {name: 'Страницы каталога', exact: true}).first();
         await paginator.getByRole('button', {name: 'Следующая страница', exact: true}).click();
         await page.waitForURL(/page=2/);
@@ -179,6 +268,12 @@ async function fixture(directory) {
         await page.waitForURL(url => !url.hash.includes('page=2'));
         await page.getByRole('textbox', {name: 'Название книги', exact: true}).fill('Ася');
         await page.waitForURL(/title=/);
+        await page.locator('.catalog-text-field__mode').first().click();
+        await page.getByRole('option', {name: 'Точно', exact: true}).click();
+        await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '=Ася');
+        await page.locator('.catalog-text-field__mode').first().click();
+        await page.getByRole('option', {name: 'Содержит', exact: true}).click();
+        await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '*Ася');
         await page.getByRole('button', {name: /Автор и серия/}).click();
         await page.getByRole('textbox', {name: 'Автор', exact: true}).fill('Иван');
         await page.waitForURL(/author=/);

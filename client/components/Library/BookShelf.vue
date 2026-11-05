@@ -2,8 +2,8 @@
     <section class="book-shelf" :aria-labelledby="headingId">
         <div class="book-shelf__heading">
             <h2 :id="headingId">{{ title }}</h2>
-            <div class="book-shelf__actions">
-                <slot name="action" />
+            <div v-if="$slots.action" class="book-shelf__link"><slot name="action" /></div>
+            <div v-if="canBack || canForward" class="book-shelf__actions">
                 <button type="button" :aria-label="`Предыдущие книги: ${title}`" :disabled="!canBack" @click="scroll(-1)"><q-icon name="la la-angle-left" size="20px" /></button>
                 <button type="button" :aria-label="`Следующие книги: ${title}`" :disabled="!canForward" @click="scroll(1)"><q-icon name="la la-angle-right" size="20px" /></button>
             </div>
@@ -39,9 +39,10 @@ onBeforeUnmount(() => observer?.disconnect());
 
 <style scoped>
 .book-shelf {min-width: 0; margin: 26px 0 0;}
-.book-shelf__heading {display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px;}
+.book-shelf__heading {display: flex; align-items: center; gap: 12px; margin-bottom: 14px;}
 h2 {font-size: 19px; line-height: 1.4; letter-spacing: -.02em; font-weight: 550; margin: 0;}
-.book-shelf__actions {display: flex; align-items: center; gap: 5px; flex-shrink: 0;}
+.book-shelf__link {flex-shrink: 0;}
+.book-shelf__actions {display: flex; align-items: center; gap: 5px; flex-shrink: 0; margin-left: auto;}
 button {background: transparent; color: var(--app-muted); border: 1px solid var(--app-border); width: 30px; height: 30px; border-radius: 50%; cursor: pointer;}
 button:disabled {opacity: .3; cursor: default;}
 button:focus-visible, .book-shelf__strip:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}

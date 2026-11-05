@@ -8,19 +8,10 @@
                 <RouterLink to="/books" class="overview-search__filters" aria-label="Открыть каталог и фильтры"><q-icon name="la la-sliders-h" size="24px" /></RouterLink>
             </form>
 
-            <div v-if="state.locked" class="library-empty">
-                <q-icon name="la la-user-lock" size="32px" />
-                <h2>Войдите в свой профиль</h2>
-                <p>Ваши книги, место чтения и личные подборки появятся здесь после входа.</p>
-                <q-btn unelevated no-caps color="primary" label="Войти в профиль" @click="library.login" />
-            </div>
-            <template v-else>
-                <div v-if="state.readingError" class="library-notice" role="alert">
-                    <q-icon name="la la-exclamation-circle" size="20px" />
-                    <span>Не удалось обновить историю. {{ state.readingError }}</span>
-                    <q-btn flat dense no-caps label="Повторить" @click="repository.loadReading(true)" />
-                </div>
-                <div class="overview-reading" :class="{'overview-reading--paired': books.current && books.recent.length}">
+            <LibraryNotice v-if="state.locked || state.readingLoginRequired" title="Войдите в свой профиль" message="История чтения, сохранённое место и личные полки появятся после входа." action-label="Войти в профиль" @action="library.login" />
+            <template v-if="!state.locked">
+                <LibraryNotice v-if="state.readingError" error title="Не удалось обновить историю" message="Проверьте подключение и попробуйте ещё раз." action-label="Повторить" :busy="state.readingLoading" @action="repository.loadReading(true)" />
+                <div v-if="!state.readingLoginRequired" class="overview-reading" :class="{'overview-reading--paired': books.current && books.recent.length}">
                     <section v-if="books.current" class="current-book" aria-labelledby="current-book-heading">
                         <div class="current-book__caption">
                             <q-icon name="la la-book-open" size="21px" aria-hidden="true" />
@@ -55,10 +46,8 @@
                     </BookShelf>
                 </div>
 
-                <div v-if="state.shelvesError" class="library-notice" role="alert">
-                    <q-icon name="la la-exclamation-circle" size="20px" /><span>Не удалось обновить подборки. {{ state.shelvesError }}</span>
-                    <q-btn flat dense no-caps label="Повторить" @click="repository.loadShelves(true)" />
-                </div>
+                <LibraryNotice v-if="state.shelvesLoginRequired && !state.readingLoginRequired" title="Подборки доступны после входа" message="Войдите в профиль, чтобы увидеть свои рекомендации." action-label="Войти в профиль" @action="library.login" />
+                <LibraryNotice v-if="state.shelvesError" error title="Не удалось обновить подборки" message="Проверьте подключение и попробуйте ещё раз." action-label="Повторить" :busy="state.shelvesLoading" @action="repository.loadShelves(true)" />
                 <div v-if="state.shelvesLoading && !state.shelvesLoaded" class="overview-loading" role="status" aria-label="Загружаем подборки">
                     <span>Собираем полки вашей библиотеки</span>
                     <div class="overview-loading__covers"><div v-for="i in 6" :key="i" class="overview-skeleton" /></div>
@@ -80,6 +69,7 @@ import {computed, ref} from 'vue';
 import {useRouter} from 'vue-router';
 import BookCover from './BookCover.vue';
 import BookShelf from './BookShelf.vue';
+import LibraryNotice from './LibraryNotice.vue';
 import {homeBooks, progress, readable, bookUid} from './libraryModel';
 import {useLibraryPage} from './useLibraryPage';
 
@@ -137,6 +127,5 @@ progress::-webkit-progress-bar {background: var(--app-border);} progress::-webki
 .overview-skeleton {aspect-ratio: 2 / 3; background: var(--app-surface-3); border-radius: 10px;}
 .overview-skeleton--hero {aspect-ratio: auto; height: 295px; max-width: 460px; border-radius: 22px;}
 @media (min-width: 1100px) {.overview-reading--paired {display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 960px); align-items: start; gap: 38px;} .overview-reading--paired > :deep(.book-shelf) {margin-top: 0;}}
-@media (min-width: 1800px) {.overview-shelves {grid-template-columns: repeat(2, minmax(0, 1fr));}}
 @media (max-width: 599px) {.overview-search {height: 54px; gap: 10px; margin-bottom: 24px; padding: 0 12px;} input {font-size: 14px;} .current-book {padding: 18px; max-width: none;} .current-book__body {gap: 15px;} .current-book__cover {width: 76px; flex-basis: 76px;} .current-book__title {font-size: 18px;} .current-book__caption {margin-bottom: 22px;} .current-book__footer {margin-top: 22px;} .overview-loading__covers {grid-template-columns: repeat(6, 112px); gap: 20px;}}
 </style>

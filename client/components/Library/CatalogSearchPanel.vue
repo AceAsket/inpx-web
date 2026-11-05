@@ -3,16 +3,11 @@
         <div class="catalog-search-panel__heading"><h1>Каталог</h1><q-select :model-value="selectedList" :options="sections" emit-value map-options borderless dense options-dense aria-label="Раздел каталога" @update:model-value="changeSection" /></div>
         <form v-if="!discovery && !extended" role="search" @submit.prevent="flush">
             <div class="catalog-search-panel__main">
-                <q-input v-model="draft.title.text" outlined clearable label="Название книги" maxlength="1000" @update:model-value="schedule">
-                    <template #prepend><q-icon name="la la-search" size="24px" /></template>
-                    <template #append><q-select v-model="draft.title.mode" :options="modes" emit-value map-options borderless dense options-dense aria-label="Совпадение названия" @update:model-value="schedule" /></template>
-                </q-input>
+                <CatalogTextField v-model:text="draft.title.text" v-model:mode="draft.title.mode" label="Название книги" mode-label="Совпадение названия" search-icon @update:text="schedule" @update:mode="schedule" />
                 <q-btn unelevated no-caps color="primary" label="Найти" icon="la la-arrow-right" type="submit" />
             </div>
             <div v-if="moreFields" class="catalog-search-panel__extra">
-                <q-input v-for="field in extraFields" :key="field.id" v-model="draft[field.id].text" outlined clearable :label="field.label" maxlength="1000" @update:model-value="schedule">
-                    <template #append><q-select v-model="draft[field.id].mode" :options="modes" emit-value map-options borderless dense options-dense :aria-label="`Совпадение: ${field.label}`" @update:model-value="schedule" /></template>
-                </q-input>
+                <CatalogTextField v-for="field in extraFields" :key="field.id" v-model:text="draft[field.id].text" v-model:mode="draft[field.id].mode" :label="field.label" @update:text="schedule" @update:mode="schedule" />
             </div>
         </form>
         <div v-if="extended" class="catalog-search-panel__extended"><span>{{ extSummary || 'Задайте условия расширенного поиска' }}</span><q-btn outline no-caps label="Параметры поиска" @click="$emit('edit-extended')" /><q-btn v-if="extSummary" flat no-caps label="Очистить" @click="$emit('clear-extended')" /></div>
@@ -32,6 +27,7 @@
 <script setup>
 import {reactive, ref, computed, watch, onBeforeUnmount, onDeactivated} from 'vue';
 import CatalogFiltersDialog from './CatalogFiltersDialog.vue';
+import CatalogTextField from './CatalogTextField.vue';
 import {textFields, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters} from './catalogSearchModel';
 
 const props = defineProps({search: {type: Object, required: true}, selectedList: String, listOptions: Array,
@@ -40,7 +36,6 @@ const props = defineProps({search: {type: Object, required: true}, selectedList:
 const emit = defineEmits(['patch', 'section', 'save-shelf', 'edit-extended', 'clear-extended']);
 const draft = reactive(Object.fromEntries(textFields.map(field => [field, decodeText(props.search[field])])));
 const moreFields = ref(!!(props.search.author || props.search.series)), filtersVisible = ref(false);
-const modes = [{label: 'Содержит', value: 'contains'}, {label: 'Начинается', value: 'starts'}, {label: 'Точно', value: 'exact'}];
 const extraFields = [{id: 'author', label: 'Автор'}, {id: 'series', label: 'Серия'}];
 const sections = computed(() => (props.listOptions || []).map(option => ({...option, label: option.value === 'extended' ? 'Расширенный поиск' : option.value === 'books' ? 'Все книги' : option.label})));
 const chips = computed(() => activeFilters(props.search, props.genreMap, props.sources));
@@ -73,14 +68,9 @@ onBeforeUnmount(() => clearTimeout(timer));
 h1 {font-size: 26px; font-weight: 550; line-height: 1.3; letter-spacing: -.03em; margin: 0;}
 .catalog-search-panel__heading > .q-select {min-width: 140px; font-size: 13px;}
 .catalog-search-panel__main {display: flex; gap: 12px; align-items: stretch;}
-.catalog-search-panel__main > .q-input {flex: 1; min-width: 0;}
+.catalog-search-panel__main > .catalog-text-field {flex: 1; min-width: 0;}
 .catalog-search-panel__main > .q-btn {border-radius: 14px; padding: 0 24px;}
 .catalog-search-panel__extra {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px;}
-.catalog-search-panel :deep(.q-field--outlined > .q-field__inner > .q-field__control) {border-radius: 14px; min-height: 56px;}
-.catalog-search-panel :deep(.q-field__append .q-select) {font-size: 11px; max-width: 102px;}
-.catalog-search-panel :deep(.q-field__append .q-field__control) {min-height: 30px; padding: 0; background: transparent !important; border: 0 !important; box-shadow: none !important;}
-.catalog-search-panel :deep(.q-field__append .q-field__control::before), .catalog-search-panel :deep(.q-field__append .q-field__control::after) {border: 0 !important;}
-.catalog-search-panel :deep(.q-field--outlined > .q-field__inner > .q-field__control) {background: var(--app-surface) !important;}
 .catalog-search-panel__tools {display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center;}
 .catalog-search-panel__tools > button {display: flex; align-items: center; justify-content: center; gap: 7px; background: transparent; color: var(--app-muted); font: inherit; font-size: 13px; border: 0; border-radius: 10px; padding: 9px 10px; cursor: pointer;}
 .catalog-search-panel__tools > button:hover {background: var(--app-surface-3);}

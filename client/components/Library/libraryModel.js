@@ -93,5 +93,9 @@ function genreMapFromTree(tree = []) {
     return result;
 }
 
+function profileLoginError(error) {
+    return error?.code === 'need_profile_login' || error?.message === 'need_profile_login';
+}
+
 module.exports = {appearance, appearanceRedirect, libraryRoutes, catalogRoutes, bookUid, progress, coverUrl,
-    readable, recentBooks, homeBooks, personalAccess, identity, discoveryOptions, normalizeShelves, genreMapFromTree};
+    readable, recentBooks, homeBooks, personalAccess, identity, discoveryOptions, normalizeShelves, genreMapFromTree, profileLoginError};

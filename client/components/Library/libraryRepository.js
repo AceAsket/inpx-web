@@ -1,11 +1,12 @@
-const {identity, personalAccess, discoveryOptions, normalizeShelves} = require('./libraryModel');
+const {identity, personalAccess, discoveryOptions, normalizeShelves, profileLoginError} = require('./libraryModel');
 
 const READING_TTL = 30000;
 const DISCOVERY_TTL = 15 * 60 * 1000;
 
 function emptyState() {
     return {revision: 0, reading: null, lists: [], shelves: [], readingLoading: false, shelvesLoading: false,
-        readingError: '', listsError: '', shelvesError: '', readingLoaded: false, shelvesLoaded: false, locked: false};
+        readingError: '', listsError: '', shelvesError: '', readingLoginRequired: false, shelvesLoginRequired: false,
+        readingLoaded: false, shelvesLoaded: false, locked: false};
 }
 
 // Private, in-memory data only. Never add this state to the persisted settings store.
@@ -48,7 +49,7 @@ class LibraryRepository {
     }
 
     async run(kind, force, ttl, work) {
-        if (this.state.locked) return;
+        if (this.state.locked || this.state[`${kind}LoginRequired`]) return;
         if (this.pending[kind]) return this.pending[kind];
         if (!force && this.loadedAt[kind] !== undefined && this.now() - this.loadedAt[kind] < ttl) return;
         const epoch = this.epoch;
@@ -62,7 +63,10 @@ class LibraryRepository {
                 this.loadedAt[kind] = this.now();
                 this.patch({...patch, [`${kind}Loaded`]: true});
             } catch (error) {
-                if (current()) this.patch({[`${kind}Error`]: error.message || 'Не удалось загрузить данные'});
+                if (current()) {
+                    if (profileLoginError(error)) this.requireLogin(kind);
+                    else this.patch({[`${kind}Error`]: error.message || 'Не удалось загрузить данные'});
+                }
             } finally {
                 if (current()) {
                     delete this.pending[kind];
@@ -72,6 +76,12 @@ class LibraryRepository {
         })();
         this.pending[kind] = pending;
         return pending;
+    }
+
+    requireLogin(kind) {
+        delete this.loadedAt[kind];
+        this.patch({[`${kind}LoginRequired`]: true, [`${kind}Error`]: '', [`${kind}Loaded`]: false,
+            ...(kind === 'reading' ? {reading: null, lists: [], listsError: ''} : {shelves: []})});
     }
 
     loadReading(force = false) {
@@ -87,7 +97,7 @@ class LibraryRepository {
             ]);
             if (reading.status === 'rejected') throw reading.reason;
             return {reading: reading.value, lists: lists.status === 'fulfilled' ? lists.value.lists || [] : [],
-                listsError: lists.status === 'rejected' ? lists.reason.message : ''};
+                listsError: lists.status === 'rejected' && !profileLoginError(lists.reason) ? lists.reason.message : ''};
         });
     }
 

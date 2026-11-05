@@ -3,7 +3,7 @@
         <div class="library-page__body">
             <div class="books-heading"><h1>{{ selectedList?.name || 'Мои книги' }}</h1><q-btn flat no-caps icon="la la-bookmark" label="Управление полками" @click="library.openLists()" /></div>
             <p class="library-page__subtitle">{{ selectedList ? 'Книги на вашей полке' : 'Продолжайте читать и возвращайтесь к любимым историям' }}</p>
-            <div v-if="state.locked" class="library-empty"><h2>Войдите в свой профиль</h2><p>История чтения и полки привязаны к профилю.</p><q-btn color="primary" unelevated no-caps label="Войти в профиль" @click="library.login" /></div>
+            <LibraryNotice v-if="state.locked || state.readingLoginRequired" title="Войдите в свой профиль" message="История чтения и личные полки появятся после входа." action-label="Войти в профиль" @action="library.login" />
             <template v-else>
                 <div v-if="state.lists.length" class="books-lists" aria-label="Мои полки">
                     <RouterLink to="/my-books" :class="{'is-active': !listId}">История чтения</RouterLink>
@@ -15,7 +15,7 @@
                     </div>
                     <q-input v-model="query" outlined dense clearable label="Найти среди моих книг" class="books-search"><template #prepend><q-icon name="la la-search" /></template></q-input>
                 </div>
-                <div v-if="error" class="library-notice" role="alert"><span>{{ error }}</span><q-btn flat dense no-caps label="Повторить" @click="load" /></div>
+                <LibraryNotice v-if="error" error title="Не удалось загрузить книги" message="Проверьте подключение и попробуйте ещё раз." action-label="Повторить" :busy="loading" @action="load" />
                 <div v-if="loading" class="library-notice" role="status"><q-spinner size="20px" /> Загружаем книги…</div>
                 <div v-if="items.length" class="books-grid" :aria-busy="loading">
                     <BookTile v-for="book in items" :key="bookUid(book)" :book="book" />
@@ -31,7 +31,8 @@
 import {ref, computed, watch, onBeforeUnmount, onDeactivated} from 'vue';
 import {useRoute} from 'vue-router';
 import BookTile from './BookTile.vue';
-import {bookUid} from './libraryModel';
+import LibraryNotice from './LibraryNotice.vue';
+import {bookUid, profileLoginError} from './libraryModel';
 import {useLibraryPage} from './useLibraryPage';
 
 const {library, active} = useLibraryPage('Мои книги', async() => {await library.repository.loadReading(true); if (active.value) load();});
@@ -47,7 +48,7 @@ function schedule() {
     if (active.value) timer = setTimeout(load, 500);
 }
 async function load() {
-    if (!active.value || state.locked) return;
+    if (!active.value || state.locked || state.readingLoginRequired) return;
     queued = true;
     sequence++;
     if (running) return;
@@ -65,7 +66,11 @@ async function load() {
                 items.value = (list ? response.books || [] : response.items || []).filter(book => bookUid(book) && !book.hidden);
                 count.value = Number(list ? response.list?.bookCount : response.count) || items.value.length;
             } catch (failure) {
-                if (active.value && request === sequence && epoch === state.revision) {items.value = []; error.value = failure.message;}
+                if (active.value && request === sequence && epoch === state.revision) {
+                    items.value = [];
+                    if (profileLoginError(failure)) library.repository.requireLogin('reading');
+                    else error.value = failure.message || 'Не удалось загрузить книги';
+                }
             }
         }
     } finally {running = false; loading.value = false;}
