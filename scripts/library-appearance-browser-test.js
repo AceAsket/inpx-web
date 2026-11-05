@@ -28,8 +28,12 @@ async function fixture(directory) {
     const books = Array.from({length: 3}, (_, edition) => seedBooks.map(([author, title]) => [author, edition ? `${title} · Издание ${edition + 1}` : title])).flat();
     const date = new Date().toISOString().slice(0, 10);
     const rows = books.map(([author, title], index) => [author + ':', 'prose:', title, index % 4 === 0 ? 'Избранные произведения' : '', String(index % 4 + 1), String(index + 1), '100', String(index + 1), '0', 'fb2', date, 'ru', '4', ''].join('\x04'));
+    const epubFile = path.join(directory, 'source.epub');
+    await require('./epub-fb2-tests').fixture(epubFile);
+    const epub = await fs.readFile(epubFile);
+    rows.push(['Тестовый Автор:', 'prose:', 'Я. Книга EPUB', '', '', '37', String(epub.length), '37', '0', 'epub', date, 'ru', '4', ''].join('\x04'));
     await archive(path.join(directory, 'sample.inpx'), [['collection.info', 'Библиотека для проверки интерфейса\n'], ['version.info', '20261104'], ['sample.inp', rows.join('\n') + '\n']]);
-    await archive(path.join(directory, 'sample.zip'), books.map(([author, title], index) => [`${index + 1}.fb2`, `<?xml version="1.0" encoding="utf-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>prose</genre><author><first-name>${author}</first-name></author><book-title>${title}</book-title><annotation><p>Книга для проверки интерфейса INPX Reader.</p></annotation><lang>ru</lang></title-info></description><body><section id="chapter"><title><p>Глава первая</p></title>${Array.from({length: 120}, (_, i) => `<p>Абзац ${i + 1}. За окном начиналось утро. Это текст тестовой библиотеки для проверки чтения, сохранения позиции и возвращения к книге.</p>`).join('')}</section></body></FictionBook>`]));
+    await archive(path.join(directory, 'sample.zip'), books.map(([author, title], index) => [`${index + 1}.fb2`, `<?xml version="1.0" encoding="utf-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>prose</genre><author><first-name>${author}</first-name></author><book-title>${title}</book-title><annotation><p>Книга для проверки интерфейса INPX Reader.</p></annotation><lang>ru</lang></title-info></description><body><section id="chapter"><title><p>Глава первая</p></title>${Array.from({length: 120}, (_, i) => `<p>Абзац ${i + 1}. За окном начиналось утро. Это текст тестовой библиотеки для проверки чтения, сохранения позиции и возвращения к книге.</p>`).join('')}</section></body></FictionBook>`]).concat([['37.epub', epub]]));
     await fs.writeJson(path.join(directory, 'config.json'), {loggingEnabled: false, adminPassword: 'appearance-local-test',
         allowAnonymousAccess: true, onlineReaderEnabled: true, discovery: {enabled: true}});
 }
@@ -83,8 +87,9 @@ async function fixture(directory) {
             });
         });
         page.on('pageerror', error => errors.push(error.message));
+        page.on('console', message => {if (message.text().includes('Failed to resolve component')) errors.push(message.text());});
         page.on('websocket', socket => socket.on('framesent', frame => {try {actions.push(JSON.parse(frame.payload).action);} catch { /* Binary. */ }}));
-        const screenshot = async name => {const file = path.join(directory, name + '.png'); await page.screenshot({path: file}); artifacts.push(file);};
+        const screenshot = async name => {const file = path.join(directory, name + '.png'); await page.screenshot({path: file, animations: 'disabled'}); artifacts.push(file);};
         const api = async source => page.evaluate(async source => {
             const settings = JSON.parse(localStorage.getItem('vuex') || '{}').settings || {};
             const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
@@ -111,9 +116,14 @@ async function fixture(directory) {
                 }});
             } finally {socket.close();}
         }, source);
-        await page.goto(base + '/#/books?lang=ru');
+        await page.goto(base + '/#/?lang=ru');
         await page.locator('.search-list-toggle').waitFor();
         assert.equal(await page.locator('.library-shell--active').count(), 0, 'Classic is the default');
+        await page.getByRole('note', {name: 'Новое оформление библиотеки'}).waitFor();
+        await page.getByRole('button', {name: 'Скрыть подсказку об оформлении', exact: true}).click();
+        await page.reload(); await page.locator('.search-list-toggle').waitFor();
+        assert.equal(await page.locator('.appearance-hint').count(), 0, 'Hint dismissal persists in this browser');
+        assert.equal(await page.locator('.author-group').count(), 0, 'Default catalog displays books, not authors');
         await page.locator('.profile-login-action,.profile-status-chip').first().click();
         await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
         await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('appearance-local-test');
@@ -124,7 +134,7 @@ async function fixture(directory) {
         await api(`const uids=${JSON.stringify(uids)}; for(let i=0;i<4;i++) await root.api.updateReaderProgress(uids[i], {percent:[.34,.14,.01,1][i],sectionId:'chapter'}); return true;`);
 
         await page.getByRole('button', {name: 'Настройки', exact: true}).click();
-        await page.getByRole('button', {name: /^Полки/}).click();
+        await page.getByRole('button', {name: /^Новый дизайн/}).click();
         await page.getByRole('navigation', {name: 'Разделы библиотеки'}).waitFor();
         await page.getByRole('link', {name: 'Обзор', exact: true}).click();
         await page.locator('.current-book').waitFor();
@@ -134,7 +144,14 @@ async function fixture(directory) {
         assert(await page.getByRole('heading', {name: /Новинки/}).count() >= 1, 'Server shelf titles must reach the UI');
         assert.equal(await page.locator('.current-book progress').getAttribute('value'), '0.01', 'Most recently opened unfinished book is current');
         const currentTitle = await page.locator('.current-book__title').innerText();
-        assert.equal(await page.locator('#recent-books-heading').locator('..').locator('..').getByRole('button', {name: `Читать: ${currentTitle}`, exact: true}).count(), 0, 'Current book is not repeated in recents');
+        assert.equal(await page.locator('#recent-books-heading').locator('..').locator('..').getByRole('button', {name: `Открыть карточку: ${currentTitle}`, exact: true}).count(), 0, 'Current book is not repeated in recents');
+        for (const cover of [page.locator('.current-book__cover'), page.locator('.book-tile__open').first()]) {
+            await cover.click();
+            await page.locator('.library-book-actions').waitFor();
+            assert(!page.url().includes('/reader'), 'Cover opens the card without starting reading');
+            await page.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+            await page.locator('.q-dialog').waitFor({state: 'hidden'});
+        }
 
         await page.getByRole('link', {name: 'Открыть мой профиль', exact: true}).focus();
         await page.keyboard.press('Enter');
@@ -149,6 +166,10 @@ async function fixture(directory) {
             });
             assert(geometry.documentWidth <= width + 1 && geometry.pageWidth <= geometry.mainWidth + 1, JSON.stringify(geometry));
             if (width >= 1800) assert(geometry.bodyWidth >= geometry.mainWidth - 80, 'Overview must use the available width');
+            if (width >= 900) {
+                assert(await page.locator('.library-shell__nav-bottom strong').evaluate(node => node.scrollWidth <= node.clientWidth), 'Profile name is not clipped');
+                assert(await page.locator('.library-shell__nav-bottom small').evaluate(node => node.getBoundingClientRect().height <= 16 && node.scrollWidth <= node.clientWidth), 'Profile subtitle fits on one line');
+            }
             assert.equal(geometry.shelfColumns, 1, 'Every discovery shelf gets a full row');
             const recent = page.locator('.book-shelf').filter({has: page.locator('#recent-books-heading')});
             const heading = await recent.locator('h2').boundingBox(), all = await recent.getByRole('link', {name: 'Все', exact: true}).boundingBox();
@@ -173,9 +194,11 @@ async function fixture(directory) {
         await page.getByText('Книга для проверки интерфейса INPX Reader.', {exact: true}).waitFor();
         await page.getByRole('button', {name: 'OK', exact: true}).click();
         assert.equal(await page.locator('body').getAttribute('data-catalog-appearance'), 'shelves');
-        const discoveryBefore = actions.filter(action => action === 'get-discovery-shelves').length;
         await page.getByRole('link', {name: 'Мои книги', exact: true}).click();
         await page.locator('.books-grid .book-tile').first().waitFor();
+        await page.locator('.books-grid .book-tile__open').first().click();
+        await page.locator('.library-book-actions').waitFor();
+        await page.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
         await page.getByRole('link', {name: 'Профиль', exact: true}).click();
         await page.locator('.profile-card').waitFor();
         await screenshot('profile-dark-390');
@@ -183,12 +206,57 @@ async function fixture(directory) {
             await page.getByRole('button', {name: new RegExp('^' + label)}).click();
             const panel = page.locator(`.library-dialog-card[data-dialog-kind="${kind}"]`);
             await panel.waitFor(); await pause(350);
+            if (kind === 'profiles') {
+                assert.equal(await panel.locator('.profile-card--current').getByRole('button', {name: 'Выбрать', exact: true}).count(), 0, 'Current profile cannot be selected again');
+                assert.equal(await panel.locator('.opds-link').count(), 0, 'Admin profile is not offered as a public OPDS profile');
+                await panel.getByRole('button', {name: 'Новый профиль', exact: true}).click();
+                await panel.getByRole('textbox', {name: 'Имя профиля', exact: true}).fill('Отменённый профиль');
+                assert.equal(await panel.locator('.profiles-box').count(), 0, 'Creation has its own screen, not a form above the profile list');
+                assert.equal(await panel.getByRole('textbox', {name: 'Email для отправки', exact: true}).isVisible(), false, 'Optional creation fields start collapsed');
+                await screenshot('profile-create-dark-390');
+                await panel.locator('.profile-create-extra summary').click();
+                await panel.getByRole('textbox', {name: 'Email для отправки', exact: true}).waitFor();
+                await screenshot('profile-create-expanded-dark-390');
+                await panel.getByRole('button', {name: 'Отмена', exact: true}).click();
+                await panel.getByRole('button', {name: 'Новый профиль', exact: true}).click();
+                assert.equal(await panel.getByRole('textbox', {name: 'Имя профиля', exact: true}).inputValue(), '', 'Cancel clears the unsaved profile');
+                await panel.getByRole('textbox', {name: 'Имя профиля', exact: true}).fill('Браузерный профиль');
+                await panel.getByRole('textbox', {name: 'Логин', exact: true}).fill('browser-profile');
+                await panel.getByRole('textbox', {name: 'Пароль', exact: true}).fill('browser-profile-password');
+                await panel.getByRole('button', {name: 'Создать', exact: true}).click();
+                const createdProfile = panel.locator('.profile-card').filter({hasText: 'Браузерный профиль'});
+                await createdProfile.waitFor();
+                await createdProfile.getByRole('button', {name: 'Выбрать', exact: true}).click();
+                await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('browser-profile');
+                await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('browser-profile-password');
+                await page.getByRole('button', {name: 'OK', exact: true}).click();
+                await panel.locator('.profile-card--current').filter({hasText: 'Браузерный профиль'}).waitFor();
+                assert.equal(await panel.getByRole('button', {name: 'Новый профиль', exact: true}).count(), 0, 'Ordinary profiles cannot manage other profiles');
+                await panel.getByRole('button', {name: 'Войти в другой профиль', exact: true}).click();
+                await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
+                await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('appearance-local-test');
+                await page.getByRole('button', {name: 'OK', exact: true}).click();
+                await panel.getByRole('button', {name: 'Новый профиль', exact: true}).waitFor();
+                assert.equal(await panel.locator('.dialog-box').evaluate(node => getComputedStyle(node).overflowY), 'visible', 'Only the dialog body scrolls');
+                await panel.locator('.profile-card--current').getByRole('button', {name: 'Настройки', exact: true}).click();
+                await panel.getByRole('button', {name: 'Сохранить изменения', exact: true}).click();
+                await panel.getByRole('button', {name: 'Сохранить изменения', exact: true}).waitFor({state: 'visible'});
+                await panel.locator('.profile-card--current').getByRole('button', {name: 'Чтение', exact: true}).click();
+                await page.setViewportSize({width: 1440, height: 1000});
+                await screenshot('profiles-dark-1440');
+                await page.setViewportSize({width: 390, height: 844});
+            }
             const bounds = await panel.evaluate(node => ({width: node.clientWidth, scroll: node.scrollWidth, height: node.getBoundingClientRect().height}));
             assert(bounds.scroll <= bounds.width + 1 && bounds.height <= 844 - 24, kind + ' must fit a phone');
             await screenshot(`${kind}-dark-390`);
             await panel.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
             await panel.waitFor({state: 'hidden'});
         }
+        await page.getByRole('link', {name: 'Обзор', exact: true}).click();
+        await page.locator('.current-book').waitFor();
+        await page.waitForFunction(() => !document.querySelector('.overview-loading'));
+        const discoveryBefore = actions.filter(action => action === 'get-discovery-shelves').length;
+        await page.getByRole('link', {name: 'Профиль', exact: true}).click();
         await page.getByRole('link', {name: 'Обзор', exact: true}).click();
         await page.locator('.current-book').waitFor();
         assert.equal(actions.filter(action => action === 'get-discovery-shelves').length, discoveryBefore, 'Navigation reuses cached shelves');
@@ -237,6 +305,13 @@ async function fixture(directory) {
 
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
         await page.locator('.library-result-card').first().waitFor();
+        await page.locator('.library-result-card__cover').first().click();
+        await page.locator('.library-book-actions').waitFor();
+        await page.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+        assert.equal(await page.locator('.search-scroll > .separator:visible').count(), 0, 'Pagination has no extra separator');
+        assert(await page.locator('.catalog-search-panel__section').evaluate(node => node.classList.contains('q-field--outlined')), 'Catalog section has a visible outline');
+        await page.locator('.catalog-search-panel__section').click();
+        await page.getByRole('option', {name: 'Все книги', exact: true}).click();
         await page.waitForFunction(() => document.title.startsWith('Все книги:'));
         assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), 'favicon.ico?v=catalog-icon-5');
         await page.goBack(); await page.locator('.current-book').waitFor();
@@ -295,7 +370,30 @@ async function fixture(directory) {
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
         assert.equal(await page.getByRole('textbox', {name: 'Название книги', exact: true}).inputValue(), 'Ася', 'Catalog navigation preserves the query');
         assert.equal(await page.getByRole('textbox', {name: 'Автор', exact: true}).inputValue(), 'Иван');
-        for (const [section, ready] of [['author', '.author-group'], ['series', '.series-group'], ['title', '.library-result-card'], ['extended', '.library-result-card'], ['for-you', '.discovery-shelf'], ['newest', '.discovery-shelf'], ['popular', '.discovery-shelf'], ['bestsellers', '.author-group']]) {
+        await page.goto(base + '/#/books?ext=epub');
+        const epubCard = page.locator('.library-result-card').filter({hasText: 'Я. Книга EPUB'});
+        await epubCard.waitFor();
+        await epubCard.getByRole('button', {name: 'Открыть карточку: Я. Книга EPUB', exact: true}).click();
+        await page.locator('.library-book-actions').waitFor();
+        const formats = page.locator('.book-actions-formats');
+        await formats.click(); await page.getByRole('option', {name: 'FB2', exact: true}).click();
+        const fb2Href = await page.locator('.book-actions-download').getAttribute('href');
+        const download = await page.request.get(new URL(fb2Href, base).href);
+        assert.equal(download.status(), 200);
+        assert((await download.text()).includes('Текст второй главы'), 'FB2 download contains the original EPUB text');
+        assert((download.headers()['content-disposition'] || '').includes('.fb2'), 'Converted download has the FB2 extension');
+        await page.locator('.library-book-actions').getByRole('button', {name: 'Читать', exact: true}).click();
+        await page.waitForURL(/#\/reader\?bookUid=/);
+        const readerUrl = page.url();
+        await page.locator('.reader-body').getByText(/Текст второй главы/).first().waitFor();
+        await page.waitForFunction(() => !document.querySelector('.reader-loading,.reader-reflow-indicator,.reader-error'));
+        await page.reload();
+        await page.locator('.reader-body').getByText(/Текст второй главы/).first().waitFor();
+        await page.waitForFunction(() => !document.querySelector('.reader-loading,.reader-reflow-indicator,.reader-error'));
+        assert.equal(page.url(), readerUrl, 'Converted EPUB retains its original UID when reopening');
+        await screenshot('epub-reader-dark-390');
+        await page.goBack(); await epubCard.waitFor();
+        for (const [section, ready] of [['author', '.author-group'], ['series', '.series-group'], ['title', '.library-result-card'], ['extended', '.library-result-card'], ['for-you', '.discovery-shelf'], ['newest', '.discovery-shelf'], ['popular', '.discovery-shelf'], ['bestsellers', '.library-result-card']]) {
             await page.setViewportSize({width: 1440, height: 1000});
             await page.goto(base + '/#/' + section + '?lang=ru');
             await page.locator(ready).first().waitFor();
@@ -320,12 +418,13 @@ async function fixture(directory) {
         await page.getByRole('button', {name: /^Классический/}).click();
         await page.locator('.search-list-toggle').waitFor();
         assert.equal(await page.locator('.library-shell--active').count(), 0);
+        assert.equal(await page.locator('.appearance-hint').count(), 0, 'Users who tried the new design do not see the hint again');
         await page.reload(); await page.locator('.search-list-toggle').waitFor();
         assert.equal(await page.locator('.library-shell--active').count(), 0, 'Classic selection persists');
         await screenshot('classic-dark-390');
 
         await page.getByRole('button', {name: 'Настройки', exact: true}).click();
-        await page.getByRole('button', {name: /^Полки/}).click();
+        await page.getByRole('button', {name: /^Новый дизайн/}).click();
         await page.getByRole('link', {name: 'Профиль', exact: true}).click();
         await page.locator('.profile-card').waitFor();
         await page.locator('.profile-bottom .profile-logout').click();
@@ -336,6 +435,13 @@ async function fixture(directory) {
         assert.equal(await page.locator('.current-book').count(), 0, 'Logout clears private reading history');
         await page.reload(); await page.locator('.overview-welcome').waitFor();
         assert.equal(await page.locator('.library-shell--active').count(), 1, 'Shelves selection persists');
+        const fresh = await browser.newPage({viewport: {width: 390, height: 844}});
+        await fresh.goto(base + '/#/');
+        await fresh.getByRole('button', {name: 'Переключить дизайн', exact: true}).click();
+        await fresh.getByRole('navigation', {name: 'Разделы библиотеки'}).waitFor();
+        await fresh.reload(); await fresh.locator('.library-shell--active').waitFor();
+        assert.equal(await fresh.locator('.appearance-hint').count(), 0);
+        await fresh.close();
         assert.deepEqual(errors, []);
         await fs.writeJson(path.join(directory, 'result.json'), {base, artifacts, errors, actions}, {spaces: 2});
         console.log(`Library appearance: classic/shelves, persistence, mobile/tablet/desktop, light/dark, reading progress, catalog query, cached shelves and logout passed. Artifacts: ${directory}`);

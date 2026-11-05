@@ -23,7 +23,6 @@
                 <RouterLink to="/profile" class="library-shell__nav-bottom" aria-label="Открыть мой профиль">
                     <span class="library-shell__profile-initial">{{ profileName.slice(0, 1).toUpperCase() }}</span>
                     <div><strong>{{ profileName }}</strong><small>{{ config.profileAuthorized ? 'Личная библиотека' : 'Общая библиотека' }}</small></div>
-                    <q-icon name="la la-angle-right" size="16px" aria-hidden="true" />
                 </RouterLink>
             </nav>
         </template>
@@ -219,14 +218,13 @@ body[data-catalog-appearance="shelves"] .q-btn.bg-primary {color: var(--library-
 .library-nav-link.is-active {background: var(--app-surface-2); color: var(--app-primary);}
 .library-nav-link:focus-visible {outline: 3px solid var(--app-primary); outline-offset: 2px;}
 .library-shell__main {grid-area: main; min-width: 0; min-height: 0; overflow: hidden;}
-.library-shell__nav-bottom {margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 12px 8px; min-width: 0; border-radius: 14px; color: var(--app-text); text-decoration: none;}
+.library-shell__nav-bottom {margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 12px 4px; min-width: 0; border-radius: 14px; color: var(--app-text); text-decoration: none;}
 .library-shell__nav-bottom:hover {background: var(--app-surface-3);}
 .library-shell__nav-bottom:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 2px;}
-.library-shell__nav-bottom > .q-icon {margin-left: auto; color: var(--app-muted);}
 .library-shell__profile-initial {display: grid; place-items: center; background: var(--app-surface-2); border-radius: 11px; width: 34px; height: 34px; color: var(--app-primary); flex-shrink: 0; font-weight: 600;}
-.library-shell__nav-bottom > div {min-width: 0;}
-.library-shell__nav-bottom strong {display: block; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-.library-shell__nav-bottom small {color: var(--app-muted); font-size: 10px;}
+.library-shell__nav-bottom > div {min-width: 0; flex: 1;}
+.library-shell__nav-bottom strong {display: block; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere;}
+.library-shell__nav-bottom small {display: block; color: var(--app-muted); font-size: 10px; line-height: 1.5; margin-top: 3px; white-space: nowrap;}
 @media (min-width: 600px) and (max-width: 899px) {.library-shell--active {grid-template-columns: 84px minmax(0, 1fr);} .library-shell__nav {padding: 22px 8px;} .library-nav-link {flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; padding: 8px 2px;} .library-shell__nav-bottom {justify-content: center;} .library-shell__nav-bottom > div, .library-shell__nav-bottom > .q-icon {display: none;}}
 @media (max-width: 599px) {
     .library-shell--active {grid-template: 'header' 64px 'main' minmax(0, 1fr) 'nav' auto / minmax(0, 1fr);}

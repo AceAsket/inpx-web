@@ -143,4 +143,4 @@ async function executeProcess(command, args, options, scope, signal) {
     });
 }
 
-module.exports = {ConversionRuntime, runProcess};
+module.exports = {ConversionRuntime, runProcess, deadline: () => context.getStore()?.deadline};

@@ -9058,7 +9058,7 @@ class Reader {
                 this.bookInfo = (bookResponse ? bookResponse.bookInfo : null);
                 const info = (this.bookInfo || {});
                 if (!info.fb2)
-                    throw new Error('Встроенная читалка пока поддерживает только FB2.');
+                    throw new Error('Для этой книги недоступна подготовка текста для чтения.');
 
                 await this.applyReaderDocumentSource({
                     book: (info.book || {}),

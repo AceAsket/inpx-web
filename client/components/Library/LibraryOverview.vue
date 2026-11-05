@@ -19,9 +19,9 @@
                             <button type="button" :aria-label="`Действия с книгой: ${books.current.title}`" @click="library.openActions(books.current)"><q-icon name="la la-ellipsis-v" size="23px" /></button>
                         </div>
                         <div class="current-book__body">
-                            <button type="button" class="current-book__cover" :aria-label="`Открыть: ${books.current.title}`" @click="library.openBook(books.current)"><BookCover :book="books.current" /></button>
+                            <button type="button" class="current-book__cover" :aria-label="`Открыть карточку: ${books.current.title}`" @click="library.openActions(books.current)"><BookCover :book="books.current" /></button>
                             <div class="current-book__info">
-                                <button type="button" class="current-book__title" @click="library.openBook(books.current)">{{ books.current.title }}</button>
+                                <button type="button" class="current-book__title" @click="library.openActions(books.current)">{{ books.current.title }}</button>
                                 <div class="current-book__author">{{ books.current.author || 'Автор не указан' }}</div>
                                 <div v-if="books.current.series" class="current-book__series">{{ books.current.series }}<span v-if="books.current.serno"> · {{ books.current.serno }}</span></div>
                             </div>

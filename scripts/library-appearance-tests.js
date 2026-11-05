@@ -192,7 +192,8 @@ async function testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability
     assert.deepEqual(home.recent.map(book => book.bookUid), ['read']);
     assert.equal(model.progress({_readerProgress: {percent: .23}}), .23);
     assert.equal(model.progress({discoveryReason: '37% прочитано'}), null, 'Never parse UI text as reading state');
-    assert.equal(model.readable({bookUid: 'a', ext: 'epub'}, {onlineReaderEnabled: true}), false);
+    assert.equal(model.readable({bookUid: 'a', ext: 'epub'}, {onlineReaderEnabled: true}), true);
+    assert.equal(model.readable({bookUid: 'a', ext: 'epub'}, {onlineReaderEnabled: true, conversionEnabled:false}), false);
     assert.equal(model.readable({bookUid: 'a', ext: 'fb2'}, {onlineReaderEnabled: true}), true);
     assert.equal(model.readable({bookUid: 'a', ext: 'fb2', unavailable: true}, {onlineReaderEnabled: true}), false);
     assert.equal(model.coverUrl({bookUid: 'source:a/b'}, '/library/'), '/library/cover/by-uid?uid=source%3Aa%2Fb');
@@ -259,6 +260,8 @@ async function testLibraryBookActionsHideUnsupportedReadingAndUnknownSize() {
     value.$store = {state: {settings: {}, config: {onlineReaderEnabled: true, bookReadLink: '', conversionEnabled: true, conversionFormats: ['epub', 'pdf']}}};
     value.book = {_uid: 'one', ext: 'epub', size: 0};
     assert.equal(value.canRead, false, 'An EPUB must not offer unsupported in-browser reading');
+    value.$store.state.config.conversionFormats.push('fb2'); assert.equal(value.canRead, true, 'EPUB reading is offered when FB2 conversion is enabled');
+    value.$store.state.config.conversionFormats.pop();
     assert.equal(value.sizeLabel, '', 'An unknown file size is not 0 KB');
     assert.deepEqual(value.downloadFormats.map(format => format.value), ['raw', 'pdf']);
     value.book.ext = 'fb2'; assert.equal(value.canRead, true);

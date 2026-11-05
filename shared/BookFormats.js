@@ -1,4 +1,4 @@
-const formats = ['epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf', 'mobi'];
+const formats = ['fb2', 'epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf', 'mobi'];
 const defaults = formats.filter(format => format !== 'mobi');
 const preferenceFields = {download:'defaultDownloadFormat', email:'defaultEmailFormat', telegram:'defaultTelegramFormat', opds:'defaultOpdsFormat'};
 
@@ -16,7 +16,12 @@ function configured(config = {}) {
 
 function available(ext, config = {}) {
     const source = String(ext || '').toLowerCase();
-    return configured(config).filter(format => source === 'fb2' || source === 'epub' && ['pdf', 'mobi'].includes(format));
+    return ['fb2', 'epub'].includes(source) ? configured(config).filter(format => format !== source) : [];
+}
+
+function canRead(ext, config = {}) {
+    const source = String(ext || '').toLowerCase();
+    return !!config.onlineReaderEnabled && (source === 'fb2' || source === 'epub' && available(source, config).includes('fb2'));
 }
 
 function resolve(ext, config = {}, preference = 'original', explicit = '') {
@@ -38,4 +43,4 @@ function profilePreference(config = {}, channel = 'download') {
     return config.profileAuthorized ? preference(config.currentUserProfile || {}, channel) : 'original';
 }
 
-module.exports = {formats, normalize, configured, available, resolve, preference, preferenceFields, profilePreference};
+module.exports = {formats, normalize, configured, available, resolve, preference, preferenceFields, profilePreference, canRead};

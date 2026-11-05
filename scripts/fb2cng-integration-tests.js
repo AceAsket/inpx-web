@@ -98,6 +98,22 @@ async function main() {
         assert.doesNotMatch((await epubContents(noCover.filePath)).opf, /<meta[^>]*name="cover"/);
         assert.strictEqual(await fs.readFile(source, 'utf8'), original);
         console.log('ok: --no-cover, original FB2 unchanged');
+
+        const epubSource = await prepare('epub');
+        const roundTrip = format => converter.prepareConvertedFile({inputFile:epubSource.filePath,
+            cacheBasePath:path.join(dir, 'epub-source'), format, sourceFileName:'source.epub', downFileName:'source.epub', config, book});
+        const fb2 = await roundTrip('fb2');
+        const fb2Text = await fs.readFile(fb2.filePath, 'utf8');
+        assert.match(fb2Text, /Это текст книги для проверки настоящего конвертера/);
+        assert.match(fb2Text, /<binary /);
+        for (const format of ['epub3', 'kepub']) {
+            const result = await roundTrip(format), document = await epubContents(result.filePath);
+            assert.strictEqual(document.title, '02 - Доктор Гарин');
+            assert.ok(Object.values(document.contents).some(text => text.includes('Это текст книги для проверки настоящего конвертера')));
+            assert.strictEqual((await roundTrip(format)).created, false);
+        }
+        assert.strictEqual((await roundTrip('fb2')).created, false);
+        console.log('ok: EPUB → FB2 → EPUB3/KEPUB, text, images, catalogue title and shared FB2 cache');
     } finally {
         await fs.remove(dir);
     }

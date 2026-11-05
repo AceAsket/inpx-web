@@ -23,7 +23,7 @@ const emit = defineEmits(['change']);
 const value = computed(() => appearance(store.state.settings.catalogAppearance));
 const options = [
     {value: 'classic', label: 'Классический', description: 'Привычный каталог', icon: 'la la-list'},
-    {value: 'shelves', label: 'Полки', description: 'Как в приложении', icon: 'la la-book-open'},
+    {value: 'shelves', label: 'Новый дизайн', description: 'Обложки и удобная навигация', icon: 'la la-book-open'},
 ];
 function select(catalogAppearance) {
     if (catalogAppearance !== value.value) {

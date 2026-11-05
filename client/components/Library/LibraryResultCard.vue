@@ -1,7 +1,7 @@
 <template>
     <article class="library-result-card">
         <div class="library-result-card__cover">
-            <button type="button" :aria-label="`Открыть: ${book.title}`" @click="library.openBook(book)"><BookCover :book="book" /></button>
+            <button type="button" :aria-label="`Открыть карточку: ${book.title}`" @click="library.openActions(book)"><BookCover :book="book" /></button>
             <q-checkbox v-if="selectable" :model-value="selected" dense class="library-result-card__select" :aria-label="`Выбрать: ${book.title}`" @update:model-value="$emit('selection', $event)" />
         </div>
         <div class="library-result-card__body">

@@ -137,7 +137,7 @@ module.exports = {
     conversionQueueLimit: 16,
     conversionTimeoutMs: 120000,
     conversionQueueTimeoutMs: 120000,
-    conversionFormats: Array.from(new Set(String(process.env.INPX_CONVERSION_FORMATS || 'epub,epub3,kepub,kfx,azw8,pdf').split(',')
+    conversionFormats: Array.from(new Set(String(process.env.INPX_CONVERSION_FORMATS || 'fb2,epub,epub3,kepub,kfx,azw8,pdf').split(',')
         .map(item => item.trim().toLowerCase()).filter(item => item && item !== 'mobi')
         .concat(process.env.INPX_MOBI_ENABLED === 'true' ? ['mobi'] : []))),
     mobiEnabled: process.env.INPX_MOBI_ENABLED === 'true',

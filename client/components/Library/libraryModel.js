@@ -35,8 +35,7 @@ function coverUrl(book = {}, root = '') {
 }
 
 function readable(book, config) {
-    return !!(config.onlineReaderEnabled && bookUid(book) && !book.unavailable
-        && !book.discoveryMissingLocal && String(book.ext || '').toLowerCase() === 'fb2');
+    return !!(require('../../../shared/BookFormats').canRead(book.ext, config) && bookUid(book) && !book.unavailable && !book.discoveryMissingLocal);
 }
 
 function recentBooks(items = []) {

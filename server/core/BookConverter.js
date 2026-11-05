@@ -1,7 +1,8 @@
 const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
-const {ConversionRuntime, runProcess: run} = require('./ConversionRuntime');
+const {ConversionRuntime, runProcess: run, deadline: conversionDeadline} = require('./ConversionRuntime');
+const epubToFb2 = require('./EpubToFb2');
 const runtime = new ConversionRuntime();
 const externalTools = require('./ExternalTools');
 const {bundledBinDir} = externalTools;
@@ -14,7 +15,7 @@ const {withFileTransaction} = require('./FilePersistence');
 const pending = new Map();
 const validatedFb2cngConfigs = new Set();
 const conversionCacheSchema = 'v2';
-const targetFormats = new Set(['epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf', 'mobi']);
+const targetFormats = new Set(['fb2', 'epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf', 'mobi']);
 const fb2cngFormats = new Map([
     ['epub', 'epub2'],
     ['epub3', 'epub3'],
@@ -189,7 +190,8 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
     if (!canConvertSourceTo(sourceExt, normalizedFormat))
         throw new Error(`Unsupported convert format: ${sourceExt || 'unknown'} -> ${normalizedFormat}`);
 
-    const usesFb2cng = sourceExt === '.fb2' && (fb2cngFormats.has(normalizedFormat) || normalizedFormat === 'mobi');
+    const usesFb2cng = sourceExt === '.fb2' && (fb2cngFormats.has(normalizedFormat) || normalizedFormat === 'mobi')
+        || sourceExt === '.epub' && fb2cngFormats.has(normalizedFormat);
     const fb2cngConfig = usesFb2cng
         ? await readFb2cngConfig(config.fb2cngConfigPath)
         : {path: '', fingerprint: 'not-used'};
@@ -199,6 +201,7 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
         schema: conversionCacheSchema,
         format: normalizedFormat,
         sourceExt,
+        ...(sourceExt === '.epub' && (normalizedFormat === 'fb2' || usesFb2cng) ? {epubToFb2: epubToFb2.version} : {}),
         fb2cngConfigFingerprint: fb2cngConfig.fingerprint,
         fb2cngVersion: usesFb2cng ? String(config.fb2cngVersion || '') : '',
         converterPaths: config.converterPaths || {},
@@ -232,10 +235,7 @@ function canConvertSourceTo(sourceExt, format) {
 
     if (!canConvertTo(format))
         return false;
-    if (sourceExt === 'fb2')
-        return true;
-
-    return sourceExt === 'epub' && ['pdf', 'mobi'].includes(format);
+    return ['fb2', 'epub'].includes(sourceExt) && sourceExt !== format;
 }
 
 async function buildCalibreEnv() {
@@ -389,6 +389,15 @@ async function convertWithKindling(inputFile, outputFile, converterPaths, fb2cng
 }
 
 async function convertPrepared(convertInput, outputFile, format, converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null, kindlingPath = '') {
+    if (path.extname(convertInput).toLowerCase() === '.epub' && (format === 'fb2' || fb2cngFormats.has(format))) {
+        const intermediate = format === 'fb2' ? outputFile : `${outputFile}.intermediate.fb2`;
+        try {
+            const resources = require('./ResourceRuntime');
+            await resources.run(() => epubToFb2.convert(convertInput, intermediate, {deadline: conversionDeadline(), signal: resources.signal()}), {kind:'conversions'});
+            if (format !== 'fb2') await convertWithFb2cng(intermediate, outputFile, format, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle);
+        } finally {if (format !== 'fb2') await fs.remove(intermediate);}
+        return;
+    }
     if (format === 'mobi') {
         await convertWithKindling(convertInput, outputFile, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle, kindlingPath);
         return;
@@ -488,11 +497,17 @@ async function prepareConvertedFile({
 
     const created = !await fs.pathExists(cacheInfo.filePath);
     if (created) {
+        let preparedInput = inputFile, preparedSource = sourceFileName;
+        if (sourceExt === '.epub' && cacheInfo.usesFb2cng) {
+            const intermediate = await prepareConvertedFile({inputFile, cacheBasePath, format:'fb2', sourceFileName, downFileName, config, book});
+            preparedInput = intermediate.filePath;
+            preparedSource = getConvertedFileName(sourceFileName || inputFile, 'fb2');
+        }
         await convert({
-            inputFile,
+            inputFile: preparedInput,
             outputFile: cacheInfo.filePath,
             format: cacheInfo.format,
-            sourceFileName,
+            sourceFileName: preparedSource,
             converterPaths: config.converterPaths,
             fb2cngConfigPath: config.fb2cngConfigPath,
             fb2cngArgs: cacheInfo.fb2cngArgs,

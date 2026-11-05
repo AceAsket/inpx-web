@@ -190,7 +190,7 @@ async function testDeliveryTransportsReceiveZipAndOriginalWithoutExternalRequest
 
 async function testOpdsOffersIndependentPreferredFormatAndCorrectAcquisitionTypes() {
     const {forBook} = require('../server/core/opds/AcquisitionLinks');
-    const config = {conversionEnabled:true, mobiEnabled:true, conversionFormats:['epub','epub3','kepub','pdf','mobi','kfx','azw8'], bookPathStatic:'/library/book'};
+    const config = {conversionEnabled:true, mobiEnabled:true, conversionFormats:['fb2','epub','epub3','kepub','pdf','mobi','kfx','azw8'], bookPathStatic:'/library/book'};
     const book = {_uid:'a+/?=', ext:'fb2'};
     const links = forBook(book, config, choices);
     assert.strictEqual(links[0].type, 'application/epub+zip');
@@ -205,7 +205,10 @@ async function testOpdsOffersIndependentPreferredFormatAndCorrectAcquisitionType
     assert.strictEqual(forBook(book, {...config, conversionEnabled:false}, choices).length, 2);
     assert.strictEqual(forBook(book, {...config, mobiEnabled:false}, {defaultOpdsFormat:'mobi'})[0].type, 'application/fb2+xml');
     const epub = forBook({...book, ext:'epub'}, config, choices);
-    assert(epub[0].href.endsWith('format=raw')); assert(!epub.some(link => /format=(epub|kepub|kfx|azw8)$/.test(link.href)));
+    assert(epub[0].href.endsWith('format=kepub'), 'EPUB sources support the preferred target through FB2');
+    assert(epub.some(link => link.href.endsWith('format=fb2') && link.type === 'application/fb2+xml'));
+    assert(epub.some(link => link.href.endsWith('format=raw') && link.type === 'application/epub+zip'));
+    assert(!epub.some(link => /format=epub$/.test(link.href)), 'The original EPUB is not offered twice');
     assert.strictEqual(forBook({...book, ext:'pdf'}, config, choices)[0].type, 'application/pdf');
 }
 

@@ -386,7 +386,7 @@ export default class BaseList {
         })();
 
         try {
-            if (action === 'readBook' && this.config.onlineReaderEnabled && String(book.ext || '').toLowerCase() === 'fb2') {
+            if (action === 'readBook' && bookFormats.canRead(book.ext, this.config)) {
                 await this.$router.push({path: '/reader', query: {bookUid: book._uid}});
                 return;
             }

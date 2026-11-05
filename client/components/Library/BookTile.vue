@@ -1,6 +1,6 @@
 <template>
     <article class="book-tile">
-        <button type="button" class="book-tile__open" :aria-label="`${canRead ? 'Читать' : 'Открыть карточку'}: ${book.title}`" @click="library.openBook(book)">
+        <button type="button" class="book-tile__open" :aria-label="`Открыть карточку: ${book.title}`" @click="library.openActions(book)">
             <BookCover :book="book" />
             <span class="book-tile__title">{{ book.title || 'Без названия' }}</span>
             <span class="book-tile__author">{{ book.author || 'Автор не указан' }}</span>
@@ -17,12 +17,11 @@
 import {computed, inject} from 'vue';
 import BookCover from './BookCover.vue';
 import {libraryContextKey} from './libraryContext';
-import {progress, readable} from './libraryModel';
+import {progress} from './libraryModel';
 
 const props = defineProps({book: {type: Object, required: true}});
 const library = inject(libraryContextKey);
 const percent = computed(() => progress(props.book));
-const canRead = computed(() => readable(props.book, library.config.value));
 </script>
 
 <style scoped>

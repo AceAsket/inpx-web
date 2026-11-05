@@ -74,8 +74,8 @@ async function testCatalogOpensReaderBeforeColdFilePreparation() {
     const source = await fs.readFile(path.resolve(__dirname, '../client/components/Search/BaseList.js'), 'utf8');
     const method = source.slice(source.indexOf('    async download(book, action, format = '), source.indexOf('    getBookUid(book = {}'));
     const pendingPreparation = new Promise(() => {});
-    const BaseList = new Function('utils', 'axios', 'window', `return class {${method}}`)(
-        {sleep: () => pendingPreparation}, {}, {location: {origin: 'http://localhost'}});
+    const BaseList = new Function('utils', 'axios', 'window', 'bookFormats', `return class {${method}}`)(
+        {sleep: () => pendingPreparation}, {}, {location: {origin: 'http://localhost'}}, require('../shared/BookFormats'));
     const list = new BaseList();
     list.config = {onlineReaderEnabled: true};
     const events = [];
@@ -87,6 +87,8 @@ async function testCatalogOpensReaderBeforeColdFilePreparation() {
     assert.deepStrictEqual(events, [{path: '/reader', query: {bookUid: 'cold-book'}}]);
     assert.strictEqual(list.downloadFlag, false);
     assert.strictEqual(list.loadingMessage2, '');
+    await list.download({_uid: 'epub-book', ext: 'epub'}, 'readBook');
+    assert.deepStrictEqual(events.pop(), {path: '/reader', query: {bookUid: 'epub-book'}});
     // External readers still need a prepared URL.
     list.config.onlineReaderEnabled = false;
     list.list = {liberamaReady: true};

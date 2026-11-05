@@ -6624,6 +6624,25 @@ class WebWorker {
                 throw new Error('404 Файл не найден');
             const book = {...rows[0]};
             this.applyPreparedBookSize(book, bookInfo.size);
+            if (String(book.ext).toLowerCase() === 'epub' && options.readerOnly === true) {
+                if (!bookFormats.canRead(book.ext, this.config))
+                    throw new Error('Для чтения EPUB включите конвертацию в FB2 в настройках сервера.');
+                const generation = this.libraryAssetGeneration;
+                const prepared = await this.getPreparedBookFile(bookUid, 'fb2');
+                const infoFile = `${prepared.rawFile}.reader-info.json`;
+                let info = await fs.readJson(infoFile).catch(() => null);
+                if (!info || info.version !== 'epub-reader-v1') {
+                    const {fb2} = await this.fb2Helper.getDescAndCover(prepared.rawFile);
+                    info = {version:'epub-reader-v1', fb2:fb2.rawNodes, contents:this.extractFb2Contents(fb2), annotationMeta:this.extractFb2AnnotationMeta(fb2)};
+                    this.checkLibraryAssetState(generation, db);
+                    await writeFileAtomic(infoFile, JSON.stringify(info));
+                } else await utils.touchFile(infoFile);
+                const overrides = await this.readingListStore.getMetadataOverrides();
+                this.checkLibraryAssetState(generation, db);
+                this.applyMetadataOverrideToBook(book, overrides);
+                return {bookInfo:{book, fb2:info.fb2, contents:info.contents, annotationMeta:info.annotationMeta,
+                    cover:`${this.config.rootPathStatic || ''}/cover/by-uid?uid=${encodeURIComponent(bookUid)}`}};
+            }
             // Reader opening only needs the document. Review archives may be
             // large and have their own cold-cache indexing cost.
             const reviewState = options.readerOnly === true ? null : await this.getReviewArchiveState(book.sourceLibDir);

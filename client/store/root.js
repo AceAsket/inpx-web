@@ -27,6 +27,7 @@ const state = {
         showNewReleaseAvailable: true,
         darkTheme: false,
         catalogAppearance: 'classic',
+        shelvesHintDismissed: false,
         showDiscoveryNewest: true,
         showDiscoveryPopular: true,
         showDiscoveryContinueReading: true,

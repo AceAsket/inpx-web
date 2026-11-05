@@ -1,6 +1,6 @@
 <template>
     <section class="catalog-search-panel" aria-label="Поиск книг">
-        <div class="catalog-search-panel__heading"><h1>Каталог</h1><q-select :model-value="selectedList" :options="sections" emit-value map-options borderless dense options-dense aria-label="Раздел каталога" @update:model-value="changeSection" /></div>
+        <div class="catalog-search-panel__heading"><h1>Каталог</h1><q-select :model-value="selectedList" :options="sections" emit-value map-options outlined dense options-dense class="catalog-search-panel__section" aria-label="Раздел каталога" @update:model-value="changeSection" /></div>
         <form v-if="!discovery && !extended" role="search" @submit.prevent="flush">
             <div class="catalog-search-panel__main">
                 <CatalogTextField v-model:text="draft.title.text" v-model:mode="draft.title.mode" label="Название книги" mode-label="Совпадение названия" search-icon @update:text="schedule" @update:mode="schedule" />
@@ -67,6 +67,8 @@ onBeforeUnmount(() => clearTimeout(timer));
 .catalog-search-panel__heading {display: flex; justify-content: space-between; gap: 18px; align-items: center; margin-bottom: 24px;}
 h1 {font-size: 26px; font-weight: 550; line-height: 1.3; letter-spacing: -.03em; margin: 0;}
 .catalog-search-panel__heading > .q-select {min-width: 140px; font-size: 13px;}
+.catalog-search-panel__section :deep(.q-field__control) {border-radius: 12px; background: var(--app-surface); min-height: 40px;}
+.catalog-search-panel__section :deep(.q-field__control::before) {border-color: var(--app-border);}
 .catalog-search-panel__main {display: flex; gap: 12px; align-items: stretch;}
 .catalog-search-panel__main > .catalog-text-field {flex: 1; min-width: 0;}
 .catalog-search-panel__main > .q-btn {border-radius: 14px; padding: 0 24px;}

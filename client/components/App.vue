@@ -147,6 +147,8 @@ class App {
     }
 
     applyCatalogAppearance() {
+        if (this.catalogAppearance === 'shelves' && !this.settings.shelvesHintDismissed)
+            this.commit('setSettings', {shelvesHintDismissed: true});
         if (this.isShelvesLayout) document.body.dataset.catalogAppearance = 'shelves';
         else delete document.body.dataset.catalogAppearance;
     }

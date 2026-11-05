@@ -2,6 +2,7 @@
     <div class="root column fit" :class="{'search--shelves': shelvesAppearance}" style="position: relative">
         <LibraryTools ref="libraryTools" :author="search.author || ''" :series="search.series || ''" />
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
+            <AppearanceHint v-if="!shelvesAppearance && !settings.shelvesHintDismissed" />
             <!-- Tool Panel begin -->
             <CatalogSearchPanel v-if="shelvesAppearance" :search="search" :selected-list="selectedList" :list-options="listOptions"
                 :discovery="isDiscoveryList" :extended="isExtendedSearch" :ext-summary="extSearchNames" :authorized="!!config.profileAuthorized"
@@ -620,6 +621,7 @@ import DivBtn from '../share/DivBtn.vue';
 import Dialog from '../share/Dialog.vue';
 import ProfileLogout from '../share/ProfileLogout.vue';
 import CatalogSearchPanel from '../Library/CatalogSearchPanel.vue';
+import AppearanceHint from '../Library/AppearanceHint.vue';
 
 import * as utils from '../../share/utils';
 
@@ -664,6 +666,7 @@ const componentOptions = {
         Dialog,
         ProfileLogout,
         CatalogSearchPanel,
+        AppearanceHint,
         DivBtn
     },
     watch: {
@@ -1543,7 +1546,7 @@ class Search {
             newList = '';
         if (!this.isDiscoveryListEnabled(newList))
             newList = '';
-        newList = (newList ? newList : 'author');
+        newList = (newList ? newList : 'books');
 
         if (this.selectedList != newList)
             this.selectedList = newList;
