@@ -1,7 +1,7 @@
 <template>
     <span ref="element" class="book-cover" :style="{'--cover-color': color}">
         <img v-if="src && visible && !failed" :key="src" :src="src" :alt="`Обложка: ${book.title || 'Без названия'}`"
-            loading="lazy" decoding="async" @error="failed = true" />
+            loading="lazy" decoding="async" @load="emit('load')" @error="failed = true; emit('error')" />
         <span v-else class="book-cover__placeholder" aria-hidden="true">
             <span>{{ letter }}</span><small>{{ (book.ext || 'КНИГА').toUpperCase() }}</small>
         </span>
@@ -14,6 +14,7 @@ import {useStore} from 'vuex';
 import {coverUrl, bookUid} from './libraryModel';
 
 const props = defineProps({book: {type: Object, required: true}});
+const emit = defineEmits(['load', 'error']);
 const store = useStore();
 const element = ref(null), visible = ref(false), failed = ref(false);
 const src = computed(() => coverUrl(props.book, store.state.config.rootPathStatic));

@@ -1,7 +1,8 @@
 <template>
     <LibraryResultCard v-if="shelvesResult" :book="book" :download-href="getDirectBookDownloadHref()" :selectable="selectable" :selected="selected"
         :show-rates="showRates" :show-info="showInfo" :date-label="showDates ? bookDate : ''" :genres="showGenres ? bookGenreItems : []"
-        @action="emit($event)" @selection="emitSelection" @genre="emit('genreClick', $event)" />
+        :feedback="showDiscoveryDismiss" :restore="showDiscoveryRestore" :reason="book.discoveryReason || ''"
+        @action="emit($event)" @selection="emitSelection" @genre="emit('genreClick', $event)" @feedback="selectDiscoveryFeedback" @restore="emit('discoveryRestore')" />
     <div v-else class="book-view q-my-sm" :class="{'is-list-mode': isListMode}">
         <div
             class="book-card"

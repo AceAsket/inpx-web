@@ -20,10 +20,11 @@
                     <span class="library-nav-link__icon"><q-icon :name="item.icon" size="25px" aria-hidden="true" /></span>
                     <span>{{ item.label }}</span>
                 </RouterLink>
-                <div class="library-shell__nav-bottom">
+                <RouterLink to="/profile" class="library-shell__nav-bottom" aria-label="Открыть мой профиль">
                     <span class="library-shell__profile-initial">{{ profileName.slice(0, 1).toUpperCase() }}</span>
                     <div><strong>{{ profileName }}</strong><small>{{ config.profileAuthorized ? 'Личная библиотека' : 'Общая библиотека' }}</small></div>
-                </div>
+                    <q-icon name="la la-angle-right" size="16px" aria-hidden="true" />
+                </RouterLink>
             </nav>
         </template>
         <div :class="enabled ? 'library-shell__main' : 'library-shell__passthrough'"><slot /></div>
@@ -43,9 +44,10 @@
 import {computed, ref, reactive, watch, provide, getCurrentInstance, defineAsyncComponent} from 'vue';
 import {useStore} from 'vuex';
 import {useRoute, useRouter} from 'vue-router';
+import './librarySurfaces.css';
 import {libraryContextKey} from './libraryContext';
 import {LibraryRepository, emptyState} from './libraryRepository';
-import {identity, bookUid, readable, progress, catalogRoutes, discoveryOptions} from './libraryModel';
+import {identity, bookUid, readable, progress, catalogRoutes, discoveryOptions, genreMapFromTree} from './libraryModel';
 
 const SettingsDialog = defineAsyncComponent(() => import('../Search/SettingsDialog/SettingsDialog.vue'));
 const UserProfilesDialog = defineAsyncComponent(() => import('../Search/UserProfilesDialog/UserProfilesDialog.vue'));
@@ -64,6 +66,8 @@ const settingsVisible = ref(false), profilesVisible = ref(false), listsVisible =
 const details = ref({}), listsBook = ref(null), genreMap = ref(new Map()), libraryTools = ref(null);
 const actionsVisible = ref(false), actionsBook = ref({});
 let detailRequest = 0;
+let genreRequest = null;
+let genresLoaded = false;
 const profileName = computed(() => config.value.currentUserProfile?.name || (config.value.profileAuthorized ? 'Мой профиль' : 'Общий профиль'));
 const collection = computed(() => String(config.value.dbConfig?.inpxInfo?.collection || 'Ваша библиотека').split('\n')[0]);
 const activeSection = computed(() => route.path === '/overview' ? 'overview' : route.path === '/my-books' ? 'books' : route.path === '/profile' ? 'profile' : 'catalog');
@@ -89,6 +93,9 @@ watch(() => [identity(config.value, settings.value), JSON.stringify(discoveryOpt
         listsVisible.value = false;
         actionsVisible.value = false;
         details.value = {};
+        genreMap.value = new Map();
+        genreRequest = null;
+        genresLoaded = false;
         detailRequest++;
     }
 }, {immediate: true});
@@ -107,6 +114,7 @@ function openActions(book) {
     actionsVisible.value = true;
 }
 async function openDetails(book) {
+    ensureGenres().catch(() => {});
     const request = ++detailRequest, epoch = repository.epoch;
     const record = {...book, _uid: bookUid(book)};
     details.value = {book: record, loading: true};
@@ -125,7 +133,28 @@ async function openDetails(book) {
         root.stdDialog.alert(error.message, 'Не удалось загрузить карточку');
     }
 }
-function navigateFromBook({type, value}) {
+async function ensureGenres() {
+    if (genresLoaded) return;
+    if (genreRequest) return genreRequest;
+    const epoch = repository.epoch;
+    genreRequest = (async() => {
+        try {
+            const result = await root.api.getGenreTree();
+            if (epoch === repository.epoch) {genreMap.value = genreMapFromTree(result.genreTree || []); genresLoaded = true;}
+        } finally {if (epoch === repository.epoch) genreRequest = null;}
+    })();
+    return genreRequest;
+}
+async function navigateFromBook({type, value}) {
+    if (type === 'genreName' && value) {
+        const epoch = repository.epoch;
+        try {await ensureGenres();} catch (error) {root.stdDialog.alert(error.message, 'Не удалось открыть жанр'); return;}
+        if (epoch !== repository.epoch) return;
+        const name = String(value).trim().toLowerCase();
+        value = Array.from(genreMap.value).find(([code, label]) => code.toLowerCase() === name || label.trim().toLowerCase() === name)?.[0]
+            || (/^[a-z0-9_-]+$/.test(name) ? name : '');
+        type = 'genre';
+    }
     const fields = {author: 'author', series: 'series', title: 'title', keyword: 'keywords', genre: 'genre'};
     if (!fields[type] || !value) return;
     detailsVisible.value = false;
@@ -160,8 +189,8 @@ body.body--dark[data-catalog-appearance="shelves"] {
     --q-primary: #6bdac9;
 }
 body[data-catalog-appearance="shelves"] .q-btn.bg-primary {color: var(--library-on-primary) !important; background: var(--app-primary) !important;}
-.library-page {height: 100%; overflow-y: auto; overflow-x: hidden; padding: 30px 40px 48px; scrollbar-color: var(--app-border) transparent;}
-.library-page__body {max-width: 1120px; margin: 0 auto;}
+.library-page {height: 100%; overflow-y: auto; overflow-x: hidden; padding: 24px 32px 36px; scrollbar-color: var(--app-border) transparent;}
+.library-page__body {width: 100%; margin: 0;}
 .library-page h1 {font-size: 28px; font-weight: 550; line-height: 1.3; letter-spacing: -.035em; margin: 0;}
 .library-page__subtitle {color: var(--app-muted); margin: 8px 0 28px; line-height: 1.6;}
 .library-empty {padding: 30px; border: 1px solid var(--app-border); border-radius: 20px; color: var(--app-muted); line-height: 1.7;}
@@ -177,7 +206,7 @@ body[data-catalog-appearance="shelves"] .q-btn.bg-primary {color: var(--library-
 <style scoped>
 .library-shell {height: 100%; min-width: 0;}
 .library-shell__passthrough {height: 100%;}
-.library-shell--active {display: grid; grid-template: 'header header' 76px 'nav main' minmax(0, 1fr) / 204px minmax(0, 1fr); background: var(--app-bg); color: var(--app-text);}
+.library-shell--active {display: grid; grid-template: 'header header' 64px 'nav main' minmax(0, 1fr) / 204px minmax(0, 1fr); background: var(--app-bg); color: var(--app-text);}
 .library-shell__header {grid-area: header; display: flex; align-items: center; gap: 28px; padding: 0 28px; border-bottom: 1px solid var(--app-border);}
 .library-brand {display: flex; align-items: center; gap: 10px; color: var(--app-text); text-decoration: none; white-space: nowrap; font-size: 22px; letter-spacing: -.04em;}
 .library-brand strong {font-weight: 500;}
@@ -190,15 +219,17 @@ body[data-catalog-appearance="shelves"] .q-btn.bg-primary {color: var(--library-
 .library-nav-link.is-active {background: var(--app-surface-2); color: var(--app-primary);}
 .library-nav-link:focus-visible {outline: 3px solid var(--app-primary); outline-offset: 2px;}
 .library-shell__main {grid-area: main; min-width: 0; min-height: 0; overflow: hidden;}
-.library-shell__nav-bottom {margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 16px 4px 0; min-width: 0;}
+.library-shell__nav-bottom {margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 12px 8px; min-width: 0; border-radius: 14px; color: var(--app-text); text-decoration: none;}
+.library-shell__nav-bottom:hover {background: var(--app-surface-3);}
+.library-shell__nav-bottom:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 2px;}
+.library-shell__nav-bottom > .q-icon {margin-left: auto; color: var(--app-muted);}
 .library-shell__profile-initial {display: grid; place-items: center; background: var(--app-surface-2); border-radius: 11px; width: 34px; height: 34px; color: var(--app-primary); flex-shrink: 0; font-weight: 600;}
 .library-shell__nav-bottom > div {min-width: 0;}
 .library-shell__nav-bottom strong {display: block; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
 .library-shell__nav-bottom small {color: var(--app-muted); font-size: 10px;}
-@media (min-width: 1600px) {.library-shell--active {grid-template-columns: 232px minmax(0, 1fr);}}
-@media (min-width: 600px) and (max-width: 899px) {.library-shell--active {grid-template-columns: 84px minmax(0, 1fr);} .library-shell__nav {padding: 22px 8px;} .library-nav-link {flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; padding: 8px 2px;} .library-shell__nav-bottom {justify-content: center;} .library-shell__nav-bottom > div {display: none;}}
+@media (min-width: 600px) and (max-width: 899px) {.library-shell--active {grid-template-columns: 84px minmax(0, 1fr);} .library-shell__nav {padding: 22px 8px;} .library-nav-link {flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; padding: 8px 2px;} .library-shell__nav-bottom {justify-content: center;} .library-shell__nav-bottom > div, .library-shell__nav-bottom > .q-icon {display: none;}}
 @media (max-width: 599px) {
-    .library-shell--active {grid-template: 'header' 70px 'main' minmax(0, 1fr) 'nav' auto / minmax(0, 1fr);}
+    .library-shell--active {grid-template: 'header' 64px 'main' minmax(0, 1fr) 'nav' auto / minmax(0, 1fr);}
     .library-shell__header {padding: 0 16px; gap: 8px; border-bottom: 0;}
     .library-brand {font-size: 20px; gap: 9px;}
     .library-brand__mark {width: 30px; height: 30px; border-radius: 9px;}

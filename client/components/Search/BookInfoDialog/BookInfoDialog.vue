@@ -1,5 +1,5 @@
 <template>
-    <Dialog ref="dialog" v-model="dialogVisible">
+    <Dialog ref="dialog" v-model="dialogVisible" variant="book-info">
         <template #header>
             <div class="row items-center">
                 <div style="font-size: 110%">
@@ -9,6 +9,9 @@
         </template>
 
         <div ref="box" class="fit column q-mt-xs overflow-auto no-wrap info-box">
+            <div :class="{'book-info-summary': shelvesAppearance}">
+                <button v-if="shelvesAppearance" type="button" class="book-info-cover" :aria-label="`Обложка: ${book.title || 'Книга'}`" @click="posterClick"><BookCover :book="book" @error="onCoverError" /></button>
+                <div>
             <div v-if="bookAuthor" class="text-green-10 info-link" @click.stop.prevent="emitNavigate('author', book.author)">
                 {{ bookAuthor }}
             </div>
@@ -21,9 +24,13 @@
             <div v-if="book.series" class="q-mt-xs info-series-link" @click.stop.prevent="emitNavigate('series', book.series)">
                 {{ seriesLabel }}: {{ book.series }}<span v-if="book.serno"> #{{ book.serno }}</span>
             </div>
+                </div>
+            </div>
 
-            <div class="row q-mt-sm no-wrap">
-                <div class="poster-size">
+            <div v-if="shelvesAppearance && selectedTab == 'fb2' && annotation" class="book-info-annotation" v-html="annotation" />
+
+            <div class="row q-mt-sm no-wrap book-info-data">
+                <div v-if="!shelvesAppearance" class="poster-size">
                     <div class="column justify-center items-center" :class="{'poster': coverSrc, 'no-poster': !coverSrc}" @click.stop.prevent="posterClick">
                         <img v-if="coverSrc" :src="coverSrc" class="poster-image fit row justify-center items-center" @error="onCoverError" />
                         <div v-else class="poster-placeholder">
@@ -55,8 +62,8 @@
                             mobile-arrows
                             class="bg-grey-4 text-grey-7 info-tabs"
                         >
-                            <q-tab v-if="fb2.length || detailsLoading" name="fb2" label="Fb2 info" />
-                            <q-tab name="inpx" label="Inpx info" />
+                            <q-tab v-if="fb2.length || detailsLoading" name="fb2" :label="shelvesAppearance ? 'Сведения FB2' : 'Fb2 info'" />
+                            <q-tab name="inpx" :label="shelvesAppearance ? 'Данные книги' : 'Inpx info'" />
                             <q-tab v-if="contents.length" name="contents" label="Содержание" />
                             <q-tab v-if="hasAuthorTab" name="author" :label="authorTabLabel" />
                         </q-tabs>
@@ -183,7 +190,7 @@
                 </div>
             </div>
 
-        <div v-if="selectedTab == 'fb2' && annotation" class="q-mt-md" v-html="annotation" />
+        <div v-if="!shelvesAppearance && selectedTab == 'fb2' && annotation" class="q-mt-md" v-html="annotation" />
         <div v-if="selectedTab == 'fb2' && hasAnnotationMeta" class="annotation-meta q-mt-md">
             <div class="text-blue section-label q-mb-sm">
                 Аннотация и статистика
@@ -295,6 +302,7 @@
 import vueComponent from '../../vueComponent.js';
 
 import Dialog from '../../share/Dialog.vue';
+import BookCover from '../../Library/BookCover.vue';
 import Fb2Parser from '../../../../server/core/fb2/Fb2Parser';
 const {escapeHtml, safeHtml} = require('../../../../shared/safeHtml');
 import * as utils from '../../../share/utils';
@@ -302,7 +310,8 @@ import _ from 'lodash';
 
 const componentOptions = {
     components: {
-        Dialog
+        Dialog,
+        BookCover,
     },
     emits: ['update:modelValue', 'navigate'],
     watch: {
@@ -361,6 +370,10 @@ class BookInfoDialog {
     created() {
         this.commit = this.$store.commit;
         this.api = this.$root.api;
+    }
+
+    get shelvesAppearance() {
+        return this.$store.state.settings.catalogAppearance === 'shelves';
     }
 
     mounted() {
@@ -990,6 +1003,8 @@ export default vueComponent(BookInfoDialog);
 </script>
 
 <style scoped>
+.book-info-cover {display: block; width: 100%; border: 0; padding: 0; background: transparent; border-radius: 9px; cursor: pointer;}
+.book-info-cover:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}
 .info-box {
     padding: 0 10px 10px;
     min-height: min(74vh, 760px);

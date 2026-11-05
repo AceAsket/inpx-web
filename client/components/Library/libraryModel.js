@@ -86,5 +86,12 @@ function normalizeShelves(shelves = []) {
     }));
 }
 
+function genreMapFromTree(tree = []) {
+    const result = new Map();
+    for (const section of tree) for (const genre of section.value || [])
+        if (genre.value) result.set(String(genre.value), String(genre.name || genre.value));
+    return result;
+}
+
 module.exports = {appearance, appearanceRedirect, libraryRoutes, catalogRoutes, bookUid, progress, coverUrl,
-    readable, recentBooks, homeBooks, personalAccess, identity, discoveryOptions, normalizeShelves};
+    readable, recentBooks, homeBooks, personalAccess, identity, discoveryOptions, normalizeShelves, genreMapFromTree};

@@ -2,6 +2,7 @@ const assert = require('assert/strict');
 const {LibraryRepository} = require('../client/components/Library/libraryRepository');
 const model = require('../client/components/Library/libraryModel');
 const catalog = require('../client/components/Library/catalogSearchModel');
+const pagination = require('../client/components/Library/paginationModel');
 
 const deferred = () => {let resolve, reject; const promise = new Promise((yes, no) => {resolve = yes; reject = no;}); return {promise, resolve, reject};};
 function fixture() {
@@ -155,6 +156,7 @@ async function testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability
     assert.equal(model.readable({bookUid: 'a', ext: 'fb2', unavailable: true}, {onlineReaderEnabled: true}), false);
     assert.equal(model.coverUrl({bookUid: 'source:a/b'}, '/library/'), '/library/cover/by-uid?uid=source%3Aa%2Fb');
     assert.equal(model.coverUrl({libid: 7, sourceId: 'other lib'}, '/library'), '/library/cover/other%20lib/7');
+    assert.deepEqual(Array.from(model.genreMapFromTree([{value: [{value: 'sf', name: 'Фантастика'}, {value: 'prose', name: 'Проза'}]}, {}])), [['sf', 'Фантастика'], ['prose', 'Проза']]);
 }
 
 async function testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards() {
@@ -192,9 +194,50 @@ async function testLibraryDialogsSupportLazyInitialOpening() {
     }
 }
 
+async function testLibraryPaginationHandlesLargeCatalogsWithoutUnboundedButtons() {
+    for (const total of [0, 1, 7, 8, 33066, 1000000]) {
+        for (const page of [1, 2, 4, 10, total - 1, total, total + 1]) {
+            const max = pagination.pageLimit(total), current = pagination.boundedPage(page, max);
+            const window = pagination.pageWindow(page, max), pages = window.filter(item => typeof item === 'number');
+            assert(pages.includes(current), 'Current page must remain visible');
+            assert.equal(pages[0], 1); assert.equal(pages.at(-1), max);
+            assert(pages.every((value, index) => value >= 1 && value <= max && (!index || value > pages[index - 1])));
+            assert(window.length <= 9, 'A million pages cannot produce a million controls');
+        }
+    }
+    assert.equal(pagination.parsePage('999999', 33066), 33066);
+    assert.equal(pagination.parsePage('0', 33066), 1);
+    for (const invalid of ['', '-1', '2.5', '1e3', 'Infinity', 'NaN', '999999999999999999999']) assert.equal(pagination.parsePage(invalid, 33066), null);
+}
+
+async function testLibraryBookActionsHideUnsupportedReadingAndUnknownSize() {
+    const {loadClient} = require('./catalog-list-filter-tests');
+    const path = require('path');
+    const Type = loadClient(path.resolve(__dirname, '../client/components/Library/BookActionsDialog.vue')).default;
+    const value = new Type();
+    value.$store = {state: {settings: {}, config: {onlineReaderEnabled: true, bookReadLink: '', conversionEnabled: true, conversionFormats: ['epub', 'pdf']}}};
+    value.book = {_uid: 'one', ext: 'epub', size: 0};
+    assert.equal(value.canRead, false, 'An EPUB must not offer unsupported in-browser reading');
+    assert.equal(value.sizeLabel, '', 'An unknown file size is not 0 KB');
+    assert.deepEqual(value.downloadFormats.map(format => format.value), ['raw', 'pdf']);
+    value.book.ext = 'fb2'; assert.equal(value.canRead, true);
+    value.book.discoveryUrl = 'javascript:alert(1)'; assert.equal(value.externalUrl, '');
+    value.book.discoveryUrl = 'https://example.org/book'; assert.equal(value.externalUrl, 'https://example.org/book');
+    const events = [], errors = [];
+    value.$emit = type => events.push(type);
+    value.$root = {stdDialog: {alert: error => errors.push(error)}, notify: {success() {}}};
+    value.api = {markReaderBooksRead: async() => {throw new Error('Save failed');}};
+    assert.equal(await value.markBooksRead(['one'], true), false);
+    assert.equal(value.readOverride, null); assert.deepEqual(events, []);
+    value.api.markReaderBooksRead = async() => ({changedBooks: 1});
+    assert.equal(await value.markBooksRead(['one'], true), true);
+    assert.equal(value.markedRead, true); assert.deepEqual(events, ['updated']); assert.equal(errors.length, 1);
+}
+
 module.exports = [testLibraryHomeCachesExpensiveShelvesAndRefreshesReadingIndependently, testLibraryHomeCoalescesConcurrentRefreshes,
     testLibraryHomeClearsPrivateDataAndRejectsLateProfileResponses, testLibraryHomeProtectsProfileSwitchBeforeNewConfigArrives,
     testLibraryHomeFallbackDoesNotOpenLoginAndKeepsHistoryWhenListsFail, testLibraryHomeRetainsCachedShelvesOnFailureAndAllowsRetry,
     testLibraryHomeRejectsLateShelvesAfterOptionsChange, testLibraryHomeDisabledDiscoveryAndProtectedProfileAvoidRequests,
     testLibraryAppearancePreservesCatalogLinksAndReaderRoutes, testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability,
-    testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards, testLibraryDialogsSupportLazyInitialOpening];
+    testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards, testLibraryDialogsSupportLazyInitialOpening,
+    testLibraryPaginationHandlesLargeCatalogsWithoutUnboundedButtons, testLibraryBookActionsHideUnsupportedReadingAndUnknownSize];

@@ -19,14 +19,15 @@ async function archive(file, entries) {
 
 async function fixture(directory) {
     await fs.ensureDir(directory);
-    const books = [
+    const seedBooks = [
         ['Джордж Оруэлл', '«1984» и эссе разных лет'], ['Лев Толстой', 'Косточка'], ['Иван Тургенев', 'Ася'],
         ['Александр Пушкин', 'Капитанская дочка'], ['Михаил Булгаков', 'Белая гвардия'], ['Антон Чехов', 'Рассказы'],
         ['Николай Гоголь', 'Мёртвые души'], ['Фёдор Достоевский', 'Белые ночи'], ['Михаил Лермонтов', 'Герой нашего времени'],
         ['Александр Грин', 'Алые паруса'], ['Иван Гончаров', 'Обломов'], ['Лев Толстой', 'После бала'],
     ];
+    const books = Array.from({length: 3}, (_, edition) => seedBooks.map(([author, title]) => [author, edition ? `${title} · Издание ${edition + 1}` : title])).flat();
     const date = new Date().toISOString().slice(0, 10);
-    const rows = books.map(([author, title], index) => [author + ':', 'prose:', title, '', '0', String(index + 1), '100', String(index + 1), '0', 'fb2', date, 'ru', '4', ''].join('\x04'));
+    const rows = books.map(([author, title], index) => [author + ':', 'prose:', title, index % 4 === 0 ? 'Избранные произведения' : '', String(index % 4 + 1), String(index + 1), '100', String(index + 1), '0', 'fb2', date, 'ru', '4', ''].join('\x04'));
     await archive(path.join(directory, 'sample.inpx'), [['collection.info', 'Библиотека для проверки интерфейса\n'], ['version.info', '20261104'], ['sample.inp', rows.join('\n') + '\n']]);
     await archive(path.join(directory, 'sample.zip'), books.map(([author, title], index) => [`${index + 1}.fb2`, `<?xml version="1.0" encoding="utf-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>prose</genre><author><first-name>${author}</first-name></author><book-title>${title}</book-title><annotation><p>Книга для проверки интерфейса INPX Reader.</p></annotation><lang>ru</lang></title-info></description><body><section id="chapter"><title><p>Глава первая</p></title>${Array.from({length: 120}, (_, i) => `<p>Абзац ${i + 1}. За окном начиналось утро. Это текст тестовой библиотеки для проверки чтения, сохранения позиции и возвращения к книге.</p>`).join('')}</section></body></FictionBook>`]));
     await fs.writeJson(path.join(directory, 'config.json'), {loggingEnabled: false, adminPassword: 'appearance-local-test',
@@ -109,13 +110,19 @@ async function fixture(directory) {
         const currentTitle = await page.locator('.current-book__title').innerText();
         assert.equal(await page.locator('#recent-books-heading').locator('..').locator('..').getByRole('button', {name: `Читать: ${currentTitle}`, exact: true}).count(), 0, 'Current book is not repeated in recents');
 
-        for (const [width, height] of [[1440, 1000], [900, 1000], [390, 844], [320, 780]]) {
+        await page.getByRole('link', {name: 'Открыть мой профиль', exact: true}).focus();
+        await page.keyboard.press('Enter');
+        await page.getByRole('heading', {name: 'Профиль', exact: true}).waitFor();
+        await page.getByRole('link', {name: 'Обзор', exact: true}).click();
+        for (const [width, height] of [[3415, 1440], [2560, 1440], [1440, 1000], [900, 1000], [390, 844], [320, 780]]) {
             await page.setViewportSize({width, height}); await pause(200);
             const geometry = await page.evaluate(() => {
                 const main = document.querySelector('.library-shell__main'), page = document.querySelector('.library-page');
-                return {viewport: innerWidth, documentWidth: document.documentElement.scrollWidth, mainWidth: main.clientWidth, pageWidth: page.scrollWidth};
+                return {viewport: innerWidth, documentWidth: document.documentElement.scrollWidth, mainWidth: main.clientWidth, pageWidth: page.scrollWidth,
+                    bodyWidth: document.querySelector('.library-page__body').clientWidth, shelfColumns: getComputedStyle(document.querySelector('.overview-shelves')).gridTemplateColumns.split(' ').length};
             });
             assert(geometry.documentWidth <= width + 1 && geometry.pageWidth <= geometry.mainWidth + 1, JSON.stringify(geometry));
+            if (width >= 1800) {assert(geometry.bodyWidth >= geometry.mainWidth - 80, 'Overview must use the available width'); assert.equal(geometry.shelfColumns, 2);}
             await screenshot(`shelves-light-${width}`);
         }
         await page.setViewportSize({width: 390, height: 844});
@@ -126,6 +133,10 @@ async function fixture(directory) {
         await screenshot('shelves-dark-390');
         await page.locator('.current-book__caption button').click();
         await page.locator('.library-book-actions').waitFor();
+        const dialog = page.locator('.library-dialog-card[data-dialog-kind="book"]');
+        assert((await dialog.boundingBox()).height < 700, 'The action card must fit the phone without reserved poster space');
+        assert.equal(await page.getByRole('button', {name: 'Прочитано', exact: true}).count(), 1);
+        assert.equal(await page.getByRole('button', {name: 'Снять отметку', exact: true}).count(), 0);
         await page.getByRole('button', {name: 'Описание и сведения', exact: true}).click();
         await page.getByText('Книга для проверки интерфейса INPX Reader.', {exact: true}).waitFor();
         await page.getByRole('button', {name: 'OK', exact: true}).click();
@@ -136,6 +147,16 @@ async function fixture(directory) {
         await page.getByRole('link', {name: 'Профиль', exact: true}).click();
         await page.locator('.profile-card').waitFor();
         await screenshot('profile-dark-390');
+        for (const [label, kind] of [['Профили и личные настройки', 'profiles'], ['Полки и списки чтения', 'reading-lists']]) {
+            await page.getByRole('button', {name: new RegExp('^' + label)}).click();
+            const panel = page.locator(`.library-dialog-card[data-dialog-kind="${kind}"]`);
+            await panel.waitFor(); await pause(350);
+            const bounds = await panel.evaluate(node => ({width: node.clientWidth, scroll: node.scrollWidth, height: node.getBoundingClientRect().height}));
+            assert(bounds.scroll <= bounds.width + 1 && bounds.height <= 844 - 24, kind + ' must fit a phone');
+            await screenshot(`${kind}-dark-390`);
+            await panel.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+            await panel.waitFor({state: 'hidden'});
+        }
         await page.getByRole('link', {name: 'Обзор', exact: true}).click();
         await page.locator('.current-book').waitFor();
         assert.equal(actions.filter(action => action === 'get-discovery-shelves').length, discoveryBefore, 'Navigation reuses cached shelves');
@@ -150,6 +171,12 @@ async function fixture(directory) {
         await page.waitForFunction(() => document.querySelector('.current-book progress')?.value === .52);
 
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
+        const paginator = page.getByRole('navigation', {name: 'Страницы каталога', exact: true}).first();
+        await paginator.getByRole('button', {name: 'Следующая страница', exact: true}).click();
+        await page.waitForURL(/page=2/);
+        await paginator.getByRole('textbox', {name: 'Номер страницы', exact: true}).fill('1');
+        await paginator.getByRole('button', {name: 'Перейти на страницу', exact: true}).click();
+        await page.waitForURL(url => !url.hash.includes('page=2'));
         await page.getByRole('textbox', {name: 'Название книги', exact: true}).fill('Ася');
         await page.waitForURL(/title=/);
         await page.getByRole('button', {name: /Автор и серия/}).click();
@@ -173,6 +200,27 @@ async function fixture(directory) {
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
         assert.equal(await page.getByRole('textbox', {name: 'Название книги', exact: true}).inputValue(), 'Ася', 'Catalog navigation preserves the query');
         assert.equal(await page.getByRole('textbox', {name: 'Автор', exact: true}).inputValue(), 'Иван');
+        for (const [section, ready] of [['author', '.author-group'], ['series', '.series-group'], ['title', '.library-result-card'], ['extended', '.library-result-card'], ['for-you', '.discovery-shelf'], ['newest', '.discovery-shelf'], ['popular', '.discovery-shelf'], ['bestsellers', '.author-group']]) {
+            await page.setViewportSize({width: 1440, height: 1000});
+            await page.goto(base + '/#/' + section + '?lang=ru');
+            await page.locator(ready).first().waitFor();
+            if (section === 'author' || section === 'series') {
+                const expand = page.getByRole('button', {name: new RegExp(section === 'author' ? '^Развернуть автора:' : '^Развернуть серию:')}).first();
+                if (await expand.count()) await expand.click();
+                await page.locator('.library-result-card').first().waitFor();
+            }
+            await screenshot(`section-${section}-1440`);
+            await page.setViewportSize({width: 390, height: 844});
+            await pause(150);
+            assert.equal(await page.locator('.page-scroller-control:visible').count(), 0, 'Legacy paginator must not leak into shelves pages');
+            assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), section + ' overflows the phone');
+            await screenshot(`section-${section}-390`);
+        }
+        await page.getByRole('button', {name: 'Настройки библиотеки', exact: true}).click();
+        await page.locator('.library-dialog-card[data-dialog-kind="settings"]').waitFor();
+        const settingsBounds = await page.locator('.library-dialog-card[data-dialog-kind="settings"]').evaluate(node => ({width: node.clientWidth, scroll: node.scrollWidth, height: node.getBoundingClientRect().height}));
+        assert(settingsBounds.scroll <= settingsBounds.width + 1 && settingsBounds.height <= 844 - 24, 'Settings must fit a phone');
+        await page.getByRole('button', {name: 'OK', exact: true}).click();
         await page.getByRole('link', {name: 'Профиль', exact: true}).click();
         await page.getByRole('button', {name: /^Классический/}).click();
         await page.locator('.search-list-toggle').waitFor();

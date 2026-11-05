@@ -458,7 +458,7 @@
 
             <div v-if="!isDiscoveryList" class="result-bar row items-center q-ml-lg q-mt-sm">
                 <div v-show="pageCount > 1" class="result-scroller-wrap">
-                    <PageScroller ref="pageScroller1" v-model="search.page" :page-count="pageCount" />
+                    <PageScroller ref="pageScroller1" v-model="search.page" :page-count="pageCount" :disable="list.totalFound < 0" />
                 </div>
 
                 <div v-show="list.totalFound > 0" class="text-bold" style="font-size: 120%; padding-bottom: 2px">
@@ -527,7 +527,7 @@
             <!-- Формирование списка конец ------------------------------------------------------------------>
 
             <div v-if="!isDiscoveryList" class="bottom-scroller-bar row q-ml-lg q-mb-sm">
-                <PageScroller v-show="pageCount > 1" v-model="search.page" :page-count="pageCount" />
+                <PageScroller v-show="pageCount > 1" v-model="search.page" :page-count="pageCount" :disable="list.totalFound < 0" />
             </div>
 
             <footer class="catalog-footer">

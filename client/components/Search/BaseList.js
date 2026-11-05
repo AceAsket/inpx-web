@@ -209,6 +209,10 @@ export default class BaseList {
         return this.$store.state.settings;
     }
 
+    get shelvesAppearance() {
+        return this.settings.catalogAppearance === 'shelves';
+    }
+
     get currentSearch() {
         return (this.isExtendedSearch ? this.extSearch : this.search);
     }
@@ -498,8 +502,10 @@ export default class BaseList {
             const result = await this.api.markReaderBooksRead(normalized, read);
             const count = (result && result.changedBooks) || normalized.length;
             this.$root.notify.success(read ? `Помечено прочитанными: ${count}` : `Отметка снята: ${count}`);
+            return true;
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
+            return false;
         }
     }
 

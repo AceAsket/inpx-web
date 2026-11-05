@@ -1,5 +1,5 @@
 <template>
-    <Dialog ref="dialog" v-model="dialogVisible">
+    <Dialog ref="dialog" v-model="dialogVisible" variant="settings">
         <template #header>
             <div class="row items-center" style="font-size: 110%">
                 <q-icon class="q-mr-sm text-green" name="la la-cog" size="28px"></q-icon>

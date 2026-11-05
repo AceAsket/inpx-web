@@ -1,0 +1,81 @@
+/* Shared surfaces for existing catalog screens. The reader and classic layout keep their own styles. */
+body[data-catalog-appearance="shelves"] .library-dialog-card .settings-dialog-body {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 14px;
+    min-width: 0 !important; width: 100%; font-size: 14px !important; margin: 0;
+}
+body[data-catalog-appearance="shelves"] .settings-dialog-body > :not(.q-checkbox) {grid-column: 1 / -1;}
+body[data-catalog-appearance="shelves"] .settings-dialog-body > .q-checkbox {min-width: 0; align-items: flex-start; margin: 0;}
+body[data-catalog-appearance="shelves"] .settings-dialog-body .q-checkbox__label {line-height: 1.5; padding-top: 8px;}
+body[data-catalog-appearance="shelves"] .settings-dialog-body .appearance-control {margin: 0 0 18px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .q-field--outlined .q-field__control {background: var(--app-surface) !important; border-radius: 12px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .dialog-box {width: 100%; max-width: none; min-width: 0; padding: 0;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .dialog-body > [style*="width"] {width: 100% !important; max-width: 100% !important; min-width: 0 !important;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .info-box {height: auto !important; min-height: 0; padding: 0; margin-top: 0; overflow: visible;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .poster-size {width: 120px; min-width: 120px; height: 180px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .poster-image {object-fit: contain;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .book-info-summary {display: flex; gap: 20px; align-items: flex-start; margin-bottom: 16px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .book-info-summary > div {flex: 1; min-width: 0; overflow-wrap: anywhere;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .book-info-cover {width: 96px; flex: 0 0 96px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .book-info-annotation {font-size: 14px; line-height: 1.75; margin-bottom: 18px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .book-info-annotation p {margin: 0 0 12px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .info-panel {min-width: 0; border: 1px solid var(--app-border); border-radius: 14px; overflow: hidden; margin-left: 0;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .info-scroll {height: auto; min-height: 0; max-height: none; font-size: 13px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .info-tabs {background: var(--app-surface-3) !important;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .info-tabs .q-tab {font-size: 12px; min-height: 38px; color: var(--app-muted); padding: 0 14px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .info-tabs .q-tab--active {background: var(--app-surface-2) !important; color: var(--app-primary) !important;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .info-tabs .q-tab__label {font-size: 12px; font-weight: 550;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .info-link {font-size: 15px; line-height: 1.5;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .text-grey-7 {color: var(--app-muted) !important;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .create-row {flex-wrap: wrap; gap: 10px; margin-bottom: 18px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .list-row,
+body[data-catalog-appearance="shelves"] .library-dialog-card .profile-card {padding: 14px 16px; border-color: var(--app-border); border-radius: 14px; background: var(--app-surface);}
+body[data-catalog-appearance="shelves"] .library-dialog-card .section-title {font-size: 15px; font-weight: 550; margin: 18px 0 12px;}
+body[data-catalog-appearance="shelves"] .library-tools-card {border-radius: 20px; width: min(860px, calc(100vw - 32px)); max-width: calc(100vw - 32px);}
+body[data-catalog-appearance="shelves"] .library-tools-card .q-card__section {padding: 18px 22px;}
+body[data-catalog-appearance="shelves"] .library-tools-card h3 {font-size: 17px; line-height: 1.5; margin: 14px 0 10px;}
+body[data-catalog-appearance="shelves"] .metadata-edit-card,
+body[data-catalog-appearance="shelves"] .app-connect-card {border-radius: 20px; max-width: calc(100vw - 24px); color: var(--app-text);}
+body[data-catalog-appearance="shelves"] .metadata-edit-title {font-size: 18px; font-weight: 550;}
+body[data-catalog-appearance="shelves"] .metadata-edit-note {color: var(--app-muted); line-height: 1.6;}
+body[data-catalog-appearance="shelves"] .metadata-edit-card .q-field--outlined .q-field__control {border-radius: 12px;}
+body[data-catalog-appearance="shelves"] .search--shelves .title-grid:not(.title-grid--list),
+body[data-catalog-appearance="shelves"] .search--shelves .extended-grid:not(.extended-grid--list),
+body[data-catalog-appearance="shelves"] .search--shelves .discovery-grid:not(.discovery-grid--list) {grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 0 18px;}
+body[data-catalog-appearance="shelves"] .search--shelves .author-group,
+body[data-catalog-appearance="shelves"] .search--shelves .series-group {margin: 14px 24px; border: 1px solid var(--app-border); border-radius: 16px; padding: 12px 16px; background: var(--app-surface);}
+body[data-catalog-appearance="shelves"] .search--shelves .book-row {margin-left: 8px; margin-right: 0;}
+body[data-catalog-appearance="shelves"] .search--shelves .catalog-group-heading {margin-left: 0; flex-wrap: wrap; gap: 6px;}
+body[data-catalog-appearance="shelves"] .search--shelves .catalog-group-heading .text-bold {font-weight: 550;}
+body[data-catalog-appearance="shelves"] .search--shelves .catalog-group-heading > .clickable2 {min-width: 0; flex: 1; overflow-wrap: anywhere; white-space: normal; font-size: 14px;}
+body[data-catalog-appearance="shelves"] .search--shelves .catalog-group-heading > [style*="color"] {color: var(--app-muted) !important; font-size: 12px;}
+body[data-catalog-appearance="shelves"] .search--shelves .catalog-group-heading .q-btn {font-size: 12px; font-weight: 500; border-radius: 9px;}
+body[data-catalog-appearance="shelves"] .search--shelves .author-info-card {border-color: var(--app-border); border-radius: 14px; background: var(--app-bg); padding: 16px;}
+body[data-catalog-appearance="shelves"] .search--shelves .discovery-page-title {font-size: 24px; font-weight: 550;}
+body[data-catalog-appearance="shelves"] .search--shelves .discovery-page-subtitle {font-size: 13px;}
+body[data-catalog-appearance="shelves"] .search--shelves .discovery-toolbar-btn {min-height: 36px; border-radius: 10px; font-size: 12px; font-weight: 500;}
+body[data-catalog-appearance="shelves"] .search--shelves .bulk-read-toolbar {gap: 8px; padding: 0 8px;}
+body[data-catalog-appearance="shelves"] .search--shelves .bulk-read-toolbar .q-btn {min-height: 36px; border-radius: 10px; padding: 5px 10px; font-size: 12px; font-weight: 500;}
+body[data-catalog-appearance="shelves"] .search--shelves .bulk-read-toolbar .q-btn--flat {color: var(--app-muted);}
+body[data-catalog-appearance="shelves"] .search--shelves .bulk-read-toolbar .q-icon {font-size: 19px;}
+body[data-catalog-appearance="shelves"] .search--shelves .result-bar {padding: 12px 24px; margin: 0; gap: 12px 24px; justify-content: space-between; border-bottom: 1px solid var(--app-border);}
+body[data-catalog-appearance="shelves"] .search--shelves .result-bar > .text-bold {font-weight: 500; font-size: 13px !important; color: var(--app-muted); padding: 0 !important;}
+body[data-catalog-appearance="shelves"] .search--shelves .bottom-scroller-bar {margin: 0; padding: 16px 24px; border-top: 1px solid var(--app-border);}
+body[data-catalog-appearance="shelves"] .search--shelves .separator {height: 8px;}
+body[data-catalog-appearance="shelves"] .std-dialog-card:not(.std-dialog-card--reader) {border-radius: 20px; max-width: calc(100vw - 32px); font-size: 14px; line-height: 1.6;}
+body[data-catalog-appearance="shelves"] .std-dialog-card:not(.std-dialog-card--reader) .header {min-height: 64px; padding: 8px 10px;}
+body[data-catalog-appearance="shelves"] .std-dialog-card:not(.std-dialog-card--reader) .caption {font-size: 17px; font-weight: 550;}
+body[data-catalog-appearance="shelves"] .std-dialog-card:not(.std-dialog-card--reader) .buttons {gap: 8px; padding: 16px 20px;}
+body[data-catalog-appearance="shelves"] .std-dialog-card:not(.std-dialog-card--reader) .buttons .q-btn {border-radius: 10px; min-height: 38px; font-weight: 550;}
+body[data-catalog-appearance="shelves"] .search--shelves .catalog-footer {font-size: 12px; padding: 14px 24px;}
+@media (max-width: 599px) {
+    body[data-catalog-appearance="shelves"] .library-dialog-card .settings-dialog-body {grid-template-columns: minmax(0, 1fr);}
+    body[data-catalog-appearance="shelves"] .library-dialog-card .poster-size {width: 80px; min-width: 80px; height: 120px;}
+    body[data-catalog-appearance="shelves"] .library-dialog-card .book-info-summary {gap: 14px;}
+    body[data-catalog-appearance="shelves"] .library-dialog-card .book-info-cover {width: 72px; flex-basis: 72px;}
+    body[data-catalog-appearance="shelves"] .library-dialog-card .info-tabs .q-tab {padding: 0 8px;}
+    body[data-catalog-appearance="shelves"] .search--shelves .author-group,
+    body[data-catalog-appearance="shelves"] .search--shelves .series-group {margin: 10px 16px; padding: 10px;}
+    body[data-catalog-appearance="shelves"] .search--shelves .book-row {margin-left: 0;}
+    body[data-catalog-appearance="shelves"] .search--shelves .result-bar,
+    body[data-catalog-appearance="shelves"] .search--shelves .bottom-scroller-bar {padding: 12px 16px;}
+}

@@ -7,8 +7,9 @@
 
         <!-- Формирование списка ------------------------------------------------------------------------>
         <div v-for="item in tableData" :key="item.key" class="column series-group">
-            <div class="row items-center q-ml-md q-mr-xs no-wrap">
-                <div class="row items-center clickable2 q-py-xs no-wrap" @click="expandSeries(item)">
+            <div class="catalog-group-heading row items-center q-ml-md q-mr-xs no-wrap">
+                <q-btn v-if="shelvesAppearance" flat dense round :icon="isExpandedSeries(item) ? 'la la-angle-down' : 'la la-angle-right'" :aria-label="`${isExpandedSeries(item) ? 'Свернуть' : 'Развернуть'} серию: ${item.series}`" :aria-expanded="isExpandedSeries(item)" @click="expandSeries(item)" />
+                <div v-else class="row items-center clickable2 q-py-xs no-wrap" @click="expandSeries(item)">
                     <div style="min-width: 30px">
                         <div v-if="!isExpandedSeries(item)">
                             <q-icon name="la la-plus-square" size="28px" />
@@ -27,7 +28,7 @@
                     {{ getBookCount(item) }}
                 </div>
 
-                <div class="series-read-actions">
+                <div v-if="!shelvesAppearance || isExpandedSeries(item)" class="series-read-actions">
                     <q-btn outline dense no-caps icon="la la-download" label="ZIP серии" :loading="batchSeries === item.series" :disable="!!batchSeries" @click.stop="downloadSeries(item)" />
                     <q-btn flat dense no-caps icon="la la-check-circle" @click.stop="markSeriesRead(item, true)">
                         Прочитана

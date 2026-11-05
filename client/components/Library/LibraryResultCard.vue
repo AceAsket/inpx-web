@@ -10,13 +10,19 @@
             <button v-if="book.author" type="button" class="library-result-card__author" @click="$emit('action', 'authorClick')">{{ book.author }}</button>
             <button v-if="book.series" type="button" class="library-result-card__series" @click="$emit('action', 'seriesClick')">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></button>
             <div v-if="percent !== null" class="library-result-card__progress">{{ Math.round(percent * 100) }}% прочитано</div>
+            <p v-if="reason" class="library-result-card__reason">{{ reason }}</p>
             <div v-if="genres.length || dateLabel" class="library-result-card__genres"><button v-for="genre in genres" :key="genre.value" type="button" @click="$emit('genre', genre.value)">{{ genre.label }}</button><span v-if="dateLabel">{{ dateLabel }}</span></div>
             <div class="library-result-card__actions">
                 <q-btn v-if="canRead" unelevated no-caps color="primary" label="Читать" @click="$emit('action', 'readBook')" />
                 <a v-if="!book.discoveryMissingLocal && !book.unavailable" :href="downloadHref" :aria-label="`Скачать: ${book.title}`"><q-icon name="la la-download" size="18px" /> Скачать</a>
                 <button v-if="showInfo" type="button" aria-label="Информация о книге" @click="library.openDetails(book)"><q-icon name="la la-info-circle" size="20px" /></button>
                 <button v-if="authorized && !book.discoveryMissingLocal" type="button" aria-label="Добавить книгу на полку" @click="$emit('action', 'readingList')"><q-icon name="la la-bookmark" size="20px" /></button>
+                <button v-if="restore" type="button" @click="$emit('restore')"><q-icon name="la la-undo" /> Вернуть</button>
             </div>
+            <details v-if="feedback" class="library-result-card__feedback">
+                <summary>Настроить рекомендации</summary>
+                <div><button v-for="option in feedbackOptions" :key="option.value" type="button" @click="$emit('feedback', option.value)">{{ option.label }}</button></div>
+            </details>
         </div>
     </article>
 </template>
@@ -28,8 +34,11 @@ import {libraryContextKey} from './libraryContext';
 import {readable, progress} from './libraryModel';
 
 const props = defineProps({book: {type: Object, required: true}, downloadHref: String, selectable: Boolean, selected: Boolean,
-    showRates: Boolean, showInfo: Boolean, dateLabel: String, genres: {type: Array, default: () => []}});
-defineEmits(['action', 'selection', 'genre']);
+    showRates: Boolean, showInfo: Boolean, dateLabel: String, genres: {type: Array, default: () => []}, feedback: Boolean, restore: Boolean, reason: String});
+defineEmits(['action', 'selection', 'genre', 'feedback', 'restore']);
+const feedbackOptions = [{value: 'more_like_this', label: 'Больше похожего'}, {value: 'not_interested', label: 'Неинтересно'},
+    {value: 'dislike_author', label: 'Меньше этого автора'}, {value: 'dislike_genre', label: 'Меньше этого жанра'},
+    {value: 'already_read', label: 'Уже прочитано'}, {value: 'ignore_for_taste', label: 'Не учитывать во вкусах'}];
 const library = inject(libraryContextKey);
 const canRead = computed(() => readable(props.book, library.config.value));
 const percent = computed(() => progress(props.book));
@@ -49,6 +58,11 @@ const authorized = computed(() => !!library.config.value.profileAuthorized);
 .library-result-card__author {font-size: 13px; color: var(--app-muted); line-height: 1.5;}
 .library-result-card__series {font-size: 12px; color: var(--app-muted); margin-top: 3px; line-height: 1.5;}
 .library-result-card__progress {font-size: 11px; color: var(--app-primary); margin-top: 5px;}
+.library-result-card__reason {font-size: 12px; line-height: 1.5; color: var(--app-muted); margin: 8px 0 0;}
+.library-result-card__feedback {font-size: 12px; color: var(--app-muted); margin-top: 12px;}
+.library-result-card__feedback summary {cursor: pointer; padding: 4px 0;}
+.library-result-card__feedback > div {display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px;}
+.library-result-card__feedback button {font: inherit; color: var(--app-text); border: 1px solid var(--app-border); border-radius: 8px; background: transparent; padding: 6px 9px; cursor: pointer;}
 .library-result-card__genres {display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; color: var(--app-muted); font-size: 10px;}
 .library-result-card__genres > button {font: inherit; color: inherit; padding: 3px 6px; background: var(--app-surface-3); border: 0; border-radius: 5px; cursor: pointer;}
 .library-result-card__actions {display: flex; gap: 13px; align-items: center; flex-wrap: wrap; margin-top: 14px;}

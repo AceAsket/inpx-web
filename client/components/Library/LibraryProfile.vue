@@ -52,4 +52,5 @@ h2 {font-size: 20px; line-height: 1.4; font-weight: 550; margin: 0; overflow-wra
 small {display: block; color: var(--app-muted); margin-top: 5px; font-size: 12px; line-height: 1.5;}
 .profile-bottom {display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--app-muted); font-size: 12px;}
 @media (max-width: 599px) {.profile-card, .profile-section {padding: 18px;} .profile-links {padding: 0 18px;} .profile-card {gap: 12px;} .profile-avatar {width: 48px; height: 48px; border-radius: 15px;} h2 {font-size: 18px;}}
+@media (min-width: 1100px) {.profile-page {max-width: 1160px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 24px; align-items: start;} h1, .library-page__subtitle, .profile-card, .profile-bottom {grid-column: 1 / -1;} .profile-section {margin-bottom: 20px;}}
 </style>
