@@ -390,6 +390,7 @@ async function fixture(directory) {
         await page.reload();
         await page.locator('.reader-body').getByText(/Текст второй главы/).first().waitFor();
         await page.waitForFunction(() => !document.querySelector('.reader-loading,.reader-reflow-indicator,.reader-error'));
+        await page.waitForFunction(() => {const cover = document.querySelector('.reader-cover'); return cover?.complete && cover.naturalWidth > 0;});
         assert.equal(page.url(), readerUrl, 'Converted EPUB retains its original UID when reopening');
         await screenshot('epub-reader-dark-390');
         await page.goBack(); await epubCard.waitFor();

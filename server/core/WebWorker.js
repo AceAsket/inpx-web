@@ -6631,9 +6631,16 @@ class WebWorker {
                 const prepared = await this.getPreparedBookFile(bookUid, 'fb2');
                 const infoFile = `${prepared.rawFile}.reader-info.json`;
                 let info = await fs.readJson(infoFile).catch(() => null);
-                if (!info || info.version !== 'epub-reader-v1') {
-                    const {fb2} = await this.fb2Helper.getDescAndCover(prepared.rawFile);
-                    info = {version:'epub-reader-v1', fb2:fb2.rawNodes, contents:this.extractFb2Contents(fb2), annotationMeta:this.extractFb2AnnotationMeta(fb2)};
+                if (!info || info.version !== 'epub-reader-v2' || info.coverFile && !await fs.pathExists(path.join(this.config.bookDir, info.coverFile))) {
+                    const {fb2, cover, coverExt} = await this.fb2Helper.getDescAndCover(prepared.rawFile);
+                    let coverFile = '';
+                    if (cover) {
+                        const ext = cover.subarray(0, 4).toString() === 'RIFF' ? '.webp' : cover.subarray(0, 3).toString() === 'GIF' ? '.gif' : coverExt;
+                        coverFile = path.basename(prepared.rawFile) + ext;
+                        this.checkLibraryAssetState(generation, db);
+                        await writeFileAtomic(path.join(this.config.bookDir, coverFile), cover);
+                    }
+                    info = {version:'epub-reader-v2', coverFile, fb2:fb2.rawNodes, contents:this.extractFb2Contents(fb2), annotationMeta:this.extractFb2AnnotationMeta(fb2)};
                     this.checkLibraryAssetState(generation, db);
                     await writeFileAtomic(infoFile, JSON.stringify(info));
                 } else await utils.touchFile(infoFile);
@@ -6641,7 +6648,7 @@ class WebWorker {
                 this.checkLibraryAssetState(generation, db);
                 this.applyMetadataOverrideToBook(book, overrides);
                 return {bookInfo:{book, fb2:info.fb2, contents:info.contents, annotationMeta:info.annotationMeta,
-                    cover:`${this.config.rootPathStatic || ''}/cover/by-uid?uid=${encodeURIComponent(bookUid)}`}};
+                    cover:info.coverFile ? `${this.config.bookPathStatic}/${encodeURIComponent(info.coverFile)}` : ''}};
             }
             // Reader opening only needs the document. Review archives may be
             // large and have their own cold-cache indexing cost.
