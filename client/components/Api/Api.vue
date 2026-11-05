@@ -488,8 +488,8 @@ class Api {
         return await this.request({action: 'get-genre-tree'});
     }
 
-    async getDiscoveryShelves(options = {}) {
-        return await this.request(Object.assign({action: 'get-discovery-shelves'}, options || {}), 300);
+    async getDiscoveryShelves(options = {}, requestOptions = {}) {
+        return await this.request(Object.assign({action: 'get-discovery-shelves'}, options || {}), 300, requestOptions);
     }
 
     async updateDiscoveryPreferences(preferences = {}) {
@@ -620,6 +620,10 @@ class Api {
         return await this.request({action: 'get-user-reading-library', options}, 120, requestOptions);
     }
 
+    async getMobileHome(limit = 100, requestOptions = {}) {
+        return await this.request({action: 'get-mobile-home', limit}, 120, requestOptions);
+    }
+
     async updateReaderProgress(bookUid, progress = {}, options = {}) {
         return await this.request({action: 'update-reader-progress', bookUid, progress}, 120, options);
     }
@@ -663,8 +667,8 @@ class Api {
         return await this.request({action: 'delete-reader-bookmark', bookUid, bookmarkId}, 120);
     }
 
-    async getReadingLists(bookUid = '') {
-        return await this.request({action: 'get-reading-lists', bookUid}, 120);
+    async getReadingLists(bookUid = '', requestOptions = {}) {
+        return await this.request({action: 'get-reading-lists', bookUid}, 120, requestOptions);
     }
 
     async getUserProfiles() {
@@ -710,8 +714,8 @@ class Api {
         return await this.request({action: 'delete-user-profile', targetUserId}, 120);
     }
 
-    async getReadingList(listId) {
-        return await this.request({action: 'get-reading-list', listId}, 120);
+    async getReadingList(listId, requestOptions = {}) {
+        return await this.request({action: 'get-reading-list', listId}, 120, requestOptions);
     }
 
     async createReadingList(name) {

@@ -363,6 +363,13 @@ class BookInfoDialog {
         this.api = this.$root.api;
     }
 
+    mounted() {
+        if (this.modelValue) {
+            this.dialogVisible = true;
+            this.init();
+        }
+    }
+
     updated() {
         this.observeGallery();
     }

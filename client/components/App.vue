@@ -4,11 +4,13 @@
         <Notify ref="notify" />
         <StdDialog ref="stdDialog" />
 
-        <router-view v-if="accessGranted" v-slot="{ Component }">
-            <keep-alive>
-                <component :is="Component" class="col" />
-            </keep-alive>
-        </router-view>        
+        <LibraryShell v-if="accessGranted" class="col" :enabled="isShelvesLayout">
+            <router-view v-slot="{ Component }">
+                <keep-alive>
+                    <component :is="Component" class="col" />
+                </keep-alive>
+            </router-view>
+        </LibraryShell>
     </div>
 </template>
 
@@ -22,6 +24,8 @@ import StdDialog from './share/StdDialog.vue';
 
 import Api from './Api/Api.vue';
 import Search from './Search/Search.vue';
+import LibraryShell from './Library/LibraryShell.vue';
+import {appearance, appearanceRedirect} from './Library/libraryModel';
 
 const componentOptions = {
     components: {
@@ -30,6 +34,7 @@ const componentOptions = {
         StdDialog,
 
         Search,
+        LibraryShell,
     },
     watch: {
         darkTheme(newValue) {
@@ -37,6 +42,16 @@ const componentOptions = {
         },
         '$route.path'() {
             this.applyPwaManifest();
+            this.applyCatalogAppearance();
+        },
+        catalogAppearance() {
+            const redirect = appearanceRedirect(this.$route, this.catalogAppearance);
+            if (redirect) this.$router.replace(redirect);
+            this.applyCatalogAppearance();
+        },
+        accessGranted(value) {
+            if (value && !this.settings.defaultsSet)
+                this.commit('setSettings', {...this.config.uiDefaults, defaultsSet: true});
         },
     },
 
@@ -99,6 +114,7 @@ class App {
 
         this.applyTheme(this.darkTheme);
         this.applyPwaManifest();
+        this.applyCatalogAppearance();
         this.setAppTitle();
     }
 
@@ -120,6 +136,19 @@ class App {
 
     get darkTheme() {
         return !!this.settings.darkTheme;
+    }
+
+    get catalogAppearance() {
+        return appearance(this.settings.catalogAppearance);
+    }
+
+    get isShelvesLayout() {
+        return this.catalogAppearance === 'shelves' && !this.$route.path.startsWith('/reader');
+    }
+
+    applyCatalogAppearance() {
+        if (this.isShelvesLayout) document.body.dataset.catalogAppearance = 'shelves';
+        else delete document.body.dataset.catalogAppearance;
     }
 
     applyTheme(value) {

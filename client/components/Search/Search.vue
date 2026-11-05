@@ -1,9 +1,13 @@
 <template>
-    <div class="root column fit" style="position: relative">
+    <div class="root column fit" :class="{'search--shelves': shelvesAppearance}" style="position: relative">
         <LibraryTools ref="libraryTools" :author="search.author || ''" :series="search.series || ''" />
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
-            <div ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
+            <CatalogSearchPanel v-if="shelvesAppearance" :search="search" :selected-list="selectedList" :list-options="listOptions"
+                :discovery="isDiscoveryList" :extended="isExtendedSearch" :ext-summary="extSearchNames" :authorized="!!config.profileAuthorized"
+                :genre-map="genreMap" :genre-tree="genreTree" :lang-list="langList" :ext-list="extList" :sources="config.librarySources || []"
+                @patch="applyCatalogSearch" @section="selectedList = $event" @save-shelf="saveSearchShelf" @edit-extended="selectExtSearch" @clear-extended="clearExtSearch" />
+            <div v-show="!shelvesAppearance" ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
                 <!-- Обновление -->
                 <div v-show="showNewReleaseAvailable && newReleaseAvailable" class="row q-py-sm bg-green-4 items-center">
                     <div class="q-ml-sm" style="font-size: 120%">
@@ -615,6 +619,7 @@ import authorBooksStorage from './authorBooksStorage';
 import DivBtn from '../share/DivBtn.vue';
 import Dialog from '../share/Dialog.vue';
 import ProfileLogout from '../share/ProfileLogout.vue';
+import CatalogSearchPanel from '../Library/CatalogSearchPanel.vue';
 
 import * as utils from '../../share/utils';
 
@@ -658,6 +663,7 @@ const componentOptions = {
         SelectExtSearchDialog,
         Dialog,
         ProfileLogout,
+        CatalogSearchPanel,
         DivBtn
     },
     watch: {
@@ -923,8 +929,8 @@ class Search {
             //локальный кеш
             await authorBooksStorage.init();
 
-            if (!this.$root.isMobileDevice)
-                this.$refs.authorInput.focus();
+            if (!this.$root.isMobileDevice && !this.shelvesAppearance)
+                this.$refs.authorInput?.focus();
 
             this.updateListFromRoute(this.$route);
 
@@ -999,6 +1005,14 @@ class Search {
 
     get config() {
         return this.$store.state.config;
+    }
+
+    get shelvesAppearance() {
+        return this.settings.catalogAppearance === 'shelves';
+    }
+
+    applyCatalogSearch(patch) {
+        Object.assign(this.search, patch, {page: 1});
     }
 
     get newReleaseAvailable() {
@@ -1609,6 +1623,7 @@ class Search {
     }
 
     makeTitle() {
+        if (!this.isSearchRoute(this.$route)) return;
         if (!this.collection)
             return;
 
@@ -1814,6 +1829,7 @@ class Search {
     }
     
     onScroll() {
+        if (this.shelvesAppearance) return;
         const curScrollTop = this.$refs.scroller.scrollTop;
         const toolPanelOffset = this.$refs.toolPanel.getBoundingClientRect().top;
 
@@ -2466,7 +2482,7 @@ class Search {
     }
 
     async refreshDiscoveryShelves(force = false) {
-        if (!this.showDiscoveryShelves)
+        if (!this.isSearchRoute(this.$route) || !this.showDiscoveryShelves)
             return;
         if (this.discoveryShelvesLoading && !force)
             return;
@@ -2568,6 +2584,19 @@ export default vueComponent(Search);
 </script>
 
 <style scoped>
+.search--shelves .header .logo-link,
+.search--shelves .header .profile-controls,
+.search--shelves .header .collection-title {display: none;}
+.search--shelves .tool-panel {background: var(--app-surface) !important; box-shadow: none; border-bottom: 1px solid var(--app-border);}
+.search--shelves .header {margin: 14px 12px 8px;}
+.search--shelves .search-list-toggle {margin-left: 0; box-shadow: none;}
+.search--shelves .toolbar-actions {padding-top: 10px;}
+.search--shelves .result-bar {margin-top: 18px;}
+.search--shelves .catalog-footer {background: transparent;}
+.search--shelves :deep(.books-grid:not(.books-grid--list)) {grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); align-items: start; gap: 0 20px;}
+.search--shelves :deep(.rating-toolbar) {display: none;}
+.search--shelves :deep(.bulk-read-toolbar) {margin-top: 12px; margin-bottom: 4px;}
+.search--shelves .result-bar {font-size: 12px;}
 .save-shelf-form {
     display: flex;
     flex-direction: column;

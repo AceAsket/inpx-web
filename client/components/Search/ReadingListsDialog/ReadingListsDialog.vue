@@ -236,6 +236,13 @@ class ReadingListsDialog {
         this.api = this.$root.api;
     }
 
+    mounted() {
+        if (this.modelValue) {
+            this.dialogVisible = true;
+            this.init();
+        }
+    }
+
     get dialogTitle() {
         return (this.book ? 'Добавить в список чтения' : 'Списки чтения');
     }

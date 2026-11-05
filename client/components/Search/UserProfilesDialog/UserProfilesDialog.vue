@@ -473,6 +473,13 @@ class UserProfilesDialog {
         this.commit = this.$store.commit;
     }
 
+    mounted() {
+        if (this.modelValue) {
+            this.dialogVisible = true;
+            this.loadProfiles();
+        }
+    }
+
     get config() {
         return this.$store.state.config;
     }

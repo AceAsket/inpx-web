@@ -1,5 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import _ from 'lodash';
+import store from './store';
+import {appearanceRedirect} from './components/Library/libraryModel';
 
 const Search = () => import('./components/Search/Search.vue');
 const Reader = () => import('./components/Reader/Reader.vue');
@@ -16,6 +18,9 @@ const myRoutes = [
     ['/popular', Search],
     ['/bestsellers', Search],
     ['/extended', Search],
+    ['/overview', () => import('./components/Library/LibraryOverview.vue')],
+    ['/my-books', () => import('./components/Library/LibraryBooks.vue')],
+    ['/profile', () => import('./components/Library/LibraryProfile.vue')],
     ['/reader', Reader],
     ['/reader-lab', ReaderLab],
     ['/:pathMatch(.*)*', null, null, '/'],
@@ -45,7 +50,14 @@ for (let route of myRoutes) {
 }
 routes = routes.children;
 
-export default createRouter({
+const router = createRouter({
     history: createWebHashHistory(),
     routes
 });
+
+router.beforeEach(to => {
+    const redirect = appearanceRedirect(to, store.state.settings.catalogAppearance);
+    if (redirect) return {path: redirect, replace: true};
+});
+
+export default router;

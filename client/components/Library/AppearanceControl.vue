@@ -1,0 +1,45 @@
+<template>
+    <fieldset class="appearance-control">
+        <legend>Оформление библиотеки</legend>
+        <div class="appearance-control__choices">
+            <button v-for="option in options" :key="option.value" type="button"
+                :class="{'is-selected': value === option.value}" :aria-pressed="value === option.value"
+                @click="select(option.value)">
+                <q-icon :name="option.icon" size="25px" aria-hidden="true" />
+                <span>{{ option.label }}<small>{{ option.description }}</small></span>
+                <q-icon v-if="value === option.value" name="la la-check-circle" size="20px" aria-hidden="true" />
+            </button>
+        </div>
+    </fieldset>
+</template>
+
+<script setup>
+import {computed} from 'vue';
+import {useStore} from 'vuex';
+import {appearance} from './libraryModel';
+
+const store = useStore();
+const emit = defineEmits(['change']);
+const value = computed(() => appearance(store.state.settings.catalogAppearance));
+const options = [
+    {value: 'classic', label: 'Классический', description: 'Привычный каталог', icon: 'la la-list'},
+    {value: 'shelves', label: 'Полки', description: 'Как в приложении', icon: 'la la-book-open'},
+];
+function select(catalogAppearance) {
+    if (catalogAppearance !== value.value) {
+        store.commit('setSettings', {catalogAppearance});
+        emit('change', catalogAppearance);
+    }
+}
+</script>
+
+<style scoped>
+.appearance-control {border: 0; padding: 0; margin: 8px 0 20px; min-width: 0; font-size: 14px;}
+legend {font-size: 15px; font-weight: 650; margin-bottom: 12px;}
+.appearance-control__choices {display: flex; gap: 10px; flex-wrap: wrap;}
+button {display: flex; align-items: center; gap: 12px; flex: 1 1 190px; padding: 16px; border: 1px solid var(--app-border); border-radius: 16px; background: var(--app-surface); color: var(--app-text); font: inherit; text-align: left; cursor: pointer;}
+button.is-selected {border-color: var(--app-primary); background: var(--app-surface-2);}
+button > span {flex: 1; font-weight: 650;}
+small {display: block; color: var(--app-muted); font-weight: 400; margin-top: 4px;}
+button:focus-visible {outline: 3px solid var(--app-primary); outline-offset: 3px;}
+</style>

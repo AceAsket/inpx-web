@@ -8,6 +8,7 @@
         </template>
 
         <div class="q-mx-md column settings-dialog-body" style="min-width: 300px; font-size: 120%;">
+            <AppearanceControl @change="dialogVisible = false" />
             <div class="row items-center q-ml-sm">
                 <div class="q-mr-sm">
                     Результатов на странице
@@ -584,6 +585,7 @@ import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
 import DiscoverySourceDialog from '../DiscoverySourceDialog/DiscoverySourceDialog.vue';
 import PerformancePanel from './PerformancePanel.vue';
+import AppearanceControl from '../../Library/AppearanceControl.vue';
 
 const componentOptions = {
     emits: ['update:modelValue', 'open-library-tasks'],
@@ -591,6 +593,7 @@ const componentOptions = {
         Dialog,
         DiscoverySourceDialog,
         PerformancePanel,
+        AppearanceControl,
     },
     watch: {
         modelValue(newValue) {
@@ -939,6 +942,10 @@ class SettingsDialog {
         this.commit = this.$store.commit;
         this.api = this.$root.api;
         this.loadSettings();
+    }
+
+    mounted() {
+        this.dialogVisible = this.modelValue;
     }
 
     unmounted() {

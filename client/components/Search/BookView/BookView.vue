@@ -1,5 +1,8 @@
 <template>
-    <div class="book-view q-my-sm" :class="{'is-list-mode': isListMode}">
+    <LibraryResultCard v-if="shelvesResult" :book="book" :download-href="getDirectBookDownloadHref()" :selectable="selectable" :selected="selected"
+        :show-rates="showRates" :show-info="showInfo" :date-label="showDates ? bookDate : ''" :genres="showGenres ? bookGenreItems : []"
+        @action="emit($event)" @selection="emitSelection" @genre="emit('genreClick', $event)" />
+    <div v-else class="book-view q-my-sm" :class="{'is-list-mode': isListMode}">
         <div
             class="book-card"
             :class="{'is-poster-mode': isPosterMode, 'is-list-mode': isListMode, 'is-compact-discovery': compactDiscovery, 'has-inline-actions': hasInlineActionsLayout, 'has-book-author': showBookAuthor}"
@@ -376,11 +379,13 @@
 const bookFormats = require('../../../../shared/BookFormats');
 //-----------------------------------------------------------------------------
 import vueComponent from '../../vueComponent.js';
+import LibraryResultCard from '../../Library/LibraryResultCard.vue';
 
 import * as utils from '../../../share/utils';
 
 const componentOptions = {
     components: {
+        LibraryResultCard,
     },
     watch: {
         settings() {
@@ -396,6 +401,7 @@ class BookView {
     _props = {
         book: Object,
         mode: String,
+        presentation: String,
         genreMap: Object,
         showReadLink: Boolean,
         showDiscoveryDismiss: { type: Boolean, default: false},
@@ -449,6 +455,10 @@ class BookView {
 
     get settings() {
         return this.$store.state.settings;
+    }
+
+    get shelvesResult() {
+        return this.settings.catalogAppearance === 'shelves' && this.presentation !== 'full';
     }
 
     get config() {
