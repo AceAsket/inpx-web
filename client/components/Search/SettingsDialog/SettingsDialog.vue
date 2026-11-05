@@ -168,6 +168,7 @@
 
                 <div v-show="adminExpanded" class="admin-collapse-body">
                     <div class="admin-toolbar">
+                        <q-btn outline color="primary" dense no-caps icon="la la-tasks" label="Задачи и состояние библиотеки" @click="$emit('open-library-tasks')" />
                         <q-btn outline color="primary" dense no-caps icon="la la-sync" :loading="adminLoading" @click="loadAdminPanel">
                             {{ adminUi.refresh }}
                         </q-btn>
@@ -585,6 +586,7 @@ import DiscoverySourceDialog from '../DiscoverySourceDialog/DiscoverySourceDialo
 import PerformancePanel from './PerformancePanel.vue';
 
 const componentOptions = {
+    emits: ['update:modelValue', 'open-library-tasks'],
     components: {
         Dialog,
         DiscoverySourceDialog,

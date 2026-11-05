@@ -1,4 +1,4 @@
-// Optional browser check: real profile login/logout, compact actions and persisted credentials.
+// Optional browser check: profile sessions, catalog shortcuts and administrator tasks.
 const assert = require('assert/strict');
 const fs = require('fs-extra');
 const os = require('os');
@@ -34,7 +34,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1280, height: 900}}), errors = [];
         page.on('pageerror', error => errors.push(error.message));
-        await page.goto(base + '/#/books?title=Packaged');
+        await page.goto(base + '/#/books?title=Packaged&lang=en');
         const login = async() => {
             await page.locator('.profile-login-action,.profile-status-chip').first().click();
             await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
@@ -47,12 +47,14 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         for (const width of [1280, 760, 514, 390, 320]) {
             await page.setViewportSize({width, height: 900}); await pause(350);
             await toolbar.getByRole('button', {name: 'Сохранить поиск как полку', exact: true}).waitFor({state: 'visible'});
+            assert.equal(await page.getByRole('button', {name: 'Задачи и состояние библиотеки', exact: true}).count(), 0);
             const geometry = await toolbar.evaluate(node => ({width: node.clientWidth, scroll: node.scrollWidth,
-                buttons: Array.from(node.querySelectorAll('button')).map(button => {
+                buttons: Array.from(node.querySelectorAll('.button[role="button"]')).map(button => {
                     const r = button.getBoundingClientRect(); return {x: r.x, y: r.y, width: r.width, height: r.height};
                 }), pageWidth: document.documentElement.scrollWidth, viewport: window.innerWidth}));
-            assert.equal(geometry.buttons.length, 3);
-            assert(Math.max(...geometry.buttons.map(button => button.y)) - Math.min(...geometry.buttons.map(button => button.y)) < 2, JSON.stringify({width, geometry}));
+            assert.equal(geometry.buttons.length, 5);
+            const axis = width > 900 ? 'x' : 'y';
+            assert(Math.max(...geometry.buttons.map(button => button[axis])) - Math.min(...geometry.buttons.map(button => button[axis])) < 2, JSON.stringify({width, geometry}));
             assert(geometry.scroll <= geometry.width + 1, 'Actions must fit without scrolling at width ' + width);
             assert(geometry.pageWidth <= geometry.viewport + 1, 'No document overflow at width ' + width);
             await page.screenshot({path: path.join(directory, `toolbar-${width}.png`)});
@@ -60,6 +62,22 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await page.setViewportSize({width: 1280, height: 900}); await pause(350);
         await toolbar.getByRole('button', {name: 'Сохранить поиск как полку', exact: true}).click();
         await page.getByRole('button', {name: 'Отмена', exact: true}).click();
+        await toolbar.getByRole('button', {name: 'Избранные авторы и серии', exact: true}).focus();
+        await page.keyboard.press('Enter');
+        await page.getByRole('button', {name: 'Закрыть избранное', exact: true}).click();
+        await toolbar.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await page.getByRole('checkbox', {name: 'Ночная тема', exact: true}).click();
+        await page.getByRole('button', {name: /Администрирование/}).click();
+        await page.getByRole('button', {name: 'Задачи и состояние библиотеки', exact: true}).click();
+        await page.getByText('Проверка библиотеки', {exact: true}).waitFor();
+        await pause(350);
+        await page.screenshot({path: path.join(directory, 'admin-tasks.png')});
+        await page.getByRole('button', {name: 'Закрыть задачи', exact: true}).click();
+        await page.getByRole('button', {name: 'OK', exact: true}).click();
+        await page.screenshot({path: path.join(directory, 'toolbar-dark-1280.png')});
+        await page.setViewportSize({width: 390, height: 900}); await pause(350);
+        await page.screenshot({path: path.join(directory, 'toolbar-dark-390.png')});
+        await page.setViewportSize({width: 1280, height: 900}); await pause(350);
         const oldToken = await page.evaluate(() => JSON.parse(localStorage.getItem('inpx-web-profile-session')).profileAccessToken);
         assert(oldToken);
         await page.locator('.user-profiles-btn').click();
@@ -68,7 +86,11 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), dialogLogout.click()]);
         await page.locator('.profile-controls').waitFor();
         assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0);
-        assert.equal(await toolbar.count(), 0, 'Private actions disappear after logout');
+        for (const name of ['Избранные авторы и серии', 'Сохранить поиск как полку'])
+            assert.equal(await toolbar.getByRole('button', {name, exact: true}).count(), 0, 'Private actions disappear after logout');
+        await toolbar.getByRole('button', {name: 'Настройки', exact: true}).click();
+        assert.equal(await page.getByRole('button', {name: /Администрирование/}).count(), 0, 'Guests cannot see administration');
+        await page.getByRole('button', {name: 'OK', exact: true}).click();
         assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('inpx-web-profile-session') || '{}').profileAccessToken || ''), '');
         const response = await page.evaluate(token => new Promise((resolve, reject) => {
             const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
@@ -84,7 +106,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await page.locator('.profile-controls').waitFor();
         assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0);
         assert.deepEqual(errors, []);
-        console.log(`Profile UI: admin logout from header and profile dialog, token revocation, guest after reload, and one-row actions at 320/390/514/760/1280px passed; screenshots: ${directory}`);
+        console.log(`Profile UI: logout, token revocation, guest restrictions, five catalog icons at 320/390/514/760/1280px, shelf/favorites actions and tasks in administration passed; screenshots: ${directory}`);
     } catch (error) {console.error(output); throw error;}
     finally {if (browser) await browser.close(); if (child) child.kill();}
 })().catch(error => {console.error(error); process.exitCode = 1;});

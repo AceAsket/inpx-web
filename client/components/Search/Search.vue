@@ -1,9 +1,6 @@
 <template>
     <div class="root column fit" style="position: relative">
-        <LibraryTools
-            :author="search.author || ''" :series="search.series || ''"
-            :show-save-shelf="!isCompactMobile || list.totalFound > 0" @save-shelf="saveSearchShelf"
-        />
+        <LibraryTools ref="libraryTools" :author="search.author || ''" :series="search.series || ''" />
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
             <!-- Tool Panel begin -->
             <div ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
@@ -379,18 +376,19 @@
                         </div>
                     </div><!-- 1-1 -->
                     <!-- 1-2 -->
-                    <div class="toolbar-actions q-mx-sm">
+                    <div class="toolbar-actions q-mx-sm" role="toolbar" aria-label="Действия библиотеки">
                         <div style="height: 3px" />
                         <q-btn
                             v-if="isCompactMobile && showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList"
                             outline dense no-caps icon="la la-sliders-h" class="mobile-extra-filters-toggle"
+                            aria-label="Дополнительные фильтры"
                             :aria-expanded="mobileExtraFiltersOpen"
                             @click="mobileExtraFiltersOpen = !mobileExtraFiltersOpen"
                         >
                             {{ mobileExtraFiltersOpen ? 'Скрыть фильтры' : 'Фильтры' }}
                             <q-badge v-if="mobileExtraFilterCount" class="q-ml-xs" color="primary">{{ mobileExtraFilterCount }}</q-badge>
                         </q-btn>
-                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-cog" round @click.stop.prevent="settingsDialogVisible = true">
+                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-cog" round role="button" aria-label="Настройки" tabindex="0" @click.stop.prevent="settingsDialogVisible = true" @keydown.enter.stop.prevent="settingsDialogVisible = true" @keydown.space.stop.prevent="settingsDialogVisible = true">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     Настройки
@@ -398,7 +396,7 @@
                             </template>
                         </DivBtn>
 
-                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-bookmark" round @click.stop.prevent="openReadingLists()">
+                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-bookmark" round role="button" aria-label="Списки чтения" tabindex="0" @click.stop.prevent="openReadingLists()" @keydown.enter.stop.prevent="openReadingLists()" @keydown.space.stop.prevent="openReadingLists()">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     Списки чтения
@@ -411,6 +409,18 @@
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     Читалка
                                 </q-tooltip>
+                            </template>
+                        </DivBtn>
+
+                        <DivBtn v-if="config.profileAuthorized" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-star" round role="button" aria-label="Избранные авторы и серии" tabindex="0" @click.stop.prevent="$refs.libraryTools.openFollows()" @keydown.enter.stop.prevent="$refs.libraryTools.openFollows()" @keydown.space.stop.prevent="$refs.libraryTools.openFollows()">
+                            <template #tooltip>
+                                <q-tooltip :delay="700" anchor="bottom middle">Избранные авторы и серии</q-tooltip>
+                            </template>
+                        </DivBtn>
+
+                        <DivBtn v-if="config.profileAuthorized && (!isCompactMobile || list.totalFound > 0)" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-folder-plus" round role="button" aria-label="Сохранить поиск как полку" tabindex="0" @click.stop.prevent="saveSearchShelf" @keydown.enter.stop.prevent="saveSearchShelf" @keydown.space.stop.prevent="saveSearchShelf">
+                            <template #tooltip>
+                                <q-tooltip :delay="700" anchor="bottom middle">Сохранить поиск как полку</q-tooltip>
                             </template>
                         </DivBtn>
 
@@ -533,7 +543,7 @@
             </footer>
         </div>
 
-        <SettingsDialog v-model="settingsDialogVisible" />
+        <SettingsDialog v-model="settingsDialogVisible" @open-library-tasks="$refs.libraryTools.openTasks()" />
         <SelectGenreDialog v-model="selectGenreDialogVisible" v-model:genre="search.genre" :genre-tree="genreTree" />
         <SelectLangDialog v-model="selectLangDialogVisible" v-model:lang="search.lang" :lang-list="langList" :lang-default="langDefault" />        
         <SelectLibRateDialog v-model="selectLibRateDialogVisible" v-model:librate="search.librate" />
@@ -2985,6 +2995,7 @@ export default vueComponent(Search);
 
     .toolbar-actions {
         width: 100%;
+        gap: 6px;
         justify-content: flex-start;
         margin-left: 8px !important;
         margin-right: 8px !important;
@@ -3094,5 +3105,12 @@ export default vueComponent(Search);
         margin-left: 8px;
         margin-right: 8px;
     }
+}
+
+@media (max-width: 360px) {
+    .toolbar-actions { gap: 4px; }
+    .mobile-extra-filters-toggle { font-size: 0; padding: 4px 8px; min-width: 36px; }
+    .mobile-extra-filters-toggle :deep(.q-icon) { font-size: 20px; margin-right: 0; }
+    .mobile-extra-filters-toggle :deep(.q-badge) { position: absolute; top: -3px; right: -3px; margin: 0; font-size: 11px; }
 }
 </style>

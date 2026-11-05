@@ -3,22 +3,6 @@
         <div v-if="$root.api && $root.api.indexWaitMessage" class="library-index-status" role="status">
             <q-spinner size="18px" /> {{ $root.api.indexWaitMessage }}
         </div>
-        <div v-if="authorized" class="library-tools-buttons library-tools-toolbar" role="toolbar" aria-label="Действия библиотеки">
-            <q-btn class="library-tool-btn" dense flat no-caps icon="la la-tasks" label="Задачи" @click="openTasks" />
-            <q-btn class="library-tool-btn" dense flat no-caps icon="la la-star" aria-label="Избранные авторы и серии" @click="openFollows">
-                <span class="library-tool-label-full">Избранные авторы и серии</span>
-                <span class="library-tool-label-short">Избранное</span>
-                <q-tooltip :delay="700">Избранные авторы и серии</q-tooltip>
-            </q-btn>
-            <q-btn
-                v-if="showSaveShelf" class="library-tool-btn" dense outline no-caps icon="la la-bookmark"
-                aria-label="Сохранить поиск как полку" @click="$emit('save-shelf')"
-            >
-                <span class="library-tool-label-full">Сохранить поиск как полку</span>
-                <span class="library-tool-label-short">В полку</span>
-                <q-tooltip :delay="700">Сохранить поиск как умную полку</q-tooltip>
-            </q-btn>
-        </div>
         <q-dialog v-model="tasksOpen" @hide="stopPolling">
             <q-card class="library-tools-card">
                 <q-card-section class="row items-center">
@@ -156,8 +140,7 @@
 <script>
 export default {
     name:'LibraryTools',
-    props:{author:{type:String,default:''},series:{type:String,default:''},showSaveShelf:{type:Boolean,default:false}},
-    emits:['save-shelf'],
+    props:{author:{type:String,default:''},series:{type:String,default:''}},
     data() {return {tasksOpen:false,followsOpen:false,tasks:[],resources:null,audit:null,isAdmin:false,deep:false,
         isbnIndex:null,isbnBusy:false,loading:false,error:'',pollTimer:null,generation:0,follows:[],books:[],truncated:false,kind:'author',value:'',busy:false,followError:''};},
     computed:{
@@ -175,7 +158,10 @@ export default {
     methods:{
         stateLabel(state) {return {queued:'В очереди',running:'В работе',generating:'В работе',ready:'Готово',error:'Ошибка',cancelled:'Отменено'}[state] || state;},
         stopPolling() {clearTimeout(this.pollTimer); this.generation++;},
-        openTasks() {this.tasksOpen = true; this.stopPolling(); this.loadTasks(this.generation);},
+        openTasks() {
+            if (!this.authorized || !this.$store.state.config.currentUserProfile?.isAdmin) return;
+            this.tasksOpen = true; this.stopPolling(); this.loadTasks(this.generation);
+        },
         async loadTasks(generation) {
             this.loading = true;
             try {const result = await this.$root.api.getBackgroundTasks(); if (generation !== this.generation) return;
@@ -199,6 +185,7 @@ export default {
             const link = document.createElement('a'); link.href = url; link.download = 'inpx-library-audit.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
         },
         openFollows() {
+            if (!this.authorized) return;
             this.followsOpen = true;
             this.kind = this.author ? 'author' : this.series ? 'series' : 'author';
             this.value = (this.author || this.series || '').replace(/^=/,'');
@@ -221,32 +208,9 @@ export default {
 </script>
 
 <style scoped>
-.library-tools { color:inherit; min-width:0; container-type:inline-size; }
+.library-tools { color:inherit; min-width:0; }
 .library-tools-buttons,.library-index-status { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
 .library-tools-buttons { padding:4px 8px; }
-.library-tools-toolbar {
-    flex-wrap: nowrap;
-    max-width: 100%;
-    overflow-x: auto;
-}
-.library-tool-btn {
-    flex: none;
-    min-height: 36px;
-    padding: 4px 10px;
-    white-space: nowrap;
-}
-.library-tool-label-short { display: none; }
-@media(max-width:900px) {
-    .library-tool-label-full { display: none; }
-    .library-tool-label-short { display: inline; }
-    .library-tools-toolbar { gap:4px; }
-    .library-tool-btn { font-size:13px; padding:4px 8px; }
-    .library-tool-btn :deep(.q-icon) { font-size:20px; margin-right:6px; }
-}
-@container(max-width:760px) {
-    .library-tool-label-full { display: none; }
-    .library-tool-label-short { display: inline; }
-}
 .library-index-status { padding:10px 16px; }
 .library-tools-card { width:min(720px,95vw);max-height:90dvh;overflow:auto; }
 .library-task,.library-follow { padding:12px 0;border-bottom:1px solid #8884;overflow-wrap:anywhere; }
