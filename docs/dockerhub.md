@@ -8,8 +8,9 @@
 
 ### Возможности
 
-**Для тестирования: 1.8.2-rc.9.** [Новый дизайн](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.9/docs/shelves-interface.md): обзор с продолжением чтения, горизонтальные подборки, адаптивная навигация и переработанный поиск. Классический вариант сохраняется; выбор находится в настройках. [Системные голоса в веб-читалке](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.9/docs/browser-speech.md) без Silero и [KOSync для KOReader](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.9/docs/koreader-sync.md) с отдельным ключом профиля. Для FB2 позиция переносится по абзацу в обе стороны; из EPUB/PDF/DJVU — процент в INPX. Браузерная речь ставится на паузу при скрытии вкладки; для фонового прослушивания остаётся Silero MP3. Сохраняются [общие подборки OPDS](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.9/docs/opds-catalog-shelves.md) через `INPX_OPDS_FEEDS_FILE`.
+**Для тестирования: 1.8.2-rc.10.** [Новый дизайн](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/shelves-interface.md): обзор с продолжением чтения, горизонтальные подборки, адаптивная навигация и переработанный поиск. Классический вариант сохраняется; выбор находится в настройках. [Системные голоса в веб-читалке](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/browser-speech.md) без Silero и [KOSync для KOReader](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/koreader-sync.md) с отдельным ключом профиля. Для FB2 позиция переносится по абзацу в обе стороны; из EPUB/PDF/DJVU — процент в INPX. Браузерная речь ставится на паузу при скрытии вкладки; для фонового прослушивания остаётся Silero MP3. Сохраняются [общие подборки OPDS](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/opds-catalog-shelves.md) через `INPX_OPDS_FEEDS_FILE`.
 
+- В RC10: [подсказки поиска, алфавитные указатели, страницы книг и серий, интерактивный Telegram-бот и зашифрованные копии с расписанием](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/catalog-discovery.md). Бот и расписание по умолчанию выключены.
 - Поиск по автору, названию, серии, жанру, языку и источнику; несколько библиотек в одном каталоге.
 - Обложки и их кэширование, поддержка WebP и JXL.
 - Чтение FB2 в браузере: темы, шрифты, закладки, заметки, сохранение позиции и отдельный PWA-ярлык читалки.
@@ -30,8 +31,8 @@ Android-клиент подключается по QR с адресом без �
 
 | Тег | Назначение |
 | --- | --- |
-| `1.8.2-rc.9` | Выбор IPv4/IPv6 для Telegram, новый дизайн и чтение EPUB через FB2; системная озвучка, KOSync и общие подборки OPDS. |
-| `1.8.2-rc.9-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
+| `1.8.2-rc.10` | Подсказки поиска, страницы библиотеки, Telegram-бот и защищённые резервные копии; включает возможности RC9. |
+| `1.8.2-rc.10-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
 | `1.8.1` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.1`. |
 | `1.8.1-silero` | Отдельный сервис озвучки для стабильной версии. |
@@ -124,8 +125,9 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 ### Features
 
-**For testing: 1.8.2-rc.9.** [New design](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.9/docs/shelves-interface.md): continue reading, horizontal book shelves, adaptive navigation and redesigned search. The classic interface remains available; switch in Settings. [Browser/system voices](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.9/docs/browser-speech.md) without Silero and [KOReader KOSync](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.9/docs/koreader-sync.md) with a separate profile key. FB2 positions bridge both ways at paragraph precision; EPUB/PDF/DJVU import percentages into INPX. Browser speech pauses when the tab is hidden; Silero MP3 remains available for background listening. Includes [shared OPDS shelves](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.9/docs/opds-catalog-shelves.md) configured through `INPX_OPDS_FEEDS_FILE`.
+**For testing: 1.8.2-rc.10.** [New design](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/shelves-interface.md): continue reading, horizontal book shelves, adaptive navigation and redesigned search. The classic interface remains available; switch in Settings. [Browser/system voices](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/browser-speech.md) without Silero and [KOReader KOSync](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/koreader-sync.md) with a separate profile key. FB2 positions bridge both ways at paragraph precision; EPUB/PDF/DJVU import percentages into INPX. Browser speech pauses when the tab is hidden; Silero MP3 remains available for background listening. Includes [shared OPDS shelves](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/opds-catalog-shelves.md) configured through `INPX_OPDS_FEEDS_FILE`.
 
+- In RC10: [search suggestions, alphabetical browsing, book and series pages, an interactive Telegram bot, and encrypted scheduled backups](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.10/docs/catalog-discovery.md). The bot and backup schedule are disabled by default.
 - Search by author, title, series, genre, language and source; multiple libraries in one catalog.
 - Cover extraction and caching, including WebP and JXL support.
 - Browser-based FB2 reading with themes, fonts, bookmarks, notes, saved positions and a dedicated reader PWA shortcut.
@@ -146,8 +148,8 @@ Connect Android through a QR containing the server address without credentials. 
 
 | Tag | Purpose |
 | --- | --- |
-| `1.8.2-rc.9` | IPv4/IPv6 selection for Telegram, new design and EPUB reading through FB2; browser speech, KOSync and shared OPDS shelves. |
-| `1.8.2-rc.9-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
+| `1.8.2-rc.10` | Search suggestions, library pages, Telegram bot and protected backups; includes RC9 features. |
+| `1.8.2-rc.10-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
 | `1.8.1` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.1`. |
 | `1.8.1-silero` | Separate speech service for the stable release. |

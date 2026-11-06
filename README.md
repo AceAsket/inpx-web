@@ -14,7 +14,7 @@ inpx-web-7z
 
 Стабильная версия — **1.8.1**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.1`. Для разработки используется ветка `develop`.
 
-Тестовая версия — **1.8.2-rc.9**: [релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.9), Docker `aceasket/inpx-web-7z:1.8.2-rc.9`. Добавлен выбор IPv4/IPv6 для Telegram, включая серверы, где доступен только IPv6. Сохраняются [новый дизайн](./docs/shelves-interface.md), переработанные профили, [преобразование EPUB в FB2 и чтение EPUB](./docs/epub-fb2.md), [голоса устройства](./docs/browser-speech.md), [синхронизация с KOReader](./docs/koreader-sync.md) и [общие подборки OPDS](./docs/opds-catalog-shelves.md). Стабильный тег `latest` остаётся на 1.8.1.
+Тестовая версия — **1.8.2-rc.10**: [релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.10), Docker `aceasket/inpx-web-7z:1.8.2-rc.10`. Добавлены подсказки поиска, алфавитные указатели, полные страницы книг и серий, интерактивный Telegram-бот и защищённые резервные копии с расписанием. Сохраняются [новый дизайн](./docs/shelves-interface.md), классический интерфейс, [чтение EPUB через FB2](./docs/epub-fb2.md), [голоса устройства](./docs/browser-speech.md), [синхронизация с KOReader](./docs/koreader-sync.md) и [общие подборки OPDS](./docs/opds-catalog-shelves.md). Стабильный тег `latest` остаётся на 1.8.1.
 
 <a id="ключевые-отличия" />
 
@@ -25,7 +25,7 @@ inpx-web-7z
 
 Подключение Android через QR, совместимость API и отмена озвучки описаны в [контракте приложения](./docs/native-client-protocol.md).
 
-В ветке разработки: [подсказки поиска, указатели авторов и серий, страницы книг, интерактивный Telegram-бот и защищённые резервные копии](./docs/catalog-discovery.md).
+Настройка новых возможностей: [поиск и страницы библиотеки, интерактивный Telegram-бот и защищённые резервные копии](./docs/catalog-discovery.md).
 
 В 1.8.1 добавлены [задачи, избранные авторы и серии, проверка библиотеки, таймер сна и переходы между текстом и аудио](./docs/library-tools.md).
 
