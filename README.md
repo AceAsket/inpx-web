@@ -14,7 +14,7 @@ inpx-web-7z
 
 Стабильная версия — **1.8.1**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.1`. Для разработки используется ветка `develop`.
 
-Тестовая версия — **1.8.2-rc.8**: [релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.8), Docker `aceasket/inpx-web-7z:1.8.2-rc.8`. [Новый дизайн](./docs/shelves-interface.md): карточки по клику на обложку, каталог «Все книги», аккуратные профили и подсказка переключения из классического интерфейса. Добавлены [преобразование EPUB в FB2 и чтение EPUB](./docs/epub-fb2.md) во встроенной читалке. Сохраняются [голоса устройства](./docs/browser-speech.md), [синхронизация с KOReader](./docs/koreader-sync.md) и [общие подборки OPDS](./docs/opds-catalog-shelves.md). Стабильный тег `latest` остаётся на 1.8.1.
+Тестовая версия — **1.8.2-rc.9**: [релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.9), Docker `aceasket/inpx-web-7z:1.8.2-rc.9`. Добавлен выбор IPv4/IPv6 для Telegram, включая серверы, где доступен только IPv6. Сохраняются [новый дизайн](./docs/shelves-interface.md), переработанные профили, [преобразование EPUB в FB2 и чтение EPUB](./docs/epub-fb2.md), [голоса устройства](./docs/browser-speech.md), [синхронизация с KOReader](./docs/koreader-sync.md) и [общие подборки OPDS](./docs/opds-catalog-shelves.md). Стабильный тег `latest` остаётся на 1.8.1.
 
 <a id="ключевые-отличия" />
 
@@ -624,7 +624,10 @@ docker run -d \
 Переменные для Telegram:
 
 * `TELEGRAM_BOT_TOKEN` — токен бота от `@BotFather`
+* `TELEGRAM_IP_FAMILY` — `auto` (по умолчанию), `4` или `6`. Применяется к отправке книг и проверке подключения. Можно выбрать также в настройках администратора: «Подключение Telegram». Для standalone доступно поле `telegramIpFamily` в `config.json`; переменная окружения имеет приоритет при запуске.
 * `TELEGRAM_CAPTION_TEMPLATE` — подпись к книге, по умолчанию `${AUTHOR} - ${TITLE}`
+
+Если `curl -4` к `https://api.telegram.org` завершается тайм-аутом, а `curl -6` отвечает, выберите «Только IPv6». Для запуска из терминала: `TELEGRAM_IP_FAMILY=6 ./inpx-web`. Для systemd задайте `Environment=TELEGRAM_IP_FAMILY=6` в сервисе и перезапустите его. В Docker добавьте `TELEGRAM_IP_FAMILY: "6"` в `environment`. Режим выбирается отдельно для Telegram и не меняет подключение к другим внешним сервисам.
 
 Переменные для email:
 
@@ -1284,6 +1287,7 @@ Options:
     // отправка книг; получатель всегда берётся из текущего профиля пользователя
     "telegramShareEnabled": false,
     "telegramBotToken": "",
+    "telegramIpFamily": "auto",
     "telegramChatId": "",
     "telegramCaptionTemplate": "${AUTHOR} - ${TITLE}",
     "emailShareEnabled": false,

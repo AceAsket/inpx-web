@@ -72,6 +72,7 @@ const propsToSave = [
     'checkReleaseLink',
     'telegramShareEnabled',
     'telegramBotToken',
+    'telegramIpFamily',
     'telegramChatId',
     'telegramCaptionTemplate',
     'emailShareEnabled',
@@ -247,6 +248,8 @@ class ConfigManager {
 
                 const discovery = Object.assign({}, this._config.discovery || {}, config.discovery || {});
 
+                if (Object.prototype.hasOwnProperty.call(config, 'telegramIpFamily'))
+                    config.telegramIpFamily = require('../../shared/TelegramNetwork').normalizeIpFamily(config.telegramIpFamily);
                 this.config = config;
                 this._config.discovery = discovery;
                 this._config.updateChannel = resolveUpdateChannel(this._config);

@@ -18,6 +18,8 @@ let branch = '';
 const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'library-sources', 'admin-login', 'admin-password'];
 
 function applyEnvSecurityOverrides(targetConfig) {
+    if (Object.prototype.hasOwnProperty.call(process.env, 'TELEGRAM_IP_FAMILY'))
+        targetConfig.telegramIpFamily = require('../shared/TelegramNetwork').normalizeIpFamily(process.env.TELEGRAM_IP_FAMILY);
     targetConfig.reviewWarmupEnabled = process.env.INPX_REVIEWS_WARMUP === 'true';
     targetConfig.reviewIndexMaxEntries = Math.max(1, parseInt(process.env.INPX_REVIEW_INDEX_MAX_ENTRIES || '100000',10) || 100000);
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_LOW_MEMORY_MODE'))

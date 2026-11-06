@@ -1733,6 +1733,7 @@ const tests = [
     ...require('./library-io-tests'),
     ...require('./download-preference-tests'),
     ...require('./channel-format-tests'),
+    ...require('./telegram-network-tests'),
     ...require('./library-feature-tests'),
     ...require('./server-audit-regression-tests'),
     ...require('./client-audit-regression-tests'),

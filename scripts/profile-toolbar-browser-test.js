@@ -37,6 +37,9 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await page.goto(base + '/#/books?title=Packaged&lang=en');
         const login = async() => {
             await page.locator('.profile-login-action,.profile-status-chip').first().click();
+            await page.getByRole('dialog').evaluate(async node => {
+                await Promise.allSettled(node.getAnimations({subtree:true}).filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished));
+            });
             await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
             await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('profile-toolbar-test');
             await page.getByRole('button', {name: 'OK', exact: true}).click();
@@ -73,6 +76,20 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await pause(350);
         await page.screenshot({path: path.join(directory, 'admin-tasks.png')});
         await page.getByRole('button', {name: 'Закрыть задачи', exact: true}).click();
+        await page.getByRole('button', {name: /^Отправка книг/}).click();
+        await page.getByRole('combobox', {name: 'Подключение Telegram', exact: true}).click();
+        await page.getByRole('option', {name: 'Только IPv6', exact: true}).click();
+        const deliverySettings = page.getByRole('button', {name: /^Отправка книг/}).locator('..');
+        await deliverySettings.getByRole('button', {name: 'Сохранить', exact: true}).click();
+        await page.getByText('Настройки отправки сохранены', {exact: true}).waitFor();
+        await page.getByRole('button', {name: 'OK', exact: true}).click();
+        await page.locator('.q-dialog').waitFor({state: 'hidden'});
+        await page.reload();
+        await page.locator('.profile-controls .profile-logout').waitFor();
+        await toolbar.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await page.getByRole('button', {name: /^Отправка книг/}).click();
+        await deliverySettings.getByText('Только IPv6', {exact: true}).waitFor();
+        await page.screenshot({path:path.join(directory, 'telegram-connection.png')});
         await page.getByRole('button', {name: 'OK', exact: true}).click();
         await page.screenshot({path: path.join(directory, 'toolbar-dark-1280.png')});
         await page.setViewportSize({width: 390, height: 900}); await pause(350);
@@ -107,6 +124,13 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0);
         assert.deepEqual(errors, []);
         console.log(`Profile UI: logout, token revocation, guest restrictions, five catalog icons at 320/390/514/760/1280px, shelf/favorites actions and tasks in administration passed; screenshots: ${directory}`);
-    } catch (error) {console.error(output); throw error;}
+    } catch (error) {
+        const page = browser?.contexts().flatMap(context => context.pages())[0];
+        if (page) {
+            await page.screenshot({path:path.join(directory, 'failure.png')}).catch(() => {});
+            await fs.writeFile(path.join(directory, 'failure.html'), await page.content()).catch(() => {});
+        }
+        console.error(`Artifacts: ${directory}\n${output}`); throw error;
+    }
     finally {if (browser) await browser.close(); if (child) child.kill();}
 })().catch(error => {console.error(error); process.exitCode = 1;});

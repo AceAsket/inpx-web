@@ -533,6 +533,8 @@
                                     <q-icon :name="telegramTokenVisible ? 'la la-eye-slash' : 'la la-eye'" class="password-visibility-toggle" @click="telegramTokenVisible = !telegramTokenVisible" />
                                 </template>
                             </q-input>
+                            <q-select v-model="integrations.telegramIpFamily" outlined dense emit-value map-options
+                                label="Подключение Telegram" :options="[{label:'Авто (IPv4 / IPv6)',value:'auto'},{label:'Только IPv4',value:'4'},{label:'Только IPv6',value:'6'}]" />
                             <q-input class="admin-mail-wide" v-model="integrations.telegramCaptionTemplate" outlined dense clearable :label="mailUi.telegramCaption" />
                         </div>
                     </div>
@@ -1011,6 +1013,7 @@ class SettingsDialog {
         return {
             telegramShareEnabled: false,
             telegramBotToken: '',
+            telegramIpFamily: 'auto',
             telegramChatId: '',
             telegramCaptionTemplate: '${AUTHOR} - ${TITLE}',
             emailShareEnabled: false,

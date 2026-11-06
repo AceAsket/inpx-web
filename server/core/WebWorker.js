@@ -6,6 +6,7 @@ const _ = require('lodash');
 const iconv = require('iconv-lite');
 const axios = require('axios');
 const FormData = require('form-data');
+const telegramNetwork = require('../../shared/TelegramNetwork');
 const nodemailer = require('nodemailer');
 const yazl = require('yazl');
 
@@ -3816,6 +3817,7 @@ class WebWorker {
             telegramShareEnabled: !!this.config.telegramShareEnabled,
             telegramBotToken: hasTelegramToken ? '__KEEP__' : '',
             telegramBotTokenSet: hasTelegramToken,
+            telegramIpFamily: telegramNetwork.normalizeIpFamily(this.config.telegramIpFamily),
             telegramChatId: String(this.config.telegramChatId || ''),
             telegramCaptionTemplate: String(this.config.telegramCaptionTemplate || '${AUTHOR} - ${TITLE}'),
             emailShareEnabled: !!this.config.emailShareEnabled,
@@ -4546,6 +4548,8 @@ class WebWorker {
 
         if (utils.hasProp(patch, 'telegramShareEnabled'))
             normalized.telegramShareEnabled = !!patch.telegramShareEnabled;
+        if (utils.hasProp(patch, 'telegramIpFamily'))
+            normalized.telegramIpFamily = telegramNetwork.normalizeIpFamily(patch.telegramIpFamily);
         if (utils.hasProp(patch, 'telegramBotToken')) {
             const token = String(patch.telegramBotToken || '').trim();
             if (token !== '__KEEP__')
@@ -4665,6 +4669,7 @@ class WebWorker {
                 throw new Error('Telegram bot token не указан');
 
             const response = await axios.get(`https://api.telegram.org/bot${this.config.telegramBotToken}/getMe`, {
+                ...telegramNetwork.requestOptions(this.config),
                 timeout: 15000,
             });
 
@@ -4744,6 +4749,7 @@ class WebWorker {
             'server',
             'opds',
             'telegramShareEnabled',
+            'telegramIpFamily',
             'telegramChatId',
             'telegramCaptionTemplate',
             'emailShareEnabled',
@@ -4782,6 +4788,8 @@ class WebWorker {
 
         if (utils.hasProp(patch, 'librarySources') && !Array.isArray(patch.librarySources))
             throw new Error('librarySources должен быть массивом');
+        if (utils.hasProp(patch, 'telegramIpFamily'))
+            patch.telegramIpFamily = telegramNetwork.normalizeIpFamily(patch.telegramIpFamily);
 
         return patch;
     }
@@ -6167,6 +6175,7 @@ class WebWorker {
         form.append('document', fs.createReadStream(rawFile), downFileName);
 
         const response = await axios.post(url, form, {
+            ...telegramNetwork.requestOptions(this.config),
             headers: form.getHeaders(),
             maxBodyLength: Infinity,
             maxContentLength: Infinity,
