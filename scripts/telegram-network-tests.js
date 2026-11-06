@@ -90,7 +90,7 @@ async function testTelegramProbeAndDocumentUseSelectedFamilyOverRealHttps() {
             axios.post = async(url, body, options) => {calls.push({url, family:options.family, timeout:options.timeout}); return originalPost(endpoint + '/sendDocument', body, {...options, proxy:false, httpsAgent:agent});};
             try {
                 const value = worker({telegramIpFamily:String(family), telegramShareEnabled:true, telegramBotToken:'fixture', telegramCaptionTemplate:'${AUTHOR} - ${TITLE}'});
-                value.readingListStore = {getUsers:async() => ({currentUser:{telegramChatId:'fixture-chat'}})};
+                value.readingListStore = {getUsers:async() => ({currentUser:{telegramChatId:'fixture-chat'}}), load:async() => ({users:[{id:'reader',telegramChatId:'fixture-chat'}]})};
                 value.getDeliveryBookFile = async() => ({book:{title:'Book',author:'Author'},rawFile:bookFile,downFileName:'book.fb2'});
                 assert.equal((await value.testAdminIntegrationConfig('admin','fixture','telegram')).success, true);
                 assert.equal((await value.sendBookToTelegram('book','','reader')).success, true);

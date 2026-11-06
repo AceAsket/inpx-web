@@ -399,6 +399,34 @@ class Api {
         }
     }
 
+    async catalogSuggest(options) {
+        return this.request({action: 'catalog-suggest', options}, 30, {suppressProfileLogin: true});
+    }
+
+    async telegramBotAccount(operation, options = {}) {
+        return this.request({action: 'telegram-bot-account', operation, options}, 30);
+    }
+
+    async getLibraryFollows(options = {}) {
+        return this.request({action: 'get-library-follows', options}, 60);
+    }
+
+    async changeLibraryFollow(operation, payload) {
+        return this.request({action: 'change-library-follow', operation, payload}, 60);
+    }
+
+    async catalogBrowse(options) {
+        return this.request({action: 'catalog-browse', options}, 30);
+    }
+
+    async catalogEntity(options) {
+        return this.request({action: 'catalog-entity', options}, 60);
+    }
+
+    async markSeriesUntil(options) {
+        return this.request({action: 'mark-series-until', options}, 120);
+    }
+
     async search(from, query, signal) {
         await this.waitForRatingIndex(query, signal);
         if (signal?.aborted) throw signal.reason;
@@ -590,6 +618,14 @@ class Api {
 
     async importAdminBackup(data) {
         return await this.request({action: 'import-admin-backup', data}, 300);
+    }
+
+    async previewAdminBackup(data) {
+        return this.request({action: 'preview-admin-backup', data}, 300);
+    }
+
+    async adminBackupVault(operation, options = {}) {
+        return this.request({action: 'admin-backup-vault', operation, options}, 300);
     }
 
     async updateBookMetadata(bookUid, metadata = {}) {

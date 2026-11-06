@@ -1,6 +1,6 @@
 <template>
     <article class="book-tile">
-        <button type="button" class="book-tile__open" :aria-label="`Открыть карточку: ${book.title}`" @click="library.openActions(book)">
+        <button type="button" class="book-tile__open" :aria-label="`Открыть карточку: ${book.title}`" @click="library.openCard(book)">
             <BookCover :book="book" />
             <span class="book-tile__title">{{ book.title || 'Без названия' }}</span>
             <span class="book-tile__author">{{ book.author || 'Автор не указан' }}</span>

@@ -1,5 +1,5 @@
 <template>
-    <Dialog v-model="dialogVisible" variant="book">
+    <DialogSurface v-model="dialogVisible" variant="book" :embedded="embedded">
         <template #header>Книга в библиотеке</template>
         <div class="library-book-actions">
             <a ref="download" style="display: none" />
@@ -8,7 +8,7 @@
                 <BookCover :book="book" />
                 <div>
                     <div class="book-actions-meta"><span>{{ sourceFormat }}</span><span v-if="sizeLabel">{{ sizeLabel }}</span><span v-if="dateLabel">{{ dateLabel }}</span></div>
-                    <h2>{{ book.title || 'Без названия' }}</h2>
+                    <component :is="embedded ? 'h1' : 'h2'">{{ book.title || 'Без названия' }}</component>
                     <button v-if="book.author" type="button" class="book-actions-author" @click="bookEvent({action: 'authorClick', book})">{{ book.author }}</button>
                     <button v-if="book.series" type="button" class="book-actions-series" @click="bookEvent({action: 'seriesClick', book})">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></button>
                     <div v-if="percent !== null" class="book-actions-progress">{{ Math.round(percent * 100) }}% прочитано</div>
@@ -21,7 +21,7 @@
                 </div>
                 <q-select v-if="downloadFormats.length > 1" v-model="downloadFormat" outlined dense emit-value map-options :options="downloadFormats" label="Формат скачивания" class="book-actions-formats" />
                 <div class="book-actions-secondary">
-                    <button type="button" @click="$emit('details', book); dialogVisible = false"><q-icon name="la la-info-circle" /><span>Описание и сведения</span></button>
+                    <button v-if="!embedded" type="button" @click="$emit('details', book); dialogVisible = false"><q-icon name="la la-info-circle" /><span>Описание и сведения</span></button>
                     <button type="button" @click="bookEvent({action: 'readingList', book})"><q-icon name="la la-bookmark" /><span>Добавить на полку</span></button>
                     <button v-if="config.profileAuthorized" type="button" :disabled="updatingRead" @click="toggleRead"><q-icon :name="markedRead ? 'la la-undo' : 'la la-check-circle'" /><span>{{ markedRead ? 'Снять отметку' : 'Прочитано' }}</span></button>
                     <button type="button" :disabled="actionBusy" @click="perform('copyLink')"><q-icon name="la la-link" /><span>Копировать ссылку</span></button>
@@ -32,7 +32,7 @@
             <q-btn v-else-if="externalUrl" color="primary" no-caps unelevated label="Открыть источник" icon="la la-external-link-alt" :href="externalUrl" target="_blank" rel="noopener noreferrer" />
             <p v-else class="book-actions-unavailable">Книга сейчас недоступна в каталоге.</p>
         </div>
-    </Dialog>
+    </DialogSurface>
 </template>
 
 <script>
@@ -40,16 +40,16 @@ import vueComponent from '../vueComponent';
 import BaseList from '../Search/BaseList';
 import BookCover from './BookCover.vue';
 import LoadingMessage from '../Search/LoadingMessage/LoadingMessage.vue';
-import Dialog from '../share/Dialog.vue';
+import DialogSurface from '../share/DialogSurface.vue';
 import {readable, progress} from './libraryModel';
 const bookFormats = require('../../../shared/BookFormats');
 
 // Use the same download, format, email, Telegram and read-state actions as the catalog.
 // This adapter has no search lifecycle or parallel implementation of those operations.
 class BookActionsDialog extends BaseList {
-    _props = {modelValue: Boolean, book: Object, genreMap: Object};
+    _props = {modelValue: Boolean, book: Object, genreMap: Object, embedded: Boolean};
     _options = {
-        components: {Dialog, BookCover, LoadingMessage},
+        components: {DialogSurface, BookCover, LoadingMessage},
         emits: ['update:modelValue', 'listEvent', 'navigate', 'details', 'updated'],
         watch: {
             modelValue(value) {this.dialogVisible = value;},

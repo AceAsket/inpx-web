@@ -151,6 +151,7 @@ module.exports = {
     bookTitleTemplate: process.env.INPX_BOOK_TITLE_TEMPLATE || '',
     telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN),
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    telegramBotEnabled: process.env.INPX_TELEGRAM_BOT_ENABLED === 'true',
     telegramIpFamily: require('../../shared/TelegramNetwork').normalizeIpFamily(process.env.TELEGRAM_IP_FAMILY),
     telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
     telegramCaptionTemplate: process.env.TELEGRAM_CAPTION_TEMPLATE || '${AUTHOR} - ${TITLE}',

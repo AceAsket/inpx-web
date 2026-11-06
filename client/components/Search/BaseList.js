@@ -247,12 +247,18 @@ export default class BaseList {
     }
 
     selectAuthor(author) {
+        if (this.settings.catalogAppearance === 'shelves') {
+            this.$router.push({path: '/author-details', query: {name: author}}); return;
+        }
         const search = (this.isExtendedSearch ? this.extSearch : this.search);
         search.author = `=${author}`;
         this.scrollToTop();
     }
 
     selectSeries(series) {
+        if (this.settings.catalogAppearance === 'shelves') {
+            this.$router.push({path: '/series-details', query: {name: series}}); return;
+        }
         const search = (this.isExtendedSearch ? this.extSearch : this.search);
         search.series = `=${series}`;
     }
@@ -510,6 +516,12 @@ export default class BaseList {
     }
 
     bookEvent(event) {
+        if (this.settings.catalogAppearance === 'shelves' && ['bookInfo', 'authorClick', 'seriesClick'].includes(event.action)) {
+            const kind = {bookInfo: 'book', authorClick: 'author', seriesClick: 'series'}[event.action];
+            this.$router.push({path: kind === 'book' ? '/book' : `/${kind}-details`,
+                query: kind === 'book' ? {bookUid: this.getBookUid(event.book)} : {name: event.book[kind]}});
+            return;
+        }
         switch (event.action) {
             case 'authorClick':
                 this.selectAuthor(event.book.author);

@@ -71,6 +71,19 @@ async function checkWebSocket(url) {
                     socket.send(JSON.stringify({action:'search',from:'title',query:{ratingCount:'1'},requestId:'ratings'}));
                 } else if (response.requestId === 'ratings') {
                     assert.strictEqual(response.totalFound,1,'Packaged ratings search must load its streaming JSON dependency');
+                    socket.send(JSON.stringify({action: 'catalog-suggest', options: {query: 'Packaged'}, requestId: 'suggestions'}));
+                } else if (response.requestId === 'suggestions') {
+                    if (response.warming) {
+                        setTimeout(() => {if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({action: 'catalog-suggest', options: {query: 'Packaged'}, requestId: 'suggestions'}));}, 100);
+                        return;
+                    }
+                    assert.strictEqual(response.groups.find(group => group.kind === 'title').items[0].book.title, 'Packaged smoke book');
+                    socket.send(JSON.stringify({action: 'catalog-browse', options: {kind: 'author'}, requestId: 'authors'}));
+                } else if (response.requestId === 'authors') {
+                    assert.strictEqual(response.total, 1);
+                    socket.send(JSON.stringify({action: 'catalog-entity', options: {kind: 'author', name: response.items[0].name}, requestId: 'author-page'}));
+                } else if (response.requestId === 'author-page') {
+                    assert.strictEqual(response.total, 1); assert.strictEqual(response.books[0].title, 'Packaged smoke book');
                     finish();
                 }
             } catch (error) {

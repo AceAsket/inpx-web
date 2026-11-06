@@ -1,12 +1,12 @@
 <template>
     <article class="library-result-card">
         <div class="library-result-card__cover">
-            <button type="button" :aria-label="`Открыть карточку: ${book.title}`" @click="library.openActions(book)"><BookCover :book="book" /></button>
+            <button type="button" :aria-label="`Открыть карточку: ${book.title}`" @click="library.openCard(book)"><BookCover :book="book" /></button>
             <q-checkbox v-if="selectable" :model-value="selected" dense class="library-result-card__select" :aria-label="`Выбрать: ${book.title}`" @update:model-value="$emit('selection', $event)" />
         </div>
         <div class="library-result-card__body">
             <div class="library-result-card__top"><span>{{ (book.ext || 'КНИГА').toUpperCase() }}<span v-if="showRates && book.librate"> · ★ {{ book.librate }}/5</span></span><button type="button" :aria-label="`Действия с книгой: ${book.title}`" @click="library.openActions(book)"><q-icon name="la la-ellipsis-v" size="22px" /></button></div>
-            <button type="button" class="library-result-card__title" @click="library.openDetails(book)">{{ book.title || 'Без названия' }}</button>
+            <button type="button" class="library-result-card__title" @click="library.openCard(book)">{{ book.title || 'Без названия' }}</button>
             <button v-if="book.author" type="button" class="library-result-card__author" @click="$emit('action', 'authorClick')">{{ book.author }}</button>
             <button v-if="book.series" type="button" class="library-result-card__series" @click="$emit('action', 'seriesClick')">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></button>
             <div v-if="percent !== null" class="library-result-card__progress">{{ Math.round(percent * 100) }}% прочитано</div>
@@ -15,7 +15,7 @@
             <div class="library-result-card__actions">
                 <q-btn v-if="canRead" unelevated no-caps color="primary" label="Читать" @click="$emit('action', 'readBook')" />
                 <a v-if="!book.discoveryMissingLocal && !book.unavailable" :href="downloadHref" :aria-label="`Скачать: ${book.title}`"><q-icon name="la la-download" size="18px" /> Скачать</a>
-                <button v-if="showInfo" type="button" aria-label="Информация о книге" @click="library.openDetails(book)"><q-icon name="la la-info-circle" size="20px" /></button>
+                <button v-if="showInfo" type="button" aria-label="Информация о книге" @click="library.openCard(book)"><q-icon name="la la-info-circle" size="20px" /></button>
                 <button v-if="authorized && !book.discoveryMissingLocal" type="button" aria-label="Добавить книгу на полку" @click="$emit('action', 'readingList')"><q-icon name="la la-bookmark" size="20px" /></button>
                 <button v-if="restore" type="button" @click="$emit('restore')"><q-icon name="la la-undo" /> Вернуть</button>
             </div>

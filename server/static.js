@@ -649,7 +649,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
             return res.sendStatus(403);
         }
         const fileName = path.basename(String(req.params.fileName || '').trim());
-        if (!fileName || fileName !== req.params.fileName || path.extname(fileName).toLowerCase() !== '.zip') {
+        if (!fileName || fileName !== req.params.fileName || !/\.zip(?:\.enc)?$/i.test(fileName)) {
             res.sendStatus(404);
             return;
         }

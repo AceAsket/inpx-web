@@ -1717,6 +1717,9 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
 }
 
 const tests = [
+    ...Object.values(require('./catalog-discovery-tests')),
+    ...Object.values(require('./backup-vault-tests')),
+    ...Object.values(require('./telegram-bot-tests')),
     ...require('./library-appearance-tests'),
     ...require('./epub-fb2-tests'),
     ...require('./book-naming-tests'),
@@ -1800,5 +1803,6 @@ const tests = [
     }
 })().catch((e) => {
     console.error(e && e.stack || e);
+    if (e?.errors) for (const error of e.errors) console.error(error);
     process.exitCode = 1;
 });

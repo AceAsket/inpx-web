@@ -150,7 +150,7 @@ async function testDeliveryUsesPreferenceOfTheAuthorizedProfile() {
         const file = path.join(dir, 'book.fb2'); await fs.writeFile(file, 'Book');
         const calls = [], users = {a:{defaultDownloadFormat:'epub', emailTo:'a@example.test'}, b:{defaultDownloadFormat:'mobi', telegramChatId:'1'}};
         worker.config = {emailShareEnabled:true, smtpHost:'fixture.invalid', telegramShareEnabled:true, telegramBotToken:'fixture'};
-        worker.readingListStore = {getUsers:async id => ({currentUser:users[id]})}; worker.addAdminEvent = () => {};
+        worker.readingListStore = {getUsers:async id => ({currentUser:users[id]}), load:async() => ({users:Object.entries(users).map(([id,user]) => ({...user,id}))})}; worker.addAdminEvent = () => {};
         worker.getPreparedBookFile = async(uid, explicit, preference) => {
             calls.push([explicit, preference]); return {book:{title:'Book', ext:'fb2'}, rawFile:file, downFileName:'Book.fb2'};
         };

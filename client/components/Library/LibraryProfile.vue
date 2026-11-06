@@ -18,6 +18,7 @@
                 <button v-if="config.profileAuthorized" type="button" @click="library.openFollows()"><q-icon name="la la-star" size="25px" /><span>Избранные авторы и серии<small>Новые книги любимых авторов</small></span><q-icon name="la la-angle-right" /></button>
                 <button type="button" @click="library.openSettings()"><q-icon name="la la-sliders-h" size="25px" /><span>Настройки библиотеки<small>{{ config.currentUserProfile?.isAdmin ? 'Каталог, источники и администрирование' : 'Каталог, карточки и подборки' }}</small></span><q-icon name="la la-angle-right" /></button>
             </section>
+            <TelegramAccountPanel v-if="config.profileAuthorized" class="q-mb-lg" />
             <div class="profile-bottom"><span>{{ config.name || 'INPX Web' }} {{ config.webAppVersion || config.version }}</span><ProfileLogout /></div>
         </div>
     </div>
@@ -27,6 +28,7 @@
 import {computed} from 'vue';
 import {useStore} from 'vuex';
 import AppearanceControl from './AppearanceControl.vue';
+import TelegramAccountPanel from './TelegramAccountPanel.vue';
 import ProfileLogout from '../share/ProfileLogout.vue';
 import {useLibraryPage} from './useLibraryPage';
 

@@ -38,7 +38,7 @@ async function fixture(directory) {
         allowAnonymousAccess: true, onlineReaderEnabled: true, discovery: {enabled: true}});
 }
 
-(async() => {
+if (require.main === module) (async() => {
     const directory = process.env.INPX_ARTIFACT_DIR || await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-appearance-'));
     await fs.ensureDir(directory);
     let browser, child, output = '';
@@ -149,8 +149,9 @@ async function fixture(directory) {
             await cover.click();
             await page.locator('.library-book-actions').waitFor();
             assert(!page.url().includes('/reader'), 'Cover opens the card without starting reading');
-            await page.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
-            await page.locator('.q-dialog').waitFor({state: 'hidden'});
+            await page.locator('.catalog-book-details').waitFor();
+            await page.goBack();
+            await page.locator('.current-book').waitFor();
         }
 
         await page.getByRole('link', {name: 'Открыть мой профиль', exact: true}).focus();
@@ -198,7 +199,8 @@ async function fixture(directory) {
         await page.locator('.books-grid .book-tile').first().waitFor();
         await page.locator('.books-grid .book-tile__open').first().click();
         await page.locator('.library-book-actions').waitFor();
-        await page.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+        await page.locator('.catalog-book-details').waitFor(); await page.goBack();
+        await page.locator('.books-grid .book-tile').first().waitFor();
         await page.getByRole('link', {name: 'Профиль', exact: true}).click();
         await page.locator('.profile-card').waitFor();
         await screenshot('profile-dark-390');
@@ -307,7 +309,8 @@ async function fixture(directory) {
         await page.locator('.library-result-card').first().waitFor();
         await page.locator('.library-result-card__cover').first().click();
         await page.locator('.library-book-actions').waitFor();
-        await page.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+        await page.locator('.catalog-book-details').waitFor(); await page.goBack();
+        await page.locator('.library-result-card').first().waitFor();
         assert.equal(await page.locator('.search-scroll > .separator:visible').count(), 0, 'Pagination has no extra separator');
         assert(await page.locator('.catalog-search-panel__section').evaluate(node => node.classList.contains('q-field--outlined')), 'Catalog section has a visible outline');
         await page.locator('.catalog-search-panel__section').click();
@@ -341,7 +344,7 @@ async function fixture(directory) {
         await paginator.getByRole('textbox', {name: 'Номер страницы', exact: true}).fill('1');
         await paginator.getByRole('button', {name: 'Перейти на страницу', exact: true}).click();
         await page.waitForURL(url => !url.hash.includes('page=2'));
-        await page.getByRole('textbox', {name: 'Название книги', exact: true}).fill('Ася');
+        await page.getByRole('combobox', {name: 'Название книги', exact: true}).fill('Ася');
         await page.waitForURL(/title=/);
         await page.locator('.catalog-text-field__mode').first().click();
         await page.getByRole('option', {name: 'Точно', exact: true}).click();
@@ -350,7 +353,7 @@ async function fixture(directory) {
         await page.getByRole('option', {name: 'Содержит', exact: true}).click();
         await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '*Ася');
         await page.getByRole('button', {name: /Автор и серия/}).click();
-        await page.getByRole('textbox', {name: 'Автор', exact: true}).fill('Иван');
+        await page.getByRole('combobox', {name: 'Автор', exact: true}).fill('Иван');
         await page.waitForURL(/author=/);
         await page.getByRole('button', {name: /^Фильтры/}).click();
         await page.getByRole('textbox', {name: 'Число голосов', exact: true}).fill('10..100');
@@ -368,8 +371,8 @@ async function fixture(directory) {
         await screenshot('catalog-dark-390');
         await page.getByRole('link', {name: 'Обзор', exact: true}).click();
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
-        assert.equal(await page.getByRole('textbox', {name: 'Название книги', exact: true}).inputValue(), 'Ася', 'Catalog navigation preserves the query');
-        assert.equal(await page.getByRole('textbox', {name: 'Автор', exact: true}).inputValue(), 'Иван');
+        assert.equal(await page.getByRole('combobox', {name: 'Название книги', exact: true}).inputValue(), 'Ася', 'Catalog navigation preserves the query');
+        assert.equal(await page.getByRole('combobox', {name: 'Автор', exact: true}).inputValue(), 'Иван');
         await page.goto(base + '/#/books?ext=epub');
         const epubCard = page.locator('.library-result-card').filter({hasText: 'Я. Книга EPUB'});
         await epubCard.waitFor();
@@ -393,6 +396,7 @@ async function fixture(directory) {
         await page.waitForFunction(() => {const cover = document.querySelector('.reader-cover'); return cover?.complete && cover.naturalWidth > 0;});
         assert.equal(page.url(), readerUrl, 'Converted EPUB retains its original UID when reopening');
         await screenshot('epub-reader-dark-390');
+        await page.goBack(); await page.locator('.catalog-book-details').waitFor();
         await page.goBack(); await epubCard.waitFor();
         for (const [section, ready] of [['author', '.author-group'], ['series', '.series-group'], ['title', '.library-result-card'], ['extended', '.library-result-card'], ['for-you', '.discovery-shelf'], ['newest', '.discovery-shelf'], ['popular', '.discovery-shelf'], ['bestsellers', '.library-result-card']]) {
             await page.setViewportSize({width: 1440, height: 1000});
@@ -451,3 +455,4 @@ async function fixture(directory) {
         console.error(output); throw error;
     } finally {if (browser) await browser.close(); if (child) child.kill();}
 })().catch(error => {console.error(error); process.exitCode = 1;});
+module.exports = {fixture, archive};

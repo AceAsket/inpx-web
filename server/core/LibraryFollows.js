@@ -40,7 +40,7 @@ class LibraryFollows {
     }
     async read(userId, refresh) {
         const store = this.worker.readingListStore, generation = this.worker.libraryAssetGeneration, db = this.worker.db;
-        const {user} = await store.resolveUser(userId);
+        const {user} = await store.resolveUser(userId, {strict: true});
         let follows = normalize(user.libraryFollows);
         const available = new Map();
         for (const follow of follows) {
@@ -54,7 +54,7 @@ class LibraryFollows {
                 books.forEach(book => available.set(book._uid,book));
             }
         }
-        follows = normalize((await store.resolveUser(userId)).user.libraryFollows);
+        follows = normalize((await store.resolveUser(userId, {strict: true})).user.libraryFollows);
         const wanted = [...new Set(follows.flatMap(row => row.newUids))].slice(0,200);
         const missing = wanted.filter(uid => !available.has(uid));
         if (missing.length) {

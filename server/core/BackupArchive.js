@@ -3,7 +3,8 @@ const path = require('path');
 const StreamZip = require('node-stream-zip');
 const {limits} = require('./RequestLimits');
 
-const names = new Set(['backup-info.json', 'config.json', 'secret.key', 'reading-lists.json', 'discovery-cache.json']);
+const names = new Set(['backup-info.json', 'config.json', 'secret.key', 'reading-lists.json', 'discovery-cache.json', 'backup-vault.json']);
+const inspection = Symbol('backupInspection');
 
 async function read(payload, config, folder) {
     const maximum = limits(config);
@@ -13,9 +14,13 @@ async function read(payload, config, folder) {
     const base64 = raw.replace(/^data:[^,]{0,200},/, '').trim();
     if (!base64 || base64.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64))
         throw new Error('Некорректный base64 бэкапа');
-    const buffer = Buffer.from(base64, 'base64');
+    let buffer = Buffer.from(base64, 'base64');
     if (buffer.length > maximum.backup)
         throw new Error('Превышен размер бэкапа');
+    const fingerprint = require('crypto').createHash('sha256').update(buffer).digest('hex');
+    if (payload.fingerprint && payload.fingerprint !== fingerprint) throw new Error('Файл резервной копии изменился после проверки');
+    const encrypted = require('./BackupCrypto').isEncrypted(buffer);
+    buffer = await require('./BackupCrypto').decrypt(buffer, payload.password);
     const file = path.join(folder, 'backup.zip');
     await fs.writeFile(file, buffer, {mode: 0o600});
     const zip = new StreamZip.async({file});
@@ -62,10 +67,13 @@ async function read(payload, config, folder) {
         const key = result['secret.key'];
         if (key && (!result['config.json'] || !/^[A-Za-z0-9+/]{43}=\s*$/.test(key.toString('utf8'))))
             throw new Error('Ключ бэкапа повреждён или отсутствует config.json');
+        if (result['backup-vault.json'] && (result['backup-vault.json'].version !== 1 || !key))
+            throw new Error('Настройки резервных копий повреждены');
+        result[inspection] = {fingerprint, encrypted, files: entries.map(entry => ({name: entry.name, size: entry.size}))};
         return result;
     } finally {
         await zip.close();
     }
 }
 
-module.exports = {read};
+module.exports = {read, inspection};

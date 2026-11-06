@@ -163,7 +163,7 @@ async function testDeliveryTransportsReceiveZipAndOriginalWithoutExternalRequest
         const file = path.join(dir, 'book.pdf'); await fs.writeFile(file, 'Converted PDF');
         const user = {...choices, telegramAsZip:true, emailTo:'reader@example.test', telegramChatId:'1'};
         worker.config = {emailShareEnabled:true, smtpHost:'fixture.invalid', telegramShareEnabled:true, telegramBotToken:'fixture'};
-        worker.readingListStore = {getUsers:async() => ({currentUser:user})}; worker.addAdminEvent = () => {}; worker.scheduleCacheClean = () => {};
+        worker.readingListStore = {getUsers:async() => ({currentUser:user}), load:async() => ({users:[{...user,id:'reader'}]})}; worker.addAdminEvent = () => {}; worker.scheduleCacheClean = () => {};
         const calls = [];
         worker.getPreparedBookFile = async(uid, explicit, preference) => {
             calls.push(preference); return {book:{title:'Book', ext:'fb2'}, rawFile:file, downFileName:`Book.${preference}`};

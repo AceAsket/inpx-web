@@ -31,6 +31,9 @@ jobs:
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/catalog-ui
       - run: node scripts/profile-toolbar-browser-test.js
+      - run: node scripts/catalog-discovery-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/catalog-discovery-ui
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -38,6 +41,8 @@ jobs:
           path: |
             ${{ runner.temp }}/catalog-ui/*.png
             ${{ runner.temp }}/catalog-ui/result.json
+            ${{ runner.temp }}/catalog-discovery-ui/*.png
+            ${{ runner.temp }}/catalog-discovery-ui/result.json
   validate:
     name: Test and package ${{ matrix.target }}
     runs-on: ${{ matrix.os }}

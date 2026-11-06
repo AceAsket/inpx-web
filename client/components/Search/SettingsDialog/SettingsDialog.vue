@@ -122,18 +122,12 @@
                 </button>
 
                 <div v-show="backupExpanded" class="admin-collapse-body">
+                    <BackupPanel v-if="backupExpanded" />
                     <div class="admin-backup-note">
-                        <div>{{ backupUi.fullBackupInfo }}</div>
+                        <strong>Перенос только настроек</strong>
                         <div>{{ backupUi.settingsBackupInfo }}</div>
-                        <div>{{ backupUi.restoreNote }}</div>
                     </div>
                     <div class="admin-backup-actions">
-                        <q-btn color="primary" dense no-caps icon="la la-download" :loading="backupLoading" @click="createBackup">
-                            {{ backupUi.backup }}
-                        </q-btn>
-                        <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="backupImportLoading" @click="openBackupImport">
-                            {{ backupUi.backupImport }}
-                        </q-btn>
                         <q-btn outline color="primary" dense no-caps icon="la la-file-export" :loading="settingsExportLoading" @click="exportSettings">
                             {{ backupUi.settings }}
                         </q-btn>
@@ -146,13 +140,6 @@
                             accept="application/json,.json"
                             style="display: none"
                             @change="onSettingsImportSelected"
-                        />
-                        <input
-                            ref="backupImportInput"
-                            type="file"
-                            accept="application/zip,.zip"
-                            style="display: none"
-                            @change="onBackupImportSelected"
                         />
                     </div>
                 </div>
@@ -537,6 +524,9 @@
                                 label="Подключение Telegram" :options="[{label:'Авто (IPv4 / IPv6)',value:'auto'},{label:'Только IPv4',value:'4'},{label:'Только IPv6',value:'6'}]" />
                             <q-input class="admin-mail-wide" v-model="integrations.telegramCaptionTemplate" outlined dense clearable :label="mailUi.telegramCaption" />
                         </div>
+                        <q-toggle v-model="integrations.telegramBotEnabled" :disable="!integrations.telegramShareEnabled" label="Интерактивный бот: поиск, списки и получение книг" />
+                        <p class="admin-mail-subtitle">Используйте отдельного бота без webhook. Пользователи подключают личный чат одноразовой ссылкой из профиля.</p>
+                        <TelegramBotStatus v-if="mailExpanded && dialogVisible" />
                     </div>
 
                     <div class="admin-mail-section">
@@ -588,6 +578,8 @@ import Dialog from '../../share/Dialog.vue';
 import DiscoverySourceDialog from '../DiscoverySourceDialog/DiscoverySourceDialog.vue';
 import PerformancePanel from './PerformancePanel.vue';
 import AppearanceControl from '../../Library/AppearanceControl.vue';
+import BackupPanel from './BackupPanel.vue';
+import TelegramBotStatus from './TelegramBotStatus.vue';
 
 const componentOptions = {
     emits: ['update:modelValue', 'open-library-tasks'],
@@ -596,6 +588,8 @@ const componentOptions = {
         DiscoverySourceDialog,
         PerformancePanel,
         AppearanceControl,
+        BackupPanel,
+        TelegramBotStatus,
     },
     watch: {
         modelValue(newValue) {
@@ -726,8 +720,6 @@ class SettingsDialog {
     integrationSaveLoading = false;
     smtpTestLoading = false;
     telegramTestLoading = false;
-    backupLoading = false;
-    backupImportLoading = false;
     settingsExportLoading = false;
     settingsImportLoading = false;
     backupExpanded = false;
@@ -850,16 +842,9 @@ class SettingsDialog {
     backupUi = {
         title: 'Резервная копия',
         subtitle: 'Полный бэкап и отдельный экспорт конфигурации.',
-        fullBackupInfo: 'Полный ZIP сохраняет состояние сервиса: настройки, secret.key, профили, списки, прогресс чтения, закладки и кэш витрины. Архивы книг, обложки, временные кэши и поисковая БД не входят.',
         settingsBackupInfo: 'JSON настроек нужен только для переноса конфигурации. Пользователи, списки, прогресс и закладки в него не входят.',
-        backup: 'Скачать полный бэкап',
-        backupImport: 'Восстановить полный ZIP',
         settings: 'Экспорт настроек JSON',
         settingsImport: 'Восстановить настройки JSON',
-        restoreNote: 'Восстановление полного ZIP заменяет текущее состояние данными из архива. После восстановления перезапустите контейнер или приложение; если в бэкапе другие источники библиотек, выполните переиндексацию.',
-        restoreConfirm: 'Восстановить полный ZIP-бэкап? Текущие настройки, профили, списки, прогресс чтения и закладки будут заменены данными из архива.',
-        restored: 'Полный бэкап восстановлен. Перезапустите приложение; если менялись источники библиотек, выполните переиндексацию.',
-        ready: 'Резервная копия готова',
     };
     mailUi = {
         title: 'Отправка книг',
@@ -1012,6 +997,7 @@ class SettingsDialog {
     makeDefaultIntegrations() {
         return {
             telegramShareEnabled: false,
+            telegramBotEnabled: false,
             telegramBotToken: '',
             telegramIpFamily: 'auto',
             telegramChatId: '',
@@ -1996,24 +1982,6 @@ class SettingsDialog {
         input.click();
     }
 
-    openBackupImport() {
-        const input = this.$refs.backupImportInput;
-        if (!input)
-            return;
-
-        input.value = '';
-        input.click();
-    }
-
-    arrayBufferToBase64(buffer) {
-        const bytes = new Uint8Array(buffer);
-        const chunkSize = 0x8000;
-        let binary = '';
-        for (let i = 0; i < bytes.length; i += chunkSize)
-            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-        return btoa(binary);
-    }
-
     async onSettingsImportSelected(event) {
         const input = event && event.target;
         const file = input && input.files && input.files[0];
@@ -2033,52 +2001,6 @@ class SettingsDialog {
             this.settingsImportLoading = false;
             if (input)
                 input.value = '';
-        }
-    }
-
-    async onBackupImportSelected(event) {
-        const input = event && event.target;
-        const file = input && input.files && input.files[0];
-        if (!file)
-            return;
-
-        const confirmed = await this.$root.stdDialog.confirm(
-            this.backupUi.restoreConfirm,
-            this.backupUi.backupImport,
-        );
-        if (!confirmed) {
-            input.value = '';
-            return;
-        }
-
-        this.backupImportLoading = true;
-        try {
-            const contentBase64 = this.arrayBufferToBase64(await file.arrayBuffer());
-            await this.api.importAdminBackup({fileName: file.name, contentBase64});
-            await this.api.updateConfig();
-            this.loadSettings();
-            this.$root.notify.success(this.backupUi.restored);
-        } catch (e) {
-            this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
-        } finally {
-            this.backupImportLoading = false;
-            if (input)
-                input.value = '';
-        }
-    }
-
-    async createBackup() {
-        this.backupLoading = true;
-        try {
-            const result = await this.api.createAdminBackup();
-            if (result && result.link) {
-                window.location.href = result.link;
-                this.$root.notify.success(this.backupUi.ready);
-            }
-        } catch (e) {
-            this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
-        } finally {
-            this.backupLoading = false;
         }
     }
 

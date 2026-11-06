@@ -1,5 +1,5 @@
 <template>
-    <Dialog ref="dialog" v-model="dialogVisible" variant="book-info">
+    <DialogSurface ref="dialog" v-model="dialogVisible" variant="book-info" :embedded="embedded">
         <template #header>
             <div class="row items-center">
                 <div style="font-size: 110%">
@@ -8,8 +8,8 @@
             </div>
         </template>
 
-        <div ref="box" class="fit column q-mt-xs overflow-auto no-wrap info-box">
-            <div :class="{'book-info-summary': shelvesAppearance}">
+        <div ref="box" class="fit column q-mt-xs overflow-auto no-wrap info-box" :class="{'info-box--embedded': embedded}">
+            <div v-if="!hideSummary" :class="{'book-info-summary': shelvesAppearance}">
                 <button v-if="shelvesAppearance" type="button" class="book-info-cover" :aria-label="`Обложка: ${book.title || 'Книга'}`" @click="posterClick"><BookCover :book="book" @error="onCoverError" /></button>
                 <div>
             <div v-if="bookAuthor" class="text-green-10 info-link" @click.stop.prevent="emitNavigate('author', book.author)">
@@ -294,14 +294,14 @@
                 </q-card-actions>
             </q-card>
         </q-dialog>
-    </Dialog>
+    </DialogSurface>
 </template>
 
 <script>
 //-----------------------------------------------------------------------------
 import vueComponent from '../../vueComponent.js';
 
-import Dialog from '../../share/Dialog.vue';
+import DialogSurface from '../../share/DialogSurface.vue';
 import BookCover from '../../Library/BookCover.vue';
 import Fb2Parser from '../../../../server/core/fb2/Fb2Parser';
 const {escapeHtml, safeHtml} = require('../../../../shared/safeHtml');
@@ -310,10 +310,10 @@ import _ from 'lodash';
 
 const componentOptions = {
     components: {
-        Dialog,
+        DialogSurface,
         BookCover,
     },
-    emits: ['update:modelValue', 'navigate'],
+    emits: ['update:modelValue', 'navigate', 'updated'],
     watch: {
         modelValue(newValue) {
             this.dialogVisible = newValue;
@@ -340,6 +340,8 @@ class BookInfoDialog {
         bookInfo: Object,
         genreMap: Object,
         initialTab: {type: String, default: 'fb2'},
+        embedded: Boolean,
+        hideSummary: Boolean,
     };
 
     dialogVisible = false;
@@ -373,7 +375,7 @@ class BookInfoDialog {
     }
 
     get shelvesAppearance() {
-        return this.$store.state.settings.catalogAppearance === 'shelves';
+        return this.embedded || this.$store.state.settings.catalogAppearance === 'shelves';
     }
 
     mounted() {
@@ -470,6 +472,7 @@ class BookInfoDialog {
             });
             this.metadataDialogVisible = false;
             this.$root.notify.success('Метаданные сохранены');
+            this.$emit('updated');
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         } finally {

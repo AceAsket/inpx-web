@@ -331,6 +331,7 @@
                             </q-input>
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
                             <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
+                            <TelegramAccountPanel />
                             <div class="profile-format-setting">
                                 <div class="profile-format-title">
                                     Форматы книг
@@ -415,6 +416,7 @@
 <script>
 import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
+import TelegramAccountPanel from '../../Library/TelegramAccountPanel.vue';
 import ReadingListsDialog from '../ReadingListsDialog/ReadingListsDialog.vue';
 import KoSyncSettings from './KoSyncSettings.vue';
 import ProfileLogout from '../../share/ProfileLogout.vue';
@@ -422,6 +424,7 @@ const bookFormats = require('../../../../shared/BookFormats');
 
 const componentOptions = {
     components: {
+        TelegramAccountPanel,
         Dialog,
         ReadingListsDialog,
         KoSyncSettings,

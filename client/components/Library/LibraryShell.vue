@@ -112,6 +112,10 @@ function openActions(book) {
         _readerProgress: book._readerProgress || (progress(book) === null ? undefined : {percent: progress(book), started: true})};
     actionsVisible.value = true;
 }
+function openCard(book) {
+    if (bookUid(book) && !book.discoveryMissingLocal) router.push({path: '/book', query: {bookUid: bookUid(book)}});
+    else openActions(book);
+}
 async function openDetails(book) {
     ensureGenres().catch(() => {});
     const request = ++detailRequest, epoch = repository.epoch;
@@ -157,6 +161,9 @@ async function navigateFromBook({type, value}) {
     const fields = {author: 'author', series: 'series', title: 'title', keyword: 'keywords', genre: 'genre'};
     if (!fields[type] || !value) return;
     detailsVisible.value = false;
+    if (type === 'author' || type === 'series') {
+        router.push({path: `/${type}-details`, query: {name: value}}); return;
+    }
     router.push({path: ['keyword', 'genre'].includes(type) ? '/books' : `/${type}`, query: {[fields[type]]: `${type === 'genre' ? '' : type === 'keyword' ? '*' : '='}${value}`}});
 }
 function bookActionEvent(event) {
@@ -166,7 +173,7 @@ async function login() {
     try {await root.api.showProfileLoginDialog('', {required: false}); await root.api.updateConfig();}
     catch (error) {root.stdDialog.alert(error.message, 'Вход в профиль');}
 }
-provide(libraryContextKey, {state, repository, config, settings, api: root.api, openBook, openDetails, openActions, login,
+provide(libraryContextKey, {state, repository, config, settings, api: root.api, openBook, openDetails, openActions, openCard, login,
     openSettings: () => {settingsVisible.value = true;},
     openProfiles: () => {profilesVisible.value = true;},
     openLists: book => {listsBook.value = book ? {...book, _uid: bookUid(book)} : null; listsVisible.value = true;},

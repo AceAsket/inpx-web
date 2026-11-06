@@ -72,6 +72,7 @@ const propsToSave = [
     'checkReleaseLink',
     'telegramShareEnabled',
     'telegramBotToken',
+    'telegramBotEnabled',
     'telegramIpFamily',
     'telegramChatId',
     'telegramCaptionTemplate',

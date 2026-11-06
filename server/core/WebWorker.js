@@ -696,6 +696,10 @@ class WebWorker {
             this.periodicCleanDir();//no await
             this.periodicCheckInpx();//no await
             this.periodicCheckNewRelease();//no await
+            this.getBackupVault().start();
+            asyncExit.add(() => this.backupVault.stop());
+            this.getTelegramBot().configure();
+            asyncExit.add(async() => {this.telegramBot.stop(); await this.telegramBot.idle();});
 
             instance = this;
         }
@@ -757,6 +761,7 @@ class WebWorker {
     }
 
     async closeDb() {
+        if (this.catalogDiscovery) {await this.catalogDiscovery.close(); this.catalogDiscovery = null;}
         if (this.db) {
             await this.db.unlock();
             this.db = null;
@@ -912,6 +917,7 @@ class WebWorker {
 
             this.resetLibraryAssetCaches();
             this.setMyState(ssNormal);
+            this.getCatalogDiscovery().warm().catch(error => this.addAdminEvent('warn', 'search', error.message));
 
             log('Searcher DB ready');
             this.warmReviewIndexes();
@@ -990,6 +996,22 @@ class WebWorker {
         }
 
         return db.wwCache.config;
+    }
+
+    getCatalogDiscovery() {
+        this.checkMyState();
+        if (!this.catalogDiscovery) this.catalogDiscovery = new (require('./CatalogDiscovery'))(this);
+        return this.catalogDiscovery;
+    }
+
+    getTelegramBot() {
+        if (!this.telegramBot) this.telegramBot = new (require('./TelegramBot'))(this);
+        return this.telegramBot;
+    }
+
+    async telegramBotAccount(userId, token, operation, options = {}) {
+        const user = await this.requireAuthorizedUser(userId, token);
+        return this.getTelegramBot().account(user, operation, options);
     }
 
     async search(from, query) {
@@ -3815,6 +3837,8 @@ class WebWorker {
 
         return {
             telegramShareEnabled: !!this.config.telegramShareEnabled,
+            telegramBotEnabled: this.config.telegramBotEnabled === true,
+            telegramBotStatus: this.telegramBot?.status() || {state: 'disabled', enabled: false, error: '', username: '', lastPollAt: ''},
             telegramBotToken: hasTelegramToken ? '__KEEP__' : '',
             telegramBotTokenSet: hasTelegramToken,
             telegramIpFamily: telegramNetwork.normalizeIpFamily(this.config.telegramIpFamily),
@@ -3858,6 +3882,7 @@ class WebWorker {
             details: details || {},
         };
 
+        if (!Array.isArray(this.adminEvents)) this.adminEvents = [];
         this.adminEvents.push(event);
         if (this.adminEvents.length > maxEvents)
             this.adminEvents.splice(0, this.adminEvents.length - maxEvents);
@@ -4548,6 +4573,8 @@ class WebWorker {
 
         if (utils.hasProp(patch, 'telegramShareEnabled'))
             normalized.telegramShareEnabled = !!patch.telegramShareEnabled;
+        if (utils.hasProp(patch, 'telegramBotEnabled'))
+            normalized.telegramBotEnabled = patch.telegramBotEnabled === true;
         if (utils.hasProp(patch, 'telegramIpFamily'))
             normalized.telegramIpFamily = telegramNetwork.normalizeIpFamily(patch.telegramIpFamily);
         if (utils.hasProp(patch, 'telegramBotToken')) {
@@ -4615,6 +4642,7 @@ class WebWorker {
 
         const normalized = this.normalizeIntegrationPatch(patch || {});
         await this.saveRuntimeConfigPatch(normalized);
+        this.getTelegramBot().configure();
         this.addAdminEvent('info', 'settings', 'Обновлены настройки отправки книг');
 
         return {integrations: this.getAdminIntegrationConfig()};
@@ -4827,31 +4855,53 @@ class WebWorker {
     async createAdminBackup(userId = '', profileAccessToken = '') {
         this.checkMyState();
         await this.requireAdmin(userId, profileAccessToken);
-        const {withFileTransactions} = require('./FilePersistence');
-        const files = Object.values(require('./BackupTransaction').targets(this.config));
-        return withFileTransactions(files, () => this.createAdminBackupSnapshot(userId, profileAccessToken));
+        return this.getBackupVault().create();
+    }
+
+    getBackupVault() {
+        if (!this.backupVault) this.backupVault = new (require('./BackupVault'))(this);
+        return this.backupVault;
+    }
+
+    async adminBackupVault(userId, token, operation, options = {}) {
+        await this.requireAdmin(userId, token);
+        const vault = this.getBackupVault();
+        if (operation === 'status') return vault.status();
+        if (operation === 'update') return vault.update(options);
+        if (operation === 'delete') return vault.remove(options.name);
+        if (operation === 'preview' || operation === 'restore') {
+            return withFileTransaction(path.join(this.config.dataDir, '.backup-import-queue'), async() => {
+                await this.requireAdmin(userId, token);
+                const data = await vault.payload(options.name, options.password);
+                return this.importAdminBackup(userId, token, {...data, preview: operation === 'preview', fingerprint: options.fingerprint});
+            });
+        }
+        throw new Error('Неизвестное действие с резервной копией');
     }
 
     async createAdminBackupSnapshot(userId = '', profileAccessToken = '') {
         this.checkMyState();
         await this.requireAdmin(userId, profileAccessToken);
+        return this.writeAdminBackupSnapshot();
+    }
+
+    async writeAdminBackupSnapshot(options = {}) {
 
         const backupDir = path.join(this.config.dataDir, 'backups');
         await fs.ensureDir(backupDir);
 
         const createdAt = new Date();
         const stamp = createdAt.toISOString().replace(/[:.]/g, '-');
-        const fileName = `inpx-web-backup-${stamp}-${utils.randomHexString(4)}.zip`;
+        const fileName = `inpx-web-${options.scheduled ? 'auto-' : ''}backup-${stamp}-${utils.randomHexString(4)}.zip${options.encryption ? '.enc' : ''}`;
         const outFile = path.join(backupDir, fileName);
+        const temporary = outFile + '.tmp';
         const zipFile = new yazl.ZipFile();
-        const output = fs.createWriteStream(outFile);
-        const done = new Promise((resolve, reject) => {
-            output.on('finish', resolve);
-            output.on('error', reject);
-            zipFile.outputStream.on('error', reject);
-        });
-        zipFile.outputStream.pipe(output);
-
+        const done = options.encryption
+            ? require('./BackupCrypto').encryptStream(zipFile.outputStream, outFile, options.encryption.key, options.encryption.salt)
+            : require('stream/promises').pipeline(zipFile.outputStream, fs.createWriteStream(temporary, {flags: 'wx', mode: 0o600}));
+        // Attach immediately: a missing source file can fail while the ZIP is still being assembled.
+        done.catch(() => {});
+        try {
         zipFile.addBuffer(Buffer.from(JSON.stringify({
             app: this.config.name,
             version: this.config.version,
@@ -4863,9 +4913,15 @@ class WebWorker {
         await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'secret.key'), 'secret.key');
         await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'reading-lists.json'), 'reading-lists.json');
         await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'discovery-cache.json'), 'discovery-cache.json');
+        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'backup-vault.json'), 'backup-vault.json');
 
         zipFile.end();
         await done;
+        if (!options.encryption) await fs.rename(temporary, outFile);
+        } catch (error) {
+            zipFile.outputStream.destroy(error); await done.catch(() => {});
+            await fs.remove(temporary).catch(() => {}); await fs.remove(outFile).catch(() => {}); throw error;
+        }
 
         return {
             success: true,
@@ -4876,6 +4932,12 @@ class WebWorker {
     }
 
     async importAdminBackup(userId = '', profileAccessToken = '', payload = {}) {
+        await this.requireAdmin(userId, profileAccessToken);
+        return withFileTransaction(path.join(this.config.dataDir, '.backup-import-queue'),
+            () => this.importAdminBackupSnapshot(userId, profileAccessToken, payload));
+    }
+
+    async importAdminBackupSnapshot(userId = '', profileAccessToken = '', payload = {}) {
         this.checkMyState();
         await this.requireAdmin(userId, profileAccessToken);
 
@@ -4921,10 +4983,22 @@ class WebWorker {
                 }
                 if (archive['discovery-cache.json'])
                     content['discovery-cache.json'] = JSON.stringify(archive['discovery-cache.json'], null, 2);
+                if (archive['backup-vault.json'])
+                    content['backup-vault.json'] = JSON.stringify(archive['backup-vault.json'], null, 2);
+                if (payload.preview === true) {
+                    const lists = archive['reading-lists.json'] || {}, users = lists.users || [];
+                    return {...archive[require('./BackupArchive').inspection], version: archive['backup-info.json'].version || '',
+                        createdAt: archive['backup-info.json'].createdAt || '', users: users.length, lists: (lists.lists || []).length,
+                        progress: users.reduce((n, user) => n + Object.keys(user.readerProgress || {}).length, 0),
+                        bookmarks: users.reduce((n, user) => n + Object.values(user.readerBookmarks || {}).reduce((m, rows) => m + (Array.isArray(rows) ? rows.length : 0), 0), 0),
+                        sources: (archive['config.json']?.librarySources || []).map(source => ({name: String(source.name || source.id || '').slice(0, 200)})),
+                        restartRecommended: true};
+                }
                 await transaction.commit(this.config, content);
                 if (runtimePatch)
                     Object.assign(this.config, runtimePatch);
                 this.profileSessions.clear();
+                if (this.telegramBot) {this.telegramBot.signature = null; this.telegramBot.configure();}
                 if (archive['discovery-cache.json']) {
                     this.discoveryCache = new Map();
                     this.discoveryDiskCache = archive['discovery-cache.json'];
@@ -6155,9 +6229,12 @@ class WebWorker {
         return archived;
     }
 
-    async sendBookToTelegram(bookUid, format = '', userId = '') {
-        const {currentUser} = await this.readingListStore.getUsers(userId);
-        const chatId = String((currentUser && currentUser.telegramChatId) || '').trim();
+    async sendBookToTelegram(bookUid, format = '', userId = '', options = {}) {
+        const data = await this.readingListStore.load();
+        const currentUser = userId ? data.users.find(user => user.id === userId) : data.users[0];
+        if (!currentUser) throw new Error('Профиль не найден');
+        if (options.authorize) await options.authorize();
+        const chatId = String(options.chatId || currentUser.telegramChatId || '').trim();
         if (!this.config.telegramShareEnabled)
             throw new Error('Отправка в Telegram отключена в настройках');
         if (!this.config.telegramBotToken)
@@ -6166,6 +6243,11 @@ class WebWorker {
             throw new Error('Telegram chat id не указан в текущем профиле пользователя');
 
         const {book, rawFile, downFileName} = await this.getDeliveryBookFile(bookUid, format, currentUser, 'telegram');
+        if ((await fs.stat(rawFile)).size > 50 * 1024 * 1024) throw new Error('Telegram принимает файлы не больше 50 МБ');
+        if (options.signal?.aborted) throw options.signal.reason;
+        if (options.beforeSend) await options.beforeSend();
+        if (options.authorize) await options.authorize();
+        if (!this.config.telegramShareEnabled || !this.config.telegramBotToken) throw new Error('Telegram отключён');
         this.addAdminEvent('info', 'delivery', `Отправка книги в Telegram: ${book.title || downFileName}`);
         const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendDocument`;
         const form = new FormData();
@@ -6180,6 +6262,7 @@ class WebWorker {
             maxBodyLength: Infinity,
             maxContentLength: Infinity,
             timeout: 300000,
+            signal: options.signal,
         });
 
         if (!response.data || response.data.ok !== true)
