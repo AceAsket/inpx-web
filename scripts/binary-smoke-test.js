@@ -182,6 +182,7 @@ async function main() {
                 '-p', `127.0.0.1:${port}:12380`, '--tmpfs', '/data',
                 '-e', 'INPX_OPDS_FEEDS_FILE=/library/opds-feeds.json',
                 '-e', 'INPX_ADMIN_PASSWORD=local-smoke-fixture',
+                ...(process.env.INPX_SMOKE_EPUB === 'true' ? ['-e','INPX_MOBI_ENABLED=true','-e','INPX_CONVERSION_FORMATS=fb2,epub,mobi'] : []),
                 '--mount', `type=bind,source=${library},target=/library,readonly`, imageName,
                 'sh', '-c', 'cp /library/config.json /data/config.json && exec inpx-web --data-dir=/data --config=/data/config.json --lib-dir=/library --host=0.0.0.0 --port=12380'];
         } else {
@@ -194,6 +195,7 @@ async function main() {
             INPX_OPDS_FEEDS_FILE:path.join(library, 'opds-feeds.json'),
             INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true',
             INPX_ENABLE_CONVERSION: process.env.INPX_SMOKE_EPUB === 'true' ? 'true' : 'false'};
+        if(process.env.INPX_SMOKE_EPUB==='true')Object.assign(env,{INPX_MOBI_ENABLED:'true',INPX_CONVERSION_FORMATS:'fb2,epub,mobi'});
         child = spawn(command, args, {env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
         exited = new Promise(resolve => {
             child.once('exit', resolve);
