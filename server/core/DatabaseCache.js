@@ -75,7 +75,8 @@ class DatabaseCache {
         return {budgetBytes:this.budgetBytes, estimatedBytes:this.bytes, blocks:this.blocks.size,
             pinnedBytes,
             evictions:this.evictions, idleEvictions:this.idleEvictions, hits:this.hits, misses:this.misses,
-            workerHeapUsed:process.memoryUsage().heapUsed, workerHeapTotal:process.memoryUsage().heapTotal};
+            workerHeapUsed:process.memoryUsage().heapUsed, workerHeapTotal:process.memoryUsage().heapTotal,
+            workerHeapLimit:require('v8').getHeapStatistics().heap_size_limit};
     }
 }
 module.exports = {DatabaseCache, policy};

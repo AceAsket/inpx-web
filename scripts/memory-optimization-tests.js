@@ -77,6 +77,58 @@ async function testBoundedDatabaseWorkerSupportsProtocolAndReopen() {
     });
 }
 
+async function testDatabaseWorkerFailureFailsClosedAndDoesNotLeakPendingRequests() {
+    await temporary(async dir => {
+        const db=new (require('../server/core/DatabaseThread'))({dbCacheBudgetMb:4});
+        const unavailable={code:'INPX_DATABASE_UNAVAILABLE'};
+        try {
+            for(let i=0;i<5;i++)await assert.rejects(db.cacheStats(),unavailable);
+            assert.equal(db.listeners.size,0,'Closed-worker requests must not leave unresolved listeners');
+            await db.lock({dbPath:dir,create:true,softLock:true});await db.create({table:'book'});
+            await db.insert({table:'book',rows:[{id:1,title:'persisted fixture'}]});
+            await db.closeAll();await db.openAll();
+            await assert.rejects(db.select({table:'book',where:()=>true}),error=>error.name==='DataCloneError');
+            assert.equal(db.listeners.size,0,'postMessage serialization errors must also release their listener');
+            assert.equal(db.available,true,'A malformed request must not kill a healthy DB worker');
+            const stats=await db.cacheStats();assert(stats.workerHeapLimit>=stats.workerHeapUsed);
+            const oldWorker=db.worker;
+            const pending=Array.from({length:3},()=>db.select({table:'book',rawResult:true,
+                where:'return new Promise(resolve => setTimeout(() => resolve([1]),1000));'}));
+            const rejected=pending.map(request=>assert.rejects(request,error=>error.code==='INPX_DATABASE_UNAVAILABLE'&&error.causeCode==='ERR_WORKER_OUT_OF_MEMORY'));
+            oldWorker.emit('error',Object.assign(new Error('fixture heap limit'),{code:'ERR_WORKER_OUT_OF_MEMORY'}));
+            await Promise.all(rejected);await db.termination;
+            assert.equal(db.worker,null);assert.equal(db.available,false);assert.equal(db.listeners.size,0);
+            assert.equal(db.failure.code,'ERR_WORKER_OUT_OF_MEMORY','A later exit event must not overwrite the original failure');
+            for(let i=0;i<5;i++)await assert.rejects(db.select({table:'book',where:'@@id(1)'}),unavailable);
+            assert.equal(db.listeners.size,0);assert.equal(db.worker,null,'Queries must not silently restart or replay writes');
+            await db.unlock();await db.lock({dbPath:dir,softLock:true});await db.openAll();
+            assert.equal(db.available,true);assert.equal(db.failure,null);
+            assert.equal((await db.select({table:'book',where:'@@id(1)'}))[0].title,'persisted fixture','Explicit reopening preserves committed data');
+            await db.worker.terminate();
+            assert.equal(db.available,false);assert.equal(db.failure.code,'INPX_DATABASE_WORKER_EXIT');
+            assert.equal(db.listeners.size,0);
+        } finally {await db.unlock();}
+    });
+}
+
+async function testIndexReadinessRejectsUnavailableDatabaseWorker() {
+    const worker=Object.create(require('../server/core/WebWorker').prototype);
+    worker.myState='normal';worker.wState={get:()=>({state:'normal'})};
+    worker.config={version:'fixture',librarySources:[]};worker.dbSearcher={};
+    worker.db={available:false,failure:{code:'ERR_WORKER_OUT_OF_MEMORY'}};
+    worker.dbConfig=async()=>assert.fail('Readiness must not query a terminated database worker');
+    const failed=await worker.getIndexStatus();
+    assert.equal(failed.ready,false);assert.equal(failed.dbLoaded,false);assert.equal(failed.searchReady,false);
+    assert.equal(failed.state,'database_unavailable');assert.match(failed.error,/Каталог недоступен/);
+    assert.equal(failed.serverMessage,failed.error);
+    worker.db.available=true;worker.dbConfig=async()=>({stats:{bookCount:1}});
+    const available=await worker.getIndexStatus();
+    assert.equal(available.ready,true);assert.equal(available.dbLoaded,true);assert.equal(available.searchReady,true);
+    worker.db=null;
+    const closed=await worker.getIndexStatus();
+    assert.equal(closed.ready,false);assert.equal(closed.dbLoaded,false);assert.equal(closed.searchReady,false);
+}
+
 async function testReviewIndexesReleaseOnlyAfterLastConsumer() {
     const worker = Object.create(require('../server/core/WebWorker').prototype);
     const original = global.setTimeout;
@@ -142,4 +194,6 @@ async function testMemoryBudgetEnvironmentOverridesPreviouslySavedValues() {
 
 module.exports = [testMemoryBudgetEnvironmentOverridesPreviouslySavedValues, testAuthorArchiveBuildIsSharedAndRejectsOldLibraries,
     testMemoryCachesEnforceBytesTtlAndReleaseOnClose, testDatabaseCacheIsGlobalIdleSafeAndKeepsUnsavedRows,
-    testBoundedDatabaseWorkerSupportsProtocolAndReopen, testReviewIndexesReleaseOnlyAfterLastConsumer, testLazyDetailsRejectLateResponsesAndRetry];
+    testBoundedDatabaseWorkerSupportsProtocolAndReopen, testDatabaseWorkerFailureFailsClosedAndDoesNotLeakPendingRequests,
+    testIndexReadinessRejectsUnavailableDatabaseWorker,
+    testReviewIndexesReleaseOnlyAfterLastConsumer, testLazyDetailsRejectLateResponsesAndRetry];

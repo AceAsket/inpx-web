@@ -51,7 +51,8 @@ class RemoteMetadata {
         return response;
     }
 
-    async reviews(uid) {
+    async reviews(uid, onProgress = null) {
+        onProgress?.({phase:'Подключение к удалённым отзывам',done:0,total:null});
         if (!await this.supported()) return [];
         const generation = this.generation;
         const items = [];
@@ -61,6 +62,7 @@ class RemoteMetadata {
             this.checkGeneration(generation);
             if (!Array.isArray(response.items) || response.items.length > 10) throw new Error('Некорректный ответ удалённой библиотеки');
             items.push(...response.items.map(item => ({name:String(item.name || '').slice(0, 300), time:String(item.time || '').slice(0, 100), text:String(item.text || '').slice(0, 16000)})));
+            onProgress?.({phase:'Получение отзывов с удалённого сервера',done:items.length,total:null,unit:'reviews'});
             if (response.next !== null && (!Number.isSafeInteger(response.next) || response.next <= cursor || response.next > 10000))
                 throw new Error('Некорректная пагинация удалённых отзывов');
             cursor = response.next;
@@ -81,11 +83,14 @@ class RemoteMetadata {
             text:String(authorInfo.text || '').slice(0, 128000), photo:''} : null;
     }
 
-    async ratingIndex() {
+    async ratingIndex(onProgress = null) {
+        onProgress?.({phase:'Подключение к оценкам удалённой библиотеки',done:0,total:null});
         if (!await this.supported('ratings')) return {signature:'legacy', counts:new Map()};
         if (this.ratings && Date.now() - this.ratings.time < 60000) return this.ratings;
         if (!this.pendingRatings) {
             const generation = this.generation;
+            const progress = this.pendingRatingsProgress = new (require('./LoadProgress').LoadProgress)();
+            progress.update('ratings',{phase:'Получение индекса оценок удалённой библиотеки',done:0,total:null,unit:'ratings'});
             const read = async() => {
                 let cursor = 0, revision;
                 const counts = new Map();
@@ -99,16 +104,22 @@ class RemoteMetadata {
                         if (typeof uid !== 'string' || uid.length > 512 || !Number.isSafeInteger(count) || count < 0) throw new Error('Некорректная оценка удалённой книги');
                         counts.set(uid, count);
                     }
+                    progress.update('ratings',{phase:'Получение индекса оценок удалённой библиотеки',done:counts.size,total:null,unit:'ratings'});
                     if (response.next !== null && (!Number.isSafeInteger(response.next) || response.next <= cursor || response.next > 10000000))
                         throw new Error('Некорректная пагинация удалённого индекса');
                     cursor = response.next;
                 }
                 return (this.ratings = {signature:revision, counts, time:Date.now()});
             };
-            const pending = read().finally(() => {if (this.pendingRatings === pending) this.pendingRatings = null;});
+            const pending = read().finally(() => {
+                progress.flush(); progress.close();
+                if (this.pendingRatings === pending) this.pendingRatings = null;
+            });
             this.pendingRatings = pending;
         }
-        return this.pendingRatings;
+        const pending = this.pendingRatings;
+        const unsubscribe = this.pendingRatingsProgress?.subscribe(snapshot => onProgress?.(snapshot.steps[0]));
+        try {return await pending;} finally {unsubscribe?.();}
     }
 }
 

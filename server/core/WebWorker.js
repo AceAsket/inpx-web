@@ -716,7 +716,8 @@ class WebWorker {
 
     async getIndexStatus() {
         const workerState = this.wState.get() || {};
-        const ready = this.myState === ssNormal && !!this.db && !!this.dbSearcher;
+        const databaseAvailable = !!this.db && this.db.available !== false;
+        const ready = this.myState === ssNormal && databaseAvailable && !!this.dbSearcher;
         const result = {
             ready,
             state: this.myState || workerState.state || '',
@@ -728,8 +729,8 @@ class WebWorker {
             progress: workerState.progress || 0,
             recsLoaded: workerState.recsLoaded || 0,
             inpxFileHash: this.inpxFileHash || '',
-            dbLoaded: !!this.db,
-            searchReady: !!this.dbSearcher,
+            dbLoaded: databaseAvailable,
+            searchReady: databaseAvailable && !!this.dbSearcher,
             version: this.config.version,
             sources: (Array.isArray(this.config.librarySources) ? this.config.librarySources : []).map(source => ({
                 id: source.id,
@@ -737,6 +738,12 @@ class WebWorker {
                 enabled: source.enabled !== false,
             })),
         };
+
+        if (this.db?.available === false) {
+            result.state = 'database_unavailable';
+            result.error = 'Каталог недоступен после остановки обработчика базы данных. Перезапустите сервер.';
+            result.serverMessage = result.error;
+        }
 
         if (ready) {
             try {
@@ -4267,7 +4274,10 @@ class WebWorker {
 
     getResourceBenchmark() {
         if (!this.resourceBenchmark) this.resourceBenchmark = new (require('./ResourceBenchmark').ResourceBenchmark)(this.config, {
-            probe:async() => {this.checkMyState(); await this.db.select({table:'book', limit:1});},
+            // Jemba applies limit after reading/mapping the selected rows. A
+            // limit-only probe materializes the entire library. An ID lookup
+            // bounds the work even if that ID was removed from the catalogue.
+            probe:async() => {this.checkMyState(); await this.db.select({table:'book', where:'@@id(1)', limit:1});},
         });
         this.resourceBenchmark.config = this.config;
         return this.resourceBenchmark;
@@ -4275,7 +4285,11 @@ class WebWorker {
 
     async getAdminPerformance(userId = '', profileAccessToken = '') {
         await this.requireAdmin(userId, profileAccessToken);
-        return {...await this.getResourceBenchmark().snapshot(), databaseCache:await this.db?.cacheStats?.(),
+        let databaseCache;
+        try {databaseCache = {...await this.db?.cacheStats?.(), available:!!this.db && this.db.available !== false};}
+        catch (_) {databaseCache = {available:false, error:'Каталог недоступен. Перезапустите сервер для восстановления.',
+            causeCode:this.db?.failure?.code, failedAt:this.db?.failure?.at};}
+        return {...await this.getResourceBenchmark().snapshot(), databaseCache, processMemory:process.memoryUsage(), processCpu:process.cpuUsage(),
             memoryCaches:{queries:{bytes:this.dbSearcher?.memCache?.bytes || 0, entries:this.dbSearcher?.memCache?.size || 0},
                 authors:{bytes:this.authorInfoCache?.bytes || 0, entries:this.authorInfoCache?.size || 0}}};
     }
@@ -4283,6 +4297,7 @@ class WebWorker {
     async startAdminBenchmark(userId = '', profileAccessToken = '', options = {}) {
         await this.requireAdmin(userId, profileAccessToken);
         this.checkMyState();
+        if (this.db?.available === false) throw new Error('Каталог недоступен. Перезапустите сервер перед проверкой.');
         return await this.getResourceBenchmark().start(options);
     }
 
@@ -6543,9 +6558,9 @@ class WebWorker {
         return result;
     }
 
-    async getReviewArchiveState(sourceLibDir = '') {
+    async getReviewArchiveState(sourceLibDir = '', onProgress = null) {
         if (this.remoteLib?.metadata) {
-            const remote = await this.remoteLib.metadata.ratingIndex();
+            const remote = await this.remoteLib.metadata.ratingIndex(onProgress);
             return {signature:`remote:${remote.signature}`, archives:[]};
         }
         const libDir = sourceLibDir || this.config.libDir;
@@ -6666,17 +6681,19 @@ class WebWorker {
         return result;
     }
 
-    async ensureReviewIndex(sourceLibDir = '', state = null) {
+    async ensureReviewIndex(sourceLibDir = '', state = null, onProgress = null) {
         state = state || await this.getReviewArchiveState(sourceLibDir);
-        if (!state.indexPromise)
-            state.indexPromise = this.createReviewIndex(state.archives).catch(error => {state.indexPromise = null; throw error;});
-        return state.indexPromise;
+        return require('./LoadProgress').sharedLoad(state,'indexPromise',
+            {phase:'Подготовка индекса отзывов',done:0,total:null},
+            progress => this.createReviewIndex(state.archives,progress),onProgress);
     }
 
-    async createReviewIndex(archives) {
+    async createReviewIndex(archives, onProgress = null) {
         const reviewToArchives = new Map();
         const limit = Math.max(1, Number(this.config.reviewIndexMaxEntries) || 100000);
-        let stored = 0;
+        let stored = 0, completed = 0;
+        const total = archives.filter(archive => archive.id.toLowerCase() !== 'additional').length;
+        onProgress?.({phase:'Проверка архивов отзывов',done:0,total,unit:'archives'});
 
         for (const [archiveIndex,archive] of archives.entries()) {
             if (archive.id.toLowerCase() === 'additional')
@@ -6708,25 +6725,29 @@ class WebWorker {
                     await zipReader.close();
                 }
             });
+            onProgress?.({phase:'Проверка архивов отзывов',done:++completed,total,unit:'archives'});
             if (reviewToArchives.fallbackArchives) break;
         }
 
         return reviewToArchives;
     }
 
-    async getBookReviews(book, state = null) {
-        if (this.remoteLib?.metadata) return this.remoteLib.metadata.reviews(book._uid);
+    async getBookReviews(book, state = null, onProgress = null) {
+        if (this.remoteLib?.metadata) return this.remoteLib.metadata.reviews(book._uid,onProgress);
         state = state || await this.getReviewArchiveState(book.sourceLibDir);
-        return this.withReviewAssets(state, () => this.readBookReviews(book, state));
+        return this.withReviewAssets(state, () => this.readBookReviews(book, state,onProgress));
     }
 
-    async readBookReviews(book, state) {
+    async readBookReviews(book, state, onProgress = null) {
         const entryKey = libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`);
-        const reviewIndex = await this.ensureReviewIndex(book.sourceLibDir, state);
+        const reviewIndex = await this.ensureReviewIndex(book.sourceLibDir, state,onProgress);
         const matches = [...reviewIndex.get(entryKey) || []];
         // Once the memory budget is reached, find this book in the remaining
         // archives on demand rather than retaining every book's review paths.
-        for (const archive of reviewIndex.fallbackArchives || []) {
+        const fallback = reviewIndex.fallbackArchives || [];
+        let checked = 0;
+        if (fallback.length) onProgress?.({phase:'Поиск отзывов в архивах',done:0,total:fallback.length,unit:'archives'});
+        for (const archive of fallback) {
             await reviewRuntime.run(async() => {
                 const reader = new ZipReader(this.config);
                 try {
@@ -6740,10 +6761,14 @@ class WebWorker {
                     log(LM_WARN, `review archive ${archive.file}: ${error.message}`);
                 } finally {await reader.close();}
             });
+            onProgress?.({phase:'Поиск отзывов в архивах',done:++checked,total:fallback.length,unit:'archives'});
         }
         const uniqueMatches = [...new Map(matches.map(match => [JSON.stringify([match.archive,match.entryName]),match])).values()];
         const reviews = [];
         const seen = new Set();
+        let completed = 0;
+        onProgress?.({phase:uniqueMatches.length ? 'Чтение отзывов книги' : 'Отзывы проверены',
+            done:0,total:uniqueMatches.length || null,unit:'files'});
 
         const lists = await reviewRuntime.map(uniqueMatches, async(match) => {
             const zipReader = new ZipReader(this.config);
@@ -6773,6 +6798,7 @@ class WebWorker {
                 return [];
             } finally {
                 await zipReader.close();
+                onProgress?.({phase:'Чтение отзывов книги',done:++completed,total:uniqueMatches.length,unit:'files'});
             }
         });
 
@@ -6787,23 +6813,27 @@ class WebWorker {
         return reviews;
     }
 
-    async getBookLibraryRating(book, state = null) {
-        if (this.remoteLib?.metadata) return this.remoteLib.metadata.rating(book._uid);
+    async getBookLibraryRating(book, state = null, onProgress = null) {
+        if (this.remoteLib?.metadata) {
+            onProgress?.({phase:'Получение оценки с удалённого сервера',done:0,total:null});
+            return this.remoteLib.metadata.rating(book._uid);
+        }
         state = state || await this.getReviewArchiveState(book.sourceLibDir);
         return this.withReviewAssets(state, async() => {
-            const ratings = await this.ensureLibraryRatings(state);
+            const ratings = await this.ensureLibraryRatings(state,onProgress);
             return ratings.get(libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`)) || null;
         });
     }
 
-    ensureLibraryRatings(state) {
-        if (!state.ratingsPromise) state.ratingsPromise = this.readLibraryRatings(state.archives)
-            .catch(error => {state.ratingsPromise = null; throw error;});
-        return state.ratingsPromise;
+    ensureLibraryRatings(state, onProgress = null) {
+        return require('./LoadProgress').sharedLoad(state,'ratingsPromise',
+            {phase:'Подготовка оценок читателей',done:0,total:null},
+            progress => this.readLibraryRatings(state.archives,progress),onProgress);
     }
 
-    async readLibraryRatings(archives) {
+    async readLibraryRatings(archives, onProgress = null) {
         const ratings = new Map();
+        onProgress?.({phase:'Поиск оценок читателей',done:0,total:null});
         for (const archive of archives.filter(item => item.id.toLowerCase() === 'additional')) {
             await reviewRuntime.run(async() => {
                 const reader = new ZipReader(this.config);
@@ -6816,7 +6846,7 @@ class WebWorker {
                             return;
                         const key = libraryReviews.entryKey(row.folder, row.file);
                         if (!ratings.has(key)) ratings.set(key, {value: row.sum / row.count, count: row.count});
-                    },this.config.tempDir);
+                    },this.config.tempDir,onProgress);
                 } catch (error) {
                     if (isResourceError(error)) throw error;
                     log(LM_WARN, `library ratings ${archive.file}: ${error.message}`);
@@ -7077,21 +7107,33 @@ class WebWorker {
         }};
     }
 
-    async getBookReviewDetails(bookUid) {
+    async getBookReviewDetails(bookUid, onProgress = null) {
+        const generation = this.libraryAssetGeneration;
+        const loads = this.bookReviewLoads || (this.bookReviewLoads = new Map());
+        const loadKey = JSON.stringify([generation,bookUid]);
+        if (!loads.has(loadKey)) loads.set(loadKey,{progress:new (require('./LoadProgress').LoadProgress)(),users:0});
+        const load = loads.get(loadKey); load.users++;
+        const unsubscribe = load.progress.subscribe(onProgress);
+        try {
         // Reuse the pending-work coalescer, but never retain completed reviews in
         // RAM. The disk cache is invalidated by source/review archive signatures.
         const result = await this.runForeground(() => this.shareBookJob('reviews', [bookUid], async() => {
             const db = this.db, generation = this.libraryAssetGeneration;
+            load.progress.update('reviews',{phase:'Проверка кэша отзывов',done:0,total:null});
             const rows = await db.select({table:'book', where:`@@hash('_uid', ${db.esc(bookUid)})`});
             if (!rows.length) throw new Error('404 Файл не найден');
-            const book = rows[0], state = await this.getReviewArchiveState(book.sourceLibDir);
+            const book = rows[0], state = await this.getReviewArchiveState(book.sourceLibDir,
+                progress => load.progress.update('ratings',progress));
             const dbConfig = await this.dbConfig();
             const key = utils.getBufHash(JSON.stringify([bookUid, book._recordHash, dbConfig.inpxHash,
                 book.folder, book.file, book.ext, state.signature]), 'sha256', 'hex');
             const file = path.join(this.config.bookDir, `${key}.reviews.json`);
             let details = await fs.readJson(file).catch(() => null);
             if (!details) {
-                const [reviews, libraryRating] = await Promise.all([this.getBookReviews(book, state), this.getBookLibraryRating(book, state)]);
+                const [reviews, libraryRating] = await Promise.all([
+                    this.getBookReviews(book,state,progress => load.progress.update('reviews',progress)),
+                    this.getBookLibraryRating(book,state,progress => load.progress.update('ratings',progress)),
+                ]);
                 details = {reviews, libraryRating};
                 this.checkLibraryAssetState(generation, db);
                 await writeFileAtomic(file, JSON.stringify(details));
@@ -7100,6 +7142,10 @@ class WebWorker {
             return {bookInfo:{book, ...details}};
         }));
         return {reviews:result.bookInfo.reviews, libraryRating:result.bookInfo.libraryRating};
+        } finally {
+            unsubscribe();
+            if (!--load.users) {load.progress.close(); if (loads.get(loadKey) === load) loads.delete(loadKey);}
+        }
     }
 
     async readBookCardFb2(book) {

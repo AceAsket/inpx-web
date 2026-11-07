@@ -37,12 +37,17 @@ jobs:
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/catalog-ui
       - run: node scripts/profile-toolbar-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/profile-toolbar-ui
       - run: node scripts/rc13-profile-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/rc13-profile
       - run: node scripts/catalog-discovery-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/catalog-discovery-ui
+      - run: node scripts/review-progress-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/review-progress-ui
       - uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -54,6 +59,9 @@ jobs:
             ${{ runner.temp }}/catalog-discovery-ui/result.json
             ${{ runner.temp }}/rc13-profile/*.png
             ${{ runner.temp }}/rc13-profile/result.json
+            ${{ runner.temp }}/profile-toolbar-ui/*.png
+            ${{ runner.temp }}/review-progress-ui/*.png
+            ${{ runner.temp }}/review-progress-ui/result.json
   validate:
     name: Test and package ${{ matrix.target }}
     if: github.event_name != 'workflow_dispatch' || !inputs.browser_only

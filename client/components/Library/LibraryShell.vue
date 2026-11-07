@@ -115,8 +115,7 @@ function openActions(book) {
     actionsVisible.value = true;
 }
 function openCard(book) {
-    if (bookUid(book) && !book.discoveryMissingLocal) router.push(catalogTarget('/book', {bookUid:bookUid(book)}, route.query));
-    else openActions(book);
+    openActions(book);
 }
 async function openDetails(book) {
     ensureGenres().catch(() => {});

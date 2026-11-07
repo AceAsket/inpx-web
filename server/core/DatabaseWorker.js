@@ -10,6 +10,6 @@ parentPort.on('message', async message => {
         cache.attach();
         result = {result:message.action === 'cacheStats' ? cache.snapshot() : await db[message.action](message.query)};
         cache.attach();
-    } catch (error) {result = {error:error.message};}
+    } catch (error) {result = {error:error.message, errorCode:error.code};}
     parentPort.postMessage({...result, requestId:message.requestId});
 });

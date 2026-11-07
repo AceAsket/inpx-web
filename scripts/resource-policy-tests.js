@@ -7,7 +7,7 @@ const policy = require('../server/core/ResourcePolicy');
 const globalRuntime = require('../server/core/ResourceRuntime');
 const {ResourceRuntime} = globalRuntime;
 const {runProcess} = require('../server/core/ConversionRuntime');
-const {ResourceBenchmark, recommend} = require('../server/core/ResourceBenchmark');
+const {ResourceBenchmark, recommend, customProfile} = require('../server/core/ResourceBenchmark');
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const GiB = 1024 * 1024 * 1024;
@@ -287,6 +287,96 @@ async function testResourceErrorsCannotBecomeCachedEmptyReviews() {
     } finally {Zip.prototype.open = original;}
 }
 
+async function testCustomBenchmarkLimitsAndLaunchSettingsAgree() {
+    const settings = policy.resolve({INPX_RESOURCE_MAX_PROCESSES:'12'}, machine());
+    const values = {total:9, images:3, reviews:9, conversions:5};
+    const custom = customProfile(values, settings);
+    const resolved = policy.resolve({INPX_RESOURCE_PROFILE:'performance', INPX_RESOURCE_MAX_PROCESSES:'9',
+        INPX_RESOURCE_TOTAL:'9', INPX_RESOURCE_IMAGES:'3', INPX_RESOURCE_REVIEWS:'9', INPX_RESOURCE_CONVERSIONS:'5', INPX_RESOURCE_BACKGROUND:'1'}, machine());
+    assert.deepStrictEqual(resolved.limits, custom.limits, 'Copied launch values must reproduce the tested concurrency');
+    assert.strictEqual(resolved.launchEnv.INPX_RESOURCE_TOTAL, '9');
+    for (const limits of [{...values, total:13}, {...values, reviews:10}, {...values, total:1.5}, {...values, total:'9'}, {...values, images:0}])
+        assert.throws(() => customProfile(limits, settings), /Параллельность|Лимит/);
+    await temporary(async dir => {
+        const runtime = new ResourceRuntime(settings), before = JSON.stringify(runtime.settings);
+        const service = new ResourceBenchmark({dataDir:dir, libDir:dir, librarySources:[{id:'source', libDir:dir}]}, {
+            runtime, hardware:machine, prepare:async() => ({coverage:['Изображения','Архивы','Хранилище'], warnings:[],
+                stages:[{name:'fixture', task:() => runtime.run(() => pause(10))}]})});
+        await assert.rejects(service.start({mode:'custom', limits:{...values, images:0}}), /Параллельность/);
+        await service.start({mode:'custom', limits:values}); await service.completion;
+        assert.strictEqual(service.job.state, 'completed');
+        assert.strictEqual(service.last.mode, 'custom');
+        assert.strictEqual(service.last.rows.length, 1);
+        const row = service.last.rows[0];
+        assert.strictEqual(row.profile, 'custom'); assert.deepStrictEqual(row.limits, custom.limits);
+        for (const name of ['cpuTimeMs','cpuPercent','cpuQuotaPercent','memoryDelta','peakRss','peakHeap'])
+            assert(Number.isFinite(row[name]) && row[name] >= 0, `Measured ${name}`);
+        assert.strictEqual(service.last.recommendation.measured, false, 'One custom run cannot select the best profile');
+        assert.strictEqual(JSON.stringify(runtime.settings), before);
+        const restored = new ResourceBenchmark(service.config, {runtime, hardware:machine});
+        assert.strictEqual((await restored.snapshot()).report.rows[0].profile, 'custom');
+    });
+}
+
+async function testBenchmarkProbesRemainSingleFlightAfterTimeout() {
+    await temporary(async dir => {
+        const settings = policy.resolve({}, machine()), runtime = new ResourceRuntime(settings);
+        let active = 0, peak = 0;
+        const service = new ResourceBenchmark({dataDir:dir, libDir:dir, librarySources:[{id:'source', libDir:dir}]}, {
+            runtime, hardware:machine, probe:async() => {peak = Math.max(peak, ++active); await pause(800); active--;},
+            prepare:async() => ({coverage:['fixture'], warnings:[], stages:[{name:'fixture', task:() => pause(100)}]})});
+        await service.start(); await service.completion;
+        assert.strictEqual(service.job.state, 'completed');
+        assert.strictEqual(peak, 1, 'Timed-out DB work must not overlap across samples or profiles');
+        if (service.probeInFlight) await service.probeInFlight;
+        assert.strictEqual(active, 0);
+    });
+}
+
+async function testBenchmarkProbeUsesBoundedPrimaryKeyAndSurvivesClosedMetrics() {
+    const Worker = require('../server/core/WebWorker');
+    await temporary(async dir => {
+        const worker = Object.create(Worker.prototype); worker.config = {dataDir:dir};
+        worker.checkMyState = () => {}; worker.requireAdmin = async() => {};
+        const db = new (require('jembadb').JembaDb)();
+        try {
+            await db.lock({dbPath:path.join(dir,'db'), create:true});
+            await db.create({table:'book'});
+            await db.insert({table:'book', rows:Array.from({length:1000}, (_, id) => ({id, title:`Book ${id}`}))});
+            const rows = db.table.get('book').tableRowsFile, getRow = rows.getRow.bind(rows);
+            let reads = 0; rows.getRow = async id => {reads++; return getRow(id);};
+            worker.db = db;
+            await worker.getResourceBenchmark().probe();
+            assert.strictEqual(reads, 1, 'The real Jemba probe must read one row, regardless of library size');
+            await db.delete({table:'book', where:'@@id(1)'}); reads = 0;
+            await worker.getResourceBenchmark().probe();
+            assert(reads <= 1, 'A deleted probe ID must not fall back to a table scan');
+        } finally {await db.unlock();}
+        worker.db = {available:false, cacheStats:async() => {throw new Error('Worker does not exist');}};
+        const info = await worker.getAdminPerformance();
+        assert.strictEqual(info.databaseCache.available, false);
+        assert(info.processMemory.rss > 0);
+        assert(Number.isFinite(info.processCpu.user));
+        assert(info.machine.memoryLimit > 0, 'Admin resource metrics remain available after a database worker failure');
+        await assert.rejects(worker.startAdminBenchmark(), /Каталог недоступен/);
+    });
+}
+
+async function testBenchmarkDatabaseFailureStopsBeforeFurtherCandidates() {
+    await temporary(async dir => {
+        const settings = policy.resolve({}, machine()), runtime = new ResourceRuntime(settings);
+        const service = new ResourceBenchmark({dataDir:dir, libDir:dir, librarySources:[{id:'source', libDir:dir}]}, {
+            runtime, hardware:machine, probe:async() => {throw new Error('Worker terminated');},
+            prepare:async() => ({coverage:['fixture'], warnings:[], stages:[{name:'fixture', task:() => runtime.run(() => pause(30))}]})});
+        await service.start(); await service.completion;
+        assert.strictEqual(service.job.state, 'failed');
+        assert.strictEqual(service.job.errorCode, 'BENCHMARK_PROBE_FAILED');
+        assert.match(service.job.message, /каталог недоступен/);
+        assert.strictEqual(runtime.active, 0); assert.strictEqual(runtime.queue.length, 0);
+        assert.strictEqual(service.last, null);
+    });
+}
+
 module.exports = [testLaunchResourceProfilesAndOverrides, testCgroupV2InheritedCpuAndMemoryLimits, testCgroupV1QuotasAndEscapedMountPaths,
     testGlobalResourceAdmissionAndForegroundPriority,
     testResourceQueueCancellationAndCallerContext, testNativeOutputCaptureLimitsAndAbortTree,
@@ -294,4 +384,6 @@ module.exports = [testLaunchResourceProfilesAndOverrides, testCgroupV2InheritedC
     testBenchmarkCancellationDrainsProcessesBeforeCleanup, testPerformanceEndpointsRequireAdministratorAndCsrf,
     testRealBenchmarkFixturesReadSelectedStorage, testReviewBackgroundCannotOccupyAllForegroundSlots,
     testSavedConfigurationCannotOverrideLaunchResourcePolicy, testBenchmarkTimeoutKeepsPreviousResultAndCleansFiles,
-    testResourceErrorsCannotBecomeCachedEmptyReviews];
+    testResourceErrorsCannotBecomeCachedEmptyReviews, testCustomBenchmarkLimitsAndLaunchSettingsAgree,
+    testBenchmarkProbesRemainSingleFlightAfterTimeout, testBenchmarkProbeUsesBoundedPrimaryKeyAndSurvivesClosedMetrics,
+    testBenchmarkDatabaseFailureStopsBeforeFurtherCandidates];

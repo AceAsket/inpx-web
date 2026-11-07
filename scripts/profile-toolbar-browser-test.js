@@ -33,6 +33,35 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         assert(ready, output);
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1280, height: 900}}), errors = [];
+        let benchmarkOptions = null, benchmarkState = 'idle', performanceReads = 0;
+        await page.routeWebSocket('**/ws', socket => {
+            const server = socket.connectToServer();
+            socket.onMessage(message => {
+                let request;
+                try {request = JSON.parse(String(message));} catch {server.send(message); return;}
+                let response;
+                if (request.action === 'get-admin-performance') {
+                    performanceReads++;
+                    response = {machine: {cpu: 2, memoryLimit: 512 * 1048576, memoryUsed: 128 * 1048576, memoryScope: 'cgroup', cpuUsageUs: performanceReads * 200000},
+                        processMemory: {rss: 96 * 1048576}, runtime: {active: benchmarkState === 'running' ? 1 : 0, queued: 0}, databaseCache: {available: true},
+                        recommendation: {profile: 'balanced', measured: false, reason: 'Метрики браузерной проверки'},
+                        sources: [{id: 'browser-fixture', name: 'Тестовое хранилище'}], report: null,
+                        job: {state: benchmarkState, stage: benchmarkState === 'running' ? 'Проверка своих значений' : 'Готово', progress: benchmarkState === 'running' ? .4 : 0,
+                            sample: {memoryUsed: 130 * 1048576, peakMemory: 132 * 1048576, cpuPercent: 25}},
+                        settings: {selected: 'balanced', limits: {total: 4, background: 1, images: 2, reviews: 1, conversions: 1}, hardMax: 12,
+                            benchmarkEnabled: true, benchmarkTimeoutMs: 60000, launchEnv: {INPX_RESOURCE_PROFILE: 'balanced'},
+                            profiles: [{id: 'balanced', name: 'Сбалансированный', limits: {total: 4, images: 2, reviews: 1, conversions: 1}}]}};
+                } else if (request.action === 'start-admin-benchmark') {
+                    // Exercise the real form/transport without starting worker load.
+                    benchmarkOptions = request.options; benchmarkState = 'running'; response = {state: 'running'};
+                } else if (request.action === 'cancel-admin-benchmark') {
+                    benchmarkState = 'cancelled'; response = {state: 'cancelled'};
+                } else {server.send(message); return;}
+                socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
+                socket.send(JSON.stringify({requestId: request.requestId, ...response}));
+            });
+            server.onMessage(message => socket.send(message));
+        });
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(base + '/#/books?title=Packaged&lang=en');
         const login = async() => {
@@ -76,6 +105,32 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await pause(350);
         await page.screenshot({path: path.join(directory, 'admin-tasks.png')});
         await page.getByRole('button', {name: 'Закрыть задачи', exact: true}).click();
+        const performancePanel = page.locator('.performance-panel');
+        await performancePanel.getByRole('button', {name: /^Свои значения/}).click();
+        await performancePanel.getByRole('spinbutton', {name: 'Всего одновременно', exact: true}).fill('2');
+        await performancePanel.getByRole('spinbutton', {name: 'Изображения', exact: true}).fill('3');
+        const runBenchmark = performancePanel.getByRole('button', {name: 'Проверить производительность', exact: true});
+        await performancePanel.getByText('Лимит отдельного вида задач превышает общий.', {exact: true}).waitFor();
+        assert(await runBenchmark.isDisabled()); assert.equal(benchmarkOptions, null);
+        await performancePanel.getByRole('spinbutton', {name: 'Всего одновременно', exact: true}).fill('3');
+        await performancePanel.getByRole('spinbutton', {name: 'Изображения', exact: true}).fill('2');
+        await performancePanel.getByRole('spinbutton', {name: 'Архивы', exact: true}).fill('1');
+        await performancePanel.getByRole('spinbutton', {name: 'Конвертация', exact: true}).fill('1');
+        await runBenchmark.click();
+        await performancePanel.getByRole('button', {name: 'Остановить', exact: true}).waitFor();
+        assert.deepEqual(benchmarkOptions, {sourceId: 'browser-fixture', mode: 'custom', limits: {total: 3, images: 2, reviews: 1, conversions: 1}});
+        await performancePanel.getByText(/Проверка своих значений.*40%/).waitFor();
+        assert(!(await performancePanel.innerText()).replace(/\s+/g, ' ').includes('CPU сейчас, ядер: —'), 'CPU is computed from successive counter samples');
+        const profileLabels = await performancePanel.locator('.performance-profile').evaluateAll(nodes => nodes.map(node => {
+            const frame = node.getBoundingClientRect(), label = node.querySelector('strong').getBoundingClientRect();
+            const padding = parseFloat(getComputedStyle(node).paddingRight) || 0;
+            return {name: node.querySelector('strong').textContent, labelRight: label.right, contentRight: frame.right - padding};
+        }));
+        assert(profileLabels.every(label => label.labelRight <= label.contentRight + 1), 'Profile titles must stay inside their card: ' + JSON.stringify(profileLabels));
+        assert(await performancePanel.getByRole('button', {name: /^Свои значения/}).isDisabled(), 'A running benchmark locks the selected profile');
+        await performancePanel.screenshot({path: path.join(directory, 'performance-custom-run.png')});
+        await performancePanel.getByRole('button', {name: 'Остановить', exact: true}).click();
+        await runBenchmark.waitFor(); assert.equal(benchmarkState, 'cancelled');
         await page.getByRole('button', {name: /^Отправка книг/}).click();
         await page.getByRole('combobox', {name: 'Подключение Telegram', exact: true}).click();
         await page.getByRole('option', {name: 'Только IPv6', exact: true}).click();
@@ -123,7 +178,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await page.locator('.profile-controls').waitFor();
         assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0);
         assert.deepEqual(errors, []);
-        console.log(`Profile UI: logout, token revocation, guest restrictions, five catalog icons at 320/390/514/760/1280px, shelf/favorites actions and tasks in administration passed; screenshots: ${directory}`);
+        console.log(`Profile UI: logout, token revocation, guest restrictions, responsive toolbar, custom performance form/validation/transport/cancel with synthetic metrics, shelf/favorites actions and tasks passed; screenshots: ${directory}`);
     } catch (error) {
         const page = browser?.contexts().flatMap(context => context.pages())[0];
         if (page) {

@@ -62,7 +62,7 @@ if (require.main === module) (async() => {
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [], actions = [];
         let readingFailure = '';
         await page.routeWebSocket('**/ws', socket => {
-            const server = socket.connectToServer(), bookRequests = new Set();
+            const server = socket.connectToServer(), bookRequests = new Set(), authorRequests = new Set();
             socket.onMessage(message => {
                 try {
                     const request = JSON.parse(String(message));
@@ -72,6 +72,7 @@ if (require.main === module) (async() => {
                         return;
                     }
                     if (request.action === 'bookSearch') bookRequests.add(request.requestId);
+                    if (request.action === 'get-author-info') authorRequests.add(request.requestId);
                 } catch { /* Forward protocol keepalive frames unchanged. */ }
                 server.send(message);
             });
@@ -81,6 +82,11 @@ if (require.main === module) (async() => {
                     if (bookRequests.has(response.requestId) && !response._rok) {
                         bookRequests.delete(response.requestId);
                         if (!response.error) {response.totalFound = 661301; socket.send(JSON.stringify(response)); return;}
+                    }
+                    if (authorRequests.has(response.requestId) && !response._rok) {
+                        authorRequests.delete(response.requestId);
+                        // Hold the real response briefly to verify the loading UI.
+                        setTimeout(() => socket.send(message), 800); return;
                     }
                 } catch { /* Forward non-JSON frames unchanged. */ }
                 socket.send(message);
@@ -157,22 +163,32 @@ if (require.main === module) (async() => {
         const currentTitle = await page.locator('.current-book__title').innerText();
         assert.equal(await page.locator('#recent-books-heading').locator('..').locator('..').getByRole('button', {name: `Открыть карточку: ${currentTitle}`, exact: true}).count(), 0, 'Current book is not repeated in recents');
         for (const cover of [page.locator('.current-book__cover'), page.locator('.book-tile__open').first()]) {
+            const previousUrl = page.url();
             await cover.click();
             await page.locator('.library-book-actions').waitFor();
-            assert(!page.url().includes('/reader'), 'Cover opens the card without starting reading');
-            await page.locator('.catalog-book-details').waitFor();
-            await page.goBack();
+            assert.equal(page.url(), previousUrl, 'Cover previews the book without replacing the current page');
+            const preview = page.locator('.library-dialog-card[data-dialog-kind="book"]');
+            assert((await preview.getByRole('link', {name: 'Полная карточка', exact: true}).getAttribute('href')).includes('#/book?bookUid='));
+            await screenshot('book-preview-light-1440');
+            await preview.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+            await preview.waitFor({state: 'hidden'});
             await page.locator('.current-book').waitFor();
         }
         assert.equal(actions.filter(action => ['get-author-info', 'get-book-reviews'].includes(action)).length, 0,
             'Cards do not load optional details by default');
         await page.locator('.current-book__cover').click();
+        await page.getByRole('link', {name: 'Полная карточка', exact: true}).click();
         await page.locator('.catalog-book-details').waitFor();
         await page.getByRole('tab', {name:'Отзывы и оценки', exact:true}).click();
         await page.getByText('Отзывов пока нет.', {exact:true}).waitFor();
         assert.equal(actions.filter(action => action === 'get-book-reviews').length, 1);
         await page.getByRole('tab', {name:'Об авторе', exact:true}).click();
+        await page.locator('.author-tab-wrap .loading-state').waitFor();
+        assert.equal(await page.locator('.author-tab-wrap .icon-rotate').count(), 0, 'The author uses the shared loading state');
+        assert.equal(await page.locator('.info-tabs.bg-grey-4').count(), 0, 'Tabs use theme variables instead of the old grey strip');
+        await screenshot('author-loading-light-1440');
         await page.getByText('Информация об авторе не найдена.', {exact:true}).waitFor();
+        await screenshot('author-empty-light-1440');
         assert.equal(actions.filter(action => action === 'get-author-info').length, 1);
         await page.getByRole('tab', {name:'Отзывы и оценки', exact:true}).click();
         assert.equal(actions.filter(action => action === 'get-book-reviews').length, 1, 'Changing tabs reuses current details');
@@ -213,6 +229,7 @@ if (require.main === module) (async() => {
         await page.locator('.library-book-actions').waitFor();
         const dialog = page.locator('.library-dialog-card[data-dialog-kind="book"]');
         assert((await dialog.boundingBox()).height < 700, 'The action card must fit the phone without reserved poster space');
+        await screenshot('book-preview-dark-390');
         assert.equal(await page.getByRole('button', {name: 'Прочитано', exact: true}).count(), 1);
         assert.equal(await page.getByRole('button', {name: 'Снять отметку', exact: true}).count(), 0);
         await page.getByRole('button', {name: 'Описание и сведения', exact: true}).click();
@@ -223,7 +240,8 @@ if (require.main === module) (async() => {
         await page.locator('.books-grid .book-tile').first().waitFor();
         await page.locator('.books-grid .book-tile__open').first().click();
         await page.locator('.library-book-actions').waitFor();
-        await page.locator('.catalog-book-details').waitFor(); await page.goBack();
+        assert(page.url().includes('#/my-books'), 'The book preview keeps the selected shelf open');
+        await page.locator('.library-dialog-card[data-dialog-kind="book"]').getByRole('button', {name: 'Закрыть окно', exact: true}).click();
         await page.locator('.books-grid .book-tile').first().waitFor();
         await page.getByRole('link', {name: 'Профиль', exact: true}).click();
         await page.locator('.profile-card').waitFor();
@@ -331,9 +349,11 @@ if (require.main === module) (async() => {
 
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
         await page.locator('.library-result-card').first().waitFor();
+        const catalogBeforePreview = page.url();
         await page.locator('.library-result-card__cover').first().click();
         await page.locator('.library-book-actions').waitFor();
-        await page.locator('.catalog-book-details').waitFor(); await page.goBack();
+        assert.equal(page.url(), catalogBeforePreview, 'Catalog cover previews preserve the active search URL');
+        await page.locator('.library-dialog-card[data-dialog-kind="book"]').getByRole('button', {name: 'Закрыть окно', exact: true}).click();
         await page.locator('.library-result-card').first().waitFor();
         assert.equal(await page.locator('.search-scroll > .separator:visible').count(), 0, 'Pagination has no extra separator');
         assert(await page.locator('.catalog-search-panel__section').evaluate(node => node.classList.contains('q-field--outlined')), 'Catalog section has a visible outline');
@@ -420,7 +440,6 @@ if (require.main === module) (async() => {
         await page.waitForFunction(() => {const cover = document.querySelector('.reader-cover'); return cover?.complete && cover.naturalWidth > 0;});
         assert.equal(page.url(), readerUrl, 'Converted EPUB retains its original UID when reopening');
         await screenshot('epub-reader-dark-390');
-        await page.goBack(); await page.locator('.catalog-book-details').waitFor();
         await page.goBack(); await epubCard.waitFor();
         for (const [section, ready] of [['author', '.author-group'], ['series', '.series-group'], ['title', '.library-result-card'], ['extended', '.library-result-card'], ['for-you', '.discovery-shelf'], ['newest', '.discovery-shelf'], ['popular', '.discovery-shelf'], ['bestsellers', '.library-result-card']]) {
             await page.setViewportSize({width: 1440, height: 1000});

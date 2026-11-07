@@ -353,7 +353,7 @@ class Api {
                 if (csrfToken)
                     params.csrfToken = csrfToken;
 
-                const response = await wsc.message(await wsc.send(params), timeoutSecs);
+                const response = await wsc.message(await wsc.send(params), timeoutSecs, options.onProgress);
                 if (this.profileSigningOut && params.action !== 'logout-user-profile')
                     throw new Error('Выполняется выход из профиля');
 
@@ -640,7 +640,9 @@ class Api {
         return await this.request({action: 'get-book-info', bookUid, card: true, lazyExtras:true}, 120);
     }
 
-    async getBookReviews(bookUid) {return this.request({action:'get-book-reviews', bookUid}, 120);}
+    async getBookReviews(bookUid, options = {}) {
+        return this.request({action:'get-book-reviews', bookUid, wantProgress:typeof options.onProgress === 'function'},120,options);
+    }
 
     async getBookGallery(bookUid) {
         return await this.request({action: 'get-book-gallery', bookUid}, 300);

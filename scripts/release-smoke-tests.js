@@ -1768,6 +1768,7 @@ const tests = [
     ...require('./audit-stage4-tests'),
     ...require('./resource-limit-tests'),
     ...require('./resource-policy-tests'),
+    ...require('./review-progress-tests'),
     ...require('./dependency-smoke-tests'),
     ...require('./security-regression-tests'),
     testConfigSecretsSurviveRestart,

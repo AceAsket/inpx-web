@@ -259,6 +259,9 @@ async function testLibraryBookActionsHideUnsupportedReadingAndUnknownSize() {
     const value = new Type();
     value.$store = {state: {settings: {}, config: {onlineReaderEnabled: true, bookReadLink: '', conversionEnabled: true, conversionFormats: ['epub', 'pdf']}}};
     value.book = {_uid: 'one', ext: 'epub', size: 0};
+    value.$route = {query: {lang: 'ru', sourceId: 'main'}};
+    assert.deepEqual(value.fullCardTarget, {path: '/book', query: {lang: 'ru', sourceId: 'main', bookUid: 'one'}},
+        'Preview retains an explicit full-card deep link and catalogue scope');
     assert.equal(value.canRead, false, 'An EPUB must not offer unsupported in-browser reading');
     value.$store.state.config.conversionFormats.push('fb2'); assert.equal(value.canRead, true, 'EPUB reading is offered when FB2 conversion is enabled');
     value.$store.state.config.conversionFormats.pop();

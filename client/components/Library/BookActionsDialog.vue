@@ -20,6 +20,7 @@
                     <a :href="getDirectBookDownloadHref(book, downloadFormat)" class="book-actions-download"><q-icon name="la la-download" size="20px" /> Скачать {{ downloadFormat === 'raw' ? sourceFormat : downloadFormat.toUpperCase() }}</a>
                 </div>
                 <q-select v-if="downloadFormats.length > 1" v-model="downloadFormat" outlined dense emit-value map-options :options="downloadFormats" label="Формат скачивания" class="book-actions-formats" />
+                <RouterLink v-if="!embedded && fullCardTarget" :to="fullCardTarget" class="book-actions-card-link" @click="dialogVisible = false"><q-icon name="la la-external-link-alt" size="18px" /> Полная карточка</RouterLink>
                 <div class="book-actions-secondary">
                     <button v-if="!embedded" type="button" @click="$emit('details', book); dialogVisible = false"><q-icon name="la la-info-circle" /><span>Описание и сведения</span></button>
                     <button type="button" @click="bookEvent({action: 'readingList', book})"><q-icon name="la la-bookmark" /><span>Добавить на полку</span></button>
@@ -42,6 +43,7 @@ import BookCover from './BookCover.vue';
 import LoadingMessage from '../Search/LoadingMessage/LoadingMessage.vue';
 import DialogSurface from '../share/DialogSurface.vue';
 import {readable, progress} from './libraryModel';
+import {catalogTarget} from './catalogSearchModel';
 const bookFormats = require('../../../shared/BookFormats');
 
 // Use the same download, format, email, Telegram and read-state actions as the catalog.
@@ -72,6 +74,10 @@ class BookActionsDialog extends BaseList {
     refresh() {}
 
     get sourceFormat() {return String(this.book.ext || 'Книга').toUpperCase();}
+    get fullCardTarget() {
+        const uid = this.getBookUid(this.book);
+        return uid && !this.book.discoveryMissingLocal ? catalogTarget('/book', {bookUid: uid}, this.$route?.query || {}) : null;
+    }
     get percent() {return progress(this.book);}
     get markedRead() {return this.readOverride ?? (this.book.state === 'read' || this.book._readingListRead === true || this.book.read === true || this.percent >= .999);}
     get canRead() {return readable(this.book, this.config) || (!this.book.unavailable && !!String(this.config.bookReadLink || '').trim());}
@@ -144,6 +150,8 @@ h2 {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0 0 10px; over
 .book-actions-primary .q-btn, .book-actions-download {min-height: 42px; border-radius: 12px; padding: 10px 18px; font-size: 14px;}
 .book-actions-download {display: flex; align-items: center; gap: 9px; text-decoration: none; color: var(--app-primary); border: 1px solid var(--app-border);}
 .book-actions-formats {margin-top: 16px; max-width: 340px;}
+.book-actions-card-link {display: inline-flex; align-items: center; gap: 7px; margin-top: 16px; padding: 5px 0; color: var(--app-link); font-size: 13px; text-decoration: none; border-radius: 6px;}
+.book-actions-card-link:hover {text-decoration: underline;}
 .book-actions-secondary {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; padding-top: 14px; margin-top: 18px; border-top: 1px solid var(--app-border);}
 .book-actions-secondary button {display: flex; align-items: center; gap: 10px; padding: 12px 6px; text-align: left; color: var(--app-text); font: inherit; font-size: 13px; border: 0; border-radius: 10px; background: transparent; cursor: pointer; line-height: 1.45;}
 .book-actions-secondary button:hover {background: var(--app-surface-3);}
