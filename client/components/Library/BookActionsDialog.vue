@@ -18,22 +18,31 @@
             <div class="book-actions-content">
                 <div v-if="bookAvailable" class="book-actions-primary">
                     <q-select v-model="downloadFormat" outlined dense emit-value map-options :options="downloadFormats" :display-value="downloadLabel" aria-label="Формат скачивания" class="book-actions-formats" />
-                    <q-btn v-if="canRead" outline no-caps icon="la la-book-open" :aria-label="readLabel" :title="readLabel" @click="bookEvent({action: 'readBook', book})" />
-                    <q-btn outline icon="la la-bookmark" aria-label="Полки и статус" title="Полки и статус" aria-haspopup="menu" :aria-expanded="libraryMenuOpen">
+                    <q-btn v-if="canSend" outline aria-label="Отправить книгу" title="Отправить книгу" aria-haspopup="menu" :aria-expanded="sendMenuOpen" :disable="actionBusy">
+                        <BookActionIcon name="send" />
+                        <q-menu v-model="sendMenuOpen" class="book-actions-menu" anchor="bottom right" self="top right">
+                            <q-list role="menu" aria-label="Отправить книгу">
+                                <q-item v-if="config.telegramShareEnabled" v-close-popup clickable role="menuitem" @click="perform('sendTelegram')"><q-item-section avatar><q-icon name="lab la-telegram-plane" /></q-item-section><q-item-section>Отправить в Telegram</q-item-section></q-item>
+                                <q-item v-if="config.emailShareEnabled" v-close-popup clickable role="menuitem" @click="perform('sendEmail')"><q-item-section avatar><q-icon name="la la-envelope" /></q-item-section><q-item-section>Отправить по Email</q-item-section></q-item>
+                            </q-list>
+                        </q-menu>
+                    </q-btn>
+                    <q-btn outline aria-label="Полки и статус" title="Полки и статус" aria-haspopup="menu" :aria-expanded="libraryMenuOpen">
+                        <BookActionIcon name="shelf" />
                         <q-menu v-model="libraryMenuOpen" class="book-actions-menu" anchor="bottom right" self="top right">
                             <q-list role="menu" aria-label="Полки и статус">
-                                <q-item v-close-popup clickable role="menuitem" @click="bookEvent({action: 'readingList', book})"><q-item-section avatar><q-icon name="la la-bookmark" /></q-item-section><q-item-section>Добавить на полку</q-item-section></q-item>
+                                <q-item v-close-popup clickable role="menuitem" @click="bookEvent({action: 'readingList', book})"><q-item-section avatar><BookActionIcon name="shelf" /></q-item-section><q-item-section>Добавить на полку</q-item-section></q-item>
                                 <q-item v-if="config.profileAuthorized" v-close-popup clickable role="menuitem" :disable="updatingRead" @click="toggleRead"><q-item-section avatar><q-icon :name="markedRead ? 'la la-undo' : 'la la-check-circle'" /></q-item-section><q-item-section>{{ markedRead ? 'Снять отметку' : 'Прочитано' }}</q-item-section></q-item>
                             </q-list>
                         </q-menu>
                     </q-btn>
-                    <q-btn outline icon="la la-share-alt" aria-label="Поделиться книгой" title="Поделиться книгой" aria-haspopup="menu" :aria-expanded="shareMenuOpen" :disable="actionBusy">
+                    <q-btn v-if="canRead" outline no-caps icon="la la-book-open" :aria-label="readLabel" :title="readLabel" @click="bookEvent({action: 'readBook', book})" />
+                    <q-btn outline aria-label="Поделиться книгой" title="Поделиться книгой" aria-haspopup="menu" :aria-expanded="shareMenuOpen" :disable="actionBusy">
+                        <BookActionIcon name="share" />
                         <q-menu v-model="shareMenuOpen" class="book-actions-menu" anchor="bottom right" self="top right">
                             <q-list role="menu" aria-label="Поделиться книгой">
-                                <q-item v-if="nativeShareSupported" v-close-popup clickable role="menuitem" @click="shareBook"><q-item-section avatar><q-icon name="la la-share-alt" /></q-item-section><q-item-section>Поделиться…</q-item-section></q-item>
+                                <q-item v-if="nativeShareSupported" v-close-popup clickable role="menuitem" @click="shareBook"><q-item-section avatar><BookActionIcon name="share" /></q-item-section><q-item-section>Поделиться…</q-item-section></q-item>
                                 <q-item v-close-popup clickable role="menuitem" @click="perform('copyLink')"><q-item-section avatar><q-icon name="la la-link" /></q-item-section><q-item-section>Копировать ссылку</q-item-section></q-item>
-                                <q-item v-if="config.telegramShareEnabled" v-close-popup clickable role="menuitem" @click="perform('sendTelegram')"><q-item-section avatar><q-icon name="lab la-telegram-plane" /></q-item-section><q-item-section>Отправить в Telegram</q-item-section></q-item>
-                                <q-item v-if="config.emailShareEnabled" v-close-popup clickable role="menuitem" @click="perform('sendEmail')"><q-item-section avatar><q-icon name="la la-envelope" /></q-item-section><q-item-section>Отправить по Email</q-item-section></q-item>
                                 <q-item v-if="!embedded && fullCardTarget" v-close-popup clickable role="menuitem" :to="fullCardTarget" @click="dialogVisible = false"><q-item-section avatar><q-icon name="la la-external-link-alt" /></q-item-section><q-item-section>Открыть страницу книги</q-item-section></q-item>
                             </q-list>
                         </q-menu>
@@ -67,6 +76,7 @@
 import vueComponent from '../vueComponent';
 import BaseList from '../Search/BaseList';
 import BookCover from './BookCover.vue';
+import BookActionIcon from './BookActionIcon.vue';
 import LoadingMessage from '../Search/LoadingMessage/LoadingMessage.vue';
 import DialogSurface from '../share/DialogSurface.vue';
 import LoadingState from '../share/LoadingState.vue';
@@ -81,7 +91,7 @@ const previewMetadata = require('../../../shared/BookPreview');
 class BookActionsDialog extends BaseList {
     _props = {modelValue: Boolean, book: Object, genreMap: Object, embedded: Boolean};
     _options = {
-        components: {DialogSurface, BookCover, LoadingMessage, LoadingState, QMenu, QList, QItem, QItemSection},
+        components: {DialogSurface, BookCover, BookActionIcon, LoadingMessage, LoadingState, QMenu, QList, QItem, QItemSection},
         emits: ['update:modelValue', 'listEvent', 'navigate', 'details', 'updated'],
         watch: {
             modelValue(value) {this.dialogVisible = value;},
@@ -97,6 +107,7 @@ class BookActionsDialog extends BaseList {
     readOverride = null;
     updatingRead = false;
     actionBusy = false;
+    sendMenuOpen = false;
     libraryMenuOpen = false;
     shareMenuOpen = false;
     annotationText = '';
@@ -131,7 +142,7 @@ class BookActionsDialog extends BaseList {
         this.config.dbConfig?.inpxHash || '',this.config.rootPathStatic || '',this.config.currentUserId || '',
         this.config.currentUserProfile?.id || '',!!this.config.profileAuthorized,this.settings.currentUserId || '']);}
     invalidateAnnotation() {
-        this.libraryMenuOpen=false;this.shareMenuOpen=false;
+        this.libraryMenuOpen=false;this.shareMenuOpen=false;this.sendMenuOpen=false;
         this.annotationGeneration++;this.annotationController?.abort();this.annotationController=null;
         this.annotationText='';this.annotationStatus='';this.annotationLimited=false;this.annotationLoading=false;this.annotationLoaded=false;
         this.previewDetails={};
@@ -160,6 +171,7 @@ class BookActionsDialog extends BaseList {
 
     get sourceFormat() {return String(this.book.ext || 'Книга').toUpperCase();}
     get bookAvailable() {return !this.book.discoveryMissingLocal && !this.book.unavailable;}
+    get canSend() {return !!(this.config.telegramShareEnabled || this.config.emailShareEnabled);}
     get nativeShareSupported() {return typeof navigator!=='undefined' && typeof navigator.share==='function';}
     get downloadLabel() {return this.downloadFormat === 'raw' ? this.sourceFormat : this.downloadFormat.toUpperCase();}
     get annotationParagraphs() {return this.annotationText.split(/\n\s*\n/).filter(text=>text.trim());}
@@ -276,7 +288,7 @@ h1.book-actions-title {margin-bottom: 20px;}
 .book-actions-availability {margin: 0; color: var(--app-primary); font-size: 13px;}
 .book-actions-year {margin: 2px 0 0; color: var(--app-muted); font-size: 13px;}
 .book-actions-primary {justify-content: flex-end; gap: 8px; margin: 18px 0;}
-.book-actions-primary .q-btn {width: 44px; min-height: 44px; padding: 0; border-radius: 12px; color: var(--app-text);}
+.book-actions-primary .q-btn {width: 44px; flex: 0 0 44px; min-height: 44px; padding: 0; border-radius: 12px; color: var(--app-text);}
 .book-actions-primary .q-btn :deep(.q-icon) {font-size: 23px;}
 .book-actions-formats {margin: 0; width: 110px; min-width: 0;}
 .book-actions-formats :deep(.q-field__control) {min-height: 44px; border-radius: 12px;}
@@ -309,5 +321,8 @@ h1.book-actions-title {margin-bottom: 20px;}
     .book-actions-primary .q-btn {width: 44px; min-height: 44px;}
     .book-actions-formats {width: 96px;}
     .book-actions-formats :deep(.q-field__control) {padding: 0 8px;}
+}
+@media (max-width: 379px) {
+    .book-actions-formats {flex-basis: 100%; width: 100%; max-width: none;}
 }
 </style>

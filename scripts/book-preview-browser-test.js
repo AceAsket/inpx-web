@@ -38,7 +38,7 @@ async function fixture(directory) {
         browser=await chromium.launch({headless:true,executablePath:process.env.INPX_CHROMIUM_PATH || undefined});
         const context=await browser.newContext({viewport:{width:1440,height:1000}});
         await context.addInitScript(()=>{if(!localStorage.getItem('vuex'))localStorage.setItem('vuex',JSON.stringify({settings:{catalogAppearance:'shelves',defaultsSet:true,langDefault:'ru'}}));});
-        page=await context.newPage();const errors=[],actions=[],held=[],configRequests=new Set();let mode='actual';
+        page=await context.newPage();const errors=[],actions=[],held=[],configRequests=new Set();let mode='actual',deliveryChannels='both';
         await page.routeWebSocket('**/ws',socket=>{
             const server=socket.connectToServer();
             socket.onMessage(message=>{
@@ -58,7 +58,7 @@ async function fixture(directory) {
                 // Expose delivery commands in this isolated UI fixture. The test
                 // only opens their menu; no Telegram or email request is sent.
                 let response;try{response=JSON.parse(String(message));}catch{socket.send(message);return;}
-                if(configRequests.has(response.requestId)&&!response._rok){response.telegramShareEnabled=true;response.emailShareEnabled=true;socket.send(JSON.stringify(response));}
+                if(configRequests.has(response.requestId)&&!response._rok){configRequests.delete(response.requestId);response.telegramShareEnabled=['both','telegram'].includes(deliveryChannels);response.emailShareEnabled=['both','email'].includes(deliveryChannels);socket.send(JSON.stringify(response));}
                 else socket.send(message);
             });
         });
@@ -81,10 +81,27 @@ async function fixture(directory) {
         await open('Книга превью');
         await annotation.getByText(/Первая строка аннотации/).waitFor();assert((await annotation.innerText()).includes('Вторая строка и детали.'));
         assert.equal(await modal.locator('.book-actions-secondary, .book-actions-card-link').count(),0,'No extra actions below the annotation');
+        for(const [name,icon] of [['Отправить книгу','send'],['Полки и статус','shelf'],['Поделиться книгой','share']]) {
+            const svg=modal.getByRole('button',{name,exact:true}).locator('svg[data-book-action-icon="'+icon+'"]');
+            assert.equal(await svg.count(),1);const box=await svg.boundingBox();assert.equal(box.width,24);assert.equal(box.height,24);
+        }
+        await modal.getByRole('button',{name:'Отправить книгу',exact:true}).click();
+        const sendMenu=page.getByRole('menu',{name:'Отправить книгу',exact:true});await sendMenu.waitFor();
+        for(const name of ['Отправить в Telegram','Отправить по Email'])await sendMenu.getByRole('menuitem',{name,exact:true}).waitFor();
+        assert.equal(await sendMenu.getByRole('menuitem').count(),2,'Delivery offers only Telegram and email');
+        await page.setViewportSize({width:320,height:900});
+        await page.waitForFunction(()=>{const menu=document.querySelector('[role="menu"][aria-label="Отправить книгу"]');if(!menu)return false;
+            const box=menu.getBoundingClientRect();return box.x>=0&&box.right<=innerWidth+1&&getComputedStyle(menu.closest('.q-menu')).opacity==='1';});
+        const sendBox=await sendMenu.boundingBox();assert(sendBox.x>=0&&sendBox.x+sendBox.width<=321,'The delivery menu fits a narrow phone');
+        await page.screenshot({path:path.join(directory,'preview-send-menu-320.png')});
+        await page.keyboard.press('Escape');await sendMenu.waitFor({state:'hidden'});
+        const row=modal.locator('.book-actions-primary'),buttonRows=await row.locator('.q-btn').evaluateAll(nodes=>nodes.map(node=>Math.round(node.getBoundingClientRect().top)));
+        assert.equal(new Set(buttonRows).size,1,'All action icons stay in one row at 320px');
+        const formatBox=await row.locator('.book-actions-formats').boundingBox();assert(formatBox.y+formatBox.height<=buttonRows[0]+1,'The format selector has its own row on a narrow phone');
         await modal.getByRole('button',{name:'Поделиться книгой',exact:true}).click();
         const shareMenu=page.getByRole('menu',{name:'Поделиться книгой',exact:true});await shareMenu.waitFor();
-        for(const name of ['Копировать ссылку','Отправить в Telegram','Отправить по Email','Открыть страницу книги'])await shareMenu.getByRole('menuitem',{name,exact:true}).waitFor();
-        await page.setViewportSize({width:320,height:900});
+        for(const name of ['Копировать ссылку','Открыть страницу книги'])await shareMenu.getByRole('menuitem',{name,exact:true}).waitFor();
+        for(const name of ['Отправить в Telegram','Отправить по Email'])assert.equal(await shareMenu.getByRole('menuitem',{name,exact:true}).count(),0,'Delivery has its own button');
         const menuBox=await shareMenu.boundingBox();assert(menuBox.x>=0&&menuBox.x+menuBox.width<=321,'The share menu fits a narrow phone');
         await page.screenshot({path:path.join(directory,'preview-share-menu-320.png')});
         await page.keyboard.press('Escape');await shareMenu.waitFor({state:'hidden'});assert(await modal.isVisible());
@@ -153,10 +170,26 @@ async function fixture(directory) {
         await full.locator('.info-series-link').click();
         await page.getByRole('heading',{name:'Цикл & мир',exact:true}).waitFor();await full.waitFor({state:'hidden'});
         assert.equal(await modal.isVisible(),false,'Navigating from details must not reopen the old preview');
+        for(const channel of ['telegram','email','none']) {
+            deliveryChannels=channel;await page.goto(base+'/#/books?title=*Книга&lang=ru&sourceId=main');
+            // Hash navigation keeps the running app and its server config.
+            // Reload to receive this channel combination through get-config.
+            await page.reload();await open('Книга превью');
+            const send=modal.getByRole('button',{name:'Отправить книгу',exact:true});
+            if(channel==='none')assert.equal(await send.count(),0,'No empty delivery menu when both channels are disabled');
+            else {
+                await send.click();await sendMenu.waitFor();
+                await sendMenu.getByRole('menuitem',{name:channel==='telegram'?'Отправить в Telegram':'Отправить по Email',exact:true}).waitFor();
+                assert.equal(await sendMenu.getByRole('menuitem').count(),1,'Only the enabled delivery channel is offered');
+                await page.keyboard.press('Escape');await sendMenu.waitFor({state:'hidden'});
+            }
+            await close();
+        }
+        assert(!actions.some(action=>/send.*(telegram|email)/i.test(action)),'Testing delivery menus never sends a book');
         assert.deepEqual(errors,[]);
         await fs.writeJson(path.join(directory,'result.json'),{realFb2Annotation:true,realEpubAnnotation:true,empty:true,authorKeyboardNavigation:true,seriesScope:true,
             delayedAnnotationKeepsReadAvailable:true,lateReplyIgnored:true,plaintextEscapesMarkup:true,retry:true,unsupported:true,limited:true,geometry,
-            actionMenus:true,mobiAvailableByDefault:true,detailsReturn:['back','cross','escape'],downloadSelectionRetained:true,detailsNavigationClosesPreview:true,errors},{spaces:2});
+            actionMenus:true,separateDelivery:true,androidIcons:true,deliveryChannels:['both','telegram','email','none'],mobiAvailableByDefault:true,detailsReturn:['back','cross','escape'],downloadSelectionRetained:true,detailsNavigationClosesPreview:true,errors},{spaces:2});
         console.log(`Book preview browser PASS: annotation, author/series, safe plaintext, stale replies, 320px, action menus, default MOBI, return from full description and format selection. Artifacts: ${directory}`);
     }catch(error){if(page){await page.screenshot({path:path.join(directory,'failure.png')}).catch(()=>{});await fs.writeFile(path.join(directory,'failure.html'),await page.content()).catch(()=>{});}console.error(`Artifacts: ${directory}\n${output}`);throw error;}
     finally{if(browser)await browser.close();if(child)child.kill();}
