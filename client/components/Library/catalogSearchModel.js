@@ -51,4 +51,11 @@ function catalogTarget(path, parameters = {}, scope = {}) {
     return {path, query:{...catalogScope(scope), ...parameters}};
 }
 
-module.exports = {textFields, filterFields, filterLabels, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters, catalogScope, catalogTarget};
+// Match the catalog's first-visit server defaults and later browser settings.
+function effectiveCatalogScope(query = {}, settings = {}, config = {}) {
+    const defaultLang = !settings.defaultsSet && typeof config.uiDefaults?.langDefault === 'string'
+        ? config.uiDefaults.langDefault : settings.langDefault;
+    return catalogScope({...query, lang:typeof query.lang === 'string' ? query.lang : defaultLang});
+}
+
+module.exports = {textFields, filterFields, filterLabels, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters, catalogScope, catalogTarget, effectiveCatalogScope};

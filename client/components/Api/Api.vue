@@ -335,6 +335,7 @@ class Api {
     async request(params, timeoutSecs = 10, options = {}) {
         let errCount = 0;
         while (1) {// eslint-disable-line
+            if(options.signal?.aborted)throw options.signal.reason || new Error('Запрос отменён');
             if (this.profileSigningOut && params.action !== 'logout-user-profile')
                 throw new Error('Выполняется выход из профиля');
             try {
@@ -354,6 +355,7 @@ class Api {
                     params.csrfToken = csrfToken;
 
                 const response = await wsc.message(await wsc.send(params), timeoutSecs, options.onProgress);
+                if(options.signal?.aborted)throw options.signal.reason || new Error('Запрос отменён');
                 if (this.profileSigningOut && params.action !== 'logout-user-profile')
                     throw new Error('Выполняется выход из профиля');
 
@@ -389,6 +391,7 @@ class Api {
 
                 errCount = 0;
             } catch(e) {
+                if(options.signal?.aborted)throw options.signal.reason || new Error('Запрос отменён');
                 errCount++;
                 if (e.message !== 'WebSocket не отвечает' || errCount > 10) {
                     errCount = 0;
@@ -638,6 +641,21 @@ class Api {
 
     async getBookCard(bookUid) {
         return await this.request({action: 'get-book-info', bookUid, card: true, lazyExtras:true}, 120);
+    }
+
+    async getBookPreview(bookUid, options = {}) {
+        const {signal}=options;
+        if(signal?.aborted)throw signal.reason || new Error('Запрос отменён');
+        // The server's bounded shared read may finish for another consumer;
+        // detach this view immediately without cancelling their operation.
+        const pending=this.request({action:'get-book-preview',bookUid},30,{...options,suppressProfileLogin:true});
+        if(!signal)return pending;
+        return new Promise((resolve,reject)=>{
+            const cleanup=()=>signal.removeEventListener('abort',abort);
+            const abort=()=>{cleanup();reject(signal.reason || new Error('Запрос отменён'));};
+            pending.then(value=>{cleanup();resolve(value);},error=>{cleanup();reject(error);});
+            if(signal.aborted)abort();else signal.addEventListener('abort',abort,{once:true});
+        });
     }
 
     async getBookReviews(bookUid, options = {}) {

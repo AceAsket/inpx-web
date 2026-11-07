@@ -3,9 +3,13 @@
         <div class="library-page__body">
             <form class="overview-search" role="search" aria-label="Поиск в библиотеке" @submit.prevent="search">
                 <q-icon name="la la-search" size="26px" aria-hidden="true" />
-                <input v-model="query" type="search" maxlength="1000" placeholder="Найти книгу в библиотеке" aria-label="Название книги" />
+                <input v-model="query" type="search" maxlength="1000" placeholder="Найти книгу в библиотеке" aria-label="Название книги" role="combobox" aria-autocomplete="list"
+                    :aria-controls="suggestionListId" :aria-expanded="suggestionsExpanded" :aria-activedescendant="activeSuggestionId"
+                    @focus="searchFocused = true" @click="searchFocused = true" @input="searchFocused = true" @blur="searchFocused = false" @keydown="completion?.keydown($event)" />
                 <button v-if="query.trim()" type="submit" class="overview-search__submit" aria-label="Найти книгу"><q-icon name="la la-arrow-right" size="22px" /></button>
-                <RouterLink to="/books" class="overview-search__filters" aria-label="Открыть каталог и фильтры"><q-icon name="la la-sliders-h" size="24px" /></RouterLink>
+                <RouterLink :to="catalogTarget('/books', {}, searchFilters)" class="overview-search__filters" aria-label="Открыть каталог и фильтры"><q-icon name="la la-sliders-h" size="24px" /></RouterLink>
+                <CatalogSuggestions ref="completion" :list-id="suggestionListId" :query="query" kind="title" :filters="searchFilters" :context="suggestionContext"
+                    :focused="searchFocused && active" @choose="chooseSuggestion" @search="search" @dismiss="searchFocused = false" @active="activeSuggestionId = $event" @expanded="suggestionsExpanded = $event" />
             </form>
 
             <LibraryNotice v-if="state.locked || state.readingLoginRequired" title="Войдите в свой профиль" message="История чтения, сохранённое место и личные полки появятся после входа." action-label="Войти в профиль" @action="library.login" />
@@ -65,17 +69,24 @@
 </template>
 
 <script setup>
-import {computed, ref} from 'vue';
+import {computed, ref, watch, getCurrentInstance} from 'vue';
 import {useRouter} from 'vue-router';
 import BookCover from './BookCover.vue';
 import BookShelf from './BookShelf.vue';
 import LibraryNotice from './LibraryNotice.vue';
+import CatalogSuggestions from './CatalogSuggestions.vue';
 import {homeBooks, progress, readable, bookUid} from './libraryModel';
 import {useLibraryPage} from './useLibraryPage';
+import {catalogTarget, effectiveCatalogScope} from './catalogSearchModel';
 
-const {library} = useLibraryPage('Обзор', value => value.repository.loadHome({freshReading: true}));
+const {library, active} = useLibraryPage('Обзор', value => value.repository.loadHome({freshReading: true}));
 const {state, repository, config, settings} = library;
 const router = useRouter(), query = ref('');
+const completion = ref(null), searchFocused = ref(false), suggestionsExpanded = ref(false), activeSuggestionId = ref();
+const suggestionListId = `overview-suggestions-${getCurrentInstance().uid}`;
+const searchFilters = computed(() => effectiveCatalogScope({}, settings.value, config.value));
+const suggestionContext = computed(() => String(state.revision));
+watch(() => [active.value, state.revision], () => {searchFocused.value = false; activeSuggestionId.value = undefined; suggestionsExpanded.value = false;});
 const books = computed(() => homeBooks(state.reading?.items || []));
 const shelves = computed(() => {
     const reading = new Map((state.reading?.items || []).map(book => [bookUid(book), book]));
@@ -89,7 +100,12 @@ const shelves = computed(() => {
         })})).slice(0, 4);
 });
 function search() {
-    router.push({path: '/books', query: query.value.trim() ? {title: `*${query.value.trim()}`} : {}});
+    searchFocused.value = false;
+    router.push(catalogTarget('/books', query.value.trim() ? {title: `*${query.value.trim()}`} : {}, searchFilters.value));
+}
+function chooseSuggestion(item) {
+    if (item.kind === 'title' && item.book) library.openCard(item.book);
+    else if (item.kind === 'correction' && item.targetKind === 'title') {query.value = item.name; search();}
 }
 function refresh() {repository.loadHome({freshReading: true, freshShelves: true});}
 </script>

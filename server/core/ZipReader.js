@@ -11,6 +11,8 @@ class ZipReader {
         this.archiveType = '';
         this.converterPaths = config.converterPaths || null;
         this.maxOutputBytes = config.resourceMaxOutputBytes || 0;
+        this.signal = config.resourceSignal;
+        this.timeoutMs = config.resourceTimeoutMs;
     }
 
     get sevenZipCommands() {
@@ -32,7 +34,7 @@ class ZipReader {
 
     async run7zCommand(args, options) {
         for (const command of this.sevenZipCommands) {
-            try { return await runProcess(command, args, {...options, resourceKind:'reviews'}); }
+            try { return await runProcess(command, args, {...(this.signal ? {signal:this.signal}:{}), ...(this.timeoutMs ? {timeoutMs:this.timeoutMs}:{}), ...options, resourceKind:'reviews'}); }
             catch (error) { if (error.code !== 'ENOENT') throw error; }
         }
         throw externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage());
@@ -154,6 +156,26 @@ class ZipReader {
             return Buffer.concat(chunks, bytes);
         }
         return await this.zip.entryData(entryFilePath);
+    }
+
+    async extractPrefixToBuf(entryFilePath, maximum) {
+        this.checkState();
+        if (!Number.isSafeInteger(maximum) || maximum < 1) throw new Error('Invalid archive prefix limit');
+        this.signal?.throwIfAborted();
+        if (this.archiveType === '7z')
+            return await this.run7zCommand(['x','-y','-bd','-spd','-so',this.archiveFile,entryFilePath],{captureStdout:true,capturePrefixBytes:maximum});
+        const stream = await this.zip.stream(entryFilePath), chunks=[];
+        let bytes=0;
+        const abort=()=>stream.destroy(this.signal.reason || Object.assign(new Error('Preview cancelled'),{code:'ABORT_ERR'}));
+        this.signal?.addEventListener('abort',abort,{once:true});
+        try {
+            this.signal?.throwIfAborted();
+            for await (const chunk of stream) {
+                const part=chunk.subarray(0,maximum-bytes);chunks.push(part);bytes+=part.length;
+                if (bytes>=maximum) break;
+            }
+        } finally {this.signal?.removeEventListener('abort',abort);stream.destroy();}
+        return Buffer.concat(chunks,bytes);
     }
 
     async extractToFile(entryFilePath, outputFile) {

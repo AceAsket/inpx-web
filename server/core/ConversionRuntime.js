@@ -80,6 +80,10 @@ function killTree(child) {
 }
 
 async function runProcess(command, args, options = {}) {
+    if (options.capturePrefixBytes !== undefined && (!options.captureStdout || !Number.isSafeInteger(options.capturePrefixBytes) || options.capturePrefixBytes < 1))
+        throw new Error('capturePrefixBytes requires captureStdout and a positive byte limit');
+    if (options.capturePrefixBytes !== undefined && (options.outputFile || options.maxOutputBytes && options.maxOutputBytes < options.capturePrefixBytes))
+        throw new Error('capturePrefixBytes cannot use outputFile or exceed maxOutputBytes');
     const inherited = context.getStore();
     const scope = inherited || {...defaults, deadline:Date.now() + resourceRuntime.settings.taskTimeoutMs};
     const signal = options.signal || resourceRuntime.signal();
@@ -100,7 +104,7 @@ async function executeProcess(command, args, options, scope, signal) {
         });
         let stderr = Buffer.alloc(0);
         let timedOut = false;
-        let outputError = null, spawnError = null, outputBytes = 0;
+        let outputError = null, spawnError = null, outputBytes = 0, prefixComplete = false;
         const chunks = [];
         let output = null, outputDone = Promise.resolve();
         const abort = () => {outputError = Object.assign(new Error('Проверка отменена'), {code:'ABORT_ERR'}); killTree(child);};
@@ -115,7 +119,13 @@ async function executeProcess(command, args, options, scope, signal) {
             child.stdout.pipe(output);
         });
         else if (options.captureStdout) child.stdout.on('data', data => {
-            if (outputError) return;
+            if (outputError || prefixComplete) return;
+            if (options.capturePrefixBytes) {
+                const part = data.subarray(0, options.capturePrefixBytes - outputBytes);
+                chunks.push(part); outputBytes += part.length;
+                if (outputBytes >= options.capturePrefixBytes) {prefixComplete = true; killTree(child);}
+                return;
+            }
             outputBytes += data.length;
             if (outputBytes > (options.maxOutputBytes || Infinity)) {
                 outputError = Object.assign(new Error('Превышен размер результата проверки'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'});
@@ -137,7 +147,7 @@ async function executeProcess(command, args, options, scope, signal) {
             if (spawnError) reject(spawnError);
             else if (timedOut) reject(timeoutError());
             else if (outputError) reject(outputError);
-            else if (code === 0) resolve(options.captureStdout ? Buffer.concat(chunks) : undefined);
+            else if (code === 0 || prefixComplete) resolve(options.captureStdout ? Buffer.concat(chunks, outputBytes) : undefined);
             else reject(new Error(`${command} failed with exit code ${code}: ${stderr.toString('utf8').trim()}`));
         });
     });

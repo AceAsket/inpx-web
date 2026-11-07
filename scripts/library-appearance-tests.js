@@ -223,6 +223,52 @@ async function testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildc
     assert(chips.some(chip => chip.field === 'hideCopies'));
 }
 
+async function testOverviewSearchUsesEffectiveCatalogLanguageScope() {
+    assert.deepEqual(catalog.effectiveCatalogScope(),{});
+    assert.deepEqual(catalog.effectiveCatalogScope({}, {defaultsSet:false,langDefault:'en'}, {uiDefaults:{langDefault:'ru'}}),{lang:'ru'},
+        'A first overview visit uses the same server defaults as the catalog');
+    assert.deepEqual(catalog.effectiveCatalogScope({}, {defaultsSet:true,langDefault:'en'}, {uiDefaults:{langDefault:'ru'}}),{lang:'en'},
+        'Applied browser settings take precedence after initialization');
+    assert.deepEqual(catalog.effectiveCatalogScope({}, {langDefault:'en'}, {uiDefaults:{}}),{lang:'en'});
+    assert.deepEqual(catalog.effectiveCatalogScope({lang:'uk',sourceId:'one',genre:'prose',ext:'fb2',title:'Old'},
+        {defaultsSet:true,langDefault:'en'}),{lang:'uk',ext:'fb2',genre:'prose',sourceId:'one'});
+    assert.deepEqual(catalog.effectiveCatalogScope({lang:''},{defaultsSet:true,langDefault:'ru'}),{},'An explicit all-language scope is not replaced by a default');
+}
+
+async function testInitialUiDefaultsWaitForConfigAndPreserveManualSettings() {
+    const path=require('path'),{loadClient}=require('./catalog-list-filter-tests');
+    const App=loadClient(path.resolve(__dirname,'../client/components/App.vue')).default;
+    for(const configFirst of [false,true]) {
+        const app=new App(),commits=[];
+        app.$store={state:{config:{},settings:{defaultsSet:false,langDefault:'en',limit:20}}};
+        app.commit=(type,patch)=>{assert.equal(type,'setSettings');commits.push(patch);Object.assign(app.$store.state.settings,patch);};
+        if(configFirst) {
+            app.$store.state.config={uiDefaults:{langDefault:'ru',limit:40}};
+            app._options.watch.config.call(app);
+        }
+        assert.equal(commits.length,0);
+        app.accessGranted=true;app._options.watch.accessGranted.call(app,true);
+        if(!configFirst) {
+            assert.equal(app.settings.defaultsSet,false,'Access before config cannot consume the one-time defaults');
+            assert.equal(app.settings.langDefault,'en');assert.equal(commits.length,0);
+            app.$store.state.config={uiDefaults:{langDefault:'ru',limit:40}};
+            app._options.watch.config.call(app);
+        }
+        assert.equal(commits.length,1);
+        assert.equal(app.settings.defaultsSet,true);assert.equal(app.settings.langDefault,'ru');assert.equal(app.settings.limit,40);
+        app.$store.state.settings.langDefault='de';app.$store.state.settings.limit=7;
+        app.$store.state.config={uiDefaults:{langDefault:'fr',limit:80}};app._options.watch.config.call(app);
+        app._options.watch.accessGranted.call(app,true);
+        assert.equal(commits.length,1,'Later config updates do not overwrite applied or manually edited settings');
+        assert.equal(app.settings.langDefault,'de');assert.equal(app.settings.limit,7);
+    }
+    const existing=new App();
+    existing.$store={state:{config:{uiDefaults:{langDefault:'ru'}},settings:{defaultsSet:true,langDefault:'uk'}}};
+    existing.accessGranted=true;existing.commit=()=>{throw new Error('Saved manual settings must remain untouched');};
+    existing._options.watch.config.call(existing);existing._options.watch.accessGranted.call(existing,true);
+    assert.equal(existing.settings.langDefault,'uk');
+}
+
 async function testLibraryDialogsSupportLazyInitialOpening() {
     const path = require('path');
     const {loadClient} = require('./catalog-list-filter-tests');
@@ -287,5 +333,6 @@ module.exports = [testLibraryHomeCachesExpensiveShelvesAndRefreshesReadingIndepe
     testLibraryHomeShowsSignInForExpiredHistoryAndRecoversWithNewSession, testLibraryHomeRejectsLateLoginFailureAndClearsProtectedShelves,
     testLibraryHomeRejectsLateShelvesAfterOptionsChange, testLibraryHomeDisabledDiscoveryAndProtectedProfileAvoidRequests,
     testLibraryAppearancePreservesCatalogLinksAndReaderRoutes, testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability,
-    testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards, testLibraryDialogsSupportLazyInitialOpening,
+    testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards, testOverviewSearchUsesEffectiveCatalogLanguageScope,
+    testInitialUiDefaultsWaitForConfigAndPreserveManualSettings, testLibraryDialogsSupportLazyInitialOpening,
     testLibraryPaginationHandlesLargeCatalogsWithoutUnboundedButtons, testLibraryBookActionsHideUnsupportedReadingAndUnknownSize];

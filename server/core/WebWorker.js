@@ -771,6 +771,7 @@ class WebWorker {
     }
 
     async closeDb() {
+        await this.bookPreview?.close?.(); this.bookPreview=null;
         await this.libraryIsbnIndex?.close?.();
         this.libraryIsbnIndex = null;
         if (this.catalogDiscovery) {await this.catalogDiscovery.close(); this.catalogDiscovery = null;}
@@ -5365,9 +5366,17 @@ class WebWorker {
         };
     }
 
-    async extractBook(libFolder, libFile, sourceLibDir = '', {maxOutputBytes = 0} = {}) {
+    async extractBook(libFolder, libFile, sourceLibDir = '', {maxOutputBytes = 0, prefixBytes = 0, signal, timeoutMs} = {}) {
+        if (prefixBytes && (!Number.isSafeInteger(prefixBytes) || prefixBytes < 1)) throw new Error('Invalid book prefix limit');
+        if (prefixBytes && maxOutputBytes && prefixBytes > maxOutputBytes) throw new Error('Book prefix exceeds maxOutputBytes');
         const outFile = `${this.config.tempDir}/${utils.randomHexString(30)}`;
         const copy = async file => {
+            if (prefixBytes) {
+                const {pipeline}=require('stream/promises');
+                try {await pipeline(fs.createReadStream(file,{start:0,end:prefixBytes-1,signal}),fs.createWriteStream(outFile),{signal});}
+                catch(error){await fs.remove(outFile);throw error;}
+                return;
+            }
             if (!maxOutputBytes) return await fs.copy(file, outFile);
             const {pipeline} = require('stream/promises'), {Transform} = require('stream');
             let bytes = 0;
@@ -5375,7 +5384,7 @@ class WebWorker {
                 await pipeline(fs.createReadStream(file), new Transform({transform(chunk, encoding, callback) {
                     bytes += chunk.length;
                     callback(bytes > maxOutputBytes ? Object.assign(new Error('Превышен размер файла превью'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'}) : null, chunk);
-                }}), fs.createWriteStream(outFile));
+                }}), fs.createWriteStream(outFile), ...(signal ? [{signal}]:[]));
             } catch (error) {await fs.remove(outFile); throw error;}
         };
 
@@ -5408,18 +5417,20 @@ class WebWorker {
             if (!await fs.pathExists(folder))
                 throw new Error(`archive not found: ${folder}`);
 
-            const zipReader = new ZipReader({resourceMaxOutputBytes:maxOutputBytes});
+            const zipReader = new ZipReader({resourceMaxOutputBytes:maxOutputBytes || (prefixBytes ? 32*1024**2:0),
+                ...(prefixBytes || signal || timeoutMs ? {resourceSignal:signal,converterPaths:this.config.converterPaths,resourceTimeoutMs:timeoutMs}:{})});
             await zipReader.open(folder, false);
 
             try {
                 const extract = async(entryFilePath) => {
                     try {
                         await fs.remove(outFile);
-                        if (maxOutputBytes) await fs.writeFile(outFile, await zipReader.extractToBuf(entryFilePath));
+                        if (prefixBytes) await fs.writeFile(outFile,await zipReader.extractPrefixToBuf(entryFilePath,prefixBytes));
+                        else if (maxOutputBytes) await fs.writeFile(outFile, await zipReader.extractToBuf(entryFilePath));
                         else await zipReader.extractToFile(entryFilePath, outFile);
                     } catch(e) {
                         await fs.remove(outFile);
-                        if (maxOutputBytes && isResourceError(e)) throw e;
+                        if (signal?.aborted || (maxOutputBytes || prefixBytes) && isResourceError(e)) throw e;
                     }
                 };
 
@@ -7239,6 +7250,11 @@ class WebWorker {
     }
 
     // Ограниченное превью без полной подготовки документа для читалки.
+    async getBookPreview(bookUid) {
+        if(!this.bookPreview)this.bookPreview=new (require('./BookPreview'))(this);
+        return await this.bookPreview.read(bookUid);
+    }
+
     async getBookGallery(bookUid) {
         if (!this.bookGallery) this.bookGallery = new (require('./BookGallery'))(this);
         return await this.bookGallery.read(bookUid);

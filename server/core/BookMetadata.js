@@ -35,29 +35,37 @@ function fb2Metadata(data) {
     };
 }
 
-async function epubMetadata(file, config) {
+async function epubMetadata(file, config = {}) {
     const reader = new ZipReader({...config, resourceMaxOutputBytes:4 * 1024 * 1024});
+    const checkAbort=()=>config.resourceSignal?.throwIfAborted();
+    const oversized=()=>Object.assign(new Error('Метаданные EPUB превышают лимит'),{code:'INPX_RESOURCE_OUTPUT_LIMIT'});
     try {
+        checkAbort();
         await reader.open(file);
+        checkAbort();
         const entries = new Map(Object.values(reader.entries).filter(entry => !entry.isDirectory && !entry.isLink).map(entry => [entry.name, entry]));
         const names = [...entries.keys()];
         const read = async(name, maximum) => {
-            if (Number(entries.get(name)?.size) > maximum) throw new Error('Метаданные EPUB превышают лимит');
+            checkAbort();
+            if (Number(entries.get(name)?.size) > maximum) throw oversized();
             if (reader.archiveType === '7z') {
                 reader.maxOutputBytes = maximum;
                 const data = await reader.extractToBuf(name);
-                if (data.length > maximum) throw new Error('Метаданные EPUB превышают лимит');
+                if (data.length > maximum) throw oversized();
                 return data;
             }
             const stream = await reader.zip.stream(name), chunks = [];
+            const abort=()=>stream.destroy(config.resourceSignal.reason);
+            config.resourceSignal?.addEventListener('abort',abort,{once:true});
             let bytes = 0;
             try {
+                checkAbort();
                 for await (const chunk of stream) {
                     bytes += chunk.length;
-                    if (bytes > maximum) throw new Error('Метаданные EPUB превышают лимит');
+                    if (bytes > maximum) throw oversized();
                     chunks.push(chunk);
                 }
-            } finally {stream.destroy();}
+            } finally {config.resourceSignal?.removeEventListener('abort',abort);stream.destroy();}
             return Buffer.concat(chunks);
         };
         const containerName = names.find(name => /(^|\/)META-INF\/container\.xml$/i.test(name));
@@ -81,7 +89,7 @@ async function epubMetadata(file, config) {
         const children = metadata.$$array('*NODE');
         const localName = node => node.selectFirstSelf().name.split(':').pop();
         const values = key => children.filter(node => localName(node) === key)
-            .map(node => node.text()).filter(Boolean);
+            .map(node => node.text() ?? node.cdata()).filter(Boolean);
         const identifiers = children.filter(node => localName(node) === 'identifier');
         const isbn = identifiers.find(node => /isbn/i.test((node.attrs() || {})['opf:scheme'] || '') || /^urn:isbn:/i.test(node.text()));
         const year = (values('date')[0] || '').match(/\b\d{4}\b/);

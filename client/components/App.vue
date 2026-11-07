@@ -47,16 +47,20 @@ const componentOptions = {
             if (redirect) this.$router.replace(redirect);
             this.applyCatalogAppearance();
         },
-        accessGranted(value) {
-            if (value && !this.settings.defaultsSet)
-                this.commit('setSettings', {...this.config.uiDefaults, defaultsSet: true});
-        },
+        accessGranted() {this.applyInitialUiDefaults();},
+        config() {this.applyInitialUiDefaults();},
     },
 
 };
 class App {
     _options = componentOptions;
     accessGranted = false;
+
+    applyInitialUiDefaults() {
+        const defaults = this.config.uiDefaults;
+        if (this.accessGranted && !this.settings.defaultsSet && defaults && typeof defaults === 'object' && !Array.isArray(defaults))
+            this.commit('setSettings', {...defaults, defaultsSet: true});
+    }
 
     created() {
         this.commit = this.$store.commit;

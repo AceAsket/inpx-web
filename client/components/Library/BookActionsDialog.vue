@@ -9,8 +9,8 @@
                 <div>
                     <div class="book-actions-meta"><span>{{ sourceFormat }}</span><span v-if="sizeLabel">{{ sizeLabel }}</span><span v-if="dateLabel">{{ dateLabel }}</span></div>
                     <component :is="embedded ? 'h1' : 'h2'">{{ book.title || 'Без названия' }}</component>
-                    <button v-if="book.author" type="button" class="book-actions-author" @click="bookEvent({action: 'authorClick', book})">{{ book.author }}</button>
-                    <button v-if="book.series" type="button" class="book-actions-series" @click="bookEvent({action: 'seriesClick', book})">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></button>
+                    <span v-if="book.author" class="book-actions-author"><template v-for="(author,index) in authorLinks" :key="index"><span v-if="index">,</span><RouterLink :to="author.target" @click="dialogVisible = false">{{ author.label }}</RouterLink></template></span>
+                    <RouterLink v-if="book.series" class="book-actions-series" :to="seriesTarget" @click="dialogVisible = false">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></RouterLink>
                     <div v-if="percent !== null" class="book-actions-progress">{{ Math.round(percent * 100) }}% прочитано</div>
                 </div>
             </div>
@@ -20,6 +20,17 @@
                     <a :href="getDirectBookDownloadHref(book, downloadFormat)" class="book-actions-download"><q-icon name="la la-download" size="20px" /> Скачать {{ downloadFormat === 'raw' ? sourceFormat : downloadFormat.toUpperCase() }}</a>
                 </div>
                 <q-select v-if="downloadFormats.length > 1" v-model="downloadFormat" outlined dense emit-value map-options :options="downloadFormats" label="Формат скачивания" class="book-actions-formats" />
+                <section v-if="!embedded" class="book-actions-annotation" :aria-busy="annotationLoading" aria-label="Аннотация книги">
+                    <h3>Аннотация</h3>
+                    <LoadingState v-if="annotationLoading" label="Загружаем аннотацию" />
+                    <div v-else-if="annotationStatus === 'unavailable'" class="book-actions-annotation-status" role="status">Не удалось загрузить аннотацию. <q-btn flat dense no-caps label="Повторить" @click="retryAnnotation" /></div>
+                    <template v-else>
+                        <p v-if="annotationText" class="book-actions-annotation-text">{{ annotationText }}</p>
+                        <p v-if="annotationLimited || annotationStatus === 'limited'" class="book-actions-annotation-status">{{ annotationText ? 'Показан фрагмент аннотации.' : 'Аннотация не вошла в ограниченное превью.' }} Полное описание доступно в карточке книги.</p>
+                        <p v-else-if="annotationStatus === 'unsupported'" class="book-actions-annotation-status">Для этого формата или источника аннотация в превью пока недоступна.</p>
+                        <p v-else-if="annotationStatus === 'empty'" class="book-actions-annotation-status">В книге нет аннотации.</p>
+                    </template>
+                </section>
                 <RouterLink v-if="!embedded && fullCardTarget" :to="fullCardTarget" class="book-actions-card-link" @click="dialogVisible = false"><q-icon name="la la-external-link-alt" size="18px" /> Полная карточка</RouterLink>
                 <div class="book-actions-secondary">
                     <button v-if="!embedded" type="button" @click="$emit('details', book); dialogVisible = false"><q-icon name="la la-info-circle" /><span>Описание и сведения</span></button>
@@ -42,8 +53,9 @@ import BaseList from '../Search/BaseList';
 import BookCover from './BookCover.vue';
 import LoadingMessage from '../Search/LoadingMessage/LoadingMessage.vue';
 import DialogSurface from '../share/DialogSurface.vue';
+import LoadingState from '../share/LoadingState.vue';
 import {readable, progress} from './libraryModel';
-import {catalogTarget} from './catalogSearchModel';
+import {catalogTarget, effectiveCatalogScope} from './catalogSearchModel';
 const bookFormats = require('../../../shared/BookFormats');
 
 // Use the same download, format, email, Telegram and read-state actions as the catalog.
@@ -51,11 +63,13 @@ const bookFormats = require('../../../shared/BookFormats');
 class BookActionsDialog extends BaseList {
     _props = {modelValue: Boolean, book: Object, genreMap: Object, embedded: Boolean};
     _options = {
-        components: {DialogSurface, BookCover, LoadingMessage},
+        components: {DialogSurface, BookCover, LoadingMessage, LoadingState},
         emits: ['update:modelValue', 'listEvent', 'navigate', 'details', 'updated'],
         watch: {
             modelValue(value) {this.dialogVisible = value;},
-            dialogVisible(value) {this.$emit('update:modelValue', value);},
+            dialogVisible(value) {this.$emit('update:modelValue', value);if(value)this.loadAnnotation();else this.invalidateAnnotation();},
+            annotationIdentity() {this.invalidateAnnotation();this.readOverride=null;
+                this.downloadFormat=bookFormats.resolve(this.book.ext,this.config,bookFormats.profilePreference(this.config)) || 'raw';this.loadAnnotation();},
             settings() {this.loadSettings();},
         },
     };
@@ -65,18 +79,62 @@ class BookActionsDialog extends BaseList {
     readOverride = null;
     updatingRead = false;
     actionBusy = false;
+    annotationText = '';
+    annotationStatus = '';
+    annotationLimited = false;
+    annotationLoading = false;
+    annotationLoaded = false;
+    annotationGeneration = 0;
+    annotationActive = true;
+    annotationController = null;
 
     created() {
         super.created();
         this.dialogVisible = this.modelValue;
         this.downloadFormat = bookFormats.resolve(this.book.ext, this.config, bookFormats.profilePreference(this.config)) || 'raw';
+        this.loadAnnotation();
     }
+    beforeUnmount() {this.annotationActive=false;this.invalidateAnnotation();super.beforeUnmount();}
+    deactivated() {this.annotationActive=false;this.invalidateAnnotation();}
+    activated() {this.annotationActive=true;this.loadAnnotation();}
     refresh() {}
+
+    get previewScope() {return effectiveCatalogScope(this.$route?.query || {},this.settings,this.config);}
+    get authorLinks() {return String(this.book.author || '').split(',').filter(label=>label.trim()).map(label=>({label,
+        target:catalogTarget('/author-details',{name:label.trim()},this.previewScope)}));}
+    get seriesTarget() {return catalogTarget('/series-details',{name:this.book.series},this.previewScope);}
+    get annotationIdentity() {return JSON.stringify([this.getBookUid(this.book),this.book._recordHash || '',this.book.sourceId || '',
+        this.config.dbConfig?.inpxHash || '',this.config.rootPathStatic || '',this.config.currentUserId || '',
+        this.config.currentUserProfile?.id || '',!!this.config.profileAuthorized,this.settings.currentUserId || '']);}
+    invalidateAnnotation() {
+        this.annotationGeneration++;this.annotationController?.abort();this.annotationController=null;
+        this.annotationText='';this.annotationStatus='';this.annotationLimited=false;this.annotationLoading=false;this.annotationLoaded=false;
+    }
+    annotationCurrent(generation,identity) {return this.annotationActive && this.dialogVisible && generation===this.annotationGeneration && identity===this.annotationIdentity;}
+    async loadAnnotation() {
+        if(!this.annotationActive || !this.dialogVisible || this.embedded || this.annotationLoading || this.annotationLoaded
+            || !this.getBookUid(this.book) || this.book.discoveryMissingLocal || this.book.unavailable)return;
+        const generation=this.annotationGeneration,identity=this.annotationIdentity,uid=this.getBookUid(this.book),controller=new AbortController();
+        this.annotationController=controller;this.annotationLoading=true;this.annotationStatus='';
+        try {
+            const response=await this.api.getBookPreview(uid,{signal:controller.signal});
+            if(!this.annotationCurrent(generation,identity))return;
+            const preview=response?.bookPreview;
+            if(!preview || preview.bookUid!==uid)throw new Error('Unexpected preview response');
+            this.annotationText=typeof preview.annotation==='string' ? preview.annotation.slice(0,6000):'';
+            this.annotationStatus=['ready','empty','limited','unsupported','unavailable'].includes(preview.annotationStatus) ? preview.annotationStatus:'unavailable';
+            this.annotationLimited=preview.annotationLimited===true;
+            this.annotationLoaded=this.annotationStatus!=='unavailable';
+            if(this.annotationStatus==='ready' && !this.annotationText)this.annotationStatus='empty';
+        } catch (_) {if(this.annotationCurrent(generation,identity))this.annotationStatus='unavailable';}
+        finally {if(this.annotationCurrent(generation,identity)){this.annotationLoading=false;this.annotationController=null;}}
+    }
+    retryAnnotation() {this.invalidateAnnotation();return this.loadAnnotation();}
 
     get sourceFormat() {return String(this.book.ext || 'Книга').toUpperCase();}
     get fullCardTarget() {
         const uid = this.getBookUid(this.book);
-        return uid && !this.book.discoveryMissingLocal ? catalogTarget('/book', {bookUid: uid}, this.$route?.query || {}) : null;
+        return uid && !this.book.discoveryMissingLocal ? catalogTarget('/book', {bookUid: uid}, this.previewScope) : null;
     }
     get percent() {return progress(this.book);}
     get markedRead() {return this.readOverride ?? (this.book.state === 'read' || this.book._readingListRead === true || this.book.read === true || this.percent >= .999);}
@@ -142,8 +200,10 @@ export default vueComponent(BookActionsDialog);
 .book-actions-summary > div {flex: 1; min-width: 0;}
 .book-actions-meta {display: flex; gap: 10px; flex-wrap: wrap; color: var(--app-muted); font-size: 12px; margin: 2px 0 10px;}
 h2 {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0 0 10px; overflow-wrap: anywhere;}
-.book-actions-author, .book-actions-series {display: block; padding: 0; border: 0; color: var(--app-muted); background: transparent; font: inherit; text-align: left; line-height: 1.5; cursor: pointer;}
-.book-actions-author {font-size: 14px;}
+.book-actions-author, .book-actions-series {display: block; padding: 0; border: 0; font: inherit; text-align: left; line-height: 1.5; overflow-wrap: anywhere;}
+.book-actions-author {font-size: 14px; width: fit-content; max-width: 100%;}
+.book-actions-author a, .book-actions-series {color: var(--app-link); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px;}
+.book-actions-author a:hover, .book-actions-series:hover {color: var(--app-primary);}
 .book-actions-series {font-size: 12px; margin-top: 6px;}
 .book-actions-progress {color: var(--app-primary); font-size: 12px; margin-top: 10px;}
 .book-actions-primary {display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 22px;}
@@ -158,6 +218,10 @@ h2 {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0 0 10px; over
 .book-actions-secondary button:disabled {opacity: .5; cursor: default;}
 .book-actions-secondary .q-icon {font-size: 21px; color: var(--app-muted);}
 .book-actions-unavailable {margin: 20px 0 0; color: var(--app-muted);}
+.book-actions-annotation {margin: 20px 0 0; padding: 16px 0 0; border-top: 1px solid var(--app-border);}
+.book-actions-annotation h3 {font-size: 14px; font-weight: 600; margin: 0 0 10px;}
+.book-actions-annotation-text {white-space: pre-line; overflow-wrap: anywhere; font-size: 14px; line-height: 1.65; margin: 0;}
+.book-actions-annotation-status {font-size: 13px; line-height: 1.5; color: var(--app-muted); margin: 0;}
 button:focus-visible, a:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}
 @media (max-width: 599px) {.book-actions-summary {gap: 16px;} .book-actions-summary > :deep(.book-cover) {width: 80px; flex-basis: 80px;} h2 {font-size: 19px;} .book-actions-primary {gap: 8px; margin-top: 18px;} .book-actions-primary .q-btn, .book-actions-download {padding: 10px 14px; font-size: 13px;} .book-actions-secondary {gap: 2px 8px;}}
 </style>

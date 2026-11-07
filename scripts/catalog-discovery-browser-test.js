@@ -407,7 +407,7 @@ async function fixture(directory) {
         await firstCard.locator('.library-result-card__title').click();
         const fullPreview=page.locator('.q-dialog .library-book-actions');
         await fullPreview.waitFor();
-        assert.equal(await fullPreview.getByRole('heading').textContent(),gridBooks[0].title);
+        assert.equal(await fullPreview.getByRole('heading',{level:2}).textContent(),gridBooks[0].title);
         assert.equal(await fullPreview.locator('.book-actions-author').textContent(),gridBooks[0].author);
         assert.equal(await fullPreview.locator('.book-actions-series').textContent(),gridBooks[0].series);
         assert.deepEqual(errors, []);

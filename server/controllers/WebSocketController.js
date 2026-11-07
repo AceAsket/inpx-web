@@ -255,6 +255,9 @@ class WebSocketController {
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
                     await this.getBookInfo(req, ws); break;
+                case 'get-book-preview':
+                    if(typeof req.bookUid!=='string'||!req.bookUid||req.bookUid.length>1024)throw new Error('Invalid book UID');
+                    this.send(await this.readWithBudget(req,ws,()=>this.webWorker.getBookPreview(req.bookUid)),req,ws);break;
                 case 'get-book-reviews':
                     if (!req.bookUid) throw new Error('bookUid is empty');
                     this.send(await this.webWorker.getBookReviewDetails(req.bookUid, req.wantProgress === true
