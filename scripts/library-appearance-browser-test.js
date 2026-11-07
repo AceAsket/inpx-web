@@ -168,7 +168,9 @@ if (require.main === module) (async() => {
             await page.locator('.library-book-actions').waitFor();
             assert.equal(page.url(), previousUrl, 'Cover previews the book without replacing the current page');
             const preview = page.locator('.library-dialog-card[data-dialog-kind="book"]');
-            assert((await preview.getByRole('link', {name: 'Полная карточка', exact: true}).getAttribute('href')).includes('#/book?bookUid='));
+            await preview.getByRole('button', {name: 'Поделиться книгой', exact: true}).click();
+            assert((await page.getByRole('menuitem', {name: 'Открыть страницу книги', exact: true}).getAttribute('href')).includes('#/book?bookUid='));
+            await page.keyboard.press('Escape');
             await screenshot('book-preview-light-1440');
             await preview.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
             await preview.waitFor({state: 'hidden'});
@@ -177,7 +179,8 @@ if (require.main === module) (async() => {
         assert.equal(actions.filter(action => ['get-author-info', 'get-book-reviews'].includes(action)).length, 0,
             'Cards do not load optional details by default');
         await page.locator('.current-book__cover').click();
-        await page.getByRole('link', {name: 'Полная карточка', exact: true}).click();
+        await page.getByRole('button', {name: 'Поделиться книгой', exact: true}).click();
+        await page.getByRole('menuitem', {name: 'Открыть страницу книги', exact: true}).click();
         await page.locator('.catalog-book-details').waitFor();
         await page.getByRole('tab', {name:'Отзывы и оценки', exact:true}).click();
         await page.getByText('Отзывов пока нет.', {exact:true}).waitFor();
@@ -230,11 +233,16 @@ if (require.main === module) (async() => {
         const dialog = page.locator('.library-dialog-card[data-dialog-kind="book"]');
         assert((await dialog.boundingBox()).height < 700, 'The action card must fit the phone without reserved poster space');
         await screenshot('book-preview-dark-390');
-        assert.equal(await page.getByRole('button', {name: 'Прочитано', exact: true}).count(), 1);
-        assert.equal(await page.getByRole('button', {name: 'Снять отметку', exact: true}).count(), 0);
+        assert.equal(await dialog.locator('.book-actions-secondary, .book-actions-card-link').count(), 0);
+        await dialog.getByRole('button', {name: 'Полки и статус', exact: true}).click();
+        await page.getByRole('menuitem', {name: 'Прочитано', exact: true}).waitFor();
+        assert.equal(await page.getByRole('menuitem', {name: 'Снять отметку', exact: true}).count(), 0);
+        await page.keyboard.press('Escape');
         await page.getByRole('button', {name: 'Полное описание', exact: true}).click();
         await page.getByText('Книга для проверки интерфейса INPX Reader.', {exact: true}).waitFor();
-        await page.getByRole('button', {name: 'OK', exact: true}).click();
+        await page.getByRole('button', {name: 'Назад к книге', exact: true}).click();
+        await dialog.waitFor();
+        await dialog.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
         assert.equal(await page.locator('body').getAttribute('data-catalog-appearance'), 'shelves');
         await page.getByRole('link', {name: 'Мои книги', exact: true}).click();
         await page.locator('.books-grid .book-tile').first().waitFor();

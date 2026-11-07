@@ -27,16 +27,19 @@ async function withFixture(fn) {
     try { await fn(dir); } finally { await fs.remove(dir); }
 }
 
-async function testMobiRequiresLaunchFlagAndDoesNotPersist() {
+async function testMobiDefaultsEnabledSupportsExplicitDisableAndDoesNotPersist() {
     const execFile = require('util').promisify(require('child_process').execFile);
     const script = `const assert=require('assert');const config=require('./server/config/base');
-        assert.strictEqual(config.mobiEnabled,process.env.INPX_MOBI_ENABLED==='true');
+        assert.strictEqual(config.mobiEnabled,process.env.INPX_MOBI_ENABLED!=='false');
         assert.strictEqual(config.conversionFormats.includes('mobi'),config.mobiEnabled);
         const saved=require('./server/config').propsToSave;
         for(const key of ['mobiEnabled','kindlingPath','kindlingVersion'])assert.ok(!saved.includes(key));`;
-    for (const flag of ['true', 'false', ''])
+    for (const flag of [undefined, 'true', 'false', '']) {
+        const env={...process.env, INPX_CONVERSION_FORMATS:'epub,pdf'};
+        if(flag===undefined)delete env.INPX_MOBI_ENABLED;else env.INPX_MOBI_ENABLED=flag;
         await execFile(process.execPath, ['-e', script], {cwd: path.resolve(__dirname, '..'),
-            env: {...process.env, INPX_MOBI_ENABLED: flag, INPX_CONVERSION_FORMATS: 'epub,mobi,pdf'}});
+            env});
+    }
     await withFixture(async dir => {
         const converter = await isolatedConverter(async() => { throw new Error('Must not launch when disabled'); });
         const filePath = path.join(dir, 'cached');
@@ -44,8 +47,9 @@ async function testMobiRequiresLaunchFlagAndDoesNotPersist() {
             format: 'mobi', config: {conversionEnabled: true}};
         const cache = await converter.getConversionCacheInfo(options);
         await fs.writeFile(cache.filePath, fixtureMobi());
-        await assert.rejects(converter.prepareConvertedFile(options), /INPX_MOBI_ENABLED=true/);
-        await assert.rejects(converter.convert({inputFile:'book.epub', outputFile:filePath, format:'MOBI'}), /INPX_MOBI_ENABLED=true/);
+        assert.strictEqual((await converter.prepareConvertedFile(options)).filePath,cache.filePath,'MOBI is available without an opt-in');
+        await assert.rejects(converter.prepareConvertedFile({...options,config:{...options.config,mobiEnabled:false}}), /MOBI выключена/);
+        await assert.rejects(converter.convert({inputFile:'book.epub', outputFile:filePath, format:'MOBI',mobiEnabled:false}), /MOBI выключена/);
     });
 }
 
@@ -71,7 +75,7 @@ async function testMobiPipelineUsesOneSlotAndCachesValidatedOutput() {
         const inputFile = path.join(dir, 'source');
         await fs.writeFile(inputFile, 'original FB2');
         const options = {inputFile, cacheBasePath:path.join(dir, 'cache'), sourceFileName:'book.fb2', downFileName:'book.fb2', format:'mobi',
-            config:{conversionEnabled:true, mobiEnabled:true, kindlingPath:'kindling-test', converterPaths:{fb2cng:'fbc-test'}}};
+            config:{conversionEnabled:true, kindlingPath:'kindling-test', converterPaths:{fb2cng:'fbc-test'}}};
         const [first, parallel] = await Promise.all([converter.prepareConvertedFile(options), converter.prepareConvertedFile(options)]);
         assert.strictEqual(first.filePath, parallel.filePath);
         assert.strictEqual(first.downloadName, 'book.mobi');
@@ -133,6 +137,10 @@ async function testMobiRejectsCorruptAndAzw3OnlyResults() {
 }
 
 async function testMobiAvailabilityInWebAndOpds() {
+    const formats=require('../shared/BookFormats');
+    assert(formats.available('fb2',{}).includes('mobi'));
+    assert(!formats.available('fb2',{mobiEnabled:false}).includes('mobi'));
+    assert(!formats.available('fb2',{conversionEnabled:false}).includes('mobi'));
     const {loadClient} = require('./catalog-list-filter-tests');
     const BookView = loadClient(path.resolve(__dirname, '../client/components/Search/BookView/BookView.vue')).default;
     const view = Object.create(BookView.prototype);
@@ -164,5 +172,5 @@ async function testMobiAvailabilityInWebAndOpds() {
     }
 }
 
-module.exports = [testMobiRequiresLaunchFlagAndDoesNotPersist, testMobiPipelineUsesOneSlotAndCachesValidatedOutput,
+module.exports = [testMobiDefaultsEnabledSupportsExplicitDisableAndDoesNotPersist, testMobiPipelineUsesOneSlotAndCachesValidatedOutput,
     testMobiCacheIncludesBothConvertersAndMetadata, testMobiRejectsCorruptAndAzw3OnlyResults, testMobiAvailabilityInWebAndOpds];

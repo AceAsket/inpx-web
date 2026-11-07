@@ -246,8 +246,8 @@
             <q-btn v-if="canEditMetadata" class="q-px-md q-ml-sm" color="secondary" dense no-caps icon="la la-edit" @click="openMetadataEditor">
                 Редактировать
             </q-btn>
-            <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps @click="okClick">
-                OK
+            <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps :icon="backToBook ? 'la la-arrow-left' : undefined" @click="okClick">
+                {{ backToBook ? 'Назад к книге' : 'OK' }}
             </q-btn>
         </template>
 
@@ -344,6 +344,7 @@ class BookInfoDialog {
         initialTab: {type: String, default: 'fb2'},
         embedded: Boolean,
         hideSummary: Boolean,
+        backToBook: Boolean,
     };
 
     dialogVisible = false;

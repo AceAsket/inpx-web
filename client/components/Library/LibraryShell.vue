@@ -32,8 +32,8 @@
             <SettingsDialog v-if="settingsVisible" v-model="settingsVisible" @open-library-tasks="libraryTools.openTasks()" />
             <UserProfilesDialog v-if="profilesVisible" v-model="profilesVisible" />
             <ReadingListsDialog v-if="listsVisible" v-model="listsVisible" :book="listsBook" />
-            <BookInfoDialog v-if="detailsVisible" v-model="detailsVisible" :book-info="details" :genre-map="genreMap" @navigate="navigateFromBook" />
-            <BookActionsDialog v-if="actionsVisible" v-model="actionsVisible" :book="actionsBook" :genre-map="genreMap" @navigate="navigateFromBook" @details="openDetails" @list-event="bookActionEvent" @updated="repository.loadReading(true)" />
+            <BookInfoDialog v-if="detailsVisible" :model-value="detailsVisible" :back-to-book="returnToActions" :book-info="details" :genre-map="genreMap" @update:model-value="detailsVisibilityChanged" @navigate="navigateFromBook" />
+            <BookActionsDialog v-if="actionsVisible || returnToActions" v-model="actionsVisible" :book="actionsBook" :genre-map="genreMap" @navigate="navigateFromBook" @details="book => openDetails(book, true)" @list-event="bookActionEvent" @updated="repository.loadReading(true)" />
             <LibraryTools ref="libraryTools" />
         </template>
     </div>
@@ -64,7 +64,7 @@ const repository = new LibraryRepository(root.api, patch => Object.assign(state,
 const lastCatalog = ref('/books');
 const settingsVisible = ref(false), profilesVisible = ref(false), listsVisible = ref(false), detailsVisible = ref(false);
 const details = ref({}), listsBook = ref(null), genreMap = ref(new Map()), libraryTools = ref(null);
-const actionsVisible = ref(false), actionsBook = ref({});
+const actionsVisible = ref(false), actionsBook = ref({}), returnToActions = ref(false);
 let detailRequest = 0;
 let genreRequest = null;
 let genresLoaded = false;
@@ -85,6 +85,7 @@ watch(() => route.fullPath, () => {
     listsVisible.value = false;
     detailsVisible.value = false;
     actionsVisible.value = false;
+    returnToActions.value = false;
 }, {immediate: true});
 watch(() => [identity(config.value, settings.value), JSON.stringify(discoveryOptions(settings.value)), config.value.discovery?.enabled], () => {
     const previous = repository.epoch;
@@ -93,6 +94,7 @@ watch(() => [identity(config.value, settings.value), JSON.stringify(discoveryOpt
         detailsVisible.value = false;
         listsVisible.value = false;
         actionsVisible.value = false;
+        returnToActions.value = false;
         details.value = {};
         genreMap.value = new Map();
         genreRequest = null;
@@ -102,7 +104,7 @@ watch(() => [identity(config.value, settings.value), JSON.stringify(discoveryOpt
 }, {immediate: true});
 watch(listsVisible, (visible, previous) => {if (!visible && previous && props.enabled) repository.loadReading(true);});
 watch(() => props.enabled, enabled => {
-    if (!enabled) {settingsVisible.value = false; profilesVisible.value = false; detailsVisible.value = false; listsVisible.value = false; actionsVisible.value = false;}
+    if (!enabled) {settingsVisible.value = false; profilesVisible.value = false; detailsVisible.value = false; listsVisible.value = false; actionsVisible.value = false; returnToActions.value = false;}
 });
 
 function openBook(book) {
@@ -110,6 +112,7 @@ function openBook(book) {
     else openActions(book);
 }
 function openActions(book) {
+    returnToActions.value = false;
     ensureGenres().catch(() => {});
     actionsBook.value = {...book, _uid: bookUid(book),
         _readerProgress: book._readerProgress || (progress(book) === null ? undefined : {percent: progress(book), started: true})};
@@ -118,7 +121,16 @@ function openActions(book) {
 function openCard(book) {
     openActions(book);
 }
-async function openDetails(book) {
+function detailsVisibilityChanged(visible) {
+    detailsVisible.value = visible;
+    if (!visible && returnToActions.value) {
+        actionsVisible.value = props.enabled;
+        returnToActions.value = false;
+    }
+}
+async function openDetails(book, fromActions = false) {
+    returnToActions.value = fromActions;
+    actionsVisible.value = false;
     ensureGenres().catch(() => {});
     const request = ++detailRequest, epoch = repository.epoch;
     const record = {...book, _uid: bookUid(book)};
@@ -162,6 +174,7 @@ async function navigateFromBook({type, value}) {
     }
     const fields = {author: 'author', series: 'series', title: 'title', keyword: 'keywords', genre: 'genre'};
     if (!fields[type] || !value) return;
+    returnToActions.value = false;
     detailsVisible.value = false;
     if (type === 'author' || type === 'series') {
         router.push(catalogTarget(`/${type}-details`, {name:value}, route.query)); return;

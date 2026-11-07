@@ -38,12 +38,13 @@ async function fixture(directory) {
         browser=await chromium.launch({headless:true,executablePath:process.env.INPX_CHROMIUM_PATH || undefined});
         const context=await browser.newContext({viewport:{width:1440,height:1000}});
         await context.addInitScript(()=>{if(!localStorage.getItem('vuex'))localStorage.setItem('vuex',JSON.stringify({settings:{catalogAppearance:'shelves',defaultsSet:true,langDefault:'ru'}}));});
-        page=await context.newPage();const errors=[],actions=[],held=[];let mode='actual';
+        page=await context.newPage();const errors=[],actions=[],held=[],configRequests=new Set();let mode='actual';
         await page.routeWebSocket('**/ws',socket=>{
             const server=socket.connectToServer();
             socket.onMessage(message=>{
                 let request;try{request=JSON.parse(String(message));}catch{server.send(message);return;}
                 actions.push(request.action);
+                if(request.action==='get-config')configRequests.add(request.requestId);
                 if(request.action!=='get-book-preview' || mode==='actual'){server.send(message);return;}
                 socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));
                 const reply=(annotation,status='ready')=>socket.send(JSON.stringify({requestId:request.requestId,bookPreview:{bookUid:request.bookUid,
@@ -53,7 +54,13 @@ async function fixture(directory) {
                 else if(mode==='empty')reply('','empty');
                 else if(mode==='unsupported')reply('','unsupported');
                 else if(mode==='limited')reply('Это длинная аннотация для проверки единой прокрутки.\n'.repeat(100),'limited');
-            });server.onMessage(message=>socket.send(message));
+            });server.onMessage(message=>{
+                // Expose delivery commands in this isolated UI fixture. The test
+                // only opens their menu; no Telegram or email request is sent.
+                let response;try{response=JSON.parse(String(message));}catch{socket.send(message);return;}
+                if(configRequests.has(response.requestId)&&!response._rok){response.telegramShareEnabled=true;response.emailShareEnabled=true;socket.send(JSON.stringify(response));}
+                else socket.send(message);
+            });
         });
         page.on('pageerror',error=>errors.push(error.message));
         await page.goto(base+'/#/books?title=*Книга&lang=ru&sourceId=main');
@@ -73,6 +80,18 @@ async function fixture(directory) {
         const scoped=()=>{const p=new URLSearchParams(page.url().split('?')[1]);assert.equal(p.get('lang'),'ru');assert.equal(p.get('sourceId'),'main');return p;};
         await open('Книга превью');
         await annotation.getByText(/Первая строка аннотации/).waitFor();assert((await annotation.innerText()).includes('Вторая строка и детали.'));
+        assert.equal(await modal.locator('.book-actions-secondary, .book-actions-card-link').count(),0,'No extra actions below the annotation');
+        await modal.getByRole('button',{name:'Поделиться книгой',exact:true}).click();
+        const shareMenu=page.getByRole('menu',{name:'Поделиться книгой',exact:true});await shareMenu.waitFor();
+        for(const name of ['Копировать ссылку','Отправить в Telegram','Отправить по Email','Открыть страницу книги'])await shareMenu.getByRole('menuitem',{name,exact:true}).waitFor();
+        await page.setViewportSize({width:320,height:900});
+        const menuBox=await shareMenu.boundingBox();assert(menuBox.x>=0&&menuBox.x+menuBox.width<=321,'The share menu fits a narrow phone');
+        await page.screenshot({path:path.join(directory,'preview-share-menu-320.png')});
+        await page.keyboard.press('Escape');await shareMenu.waitFor({state:'hidden'});assert(await modal.isVisible());
+        await modal.getByRole('button',{name:'Полки и статус',exact:true}).click();
+        const libraryMenu=page.getByRole('menu',{name:'Полки и статус',exact:true});await libraryMenu.getByRole('menuitem',{name:'Добавить на полку',exact:true}).waitFor();
+        await page.keyboard.press('Escape');await libraryMenu.waitFor({state:'hidden'});
+        await page.setViewportSize({width:1440,height:1000});
         const details=modal.locator('.book-actions-details');await modal.getByText('2003',{exact:true}).waitFor();await details.getByText('север, сказка',{exact:true}).waitFor();
         assert.equal(await details.getByText('Жанр',{exact:true}).count(),1);await details.getByText('Проза',{exact:true}).waitFor();assert(!(await details.allTextContents()).join(' ').includes('2026'));
         await page.setViewportSize({width:320,height:900});await page.screenshot({path:path.join(directory,'preview-metadata-320.png')});
@@ -112,11 +131,33 @@ async function fixture(directory) {
         await modal.locator('.dialog-body').evaluate(node=>{node.scrollTop=0;});await page.screenshot({path:path.join(directory,'preview-annotation-320.png')});
         await annotation.locator('.book-actions-annotation-status').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(directory,'preview-limited-320.png')});
         assert(!actions.some(action=>['get-book-info','get-book-gallery','get-book-link'].includes(action)),'Preview never loads full card/reader/gallery data');
+        assert(!actions.some(action=>/send.*(telegram|email)/i.test(action)),'Opening a menu never sends a book');
+        await close();mode='actual';await page.setViewportSize({width:420,height:1000});await open('Книга превью');
+        await modal.getByRole('combobox',{name:'Формат скачивания',exact:true}).click();
+        await page.getByRole('option',{name:'MOBI',exact:true}).click();
+        const full=page.locator('.q-dialog [data-dialog-kind="book-info"]');
+        for(const method of ['back','cross','escape']) {
+            await modal.getByRole('button',{name:'Полное описание',exact:true}).click();
+            await full.getByRole('button',{name:'Назад к книге',exact:true}).waitFor();
+            await full.getByText('Первая строка аннотации.',{exact:true}).waitFor();
+            await modal.waitFor({state:'hidden'});
+            if(method==='back') {await page.screenshot({path:path.join(directory,'full-description-back-420.png')});await full.getByRole('button',{name:'Назад к книге',exact:true}).click();}
+            else if(method==='cross')await full.getByRole('button',{name:'Закрыть окно',exact:true}).click();
+            else await page.keyboard.press('Escape');
+            await modal.getByRole('button',{name:'Полное описание',exact:true}).waitFor();await full.waitFor({state:'hidden'});
+            await annotation.getByText(/Первая строка аннотации/).waitFor();
+            assert.equal(await modal.getByRole('link',{name:'Скачать MOBI',exact:true}).count(),1,'Returning keeps the chosen download format');
+        }
+        await modal.getByRole('button',{name:'Полное описание',exact:true}).click();
+        await full.getByRole('button',{name:'Назад к книге',exact:true}).waitFor();
+        await full.locator('.info-series-link').click();
+        await page.getByRole('heading',{name:'Цикл & мир',exact:true}).waitFor();await full.waitFor({state:'hidden'});
+        assert.equal(await modal.isVisible(),false,'Navigating from details must not reopen the old preview');
         assert.deepEqual(errors,[]);
         await fs.writeJson(path.join(directory,'result.json'),{realFb2Annotation:true,realEpubAnnotation:true,empty:true,authorKeyboardNavigation:true,seriesScope:true,
             delayedAnnotationKeepsReadAvailable:true,lateReplyIgnored:true,plaintextEscapesMarkup:true,retry:true,unsupported:true,limited:true,geometry,
-            forbiddenActions:actions.filter(action=>['get-book-info','get-book-gallery','get-book-link'].includes(action)),errors},{spaces:2});
-        console.log(`Book preview browser PASS: real FB2/EPUB annotation, author/series scope and keyboard, loading/error/retry/empty/limited, safe plaintext, stale reply and one-scroller 320px. Artifacts: ${directory}`);
+            actionMenus:true,mobiAvailableByDefault:true,detailsReturn:['back','cross','escape'],downloadSelectionRetained:true,detailsNavigationClosesPreview:true,errors},{spaces:2});
+        console.log(`Book preview browser PASS: annotation, author/series, safe plaintext, stale replies, 320px, action menus, default MOBI, return from full description and format selection. Artifacts: ${directory}`);
     }catch(error){if(page){await page.screenshot({path:path.join(directory,'failure.png')}).catch(()=>{});await fs.writeFile(path.join(directory,'failure.html'),await page.content()).catch(()=>{});}console.error(`Artifacts: ${directory}\n${output}`);throw error;}
     finally{if(browser)await browser.close();if(child)child.kill();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -415,10 +415,10 @@ async function convertPrepared(convertInput, outputFile, format, converterPaths 
     await convertWithCalibre(convertInput, outputFile, format, converterPaths);
 }
 
-async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null, mobiEnabled = false, kindlingPath = ''}) {
+async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null, mobiEnabled = true, kindlingPath = ''}) {
     format = String(format || '').toLowerCase();
     if (format === 'mobi' && mobiEnabled !== true)
-        throw new Error('Конвертация в MOBI выключена. Для включения задайте INPX_MOBI_ENABLED=true при запуске.');
+        throw new Error('Конвертация в MOBI выключена настройками сервера.');
     const sourceExt = path.extname(sourceFileName || inputFile).toLowerCase();
     if (!canConvertSourceTo(sourceExt, format))
         throw new Error(`Unsupported convert format: ${sourceExt || 'unknown'} -> ${format}`);
@@ -483,8 +483,8 @@ async function prepareConvertedFile({
     if (!config.conversionEnabled)
         throw new Error(disabledMessage || 'Book conversion is disabled');
 
-    if (String(format).toLowerCase() === 'mobi' && config.mobiEnabled !== true)
-        throw new Error('Конвертация в MOBI выключена. Для включения задайте INPX_MOBI_ENABLED=true при запуске.');
+    if (String(format).toLowerCase() === 'mobi' && config.mobiEnabled !== undefined && config.mobiEnabled !== true)
+        throw new Error('Конвертация в MOBI выключена настройками сервера.');
 
     const cacheInfo = await getConversionCacheInfo({
         cacheBasePath,
