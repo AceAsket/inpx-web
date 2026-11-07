@@ -90,6 +90,7 @@ async function testTelegramBotSearchFormatsPrivateListsAndRevocation() {
         await callback(101, bookButton.callback_data);
         assert(messages.at(-1).data.text.includes('Book &lt;one&gt;'));
         const download = messages.at(-1).data.reply_markup.inline_keyboard[0][0];
+        assert.strictEqual(download.text, 'Получить FB2', 'The original download names its real file format');
         await callback(101, download.callback_data);
         await bot.idle();
         assert.deepStrictEqual(deliveries[0], {uid: 'book-one', format: 'raw', userId: a.id, chatId: '101'});
@@ -188,7 +189,7 @@ async function testTelegramBotApiSanitizesFailuresAndHonorsCancellation() {
     } finally {axios.post = saved;}
 }
 async function testTelegramBotUsesProfileFormatAndThrottlesPerChat() {
-    await fixture(async({a, bot, run, store, messages, deliveries, link, callback}) => {
+    await fixture(async({a, bot, run, store, worker, messages, deliveries, link, callback}) => {
         await link(a, 101);
         await store.updateUser(a.id, {defaultTelegramFormat: 'epub'});
         const ctx = {run, chatId: '101', userId: a.id};
@@ -197,6 +198,13 @@ async function testTelegramBotUsesProfileFormatAndThrottlesPerChat() {
         assert(download.text.includes('EPUB'));
         await callback(101, download.callback_data); await bot.idle();
         assert.strictEqual(deliveries[0].format, 'epub');
+        await store.updateUser(a.id, {defaultTelegramFormat: 'original'});
+        const originalBook = await worker.getBookRecordByUid('book-one');
+        for (const ext of ['epub', 'pdf']) {
+            worker.getBookRecordByUid = async() => ({...originalBook, ext});
+            await bot.dispatch(ctx, a, 'book', {uid: 'book-one'});
+            assert.strictEqual(messages.at(-1).data.reply_markup.inline_keyboard[0][0].text, `Получить ${ext.toUpperCase()}`);
+        }
         bot.outbound.clear(); bot.nextMessageAt = 0;
         const sleeps = []; bot.sleep = async milliseconds => {sleeps.push(milliseconds);};
         await bot.throttle(ctx); await bot.throttle(ctx);

@@ -1,5 +1,5 @@
 <template>
-    <q-menu :model-value="visible" no-parent-event no-focus no-refocus fit :offset="[0, 8]" class="catalog-suggestions" @update:model-value="value => !value && dismiss()">
+    <q-menu :model-value="visible" no-parent-event no-focus no-refocus no-route-dismiss fit :offset="[0, 8]" class="catalog-suggestions" @update:model-value="value => !value && dismiss()">
         <div :id="listId" role="listbox" aria-label="Подсказки поиска" class="catalog-suggestions__list">
             <p v-if="loading && !items.length" role="status">
                 Ищем подсказки…
@@ -58,8 +58,9 @@ watch(visible, value => emit('expanded', value));
 function dismiss() {emit('dismiss');}
 function choose(item) {emit('choose', item); dismiss();}
 function keydown(event) {
-    if (!props.focused || !items.value.length) return;
-    if (event.key === 'Escape') {event.preventDefault(); dismiss();}
+    if (!props.focused) return;
+    if (event.key === 'Escape') {event.preventDefault(); dismiss(); return;}
+    if (!items.value.length) return;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         selected.value = selected.value < 0 ? (event.key === 'ArrowDown' ? 0 : items.value.length - 1)

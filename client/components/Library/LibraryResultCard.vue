@@ -1,5 +1,5 @@
 <template>
-    <article class="library-result-card">
+    <article class="library-result-card" :class="{'library-result-card--compact': compact}">
         <div class="library-result-card__cover">
             <button type="button" :aria-label="`Открыть карточку: ${book.title}`" @click="library.openCard(book)"><BookCover :book="book" /></button>
             <q-checkbox v-if="selectable" :model-value="selected" dense class="library-result-card__select" :aria-label="`Выбрать: ${book.title}`" @update:model-value="$emit('selection', $event)" />
@@ -11,7 +11,7 @@
             <button v-if="book.series" type="button" class="library-result-card__series" @click="$emit('action', 'seriesClick')">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></button>
             <div v-if="percent !== null" class="library-result-card__progress">{{ Math.round(percent * 100) }}% прочитано</div>
             <p v-if="reason" class="library-result-card__reason">{{ reason }}</p>
-            <div v-if="genres.length || dateLabel" class="library-result-card__genres"><button v-for="genre in genres" :key="genre.value" type="button" @click="$emit('genre', genre.value)">{{ genre.label }}</button><span v-if="dateLabel">{{ dateLabel }}</span></div>
+            <div v-if="!compact && (genres.length || dateLabel)" class="library-result-card__genres"><button v-for="genre in genres" :key="genre.value" type="button" @click="$emit('genre', genre.value)">{{ genre.label }}</button><span v-if="dateLabel">{{ dateLabel }}</span></div>
             <div class="library-result-card__actions">
                 <q-btn v-if="canRead" unelevated no-caps color="primary" label="Читать" @click="$emit('action', 'readBook')" />
                 <a v-if="!book.discoveryMissingLocal && !book.unavailable" :href="downloadHref" :aria-label="`Скачать: ${book.title}`"><q-icon name="la la-download" size="18px" /> Скачать</a>
@@ -34,7 +34,7 @@ import {libraryContextKey} from './libraryContext';
 import {readable, progress} from './libraryModel';
 
 const props = defineProps({book: {type: Object, required: true}, downloadHref: String, selectable: Boolean, selected: Boolean,
-    showRates: Boolean, showInfo: Boolean, dateLabel: String, genres: {type: Array, default: () => []}, feedback: Boolean, restore: Boolean, reason: String});
+    showRates: Boolean, showInfo: Boolean, dateLabel: String, genres: {type: Array, default: () => []}, feedback: Boolean, restore: Boolean, reason: String, compact: Boolean});
 defineEmits(['action', 'selection', 'genre', 'feedback', 'restore']);
 const feedbackOptions = [{value: 'more_like_this', label: 'Больше похожего'}, {value: 'not_interested', label: 'Неинтересно'},
     {value: 'dislike_author', label: 'Меньше этого автора'}, {value: 'dislike_genre', label: 'Меньше этого жанра'},
@@ -68,6 +68,12 @@ const authorized = computed(() => !!library.config.value.profileAuthorized);
 .library-result-card__actions {display: flex; gap: 13px; align-items: center; flex-wrap: wrap; margin-top: 14px;}
 .library-result-card__actions > .q-btn {border-radius: 10px; padding: 6px 16px; min-height: 34px; font-size: 12px; font-weight: 550;}
 .library-result-card__actions > a, .library-result-card__actions > button {display: flex; align-items: center; gap: 5px; color: var(--app-muted); font: inherit; font-size: 12px; border: 0; border-radius: 6px; background: transparent; padding: 5px 0; text-decoration: none; cursor: pointer;}
+.library-result-card.library-result-card--compact {padding: 12px; gap: 12px; border-radius: 14px;}
+.library-result-card--compact .library-result-card__cover {width: 60px;}
+.library-result-card--compact .library-result-card__title {font-size: 15px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;}
+.library-result-card--compact .library-result-card__author, .library-result-card--compact .library-result-card__series {font-size: 12px;}
+.library-result-card--compact .library-result-card__actions {margin-top: 8px; gap: 10px;}
+.library-result-card--compact .library-result-card__actions > .q-btn {padding: 4px 12px;}
 button:focus-visible, a:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}
 @media (max-width: 599px) {.library-result-card {padding: 14px; gap: 14px; border-radius: 16px;} .library-result-card__cover {width: 72px;} .library-result-card__title {font-size: 16px;} .library-result-card__author {font-size: 12px;} .library-result-card__actions {gap: 10px; margin-top: 10px;} .library-result-card__actions > .q-btn {padding: 6px 13px;}}
 </style>

@@ -47,6 +47,39 @@ async function fixture(directory) {
         assert(ready, output);
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [];
+        let externalFixture = false;
+        await page.routeWebSocket('**', socket => {
+            const server = socket.connectToServer(), suggestions = new Set(), configs = new Set();
+            socket.onMessage(message => {
+                const request = JSON.parse(String(message));
+                if (request.action === 'catalog-suggest') suggestions.add(request.requestId);
+                if (request.action === 'get-config') configs.add(request.requestId);
+                if (externalFixture && request.action === 'get-discovery-shelves') {
+                    socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
+                    socket.send(JSON.stringify({requestId: request.requestId, shelves: [{id: 'external', source: 'external', sourceName: 'Тестовая витрина',
+                        title: 'Тестовая витрина', updatedAt: Date.now(), items: Array.from({length: 48}, (_, id) => ({id, title: `Тестовая книга ${id + 1}`,
+                            author: 'Тестовый автор', ext: 'fb2', discoveryMissingLocal: true}))}]}));
+                    return;
+                }
+                server.send(message);
+            });
+            server.onMessage(message => {
+                const response = JSON.parse(String(message));
+                if (configs.has(response.requestId) && !response._rok) {
+                    configs.delete(response.requestId);
+                    if (externalFixture) {
+                        response.discovery = {...response.discovery, enabled: true, externalSource: 'web-page', externalName: 'Тестовая витрина', externalUrl: 'https://example.invalid/catalog'};
+                        socket.send(JSON.stringify(response)); return;
+                    }
+                }
+                if (suggestions.has(response.requestId) && !response._rok) {
+                    suggestions.delete(response.requestId);
+                    // A real library can respond after the 500 ms automatic search changes the route.
+                    setTimeout(() => socket.send(message), 800); return;
+                }
+                socket.send(message);
+            });
+        });
         page.on('pageerror', error => errors.push(error.message));
         page.on('console', message => {if (/Failed to resolve component/.test(message.text())) errors.push(message.text());});
         const screenshot = name => page.screenshot({path: path.join(directory, name + '.png'), animations: 'disabled'});
@@ -74,9 +107,12 @@ async function fixture(directory) {
         await page.locator('.profile-controls .profile-logout').waitFor();
         await page.getByRole('button', {name: 'Переключить дизайн', exact: true}).click();
         await page.getByRole('navigation', {name: 'Разделы библиотеки'}).waitFor();
+        await page.goto(base + '/#/');
+        await page.waitForURL(url => url.hash === '#/overview');
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
         const input = page.locator('.catalog-search-panel__main input').first();
         await input.fill('zzzz'); await pause(600); await input.fill('Кост');
+        await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '*Кост');
         await page.getByRole('option', {name: /Косточка/}).waitFor();
         await input.press('Escape'); await page.locator('.catalog-suggestions').waitFor({state: 'hidden'});
         await input.fill('Косто'); await page.getByRole('option', {name: /Косточка/}).waitFor();
@@ -153,6 +189,34 @@ async function fixture(directory) {
         await page.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
         await page.goto(base + '/#/book');
         await page.getByRole('heading', {name: 'Не удалось открыть книгу', exact: true}).waitFor();
+        externalFixture = true;
+        await page.setViewportSize({width: 1440, height: 1000});
+        await page.evaluate(() => {
+            const saved = JSON.parse(localStorage.getItem('vuex') || '{}');
+            saved.settings = {...saved.settings, discoveryExternalSource: 'web-page', discoveryExternalName: 'Тестовая витрина',
+                discoveryExternalUrl: 'https://example.invalid/catalog', showDiscoveryExternal: true};
+            localStorage.setItem('vuex', JSON.stringify(saved));
+        });
+        // A document navigation hydrates the synthetic source preferences saved above.
+        await page.goto(base + '/?external-fixture=1#/bestsellers');
+        const controls = page.getByRole('group', {name: 'Книг на странице', exact: true});
+        await controls.waitFor();
+        await page.waitForFunction(() => document.querySelectorAll('.discovery-shelf .library-result-card').length === 12);
+        await controls.getByRole('button', {name: '24', exact: true}).click();
+        await page.waitForFunction(() => document.querySelectorAll('.discovery-shelf .library-result-card').length === 24);
+        assert.equal(await controls.getByRole('button', {name: '24', exact: true}).getAttribute('aria-pressed'), 'true');
+        const cardHeight = (await page.locator('.discovery-shelf .library-result-card').first().boundingBox()).height;
+        await page.getByRole('button', {name: 'Компактные карточки', exact: true}).click();
+        await page.locator('.library-result-card--compact').first().waitFor();
+        assert((await page.locator('.library-result-card--compact').first().boundingBox()).height < cardHeight, 'Compact mode actually reduces card height');
+        assert.equal(await page.locator('.discovery-wrap').getByText('Тестовая витрина', {exact: true}).count(), 1, 'The external title is not repeated');
+        for (const width of [1440, 390, 320]) {
+            await page.setViewportSize({width, height: 900});
+            assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Discovery controls fit the viewport');
+            await screenshot('discovery-controls-light-' + width);
+        }
+        await page.getByRole('button', {name: 'Включить тёмную тему', exact: true}).click();
+        await screenshot('discovery-controls-dark-320');
         assert.deepEqual(errors, []);
         await fs.writeJson(path.join(directory, 'result.json'), {base, errors, depth}, {spaces: 2});
         console.log('Catalog discovery browser: OK. Artifacts: ' + directory);

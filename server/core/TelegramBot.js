@@ -237,7 +237,8 @@ class TelegramBot {
             const book = await this.worker.getBookRecordByUid(payload.uid);
             if (!book || book.del) return this.reply(ctx, 'Книга сейчас недоступна. Повторите поиск.', [this.menu(ctx)]);
             const preferred = bookFormats.resolve(book.ext, this.config, bookFormats.preference(user, 'telegram')) || 'raw';
-            const label = preferred === 'raw' ? 'Получить оригинал' : `Получить ${preferred.toUpperCase()}`;
+            const extension = String(preferred === 'raw' ? book.ext || '' : preferred).toUpperCase();
+            const label = extension ? `Получить ${extension}` : 'Получить файл';
             const rows = [[button(label, 'download', {uid: book._uid, format: preferred})]];
             if (preferred !== 'raw') rows.push([button('Оригинал ' + String(book.ext).toUpperCase(), 'download', {uid: book._uid, format: 'raw'})]);
             const formats = bookFormats.available(book.ext, this.config).filter(format => format !== preferred);

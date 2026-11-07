@@ -77,7 +77,8 @@ const navigation = computed(() => [
     {id: 'profile', label: 'Профиль', icon: 'la la-user', to: '/profile'},
 ]);
 watch(() => route.fullPath, () => {
-    if (catalogRoutes.has(route.path)) lastCatalog.value = route.fullPath;
+    if (catalogRoutes.has(route.path))
+        lastCatalog.value = route.path === '/' && !Object.keys(route.query || {}).length ? '/books' : route.fullPath;
     settingsVisible.value = false;
     profilesVisible.value = false;
     listsVisible.value = false;
