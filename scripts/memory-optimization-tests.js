@@ -127,6 +127,19 @@ async function testAuthorArchiveBuildIsSharedAndRejectsOldLibraries() {
     worker.authorInfoCache.close();
 }
 
-module.exports = [testAuthorArchiveBuildIsSharedAndRejectsOldLibraries,
+async function testMemoryBudgetEnvironmentOverridesPreviouslySavedValues() {
+    const keys = ['INPX_DB_CACHE_BUDGET_MB', 'INPX_QUERY_CACHE_MEM_MB'];
+    const previous = keys.map(key => process.env[key]);
+    try {
+        const manager = Object.create(require('../server/config').prototype);
+        manager.inited = true; manager._config = {dbCacheBudgetMb:64, queryCacheMemMb:32};
+        process.env[keys[0]] = '12'; process.env[keys[1]] = '20';
+        assert.equal(manager.config.dbCacheBudgetMb, 12); assert.equal(manager.config.queryCacheMemMb, 20);
+        process.env[keys[0]] = ''; delete process.env[keys[1]];
+        assert.equal(manager.config.dbCacheBudgetMb, 64); assert.equal(manager.config.queryCacheMemMb, 32);
+    } finally {for (let i = 0; i < keys.length; i++) {if (previous[i] === undefined) delete process.env[keys[i]]; else process.env[keys[i]] = previous[i];}}
+}
+
+module.exports = [testMemoryBudgetEnvironmentOverridesPreviouslySavedValues, testAuthorArchiveBuildIsSharedAndRejectsOldLibraries,
     testMemoryCachesEnforceBytesTtlAndReleaseOnClose, testDatabaseCacheIsGlobalIdleSafeAndKeepsUnsavedRows,
     testBoundedDatabaseWorkerSupportsProtocolAndReopen, testReviewIndexesReleaseOnlyAfterLastConsumer, testLazyDetailsRejectLateResponsesAndRetry];
