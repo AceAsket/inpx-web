@@ -4,6 +4,7 @@ const ProfileAccess=require('../core/ProfileAccess');
 const Budget=require('../core/ClientRequestBudget');
 const {getEnabledLibrarySources}=require('../core/LibrarySources');
 const formats=require('../../shared/BookFormats');
+const converter=require('../core/BookConverter');
 const {EbookReader}=require('../core/EbookReader');
 const shelves=require('../core/EbookShelves');
 
@@ -41,7 +42,7 @@ class EbookController {
         return '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">'+
             `<title>${escape(title)} — ${escape(brand)}</title><style>${require('../core/EbookStyle')}</style></head><body><div class="wrap"><header class="masthead"><div class="brand">${this.link('',{},brand)}</div><div class="account">${user}</div></header>`+
             (reading?`<p>${this.link('',{},'Библиотека')} · ${escape(title)}</p><main>${body}</main>`:
-                `<nav class="nav" aria-label="Навигация">${this.link('',{},'Каталог',current==='/'?'active':'')} ${this.link('/shelves',{},'Мои полки',current.startsWith('/shel')?'active':'')} ${this.link('/recent',{},'Сейчас читаю',current==='/recent'?'active':'')} <a href="${escape(this.root+'/#/overview')}">Полная версия</a></nav><main><h1>${escape(title)}</h1>${body}</main>`)+
+                `<nav class="nav" aria-label="Навигация">${this.link('',{},'Каталог',current==='/'?'active':'')} ${this.link('/shelves',{},'Мои полки',current.startsWith('/shel')?'active':'')} ${this.link('/recent',{},'Сейчас читаю',current==='/recent'?'active':'')}</nav><main><h1>${escape(title)}</h1>${body}</main>`)+
             '</div></body></html>';
     }
     destination(value) {
@@ -108,19 +109,21 @@ class EbookController {
     downloadSelection(book,format){
         const wanted=formats.normalize(format),native=String(book.ext).toLowerCase(),label=String(wanted==='original'?native:wanted).toUpperCase();
         const selected=wanted==='original'||wanted===native?'raw':formats.available(native,this.config).includes(wanted)?wanted:null;
-        return {selected,label};
+        const extension=selected==='raw'?native:converter.getConvertedExtension(wanted);
+        const suffix=/^[a-z0-9]{1,12}(?:\.[a-z0-9]{1,12})?$/.test(extension)?'/book.'+extension:'';
+        return {selected,label,suffix};
     }
     downloadButton(book,format){
-        const {selected,label}=this.downloadSelection(book,format);
+        const {selected,label,suffix}=this.downloadSelection(book,format);
         if(!selected)return `<p class="hint">Скачивание ${escape(label)} для этой книги недоступно. Выберите другой формат в профиле.</p>`;
-        return `<p class="quick-download download-form"><a class="button" href="${escape(this.url('/download/book.'+label.toLowerCase(),{uid:book._uid||book.bookUid}))}" aria-label="${escape('Скачать «'+book.title+'» в формате '+label)}">Скачать ${escape(label)}</a></p>`;
+        return `<p class="quick-download download-form"><a class="button" href="${escape(this.url('/download'+suffix,{uid:book._uid||book.bookUid}))}" aria-label="${escape('Скачать «'+book.title+'» в формате '+label)}">Скачать ${escape(label)}</a></p>`;
     }
     async download(req,identity){
         const uid=scalar(req.query,'uid',1024);if(!uid)throw bad('Не указана книга.');
         const book=await this.worker.getBookRecordByUid(uid);if(!book)throw bad('Книга не найдена.',404);
-        const {selected,label}=this.downloadSelection(book,formats.preference(identity.user));
+        const {selected,label,suffix}=this.downloadSelection(book,formats.preference(identity.user));
         if(!selected)throw bad(`Скачивание ${label} для этой книги недоступно. Выберите другой формат в профиле.`,415);
-        return {redirect:this.root+'/book/by-uid/book.'+label.toLowerCase()+'?'+new URLSearchParams({uid,format:selected})};
+        return {redirect:this.root+'/book/by-uid'+suffix+'?'+new URLSearchParams({uid,format:selected})};
     }
     formatForm(req,identity,next,ext=''){
         const selected=formats.preference(identity.user),values=[...new Set(['original',...formats.configured(this.config),...(formats.formats.includes(ext)?[ext]:[]),selected])];
@@ -154,7 +157,6 @@ class EbookController {
         if(identity)body+=this.formatForm(req,identity,this.url('/book',{...p,uid}),String(book.ext).toLowerCase())+this.downloadButton({...book,_uid:uid},formats.preference(identity.user));
         else body+=`<form class="download-form" action="${escape(this.root+'/book/by-uid')}" method="get">${this.hidden('uid',uid)}<label for="format">Формат скачивания</label><select id="format" name="format">${available.map(format=>option(format.key,format.label,'raw')).join('')}</select><button type="submit">Скачать книгу</button></form>`;
         if(formats.canRead(book.ext,this.config)&&!this.worker.remoteLib)body+=this.link('/read',{...p,uid,page:1,font:22,bookPage:p.page},'Читать текст','button');
-        body+=`<p><a href="${escape(this.root+'/#/book?'+new URLSearchParams({bookUid:uid,lang:p.lang,sourceId:p.sourceId}))}">Открыть в полной веб-версии</a></p>`;
         if(scalar(req.query,'annotation',1)!=='1')body+=this.link('/book',{...p,uid,annotation:1},'Показать аннотацию','button');
         else {
             let preview;
@@ -242,7 +244,7 @@ class EbookController {
                 identity=await this.identity(req);
                 if(path==='/login')return res.type('html').send(this.access.bindingEnabled?this.document(req,'Вход',`<p>Профиль задаётся входом через proxy.</p>${this.link('',{},'К поиску')}`,identity):this.form(req,'profile'));
                 if(this.access.loginRequired&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
-                const isDownload=path==='/download'||/^\/download\/book\.[a-z0-9]{1,12}$/.test(path);
+                const isDownload=path==='/download'||/^\/download\/book\.[a-z0-9]{1,12}(?:\.[a-z0-9]{1,12})?$/.test(path);
                 if((['/shelves','/shelf'].includes(path)||isDownload)&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
                 const handler=path==='/'?()=>this.search(req,identity):path==='/book'?()=>this.book(req,identity):path==='/read'?()=>this.reading(req):path==='/recent'?()=>this.recent(req,identity):path==='/shelves'?()=>this.shelfIndex(req,identity):path==='/shelf'?()=>this.shelf(req,identity):isDownload?()=>this.download(req,identity):null;
                 if(!handler)throw bad('Страница не найдена.',404);

@@ -1,53 +1,53 @@
 <template>
     <DialogSurface v-model="dialogVisible" variant="book" :embedded="embedded">
-        <template #header>Книга в библиотеке</template>
+        <template #header><h2 class="book-actions-title">{{ book.title || 'Без названия' }}</h2></template>
         <div class="library-book-actions">
             <a ref="download" style="display: none" />
             <LoadingMessage :message="loadingMessage2" />
+            <h1 v-if="embedded" class="book-actions-title">{{ book.title || 'Без названия' }}</h1>
             <div class="book-actions-summary">
                 <BookCover :book="book" />
                 <div>
-                    <div v-if="sizeLabel || dateLabel" class="book-actions-meta"><span v-if="sizeLabel">{{ sizeLabel }}</span><span v-if="dateLabel">Добавлена {{ dateLabel }}</span></div>
-                    <component :is="embedded ? 'h1' : 'h2'">{{ book.title || 'Без названия' }}</component>
-                    <span v-if="book.author" class="book-actions-author"><template v-for="(author,index) in authorLinks" :key="index"><span v-if="index">,</span><RouterLink :to="author.target" @click="dialogVisible = false">{{ author.label }}</RouterLink></template></span>
-                    <RouterLink v-if="book.series" class="book-actions-series" :to="seriesTarget" @click="dialogVisible = false">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></RouterLink>
-                    <dl v-if="genreLabels.length || publicationYear || keywordLabels.length" class="book-actions-details">
-                        <div v-if="genreLabels.length"><dt>Жанр</dt><dd>{{ genreLabels.join(', ') }}</dd></div>
-                        <div v-if="publicationYear"><dt>Год</dt><dd>{{ publicationYear }}</dd></div>
-                        <div v-if="keywordLabels.length"><dt>Ключевые слова</dt><dd>{{ keywordLabels.join(', ') }}</dd></div>
-                    </dl>
+                    <span v-if="book.author" class="book-actions-author"><template v-for="(author,index) in authorLinks" :key="index"><span v-if="index">, </span><RouterLink :to="author.target" @click="dialogVisible = false">{{ author.label }}</RouterLink></template></span>
+                    <p class="book-actions-meta">{{ sourceFormat }}<template v-if="languageLabel"> · {{ languageLabel }}</template></p>
+                    <p class="book-actions-availability">{{ book.discoveryMissingLocal ? 'Внешний источник' : book.unavailable ? 'Книга недоступна' : 'В библиотеке' }}</p>
+                    <p v-if="publicationYear" class="book-actions-year">Год: <span>{{ publicationYear }}</span></p>
                     <div v-if="percent !== null" class="book-actions-progress">{{ Math.round(percent * 100) }}% прочитано</div>
                 </div>
             </div>
-            <template v-if="!book.discoveryMissingLocal && !book.unavailable">
-                <div class="book-actions-primary">
-                    <q-btn v-if="canRead" color="primary" unelevated no-caps icon="la la-book-open" :label="readLabel" @click="bookEvent({action: 'readBook', book})" />
-                    <a :href="getDirectBookDownloadHref(book, downloadFormat)" class="book-actions-download"><q-icon name="la la-download" size="20px" /> Скачать {{ downloadFormat === 'raw' ? sourceFormat : downloadFormat.toUpperCase() }}</a>
+            <div class="book-actions-content">
+                <div v-if="bookAvailable" class="book-actions-primary">
+                    <q-select v-model="downloadFormat" outlined dense emit-value map-options :options="downloadFormats" :display-value="downloadLabel" aria-label="Формат скачивания" class="book-actions-formats" />
+                    <q-btn v-if="canRead" outline no-caps icon="la la-book-open" :aria-label="readLabel" :title="readLabel" @click="bookEvent({action: 'readBook', book})" />
+                    <q-btn outline icon="la la-bookmark" aria-label="Добавить на полку" title="Добавить на полку" @click="bookEvent({action: 'readingList', book})" />
+                    <q-btn outline icon="la la-share-alt" aria-label="Поделиться книгой" title="Поделиться книгой" :disable="actionBusy" @click="shareBook" />
                 </div>
-                <q-select v-if="downloadFormats.length > 1" v-model="downloadFormat" outlined dense emit-value map-options :options="downloadFormats" label="Формат скачивания" class="book-actions-formats" />
-                <section v-if="!embedded" class="book-actions-annotation" :aria-busy="annotationLoading" aria-label="Аннотация книги">
+                <dl v-if="genreLabels.length" class="book-actions-details book-actions-genres"><div><dt>Жанр</dt><dd>{{ genreLabels.join(', ') }}</dd></div></dl>
+                <a v-if="bookAvailable" :href="getDirectBookDownloadHref(book, downloadFormat)" class="book-actions-download" :aria-label="'Скачать ' + downloadLabel"><span>Скачать книгу</span><span>{{ downloadLabel }}</span></a>
+                <button v-if="!embedded && bookAvailable" type="button" class="book-actions-full-description" @click="$emit('details', book); dialogVisible = false">Полное описание</button>
+                <RouterLink v-if="book.series" class="book-actions-series" :to="seriesTarget" @click="dialogVisible = false">Серия: {{ book.series }}<span v-if="book.serno"> · Том {{ book.serno }}</span></RouterLink>
+                <dl v-if="keywordLabels.length" class="book-actions-details book-actions-keywords"><div><dt>Ключевые слова</dt><dd>{{ keywordLabels.join(', ') }}</dd></div></dl>
+                <p v-if="sizeLabel || dateLabel" class="book-actions-file"><span v-if="sizeLabel">Файл · {{ sizeLabel }}</span><span v-if="dateLabel">Добавлена {{ dateLabel }}</span></p>
+                <section v-if="!embedded && bookAvailable" class="book-actions-annotation" :aria-busy="annotationLoading" aria-label="Аннотация книги">
                     <h3>Аннотация</h3>
                     <LoadingState v-if="annotationLoading" label="Загружаем аннотацию" />
                     <div v-else-if="annotationStatus === 'unavailable'" class="book-actions-annotation-status" role="status">Не удалось загрузить аннотацию. <q-btn flat dense no-caps label="Повторить" @click="retryAnnotation" /></div>
                     <template v-else>
-                        <p v-if="annotationText" class="book-actions-annotation-text">{{ annotationText }}</p>
+                        <p v-for="(paragraph,index) in annotationParagraphs" :key="index" class="book-actions-annotation-text">{{ paragraph }}</p>
                         <p v-if="annotationLimited || annotationStatus === 'limited'" class="book-actions-annotation-status">{{ annotationText ? 'Показан фрагмент аннотации.' : 'Аннотация не вошла в ограниченное превью.' }} Полное описание доступно в карточке книги.</p>
                         <p v-else-if="annotationStatus === 'unsupported'" class="book-actions-annotation-status">Для этого формата или источника аннотация в превью пока недоступна.</p>
                         <p v-else-if="annotationStatus === 'empty'" class="book-actions-annotation-status">В книге нет аннотации.</p>
                     </template>
                 </section>
-                <RouterLink v-if="!embedded && fullCardTarget" :to="fullCardTarget" class="book-actions-card-link" @click="dialogVisible = false"><q-icon name="la la-external-link-alt" size="18px" /> Полная карточка</RouterLink>
-                <div class="book-actions-secondary">
-                    <button v-if="!embedded" type="button" @click="$emit('details', book); dialogVisible = false"><q-icon name="la la-info-circle" /><span>Описание и сведения</span></button>
-                    <button type="button" @click="bookEvent({action: 'readingList', book})"><q-icon name="la la-bookmark" /><span>Добавить на полку</span></button>
+                <RouterLink v-if="!embedded && fullCardTarget && bookAvailable" :to="fullCardTarget" class="book-actions-card-link" @click="dialogVisible = false"><q-icon name="la la-external-link-alt" size="18px" /> Полная карточка</RouterLink>
+                <div v-if="bookAvailable" class="book-actions-secondary">
                     <button v-if="config.profileAuthorized" type="button" :disabled="updatingRead" @click="toggleRead"><q-icon :name="markedRead ? 'la la-undo' : 'la la-check-circle'" /><span>{{ markedRead ? 'Снять отметку' : 'Прочитано' }}</span></button>
-                    <button type="button" :disabled="actionBusy" @click="perform('copyLink')"><q-icon name="la la-link" /><span>Копировать ссылку</span></button>
                     <button v-if="config.telegramShareEnabled" type="button" :disabled="actionBusy" @click="perform('sendTelegram')"><q-icon name="lab la-telegram-plane" /><span>Отправить в Telegram</span></button>
                     <button v-if="config.emailShareEnabled" type="button" :disabled="actionBusy" @click="perform('sendEmail')"><q-icon name="la la-envelope" /><span>Отправить по Email</span></button>
                 </div>
-            </template>
-            <q-btn v-else-if="externalUrl" color="primary" no-caps unelevated label="Открыть источник" icon="la la-external-link-alt" :href="externalUrl" target="_blank" rel="noopener noreferrer" />
-            <p v-else class="book-actions-unavailable">Книга сейчас недоступна в каталоге.</p>
+            </div>
+            <q-btn v-if="!bookAvailable && externalUrl" color="primary" no-caps unelevated label="Открыть источник" icon="la la-external-link-alt" :href="externalUrl" target="_blank" rel="noopener noreferrer" />
+            <p v-else-if="!bookAvailable" class="book-actions-unavailable">Книга сейчас недоступна в каталоге.</p>
         </div>
     </DialogSurface>
 </template>
@@ -144,6 +144,15 @@ class BookActionsDialog extends BaseList {
     retryAnnotation() {this.invalidateAnnotation();return this.loadAnnotation();}
 
     get sourceFormat() {return String(this.book.ext || 'Книга').toUpperCase();}
+    get bookAvailable() {return !this.book.discoveryMissingLocal && !this.book.unavailable;}
+    get downloadLabel() {return this.downloadFormat === 'raw' ? this.sourceFormat : this.downloadFormat.toUpperCase();}
+    get annotationParagraphs() {return this.annotationText.split(/\n\s*\n/).filter(text=>text.trim());}
+    get languageLabel() {
+        return String(this.book.lang || '').split(',').slice(0,4).map(value=>{
+            const code=value.trim();if(!code)return '';
+            try{return typeof Intl.DisplayNames==='function' ? new Intl.DisplayNames(['ru'],{type:'language'}).of(code):code;}catch{return code;}
+        }).filter(Boolean).join(', ');
+    }
     get fullCardTarget() {
         const uid = this.getBookUid(this.book);
         return uid && !this.book.discoveryMissingLocal ? catalogTarget('/book', {bookUid: uid}, this.previewScope) : null;
@@ -171,6 +180,16 @@ class BookActionsDialog extends BaseList {
         this.actionBusy = true;
         try {await this.download(this.book, action);}
         finally {this.actionBusy = false;}
+    }
+    async shareBook() {
+        if(this.actionBusy)return;
+        if(typeof navigator!=='undefined' && typeof navigator.share==='function' && this.fullCardTarget){
+            this.actionBusy=true;
+            try{await navigator.share({title:this.book.title,url:new URL(this.$router.resolve(this.fullCardTarget).href,window.location.href).href});return;}
+            catch(error){if(error.name==='AbortError')return;}
+            finally{this.actionBusy=false;}
+        }
+        await this.perform('copyLink');
     }
     async toggleRead() {
         if (this.updatingRead) return;
@@ -238,5 +257,46 @@ h2 {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0 0 10px; over
 .book-actions-annotation-text {white-space: pre-line; overflow-wrap: anywhere; font-size: 14px; line-height: 1.65; margin: 0;}
 .book-actions-annotation-status {font-size: 13px; line-height: 1.5; color: var(--app-muted); margin: 0;}
 button:focus-visible, a:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}
-@media (max-width: 599px) {.book-actions-summary {gap: 16px;} .book-actions-summary > :deep(.book-cover) {width: 80px; flex-basis: 80px;} h2 {font-size: 19px;} .book-actions-primary {gap: 8px; margin-top: 18px;} .book-actions-primary .q-btn, .book-actions-download {padding: 10px 14px; font-size: 13px;} .book-actions-secondary {gap: 2px 8px;}}
+.book-actions-title {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0; overflow-wrap: anywhere;}
+h1.book-actions-title {margin-bottom: 20px;}
+.book-actions-summary {gap: 20px; padding-top: 4px;}
+.book-actions-summary > :deep(.book-cover) {width: 112px; flex-basis: 112px;}
+.book-actions-summary > div:not(.book-cover) {padding-top: 10px;}
+.book-actions-author {font-size: 15px;}
+.book-actions-meta {margin: 14px 0 2px; font-size: 13px;}
+.book-actions-availability {margin: 0; color: var(--app-primary); font-size: 13px;}
+.book-actions-year {margin: 2px 0 0; color: var(--app-muted); font-size: 13px;}
+.book-actions-primary {justify-content: flex-end; gap: 8px; margin: 18px 0;}
+.book-actions-primary .q-btn {width: 44px; min-height: 44px; padding: 0; border-radius: 12px; color: var(--app-text);}
+.book-actions-primary .q-btn :deep(.q-icon) {font-size: 23px;}
+.book-actions-formats {margin: 0; width: 110px; min-width: 0;}
+.book-actions-formats :deep(.q-field__control) {min-height: 44px; border-radius: 12px;}
+.book-actions-details {font-size: 14px; line-height: 1.55; margin: 18px 0;}
+.book-actions-genres dt {color: var(--app-text);}
+.book-actions-genres dt::after {content: ':';}
+.book-actions-genres dd {margin-left: 5px;}
+.book-actions-download {width: 100%; justify-content: center; min-height: 46px; padding: 11px 16px; background: var(--app-primary, var(--q-primary, #00796f)); color: var(--library-on-primary, #fff); border: 0; border-radius: 13px; font-size: 15px; font-weight: 550;}
+.book-actions-download span:last-child {font-size: 12px; font-weight: 500; opacity: .85;}
+.book-actions-full-description {width: 100%; min-height: 44px; margin-top: 14px; padding: 10px 16px; border: 1px solid var(--app-muted); border-radius: 13px; color: var(--app-link); background: transparent; font: inherit; font-size: 14px; cursor: pointer;}
+.book-actions-series {font-size: 14px; margin-top: 26px; margin-bottom: 24px; text-decoration: none;}
+.book-actions-series:hover {text-decoration: underline;}
+.book-actions-keywords dt {display: block; color: var(--app-muted); font-size: 12px; margin-bottom: 5px;}
+.book-actions-keywords dd {margin: 0; display: block; line-height: 1.55;}
+.book-actions-file {display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--app-muted); font-size: 12px; margin: 14px 0 22px;}
+.book-actions-annotation {margin-top: 24px; padding: 0; border: 0;}
+.book-actions-annotation h3 {font-size: 19px; font-weight: 500; margin: 0 0 12px;}
+.book-actions-annotation-text {font-family: Georgia, 'Times New Roman', serif; font-size: 18px; line-height: 1.65; white-space: pre-line; margin: 0 0 18px;}
+.book-actions-secondary:empty {display: none;}
+@media (max-width: 599px) {
+    .book-actions-title {font-size: 21px;}
+    .book-actions-summary {gap: 16px;}
+    .book-actions-summary > :deep(.book-cover) {width: 88px; flex-basis: 88px;}
+    .book-actions-summary > div:not(.book-cover) {padding-top: 4px;}
+    .book-actions-author {font-size: 14px;}
+    .book-actions-primary {gap: 8px; margin: 16px 0;}
+    .book-actions-primary .q-btn {width: 44px; min-height: 44px;}
+    .book-actions-formats {width: 96px;}
+    .book-actions-formats :deep(.q-field__control) {padding: 0 8px;}
+    .book-actions-secondary {gap: 2px 8px;}
+}
 </style>

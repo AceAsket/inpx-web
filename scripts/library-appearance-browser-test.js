@@ -232,7 +232,7 @@ if (require.main === module) (async() => {
         await screenshot('book-preview-dark-390');
         assert.equal(await page.getByRole('button', {name: 'Прочитано', exact: true}).count(), 1);
         assert.equal(await page.getByRole('button', {name: 'Снять отметку', exact: true}).count(), 0);
-        await page.getByRole('button', {name: 'Описание и сведения', exact: true}).click();
+        await page.getByRole('button', {name: 'Полное описание', exact: true}).click();
         await page.getByText('Книга для проверки интерфейса INPX Reader.', {exact: true}).waitFor();
         await page.getByRole('button', {name: 'OK', exact: true}).click();
         assert.equal(await page.locator('body').getAttribute('data-catalog-appearance'), 'shelves');

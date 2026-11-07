@@ -225,6 +225,11 @@ async function testEbookMobiPreferenceAppliesToSearchRecentShelfAndCardWithLegac
         assert.equal(r.response.status,302);assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.mobi?uid=known&format=mobi');
         user.defaultDownloadFormat='epub';r=await request('/library/ebook/download/book.mobi?uid=known');
         assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub');
+        worker.config.conversionFormats.push('epub3','kepub');
+        user.defaultDownloadFormat='epub3';r=await request('/library/ebook/download/book.mobi?uid=known');
+        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub3');
+        user.defaultDownloadFormat='kepub';r=await request('/library/ebook/download/book.kepub.epub?uid=known');
+        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.kepub.epub?uid=known&format=kepub');
         worker.config.conversionEnabled=false;r=await request('/library/ebook/download/book.mobi?uid=known');assert.equal(r.response.status,415);
     });
 }

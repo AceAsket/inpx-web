@@ -73,11 +73,11 @@ async function fixture(directory) {
         const scoped=()=>{const p=new URLSearchParams(page.url().split('?')[1]);assert.equal(p.get('lang'),'ru');assert.equal(p.get('sourceId'),'main');return p;};
         await open('Книга превью');
         await annotation.getByText(/Первая строка аннотации/).waitFor();assert((await annotation.innerText()).includes('Вторая строка и детали.'));
-        const details=modal.locator('.book-actions-details');await details.getByText('2003',{exact:true}).waitFor();await details.getByText('север, сказка',{exact:true}).waitFor();
-        assert.equal(await details.getByText('Жанр',{exact:true}).count(),1);await details.getByText('Проза',{exact:true}).waitFor();assert(!(await details.innerText()).includes('2026'));
+        const details=modal.locator('.book-actions-details');await modal.getByText('2003',{exact:true}).waitFor();await details.getByText('север, сказка',{exact:true}).waitFor();
+        assert.equal(await details.getByText('Жанр',{exact:true}).count(),1);await details.getByText('Проза',{exact:true}).waitFor();assert(!(await details.allTextContents()).join(' ').includes('2026'));
         await page.setViewportSize({width:320,height:900});await page.screenshot({path:path.join(directory,'preview-metadata-320.png')});
         assert(await modal.evaluate(node=>node.scrollWidth<=node.clientWidth+1));await page.setViewportSize({width:1440,height:1000});
-        assert.equal(await modal.locator('.book-actions-author').textContent(),'Первый Автор,Второй Автор');
+        assert.equal(await modal.locator('.book-actions-author').textContent(),'Первый Автор, Второй Автор');
         assert.equal(await modal.locator('.book-actions-author a').count(),2);
         const firstAuthor=modal.getByRole('link',{name:'Первый Автор',exact:true});
         assert((await firstAuthor.getAttribute('href')).includes('author-details'));
