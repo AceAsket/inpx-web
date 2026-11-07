@@ -116,6 +116,8 @@ async function testBookNamingAppliesToLegacyCacheAndSharedHttpDownloads() {
                 const response = await fetch(`${base}/book/by-uid?uid=${uid}&format=raw`);
                 assert.strictEqual(response.status,200);
                 assert.ok(response.headers.get('content-disposition').includes(encodeURIComponent(name)));
+                assert.match(response.headers.get('content-disposition'), /^attachment; filename="[A-Za-z0-9._ -]+\.fb2"; filename\*=UTF-8''/);
+                assert.ok(new URL(response.url).pathname.endsWith('.fb2'), 'Legacy devices can read the extension from the final URL');
                 assert.ok(Buffer.from(await response.arrayBuffer()).equals(source));
             }
             let archiveIndex = 0;
@@ -140,6 +142,8 @@ async function testBookNamingAppliesToLegacyCacheAndSharedHttpDownloads() {
             config.bookFilenameTemplate = '';
             const defaultDownload = await fetch(`${base}/book/by-uid?uid=one&format=raw`);
             assert.ok(defaultDownload.headers.get('content-disposition').includes(encodeURIComponent('Автор О._Название.fb2')));
+            const alias = await fetch(`${base}/book/by-uid/book.mobi?uid=one&format=raw`);
+            assert.equal(alias.status,200);assert.ok(new URL(alias.url).pathname.endsWith('.fb2'),'The cosmetic filename cannot change the actual format');
             config.bookFilenameTemplate = '${UNKNOWN}';
             assert.strictEqual((await fetch(`${base}/book/by-uid?uid=one&format=raw`)).status,500);
         } finally {server.closeAllConnections(); await new Promise(resolve => server.close(resolve));}

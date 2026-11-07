@@ -153,7 +153,7 @@ async function testEbookShelvesRequireIdentityAndNeverAcceptForeignProfileScope(
         let r=await request('/library/ebook/login');await request('/library/ebook/login',{csrf:csrf(r.text),login:'reader',password:' pass '});
         r=await request('/library/ebook/shelves?user=foreign');assert.equal(r.response.status,200);assert.match(r.text,/Личная полка/);
         r=await request('/library/ebook/shelf?id=foreign&user=reader');assert.equal(r.response.status,404);assert(!r.text.includes('Личная полка'));
-        r=await request('/library/ebook/shelf?id=own');assert.equal(r.response.status,200);assert.match(r.text,/Скачать FB2/);assert.match(r.text,/action="\/library\/ebook\/download"/);assert.match(r.text,/back=/);
+        r=await request('/library/ebook/shelf?id=own');assert.equal(r.response.status,200);assert.match(r.text,/Скачать FB2/);assert.match(r.text,/href="\/library\/ebook\/download\/book\.fb2\?uid=known"/);assert.match(r.text,/back=/);
         assert(!r.text.includes('<script>alert'));
         assert.equal((await request('/library/ebook/shelf?id=own&cursor=-1')).response.status,400);
         assert.equal((await request('/library/ebook/shelf?id=own&cursor=20&trail=10,0')).response.status,400);
@@ -208,6 +208,27 @@ async function testEbookShelfLateResponseCannotRevealLoggedOutProfile(){
     });
 }
 
+async function testEbookMobiPreferenceAppliesToSearchRecentShelfAndCardWithLegacySafeLinks(){
+    await fixture({conversionEnabled:true,conversionFormats:['epub','mobi'],mobiEnabled:true},async({request,csrf,worker,user})=>{
+        user.defaultDownloadFormat='mobi';
+        worker.readingListStore.getList=async()=>({id:'own',name:'Own',books:[{bookUid:'known'}]});
+        assert.equal((await request('/library/ebook/download/book.mobi?uid=known')).response.status,401);
+        let r=await request('/library/ebook/login');await request('/library/ebook/login',{csrf:csrf(r.text),login:'reader',password:' pass '});
+        for(const page of ['?q=Книга','/recent','/shelf?id=own','/book?uid=known']){
+            r=await request('/library/ebook'+page);
+            assert.equal(r.response.status,200);
+            assert.match(r.text,/href="\/library\/ebook\/download\/book\.mobi\?uid=known"/);
+            assert.match(r.text,/>Скачать MOBI<\/a>/);assert(!r.text.includes('>Скачать FB2<'));
+        }
+        // A stale FB2 link and an explicit raw query still use the current profile.
+        r=await request('/library/ebook/download/book.fb2?uid=known&format=raw');
+        assert.equal(r.response.status,302);assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.mobi?uid=known&format=mobi');
+        user.defaultDownloadFormat='epub';r=await request('/library/ebook/download/book.mobi?uid=known');
+        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub');
+        worker.config.conversionEnabled=false;r=await request('/library/ebook/download/book.mobi?uid=known');assert.equal(r.response.status,415);
+    });
+}
+
 module.exports=[testEbookHtmlWorksWithoutSpaAndSearchIsBoundedExplicitAndEscaped,testEbookInputAndPaginationRejectAmbiguousAndOversizedRequests,
     testEbookBookCardDefersMetadataAndReusesDownloadAndReadPaths,testEbookProfileLoginCsrfPasswordAndRevokedSessionStayProtected,
     testEbookLibraryPasswordLogoutAndSafeReturnPaths,testEbookLatePrivateResponseIsRejectedAfterProfileLogout,
@@ -215,5 +236,5 @@ module.exports=[testEbookHtmlWorksWithoutSpaAndSearchIsBoundedExplicitAndEscaped
     testEbookQuickSearchCombinesTitleAndAuthorAndAllowsAuthorOnly,testEbookShelvesRequireIdentityAndNeverAcceptForeignProfileScope,
     testEbookOrdinaryShelfResolvesOnlyOnePageAndPreservesMissingPositions,testEbookSmartShelfListingDoesNotRecomputeAndUnreadScanIsBounded,
     testEbookShelfDownloadFormatsRespectAvailabilityAndPreferences,testEbookShelfLateResponseCannotRevealLoggedOutProfile,
-    testEbookFormatChoicePersistsOnlyInAuthenticatedProfileWithCsrf];
+    testEbookFormatChoicePersistsOnlyInAuthenticatedProfileWithCsrf,testEbookMobiPreferenceAppliesToSearchRecentShelfAndCardWithLegacySafeLinks];
 if(require.main===module)(async()=>{for(const test of module.exports){await test();console.log('ok '+test.name);}})().catch(error=>{console.error(error);process.exitCode=1;});

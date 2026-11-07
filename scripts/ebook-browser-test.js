@@ -79,7 +79,7 @@ async function pageRecent(context,base,title){
         for(let i=0;i<120;i++){try{const response=await fetch(base+'/ready');ready=response.ok&&(await response.json()).ready;}catch{}if(ready||child.exitCode!==null)break;await pause(500);}
         assert(ready,output);
         browser=await chromium.launch({headless:true,executablePath:process.env.INPX_CHROMIUM_PATH||undefined});
-        const context=await browser.newContext({javaScriptEnabled:false,viewport:{width:600,height:900}});page=await context.newPage();
+        const context=await browser.newContext({javaScriptEnabled:false,viewport:{width:600,height:900},userAgent:'Mozilla/5.0 (Linux; U; en-US) AppleWebKit/534.26 (KHTML, like Gecko) Version/4.0 Kindle/3.0+'});page=await context.newPage();
         const resources=[],errors=[];let sockets=0;
         page.on('request',request=>resources.push({type:request.resourceType(),url:request.url()}));page.on('websocket',()=>sockets++);page.on('pageerror',error=>errors.push(error.message));
         const response=await page.goto(base+'/library/ebook');assert.equal(response.status(),401);
@@ -103,19 +103,21 @@ async function pageRecent(context,base,title){
         const title=await page.locator('.result h3 a').first().textContent();
         await page.locator('.result h3 a').first().click();await page.getByRole('heading',{name:title,exact:true}).waitFor();
         await page.getByLabel('Формат скачивания',{exact:true}).selectOption('fb2');await page.getByRole('button',{name:'Сохранить формат',exact:true}).click();
-        const download=page.locator('.download-form button');assert(await download.isVisible());
+        const download=page.locator('.quick-download a');assert(await download.isVisible());
         assert.equal(await page.getByRole('heading',{name:'Аннотация',exact:true}).count(),0,'Metadata is opt-in on low-power devices');
         await page.getByRole('link',{name:'Показать аннотацию',exact:true}).click();await page.getByRole('heading',{name:'Аннотация',exact:true}).waitFor();
         await page.getByText('Аннотация для электронной книги.',{exact:false}).waitFor();assert.equal(await page.locator('img[src=x]').count(),0);
         const uid=new URL(page.url()).searchParams.get('uid');
         const cardGeometry=[];
-        for(const width of[600,320]){
+        for(const width of[600,320,1072]){
             await page.setViewportSize({width,height:900});
             // evaluate is used only by the test to measure layout; page scripts remain disabled.
             const geometry=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,scriptCount:document.scripts.length}));
             assert(geometry.scroll<=width+1,JSON.stringify(geometry));assert.equal(geometry.scriptCount,0);cardGeometry.push(geometry);
+            if(width===1072){const layout=await page.locator('.wrap').boundingBox();assert(layout.width>=width-1,'The device page uses the full viewport');}
             await page.screenshot({path:path.join(directory,'ebook-card-'+width+'.png'),fullPage:true});
         }
+        await page.setViewportSize({width:320,height:900});
         await page.getByRole('link',{name:'Читать текст',exact:true}).click();await page.locator('.reading').waitFor();
         const firstText=await page.locator('.reading').textContent();assert(firstText.includes('Первая глава'));
         assert(Buffer.byteLength(firstText)<10000,'A reader document sends one small page');
@@ -125,7 +127,7 @@ async function pageRecent(context,base,title){
         await page.screenshot({path:path.join(directory,'ebook-read-320.png'),fullPage:true});
         assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
         await page.getByRole('link',{name:'О книге',exact:true}).click();
-        const pendingDownload=page.waitForEvent('download');await page.locator('.download-form button').click();
+        const pendingDownload=page.waitForEvent('download');await page.locator('.quick-download a').click();
         const downloaded=await pendingDownload;const saved=await downloaded.path();assert((await fs.readFile(saved,'utf8')).includes('FictionBook'));
         const shelves=await checkOpds(base,context,uid,title);
         await page.goto(base+'/library/ebook/shelves');await page.getByRole('heading',{name:'Мои полки',exact:true}).waitFor();
@@ -136,7 +138,7 @@ async function pageRecent(context,base,title){
         await page.getByLabel('Формат скачивания',{exact:true}).selectOption('original');await page.getByRole('button',{name:'Сохранить формат',exact:true}).click();
         assert.equal(await page.getByLabel('Формат скачивания',{exact:true}).inputValue(),'original');
         await page.screenshot({path:path.join(directory,'ebook-shelf-download-320.png'),fullPage:true});
-        const shelfDownload=page.waitForEvent('download');await page.getByRole('button',{name:/Скачать «/}).click();assert.equal(await(await shelfDownload).failure(),null);
+        const shelfDownload=page.waitForEvent('download');await page.getByRole('link',{name:/Скачать «/}).click();assert.equal(await(await shelfDownload).failure(),null);
         assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
         await page.locator('.result h3 a').first().click();await page.getByRole('link',{name:'К полке',exact:true}).click();assert.equal(new URL(page.url()).searchParams.get('id'),shelves.own);
         await page.goto(base+'/library/ebook/shelf?'+new URLSearchParams({id:shelves.smart}));assert.equal(await page.locator('.result').count(),10);
@@ -150,7 +152,7 @@ async function pageRecent(context,base,title){
         assert.deepEqual(errors,[]);assert.equal(sockets,0);assert(resources.every(resource=>!['script','stylesheet','font','image'].includes(resource.type)),JSON.stringify(resources));
         await fs.writeJson(path.join(directory,'result.json'),{javaScriptEnabled:false,sockets,resourceTypes:[...new Set(resources.map(resource=>resource.type))],cardGeometry,
             login:true,search:true,combinedAuthorSearch:true,pagination:true,annotation:true,readerPaging:true,fontRetainsPage:true,originalDownload:true,opdsProgress:true,privateShelves:true,shelfDownload:true,profileFormatPersists:true,unavailableFormatNeverFallsBack:true,smartShelfPaging:true,logoutProtected:true,errors},{spaces:2});
-        console.log('Ebook browser PASS: no JavaScript/WebSocket/assets, real forms/login/search/metadata/download/text pages, 600/320 px. Artifacts: '+directory);
+        console.log('Ebook browser PASS: no JavaScript/WebSocket/assets, real forms/login/search/metadata/download/text pages, 320/600/1072 px, full-width device layout. Artifacts: '+directory);
     }catch(error){if(page)await page.screenshot({path:path.join(directory,'failure.png'),fullPage:true}).catch(()=>{});console.error(output);throw error;}
     finally{if(browser)await browser.close();if(child)child.kill();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

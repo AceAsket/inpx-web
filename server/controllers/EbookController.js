@@ -100,7 +100,7 @@ class EbookController {
         const uid=book._uid||book.bookUid;
         if(book.unavailable)return '<article class="result"><h3>Книга недоступна</h3><p class="hint">Файл отсутствует в текущей библиотеке.</p></article>';
         return `<article class="result">${p.covers==='1'?`<img class="cover" alt="" src="${escape(this.root+'/cover/by-uid?'+new URLSearchParams({uid}))}">`:''}`+
-            `<span class="book-format">${escape(String(book.ext||'').toUpperCase())}</span><h3>${this.link('/book',{...p,uid},short(book.title||'Без названия',240))}</h3><p class="author">${escape(short(book.author||'Автор не указан'))}</p>`+
+            `<span class="book-format">Файл: ${escape(String(book.ext||'').toUpperCase())}</span><h3>${this.link('/book',{...p,uid},short(book.title||'Без названия',240))}</h3><p class="author">${escape(short(book.author||'Автор не указан'))}</p>`+
             (book.series?`<p class="series">${escape(short(book.series,160))}${book.serno?' · '+escape(book.serno):''}</p>`:'')+
             `<p class="book-meta">${Number(book.size)>0?Math.ceil(book.size/1024)+' КБ':''}${book.lang?' · '+escape(book.lang):''}${book.sourceName?' · '+escape(book.sourceName):''}${book._shelfRead?' · Прочитана':''}</p>`+
             (downloadFormat!==null?this.downloadButton(book,downloadFormat):'')+'</article>';
@@ -113,24 +113,24 @@ class EbookController {
     downloadButton(book,format){
         const {selected,label}=this.downloadSelection(book,format);
         if(!selected)return `<p class="hint">Скачивание ${escape(label)} для этой книги недоступно. Выберите другой формат в профиле.</p>`;
-        return `<form class="quick-download download-form" method="get" action="${escape(this.url('/download'))}">${this.hidden('uid',book._uid||book.bookUid)}<button aria-label="${escape('Скачать «'+book.title+'» в формате '+label)}">Скачать ${escape(label)}</button></form>`;
+        return `<p class="quick-download download-form"><a class="button" href="${escape(this.url('/download/book.'+label.toLowerCase(),{uid:book._uid||book.bookUid}))}" aria-label="${escape('Скачать «'+book.title+'» в формате '+label)}">Скачать ${escape(label)}</a></p>`;
     }
     async download(req,identity){
         const uid=scalar(req.query,'uid',1024);if(!uid)throw bad('Не указана книга.');
         const book=await this.worker.getBookRecordByUid(uid);if(!book)throw bad('Книга не найдена.',404);
         const {selected,label}=this.downloadSelection(book,formats.preference(identity.user));
         if(!selected)throw bad(`Скачивание ${label} для этой книги недоступно. Выберите другой формат в профиле.`,415);
-        return {redirect:this.root+'/book/by-uid?'+new URLSearchParams({uid,format:selected})};
+        return {redirect:this.root+'/book/by-uid/book.'+label.toLowerCase()+'?'+new URLSearchParams({uid,format:selected})};
     }
     formatForm(req,identity,next,ext=''){
         const selected=formats.preference(identity.user),values=[...new Set(['original',...formats.configured(this.config),...(formats.formats.includes(ext)?[ext]:[]),selected])];
-        const originalLabel=ext?String(ext).toUpperCase()+' · Оригинал':'Исходный формат книги';
+        const originalLabel=ext?String(ext).toUpperCase()+' · Оригинал':'Исходный формат';
         return `<form class="shelf-options" method="post" action="${escape(this.url('/format'))}">${this.hidden('csrf',this.security.getCsrfToken(req))}${this.hidden('next',next)}<label for="format">Формат скачивания</label><select id="format" name="format">${values.map(value=>option(value,value==='original'?originalLabel:value.toUpperCase(),selected)).join('')}</select><p class="hint">Применяется ко всем скачиваниям в вашем профиле.</p><button>Сохранить формат</button></form>`;
     }
     navigation(p,page,total,path='') {
         return `<nav class="pagination" aria-label="Страницы">${page>1?this.link(path,{...p,page:page-1},'Предыдущая'):''} Страница ${page} из ${total} ${page<total?this.link(path,{...p,page:page+1},'Следующая'):''}</nav>`;
     }
-    async search(req) {
+    async search(req,identity) {
         const p=parameters(req.query,this.config),advanced=scalar(req.query,'options',1)==='1';let body=this.searchForm(p,advanced);
         if(advanced)return {title:'Параметры поиска',body};
         if(!p.q&&!p.author)return {title:'Поиск книг',body};
@@ -139,7 +139,7 @@ class EbookController {
         const total=Math.max(1,Math.ceil(result.totalFound/p.size));
         body+=`<div class="result-header"><h2>Найдено: ${Number(result.totalFound)||0}</h2></div>`;
         if(p.page>total)body+='<p>На этой странице результатов нет.</p>'+this.link('',{...p,page:1},'К первой странице');
-        else body+=result.found.map(book=>this.bookRow(book,p)).join('')+this.navigation(p,p.page,total);
+        else body+=result.found.map(book=>this.bookRow(book,p,identity?formats.preference(identity.user):null)).join('')+this.navigation(p,p.page,total);
         return {title:'Поиск книг',body};
     }
     async book(req,identity) {
@@ -154,7 +154,7 @@ class EbookController {
         if(identity)body+=this.formatForm(req,identity,this.url('/book',{...p,uid}),String(book.ext).toLowerCase())+this.downloadButton({...book,_uid:uid},formats.preference(identity.user));
         else body+=`<form class="download-form" action="${escape(this.root+'/book/by-uid')}" method="get">${this.hidden('uid',uid)}<label for="format">Формат скачивания</label><select id="format" name="format">${available.map(format=>option(format.key,format.label,'raw')).join('')}</select><button type="submit">Скачать книгу</button></form>`;
         if(formats.canRead(book.ext,this.config)&&!this.worker.remoteLib)body+=this.link('/read',{...p,uid,page:1,font:22,bookPage:p.page},'Читать текст','button');
-        body+=`<p><a href="${escape(this.root+'/#/book?'+new URLSearchParams({bookUid:uid,lang:p.lang,sourceId:p.sourceId}))}">Полная карточка</a></p>`;
+        body+=`<p><a href="${escape(this.root+'/#/book?'+new URLSearchParams({bookUid:uid,lang:p.lang,sourceId:p.sourceId}))}">Открыть в полной веб-версии</a></p>`;
         if(scalar(req.query,'annotation',1)!=='1')body+=this.link('/book',{...p,uid,annotation:1},'Показать аннотацию','button');
         else {
             let preview;
@@ -182,7 +182,7 @@ class EbookController {
     async recent(req,identity) {
         if(!identity)return {title:'Сейчас читаю',body:'<p>Войдите в свой профиль, чтобы увидеть книги из истории.</p>'+this.link('/login',{},'Войти')};
         const summary=await this.worker.buildUserReadingSummary(identity.user,10),p=parameters({},this.config);
-        return {title:'Сейчас читаю',body:summary.items.length?summary.items.map(book=>this.bookRow(book,p)+`<p class="meta">Прочитано ${Math.round(book.percent*100)}%</p>`).join(''):'<p>В истории пока нет книг в процессе чтения.</p>'};
+        return {title:'Сейчас читаю',body:summary.items.length?summary.items.map(book=>this.bookRow(book,p,formats.preference(identity.user))+`<p class="meta">Прочитано ${Math.round(book.percent*100)}%</p>`).join(''):'<p>В истории пока нет книг в процессе чтения.</p>'};
     }
     async shelfIndex(req,identity){
         const items=await shelves.lists(this.worker,identity.user.id),page=number(req.query,'page',1,100000),size=20,total=Math.max(1,Math.ceil(items.length/size));
@@ -242,8 +242,9 @@ class EbookController {
                 identity=await this.identity(req);
                 if(path==='/login')return res.type('html').send(this.access.bindingEnabled?this.document(req,'Вход',`<p>Профиль задаётся входом через proxy.</p>${this.link('',{},'К поиску')}`,identity):this.form(req,'profile'));
                 if(this.access.loginRequired&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
-                if(['/shelves','/shelf','/download'].includes(path)&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
-                const handler=path==='/'?()=>this.search(req):path==='/book'?()=>this.book(req,identity):path==='/read'?()=>this.reading(req):path==='/recent'?()=>this.recent(req,identity):path==='/shelves'?()=>this.shelfIndex(req,identity):path==='/shelf'?()=>this.shelf(req,identity):path==='/download'?()=>this.download(req,identity):null;
+                const isDownload=path==='/download'||/^\/download\/book\.[a-z0-9]{1,12}$/.test(path);
+                if((['/shelves','/shelf'].includes(path)||isDownload)&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
+                const handler=path==='/'?()=>this.search(req,identity):path==='/book'?()=>this.book(req,identity):path==='/read'?()=>this.reading(req):path==='/recent'?()=>this.recent(req,identity):path==='/shelves'?()=>this.shelfIndex(req,identity):path==='/shelf'?()=>this.shelf(req,identity):isDownload?()=>this.download(req,identity):null;
                 if(!handler)throw bad('Страница не найдена.',404);
                 const db=this.worker.db,generation=this.worker.libraryAssetGeneration;
                 const key=JSON.stringify([req.securitySession.id,path,req.query]);

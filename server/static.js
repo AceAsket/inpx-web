@@ -9,6 +9,7 @@ const ZipReader = require('./core/ZipReader');
 const imageUtils = require('./core/ImageUtils');
 const bookConverter = require('./core/BookConverter');
 const bookNaming = require('./core/BookNaming');
+const bookDownloadHeaders = require('./core/BookDownloadHeaders');
 const crypto = require('crypto');
 const webAppDir = require('../build/appdir');
 const externalTools = require('./core/ExternalTools');
@@ -684,7 +685,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
     });
 
     require('./core/BatchDownload').register(app, config);
-    app.get(`${config.bookPathStatic}/by-uid`, async(req, res) => {
+    app.get([`${config.bookPathStatic}/by-uid`, `${config.bookPathStatic}/by-uid/:downloadName`], async(req, res) => {
         if (!webWorker) {
             res.sendStatus(404);
             return;
@@ -705,13 +706,18 @@ module.exports = (app, config, webWorker = null, security = null) => {
                 return;
             }
 
-            const {link} = await webWorker.getBookLink(bookUid);
+            const {link, downFileName} = await webWorker.getBookLink(bookUid);
             let href = link;
 
             if (fileType)
                 href += `/${fileType}`;
             else if (zip)
                 href += '/zip';
+
+            if (fileType || zip) {
+                const name = fileType === 'raw' ? downFileName : bookConverter.getConvertedFileName(downFileName || 'book', fileType || 'zip');
+                href += '/' + encodeURIComponent(bookDownloadHeaders.fallbackFilename(name));
+            }
 
             res.redirect(302, `${href}?uid=${encodeURIComponent(bookUid)}`);
         } catch(e) {
@@ -782,7 +788,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
                     //отдача файла
                     if (gzipped)
                         res.set('Content-Encoding', 'gzip');
-                    res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(downFileName)}`);
+                    res.set('Content-Disposition', bookDownloadHeaders.disposition(downFileName));
                     const mimeType = getBookDownloadMimeType(downFileName);
                     if (mimeType)
                         res.set('Content-Type', mimeType);
