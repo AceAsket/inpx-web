@@ -71,3 +71,23 @@
 Дополнительные финальные артефакты: `.review-tmp/followup-final/` —
 `catalog-browser-final`, `book-preview-browser-final`,
 `overview-browser-defaults-fixed`. Все восемь браузерных сценариев включены в CI.
+
+## GitHub Actions
+
+Проверенный код: `7dd2130bef07fc4a17706075ca061e982f81a4a1`.
+[Полный прогон](https://github.com/AceAsket/inpx-web/actions/runs/42397993744)
+завершился **SUCCESS**.
+
+- Linux и Windows: release smoke, озвучка, сборка и проверка упакованного
+  приложения — PASS.
+- Восемь браузерных сценариев классического интерфейса и нового каталога,
+  включая производительность, Обзор и аннотации, — PASS.
+- Docker lite/full, настоящие конвертеры и интеграционный бенчмарк с DB probe,
+  сравнением, своими лимитами и одним выбранным профилем — PASS.
+- [Артефакт скриншотов](https://github.com/AceAsket/inpx-web/actions/runs/42397993744/artifacts/13584745446):
+  8 098 411 байт, SHA-256
+  `ff8c6ce0c510ca3966fe5da20137d7ecb5d66aadd0f3e1424edfc29c73f65c73`.
+
+Публикация релиза и Docker-образов этим прогоном не выполнялась.
+Опубликованный `v1.8.2-rc.14` по-прежнему указывает на
+`003b0aaf401f9e9b95625570f6daf54d034f60b0`.
