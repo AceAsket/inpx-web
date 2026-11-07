@@ -405,11 +405,13 @@ async function fixture(directory) {
         assert.equal(await firstCard.locator('.library-result-card__title').textContent(),gridBooks[0].title);
         assert.equal(await firstCard.locator('.library-result-card__author').textContent(),gridBooks[0].author);
         await firstCard.locator('.library-result-card__title').click();
-        const fullPreview=page.locator('.q-dialog .library-book-actions');
+        const fullPreview=page.locator('.q-dialog [data-dialog-kind="book"]');
         await fullPreview.waitFor();
         assert.equal(await fullPreview.getByRole('heading',{level:2}).textContent(),gridBooks[0].title);
-        assert.equal(await fullPreview.locator('.book-actions-author').textContent(),gridBooks[0].author);
-        assert.equal(await fullPreview.locator('.book-actions-series').textContent(),gridBooks[0].series);
+        assert.deepEqual((await fullPreview.locator('.book-actions-author').textContent()).split(',').map(value=>value.trim()),gridBooks[0].author.split(',').map(value=>value.trim()));
+        assert((await fullPreview.locator('.book-actions-series').textContent()).includes(gridBooks[0].series));
+        const seriesHref=await fullPreview.locator('.book-actions-series').getAttribute('href');
+        assert.equal(new URLSearchParams(seriesHref.split('?')[1]).get('name'),gridBooks[0].series);
         assert.deepEqual(errors, []);
         assert.deepEqual(invalidBookRequests, [], 'Deactivated book pages must not reload with an empty UID');
         assert.deepEqual(inactiveReaderRequests, [], 'A cached reader must not prepare documents while another page is active');
