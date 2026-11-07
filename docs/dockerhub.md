@@ -8,9 +8,9 @@
 
 ### Возможности
 
-**Для тестирования: 1.8.2-rc.12.** [Новый дизайн](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/shelves-interface.md): обзор с продолжением чтения, горизонтальные подборки, адаптивная навигация и переработанный поиск. Классический вариант сохраняется; выбор находится в настройках. [Системные голоса в веб-читалке](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/browser-speech.md) без Silero и [KOSync для KOReader](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/koreader-sync.md) с отдельным ключом профиля. Для FB2 позиция переносится по абзацу в обе стороны; из EPUB/PDF/DJVU — процент в INPX. Браузерная речь ставится на паузу при скрытии вкладки; для фонового прослушивания остаётся Silero MP3. Сохраняются [общие подборки OPDS](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/opds-catalog-shelves.md) через `INPX_OPDS_FEEDS_FILE`.
+**Для тестирования: 1.8.2-rc.13.** [Новый дизайн](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/shelves-interface.md): обзор с продолжением чтения, горизонтальные подборки, адаптивная навигация и переработанный поиск. Классический вариант сохраняется; выбор находится в настройках. [Системные голоса в веб-читалке](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/browser-speech.md) без Silero и [KOSync для KOReader](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/koreader-sync.md) с отдельным ключом профиля. Для FB2 позиция переносится по абзацу в обе стороны; из EPUB/PDF/DJVU — процент в INPX. Браузерная речь ставится на паузу при скрытии вкладки; для фонового прослушивания остаётся Silero MP3. Сохраняются [общие подборки OPDS](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/opds-catalog-shelves.md) через `INPX_OPDS_FEEDS_FILE`.
 
-- RC12: отзывы и автор загружаются по запросу; автозагрузка включается отдельными опциями. Ограничены кэши БД и поиска, данные читалки освобождаются при выходе. В полном образе исправлен EPUB → FB2 для чтения. При своём `INPX_CONVERSION_FORMATS` добавьте `fb2`. [Настройки памяти](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/memory-and-loading.md). Сохраняются все возможности RC10–RC11.
+- RC13 исправляет изоляцию прогресса профилей и сохраняет ссылки на книги при обновлении INPX. Фоны вынесены из общего JSON, ограничены RAM- и дисковые кэши, ускорены точный поиск, повторное открытие FB2 и подготовка фрагментов озвучки. Начальные JS/CSS уменьшены примерно на 42%. [Проверки и замеры](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/rc13-validation.md), [настройки памяти](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/memory-and-loading.md). Сохраняются все возможности RC10–RC12, включая загрузку отзывов по запросу и чтение EPUB через FB2 в полном образе.
 - Поиск по автору, названию, серии, жанру, языку и источнику; несколько библиотек в одном каталоге.
 - Обложки и их кэширование, поддержка WebP и JXL.
 - Чтение FB2 в браузере: темы, шрифты, закладки, заметки, сохранение позиции и отдельный PWA-ярлык читалки.
@@ -31,8 +31,8 @@ Android-клиент подключается по QR с адресом без �
 
 | Тег | Назначение |
 | --- | --- |
-| `1.8.2-rc.12` | Загрузка по запросу, ограничение кэшей и EPUB → FB2; все возможности RC11. |
-| `1.8.2-rc.12-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
+| `1.8.2-rc.13` | Загрузка по запросу, ограничение кэшей и EPUB → FB2; все возможности RC11. |
+| `1.8.2-rc.13-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
 | `1.8.1` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.1`. |
 | `1.8.1-silero` | Отдельный сервис озвучки для стабильной версии. |
@@ -125,9 +125,9 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 ### Features
 
-**For testing: 1.8.2-rc.12.** [New design](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/shelves-interface.md): continue reading, horizontal book shelves, adaptive navigation and redesigned search. The classic interface remains available; switch in Settings. [Browser/system voices](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/browser-speech.md) without Silero and [KOReader KOSync](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/koreader-sync.md) with a separate profile key. FB2 positions bridge both ways at paragraph precision; EPUB/PDF/DJVU import percentages into INPX. Browser speech pauses when the tab is hidden; Silero MP3 remains available for background listening. Includes [shared OPDS shelves](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/opds-catalog-shelves.md) configured through `INPX_OPDS_FEEDS_FILE`.
+**For testing: 1.8.2-rc.13.** [New design](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/shelves-interface.md): continue reading, horizontal book shelves, adaptive navigation and redesigned search. The classic interface remains available; switch in Settings. [Browser/system voices](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/browser-speech.md) without Silero and [KOReader KOSync](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/koreader-sync.md) with a separate profile key. FB2 positions bridge both ways at paragraph precision; EPUB/PDF/DJVU import percentages into INPX. Browser speech pauses when the tab is hidden; Silero MP3 remains available for background listening. Includes [shared OPDS shelves](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/opds-catalog-shelves.md) configured through `INPX_OPDS_FEEDS_FILE`.
 
-- RC12 loads reviews and author biographies on demand, with separate opt-in automatic loading settings. Database and query caches are bounded; reader documents are released on leaving the reader. Full images enable EPUB → FB2 reading. Add `fb2` if you override `INPX_CONVERSION_FORMATS`. [Memory settings](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.12/docs/memory-and-loading.md). Includes all RC10–RC11 features.
+- RC13 fixes profile progress isolation and preserves book links across INPX updates. Background images are stored outside the shared JSON, RAM/disk caches are bounded, and exact search, repeated FB2 opening and speech-fragment preparation are faster. Initial JS/CSS is about 42% smaller. [Validation and measurements](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/rc13-validation.md), [memory settings](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.13/docs/memory-and-loading.md). Includes all RC10–RC12 features, on-demand reviews and EPUB → FB2 reading in full images.
 - Search by author, title, series, genre, language and source; multiple libraries in one catalog.
 - Cover extraction and caching, including WebP and JXL support.
 - Browser-based FB2 reading with themes, fonts, bookmarks, notes, saved positions and a dedicated reader PWA shortcut.
@@ -148,8 +148,8 @@ Connect Android through a QR containing the server address without credentials. 
 
 | Tag | Purpose |
 | --- | --- |
-| `1.8.2-rc.12` | On-demand details, bounded caches and EPUB → FB2; all RC11 features. |
-| `1.8.2-rc.12-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
+| `1.8.2-rc.13` | On-demand details, bounded caches and EPUB → FB2; all RC11 features. |
+| `1.8.2-rc.13-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
 | `1.8.1` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.1`. |
 | `1.8.1-silero` | Separate speech service for the stable release. |
