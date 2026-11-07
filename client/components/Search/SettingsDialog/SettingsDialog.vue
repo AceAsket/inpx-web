@@ -7,7 +7,7 @@
             </div>
         </template>
 
-        <div class="q-mx-md column settings-dialog-body" style="min-width: 300px; font-size: 120%;">
+        <div class="q-mx-md column settings-dialog-body" style="min-width: min(300px, calc(100vw - 96px)); font-size: 120%;">
             <AppearanceControl @change="dialogVisible = false" />
             <div class="row items-center q-ml-sm">
                 <div class="q-mr-sm">
@@ -523,8 +523,21 @@
                                     <q-icon :name="telegramTokenVisible ? 'la la-eye-slash' : 'la la-eye'" class="password-visibility-toggle" @click="telegramTokenVisible = !telegramTokenVisible" />
                                 </template>
                             </q-input>
+                            <q-select v-model="integrations.telegramProxyMode" outlined dense emit-value map-options label="Маршрут Telegram" :options="telegramProxyModes" />
                             <q-select v-model="integrations.telegramIpFamily" outlined dense emit-value map-options
-                                label="Подключение Telegram" :options="[{label:'Авто (IPv4 / IPv6)',value:'auto'},{label:'Только IPv4',value:'4'},{label:'Только IPv6',value:'6'}]" />
+                                label="IP-семейство Telegram" :options="[{label:'Авто (IPv4 / IPv6)',value:'auto'},{label:'Только IPv4',value:'4'},{label:'Только IPv6',value:'6'}]" />
+                            <p class="admin-mail-wide admin-mail-subtitle telegram-connection-hint">{{ telegramConnectionHint }}</p>
+                            <template v-if="integrations.telegramProxyMode === 'custom'">
+                                <q-select v-model="integrations.telegramProxyProtocol" outlined dense emit-value map-options label="Протокол прокси" :options="telegramProxyProtocols" />
+                                <q-input v-model="integrations.telegramProxyHost" outlined dense clearable label="Адрес прокси" placeholder="Имя сервера или IP" maxlength="253" autocomplete="off" spellcheck="false" />
+                                <q-input v-model.number="integrations.telegramProxyPort" outlined dense type="number" min="1" max="65535" label="Порт прокси" />
+                                <q-input v-model="integrations.telegramProxyUsername" outlined dense clearable label="Пользователь прокси" autocomplete="off" maxlength="1024" />
+                                <q-input v-model="integrations.telegramProxyPassword" outlined dense clearable :type="telegramProxyPasswordVisible ? 'text' : 'password'" label="Пароль прокси" autocomplete="new-password" maxlength="1024" :hint="integrations.telegramProxyPassword === '__KEEP__' ? 'Пароль сохранён. Введите новый или очистите поле.' : undefined">
+                                    <template #append>
+                                        <q-icon :name="telegramProxyPasswordVisible ? 'la la-eye-slash' : 'la la-eye'" class="password-visibility-toggle" @click="telegramProxyPasswordVisible = !telegramProxyPasswordVisible" />
+                                    </template>
+                                </q-input>
+                            </template>
                             <q-input class="admin-mail-wide" v-model="integrations.telegramCaptionTemplate" outlined dense clearable :label="mailUi.telegramCaption" />
                         </div>
                         <q-toggle v-model="integrations.telegramBotEnabled" :disable="!integrations.telegramShareEnabled" label="Интерактивный бот: поиск, списки и получение книг" />
@@ -733,6 +746,7 @@ class SettingsDialog {
     opdsSaveLoading = false;
     smtpPassVisible = false;
     telegramTokenVisible = false;
+    telegramProxyPasswordVisible = false;
     opdsPasswordVisible = false;
     opdsExpanded = false;
     mailExpanded = false;
@@ -764,6 +778,8 @@ class SettingsDialog {
     adminEventLogEnabled = true;
     adminEventLogSize = 300;
     integrations = this.makeDefaultIntegrations();
+    telegramProxyModes = [{label:'Прямое соединение',value:'direct'}, {label:'Прокси окружения сервера',value:'system'}, {label:'Свой прокси',value:'custom'}];
+    telegramProxyProtocols = [{label:'HTTP',value:'http'}, {label:'HTTPS',value:'https'}, {label:'SOCKS5',value:'socks5'}, {label:'SOCKS5 (DNS через прокси)',value:'socks5h'}];
     opdsSettings = this.makeDefaultOpdsSettings();
     adminUi = {
         title: 'Администрирование',
@@ -1007,6 +1023,12 @@ class SettingsDialog {
             telegramBotEnabled: false,
             telegramBotToken: '',
             telegramIpFamily: 'auto',
+            telegramProxyMode: 'system',
+            telegramProxyProtocol: 'http',
+            telegramProxyHost: '',
+            telegramProxyPort: '',
+            telegramProxyUsername: '',
+            telegramProxyPassword: '',
             telegramChatId: '',
             telegramCaptionTemplate: '${AUTHOR} - ${TITLE}',
             emailShareEnabled: false,
@@ -1029,13 +1051,28 @@ class SettingsDialog {
         };
     }
 
-    loadIntegrations() {
-        const source = this.config.adminIntegrations || {};
-        this.integrations = Object.assign(this.makeDefaultIntegrations(), source, {
+    integrationValues(source = {}) {
+        return Object.assign(this.makeDefaultIntegrations(), source, {
             smtpPort: parseInt(source.smtpPort, 10) || 587,
             telegramBotToken: source.telegramBotToken || (source.telegramBotTokenSet ? '__KEEP__' : ''),
+            telegramProxyPassword: source.telegramProxyPasswordSet || source.telegramProxyPassword === '__KEEP__' ? '__KEEP__' : '',
             smtpPass: source.smtpPass || (source.smtpPassSet ? '__KEEP__' : ''),
         });
+    }
+
+    loadIntegrations() {
+        this.integrations = this.integrationValues(this.config.adminIntegrations || {});
+        this.telegramProxyPasswordVisible = false;
+    }
+
+    get telegramConnectionHint() {
+        if (this.integrations.telegramProxyMode === 'custom')
+            return 'IPv4/IPv6 применяется к соединению сервера с прокси. ' + (this.integrations.telegramProxyProtocol === 'socks5'
+                ? 'SOCKS5 также использует это IP-семейство при локальном разрешении адреса Telegram.'
+                : 'Адрес Telegram разрешает прокси-сервер.');
+        if (this.integrations.telegramProxyMode === 'direct')
+            return 'Сервер подключается к Telegram напрямую. IP-семейство применяется к соединению с Telegram.';
+        return 'Используются HTTPS_PROXY, ALL_PROXY и NO_PROXY в окружении процесса сервера. Настройки браузера, ОС и PAC не читаются.';
     }
 
     loadOpdsSettings() {
@@ -1890,9 +1927,16 @@ class SettingsDialog {
 
         this.integrationSaveLoading = true;
         try {
-            const result = await this.api.updateAdminIntegrations(this.integrations);
+            const patch = {...this.integrations};
+            // Hidden custom drafts must not block direct/environment routing.
+            // Omitted fields preserve the server's saved custom connection.
+            if (patch.telegramProxyMode !== 'custom')
+                for (const key of Object.keys(patch))
+                    if (key.startsWith('telegramProxy') && key !== 'telegramProxyMode') delete patch[key];
+            const result = await this.api.updateAdminIntegrations(patch);
             if (result && result.integrations)
-                this.integrations = Object.assign(this.makeDefaultIntegrations(), result.integrations);
+                this.integrations = this.integrationValues(result.integrations);
+            this.telegramProxyPasswordVisible = false;
             await this.api.updateConfig();
             if (!options.quiet)
                 this.$root.notify.success(this.mailUi.saved);
@@ -2528,7 +2572,7 @@ export default vueComponent(SettingsDialog);
     }
 
     .admin-mail-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .admin-mail-wide,

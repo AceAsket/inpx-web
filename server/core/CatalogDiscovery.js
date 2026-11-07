@@ -2,6 +2,23 @@ const search = require('../../shared/CatalogSearch');
 const model = require('../../shared/CatalogDiscovery');
 const MAX_CHAR = String.fromCodePoint(0xFFFFF);
 const KINDS = ['author', 'series', 'title'];
+const Lookup = require('./CatalogLookupIndex');
+
+function matchesScope(book, filters) {
+    if (!book || book.del) return false;
+    if (filters.sourceId && (book.sourceId || '') !== filters.sourceId.trim()) return false;
+    for (const key of ['lang','ext']) {
+        if (!filters[key]) continue;
+        const values=filters[key].toLowerCase().split(key==='ext' ? /[,|]/ : ',').map(value=>value.trim());
+        const actual=String(book[key] || '').toLowerCase();
+        if (!values.includes(actual) && !(values.includes('?') && !actual)) return false;
+    }
+    if (filters.genre) {
+        const genres=filters.genre.toLowerCase().split(',').map(value=>value.trim());
+        if (!String(book.genre || '').toLowerCase().split(',').some(value=>genres.includes(value.trim()) || !value && genres.includes('?'))) return false;
+    }
+    return true;
+}
 
 class CatalogDiscovery {
     constructor(worker) {this.worker = worker; this.cache = new Map(); this.pending = new Map(); this.cacheBytes = 0;}
@@ -52,55 +69,41 @@ class CatalogDiscovery {
     async suggest(options = {}) {
         const query = model.text(options.query || ''), filters = model.scope(options.filters);
         const kind = options.kind && KINDS.includes(options.kind) ? options.kind : '';
-        if (Array.from(query).length < 2 || !search.words(query).length || /^[=~*#?]/.test(query)) return {query, groups: [], corrections: []};
-        if (!await this.warm()) return {query, groups: [], corrections: [], warming: true, progress:{...this.lookup.progress}};
+        if (Array.from(query).length < model.MIN_SUGGEST_CHARS || !search.words(query).length || /^[=~*#?]/.test(query)) return {query, groups: [], corrections: []};
         return this.cached(JSON.stringify(['suggest', query, filters, kind]), async db => {
             const groups = [];
             const scoped = Object.keys(filters).length > 1;
-            const selected = scoped ? Array.from(await this.worker.dbSearcher.selectBookIds(filters)) : null;
+            let limited=false;
             for (const field of kind ? [kind] : KINDS) {
-                const ids = await this.lookup.ids(field, query);
-                const rows = await db.select({table: field, rawResult: true, where: `
-                    const normalize = ${search.normalize.toString()}, words = ${search.words.toString()};
-                    const relevance = ${model.relevance.toString()};
-                    const selected = ${selected ? `new Set(${db.esc(selected)})` : 'null'};
-                    const result = [];
-                    for (const id of ${db.esc(Array.from(ids))}) {
-                        const row = @unsafeRow(id);
-                        if (!row || row.value === '?') continue;
-                        let count = selected ? 0 : row.bookCount;
-                        const bookIds = [];
-                        for (const id of row.bookIds) {
-                            if (selected && !selected.has(id)) continue;
-                            if (selected) count++;
-                            if (bookIds.length < 20) bookIds.push(id);
-                            if (!selected && bookIds.length >= 20) break;
-                        }
-                        if (!count) continue;
-                        const item = {name: row.name, count, bookIds, score: relevance(row.name, ${db.esc(query)})};
-                        result.push(item);
-                        result.sort((a, b) => b.score - a.score || b.count - a.count || a.name.localeCompare(b.name));
-                        if (result.length > 6) result.pop();
-                    }
-                    return result;
-                `});
-                const items = rows[0].rawResult;
-                if (field === 'title' && items.length) {
-                    const books = await db.select({table: 'book', where: `@@id(${db.esc(items.flatMap(row => row.bookIds))})`});
-                    const byId = new Map(books.map(book => [book.id, book]));
-                    for (const item of items) {
-                        item.book = item.bookIds.map(id => byId.get(id)).find(book => book && !book.del);
-                        if (!item.book) {
-                            const ids = await this.worker.dbSearcher.selectBookIds({...filters, title: '=' + item.name});
-                            const fallback = ids?.length ? await db.select({table: 'book', where: `@@id(${db.esc(Array.from(ids.slice(0, 1)))})`}) : [];
-                            item.book = fallback[0];
-                        }
-                    }
+                // Suggestions never trigger or await a second full-library
+                // index. All candidate and posting limits apply BEFORE rows
+                // cross the database worker boundary, including scoped queries.
+                const candidates=await Lookup.candidates(db,field,query,scoped);
+                limited ||= candidates.limited;
+                const rows=candidates.rows.filter(row=>row.count>0).sort((a,b)=>
+                    model.relevance(b.name,query)-model.relevance(a.name,query) || b.count-a.count || a.name.localeCompare(b.name));
+                const byId=new Map((candidates.books || []).map(book=>[book.id,book]));
+                if (scoped || field==='title') {
+                    const ids=[...new Set(rows.flatMap(row=>row.bookIds))].filter(id=>!byId.has(id));
+                    limited ||= ids.length>Lookup.fastLimits.books;
+                    for(const book of await Lookup.books(db,ids))byId.set(book.id,book);
                 }
-                groups.push({kind: field, items: items.map(item => ({name: item.name, count: item.count, ...(item.book ? {book: item.book} : {})}))});
+                const items=[];
+                for(const row of rows) {
+                    const matching=row.bookIds.map(id=>byId.get(id)).filter(book=>matchesScope(book,filters));
+                    if ((scoped || field==='title') && !matching.length) {limited ||= !row.complete;continue;}
+                    const complete=row.complete && row.bookIds.every(id=>byId.has(id));
+                    const count=scoped ? (complete ? matching.length:null):row.count;
+                    const item={name:row.name,count};
+                    if(scoped && !complete) {item.limited=true;limited=true;}
+                    if(field==='title')item.book=matching[0];
+                    items.push(item);
+                    if(items.length===6)break;
+                }
+                groups.push({kind:field,items});
             }
             const corrections = groups.some(group => group.items.length) ? [] : await this.correct(query, kind ? [kind] : KINDS, filters, db);
-            return {query, groups, corrections};
+            return {query, groups, corrections, ...(limited ? {limited:true}:{})};
         });
     }
 
@@ -110,31 +113,18 @@ class CatalogDiscovery {
         for (const field of fields) for (let position = 0; position < tokens.length; position++) {
             if (result.length >= 3 || Date.now() >= deadline) return result;
             if (tokens[position].length < 4 || tokens[position].length > 40) continue;
-            const token = search.root(tokens[position]), prefix = `${field}:`;
-            const rows = await db.select({table: 'word', rawResult: true, where: `
-                const exact = @dirtyIndexLR('value', ${db.esc(prefix + token)}, ${db.esc(prefix + token + MAX_CHAR)});
-                if (exact.size) return [];
-                const distance = ${model.distance.toString()}, candidates = [], start = Date.now();
-                let scanned = 0;
-                for (const id of @dirtyIndexLR('value', ${db.esc(prefix)}, ${db.esc(prefix + MAX_CHAR)})) {
-                    if (++scanned > 50000 || Date.now() - start > 60 || Date.now() > ${deadline}) break;
-                    const row = @unsafeRow(id), word = row.value.slice(${prefix.length});
-                    if (distance(word, ${db.esc(token)}, 1) === 1 && row.bookIds.length)
-                        candidates.push({word, bookId: row.bookIds[0], count: row.bookIds.length});
-                    if (candidates.length >= 100) break;
-                }
-                return candidates.sort((a, b) => b.count - a.count).slice(0, 5);
-            `});
-            const candidates = rows[0].rawResult;
+            const token = search.root(tokens[position]);
+            const words=await Lookup.wordCandidates(db,field,token,{typo:true});
+            const candidates=words.rows.filter(row=>model.distance(row.word,token,1)===1);
             if (!candidates.length) continue;
-            const books = await db.select({table: 'book', where: `@@id(${db.esc(candidates.map(row => row.bookId))})`});
+            const books=await Lookup.books(db,[...new Set(candidates.flatMap(row=>row.bookIds))]);
             for (const candidate of candidates) {
-                const book = books.find(book => book.id === candidate.bookId);
+                const book=books.find(book=>candidate.bookIds.includes(book.id) && matchesScope(book,filters));
                 const word = search.words(book?.[field]).find(word => search.root(word) === candidate.word);
                 if (!word) continue;
                 const corrected = tokens.map((value, index) => index === position ? word : value).join(' ');
                 if (result.some(item => item.kind === field && item.query === corrected)) continue;
-                if ((await this.worker.dbSearcher.selectBookIds({...filters, [field]: corrected})).length)
+                if (search.match(book[field],corrected))
                     result.push({kind: field, query: corrected});
                 if (result.length >= 3) return result;
             }

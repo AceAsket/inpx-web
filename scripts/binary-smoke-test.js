@@ -23,15 +23,18 @@ async function createFixture(dir) {
     zip.addBuffer(Buffer.from('20260914'), 'version.info');
     const row = ['Tester,Smoke:', 'sf:', 'Packaged smoke book', '', '0', '1', '100', '1', '0', 'fb2', '2026-09-14', 'en', '0', ''];
     let rows = row.join('\x04') + '\n';
+    const books = new yazl.ZipFile();
+    const bookDone = require('stream/promises').pipeline(books.outputStream, fs.createWriteStream(path.join(dir, 'smoke.zip')));
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZcQAAAAASUVORK5CYII=';
+    books.addBuffer(Buffer.from('<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>Packaged smoke book</book-title><lang>en</lang></title-info></description><body><section><p>Smoke text</p><image l:href="#illustration"/></section></body><binary id="illustration" content-type="image/png">'+png+'</binary></FictionBook>'), '1.fb2');
     if (process.env.INPX_SMOKE_EPUB === 'true') {
         const epubFile = path.join(dir, 'original.epub'); await require('./epub-fb2-tests').fixture(epubFile);
         const epubData = await fs.readFile(epubFile);
-        const books = new yazl.ZipFile();
-        const done = require('stream/promises').pipeline(books.outputStream, fs.createWriteStream(path.join(dir, 'smoke.zip')));
-        books.addBuffer(epubData, '2.epub'); books.end(); await done;
+        books.addBuffer(epubData, '2.epub');
         const epubRow = [...row]; epubRow[2] = 'EPUB original'; epubRow[5] = '2'; epubRow[6] = String(epubData.length); epubRow[7] = '2'; epubRow[9] = 'epub'; epubRow[11] = 'ru';
         rows += epubRow.join('\x04') + '\n';
     }
+    books.end(); await bookDone;
     zip.addBuffer(Buffer.from(rows), 'smoke.inp');
     zip.end();
     await complete;
@@ -63,6 +66,7 @@ async function unusedPort() {
 async function checkWebSocket(url) {
     await new Promise((resolve, reject) => {
         const socket = new WebSocket(url.replace(/^http/, 'ws'));
+        let epubUid;
         const timer = setTimeout(() => finish(new Error('WebSocket response timed out')), 60000);
         const finish = error => {
             clearTimeout(timer);
@@ -98,8 +102,17 @@ async function checkWebSocket(url) {
                     assert(response.books.some(book => book.title === 'Packaged smoke book'));
                     if (process.env.INPX_SMOKE_EPUB === 'true') {
                         const epub = response.books.find(book => book.ext === 'epub'); assert(epub);
-                        socket.send(JSON.stringify({action:'get-book-info', bookUid:epub._uid, readerOnly:true, requestId:'epub-reader'}));
-                    } else finish();
+                        epubUid = epub._uid;
+                    }
+                    const book = response.books.find(book => book.ext === 'fb2'); assert(book);
+                    socket.send(JSON.stringify({action:'get-book-gallery', bookUid:book._uid, requestId:'gallery'}));
+                } else if (response.requestId === 'gallery') {
+                    assert.strictEqual(response.images.length, 1, 'Packaged gallery includes its bounded parser and original FB2 image');
+                    assert.strictEqual(response.images[0].id, 'illustration');
+                    assert.strictEqual(response.images[0].contentType, 'image/png');
+                    assert(Buffer.from(response.images[0].data, 'base64').length > 0);
+                    if (epubUid) socket.send(JSON.stringify({action:'get-book-info', bookUid:epubUid, readerOnly:true, requestId:'epub-reader'}));
+                    else finish();
                 } else if (response.requestId === 'epub-reader') {
                     const document = JSON.stringify(response.bookInfo.fb2);
                     assert.match(document, /Текст второй главы/);

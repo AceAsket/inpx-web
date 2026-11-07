@@ -1,14 +1,14 @@
 <template>
     <q-menu :model-value="visible" no-parent-event no-focus no-refocus no-route-dismiss fit :offset="[0, 8]" class="catalog-suggestions" @update:model-value="value => !value && dismiss()">
         <div :id="listId" role="listbox" aria-label="Подсказки поиска" class="catalog-suggestions__list">
-            <p v-if="loading && !items.length && !data?.warming && !error" role="status">
+            <p v-if="loading && !items.length && !error" role="status" class="catalog-suggestions__status">
                 Ищем подсказки…
             </p>
-            <p v-if="error" role="status">
+            <p v-else-if="error" role="status" class="catalog-suggestions__status">
                 {{ error }}
             </p>
-            <p v-if="data?.warming && !error" role="status">
-                Подготавливаем подсказки<span v-if="preparationPercent !== null">: {{ preparationPercent }}%</span>. Поиск уже доступен.
+            <p v-else-if="data && !items.length" role="status" class="catalog-suggestions__status">
+                Подсказок нет. Можно искать по всему каталогу.
             </p>
             <div v-for="(item, index) in items" :key="`${item.kind}:${item.name}`">
                 <div v-if="index === 0 || items[index - 1].kind !== item.kind" class="catalog-suggestions__heading">
@@ -19,37 +19,42 @@
                 </button>
             </div>
         </div>
+        <p v-if="data?.limited && items.length" class="catalog-suggestions__status">
+            Показана часть совпадений. Полный результат — в поиске.
+        </p>
+        <button type="button" class="catalog-suggestions__search" @mousedown.prevent @click="search">
+            <q-icon name="la la-search" size="20px" /><span>Искать «{{ queryText }}»</span><q-icon name="la la-arrow-right" size="18px" />
+        </button>
     </q-menu>
 </template>
 
 <script setup>
 import {ref, computed, watch, onBeforeUnmount, onDeactivated, getCurrentInstance} from 'vue';
 import {QMenu} from 'quasar';
+import {MIN_SUGGEST_CHARS} from '../../../shared/CatalogDiscovery';
 const props = defineProps({query: {type: String, default: ''}, kind: {type: String, default: ''}, filters: {type: Object, default: () => ({})},
     focused: Boolean, context: {type: String, default: ''}, listId: {type: String, required: true}});
-const emit = defineEmits(['choose', 'dismiss', 'active', 'expanded']);
+const emit = defineEmits(['choose', 'search', 'dismiss', 'active', 'expanded']);
 const root = getCurrentInstance().proxy.$root;
-const data = ref(null), loading = ref(false), error = ref(''), selected = ref(-1);
-const visible = computed(() => !!(props.focused && (loading.value || data.value?.warming || error.value || items.value.length)));
+const data = ref(null), loading = ref(false), error = ref(''), selected = ref(-1), enabled = ref(false);
+const queryText = computed(() => String(props.query || '').normalize('NFKC').replace(/\s+/g, ' ').trim());
+const visible = computed(() => props.focused && enabled.value);
 const labels = {title: 'Книги', author: 'Авторы', series: 'Серии', correction: 'Возможно, вы искали'};
 const icons = {title: 'la la-book', author: 'la la-user-edit', series: 'la la-layer-group', correction: 'la la-spell-check'};
 const items = computed(() => [...(data.value?.groups || []).flatMap(group => group.items.map(item => ({...item, kind: group.kind}))),
     ...(data.value?.corrections || []).map(item => ({kind: 'correction', name: item.query, targetKind: item.kind}))]);
-const preparationPercent = computed(() => data.value?.progress?.total > 0
-    ? Math.min(99, Math.floor(100 * data.value.progress.done / data.value.progress.total)) : null);
 let timer, revision = 0;
 watch(() => [props.query, props.kind, JSON.stringify(props.filters), props.context, props.focused], () => {
     clearTimeout(timer); const request = ++revision;
     data.value = null; selected.value = -1; error.value = ''; loading.value = false;
-    if (!props.focused || Array.from((props.query || '').trim()).length < 2) return;
+    enabled.value = false;
+    if (!props.focused || Array.from(queryText.value).length < MIN_SUGGEST_CHARS) return;
+    enabled.value = true;
     const requestSuggestions = async() => {
         loading.value = true;
         try {
             const result = await root.api.catalogSuggest({query: props.query, kind: props.kind, filters: props.filters});
-            if (request === revision) {
-                data.value = result;
-                if (result.warming) timer = setTimeout(requestSuggestions, 1500);
-            }
+            if (request === revision) data.value = result;
         } catch (e) {if (request === revision && e.message !== 'need_profile_login') error.value = 'Подсказки недоступны. Можно выполнить поиск.';}
         finally {if (request === revision) loading.value = false;}
     };
@@ -59,6 +64,7 @@ watch(selected, index => emit('active', index >= 0 ? `${props.listId}-${index}` 
 watch(visible, value => emit('expanded', value));
 function dismiss() {emit('dismiss');}
 function choose(item) {emit('choose', item); dismiss();}
+function search() {emit('search'); dismiss();}
 function keydown(event) {
     if (!props.focused) return;
     if (event.key === 'Escape') {event.preventDefault(); dismiss(); return;}
@@ -71,7 +77,7 @@ function keydown(event) {
     }
     if (event.key === 'Enter' && selected.value >= 0) {event.preventDefault(); event.stopPropagation(); choose(items.value[selected.value]);}
 }
-function cancel() {clearTimeout(timer); revision++; loading.value = false; data.value = null;}
+function cancel() {clearTimeout(timer); revision++; enabled.value = false; loading.value = false; data.value = null; selected.value = -1;}
 onBeforeUnmount(cancel); onDeactivated(cancel);
 defineExpose({keydown});
 </script>
@@ -85,4 +91,7 @@ defineExpose({keydown});
 .catalog-suggestions button > span {flex: 1; min-width: 0; overflow-wrap: anywhere;}
 .catalog-suggestions small {display: block; color: var(--app-muted, #52696d); font-size: 11px;}
 .catalog-suggestions p {padding: 10px; margin: 0; color: var(--app-muted, #52696d);}
+.catalog-suggestions__status {font-size: 12px; line-height: 1.4;}
+.catalog-suggestions .catalog-suggestions__search {position: sticky; bottom: 0; border-top: 1px solid var(--app-border, #d6e3e3); border-radius: 0; background: var(--app-surface, white); color: var(--app-primary, #087f78); padding: 12px 18px;}
+.catalog-suggestions button:focus-visible {outline: 2px solid var(--app-primary, #087f78); outline-offset: -3px;}
 </style>

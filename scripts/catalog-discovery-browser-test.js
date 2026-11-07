@@ -18,7 +18,11 @@ async function fixture(directory) {
     ];
     const rows = [], files = [], date = new Date().toISOString().slice(0, 10);
     for (const [index, [author, title, series, number, lang]] of entries.entries()) {
-        const book = `<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><author><first-name>${author}</first-name></author><book-title>${title}</book-title><annotation><p>Аннотация для браузерной проверки.</p></annotation><lang>${lang}</lang><sequence name="${series}" number="${number}"/></title-info></description><body><section><title><p>Глава первая</p></title><p>Текст книги для проверки.</p></section></body></FictionBook>`;
+        // Distinct tiny PNG payloads exercise the real preview cap without a large fixture.
+        const images = index === 0 ? Array.from({length:20}, (_, id) => ({id:'illustration-' + id, data:Buffer.concat([
+            Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZcQAAAAASUVORK5CYII=', 'base64'), Buffer.from([id]),
+        ]).toString('base64')})) : [];
+        const book = `<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><author><first-name>${author}</first-name></author><book-title>${title}</book-title><annotation><p>Аннотация для браузерной проверки.</p></annotation><lang>${lang}</lang><sequence name="${series}" number="${number}"/></title-info></description><body><section><title><p>Глава первая</p></title><p>Текст книги для проверки.</p>${images.map(image => `<image l:href="#${image.id}"/>`).join('')}</section></body>${images.map(image => `<binary id="${image.id}" content-type="image/png">${image.data}</binary>`).join('')}</FictionBook>`;
         rows.push([author + ':', 'prose:', title, series, String(number), String(index + 1), String(Buffer.byteLength(book)), String(index + 1), '0', 'fb2', date, lang, '4', ''].join('\x04'));
         files.push([`${index + 1}.fb2`, book]);
     }
@@ -50,17 +54,22 @@ async function fixture(directory) {
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [];
         let externalFixture = false;
-        let warmingFixture = true, warmingPolls = 0;
+        let galleryFixture = 'actual';
+        const suggestionRequests = new Map();
         const invalidBookRequests = [];
         const inactiveReaderRequests = [];
         await page.routeWebSocket('**', socket => {
-            const server = socket.connectToServer(), suggestions = new Map(), configs = new Set();
+            const server = socket.connectToServer(), suggestions = new Map(), configs = new Set(), galleries = new Set();
             socket.onMessage(message => {
                 const request = JSON.parse(String(message));
                 if (request.action === 'get-book-info' && !request.bookUid) invalidBookRequests.push({card: request.card, readerOnly: request.readerOnly, url: page.url()});
                 if (request.action === 'get-book-info' && request.readerOnly && !page.url().includes('#/reader')) inactiveReaderRequests.push(request.bookUid);
-                if (request.action === 'catalog-suggest') suggestions.set(request.requestId, request.options.query);
+                if (request.action === 'catalog-suggest') {
+                    suggestions.set(request.requestId, request.options.query);
+                    suggestionRequests.set(request.options.query, (suggestionRequests.get(request.options.query) || 0) + 1);
+                }
                 if (request.action === 'get-config') configs.add(request.requestId);
+                if (request.action === 'get-book-gallery') galleries.add(request.requestId);
                 if (externalFixture && request.action === 'get-discovery-shelves') {
                     socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
                     socket.send(JSON.stringify({requestId: request.requestId, shelves: [{id: 'external', source: 'external', sourceName: 'Тестовая витрина',
@@ -82,12 +91,15 @@ async function fixture(directory) {
                 if (suggestions.has(response.requestId) && !response._rok) {
                     const query = suggestions.get(response.requestId);
                     suggestions.delete(response.requestId);
+                    // Compatibility: an older server's warming response must not make the client poll.
+                    if (query === 'Тест') message = JSON.stringify({requestId:response.requestId, query, warming:true, groups:[], corrections:[], progress:{done:20, total:100}});
+                    else if (query === 'Кост') message = JSON.stringify({...response, limited:true});
                     // A real library can respond after the 500 ms automatic search changes the route.
-                    if (warmingFixture && query === 'Кост') {
-                        warmingPolls++;
-                        message = JSON.stringify({requestId:response.requestId, query, warming:true, groups:[], corrections:[], progress:{done:warmingPolls * 100, total:10000}});
-                    }
                     setTimeout(() => socket.send(message), 800); return;
+                }
+                if (galleries.has(response.requestId) && !response._rok) {
+                    galleries.delete(response.requestId);
+                    if (galleryFixture === 'empty-limited') message = JSON.stringify({...response, images:[], limited:true, omitted:20});
                 }
                 socket.send(message);
             });
@@ -124,34 +136,66 @@ async function fixture(directory) {
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
         await page.goto(base + '/#/books?lang=ru');
         const input = page.locator('.catalog-search-panel__main input').first();
-        await input.fill('zzzz'); await pause(600); await input.fill('Кост');
+        await input.fill('Те'); await input.press('Enter');
+        await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '*Те');
+        await pause(600);
+        assert.equal(suggestionRequests.get('Те') || 0, 0, 'Two characters still allow ordinary Enter search but never request suggestions');
+        await input.fill('😀а'); await pause(600);
+        assert.equal(suggestionRequests.get('😀а') || 0, 0, 'Count Unicode characters rather than UTF-16 units');
+        await input.fill('Тес');
+        for (let i=0; i<30 && !suggestionRequests.get('Тес'); i++) await pause(100);
+        assert(suggestionRequests.get('Тес') >= 1, 'Three characters request suggestions');
+        await input.fill('Тест');
+        const directSearch = page.getByRole('button', {name: 'Искать «Тест»', exact: true});
+        await directSearch.waitFor();
+        assert(await page.getByRole('button', {name: 'Найти', exact: true}).isEnabled(), 'Main search never waits for suggestions');
+        assert.equal(await page.getByText('Подсказок нет. Можно искать по всему каталогу.', {exact:true}).count(), 0, 'Direct search is available before the delayed suggestion response');
+        await directSearch.click();
+        await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '*Тест');
+        await input.click();
+        await page.getByText('Подсказок нет. Можно искать по всему каталогу.', {exact:true}).waitFor();
+        const requestsAfterReply = suggestionRequests.get('Тест');
+        await pause(1800);
+        assert.equal(suggestionRequests.get('Тест'), requestsAfterReply, 'Even a legacy warming response must not trigger periodic polling');
+        assert.equal(await page.getByText(/Подготавливаем подсказки|20%/).count(), 0, 'No misleading preparation percentage is displayed');
+        await screenshot('suggestions-no-wait-1440');
+        await input.fill('Кост');
         await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '*Кост');
-        await page.getByText(/Подготавливаем подсказки: \d+%/).waitFor();
-        const preparation = await page.evaluate(async() => {
-            let samples = 0, invalid = 0;
-            const sample = () => {
-                const menu = document.querySelector('.catalog-suggestions'); samples++;
-                if (!menu || getComputedStyle(menu).display === 'none' || menu.querySelectorAll('[role="status"]').length !== 1
-                    || menu.textContent.includes('Ищем подсказки')) invalid++;
-            };
-            sample(); const timer = setInterval(sample, 20);
-            await new Promise(resolve => setTimeout(resolve, 5000)); clearInterval(timer);
-            return {samples, invalid};
-        });
-        assert(warmingPolls >= 3, 'Exercise several delayed preparation polls');
-        assert.equal(preparation.invalid, 0, 'Preparation remains visible as one stable status throughout polling');
-        warmingFixture = false;
         await page.getByRole('option', {name: /Косточка/}).waitFor();
+        await page.getByText('Показана часть совпадений. Полный результат — в поиске.', {exact:true}).waitFor();
+        await page.setViewportSize({width:320, height:780});
+        await pause(150);
+        const suggestionGeometry = await page.locator('.catalog-suggestions').evaluate(node => ({left:node.getBoundingClientRect().left,
+            right:node.getBoundingClientRect().right, width:innerWidth, scroll:node.scrollWidth, client:node.clientWidth}));
+        assert(suggestionGeometry.left >= 0 && suggestionGeometry.right <= suggestionGeometry.width + 1
+            && suggestionGeometry.scroll <= suggestionGeometry.client + 1, 'Suggestions and direct search fit mobile: ' + JSON.stringify(suggestionGeometry));
+        await screenshot('suggestions-partial-320');
+        await page.setViewportSize({width:1440, height:1000});
         await input.press('Escape'); await page.locator('.catalog-suggestions').waitFor({state: 'hidden'});
         await input.fill('Косто'); await page.getByRole('option', {name: /Косточка/}).waitFor();
         await input.press('ArrowDown');
         assert(await input.getAttribute('aria-activedescendant'));
+        const catalogUrl = page.url();
         await input.press('Enter');
-        await page.getByRole('heading', {name: 'Косточка', exact: true}).waitFor();
+        await page.locator('.q-dialog .library-book-actions').getByRole('heading', {name: 'Косточка', exact: true}).waitFor();
+        assert.equal(page.url(), catalogUrl, 'Choosing a title suggestion opens a preview without changing the search URL');
+        await page.getByRole('link', {name: 'Полная карточка', exact: true}).click();
+        await page.locator('.catalog-book-details').waitFor();
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Choosing a suggestion retains the language');
         await page.locator('.catalog-book-details').waitFor();
         assert(!page.url().includes('/reader'));
         const bookUrl = page.url();
+        await page.locator('.fb2-gallery').scrollIntoViewIfNeeded();
+        await page.getByText('Показаны первые 18. Остальные иллюстрации доступны в читалке.', {exact:true}).waitFor();
+        assert.equal(await page.locator('.fb2-gallery-image').count(), 18, 'The real gallery endpoint returns a bounded preview');
+        await screenshot('gallery-limited-1440');
+        galleryFixture = 'empty-limited';
+        await page.reload();
+        await page.locator('.fb2-gallery').scrollIntoViewIfNeeded();
+        await page.getByText('Превью иллюстраций ограничено. Откройте книгу в читалке.', {exact:true}).waitFor();
+        assert.equal(await page.getByText('Иллюстрации не найдены', {exact:true}).count(), 0, 'A bounded empty preview does not claim that the book has no illustrations');
+        assert.equal(await page.locator('.fb2-gallery .loading-state').count(), 0);
+        galleryFixture = 'actual';
         await page.locator('.library-book-actions').getByRole('button', {name: 'Читать', exact: true}).click();
         await page.locator('.reader-body').getByText('Текст книги для проверки.', {exact: true}).first().waitFor();
         await page.goto(bookUrl);
@@ -277,7 +321,7 @@ async function fixture(directory) {
         assert.deepEqual(errors, []);
         assert.deepEqual(invalidBookRequests, [], 'Deactivated book pages must not reload with an empty UID');
         assert.deepEqual(inactiveReaderRequests, [], 'A cached reader must not prepare documents while another page is active');
-        await fs.writeJson(path.join(directory, 'result.json'), {base, errors, depth}, {spaces: 2});
+        await fs.writeJson(path.join(directory, 'result.json'), {base, errors, depth, suggestionRequests: Object.fromEntries(suggestionRequests)}, {spaces: 2});
         console.log('Catalog discovery browser: OK. Artifacts: ' + directory);
     } catch (error) {
         if (browser) {const page = browser.contexts().flatMap(context => context.pages())[0]; if (page) {await page.screenshot({path: path.join(directory, 'failure.png')}).catch(() => {}); await fs.writeFile(path.join(directory, 'failure.html'), await page.content());}}

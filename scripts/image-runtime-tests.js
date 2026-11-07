@@ -160,6 +160,23 @@ async function testQueuedImageJobsKeepTheirOwnRequestContext() {
     assert.strictEqual(runtime.active, 0);
 }
 
+async function testPreviewDecoderChecksOutputSizeBeforeBufferingAndKeepsFullReads() {
+    await temporary(async dir=>{
+        const data=Buffer.concat([png,Buffer.alloc(4096)]),runtime=new ImageRuntime(1);
+        const images=isolatedImages(async(command,args)=>{await fs.writeFile(args[1],data);},runtime);
+        const read=fs.readFile;let outputReads=0;
+        fs.readFile=async function(file,...args){if(String(file).endsWith('.png'))outputReads++;return read.call(this,file,...args);};
+        try {
+            await assert.rejects(images.normalizeForFb2(jxl('preview'),dir,[],{djxl:'test-djxl'},1024),{code:'INPX_RESOURCE_IMAGE_OUTPUT_LIMIT'});
+            assert.strictEqual(outputReads,0,'Reject oversized decoder output before allocating its buffer');
+            assert.deepStrictEqual(await fs.readdir(dir),[]);assert.strictEqual(runtime.active,0);
+            const full=await images.normalizeForFb2(jxl('full'),dir,[],{djxl:'test-djxl'});
+            assert(full.data.equals(data));assert.strictEqual(outputReads,1,'Full reader/export decoding keeps its original behavior');
+            assert.deepStrictEqual(await fs.readdir(dir),[]);
+        } finally {fs.readFile=read;}
+    });
+}
+
 module.exports = [testImagesShareBudgetAcrossBooksCoversAndEpub, testImageRuntimeOneSlotDoesNotDeadlockNestedDecoder,
     testImageMapWaitsForWorkersOnFailureAndRecovers, testImageDecoderTimeoutCleansFilesAndReleasesSlot,
-    testQueuedImageJobsKeepTheirOwnRequestContext];
+    testQueuedImageJobsKeepTheirOwnRequestContext,testPreviewDecoderChecksOutputSizeBeforeBufferingAndKeepsFullReads];

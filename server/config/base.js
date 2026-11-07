@@ -156,6 +156,8 @@ module.exports = {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramBotEnabled: process.env.INPX_TELEGRAM_BOT_ENABLED === 'true',
     telegramIpFamily: require('../../shared/TelegramNetwork').normalizeIpFamily(process.env.TELEGRAM_IP_FAMILY),
+    ...require('../../shared/TelegramNetwork').proxyDefaults,
+    ...require('../../shared/TelegramNetwork').environmentPatch(process.env),
     telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
     telegramCaptionTemplate: process.env.TELEGRAM_CAPTION_TEMPLATE || '${AUTHOR} - ${TITLE}',
     emailShareEnabled: Boolean(process.env.SMTP_HOST),

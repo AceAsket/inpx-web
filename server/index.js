@@ -18,6 +18,7 @@ let branch = '';
 const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'library-sources', 'admin-login', 'admin-password'];
 
 function applyEnvSecurityOverrides(targetConfig) {
+    Object.assign(targetConfig,require('../shared/TelegramNetwork').environmentPatch(process.env));
     if (Object.prototype.hasOwnProperty.call(process.env, 'TELEGRAM_IP_FAMILY'))
         targetConfig.telegramIpFamily = require('../shared/TelegramNetwork').normalizeIpFamily(process.env.TELEGRAM_IP_FAMILY);
     targetConfig.reviewWarmupEnabled = process.env.INPX_REVIEWS_WARMUP === 'true';

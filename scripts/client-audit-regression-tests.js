@@ -203,6 +203,26 @@ async function testLazyGalleryRestoresInlineAnnotationAndHistoryImages() {
     assert.strictEqual(value.fb2Images.length, 1);
 }
 
+async function testGalleryRetainsBoundedPreviewStateAndFinishesFailures() {
+    for (const images of [[], gallery('pic').images]) {
+        const value = card({getBookGallery: async() => ({images, limited:true, omitted:1})});
+        await value.loadGallery();
+        assert.strictEqual(value.galleryLimited, true);
+        assert.strictEqual(value.fb2Images.length, images.length);
+        assert.strictEqual(value.galleryLoading, false);
+        value.init();
+        assert.strictEqual(value.galleryLimited, false, 'A new card does not retain the previous preview limit');
+    }
+    const failed = card({getBookGallery: async() => {throw new Error('temporary gallery failure');}});
+    await failed.loadGallery();
+    assert.strictEqual(failed.galleryLoading, false);
+    assert.match(failed.galleryError, /temporary gallery failure/);
+    const legacy = card({getBookGallery: async() => gallery('pic')});
+    await legacy.loadGallery();
+    assert.strictEqual(legacy.galleryLimited, false, 'Servers without limit metadata remain supported');
+    assert.strictEqual(legacy.fb2Images.length, 1);
+}
+
 async function testFollowLinkUsesIndividualAuthorIndex() {
     const dir = await fs.mkdtemp(path.join(require('os').tmpdir(), 'inpx-client-follow-'));
     const libDir = path.join(dir, 'books'), dataDir = path.join(dir, 'data');
@@ -261,5 +281,5 @@ module.exports = [testRemovingVoteFilterDoesNotWaitForObsoleteIndexBuild,
     testVoteWaitCancellationPreservesOtherSearchesAndUnmounts, testCancelledVotePollCannotClearANewerWait,
     testClosedAnchoredAudioCannotRestartAfterLateResponses,
     testReopenedGalleryIgnoresOldSuccessAndFailure, testClosedGalleryDoesNotPublishLateResults,
-    testLazyGalleryRestoresInlineAnnotationAndHistoryImages, testFollowLinkUsesIndividualAuthorIndex,
+    testLazyGalleryRestoresInlineAnnotationAndHistoryImages, testGalleryRetainsBoundedPreviewStateAndFinishesFailures, testFollowLinkUsesIndividualAuthorIndex,
     testIsbnActionFailureResumesTaskPollingWithoutRevivingClosedDialog];

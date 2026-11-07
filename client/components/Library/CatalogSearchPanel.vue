@@ -5,11 +5,11 @@
         </div>
         <form v-if="!discovery && !extended" role="search" @submit.prevent="flush">
             <div class="catalog-search-panel__main">
-                <CatalogTextField v-model:text="draft.title.text" v-model:mode="draft.title.mode" label="Название книги" mode-label="Совпадение названия" search-icon suggestions :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @update:text="schedule" @update:mode="schedule" />
+                <CatalogTextField v-model:text="draft.title.text" v-model:mode="draft.title.mode" label="Название книги" mode-label="Совпадение названия" search-icon suggestions :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @search="flush" @update:text="schedule" @update:mode="schedule" />
                 <q-btn unelevated no-caps color="primary" label="Найти" icon="la la-arrow-right" type="submit" />
             </div>
             <div v-if="moreFields" class="catalog-search-panel__extra">
-                <CatalogTextField v-for="field in extraFields" :key="field.id" v-model:text="draft[field.id].text" v-model:mode="draft[field.id].mode" :label="field.label" suggestions :kind="field.id" :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @update:text="schedule" @update:mode="schedule" />
+                <CatalogTextField v-for="field in extraFields" :key="field.id" v-model:text="draft[field.id].text" v-model:mode="draft[field.id].mode" :label="field.label" suggestions :kind="field.id" :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @search="flush" @update:text="schedule" @update:mode="schedule" />
             </div>
         </form>
         <div v-if="extended" class="catalog-search-panel__extended">
@@ -46,18 +46,21 @@
 </template>
 
 <script setup>
-import {reactive, ref, computed, watch, onBeforeUnmount, onDeactivated} from 'vue';
+import {reactive, ref, computed, watch, onBeforeUnmount, onDeactivated, inject} from 'vue';
 import CatalogFiltersDialog from './CatalogFiltersDialog.vue';
 import CatalogTextField from './CatalogTextField.vue';
 import {useRouter} from 'vue-router';
 import {useStore} from 'vuex';
 import {textFields, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters, catalogScope, catalogTarget} from './catalogSearchModel';
+import {libraryContextKey} from './libraryContext';
+import {bookUid} from './libraryModel';
 
 const props = defineProps({search: {type: Object, required: true}, selectedList: String, listOptions: Array,
     discovery: Boolean, extended: Boolean, extSummary: String, authorized: Boolean, genreMap: {type: Object, required: true},
     genreTree: Array, langList: Array, extList: Array, sources: {type: Array, default: () => []}});
 const emit = defineEmits(['patch', 'section', 'save-shelf', 'edit-extended', 'clear-extended']);
 const router = useRouter(), store = useStore();
+const library = inject(libraryContextKey, null);
 const suggestionFilters = computed(() => catalogScope(props.search));
 const suggestionContext = computed(() => `${store.state.config.profileAuthorized}:${store.state.config.currentUserProfile?.id || ''}`);
 const draft = reactive(Object.fromEntries(textFields.map(field => [field, decodeText(props.search[field])])));
@@ -90,7 +93,11 @@ function chooseSuggestion(item) {
         router.push({path: item.targetKind === 'title' ? '/books' : `/${item.targetKind}`, query: {...suggestionFilters.value, [item.targetKind]: item.name}});
         return;
     }
-    router.push(item.kind === 'title' ? catalogTarget('/book', {bookUid:item.book?._uid}, suggestionFilters.value)
+    if (item.kind === 'title' && bookUid(item.book) && library?.openCard) {
+        library.openCard(item.book);
+        return;
+    }
+    router.push(item.kind === 'title' ? catalogTarget('/book', {bookUid:bookUid(item.book)}, suggestionFilters.value)
         : catalogTarget(item.kind === 'author' ? '/author-details' : '/series-details', {name:item.name}, suggestionFilters.value));
 }
 onDeactivated(() => {clearTimeout(timer); filtersVisible.value = false;});

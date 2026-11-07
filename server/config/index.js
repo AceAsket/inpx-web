@@ -77,6 +77,7 @@ const propsToSave = [
     'telegramBotToken',
     'telegramBotEnabled',
     'telegramIpFamily',
+    ...require('../../shared/TelegramNetwork').proxyFields,
     'telegramChatId',
     'telegramCaptionTemplate',
     'emailShareEnabled',
@@ -204,6 +205,7 @@ class ConfigManager {
         if (!this.inited)
             throw new Error('not inited');
         const result = _.cloneDeep(this._config);
+        Object.assign(result, require('../../shared/TelegramNetwork').environmentPatch(process.env));
         // Resource policy is launch-only and cannot be replaced by saved settings
         // or an administrator's imported configuration.
         result.conversionConcurrency = require('../core/ResourceRuntime').settings.limits.conversions;
@@ -260,6 +262,7 @@ class ConfigManager {
 
                 if (Object.prototype.hasOwnProperty.call(config, 'telegramIpFamily'))
                     config.telegramIpFamily = require('../../shared/TelegramNetwork').normalizeIpFamily(config.telegramIpFamily);
+                Object.assign(config,require('../../shared/TelegramNetwork').normalizeProxyConfig({...this._config,...config}));
                 this.config = config;
                 this._config.discovery = discovery;
                 this._config.updateChannel = resolveUpdateChannel(this._config);

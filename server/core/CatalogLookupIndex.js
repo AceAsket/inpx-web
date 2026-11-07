@@ -4,11 +4,135 @@ const runtime = require('./ResourceRuntime');
 const crypto = require('crypto');
 const TABLE = 'catalog_lookup', VERSION = 2;
 const BATCH_SIZE = 1000, IDLE_MS = 30000;
+const FAST_LIMITS = {names:32, wordRows:16, wordBooks:64, books:128, perName:4};
+const SUGGEST_BOOK_FIELDS = ['id','_uid','_recordHash','title','author','series','serno','folder','file','ext','size','inpxSize',
+    'date','genre','lang','del','librate','libid','insno','sourcelib','sourceId','sourceName','sourceLibDir','sourceType','unavailable'];
+
+// Jemba 5.1.7's range reducer first materializes EVERY matching ID; select.limit
+// is applied even later, after loading rows. Seek its existing sorted runs and
+// merge only a bounded prefix instead. This adapter is read-only and guarded:
+// an unsupported index returns no candidates, never a full-table fallback.
+function boundedRange(index, from, to, limit) {
+    if (!index?.unique || !Array.isArray(index.sorted) || index.sorted.length>64 || !index.sorted.every(Array.isArray)
+        || typeof index.hash?.get !== 'function'
+        || typeof index.cmp !== 'function' || typeof index.prepareValue !== 'function')
+        return {ids:[],limited:true};
+    from=index.prepareValue(from); to=index.prepareValue(to);
+    const runs=index.sorted.map(values=>{
+        let left=0,right=values.length;
+        while(left<right) {const middle=(left+right)>>>1;if(index.cmp(values[middle],from)<0)left=middle+1;else right=middle;}
+        return {values,at:left};
+    });
+    const valid=run=>run.at<run.values.length && index.cmp(run.values[run.at],to)<=0;
+    const ids=new Set();let inspected=0;
+    while(ids.size<limit && inspected++<limit*4+128) {
+        let next;
+        for(const run of runs)if(valid(run) && (!next || index.cmp(run.values[run.at],next.values[next.at])<0))next=run;
+        if(!next)break;
+        const id=index.hash.get(next.values[next.at++]);
+        if(id!==undefined)ids.add(id);
+    }
+    return {ids:[...ids],limited:runs.some(valid)};
+}
+
+function sampleIds(ids, limit) {
+    if (!ids?.length || !limit) return [];
+    const size=Math.min(limit,ids.length), result=[];
+    // Diverse samples avoid spending the entire budget on one early edition or
+    // one prolific author, without copying/scanning a large posting list.
+    for(let i=0;i<size;i++)result.push(ids[Math.floor(i*(ids.length-1)/Math.max(1,size-1))]);
+    return result;
+}
 
 // A separate inverted index maps words to author/series/title IDs, not to every
 // book by a prolific author. Built incrementally in bounded batches; a marker
 // makes interrupted builds distinguishable from complete ones after a restart.
 class CatalogLookupIndex {
+    static get fastLimits() {return FAST_LIMITS;}
+
+    static async names(db, kind, query, exactNames = null) {
+        const keys=exactNames || [...new Set([query.toLowerCase(),require('../../shared/CatalogSearch').normalize(query)])];
+        const result=await db.select({table:kind,rawResult:true,where:`
+            const range=${boundedRange.toString()}, sample=${sampleIds.toString()};
+            const ids=new Set(), index=__tr._index?.get('value');let limited=false;
+            for(const key of ${db.esc(keys)}) {
+                const exact=range(index,key,key,${FAST_LIMITS.names});
+                for(const id of exact.ids)ids.add(id);
+                limited ||= exact.limited;
+                ${exactNames ? '' : `const prefix=range(index,key,key+${db.esc(String.fromCodePoint(0xFFFFF))},${FAST_LIMITS.names});
+                for(const id of prefix.ids)if(ids.size<${FAST_LIMITS.names})ids.add(id);else limited=true;
+                limited ||= prefix.limited;`}
+            }
+            const rows=[];
+            for(const id of ids) {
+                const row=@unsafeRow(id);
+                if(row && row.value!=='?')rows.push({id:row.id,name:row.name,count:row.bookCount,
+                    bookIds:sample(row.bookIds,${FAST_LIMITS.perName}),complete:row.bookIds.length<=${FAST_LIMITS.perName}});
+                if(rows.length>=${FAST_LIMITS.names})break;
+            }
+            return {rows,limited};
+        `});
+        return result[0].rawResult;
+    }
+
+    static async wordCandidates(db, kind, token, {typo = false} = {}) {
+        if (!await db.tableExists({table:'word'})) return {rows:[],limited:false};
+        const prefix=kind+':'+(typo ? token.slice(0,2):token);
+        const result=await db.select({table:'word',rawResult:true,where:`
+            const range=${boundedRange.toString()}, sample=${sampleIds.toString()};
+            const index=__tr._index?.get('value'), ids=new Set();let limited=false;
+            const exact=range(index,${db.esc(prefix)},${db.esc(prefix)},${FAST_LIMITS.wordRows});
+            for(const id of exact.ids)ids.add(id);
+            const prefix=range(index,${db.esc(prefix)},${db.esc(prefix+String.fromCodePoint(0xFFFFF))},${FAST_LIMITS.wordRows});
+            for(const id of prefix.ids)if(ids.size<${FAST_LIMITS.wordRows})ids.add(id);else limited=true;
+            limited ||= exact.limited || prefix.limited;
+            const rows=[];
+            for(const id of ids) {
+                const row=@unsafeRow(id);
+                if(!row || !row.value.startsWith(${db.esc(kind+':')}))continue;
+                rows.push({word:row.value.slice(${kind.length+1}),bookIds:sample(row.bookIds,${FAST_LIMITS.wordBooks/FAST_LIMITS.wordRows}),
+                    complete:row.bookIds.length<=${FAST_LIMITS.wordBooks/FAST_LIMITS.wordRows}});
+                limited ||= row.bookIds.length>${FAST_LIMITS.wordBooks/FAST_LIMITS.wordRows};
+            }
+            return {rows,limited};
+        `});
+        return result[0].rawResult;
+    }
+
+    static async books(db, ids) {
+        if (!ids.length) return [];
+        const result=await db.select({table:'book',rawResult:true,where:`
+            const rows=[];
+            const fields=${db.esc(SUGGEST_BOOK_FIELDS)};
+            for(const id of ${db.esc(ids.slice(0,FAST_LIMITS.books))}) {
+                const row=@unsafeRow(id);
+                if(row) {const book={};for(const field of fields)if(row[field]!==undefined)book[field]=row[field];rows.push(book);}
+            }
+            return rows;
+        `});
+        return result[0].rawResult;
+    }
+
+    static async candidates(db, kind, query, scoped) {
+        const search=require('../../shared/CatalogSearch');
+        const direct=await this.names(db,kind,query);
+        direct.rows=direct.rows.filter(row=>search.match(row.name,query));
+        // Full-name prefixes outrank matches later in a name. Six useful direct
+        // answers need no word posting reads in the common unfiltered case.
+        if (!scoped && direct.rows.filter(row=>row.count>0).length>=6) return direct;
+        const tokens=[...new Set(search.words(query).map(search.root))].sort((a,b)=>b.length-a.length);
+        const words=await this.wordCandidates(db,kind,tokens[0]);
+        const books=await this.books(db,[...new Set(words.rows.flatMap(row=>row.bookIds))]);
+        const names=new Set();
+        for(const book of books) {
+            const values=kind==='author' ? [...String(book.author || '').split(','),book.author]:[book[kind]];
+            for(const value of values)if(value && search.match(value,query))names.add(value.toLowerCase());
+        }
+        const extra=names.size ? await this.names(db,kind,query,[...names].slice(0,FAST_LIMITS.names)):{rows:[],limited:false};
+        return {rows:[...new Map([...direct.rows,...extra.rows].map(row=>[row.id,row])).values()],
+            books,limited:direct.limited || words.limited || extra.limited || names.size>FAST_LIMITS.names};
+    }
+
     constructor(worker, {idleMs = IDLE_MS} = {}) {
         this.worker = worker; this.db = worker.db; this.generation = worker.libraryAssetGeneration;
         this.controller = new AbortController(); this.ready = false;

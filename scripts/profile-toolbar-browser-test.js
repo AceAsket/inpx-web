@@ -34,11 +34,16 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1280, height: 900}}), errors = [];
         let benchmarkOptions = null, benchmarkState = 'idle', performanceReads = 0;
+        const integrationUpdates = [], integrationReplies = [], telegramProbeModes = [];
+        let lastSavedIntegrations = {};
         await page.routeWebSocket('**/ws', socket => {
-            const server = socket.connectToServer();
+            const server = socket.connectToServer(), integrationRequests = new Set();
             socket.onMessage(message => {
                 let request;
                 try {request = JSON.parse(String(message));} catch {server.send(message); return;}
+                if (request.action === 'update-admin-integrations') {
+                    integrationRequests.add(request.requestId); integrationUpdates.push(request.integrations);
+                }
                 let response;
                 if (request.action === 'get-admin-performance') {
                     performanceReads++;
@@ -56,11 +61,23 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
                     benchmarkOptions = request.options; benchmarkState = 'running'; response = {state: 'running'};
                 } else if (request.action === 'cancel-admin-benchmark') {
                     benchmarkState = 'cancelled'; response = {state: 'cancelled'};
+                } else if (request.action === 'test-admin-integration' && request.kind === 'telegram') {
+                    // The real save/config path runs first. No request reaches Telegram or a proxy.
+                    telegramProbeModes.push(lastSavedIntegrations.telegramProxyMode);
+                    response = {message:'Проверка соединения в браузерном сценарии завершена'};
                 } else {server.send(message); return;}
                 socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
                 socket.send(JSON.stringify({requestId: request.requestId, ...response}));
             });
-            server.onMessage(message => socket.send(message));
+            server.onMessage(message => {
+                const body = JSON.parse(String(message));
+                if (integrationRequests.has(body.requestId) && !body._rok) {
+                    integrationRequests.delete(body.requestId);
+                    lastSavedIntegrations = body.integrations || {};
+                    integrationReplies.push(lastSavedIntegrations);
+                }
+                socket.send(message);
+            });
         });
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(base + '/#/books?title=Packaged&lang=en');
@@ -132,11 +149,53 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await performancePanel.getByRole('button', {name: 'Остановить', exact: true}).click();
         await runBenchmark.waitFor(); assert.equal(benchmarkState, 'cancelled');
         await page.getByRole('button', {name: /^Отправка книг/}).click();
-        await page.getByRole('combobox', {name: 'Подключение Telegram', exact: true}).click();
+        await page.getByRole('combobox', {name: 'IP-семейство Telegram', exact: true}).click();
         await page.getByRole('option', {name: 'Только IPv6', exact: true}).click();
         const deliverySettings = page.getByRole('button', {name: /^Отправка книг/}).locator('..');
-        await deliverySettings.getByRole('button', {name: 'Сохранить', exact: true}).click();
-        await page.getByText('Настройки отправки сохранены', {exact: true}).waitFor();
+        const telegramSettings = deliverySettings.locator('.admin-mail-section').first();
+        await telegramSettings.getByText(/HTTPS_PROXY, ALL_PROXY и NO_PROXY/).waitFor();
+        const route = telegramSettings.getByRole('combobox', {name:'Маршрут Telegram',exact:true});
+        await route.click(); await page.getByRole('option', {name:'Свой прокси',exact:true}).click();
+        await telegramSettings.getByRole('combobox', {name:'Протокол прокси',exact:true}).click();
+        await page.getByRole('option', {name:'SOCKS5 (DNS через прокси)',exact:true}).click();
+        await telegramSettings.getByRole('textbox', {name:'Адрес прокси',exact:true}).fill('proxy.example.invalid');
+        await telegramSettings.getByRole('spinbutton', {name:'Порт прокси',exact:true}).fill('1080');
+        await telegramSettings.getByRole('textbox', {name:'Пользователь прокси',exact:true}).fill('fixture-user');
+        const proxyPassword = telegramSettings.getByLabel('Пароль прокси', {exact:true});
+        await proxyPassword.fill('client-proxy-browser-fixture');
+        const testTelegram = telegramSettings.getByRole('button', {name:'Проверить',exact:true});
+        await testTelegram.click();
+        await page.getByText('Проверка соединения в браузерном сценарии завершена', {exact:true}).waitFor();
+        assert.equal(integrationUpdates.at(-1).telegramProxyMode,'custom');
+        assert.equal(integrationUpdates.at(-1).telegramProxyProtocol,'socks5h');
+        assert.equal(integrationUpdates.at(-1).telegramProxyHost,'proxy.example.invalid');
+        assert.equal(integrationUpdates.at(-1).telegramProxyPort,1080);
+        assert.equal(integrationUpdates.at(-1).telegramIpFamily,'6');
+        assert.equal(await proxyPassword.inputValue(),'__KEEP__');
+        assert(integrationReplies.every(reply => !JSON.stringify(reply).includes('client-proxy-browser-fixture')), 'Admin replies never reveal the saved proxy password');
+        assert(await page.evaluate(() => !JSON.stringify(localStorage).includes('client-proxy-browser-fixture')), 'Proxy password is not persisted in browser storage');
+        await telegramSettings.getByText(/IPv4\/IPv6 применяется к соединению сервера с прокси/).waitFor();
+        await page.waitForFunction(() => !document.querySelector('.q-notification'), undefined, {timeout:15000});
+        await proxyPassword.scrollIntoViewIfNeeded();
+        await page.screenshot({path:path.join(directory,'telegram-proxy-custom-1280.png')});
+        await page.setViewportSize({width:320,height:900});
+        await proxyPassword.scrollIntoViewIfNeeded();
+        const proxyGeometry = await telegramSettings.evaluate(node => ({width:innerWidth, client:node.clientWidth, scroll:node.scrollWidth,
+            fields:[...node.querySelectorAll('.q-field')].map(field => ({left:field.getBoundingClientRect().left,right:field.getBoundingClientRect().right}))}));
+        assert(proxyGeometry.scroll <= proxyGeometry.client + 1 && proxyGeometry.fields.every(field => field.left >= 0 && field.right <= proxyGeometry.width),
+            'Proxy fields fit inside the dialog at320px: ' + JSON.stringify(proxyGeometry));
+        await page.screenshot({path:path.join(directory,'telegram-proxy-custom-320.png')});
+        await page.setViewportSize({width:1280,height:900});
+        await telegramSettings.getByRole('textbox', {name:'Адрес прокси',exact:true}).fill('https://invalid.example/path');
+        await telegramSettings.getByRole('spinbutton', {name:'Порт прокси',exact:true}).fill('99999');
+        for (const name of ['Прямое соединение','Прокси окружения сервера']) {
+            await route.click(); await page.getByRole('option', {name,exact:true}).click();
+            await testTelegram.click();
+            for(let i=0;i<30 && telegramProbeModes.length < (name === 'Прямое соединение' ? 2 : 3);i++) await pause(100);
+            assert(!Object.keys(integrationUpdates.at(-1)).some(key => key.startsWith('telegramProxy') && key !== 'telegramProxyMode'),
+                'Hidden custom fields cannot block switching to a direct/environment route');
+        }
+        assert.deepEqual(telegramProbeModes,['custom','direct','system'], 'Every connection test follows the mode saved through the real admin API');
         await page.getByRole('button', {name: 'OK', exact: true}).click();
         await page.locator('.q-dialog').waitFor({state: 'hidden'});
         await page.reload();
@@ -144,6 +203,8 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await toolbar.getByRole('button', {name: 'Настройки', exact: true}).click();
         await page.getByRole('button', {name: /^Отправка книг/}).click();
         await deliverySettings.getByText('Только IPv6', {exact: true}).waitFor();
+        await telegramSettings.getByText('Прокси окружения сервера', {exact:true}).waitFor();
+        assert.equal(await telegramSettings.getByLabel('Пароль прокси', {exact:true}).count(),0);
         await page.screenshot({path:path.join(directory, 'telegram-connection.png')});
         await page.getByRole('button', {name: 'OK', exact: true}).click();
         await page.screenshot({path: path.join(directory, 'toolbar-dark-1280.png')});

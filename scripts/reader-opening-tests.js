@@ -197,21 +197,23 @@ async function testBackgroundLibraryWorkWaitsForUser() {
 }
 
 async function testBookGalleryReturnsFirstImagesWithoutCover() {
-    const Fb2Parser = require('../server/core/fb2/Fb2Parser');
-    const parser = new Fb2Parser();
-    parser.fromString('<FictionBook xmlns:l="x"><description><title-info><coverpage><image l:href="#cover"/></coverpage></title-info></description>' +
-        '<binary id="cover" content-type="image/png">Y292ZXI=</binary>' +
-        Array.from({length: 20}, (_, num) => `<binary id="${num}" content-type="${num ? 'image/png' : 'image/jpg'}">aW1n</binary>`).join('') +
-        '</FictionBook>', {lowerCase: true});
-    const worker = Object.create(require('../server/core/WebWorker').prototype);
-    worker.getBookInfo = async(bookUid, options) => {
-        assert.deepStrictEqual(options, {readerOnly: true}, 'The gallery does not wait for reviews');
-        return {bookInfo: {fb2: parser.rawNodes}};
-    };
-    const {images} = await worker.getBookGallery('gallery-book');
-    assert.deepStrictEqual(images.map(image => image.id), Array.from({length: 18}, (_, num) => String(num)));
-    assert.strictEqual(images[0].contentType, 'image/jpeg');
-    assert.strictEqual(images[1].data, 'aW1n');
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'inpx-gallery-opening-'));
+    try {
+        const image=Buffer.from('89504e470d0a1a0a','hex').toString('base64');
+        const xml='<FictionBook xmlns:l="x"><description><title-info><coverpage><image l:href="#cover"/></coverpage></title-info></description>' +
+            `<binary id="cover" content-type="image/png">${image}</binary>` +
+            Array.from({length:20},(_,num)=>`<binary id="${num}" content-type="image/png">${image}</binary>`).join('')+'</FictionBook>';
+        const worker=Object.create(require('../server/core/WebWorker').prototype);
+        worker.config={bookDir:dir,tempDir:dir};worker.fb2Helper=new Fb2Helper();worker.checkMyState=()=>{};
+        worker.db={esc:JSON.stringify,select:async()=>[{_uid:'gallery-book',ext:'fb2',file:'123',folder:'book.7z'}]};
+        worker.dbConfig=async()=>({inpxHash:'fixture'});worker.scheduleCacheClean=()=>{};
+        worker.getBookInfo=async()=>assert.fail('Gallery must not prepare the full reader document');
+        worker.extractBook=async()=>{const file=path.join(dir,'extracted');await fs.writeFile(file,xml);return file;};
+        const {images,limited}=await worker.getBookGallery('gallery-book');
+        assert.deepStrictEqual(images.map(image=>image.id),Array.from({length:18},(_,num)=>String(num)));
+        assert.strictEqual(images[0].contentType,'image/png');assert.strictEqual(images[1].data,image);
+        assert.strictEqual(limited,true);
+    } finally {await fs.remove(dir);}
 }
 
 async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {

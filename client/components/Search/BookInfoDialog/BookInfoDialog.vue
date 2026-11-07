@@ -176,17 +176,14 @@
                                 <div class="text-blue section-label q-mb-sm">
                                     Иллюстрации
                                 </div>
-                                <div v-if="galleryLoading" class="row items-center no-wrap text-grey-7">
-                                    <q-spinner size="20px" class="q-mr-sm" />
-                                    Загрузка иллюстраций: {{ galleryCount }}
-                                </div>
+                                <LoadingState v-if="galleryLoading" label="Загружаем иллюстрации" />
                                 <div v-else-if="galleryError" class="text-red-8">
                                     Не удалось загрузить иллюстрации: {{ galleryError }}
                                 </div>
-                                <div v-else-if="galleryRequested && !fb2Images.length" class="text-grey-7">
+                                <div v-else-if="galleryRequested && !fb2Images.length && !galleryLimited" class="text-grey-7">
                                     Иллюстрации не найдены
                                 </div>
-                                <div v-else class="fb2-gallery-grid">
+                                <div v-else-if="fb2Images.length" class="fb2-gallery-grid">
                                     <img
                                         v-for="image in fb2Images"
                                         :key="image.id"
@@ -195,6 +192,9 @@
                                         class="fb2-gallery-image"
                                     />
                                 </div>
+                                <p v-if="galleryRequested && !galleryLoading && !galleryError && galleryLimited" class="gallery-limit-note" role="status">
+                                    {{ fb2Images.length ? `Показаны первые ${fb2Images.length}. Остальные иллюстрации доступны в читалке.` : 'Превью иллюстраций ограничено. Откройте книгу в читалке.' }}
+                                </p>
                             </div>
                         </template>
 
@@ -363,6 +363,7 @@ class BookInfoDialog {
     galleryRequested = false;
     galleryLoading = false;
     galleryError = '';
+    galleryLimited = false;
     galleryGeneration = 0;
     annotationMeta = null;
     reviews = [];
@@ -426,6 +427,7 @@ class BookInfoDialog {
         this.galleryRequested = false;
         this.galleryLoading = false;
         this.galleryError = '';
+        this.galleryLimited = false;
         this.invalidateGallery();
         this.annotationMeta = null;
         this.reviews = [];
@@ -802,6 +804,7 @@ class BookInfoDialog {
             const response = await this.api.getBookGallery(bookUid);
             if (!isCurrent())
                 return;
+            this.galleryLimited = response.limited === true;
             this.fb2Images = (response.images || []).map(image => ({
                 id: image.id,
                 src: `data:${image.contentType};base64,${image.data}`,
@@ -1130,6 +1133,12 @@ export default vueComponent(BookInfoDialog);
 .fb2-gallery {
     border-top: 1px solid #ccc;
     padding-top: 12px;
+}
+.gallery-limit-note {
+    color: var(--app-muted, #52696d);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 12px 0 0;
 }
 
 .fb2-contents {

@@ -112,6 +112,42 @@ async function testResourceQueueCancellationAndCallerContext() {
     assert.strictEqual(await runtime.run(() => 42), 42);
 }
 
+async function testRuntimeFailureDiagnosticsAreBoundedAndExcludePayloads() {
+    const runtime = new ResourceRuntime(policy.resolve({INPX_RESOURCE_MAX_PROCESSES:'1'}, machine()));
+    const rejected = async(code, kind) => {
+        const error = Object.assign(new Error('private request details'), {code, request:{token:'private-token'}});
+        await assert.rejects(runtime.run(() => {throw error;}, {kind}), actual => actual === error);
+    };
+    // Expected native-tool fallback failures are counted even when a caller
+    // catches them and later succeeds. The original rejection is preserved.
+    await rejected('ENOENT', 'images'); await rejected('ENOENT', 'images');
+    assert.strictEqual(await runtime.run(() => 'fallback succeeded', {kind:'images'}), 'fallback succeeded');
+    const first = runtime.snapshot();
+    assert.strictEqual(first.failed, 2); assert.strictEqual(first.completed, 1);
+    assert.deepStrictEqual(first.failedByCode, {ENOENT:2});
+    assert.deepStrictEqual(first.failedByKind, {images:2});
+    assert.deepStrictEqual(Object.keys(first.lastFailure).sort(), ['at','code','kind']);
+    assert(Number.isFinite(Date.parse(first.lastFailure.at)));
+    first.failedByCode.ENOENT=900;first.failedByKind.images=900;first.lastFailure.code='changed';
+    assert.strictEqual(runtime.snapshot().failedByCode.ENOENT, 2);
+    assert.strictEqual(runtime.snapshot().lastFailure.code, 'ENOENT');
+    for (let i=0;i<40;i++) await rejected(`FIXTURE_${i}`, `kind_${i}`);
+    await rejected('unsafe code with private text', 'unsafe kind with private text');
+    const last=runtime.snapshot();
+    assert(Object.keys(last.failedByCode).length <= 32); assert(Object.keys(last.failedByKind).length <= 32);
+    assert(last.failedByCode.OTHER > 0); assert(last.failedByKind.OTHER > 0);
+    assert.strictEqual(Object.values(last.failedByCode).reduce((a,b)=>a+b,0),last.failed);
+    assert.strictEqual(Object.values(last.failedByKind).reduce((a,b)=>a+b,0),last.failed);
+    assert(!JSON.stringify([last.failedByCode,last.failedByKind,last.lastFailure]).includes('private'));
+    let release;
+    const active=runtime.run(()=>new Promise(resolve=>{release=resolve;}));
+    const controller=new AbortController();
+    const queued=runtime.run(()=>assert.fail('Cancelled work must not start'),{signal:controller.signal});
+    controller.abort();await assert.rejects(queued,{code:'ABORT_ERR'});
+    release();await active;
+    assert.strictEqual(runtime.snapshot().failed,last.failed,'Queued cancellation does not change the existing started-task counter');
+}
+
 async function testNativeOutputCaptureLimitsAndAbortTree() {
     await temporary(async dir => {
         const output = path.join(dir, 'output');
@@ -379,7 +415,7 @@ async function testBenchmarkDatabaseFailureStopsBeforeFurtherCandidates() {
 
 module.exports = [testLaunchResourceProfilesAndOverrides, testCgroupV2InheritedCpuAndMemoryLimits, testCgroupV1QuotasAndEscapedMountPaths,
     testGlobalResourceAdmissionAndForegroundPriority,
-    testResourceQueueCancellationAndCallerContext, testNativeOutputCaptureLimitsAndAbortTree,
+    testResourceQueueCancellationAndCallerContext, testRuntimeFailureDiagnosticsAreBoundedAndExcludePayloads, testNativeOutputCaptureLimitsAndAbortTree,
     testRecommendationPrefersSmallestSafeNearBestProfile, testBenchmarkPersistsResultsAndDetectsChangedEnvironment,
     testBenchmarkCancellationDrainsProcessesBeforeCleanup, testPerformanceEndpointsRequireAdministratorAndCsrf,
     testRealBenchmarkFixturesReadSelectedStorage, testReviewBackgroundCannotOccupyAllForegroundSlots,

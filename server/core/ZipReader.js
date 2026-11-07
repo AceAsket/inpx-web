@@ -138,6 +138,21 @@ class ZipReader {
         if (this.archiveType === '7z')
             return await this.run7zStdout(['x', '-y', '-bd', '-spd', '-so', this.archiveFile, entryFilePath]);
 
+        if (this.maxOutputBytes > 0) {
+            const entry = await this.zip.entry(entryFilePath);
+            const oversized = () => Object.assign(new Error('Превышен размер извлечённого файла'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'});
+            if (Number(entry?.size) > this.maxOutputBytes) throw oversized();
+            const stream = await this.zip.stream(entryFilePath), chunks = [];
+            let bytes = 0;
+            try {
+                for await (const chunk of stream) {
+                    bytes += chunk.length;
+                    if (bytes > this.maxOutputBytes) throw oversized();
+                    chunks.push(chunk);
+                }
+            } finally {stream.destroy();}
+            return Buffer.concat(chunks, bytes);
+        }
         return await this.zip.entryData(entryFilePath);
     }
 

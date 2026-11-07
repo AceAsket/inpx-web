@@ -7,6 +7,7 @@ const iconv = require('iconv-lite');
 const axios = require('axios');
 const FormData = require('form-data');
 const telegramNetwork = require('../../shared/TelegramNetwork');
+const telegramTransport = require('./TelegramTransport');
 const nodemailer = require('nodemailer');
 const yazl = require('yazl');
 
@@ -3914,6 +3915,8 @@ class WebWorker {
     getAdminIntegrationConfig() {
         const hasTelegramToken = !!String(this.config.telegramBotToken || '').trim();
         const hasSmtpPassword = !!String(this.config.smtpPass || '').trim();
+        const effective=telegramTransport.effectiveConfig(this.config),proxy=telegramNetwork.normalizeProxyConfig(effective);
+        const hasProxyPassword=!!proxy.telegramProxyPassword;
 
         return {
             telegramShareEnabled: !!this.config.telegramShareEnabled,
@@ -3921,7 +3924,10 @@ class WebWorker {
             telegramBotStatus: this.telegramBot?.status() || {state: 'disabled', enabled: false, error: '', username: '', lastPollAt: ''},
             telegramBotToken: hasTelegramToken ? '__KEEP__' : '',
             telegramBotTokenSet: hasTelegramToken,
-            telegramIpFamily: telegramNetwork.normalizeIpFamily(this.config.telegramIpFamily),
+            telegramIpFamily: effective.telegramIpFamily,
+            ...proxy,
+            telegramProxyPassword:hasProxyPassword ? '__KEEP__':'',
+            telegramProxyPasswordSet:hasProxyPassword,
             telegramChatId: String(this.config.telegramChatId || ''),
             telegramCaptionTemplate: String(this.config.telegramCaptionTemplate || '${AUTHOR} - ${TITLE}'),
             emailShareEnabled: !!this.config.emailShareEnabled,
@@ -4663,6 +4669,14 @@ class WebWorker {
 
     normalizeIntegrationPatch(patch = {}) {
         const normalized = {};
+        for(const field of telegramNetwork.proxyFields) {
+            if(!utils.hasProp(patch,field) || field==='telegramProxyPassword' && patch[field]==='__KEEP__')continue;
+            normalized[field]=patch[field];
+        }
+        if(telegramNetwork.proxyFields.some(field=>utils.hasProp(normalized,field))) {
+            const proxy=telegramNetwork.normalizeProxyConfig({...this.config,...normalized});
+            for(const field of telegramNetwork.proxyFields)if(utils.hasProp(normalized,field))normalized[field]=proxy[field];
+        }
 
         if (utils.hasProp(patch, 'telegramShareEnabled'))
             normalized.telegramShareEnabled = !!patch.telegramShareEnabled;
@@ -4789,10 +4803,12 @@ class WebWorker {
             if (!this.config.telegramBotToken)
                 throw new Error('Telegram bot token не указан');
 
-            const response = await axios.get(`https://api.telegram.org/bot${this.config.telegramBotToken}/getMe`, {
-                ...telegramNetwork.requestOptions(this.config),
-                timeout: 15000,
-            });
+            let response,network;
+            try {
+                network=telegramTransport.requestOptions(this.config,{timeout:15000});
+                response = await axios.get(`https://api.telegram.org/bot${this.config.telegramBotToken}/getMe`, {...network,timeout:15000});
+            } catch(error) {throw telegramTransport.safeError(error,this.config,this.config.telegramBotToken);}
+            finally {network?.httpsAgent?.destroy();}
 
             if (!response.data || response.data.ok !== true)
                 throw new Error('Telegram API не принял токен');
@@ -4874,6 +4890,7 @@ class WebWorker {
             'opds',
             'telegramShareEnabled',
             'telegramIpFamily',
+            ...telegramNetwork.proxyFields.filter(field=>field!=='telegramProxyPassword'),
             'telegramChatId',
             'telegramCaptionTemplate',
             'emailShareEnabled',
@@ -4914,6 +4931,10 @@ class WebWorker {
             throw new Error('librarySources должен быть массивом');
         if (utils.hasProp(patch, 'telegramIpFamily'))
             patch.telegramIpFamily = telegramNetwork.normalizeIpFamily(patch.telegramIpFamily);
+        if(telegramNetwork.proxyFields.some(field=>utils.hasProp(patch,field))) {
+            const proxy=telegramNetwork.normalizeProxyConfig({...this.config,...patch});
+            for(const field of telegramNetwork.proxyFields)if(utils.hasProp(patch,field))patch[field]=proxy[field];
+        }
 
         return patch;
     }
@@ -5344,8 +5365,19 @@ class WebWorker {
         };
     }
 
-    async extractBook(libFolder, libFile, sourceLibDir = '') {
+    async extractBook(libFolder, libFile, sourceLibDir = '', {maxOutputBytes = 0} = {}) {
         const outFile = `${this.config.tempDir}/${utils.randomHexString(30)}`;
+        const copy = async file => {
+            if (!maxOutputBytes) return await fs.copy(file, outFile);
+            const {pipeline} = require('stream/promises'), {Transform} = require('stream');
+            let bytes = 0;
+            try {
+                await pipeline(fs.createReadStream(file), new Transform({transform(chunk, encoding, callback) {
+                    bytes += chunk.length;
+                    callback(bytes > maxOutputBytes ? Object.assign(new Error('Превышен размер файла превью'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'}) : null, chunk);
+                }}), fs.createWriteStream(outFile));
+            } catch (error) {await fs.remove(outFile); throw error;}
+        };
 
         libFolder = libFolder.replace(/\\/g, '/').replace(/\/\//g, '/');
         const libDir = sourceLibDir || this.config.libDir;
@@ -5364,28 +5396,30 @@ class WebWorker {
         if (folderStat && folderStat.isDirectory()) {
             const resolved = await this.resolveExistingPath(fullPath);
             if (!resolved) throw new Error(`file not found: ${fullPath}`);
-            await fs.copy(resolved, outFile);
+            await copy(resolved);
             return outFile;
         }
 
         if (!file || await fs.pathExists(fullPath)) {// файл есть на диске
             
-            await fs.copy(fullPath, outFile);
+            await copy(fullPath);
             return outFile;
         } else {// файл в zip-архиве
             if (!await fs.pathExists(folder))
                 throw new Error(`archive not found: ${folder}`);
 
-            const zipReader = new ZipReader();
+            const zipReader = new ZipReader({resourceMaxOutputBytes:maxOutputBytes});
             await zipReader.open(folder, false);
 
             try {
                 const extract = async(entryFilePath) => {
                     try {
                         await fs.remove(outFile);
-                        await zipReader.extractToFile(entryFilePath, outFile);
+                        if (maxOutputBytes) await fs.writeFile(outFile, await zipReader.extractToBuf(entryFilePath));
+                        else await zipReader.extractToFile(entryFilePath, outFile);
                     } catch(e) {
                         await fs.remove(outFile);
+                        if (maxOutputBytes && isResourceError(e)) throw e;
                     }
                 };
 
@@ -6375,16 +6409,21 @@ class WebWorker {
 
         form.append('chat_id', chatId);
         form.append('caption', formatTemplate(this.config.telegramCaptionTemplate, book).trim());
-        form.append('document', fs.createReadStream(rawFile), downFileName);
+        const document=fs.createReadStream(rawFile);
+        form.append('document', document, downFileName);
 
-        const response = await axios.post(url, form, {
-            ...telegramNetwork.requestOptions(this.config),
+        let response,network;
+        try {
+            network=telegramTransport.requestOptions(this.config,{timeout:300000});
+            response = await axios.post(url, form, {
+            ...network,
             headers: form.getHeaders(),
             maxBodyLength: Infinity,
             maxContentLength: Infinity,
             timeout: 300000,
             signal: options.signal,
-        });
+        });} catch(error) {throw telegramTransport.safeError(error,this.config,this.config.telegramBotToken);}
+        finally {document.destroy();form.destroy();network?.httpsAgent?.destroy();}
 
         if (!response.data || response.data.ok !== true)
             throw new Error('Telegram API не принял файл');
@@ -7199,30 +7238,10 @@ class WebWorker {
         return href.replace(/^#/, '');
     }
 
-    //Первые иллюстрации для галереи карточки. Ждёт полной подготовки книги.
+    // Ограниченное превью без полной подготовки документа для читалки.
     async getBookGallery(bookUid) {
-        const {bookInfo} = await this.getBookInfo(bookUid, {readerOnly: true});
-        const images = [];
-        if (!bookInfo.fb2)
-            return {images};
-
-        const parser = new Fb2Parser(bookInfo.fb2);
-        const coverId = this.getFb2CoverId(parser);
-        for (const node of parser.$$array('/binary')) {
-            const attrs = node.attrs() || {};
-            let contentType = String(attrs['content-type'] || '').toLowerCase();
-            if (contentType === 'image/jpg' || contentType === 'application/octet-stream')
-                contentType = 'image/jpeg';
-            const data = node.text();
-            if (!attrs.id || attrs.id === coverId || !data || !contentType.startsWith('image/'))
-                continue;
-
-            images.push({id: attrs.id, contentType, data});
-            if (images.length >= bookGalleryLimit)
-                break;
-        }
-
-        return {images};
+        if (!this.bookGallery) this.bookGallery = new (require('./BookGallery'))(this);
+        return await this.bookGallery.read(bookUid);
     }
 
     // Opt-in startup warmup; large collections keep lazy, bounded indexes by default.

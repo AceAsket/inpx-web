@@ -803,7 +803,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error(`bookUid is empty`);
 
-        this.send(await this.webWorker.getBookGallery(req.bookUid), req, ws);
+        this.send(await this.readWithBudget(req, ws, () => this.webWorker.getBookGallery(req.bookUid)), req, ws);
     }
 
     async getReadingLists(req, ws) {

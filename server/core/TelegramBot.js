@@ -28,7 +28,7 @@ class TelegramBot {
     enabled() {return this.config.telegramBotEnabled === true && this.config.telegramShareEnabled === true && !!this.config.telegramBotToken;}
     status() {return {...this.health, enabled: this.enabled()};}
     configure() {
-        const signature = JSON.stringify([this.enabled(), this.config.telegramBotToken, this.config.telegramIpFamily]);
+        const signature = JSON.stringify([this.enabled(), this.config.telegramBotToken, require('./TelegramTransport').signature(this.config)]);
         if (signature === this.signature) return;
         this.signature = signature; this.stop(); this.pairs.clear(); this.callbacks.clear();
         if (!this.enabled()) {this.health = {state: 'disabled', error: '', username: '', lastPollAt: ''}; return;}

@@ -1,4 +1,5 @@
 const {normalize, words} = require('./CatalogSearch');
+const MIN_SUGGEST_CHARS = 3;
 
 function text(value, maximum = 120) {
     if (typeof value !== 'string' || Array.from(value).length > maximum) throw new Error('Слишком длинный поисковый запрос');
@@ -52,4 +53,4 @@ function scope(value = {}) {
     return result;
 }
 
-module.exports = {text, prefix, distance, relevance, scope};
+module.exports = {text, prefix, distance, relevance, scope, MIN_SUGGEST_CHARS};

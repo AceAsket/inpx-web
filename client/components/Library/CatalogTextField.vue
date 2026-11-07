@@ -1,10 +1,10 @@
 <template>
     <div class="catalog-text-field">
-        <q-input :model-value="text" borderless clearable :label="label" maxlength="1000" class="catalog-text-field__input" :role="suggestions ? 'combobox' : undefined" :aria-controls="suggestions ? listId : undefined" :aria-expanded="suggestions ? expanded : undefined" :aria-activedescendant="activeId" :aria-autocomplete="suggestions ? 'list' : undefined" @focus="focused = true" @blur="focused = false" @keydown="completion?.keydown($event)" @update:model-value="focused = true; $emit('update:text', $event)">
+        <q-input :model-value="text" borderless clearable :label="label" maxlength="1000" class="catalog-text-field__input" :role="suggestions ? 'combobox' : undefined" :aria-controls="suggestions ? listId : undefined" :aria-expanded="suggestions ? expanded : undefined" :aria-activedescendant="activeId" :aria-autocomplete="suggestions ? 'list' : undefined" @focus="focused = true" @click="focused = true" @blur="focused = false" @keydown="completion?.keydown($event)" @update:model-value="focused = true; $emit('update:text', $event)">
             <template v-if="searchIcon" #prepend>
                 <q-icon name="la la-search" size="24px" />
             </template>
-            <CatalogSuggestions v-if="suggestions" ref="completion" :list-id="listId" :query="text" :kind="kind" :filters="filters" :context="context" :focused="focused" @choose="$emit('choose', $event)" @dismiss="focused = false" @active="activeId = $event" @expanded="expanded = $event" />
+            <CatalogSuggestions v-if="suggestions" ref="completion" :list-id="listId" :query="text" :kind="kind" :filters="filters" :context="context" :focused="focused" @choose="$emit('choose', $event)" @search="$emit('search')" @dismiss="focused = false" @active="activeId = $event" @expanded="expanded = $event" />
         </q-input>
         <q-select :model-value="mode" :options="modes" emit-value map-options borderless dense options-dense dropdown-icon="la la-angle-down" class="catalog-text-field__mode" :aria-label="modeLabel || `Совпадение: ${label}`" @update:model-value="$emit('update:mode', $event)" />
     </div>
@@ -16,7 +16,7 @@ import CatalogSuggestions from './CatalogSuggestions.vue';
 defineProps({text: {type: String, default: ''}, mode: {type: String, default: 'contains'}, label: {type: String, default: ''},
     modeLabel: {type: String, default: ''}, searchIcon: Boolean, suggestions: Boolean, kind: {type: String, default: ''},
     filters: {type: Object, default: () => ({})}, context: {type: String, default: ''}});
-defineEmits(['update:text', 'update:mode', 'choose']);
+defineEmits(['update:text', 'update:mode', 'choose', 'search']);
 const focused = ref(false), expanded = ref(false), activeId = ref(), completion = ref(null);
 const listId = `catalog-suggestions-${getCurrentInstance().uid}`;
 const modes = [{label: 'Содержит', value: 'contains'}, {label: 'Начинается', value: 'starts'}, {label: 'Точно', value: 'exact'}];

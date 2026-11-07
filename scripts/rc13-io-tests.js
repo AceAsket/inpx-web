@@ -267,8 +267,160 @@ async function testStaticCoversRejectChangedDatabaseGenerationAndManualReset() {
     });
 }
 
+async function galleryWorker(dir,xml,record={}) {
+    const worker=makeWorker();
+    worker.config={libDir:dir,bookDir:path.join(dir,'cache'),tempDir:dir};await fs.ensureDir(worker.config.bookDir);
+    worker.checkMyState=()=>{};worker.libraryAssetGeneration=1;worker.fb2Helper=new (require('../server/core/fb2/Fb2Helper'))();
+    worker.galleryRecord={id:1,_uid:'gallery',_recordHash:'v1',ext:'fb2',file:'123',folder:'books.7z',...record};
+    worker.db={esc:JSON.stringify,select:async()=>[worker.galleryRecord]};worker.dbConfig=async()=>({inpxHash:'library-v1'});
+    worker.scheduleCacheClean=()=>{};worker.getBookAssetArchives=async()=>[];worker.getFblibraryArchives=async()=>[];
+    worker.getBookInfo=worker.getBookLink=async()=>assert.fail('Preview must not restore or load the complete reader document');
+    worker.galleryExtractions=0;
+    worker.extractBook=async(folder,file,source,options)=>{
+        assert.equal(options.maxOutputBytes,32*1024**2);worker.galleryExtractions++;
+        const fileName=path.join(dir,`raw-${worker.galleryExtractions}`);await fs.writeFile(fileName,xml);return fileName;
+    };
+    return worker;
+}
+const galleryXml=binaries=>`<FictionBook xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><coverpage><image l:href="#cover"/></coverpage></title-info></description><body><section><p>text</p></section></body>${binaries}</FictionBook>`;
+const galleryBinary=(id,data,type='image/png')=>`<binary id="${id}" content-type="${type}">${data.toString('base64')}</binary>`;
+
+async function testLazyGalleryBoundsSidecarsCoalescesAndReusesRevisionCache() {
+    await temporary(async dir=>{
+        const worker=await galleryWorker(dir,galleryXml(''));
+        const archive=path.join(dir,'images.zip'),zip=new (require('yazl').ZipFile)();
+        const complete=pipeline(zip.outputStream,fs.createWriteStream(archive));
+        const image=Buffer.alloc(32768,42);Buffer.from('89504e470d0a1a0a','hex').copy(image);
+        for(let i=0;i<40;i++)zip.addBuffer(image,`123/${i}`);zip.end();await complete;
+        worker.getBookAssetArchives=async()=>[{file:archive}];
+        const Reader=require('../server/core/ZipReader'),original=Reader.prototype.extractToBuf;
+        let extracted=0;Reader.prototype.extractToBuf=async function(...args){extracted++;return original.apply(this,args);};
+        try {
+            const results=await Promise.all(Array.from({length:3},()=>worker.getBookGallery('gallery')));
+            assert.equal(worker.galleryExtractions,1);assert.equal(extracted,18,'Only preview illustrations are extracted');
+            assert.equal(results[0].images.length,18);assert.equal(results[0].limited,true);assert.equal(results[0].omitted,22);
+            assert.equal(worker.bookGallery.pending.size,0);
+            results[0].images[0].id='mutated';assert.notEqual(results[1].images[0].id,'mutated');
+            const warm=await worker.getBookGallery('gallery');assert.equal(warm.images[0].id,'0');assert.equal(extracted,18);
+            assert.equal((await fs.readdir(worker.config.bookDir)).filter(file=>file.endsWith('.gallery.json')).length,1);
+            assert(!(await fs.readdir(worker.config.bookDir)).some(file=>file.endsWith('.i.json')),'No complete reader JSON is materialized');
+            worker.galleryRecord._recordHash='v2';await worker.getBookGallery('gallery');assert.equal(worker.galleryExtractions,2);
+        } finally {Reader.prototype.extractToBuf=original;}
+    });
+}
+
+async function testLazyGallerySkipsWholeOversizeImagesAndBoundsAggregateBytes() {
+    await temporary(async dir=>{
+        const image=Buffer.alloc(2*1024**2,42);Buffer.from('89504e470d0a1a0a','hex').copy(image);
+        const tooLarge=Buffer.concat([image,Buffer.from([0])]);
+        const binaries=galleryBinary('cover',image)+galleryBinary('oversize',tooLarge)+galleryBinary('unsafe',Buffer.from('<svg/>'),'image/svg+xml')+
+            Array.from({length:5},(_,i)=>galleryBinary(String(i),image)).join('')+galleryBinary('0',image);
+        const worker=await galleryWorker(dir,galleryXml(binaries));
+        const result=await worker.getBookGallery('gallery');
+        assert.equal(result.images.length,4);assert(result.limited);assert(result.omitted>=3);
+        assert.equal(result.images.reduce((sum,image)=>sum+Buffer.byteLength(image.data,'base64'),0),8*1024**2);
+        assert(!result.images.some(image=>['cover','oversize','unsafe'].includes(image.id)));
+        assert(result.images.every(image=>Buffer.byteLength(image.data,'base64')===2*1024**2),'Images are skipped, never truncated');
+        assert((await fs.stat(path.join(worker.config.bookDir,(await fs.readdir(worker.config.bookDir))[0]))).size<12*1024**2);
+        const remote=await galleryWorker(path.join(dir,'remote'),'',{});remote.remoteLib={};
+        assert.deepEqual(await remote.getBookGallery('gallery'),{images:[],limited:true,omitted:1});assert.equal(remote.galleryExtractions,0);
+    });
+}
+
+async function testLazyGalleryRejectsRawExpansionAndStalePublication() {
+    await temporary(async dir=>{
+        const raw=require('zlib').gzipSync(Buffer.alloc(33*1024**2,32));
+        const worker=await galleryWorker(dir,raw);
+        assert.deepEqual(await worker.getBookGallery('gallery'),{images:[],limited:true,omitted:1});
+        assert(!(await fs.readdir(dir)).some(file=>file.startsWith('raw-')));
+        const stale=await galleryWorker(path.join(dir,'stale'),galleryXml(''));
+        const rename=fs.rename;
+        fs.rename=async function(source,target,...args){const value=await rename.call(this,source,target,...args);if(String(target).endsWith('.gallery.json'))stale.libraryAssetGeneration++;return value;};
+        try {await assert.rejects(stale.getBookGallery('gallery'),{code:'INPX_LIBRARY_CHANGED'});}
+        finally {fs.rename=rename;}
+        assert.equal((await fs.readdir(stale.config.bookDir)).filter(file=>file.endsWith('.gallery.json')).length,0);
+        assert.equal(stale.bookGallery.pending.size,0);
+    });
+}
+
+async function testLazyGallerySaxIgnoresCommentAndBodyMarkupAndReadsBinaryCdata() {
+    await temporary(async dir=>{
+        const image=Buffer.from('89504e470d0a1a0a','hex'),fake=galleryBinary('fake',image);
+        const xml=galleryXml(galleryBinary('cover',image)+`<binary id="real" content-type="image/png"><![CDATA[${image.toString('base64')}]]></binary>`+
+            galleryBinary('real',image)+`<!-- ${fake} -->`)
+            .replace('<p>text</p>',`<p><![CDATA[${fake}]]></p>${galleryBinary('nested',image)}`);
+        const worker=await galleryWorker(dir,xml);
+        const result=await worker.getBookGallery('gallery');
+        assert.deepEqual(result.images,[{id:'real',contentType:'image/png',data:image.toString('base64')}]);
+        assert.equal(result.limited,false);assert.equal(result.omitted,0);
+    });
+}
+
+async function testLazyGalleryLargeCdataAndTextStayChunkedInsideSax() {
+    await temporary(async dir=>{
+        const image=Buffer.alloc(384*1024,42);Buffer.from('89504e470d0a1a0a','hex').copy(image);
+        const xml=galleryXml('<binary id="oversize" content-type="image/png"><![CDATA['+'A'.repeat(4*1024**2)+']]></binary>'+galleryBinary('good',image))
+            .replace('<p>text</p>','<p>'+'x'.repeat(1024**2)+'</p><p><![CDATA['+'y'.repeat(1024**2)+']]></p>');
+        const worker=await galleryWorker(dir,xml),sax=require('sax'),create=sax.parser;
+        let maximumWrite=0,maximumTextEvent=0,maximumCdataEvent=0,maximumInternalBuffer=0,textEvents=0,cdataEvents=0;
+        sax.parser=function(...args){
+            const parser=create.apply(this,args),write=parser.write;
+            for(const name of ['ontext','oncdata']){
+                let callback;
+                Object.defineProperty(parser,name,{configurable:true,get:()=>callback,set:handler=>{
+                    callback=function(value){
+                        if(name==='ontext'){textEvents++;maximumTextEvent=Math.max(maximumTextEvent,value.length);}
+                        else {cdataEvents++;maximumCdataEvent=Math.max(maximumCdataEvent,value.length);}
+                        return handler.call(this,value);
+                    };
+                }});
+            }
+            parser.write=function(chunk){
+                maximumWrite=Math.max(maximumWrite,chunk?.length||0);
+                const value=write.call(this,chunk);
+                maximumInternalBuffer=Math.max(maximumInternalBuffer,this.textNode.length,this.cdata.length);
+                return value;
+            };
+            return parser;
+        };
+        try {
+            const result=await worker.getBookGallery('gallery');
+            assert.deepEqual(result.images,[{id:'good',contentType:'image/png',data:image.toString('base64')}]);
+            assert.equal(result.limited,true);assert.equal(result.omitted,1,'One oversize binary is skipped, the following image survives chunk boundaries');
+            assert(textEvents>4&&cdataEvents>4,'Both large text and CDATA must be flushed repeatedly');
+            assert(maximumWrite<=65536,'The parser must not receive the entire multi-megabyte XML in one write');
+            assert(maximumTextEvent<=131072&&maximumCdataEvent<=131072,'Internal SAX buffers must flush before reaching the image collector limit');
+            assert(maximumInternalBuffer<=65536,'SAX buffer checks must remain enabled after each write');
+        } finally {sax.parser=create;}
+    });
+}
+
+async function testZipPreviewLimitAndFolderExtractionLimitDoNotChangeFullReads() {
+    await temporary(async dir=>{
+        const archive=path.join(dir,'input.zip'),zip=new (require('yazl').ZipFile)();
+        const complete=pipeline(zip.outputStream,fs.createWriteStream(archive));zip.addBuffer(Buffer.alloc(4096),'book.fb2');zip.end();await complete;
+        const Reader=require('../server/core/ZipReader'),bounded=new Reader({resourceMaxOutputBytes:1024}),full=new Reader();
+        try {
+            await bounded.open(archive,false);await assert.rejects(bounded.extractToBuf('book.fb2'),{code:'INPX_RESOURCE_OUTPUT_LIMIT'});
+            const entry=bounded.zip.entry;bounded.zip.entry=async()=>({size:1});
+            try {await assert.rejects(bounded.extractToBuf('book.fb2'),{code:'INPX_RESOURCE_OUTPUT_LIMIT'},'Actual streamed bytes must also be capped');}
+            finally {bounded.zip.entry=entry;}
+            await full.open(archive,false);assert.equal((await full.extractToBuf('book.fb2')).length,4096);
+        } finally {await bounded.close();await full.close();}
+        const worker=makeWorker();worker.config={libDir:dir,tempDir:path.join(dir,'tmp')};await fs.ensureDir(worker.config.tempDir);
+        worker.resolveLibraryArchivePath=async folder=>folder;worker.resolveExistingPath=async file=>file;
+        await fs.outputFile(path.join(dir,'folder','book.fb2'),Buffer.alloc(4096));
+        await assert.rejects(worker.extractBook('folder','book.fb2','',{maxOutputBytes:1024}),{code:'INPX_RESOURCE_OUTPUT_LIMIT'});
+        assert.deepEqual(await fs.readdir(worker.config.tempDir),[]);
+        const extracted=await worker.extractBook('folder','book.fb2');assert.equal((await fs.stat(extracted)).size,4096);await fs.remove(extracted);
+    });
+}
+
 module.exports = [testBookInfoCacheWithRootReusesParsedCover, testMetadataCacheBytesExpiryAndGeneration,
     testRepackedEpubMetadataLimitsByNameAndActualBytes, testSpeechPartsReuseVersionAndKeepUsersOptionsSeparate,
     testDiscoveryCachesBoundBytesCoalesceAndInvalidate, testBatchExpiryCleanupAndTicketCountBudget,
     testCoverCacheInvalidatesStableUidAndRejectsObsoleteWork,testBatchDiskFailureStopsPreparationAndClosesInputStreams,
-    testStaticCoversRejectChangedDatabaseGenerationAndManualReset];
+    testStaticCoversRejectChangedDatabaseGenerationAndManualReset,
+    testLazyGalleryBoundsSidecarsCoalescesAndReusesRevisionCache,testLazyGallerySkipsWholeOversizeImagesAndBoundsAggregateBytes,
+    testLazyGalleryRejectsRawExpansionAndStalePublication,testLazyGallerySaxIgnoresCommentAndBodyMarkupAndReadsBinaryCdata,
+    testLazyGalleryLargeCdataAndTextStayChunkedInsideSax,testZipPreviewLimitAndFolderExtractionLimitDoNotChangeFullReads];

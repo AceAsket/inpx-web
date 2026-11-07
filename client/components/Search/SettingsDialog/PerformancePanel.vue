@@ -21,6 +21,7 @@
                 <span>Лимит памяти: <b>{{ bytes(info.machine.memoryLimit) }}</b></span>
                 <span>Память сейчас: <b>{{ bytes(info.machine.memoryUsed) }}</b></span>
                 <span v-if="info.processMemory">RSS Node: <b>{{ bytes(info.processMemory.rss) }}</b></span>
+                <span v-if="info.databaseCache?.workerHeapUsed">Heap каталога: <b>{{ bytes(info.databaseCache.workerHeapUsed) }}<template v-if="info.databaseCache.workerHeapLimit"> / {{ bytes(info.databaseCache.workerHeapLimit) }}</template></b></span>
                 <span>Задачи: <b>{{ info.runtime.active }}</b> · в очереди {{ info.runtime.queued }}</span>
             </div>
             <div v-if="info.databaseCache?.available === false" class="text-negative" role="alert">
