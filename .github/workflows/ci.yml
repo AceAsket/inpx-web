@@ -4,6 +4,12 @@ on:
   push:
     branches: [develop, master, main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      browser_only:
+        description: Run browser checks without rebuilding platform binaries
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -50,6 +56,7 @@ jobs:
             ${{ runner.temp }}/rc13-profile/result.json
   validate:
     name: Test and package ${{ matrix.target }}
+    if: github.event_name != 'workflow_dispatch' || !inputs.browser_only
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     strategy:
