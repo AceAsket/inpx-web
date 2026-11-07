@@ -15,7 +15,7 @@ async function fixture(directory) {
     const rows=titles.map((title,index)=>['Первый,Автор:Второй,Автор:','prose:',title,'Цикл & мир','1',String(index+1),'100',String(index+1),'0',
         index===2 ? 'epub':'fb2','2026-11-07','ru','0',''].join('\x04'));
     await archive(path.join(directory,'sample.inpx'),[['collection.info','Проверка превью'],['version.info','20261107'],['sample.inp',rows.join('\n')+'\n']]);
-    const xml=annotation=>`<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>prose</genre><book-title>Книга превью</book-title>${annotation}<lang>ru</lang></title-info></description><body><section><p>Полный текст не должен загружаться для превью.</p></section></body></FictionBook>`;
+    const xml=annotation=>`<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>prose</genre><book-title>Книга превью</book-title>${annotation}<keywords>север, сказка</keywords><date value="2001-01-01">2001</date><lang>ru</lang></title-info><document-info><date value="2026-11-07">2026</date></document-info><publish-info><year>2003</year></publish-info></description><body><section><p>Полный текст не должен загружаться для превью.</p></section></body></FictionBook>`;
     await archive(path.join(directory,'sample.zip'),[['1.fb2',xml('<annotation><p>Первая строка аннотации.</p><p>Вторая строка и детали.</p></annotation>')],
         ['2.fb2',xml('')],['3.epub',epubData]]);
     await fs.writeJson(path.join(directory,'config.json'),{loggingEnabled:false,allowAnonymousAccess:true,onlineReaderEnabled:true,discovery:{enabled:true}});
@@ -73,6 +73,10 @@ async function fixture(directory) {
         const scoped=()=>{const p=new URLSearchParams(page.url().split('?')[1]);assert.equal(p.get('lang'),'ru');assert.equal(p.get('sourceId'),'main');return p;};
         await open('Книга превью');
         await annotation.getByText(/Первая строка аннотации/).waitFor();assert((await annotation.innerText()).includes('Вторая строка и детали.'));
+        const details=modal.locator('.book-actions-details');await details.getByText('2003',{exact:true}).waitFor();await details.getByText('север, сказка',{exact:true}).waitFor();
+        assert.equal(await details.getByText('Жанр',{exact:true}).count(),1);await details.getByText('Проза',{exact:true}).waitFor();assert(!(await details.innerText()).includes('2026'));
+        await page.setViewportSize({width:320,height:900});await page.screenshot({path:path.join(directory,'preview-metadata-320.png')});
+        assert(await modal.evaluate(node=>node.scrollWidth<=node.clientWidth+1));await page.setViewportSize({width:1440,height:1000});
         assert.equal(await modal.locator('.book-actions-author').textContent(),'Первый Автор,Второй Автор');
         assert.equal(await modal.locator('.book-actions-author a').count(),2);
         const firstAuthor=modal.getByRole('link',{name:'Первый Автор',exact:true});

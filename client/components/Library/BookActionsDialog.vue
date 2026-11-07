@@ -7,10 +7,15 @@
             <div class="book-actions-summary">
                 <BookCover :book="book" />
                 <div>
-                    <div class="book-actions-meta"><span>{{ sourceFormat }}</span><span v-if="sizeLabel">{{ sizeLabel }}</span><span v-if="dateLabel">{{ dateLabel }}</span></div>
+                    <div class="book-actions-meta"><span>{{ sourceFormat }}</span><span v-if="sizeLabel">{{ sizeLabel }}</span><span v-if="dateLabel">Добавлена {{ dateLabel }}</span></div>
                     <component :is="embedded ? 'h1' : 'h2'">{{ book.title || 'Без названия' }}</component>
                     <span v-if="book.author" class="book-actions-author"><template v-for="(author,index) in authorLinks" :key="index"><span v-if="index">,</span><RouterLink :to="author.target" @click="dialogVisible = false">{{ author.label }}</RouterLink></template></span>
                     <RouterLink v-if="book.series" class="book-actions-series" :to="seriesTarget" @click="dialogVisible = false">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></RouterLink>
+                    <dl v-if="genreLabels.length || publicationYear || keywordLabels.length" class="book-actions-details">
+                        <div v-if="genreLabels.length"><dt>Жанр</dt><dd>{{ genreLabels.join(', ') }}</dd></div>
+                        <div v-if="publicationYear"><dt>Год</dt><dd>{{ publicationYear }}</dd></div>
+                        <div v-if="keywordLabels.length"><dt>Ключевые слова</dt><dd>{{ keywordLabels.join(', ') }}</dd></div>
+                    </dl>
                     <div v-if="percent !== null" class="book-actions-progress">{{ Math.round(percent * 100) }}% прочитано</div>
                 </div>
             </div>
@@ -57,6 +62,7 @@ import LoadingState from '../share/LoadingState.vue';
 import {readable, progress} from './libraryModel';
 import {catalogTarget, effectiveCatalogScope} from './catalogSearchModel';
 const bookFormats = require('../../../shared/BookFormats');
+const previewMetadata = require('../../../shared/BookPreview');
 
 // Use the same download, format, email, Telegram and read-state actions as the catalog.
 // This adapter has no search lifecycle or parallel implementation of those operations.
@@ -87,6 +93,7 @@ class BookActionsDialog extends BaseList {
     annotationGeneration = 0;
     annotationActive = true;
     annotationController = null;
+    previewDetails = {};
 
     created() {
         super.created();
@@ -103,12 +110,16 @@ class BookActionsDialog extends BaseList {
     get authorLinks() {return String(this.book.author || '').split(',').filter(label=>label.trim()).map(label=>({label,
         target:catalogTarget('/author-details',{name:label.trim()},this.previewScope)}));}
     get seriesTarget() {return catalogTarget('/series-details',{name:this.book.series},this.previewScope);}
+    get genreLabels(){return previewMetadata.tokens(this.book.genre||this.previewDetails.genres).map(code=>this.genreMap instanceof Map?this.genreMap.get(code)||code:this.genreMap?.[code]||code);}
+    get publicationYear(){return previewMetadata.year(this.previewDetails.publishedYear)||previewMetadata.year(this.book.publishedYear)||previewMetadata.year(this.book.year);}
+    get keywordLabels(){return previewMetadata.tokens(this.book.keywords||this.previewDetails.keywords);}
     get annotationIdentity() {return JSON.stringify([this.getBookUid(this.book),this.book._recordHash || '',this.book.sourceId || '',
         this.config.dbConfig?.inpxHash || '',this.config.rootPathStatic || '',this.config.currentUserId || '',
         this.config.currentUserProfile?.id || '',!!this.config.profileAuthorized,this.settings.currentUserId || '']);}
     invalidateAnnotation() {
         this.annotationGeneration++;this.annotationController?.abort();this.annotationController=null;
         this.annotationText='';this.annotationStatus='';this.annotationLimited=false;this.annotationLoading=false;this.annotationLoaded=false;
+        this.previewDetails={};
     }
     annotationCurrent(generation,identity) {return this.annotationActive && this.dialogVisible && generation===this.annotationGeneration && identity===this.annotationIdentity;}
     async loadAnnotation() {
@@ -121,6 +132,7 @@ class BookActionsDialog extends BaseList {
             if(!this.annotationCurrent(generation,identity))return;
             const preview=response?.bookPreview;
             if(!preview || preview.bookUid!==uid)throw new Error('Unexpected preview response');
+            this.previewDetails={publishedYear:previewMetadata.year(preview.publishedYear),genres:previewMetadata.tokens(preview.genres),keywords:previewMetadata.tokens(preview.keywords)};
             this.annotationText=typeof preview.annotation==='string' ? preview.annotation.slice(0,6000):'';
             this.annotationStatus=['ready','empty','limited','unsupported','unavailable'].includes(preview.annotationStatus) ? preview.annotationStatus:'unavailable';
             this.annotationLimited=preview.annotationLimited===true;
@@ -205,6 +217,10 @@ h2 {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0 0 10px; over
 .book-actions-author a, .book-actions-series {color: var(--app-link); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px;}
 .book-actions-author a:hover, .book-actions-series:hover {color: var(--app-primary);}
 .book-actions-series {font-size: 12px; margin-top: 6px;}
+.book-actions-details {display: grid; gap: 6px; margin: 12px 0 0; font-size: 12px; line-height: 1.55;}
+.book-actions-details > div {display: grid; grid-template-columns: 102px minmax(0, 1fr); gap: 10px;}
+.book-actions-details dt {color: var(--app-muted);}
+.book-actions-details dd {margin: 0; overflow-wrap: anywhere;}
 .book-actions-progress {color: var(--app-primary); font-size: 12px; margin-top: 10px;}
 .book-actions-primary {display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 22px;}
 .book-actions-primary .q-btn, .book-actions-download {min-height: 42px; border-radius: 12px; padding: 10px 18px; font-size: 14px;}

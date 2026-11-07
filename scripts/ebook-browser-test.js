@@ -6,7 +6,7 @@ const path=require('path');
 const {spawn}=require('child_process');
 const {pipeline}=require('stream/promises');
 const yazl=require('yazl');
-const {unusedPort}=require('./binary-smoke-test');
+const {unusedPort,checkEbookProfileDownload}=require('./binary-smoke-test');
 const {chromium}=require(process.env.INPX_PLAYWRIGHT_MODULE||'playwright');
 const WebSocket=require('ws');
 const he=require('he');
@@ -40,6 +40,7 @@ async function checkOpds(base,context,uid,title){
             socket.on('message',receive);socket.send(JSON.stringify({...payload,requestId,csrfToken}));
         });
         const config=await call({action:'get-config'});csrfToken=config.csrfToken;assert.equal(config.currentUserId,'admin');
+        assert.equal(config.currentUserProfile.defaultDownloadFormat,'fb2','The no-JS form saved the profile preference');
         const feedUrl=base+config.opdsRoot+'/title?'+new URLSearchParams({title:'='+title});
         for(const [percent,mark]of [[.1,'◔'],[.4,'◑'],[.8,'◕'],[1,'⬤']]){
             await call({action:'update-reader-progress',bookUid:uid,progress:{percent}});
@@ -51,6 +52,11 @@ async function checkOpds(base,context,uid,title){
         }
         assert.equal((await fetch(feedUrl)).status,401,'Unsigned requests cannot see the private progress');
         assert.equal((await fetch(feedUrl+'&user=foreign',{headers:{cookie}})).status,401,'A scoped request cannot change the signed-in profile');
+        const own=(await call({action:'create-reading-list',name:'Для электронной книги',visibility:'private'})).list;
+        await call({action:'update-reading-list-book',listId:own.id,bookUid:uid,enabled:true});
+        const smart=(await call({action:'create-reading-list',name:'Умная полка',visibility:'private',filters:{title:'электронной',lang:'ru'}})).list;
+        await call({action:'update-user-profile',targetUserId:'admin',profile:{defaultDownloadFormat:'epub'}});
+        return {own:own.id,smart:smart.id};
     }finally{socket.terminate();}
 }
 async function pageRecent(context,base,title){
@@ -67,7 +73,7 @@ async function pageRecent(context,base,title){
         const port=await unusedPort(),base=`http://127.0.0.1:${port}`;
         child=spawn(process.execPath,[path.resolve('server'),`--data-dir=${data}`,`--config=${lib}/config.json`,`--lib-dir=${lib}`,`--port=${port}`,'--host=127.0.0.1'],
             {windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,INPX_TTS_ENABLED:'false',INPX_LIBRARY_SOURCES:'',LIBRARY_SOURCES:'',
-                INPX_AUTH_MODE:'local',INPX_REQUIRE_AUTH:'false',INPX_ALLOW_ANONYMOUS_ACCESS:'false',INPX_ADMIN_PASSWORD:'ebook-browser-fixture'}});
+                INPX_AUTH_MODE:'local',INPX_REQUIRE_AUTH:'false',INPX_ALLOW_ANONYMOUS_ACCESS:'false',INPX_ENABLE_CONVERSION:'false',INPX_ADMIN_PASSWORD:'ebook-browser-fixture'}});
         for(const stream of[child.stdout,child.stderr])stream.on('data',data=>{output=(output+data).slice(-10000);});
         let ready=false;
         for(let i=0;i<120;i++){try{const response=await fetch(base+'/ready');ready=response.ok&&(await response.json()).ready;}catch{}if(ready||child.exitCode!==null)break;await pause(500);}
@@ -80,17 +86,24 @@ async function pageRecent(context,base,title){
         await page.getByRole('textbox',{name:'Логин',exact:true}).fill('admin');await page.getByLabel('Пароль',{exact:true}).fill('ebook-browser-fixture');
         await page.getByRole('button',{name:'Войти',exact:true}).click();
         await page.getByRole('heading',{name:'Поиск книг',exact:true}).waitFor();
-        const search=page.getByRole('textbox',{name:'Название, автор или серия',exact:true});await search.fill('электронной');
+        const search=page.getByRole('textbox',{name:'Название книги',exact:true});await search.fill('электронной');
+        const author=page.getByRole('textbox',{name:'Автор',exact:true});await author.fill('Тестовый');
         await page.getByRole('button',{name:'Параметры поиска',exact:true}).click();
         assert.equal(await search.inputValue(),'электронной');await page.getByLabel('Книг на странице',{exact:true}).selectOption('10');
         await page.getByRole('button',{name:'Применить параметры',exact:true}).click();await page.getByRole('heading',{name:'Найдено: 25',exact:true}).waitFor();
+        assert.equal(await author.inputValue(),'Тестовый');await author.fill('Несуществующий');await page.getByRole('button',{name:'Найти книги',exact:true}).click();
+        await page.getByRole('heading',{name:'Найдено: 0',exact:true}).waitFor();await author.fill('Тестовый');
         await search.fill('электронной');
-        await page.getByRole('button',{name:'Найти',exact:true}).click();await page.getByRole('heading',{name:'Найдено: 25',exact:true}).waitFor();
+        await page.getByRole('button',{name:'Найти книги',exact:true}).click();await page.getByRole('heading',{name:'Найдено: 25',exact:true}).waitFor();
+        assert(!(await page.content()).includes('без JavaScript и анимации'));
+        await page.screenshot({path:path.join(directory,'ebook-catalog-600.png'),fullPage:true});
+        const searchHtml=await page.content();
         assert.equal(await page.locator('.result').count(),10);await page.locator('.pagination').first().getByRole('link',{name:'Следующая',exact:true}).click();
         assert.equal(new URL(page.url()).searchParams.get('page'),'2');assert.equal(new URL(page.url()).searchParams.get('lang'),'ru');
         const title=await page.locator('.result h3 a').first().textContent();
         await page.locator('.result h3 a').first().click();await page.getByRole('heading',{name:title,exact:true}).waitFor();
-        const download=page.getByRole('button',{name:'Скачать книгу',exact:true});assert(await download.isVisible());
+        await page.getByLabel('Формат скачивания',{exact:true}).selectOption('fb2');await page.getByRole('button',{name:'Сохранить формат',exact:true}).click();
+        const download=page.locator('.download-form button');assert(await download.isVisible());
         assert.equal(await page.getByRole('heading',{name:'Аннотация',exact:true}).count(),0,'Metadata is opt-in on low-power devices');
         await page.getByRole('link',{name:'Показать аннотацию',exact:true}).click();await page.getByRole('heading',{name:'Аннотация',exact:true}).waitFor();
         await page.getByText('Аннотация для электронной книги.',{exact:false}).waitFor();assert.equal(await page.locator('img[src=x]').count(),0);
@@ -112,15 +125,31 @@ async function pageRecent(context,base,title){
         await page.screenshot({path:path.join(directory,'ebook-read-320.png'),fullPage:true});
         assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
         await page.getByRole('link',{name:'О книге',exact:true}).click();
-        const pendingDownload=page.waitForEvent('download');await page.getByRole('button',{name:'Скачать книгу',exact:true}).click();
+        const pendingDownload=page.waitForEvent('download');await page.locator('.download-form button').click();
         const downloaded=await pendingDownload;const saved=await downloaded.path();assert((await fs.readFile(saved,'utf8')).includes('FictionBook'));
-        await checkOpds(base,context,uid,title);
+        const shelves=await checkOpds(base,context,uid,title);
+        await page.goto(base+'/library/ebook/shelves');await page.getByRole('heading',{name:'Мои полки',exact:true}).waitFor();
+        await page.screenshot({path:path.join(directory,'ebook-shelves-320.png'),fullPage:true});
+        await page.getByRole('link',{name:'Для электронной книги',exact:true}).click();await page.getByRole('heading',{name:'Для электронной книги',exact:true}).waitFor();
+        assert.equal(await page.locator('.result').count(),1);assert.equal(await page.getByLabel('Формат скачивания',{exact:true}).inputValue(),'epub');
+        await page.getByText('Скачивание EPUB для этой книги недоступно.',{exact:false}).waitFor();assert.equal(await page.locator('.quick-download').count(),0,'Never silently download FB2 instead of the selected EPUB');
+        await page.getByLabel('Формат скачивания',{exact:true}).selectOption('original');await page.getByRole('button',{name:'Сохранить формат',exact:true}).click();
+        assert.equal(await page.getByLabel('Формат скачивания',{exact:true}).inputValue(),'original');
+        await page.screenshot({path:path.join(directory,'ebook-shelf-download-320.png'),fullPage:true});
+        const shelfDownload=page.waitForEvent('download');await page.getByRole('button',{name:/Скачать «/}).click();assert.equal(await(await shelfDownload).failure(),null);
+        assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+        await page.locator('.result h3 a').first().click();await page.getByRole('link',{name:'К полке',exact:true}).click();assert.equal(new URL(page.url()).searchParams.get('id'),shelves.own);
+        await page.goto(base+'/library/ebook/shelf?'+new URLSearchParams({id:shelves.smart}));assert.equal(await page.locator('.result').count(),10);
+        await page.locator('.pagination').getByRole('link',{name:'Следующая',exact:true}).click();assert.equal(new URL(page.url()).searchParams.get('cursor'),'10');
+        await page.locator('.pagination').getByRole('link',{name:'Предыдущая',exact:true}).click();assert.equal(new URL(page.url()).searchParams.get('cursor'),'0');
         await page.goto(base+'/library/ebook/recent');await page.getByRole('button',{name:'Выйти',exact:true}).click();
         await page.getByRole('heading',{name:'Вход в профиль',exact:true}).waitFor();
         const denied=await page.goto(base+'/library/ebook/read?'+new URLSearchParams({uid}));assert.equal(denied.status(),401);assert.equal(await page.locator('.reading').count(),0);
+        const privateShelf=await page.goto(base+'/library/ebook/shelf?'+new URLSearchParams({id:shelves.own}));assert.equal(privateShelf.status(),401);assert.equal(await page.locator('.result').count(),0);
+        await checkEbookProfileDownload(base+'/library',searchHtml,'ebook-browser-fixture','fb2');
         assert.deepEqual(errors,[]);assert.equal(sockets,0);assert(resources.every(resource=>!['script','stylesheet','font','image'].includes(resource.type)),JSON.stringify(resources));
         await fs.writeJson(path.join(directory,'result.json'),{javaScriptEnabled:false,sockets,resourceTypes:[...new Set(resources.map(resource=>resource.type))],cardGeometry,
-            login:true,search:true,pagination:true,annotation:true,readerPaging:true,fontRetainsPage:true,originalDownload:true,opdsProgress:true,logoutProtected:true,errors},{spaces:2});
+            login:true,search:true,combinedAuthorSearch:true,pagination:true,annotation:true,readerPaging:true,fontRetainsPage:true,originalDownload:true,opdsProgress:true,privateShelves:true,shelfDownload:true,profileFormatPersists:true,unavailableFormatNeverFallsBack:true,smartShelfPaging:true,logoutProtected:true,errors},{spaces:2});
         console.log('Ebook browser PASS: no JavaScript/WebSocket/assets, real forms/login/search/metadata/download/text pages, 600/320 px. Artifacts: '+directory);
     }catch(error){if(page)await page.screenshot({path:path.join(directory,'failure.png'),fullPage:true}).catch(()=>{});console.error(output);throw error;}
     finally{if(browser)await browser.close();if(child)child.kill();}

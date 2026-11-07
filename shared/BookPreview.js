@@ -8,4 +8,6 @@ function annotationText(value) {
     if(end<text.length&&/[\ud800-\udbff]/.test(text[end-1]))end--;
     return {annotation:text.slice(0,end),limited:text.length>end};
 }
-module.exports={limits,statuses,annotationText};
+function year(value){const match=String(value||'').trim().match(/^([1-9]\d{3})(?:$|[-/.\s])/);return match?match[1]:'';}
+function tokens(value){return [...new Set((Array.isArray(value)?value.slice(0,12):String(value||'').slice(0,1200).split(/[,;\n]/)).map(v=>String(v||'').trim().slice(0,120)).filter(Boolean))].slice(0,12);}
+module.exports={limits,statuses,annotationText,year,tokens};

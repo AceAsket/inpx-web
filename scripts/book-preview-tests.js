@@ -68,8 +68,18 @@ async function testBookPreviewApiAbortsWithoutLateAuthenticationDialogsOrRetry()
     assert.equal(require('events').getEventListeners(controller.signal,'abort').length,0);
     await assert.rejects(api.getBookPreview('two',{signal:controller.signal}),/closed view/);assert.equal(sent,1,'An already cancelled view sends no request');
 }
+async function testBookPreviewMetadataShowsGenresPublicationYearAndSafeKeywords(){
+    const value=card({getBookPreview:async uid=>({bookPreview:{...preview(uid).bookPreview,publishedYear:'2003',genres:['sf'],keywords:'север, сказка'}})});
+    value.book.genre='sf,detective';value.book.date='2026-11-07';value.genreMap=new Map([['sf','Фантастика'],['detective','Детектив']]);
+    assert.deepEqual(value.genreLabels,['Фантастика','Детектив']);assert.equal(value.publicationYear,'');
+    await value.loadAnnotation();assert.equal(value.publicationYear,'2003');assert.deepEqual(value.keywordLabels,['север','сказка']);
+    value.invalidateAnnotation();assert.equal(value.publicationYear,'');assert.deepEqual(value.keywordLabels,[]);
+    value.book.keywords='<img src=x>, ещё';assert.equal(value.keywordLabels[0],'<img src=x>');
+    value.book.keywords='';value.book.year='0';value.book.publishedYear='2024-03-01';assert.equal(value.publicationYear,'2024');
+}
 
 module.exports=[testBookPreviewAuthorSeriesAndFullCardRetainScopeAndWholeNames,testBookPreviewLoadsOnlyBoundedAnnotationAndPreservesStatuses,
-    testBookPreviewChangingBookProfileAndClosingRejectsLateAnnotations,testBookPreviewApiAbortsWithoutLateAuthenticationDialogsOrRetry];
+    testBookPreviewChangingBookProfileAndClosingRejectsLateAnnotations,testBookPreviewApiAbortsWithoutLateAuthenticationDialogsOrRetry,
+    testBookPreviewMetadataShowsGenresPublicationYearAndSafeKeywords];
 if(require.main===module)(async()=>{for(const test of module.exports){await test();console.log('ok '+test.name);}})()
     .catch(error=>{console.error(error);process.exitCode=1;});

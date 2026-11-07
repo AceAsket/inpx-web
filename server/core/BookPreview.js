@@ -2,7 +2,7 @@ const fs=require('fs-extra');
 const {Readable}=require('stream');
 const {isUtf8}=require('buffer');
 const sax=require('sax');
-const {limits,annotationText}=require('../../shared/BookPreview');
+const {limits,annotationText,year,tokens}=require('../../shared/BookPreview');
 const {MemoryCache}=require('./MemoryCache');
 const {coverCacheKey}=require('./BookAssets');
 const {epubMetadata}=require('./BookMetadata');
@@ -61,6 +61,25 @@ async function decodedPrefix(data,signal) {
     return Buffer.concat(chunks,bytes);
 }
 
+function detailsFromXml(xml){
+    const parser=sax.parser(false,{lowercase:true}),route=[],stop={},genres=[];
+    let keywords='',publication='',date='',dateValue='',genre='';
+    parser.onopentag=node=>{const name=node.name.split(':').at(-1);route.push(name);if(route.length>128||route.length===2&&['body','binary'].includes(name))throw stop;
+        if(route.join('/')==='fictionbook/description/title-info/date')dateValue=String(node.attributes.value||'').slice(0,64);};
+    const text=value=>{const key=route.join('/');
+        if(key==='fictionbook/description/title-info/keywords')keywords=(keywords+value).slice(0,1200);
+        if(key==='fictionbook/description/title-info/genre')genre=(genre+value).slice(0,120);
+        if(key==='fictionbook/description/publish-info/year')publication=(publication+value).slice(0,32);
+        if(key==='fictionbook/description/title-info/date')date=(date+value).slice(0,64);};
+    parser.ontext=text;parser.oncdata=text;
+    parser.onclosetag=name=>{const key=route.join('/');if(key==='fictionbook/description/title-info/genre'){if(genres.length<12&&genre.trim())genres.push(genre.trim());genre='';}
+        if(key==='fictionbook/description')throw stop;route.pop();};
+    try{for(let i=0;i<xml.length;i+=65536)parser.write(xml.slice(i,i+65536));parser.close();}catch(error){if(error!==stop)return {};}
+    const publishedYear=year(publication)||year(dateValue)||year(date),tags=tokens(keywords),result={};
+    if(publishedYear)result.publishedYear=publishedYear;if(tags.length)result.keywords=tags.join(', ');if(genres.length)result.genres=tokens(genres);
+    return result;
+}
+
 class BookPreview {
     constructor(worker,options={}) {
         this.worker=worker;this.timeoutMs=options.timeoutMs||limits.timeoutMs;this.ttl=options.ttl||limits.cacheTtlMs;
@@ -108,14 +127,16 @@ class BookPreview {
                         // A bounded prefix can end inside a UTF-8 code point.
                         for(let cut=0;cut<=3;cut++)if(isUtf8(data.subarray(0,data.length-cut))){data=data.subarray(0,data.length-cut);break;}
                         data=worker.fb2Helper.checkEncoding(data);
-                        result=annotationFromXml(data.subarray(0,limits.prefixBytes).toString('utf8'));
+                        const xml=data.subarray(0,limits.prefixBytes).toString('utf8');
+                        result={...annotationFromXml(xml),...detailsFromXml(xml)};
                     }else{
                         file=await worker.extractBook(book.folder,`${book.file}.${book.ext}`,book.sourceLibDir,
                             {maxOutputBytes:limits.epubBytes,signal,timeoutMs:this.timeoutMs});
                         guard();signal.throwIfAborted();
                         const metadata=await epubMetadata(file,{...worker.config,resourceSignal:signal,resourceTimeoutMs:this.timeoutMs});
                         const cleaned=annotationText(metadata.description);
-                        result={annotation:cleaned.annotation,annotationStatus:cleaned.limited?'limited':cleaned.annotation?'ready':'empty',annotationLimited:cleaned.limited};
+                        result={annotation:cleaned.annotation,annotationStatus:cleaned.limited?'limited':cleaned.annotation?'ready':'empty',annotationLimited:cleaned.limited,
+                            ...(year(metadata.publishedYear)?{publishedYear:year(metadata.publishedYear)}:{}),...(tokens(metadata.tags).length?{keywords:tokens(metadata.tags).join(', ')}:{})};
                     }
                     signal.throwIfAborted();guard();
                     const value={bookUid:uid,...result};
@@ -130,9 +151,10 @@ class BookPreview {
                 .finally(()=>{clearTimeout(timer);this.controllers.delete(controller);if(this.pending.get(key)===pending)this.pending.delete(key);});
             this.pending.set(key,pending);
         }
-        const result=await this.pending.get(key);guard();return {bookPreview:{...result}};
+        const result=await this.pending.get(key);guard();return {bookPreview:{...result,...(Array.isArray(result.genres)?{genres:[...result.genres]}:{})}};
     }
 }
 module.exports=BookPreview;
 module.exports.annotationFromXml=annotationFromXml;
 module.exports.decodedPrefix=decodedPrefix;
+module.exports.detailsFromXml=detailsFromXml;

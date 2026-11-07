@@ -110,6 +110,7 @@ function openBook(book) {
     else openActions(book);
 }
 function openActions(book) {
+    ensureGenres().catch(() => {});
     actionsBook.value = {...book, _uid: bookUid(book),
         _readerProgress: book._readerProgress || (progress(book) === null ? undefined : {percent: progress(book), started: true})};
     actionsVisible.value = true;

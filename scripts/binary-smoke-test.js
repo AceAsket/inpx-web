@@ -127,6 +127,25 @@ async function checkWebSocket(url) {
     });
 }
 
+async function checkEbookProfileDownload(url,html,password='local-smoke-fixture',format=process.env.INPX_SMOKE_EPUB==='true'?'epub':'fb2'){
+    const login=await fetch(url+'/ebook/login');
+    const cookie=login.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session=')).split(';')[0];
+    const csrf=(await login.text()).match(/name="csrf" value="([^"]+)"/)[1];
+    const post=(path,body)=>fetch(url+path,{method:'POST',redirect:'manual',headers:{cookie,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(body)});
+    assert.equal((await post('/ebook/login',{csrf,login:'admin',password})).status,303);
+    assert.equal((await post('/ebook/format',{csrf,format})).status,303);
+    const shelves=await fetch(url+'/ebook/shelves',{headers:{cookie}});assert.equal(shelves.status,200);assert.match(await shelves.text(),/Мои полки/);
+    const encoded=html.match(/[?&](?:amp;)?uid=([^"&]+)/)?.[1];assert(encoded,'The ebook result has a stable UID');
+    // An old or manipulated query must not replace the selected profile format.
+    const response=await fetch(url+'/ebook/download?'+new URLSearchParams({uid:decodeURIComponent(encoded),format:'raw'}),{headers:{cookie}});
+    assert.equal(response.status,200);assert.match(response.headers.get('content-disposition'),new RegExp('\\.'+format+'$'));
+    const bytes=Buffer.from(await response.arrayBuffer());
+    if(format==='epub'){assert.equal(bytes.readUInt32LE(0),0x04034b50);assert.match(response.headers.get('content-type'),/application\/epub\+zip/);}
+    else assert.match(bytes.toString('utf8'),/FictionBook/);
+    assert.equal((await post('/ebook/logout',{csrf})).status,303);
+    console.log('ok packaged ebook profile → exact '+format.toUpperCase()+' download, no original fallback');
+}
+
 async function main() {
     const [target, imageName] = process.argv.slice(2);
     if (!target || (target === '--image' && !imageName))
@@ -147,6 +166,7 @@ async function main() {
             args = ['run', '--rm', '--name', containerName,
                 '-p', `127.0.0.1:${port}:12380`, '--tmpfs', '/data',
                 '-e', 'INPX_OPDS_FEEDS_FILE=/library/opds-feeds.json',
+                '-e', 'INPX_ADMIN_PASSWORD=local-smoke-fixture',
                 '--mount', `type=bind,source=${library},target=/library,readonly`, imageName,
                 'sh', '-c', 'cp /library/config.json /data/config.json && exec inpx-web --data-dir=/data --config=/data/config.json --lib-dir=/library --host=0.0.0.0 --port=12380'];
         } else {
@@ -155,6 +175,7 @@ async function main() {
                 `--config=${path.join(library, 'config.json')}`, '--host=127.0.0.1', `--port=${port}`];
         }
         const env = {...process.env, INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
+            INPX_ADMIN_PASSWORD:'local-smoke-fixture',
             INPX_OPDS_FEEDS_FILE:path.join(library, 'opds-feeds.json'),
             INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true',
             INPX_ENABLE_CONVERSION: process.env.INPX_SMOKE_EPUB === 'true' ? 'true' : 'false'};
@@ -191,6 +212,8 @@ async function main() {
         const ebookHtml=await ebook.text();
         assert.match(ebookHtml,/Packaged smoke book/);
         assert(!/<script\b|\.woff2?\b/.test(ebookHtml),'The packaged electronic-reader interface needs no client bundle');
+        const ebookSlash=await fetch(`${url}/ebook/`);assert.equal(ebookSlash.status,200);assert.match(await ebookSlash.text(),/Поиск книг/);
+        await checkEbookProfileDownload(url,ebookHtml);
         assert.match(await (await fetch(`${url}/robots.txt`)).text(),/Disallow: \/\s*$/);
         const opds = await fetch(`${url}/opds`);
         assert.strictEqual(opds.status, 200);
@@ -213,6 +236,6 @@ async function main() {
     }
 }
 
-module.exports = {createFixture, unusedPort};
+module.exports = {createFixture, unusedPort, checkEbookProfileDownload};
 if (require.main === module)
     main().catch(error => { console.error(error); process.exitCode = 1; });

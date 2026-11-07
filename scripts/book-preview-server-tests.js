@@ -61,6 +61,17 @@ async function testBookPreviewXmlDepthMarkupAndEmptyAnnotationAreHonest(){
     assert.equal(parse(xml('<annotation>'+'<p>'.repeat(140)+'text'+'</p>'.repeat(140)+'</annotation>')).annotationStatus,'limited');
     assert.equal(parse('not an FB2 document').annotationStatus,'unavailable');
 }
+async function testBookPreviewMetadataReadsDescriptionWithoutUsingImportOrDocumentDates(){
+    const source='<FictionBook><description><title-info><genre>sf</genre><annotation><p>Text</p></annotation><keywords>north, winter</keywords><date value="2001-02-03">2001</date></title-info><document-info><date>2026</date></document-info><publish-info><year>2003</year></publish-info></description><body><year>2099</year></body></FictionBook>';
+    assert.deepEqual(BookPreview.detailsFromXml(source),{publishedYear:'2003',keywords:'north, winter',genres:['sf']});
+    assert.deepEqual(BookPreview.detailsFromXml('<FictionBook><description><document-info><date>2026</date></document-info></description></FictionBook>'),{});
+    await temporary(async dir=>{
+        const worker=await workerAt(dir,source);const first=(await worker.getBookPreview('known')).bookPreview;
+        assert.equal(first.annotation,'Text');assert.equal(first.publishedYear,'2003');assert.equal(first.keywords,'north, winter');
+        first.genres.push('changed');assert.deepEqual((await worker.getBookPreview('known')).bookPreview.genres,['sf']);
+        await worker.bookPreview.close();assert.deepEqual(await fs.readdir(worker.config.tempDir),[]);
+    });
+}
 
 async function testBookPreviewArchiveReaderKeepsIndependentListingAndPrefixCaps(){
     await temporary(async dir=>{
@@ -153,5 +164,5 @@ module.exports=[testBookPreviewPlaintextBoundedInputAndOriginalSourceUnchanged,t
     testBookPreviewXmlDepthMarkupAndEmptyAnnotationAreHonest,testBookPreviewArchiveReaderKeepsIndependentListingAndPrefixCaps,
     testBookPreviewCacheCoalescesBoundsAndInvalidatesWithoutProfiles,
     testBookPreviewUnavailableRetriesAndQueueDeadlineDrains,testBookPreviewGenerationRemoteAndEpubMetadataStayControlled,
-    testBookPreviewWebSocketChecksAccessBeforeReadBudgetAndCache];
+    testBookPreviewWebSocketChecksAccessBeforeReadBudgetAndCache,testBookPreviewMetadataReadsDescriptionWithoutUsingImportOrDocumentDates];
 if(require.main===module)(async()=>{for(const test of module.exports){await test();console.log('ok '+test.name);}})().catch(error=>{console.error(error);process.exitCode=1;});
