@@ -23,5 +23,5 @@ const normalizedPercent = computed(() => props.percent === null || !Number.isFin
 .loading-state__percent {flex-shrink: 0; font-size: 13px; font-weight: 550; font-variant-numeric: tabular-nums; color: var(--app-primary);}
 .loading-state__progress {margin-top: 14px; height: 5px;}
 .loading-state__detail {margin: 9px 0 0; color: var(--app-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-line;}
-@media (prefers-reduced-motion: reduce) {.loading-state :deep(.q-spinner) {animation: none;}}
+@media (prefers-reduced-motion: reduce) {.loading-state :deep(.q-spinner), .loading-state :deep(.q-spinner *) {animation: none;}}
 </style>
