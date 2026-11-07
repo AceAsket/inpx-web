@@ -153,6 +153,23 @@ class BasePage {
     }
 
     makeBody(content, req) {
+        // Keep the checked profile when following any catalog/book navigation.
+        // Some legacy page builders omit req when constructing their links.
+        if(this.getScopeUserId(req)) {
+            const root=this.opdsRoot||this.config.opdsRoot||'/opds';
+            const scope=link=>{
+                const attrs=link?.['*ATTRS'];if(!attrs?.href)return link;
+                const href=he.decode(attrs.href),pathname=href.split('?')[0];
+                if(pathname!==root&&!pathname.startsWith(root+'/'))return link;
+                if(new URLSearchParams(href.split('?')[1]||'').has('user'))return link;
+                const value=this.scopedHref(href,req);
+                return value===href?link:{...link,'*ATTRS':{...attrs,href:this.escape(value)}};
+            };
+            const links=value=>Array.isArray(value)?value.map(scope):value?scope(value):value;
+            content={...content,...(content.link?{link:links(content.link)}:{}),
+                entry:(content.entry||[]).map(entry=>({...entry,...(entry.link?{link:links(entry.link)}:{})}))};
+        }
+        content = require('./Progress').decorate(content,req,this.id==='reading-progress');
         content = require('./Compatibility').decorate(content, this.config);
         const base = this.makeEntry({id: this.id, title: this.title});
         base['*ATTRS'] = {

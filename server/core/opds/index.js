@@ -33,6 +33,9 @@ function scopeGuard(getWorker) {
                 // Every page and generated link must refer to the profile checked above.
                 req.query.user = user.id;
                 req.opdsUser = user;
+                res.set('Cache-Control','private, no-store');
+                res.vary('Cookie');
+                res.vary('Authorization');
             }
             next();
         } catch (error) {

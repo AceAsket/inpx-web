@@ -48,6 +48,9 @@ jobs:
       - run: node scripts/book-preview-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/book-preview-ui
+      - run: node scripts/ebook-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/ebook-ui
       - run: node scripts/rc13-profile-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/rc13-profile
@@ -75,6 +78,8 @@ jobs:
             ${{ runner.temp }}/overview-suggestions-ui/result.json
             ${{ runner.temp }}/book-preview-ui/*.png
             ${{ runner.temp }}/book-preview-ui/result.json
+            ${{ runner.temp }}/ebook-ui/*.png
+            ${{ runner.temp }}/ebook-ui/result.json
             ${{ runner.temp }}/review-progress-ui/*.png
             ${{ runner.temp }}/review-progress-ui/result.json
   validate:

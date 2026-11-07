@@ -186,6 +186,11 @@ async function main() {
         assert.strictEqual(home.status, 200);
         assert.strictEqual(home.headers.get('x-robots-tag'),'noindex, nofollow');
         assert.match(await home.text(), /<html/i);
+        const ebook=await fetch(`${url}/ebook?q=Packaged&lang=en`);
+        assert.strictEqual(ebook.status,200);
+        const ebookHtml=await ebook.text();
+        assert.match(ebookHtml,/Packaged smoke book/);
+        assert(!/<script\b|\.woff2?\b/.test(ebookHtml),'The packaged electronic-reader interface needs no client bundle');
         assert.match(await (await fetch(`${url}/robots.txt`)).text(),/Disallow: \/\s*$/);
         const opds = await fetch(`${url}/opds`);
         assert.strictEqual(opds.status, 200);

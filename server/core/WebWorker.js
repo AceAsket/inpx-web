@@ -771,6 +771,7 @@ class WebWorker {
     }
 
     async closeDb() {
+        await this.ebookReader?.close?.(); this.ebookReader=null;
         await this.bookPreview?.close?.(); this.bookPreview=null;
         await this.libraryIsbnIndex?.close?.();
         this.libraryIsbnIndex = null;

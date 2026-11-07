@@ -275,6 +275,8 @@ async function main() {
     const initHealthRoutes = require('./core/HealthRoutes');
     initHealthRoutes(app, config, webSocketController.webWorker, security, webSocketController);
 
+    require('./controllers/EbookController').register(app,config,webSocketController.webWorker,security,webAccess);
+
     const initStatic = require('./static');
     initStatic(app, config, webSocketController.webWorker, security);
 
