@@ -155,7 +155,7 @@ async function checkEbookProfileDownload(url,html,password='local-smoke-fixture'
     assert(new URL(response.url).pathname.endsWith('.'+format),'The final URL has the actual file extension');
     const bytes=Buffer.from(await response.arrayBuffer());
     if(format==='epub'){assert.equal(bytes.readUInt32LE(0),0x04034b50);assert.match(response.headers.get('content-type'),/application\/epub\+zip/);}
-    else if(format==='mobi'){assert.equal(bytes.toString('ascii',60,68),'BOOKMOBI');assert.match(response.headers.get('content-type'),/application\/x-mobipocket-ebook/);}
+    else if(format==='mobi'){assert.equal(bytes.toString('ascii',60,68),'BOOKMOBI');assert.match(response.headers.get('content-type'),/application\/x-mobipocket-ebook/);assert.match(response.headers.get('content-disposition'),/filename="[^".]+\.mobi"/);assert.equal(Number(response.headers.get('content-length')),bytes.length);}
     else assert.match(bytes.toString('utf8'),/FictionBook/);
     assert.equal((await post('/ebook/logout',{csrf})).status,303);
     console.log('ok packaged ebook profile → exact '+format.toUpperCase()+' download, no original fallback');

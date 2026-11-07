@@ -166,5 +166,16 @@ async function testBookNamingBatchZipKeepsDistinctNames() {
     });
 }
 
-module.exports = [testBookNamingConditionalTemplatesAndSafeFilenames, testBookTitleOverrideKeepsConfigAndSeparatesConversionCache,
+async function testBookDownloadHeadersKeepOneExtensionForLegacyAndUnicodeForModernBrowsers() {
+    const {fallbackFilename, disposition} = require('../server/core/BookDownloadHeaders');
+    assert.equal(fallbackFilename('A. Writer.Book.mobi'), 'A_ Writer_Book.mobi');
+    assert.match(fallbackFilename('А. Автор.Книга.mobi'), /^book-[a-f0-9]+\.mobi$/);
+    assert.notEqual(fallbackFilename('Первая.mobi'), fallbackFilename('Вторая.mobi'));
+    const header = disposition('А. Автор.Книга.mobi');
+    assert.match(header, /^attachment; filename="[^".]+\.mobi"; filename\*=UTF-8''/);
+    assert(header.endsWith(encodeURIComponent('А. Автор.Книга.mobi')));
+    assert(!disposition('bad"\r\nname.mobi').includes('\r\n'));
+}
+
+module.exports = [testBookDownloadHeadersKeepOneExtensionForLegacyAndUnicodeForModernBrowsers,testBookNamingConditionalTemplatesAndSafeFilenames, testBookTitleOverrideKeepsConfigAndSeparatesConversionCache,
     testBookNamingAppliesToLegacyCacheAndSharedHttpDownloads, testBookNamingBatchZipKeepsDistinctNames];
