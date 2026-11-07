@@ -46,17 +46,17 @@ const authorized = computed(() => !!library.config.value.profileAuthorized);
 </script>
 
 <style scoped>
-.library-result-card {display: flex; align-items: flex-start; gap: 18px; padding: 20px; min-width: 0; border-radius: 18px; background: var(--app-surface); color: var(--app-text); margin: 8px 0;}
+.library-result-card {display: flex; align-items: stretch; gap: 18px; padding: 20px; min-width: 0; border-radius: 18px; background: var(--app-surface); color: var(--app-text); margin: 8px 0;}
 .library-result-card__cover {width: 86px; flex-shrink: 0; position: relative; padding-top: 3px;}
 .library-result-card__cover > button {display: block; width: 100%; border: 0; padding: 0; background: transparent; border-radius: 9px; cursor: pointer;}
 .library-result-card__select {position: absolute; top: 0; left: -8px; background: var(--app-surface); border-radius: 8px;}
-.library-result-card__body {flex: 1; min-width: 0;}
+.library-result-card__body {display: flex; flex-direction: column; flex: 1; min-width: 0;}
 .library-result-card__top {display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--app-muted); font-size: 11px; margin: -3px 0 6px;}
 .library-result-card__top > button {border: 0; background: transparent; color: var(--app-muted); padding: 3px; margin: -4px -6px -4px 0; border-radius: 6px; cursor: pointer;}
-.library-result-card__title, .library-result-card__author, .library-result-card__series {display: block; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; background: transparent; cursor: pointer; overflow-wrap: anywhere;}
-.library-result-card__title {font-size: 17px; line-height: 1.35; font-weight: 550; margin-bottom: 6px;}
-.library-result-card__author {font-size: 13px; color: var(--app-muted); line-height: 1.5;}
-.library-result-card__series {font-size: 12px; color: var(--app-muted); margin-top: 3px; line-height: 1.5;}
+.library-result-card__title, .library-result-card__author, .library-result-card__series {display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; flex-shrink: 0; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; background: transparent; cursor: pointer; overflow-wrap: anywhere;}
+.library-result-card__title {-webkit-line-clamp: 2; max-height: 2.7em; font-size: 17px; line-height: 1.35; font-weight: 550; margin-bottom: 6px;}
+.library-result-card__author {-webkit-line-clamp: 2; max-height: 3em; font-size: 13px; color: var(--app-muted); line-height: 1.5;}
+.library-result-card__series {-webkit-line-clamp: 1; max-height: 1.5em; font-size: 12px; color: var(--app-muted); margin-top: 3px; line-height: 1.5;}
 .library-result-card__progress {font-size: 11px; color: var(--app-primary); margin-top: 5px;}
 .library-result-card__reason {font-size: 12px; line-height: 1.5; color: var(--app-muted); margin: 8px 0 0;}
 .library-result-card__feedback {font-size: 12px; color: var(--app-muted); margin-top: 12px;}
@@ -65,15 +65,15 @@ const authorized = computed(() => !!library.config.value.profileAuthorized);
 .library-result-card__feedback button {font: inherit; color: var(--app-text); border: 1px solid var(--app-border); border-radius: 8px; background: transparent; padding: 6px 9px; cursor: pointer;}
 .library-result-card__genres {display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; color: var(--app-muted); font-size: 10px;}
 .library-result-card__genres > button {font: inherit; color: inherit; padding: 3px 6px; background: var(--app-surface-3); border: 0; border-radius: 5px; cursor: pointer;}
-.library-result-card__actions {display: flex; gap: 13px; align-items: center; flex-wrap: wrap; margin-top: 14px;}
+.library-result-card__actions {display: flex; gap: 13px; align-items: center; flex-wrap: wrap; margin-top: auto; padding-top: 14px;}
 .library-result-card__actions > .q-btn {border-radius: 10px; padding: 6px 16px; min-height: 34px; font-size: 12px; font-weight: 550;}
 .library-result-card__actions > a, .library-result-card__actions > button {display: flex; align-items: center; gap: 5px; color: var(--app-muted); font: inherit; font-size: 12px; border: 0; border-radius: 6px; background: transparent; padding: 5px 0; text-decoration: none; cursor: pointer;}
 .library-result-card.library-result-card--compact {padding: 12px; gap: 12px; border-radius: 14px;}
 .library-result-card--compact .library-result-card__cover {width: 60px;}
-.library-result-card--compact .library-result-card__title {font-size: 15px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;}
+.library-result-card--compact .library-result-card__title {font-size: 15px; line-height: 1.4; max-height: 2.8em;}
 .library-result-card--compact .library-result-card__author, .library-result-card--compact .library-result-card__series {font-size: 12px;}
-.library-result-card--compact .library-result-card__actions {margin-top: 8px; gap: 10px;}
+.library-result-card--compact .library-result-card__actions {padding-top: 8px; gap: 10px;}
 .library-result-card--compact .library-result-card__actions > .q-btn {padding: 4px 12px;}
 button:focus-visible, a:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}
-@media (max-width: 599px) {.library-result-card {padding: 14px; gap: 14px; border-radius: 16px;} .library-result-card__cover {width: 72px;} .library-result-card__title {font-size: 16px;} .library-result-card__author {font-size: 12px;} .library-result-card__actions {gap: 10px; margin-top: 10px;} .library-result-card__actions > .q-btn {padding: 6px 13px;}}
+@media (max-width: 599px) {.library-result-card {padding: 14px; gap: 14px; border-radius: 16px;} .library-result-card__cover {width: 72px;} .library-result-card__title {font-size: 16px;} .library-result-card__author {font-size: 12px;} .library-result-card__actions {gap: 10px; padding-top: 10px;} .library-result-card__actions > .q-btn {padding: 6px 13px;}}
 </style>

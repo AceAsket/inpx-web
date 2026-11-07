@@ -39,6 +39,9 @@ jobs:
       - run: node scripts/profile-toolbar-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/profile-toolbar-ui
+      - run: node scripts/performance-panel-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/performance-panel-ui
       - run: node scripts/rc13-profile-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/rc13-profile
@@ -60,6 +63,8 @@ jobs:
             ${{ runner.temp }}/rc13-profile/*.png
             ${{ runner.temp }}/rc13-profile/result.json
             ${{ runner.temp }}/profile-toolbar-ui/*.png
+            ${{ runner.temp }}/performance-panel-ui/*.png
+            ${{ runner.temp }}/performance-panel-ui/result.json
             ${{ runner.temp }}/review-progress-ui/*.png
             ${{ runner.temp }}/review-progress-ui/result.json
   validate:

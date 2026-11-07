@@ -68,7 +68,8 @@ class CatalogDiscovery {
 
     async suggest(options = {}) {
         const query = model.text(options.query || ''), filters = model.scope(options.filters);
-        const kind = options.kind && KINDS.includes(options.kind) ? options.kind : '';
+        const kind = options.kind ?? '';
+        if (kind !== '' && !KINDS.includes(kind)) throw new Error('Укажите title, author или series для подсказок');
         if (Array.from(query).length < model.MIN_SUGGEST_CHARS || !search.words(query).length || /^[=~*#?]/.test(query)) return {query, groups: [], corrections: []};
         return this.cached(JSON.stringify(['suggest', query, filters, kind]), async db => {
             const groups = [];

@@ -20,6 +20,7 @@ async function fixture(total,work) {
             {title:'Приключения Тест героя',author:'Толстой Лев Николаевич',series:'Другой цикл',lang:'ru',sourceId:'one'},
             {title:'Ёлка у озера',author:'Ёлкин Семён',series:'Озёрные истории',lang:'ru',sourceId:'one'},
             {title:'Тест удалённый',author:'Удалённый автор',series:'Удалённая серия',lang:'ru',sourceId:'one',del:1},
+            {title:'Туман над рекой',author:'Туман Автор',series:'Туман серия',lang:'ru',sourceId:'one'},
             ...Array.from({length:total},(_,i)=>({title:`Тест ${String(i).padStart(6,'0')}`,author:'Ионова Злата Алексеевна',series:`Серия ${i}`,lang:'ru',sourceId:'one'})),
         ].map((book,i)=>({id:i*2+7,_uid:'book-'+i,ext:'fb2',genre:'prose,sf',del:0,...book}));
         await db.create({table:'book'});
@@ -125,7 +126,40 @@ async function testFastSuggestionsBoundRowsBeforeReadingLargePrefixAndPostings()
     });
 }
 
+async function testFastSuggestionsFieldScopeSeparatesIndexesCorrectionsAndCache() {
+    await fixture(0,async({service,db,readCount,resetReads})=>{
+        const select=db.select.bind(db),tables=[];
+        db.select=async options=>{tables.push(options.table);return select(options);};
+        const byKind=new Map();
+        for(const kind of ['title','author','series']) {
+            tables.length=0;resetReads();
+            const options={query:'Туман',kind,filters:{lang:'ru',sourceId:'one'}};
+            const [first,concurrent]=await Promise.all([service.suggest(options),service.suggest(options)]);
+            assert.equal(first,concurrent,'Identical scoped requests still coalesce');
+            assert.deepEqual(first.groups.map(group=>group.kind),[kind]);
+            assert(first.groups[0].items.length>0,'The fixture has a matching '+kind);
+            assert(readCount()>0,'Changing only kind cannot reuse another field cache');
+            assert(tables.every(table=>!['title','author','series'].includes(table)||table===kind),'A field never computes other name indexes');
+            byKind.set(kind,first);
+            resetReads();assert.equal(await service.suggest(options),first);assert.equal(readCount(),0);
+            const filtered=await service.suggest({...options,filters:{sourceId:'missing'}});
+            assert.equal(filtered.groups[0].items.length,0,'Filters remain part of cache identity');
+            resetReads();assert.equal(await service.suggest(options),first);assert.equal(readCount(),0);
+            const typo=await service.suggest({...options,query:'тумон'});
+            assert(typo.corrections.length>0,'The fixture exercises corrections too');
+            assert(typo.corrections.every(item=>item.kind===kind),'Corrections stay inside the selected field');
+        }
+        const mixed=await service.suggest({query:'Туман'});
+        assert.deepEqual(mixed.groups.map(group=>group.kind),['author','series','title']);
+        assert(mixed.groups.every(group=>group.items.length>0),'An explicit unified caller can still request mixed suggestions');
+        assert([...byKind.values()].every(value=>value!==mixed));
+        resetReads();await assert.rejects(service.suggest({query:'Туман',kind:'books'}),/title, author или series/);
+        assert.equal(readCount(),0,'Unknown field scopes do not fall back to mixed database work');
+    });
+}
+
 module.exports=[testFastSuggestionsWorkBeforeAnyLookupBuildAndPreserveScope,
-    testFastSuggestionsShortQueriesAndUnsupportedIndexNeverScan,testFastSuggestionsBoundRowsBeforeReadingLargePrefixAndPostings];
+    testFastSuggestionsShortQueriesAndUnsupportedIndexNeverScan,testFastSuggestionsBoundRowsBeforeReadingLargePrefixAndPostings,
+    testFastSuggestionsFieldScopeSeparatesIndexesCorrectionsAndCache];
 if(require.main===module)(async()=>{for(const test of module.exports){await test();console.log('ok '+test.name);}})()
     .catch(error=>{console.error(error);process.exitCode=1;});

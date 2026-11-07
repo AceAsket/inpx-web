@@ -127,7 +127,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await performancePanel.getByRole('button', {name: /^Свои значения/}).click();
         await performancePanel.getByRole('spinbutton', {name: 'Всего одновременно', exact: true}).fill('2');
         await performancePanel.getByRole('spinbutton', {name: 'Изображения', exact: true}).fill('3');
-        const runBenchmark = performancePanel.getByRole('button', {name: 'Проверить производительность', exact: true});
+        const runBenchmark = performancePanel.getByTestId('performance-start');
         await performancePanel.getByText('Лимит отдельного вида задач превышает общий.', {exact: true}).waitFor();
         assert(await runBenchmark.isDisabled()); assert.equal(benchmarkOptions, null);
         await performancePanel.getByRole('spinbutton', {name: 'Всего одновременно', exact: true}).fill('3');

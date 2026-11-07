@@ -1768,6 +1768,8 @@ const tests = [
     ...require('./audit-stage4-tests'),
     ...require('./resource-limit-tests'),
     ...require('./resource-policy-tests'),
+    ...require('./resource-benchmark-summary-tests'),
+    ...require('./performance-panel-tests'),
     ...require('./review-progress-tests'),
     ...require('./catalog-suggest-fast-tests'),
     ...require('./telegram-proxy-client-tests'),

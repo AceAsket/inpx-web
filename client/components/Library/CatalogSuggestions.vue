@@ -41,8 +41,10 @@ const queryText = computed(() => String(props.query || '').normalize('NFKC').rep
 const visible = computed(() => props.focused && enabled.value);
 const labels = {title: 'Книги', author: 'Авторы', series: 'Серии', correction: 'Возможно, вы искали'};
 const icons = {title: 'la la-book', author: 'la la-user-edit', series: 'la la-layer-group', correction: 'la la-spell-check'};
-const items = computed(() => [...(data.value?.groups || []).flatMap(group => group.items.map(item => ({...item, kind: group.kind}))),
-    ...(data.value?.corrections || []).map(item => ({kind: 'correction', name: item.query, targetKind: item.kind}))]);
+const items = computed(() => [...(data.value?.groups || []).filter(group => !props.kind || group.kind === props.kind)
+    .flatMap(group => group.items.map(item => ({...item, kind: group.kind}))),
+    ...(data.value?.corrections || []).filter(item => !props.kind || item.kind === props.kind)
+        .map(item => ({kind: 'correction', name: item.query, targetKind: item.kind}))]);
 let timer, revision = 0;
 watch(() => [props.query, props.kind, JSON.stringify(props.filters), props.context, props.focused], () => {
     clearTimeout(timer); const request = ++revision;

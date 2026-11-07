@@ -5,7 +5,7 @@
         </div>
         <form v-if="!discovery && !extended" role="search" @submit.prevent="flush">
             <div class="catalog-search-panel__main">
-                <CatalogTextField v-model:text="draft.title.text" v-model:mode="draft.title.mode" label="Название книги" mode-label="Совпадение названия" search-icon suggestions :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @search="flush" @update:text="schedule" @update:mode="schedule" />
+                <CatalogTextField v-model:text="draft.title.text" v-model:mode="draft.title.mode" label="Название книги" mode-label="Совпадение названия" search-icon suggestions kind="title" :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @search="flush" @update:text="schedule" @update:mode="schedule" />
                 <q-btn unelevated no-caps color="primary" label="Найти" icon="la la-arrow-right" type="submit" />
             </div>
             <div v-if="moreFields" class="catalog-search-panel__extra">

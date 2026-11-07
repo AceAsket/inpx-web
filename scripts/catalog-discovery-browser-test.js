@@ -14,6 +14,7 @@ async function fixture(directory) {
         ['Толстой Лев', 'Косточка', 'Рассказы', 1, 'ru'], ['Толстой Лев', 'После бала', 'Рассказы', 2, 'ru'],
         ['Тургенев Иван', 'Ася', '', 0, 'ru'],
         ['Толстой Лев', 'Childhood', 'Рассказы', 3, 'en'],
+        ['Туман Автор', 'Туман над рекой', 'Туман серия', 1, 'ru'],
         ...Array.from({length: 240}, (_, i) => [`Корнеев Автор${String(i).padStart(4, '0')}`, `Книга указателя ${i}`, `Коллекция ${i}`, 1, 'ru']),
     ];
     const rows = [], files = [], date = new Date().toISOString().slice(0, 10);
@@ -39,6 +40,7 @@ async function fixture(directory) {
     try {
         const library = path.join(directory, 'library'); await fixture(library);
         const dataDir = path.join(directory, 'data'); await fs.copy(path.resolve('dist/tmp/public'), path.join(dataDir, 'public'));
+        assert(await fs.pathExists(path.join(dataDir,'public/index.html')), 'Build the production UI before copying browser fixtures');
         const port = await unusedPort(), base = `http://127.0.0.1:${port}`;
         child = spawn(process.execPath, [path.resolve('server'), `--data-dir=${dataDir}`, `--config=${library}/config.json`, `--lib-dir=${library}`, `--port=${port}`, '--host=127.0.0.1'],
             {windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: {...process.env, INPX_TTS_ENABLED: 'false', INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
@@ -54,8 +56,15 @@ async function fixture(directory) {
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [];
         let externalFixture = false;
+        let cardGridFixture = false;
+        const gridBooks = Array.from({length:6}, (_, index) => ({_uid:`card-grid-${index}`, ext:'fb2', lang:'ru', genre:'prose', size:300,
+            title:index === 0 ? 'Сетка 0. ' + 'Очень длинное название сборника разных произведений '.repeat(6) + 'Конец названия' : `Сетка ${index}. Короткая книга`,
+            author:index === 0 || index === 2 ? Array.from({length:40}, (_, author) => `Автор ${author + 1} Фамилия Имя Отчество`).join(', ') : 'Краткий Автор',
+            series:index === 0 || index === 2 ? 'Длинная серия со всеми важными подробностями '.repeat(5) + 'Конец серии' : '',
+        }));
         let galleryFixture = 'actual';
         const suggestionRequests = new Map();
+        const suggestionScopes = [];
         const invalidBookRequests = [];
         const inactiveReaderRequests = [];
         await page.routeWebSocket('**', socket => {
@@ -65,10 +74,16 @@ async function fixture(directory) {
                 if (request.action === 'get-book-info' && !request.bookUid) invalidBookRequests.push({card: request.card, readerOnly: request.readerOnly, url: page.url()});
                 if (request.action === 'get-book-info' && request.readerOnly && !page.url().includes('#/reader')) inactiveReaderRequests.push(request.bookUid);
                 if (request.action === 'catalog-suggest') {
-                    suggestions.set(request.requestId, request.options.query);
+                    suggestions.set(request.requestId, request.options);
+                    suggestionScopes.push({query:request.options.query,kind:request.options.kind,filters:request.options.filters});
                     suggestionRequests.set(request.options.query, (suggestionRequests.get(request.options.query) || 0) + 1);
                 }
                 if (request.action === 'get-config') configs.add(request.requestId);
+                if (cardGridFixture && request.action === 'bookSearch') {
+                    socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));
+                    socket.send(JSON.stringify({requestId:request.requestId,found:gridBooks,totalFound:gridBooks.length,inpxHash:'card-grid-fixture'}));
+                    return;
+                }
                 if (request.action === 'get-book-gallery') galleries.add(request.requestId);
                 if (externalFixture && request.action === 'get-discovery-shelves') {
                     socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
@@ -89,11 +104,14 @@ async function fixture(directory) {
                     }
                 }
                 if (suggestions.has(response.requestId) && !response._rok) {
-                    const query = suggestions.get(response.requestId);
+                    const {query,kind} = suggestions.get(response.requestId);
                     suggestions.delete(response.requestId);
                     // Compatibility: an older server's warming response must not make the client poll.
                     if (query === 'Тест') message = JSON.stringify({requestId:response.requestId, query, warming:true, groups:[], corrections:[], progress:{done:20, total:100}});
                     else if (query === 'Кост') message = JSON.stringify({...response, limited:true});
+                    else if (query === 'Туман' && kind === 'title') message = JSON.stringify({...response,
+                        groups:[...response.groups,{kind:'author',items:[{name:'Туман лишний автор',count:1}]},{kind:'series',items:[{name:'Туман лишняя серия',count:1}]}],
+                        corrections:[{kind:'author',query:'Туман лишняя коррекция'}]});
                     // A real library can respond after the 500 ms automatic search changes the route.
                     setTimeout(() => socket.send(message), 800); return;
                 }
@@ -230,8 +248,28 @@ async function fixture(directory) {
         await page.getByText('Прочитано 1 из 2', {exact: false}).waitFor();
         for (const width of [1440, 390, 320]) {await page.setViewportSize({width, height: 900}); await geometry('series ' + width);}
         await screenshot('series-light-320');
+        for(const [kind,label] of [['title','Книги'],['author','Авторы'],['series','Серии']]) {
+            await page.goto(base + '/#/books?lang=ru');
+            let field=input;
+            if(kind!=='title') {
+                const toggle=page.getByRole('button',{name:'Автор и серия',exact:true});
+                if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
+                field=page.locator('.catalog-search-panel__extra .catalog-text-field').nth(kind==='author'?0:1).locator('input').first();
+            }
+            await field.fill('Туман');
+            const expected=kind==='title'?'Туман над рекой':kind==='author'?'Туман Автор':'Туман серия';
+            await page.getByRole('option',{name:new RegExp(expected)}).waitFor();
+            assert.deepEqual((await page.locator('.catalog-suggestions__heading').allTextContents()).map(value=>value.trim()),[label],kind+' displays only matching field suggestions');
+            assert.equal(await page.getByRole('option',{name:/лишни/}).count(),0,'Old mixed responses cannot leak groups or corrections into a named field');
+            await field.press('Escape');
+        }
+        const fieldRequests=suggestionScopes.filter(request=>request.query==='Туман');
+        assert.deepEqual([...new Set(fieldRequests.map(request=>request.kind))].sort(),['author','series','title']);
+        assert(fieldRequests.every(request=>request.filters.lang==='ru'),'Field scopes retain catalog filters');
         await page.goto(base + '/#/books?lang=ru');
-        await input.fill('Толс');
+        const extraFieldsToggle=page.getByRole('button',{name:'Автор и серия',exact:true});
+        if(await extraFieldsToggle.getAttribute('aria-expanded')!=='true')await extraFieldsToggle.click();
+        await page.locator('.catalog-search-panel__extra .catalog-text-field').first().locator('input').first().fill('Толс');
         await page.getByRole('option', {name:/Толстой Лев/}).waitFor();
         await page.getByRole('option', {name:/Толстой Лев/}).click();
         await page.getByRole('heading', {name:'Толстой Лев', exact:true}).waitFor();
@@ -318,10 +356,55 @@ async function fixture(directory) {
         }
         await page.getByRole('button', {name: 'Включить тёмную тему', exact: true}).click();
         await screenshot('discovery-controls-dark-320');
+        cardGridFixture = true;
+        await page.goto(base + '/?card-grid-fixture=1#/books?title=*Сетка');
+        await page.waitForFunction(() => document.querySelectorAll('.books-grid .library-result-card').length === 6);
+        const cardGridGeometry = [];
+        for (const width of [1440,320]) {
+            await page.setViewportSize({width,height:1000}); await pause(150);
+            const measured = await page.locator('.books-grid').evaluate(grid => ({width:innerWidth,scroll:grid.scrollWidth,client:grid.clientWidth,
+                cards:[...grid.querySelectorAll('.library-result-card')].map(card => {
+                    const box=card.getBoundingClientRect(), actions=card.querySelector('.library-result-card__actions').getBoundingClientRect();
+                    const fields=Object.fromEntries(['title','author','series'].map(name => {
+                        const field=card.querySelector('.library-result-card__'+name), rect=field?.getBoundingClientRect();
+                        return [name,field ? {height:rect.height,lineHeight:parseFloat(getComputedStyle(field).lineHeight),scroll:field.scrollHeight,client:field.clientHeight} : null];
+                    }));
+                    return {top:box.top,bottom:box.bottom,height:box.height,left:box.left,right:box.right,actionsBottom:actions.bottom,fields};
+                })}));
+            assert(measured.scroll<=measured.client+1 && measured.cards.every(card => card.left>=0 && card.right<=width+1), 'Cards fit the viewport: '+JSON.stringify(measured));
+            const rows=[];
+            for(const card of measured.cards) {
+                let row=rows.find(row => Math.abs(row.top-card.top)<1);
+                if(!row){row={top:card.top,bottom:card.bottom,height:card.height,cards:[]};rows.push(row);}
+                row.cards.push(card);
+                assert(card.height<380, 'Long metadata must not create a tall card');
+                for(const [field,lines] of [['title',2],['author',2],['series',1]])
+                    if(card.fields[field]) assert(card.fields[field].height<=card.fields[field].lineHeight*lines+1, field+' is clamped');
+            }
+            assert(rows.length>=3);
+            for(const row of rows) {
+                assert(Math.max(...row.cards.map(card=>card.height))-Math.min(...row.cards.map(card=>card.height))<=1,'Cards in a row have equal height');
+                assert(Math.max(...row.cards.map(card=>card.actionsBottom))-Math.min(...row.cards.map(card=>card.actionsBottom))<=1,'Actions align at the bottom of each row');
+            }
+            for(let i=1;i<rows.length;i++)assert(rows[i].top-rows[i-1].bottom<=20+1,'Rows have no inherited empty track space');
+            assert(rows.at(-1).height<rows[0].height-10,'Short rows do not inherit the tallest row height');
+            assert(measured.cards[0].fields.author.scroll>measured.cards[0].fields.author.client,'The long author fixture exercises actual clipping');
+            cardGridGeometry.push({width,rows:rows.map(row=>({height:row.height,count:row.cards.length}))});
+            await screenshot('result-cards-long-'+width);
+        }
+        const firstCard=page.locator('.books-grid .library-result-card').first();
+        assert.equal(await firstCard.locator('.library-result-card__title').textContent(),gridBooks[0].title);
+        assert.equal(await firstCard.locator('.library-result-card__author').textContent(),gridBooks[0].author);
+        await firstCard.locator('.library-result-card__title').click();
+        const fullPreview=page.locator('.q-dialog .library-book-actions');
+        await fullPreview.waitFor();
+        assert.equal(await fullPreview.getByRole('heading').textContent(),gridBooks[0].title);
+        assert.equal(await fullPreview.locator('.book-actions-author').textContent(),gridBooks[0].author);
+        assert.equal(await fullPreview.locator('.book-actions-series').textContent(),gridBooks[0].series);
         assert.deepEqual(errors, []);
         assert.deepEqual(invalidBookRequests, [], 'Deactivated book pages must not reload with an empty UID');
         assert.deepEqual(inactiveReaderRequests, [], 'A cached reader must not prepare documents while another page is active');
-        await fs.writeJson(path.join(directory, 'result.json'), {base, errors, depth, suggestionRequests: Object.fromEntries(suggestionRequests)}, {spaces: 2});
+        await fs.writeJson(path.join(directory, 'result.json'), {base, errors, depth, cardGridGeometry, suggestionScopes, suggestionRequests: Object.fromEntries(suggestionRequests)}, {spaces: 2});
         console.log('Catalog discovery browser: OK. Artifacts: ' + directory);
     } catch (error) {
         if (browser) {const page = browser.contexts().flatMap(context => context.pages())[0]; if (page) {await page.screenshot({path: path.join(directory, 'failure.png')}).catch(() => {}); await fs.writeFile(path.join(directory, 'failure.html'), await page.content());}}

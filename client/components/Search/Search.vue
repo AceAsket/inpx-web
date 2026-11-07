@@ -2601,7 +2601,8 @@ export default vueComponent(Search);
 .search--shelves .toolbar-actions {padding-top: 10px;}
 .search--shelves .result-bar {margin-top: 18px;}
 .search--shelves .catalog-footer {background: transparent;}
-.search--shelves :deep(.books-grid:not(.books-grid--list)) {grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); align-items: start; gap: 0 20px;}
+.search--shelves :deep(.books-grid:not(.books-grid--list)) {grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); grid-auto-rows: auto; align-items: stretch; gap: 16px 20px;}
+.search--shelves :deep(.books-grid:not(.books-grid--list) > .library-result-card) {margin: 0;}
 .search--shelves :deep(.rating-toolbar) {display: none;}
 .search--shelves :deep(.bulk-read-toolbar) {margin-top: 12px; margin-bottom: 4px;}
 .search--shelves .result-bar {font-size: 12px;}

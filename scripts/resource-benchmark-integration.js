@@ -45,10 +45,17 @@ const path = require('path');
         for (const key of Object.keys(limits)) assert.strictEqual(custom.limits[key],limits[key]);
         assert(Number.isFinite(custom.cpuTimeMs) && Number.isFinite(custom.cpuPercent));
         assert(custom.peakRss > 0 && Number.isFinite(custom.memoryDelta));
+        await service.start({mode:'profile',profileId:'economy'}); await service.completion;
+        assert.strictEqual(service.job.state,'completed',service.lastError?.stack || service.job.message);
+        assert.strictEqual(service.last.schema,2); assert.strictEqual(service.last.mode,'profile');
+        assert.strictEqual(service.last.rows.length,1); assert.strictEqual(service.last.rows[0].profile,'economy');
+        assert(Number.isInteger(service.last.rows[0].probeTimeouts) && service.last.rows[0].probeTimeouts>=0);
+        assert.strictEqual(service.last.rows[0].probeFailures,0);
+        assert.strictEqual(service.last.recommendation.measured,false,'One preset is not a comparison');
         assert.strictEqual(JSON.stringify(runtime.settings),before,'Real custom runs must not apply their test limits');
         assert.strictEqual(await fs.readFile(source, 'utf8'), content);
         assert.deepStrictEqual(await fs.readdir(config.tempDir), []);
         assert.strictEqual(require('../server/core/ResourceRuntime').active, 0);
-        console.log('Resource benchmark: real djxl, 7-Zip, fbc and DB probe, standard/custom profiles, measured CPU/RAM and cleanup passed');
+        console.log('Resource benchmark: real djxl, 7-Zip, fbc and DB probe, comparison/custom/selected profiles, measured CPU/RAM and cleanup passed');
     } finally {await db?.unlock(); await fs.remove(dir);}
 })().catch(error => {console.error(error); process.exitCode = 1;});
