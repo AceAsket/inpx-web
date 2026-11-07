@@ -14,6 +14,7 @@ class CatalogLookupIndex {
         this.controller = new AbortController(); this.ready = false;
         this.cursor = 'catalog-lookup-' + crypto.randomBytes(12).toString('hex');
         this.idleMs = idleMs; this.readers = new Set();
+        this.progress = {done:0, total:null};
     }
     async open() {
         clearTimeout(this.idleTimer);
@@ -95,6 +96,9 @@ class CatalogLookupIndex {
                 this.check();
                 await this.db.create({table: TABLE, cacheSize: 5, index: {field: 'value', unique: false, type: 'string', depth: 1000000}});
                 await this.db.insert({table: TABLE, rows: [{id: 0, value: '', complete: false, version: VERSION, signature}]});
+                const metadata = await this.db.getDbInfo();
+                this.progress = {done:0, total:['author', 'series', 'title'].reduce((sum, kind) => sum + (metadata[kind]?.count || 0), 0)};
+                tasks.update(id, {total:this.progress.total});
                 let rowId = 0, done = 0;
                 for (const kind of ['author', 'series', 'title']) {
                     try {
@@ -112,6 +116,7 @@ class CatalogLookupIndex {
                             const rows = Array.from(postings, ([word, entityIds]) => ({id: ++rowId, value: `${kind}:${word}`, entityIds}));
                             if (rows.length) await this.background(() => this.db.insert({table: TABLE, rows}));
                             done += names.length;
+                            this.progress.done = done;
                             tasks.update(id, {phase: 'Индекс имён, серий и названий', done});
                             // Leave time for searches/readers on a single-core NAS.
                             await new Promise(resolve => setTimeout(resolve, 25));

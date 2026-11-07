@@ -53,7 +53,7 @@ class CatalogDiscovery {
         const query = model.text(options.query || ''), filters = model.scope(options.filters);
         const kind = options.kind && KINDS.includes(options.kind) ? options.kind : '';
         if (Array.from(query).length < 2 || !search.words(query).length || /^[=~*#?]/.test(query)) return {query, groups: [], corrections: []};
-        if (!await this.warm()) return {query, groups: [], corrections: [], warming: true};
+        if (!await this.warm()) return {query, groups: [], corrections: [], warming: true, progress:{...this.lookup.progress}};
         return this.cached(JSON.stringify(['suggest', query, filters, kind]), async db => {
             const groups = [];
             const scoped = Object.keys(filters).length > 1;

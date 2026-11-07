@@ -1,14 +1,14 @@
 <template>
     <q-menu :model-value="visible" no-parent-event no-focus no-refocus no-route-dismiss fit :offset="[0, 8]" class="catalog-suggestions" @update:model-value="value => !value && dismiss()">
         <div :id="listId" role="listbox" aria-label="Подсказки поиска" class="catalog-suggestions__list">
-            <p v-if="loading && !items.length" role="status">
+            <p v-if="loading && !items.length && !data?.warming && !error" role="status">
                 Ищем подсказки…
             </p>
             <p v-if="error" role="status">
                 {{ error }}
             </p>
-            <p v-if="data?.warming" role="status">
-                Готовим индекс подсказок. Поиск уже доступен.
+            <p v-if="data?.warming && !error" role="status">
+                Подготавливаем подсказки<span v-if="preparationPercent !== null">: {{ preparationPercent }}%</span>. Поиск уже доступен.
             </p>
             <div v-for="(item, index) in items" :key="`${item.kind}:${item.name}`">
                 <div v-if="index === 0 || items[index - 1].kind !== item.kind" class="catalog-suggestions__heading">
@@ -35,6 +35,8 @@ const labels = {title: 'Книги', author: 'Авторы', series: 'Серии
 const icons = {title: 'la la-book', author: 'la la-user-edit', series: 'la la-layer-group', correction: 'la la-spell-check'};
 const items = computed(() => [...(data.value?.groups || []).flatMap(group => group.items.map(item => ({...item, kind: group.kind}))),
     ...(data.value?.corrections || []).map(item => ({kind: 'correction', name: item.query, targetKind: item.kind}))]);
+const preparationPercent = computed(() => data.value?.progress?.total > 0
+    ? Math.min(99, Math.floor(100 * data.value.progress.done / data.value.progress.total)) : null);
 let timer, revision = 0;
 watch(() => [props.query, props.kind, JSON.stringify(props.filters), props.context, props.focused], () => {
     clearTimeout(timer); const request = ++revision;

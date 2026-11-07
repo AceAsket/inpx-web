@@ -121,6 +121,7 @@ async function testCatalogLookupReadsEachNameOnceAndReleasesIdleTables() {
         const worker = {db, libraryAssetGeneration: 1, dbSearcher: {dbConfig: {inpxHash: 'resource-test'}}};
         lookup = new (require('../server/core/CatalogLookupIndex'))(worker, {idleMs: 30});
         await lookup.ensure(); await lookup.building;
+        assert.deepStrictEqual(lookup.progress, {done:total * 3, total:total * 3}, 'Cold builds report progress across all three kinds');
         assert.strictEqual(reads, total * 3, 'Batch limits must apply before reading/cloning source rows');
         assert.strictEqual((await lookup.ids('title', 'приключ')).length, total, 'Posting lists preserve every match, including sparse IDs');
         assert.deepStrictEqual(await lookup.ids('author', 'героя 5002'), [5002 * 2 + 7], 'Word intersections survive batch boundaries');

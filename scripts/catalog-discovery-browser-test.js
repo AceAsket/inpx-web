@@ -49,15 +49,16 @@ async function fixture(directory) {
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [];
         let externalFixture = false;
+        let warmingFixture = true, warmingPolls = 0;
         const invalidBookRequests = [];
         const inactiveReaderRequests = [];
         await page.routeWebSocket('**', socket => {
-            const server = socket.connectToServer(), suggestions = new Set(), configs = new Set();
+            const server = socket.connectToServer(), suggestions = new Map(), configs = new Set();
             socket.onMessage(message => {
                 const request = JSON.parse(String(message));
                 if (request.action === 'get-book-info' && !request.bookUid) invalidBookRequests.push({card: request.card, readerOnly: request.readerOnly, url: page.url()});
                 if (request.action === 'get-book-info' && request.readerOnly && !page.url().includes('#/reader')) inactiveReaderRequests.push(request.bookUid);
-                if (request.action === 'catalog-suggest') suggestions.add(request.requestId);
+                if (request.action === 'catalog-suggest') suggestions.set(request.requestId, request.options.query);
                 if (request.action === 'get-config') configs.add(request.requestId);
                 if (externalFixture && request.action === 'get-discovery-shelves') {
                     socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
@@ -78,8 +79,13 @@ async function fixture(directory) {
                     }
                 }
                 if (suggestions.has(response.requestId) && !response._rok) {
+                    const query = suggestions.get(response.requestId);
                     suggestions.delete(response.requestId);
                     // A real library can respond after the 500 ms automatic search changes the route.
+                    if (warmingFixture && query === 'Кост') {
+                        warmingPolls++;
+                        message = JSON.stringify({requestId:response.requestId, query, warming:true, groups:[], corrections:[], progress:{done:warmingPolls * 100, total:10000}});
+                    }
                     setTimeout(() => socket.send(message), 800); return;
                 }
                 socket.send(message);
@@ -118,6 +124,21 @@ async function fixture(directory) {
         const input = page.locator('.catalog-search-panel__main input').first();
         await input.fill('zzzz'); await pause(600); await input.fill('Кост');
         await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '*Кост');
+        await page.getByText(/Подготавливаем подсказки: \d+%/).waitFor();
+        const preparation = await page.evaluate(async() => {
+            let samples = 0, invalid = 0;
+            const sample = () => {
+                const menu = document.querySelector('.catalog-suggestions'); samples++;
+                if (!menu || getComputedStyle(menu).display === 'none' || menu.querySelectorAll('[role="status"]').length !== 1
+                    || menu.textContent.includes('Ищем подсказки')) invalid++;
+            };
+            sample(); const timer = setInterval(sample, 20);
+            await new Promise(resolve => setTimeout(resolve, 5000)); clearInterval(timer);
+            return {samples, invalid};
+        });
+        assert(warmingPolls >= 3, 'Exercise several delayed preparation polls');
+        assert.equal(preparation.invalid, 0, 'Preparation remains visible as one stable status throughout polling');
+        warmingFixture = false;
         await page.getByRole('option', {name: /Косточка/}).waitFor();
         await input.press('Escape'); await page.locator('.catalog-suggestions').waitFor({state: 'hidden'});
         await input.fill('Косто'); await page.getByRole('option', {name: /Косточка/}).waitFor();
