@@ -39,8 +39,21 @@ Silero: `aceasket/inpx-web-7z:1.8.2-rc.16-silero`.
 standalone, Docker lite/full и реальные конвертеры — PASS.
 Проверены вход и личные полки без JavaScript, сохранение формата профиля,
 настоящие FB2 и EPUB без подмены оригиналом, метаданные превью и область OPDS.
-Релизные workflows повторяют проверки из тега перед публикацией.
+Проверки тега `fbba3ee7e2302e3a58bc3664bd8670ef90bcadcb` завершились успешно:
+[полный CI RC16](https://github.com/AceAsket/inpx-web/actions/runs/42411243728),
+[standalone и установщик](https://github.com/AceAsket/inpx-web/actions/runs/42411246881),
+[Docker и реальный Silero](https://github.com/AceAsket/inpx-web/actions/runs/42411246907).
+[Артефакт скриншотов](https://github.com/AceAsket/inpx-web/actions/runs/42411243728/artifacts/13589048487).
 [Подробный отчёт и скриншоты](develop-ui-validation.md).
+
+После публикации проверены пять файлов GitHub Release и оба Docker-образа:
+метка revision совпадает с коммитом тега. Контрольные суммы:
+
+- `1.8.2-rc.16`: `sha256:fdbb90bf24bf1aad136ba1b7985ed1ac61520b866550081630028a9c77649155`.
+- `1.8.2-rc.16-silero`: `sha256:ae7c083ae1b69cb9ced7f7e082a3b6006680498ee50acf2432160b0765652e38`.
+
+Контрольные суммы Docker-тегов RC14, RC15 и стабильных `1.8.1` / `latest`
+совпадают со снимком до выпуска. GitHub latest также остаётся `v1.8.1`.
 
 [Замеры памяти и CPU пользовательского стенда](rc15-stand-review.md) относятся
 к RC15. Они не являются результатами RC16; повторные замеры и проверка
