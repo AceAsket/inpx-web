@@ -635,7 +635,9 @@ async function testReaderPaginationResumesAcrossViewportGeometry() {
     assert.match(readerSource, /for \(let index = startIndex; index < queue\.length; index \+= 1\)/);
     assert.match(readerSource, /storePartialLayout\(index\);\s*return false;/);
     assert.match(readerSource, /type: 'complete',\s*pages: finalPages/);
-    assert.match(readerSource, /async loadReader\(\) \{[\s\S]{0,400}this\.pagedLayoutCache\.clear\(\);/);
+    // Cache reset on a new document is exercised by
+    // testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments. Avoid a source
+    // length assertion: adding the active-route guard shifted the same reset.
 }
 
 async function testReaderDefersViewportRefreshAcrossScreenUnlock() {
