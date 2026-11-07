@@ -142,6 +142,7 @@ async function fixture(directory) {
         await page.setViewportSize({width: 1440, height: 1000});
         await page.locator('.book-actions-author').click();
         await page.getByRole('heading', {name: 'Толстой Лев', exact: true}).waitFor();
+        await page.locator('.catalog-book-grid .book-tile').first().waitFor();
         assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
         await page.goBack(); await page.locator('.catalog-book-details').waitFor();
         await page.locator('.book-actions-series').click();
