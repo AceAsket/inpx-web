@@ -9,6 +9,7 @@ import LoadingMessage from './LoadingMessage/LoadingMessage.vue';
 import * as utils from '../../share/utils';
 const {match: catalogMatch} = require('../../../shared/CatalogSearch');
 const bookFormats = require('../../../shared/BookFormats');
+const {catalogTarget} = require('../Library/catalogSearchModel');
 
 const showMoreCount = 100;//значение для "Показать еще"
 const maxItemCount = 500;//выше этого значения показываем "Загрузка"
@@ -248,7 +249,7 @@ export default class BaseList {
 
     selectAuthor(author) {
         if (this.settings.catalogAppearance === 'shelves') {
-            this.$router.push({path: '/author-details', query: {name: author}}); return;
+            this.$router.push(catalogTarget('/author-details', {name:author}, this.currentSearch)); return;
         }
         const search = (this.isExtendedSearch ? this.extSearch : this.search);
         search.author = `=${author}`;
@@ -257,7 +258,7 @@ export default class BaseList {
 
     selectSeries(series) {
         if (this.settings.catalogAppearance === 'shelves') {
-            this.$router.push({path: '/series-details', query: {name: series}}); return;
+            this.$router.push(catalogTarget('/series-details', {name:series}, this.currentSearch)); return;
         }
         const search = (this.isExtendedSearch ? this.extSearch : this.search);
         search.series = `=${series}`;
@@ -518,8 +519,8 @@ export default class BaseList {
     bookEvent(event) {
         if (this.settings.catalogAppearance === 'shelves' && ['bookInfo', 'authorClick', 'seriesClick'].includes(event.action)) {
             const kind = {bookInfo: 'book', authorClick: 'author', seriesClick: 'series'}[event.action];
-            this.$router.push({path: kind === 'book' ? '/book' : `/${kind}-details`,
-                query: kind === 'book' ? {bookUid: this.getBookUid(event.book)} : {name: event.book[kind]}});
+            this.$router.push(catalogTarget(kind === 'book' ? '/book' : `/${kind}-details`,
+                kind === 'book' ? {bookUid:this.getBookUid(event.book)} : {name:event.book[kind]}, this.currentSearch));
             return;
         }
         switch (event.action) {

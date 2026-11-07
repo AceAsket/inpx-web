@@ -54,6 +54,16 @@ async function testCatalogDiscoveryIndexedSuggestionsAndScopedAlphabet() {
         assert.deepStrictEqual(catalogScope({...filters, name:'Old author', page:'5', title:'*Old book'}), filters);
         assert.deepStrictEqual(catalogTarget('/author-details', {name:'Толстой'}, {...filters, name:'Old', page:5}),
             {path:'/author-details', query:{...filters, name:'Толстой'}});
+        const routes = [];
+        classic.$store = {state:{settings:{catalogAppearance:'shelves'}}};
+        classic.$router = {push:target => routes.push(target)}; classic.search = {...filters};
+        classic.selectAuthor('Толстой'); classic.selectSeries('Рассказы');
+        for (const action of ['authorClick', 'seriesClick', 'bookInfo'])
+            classic.bookEvent({action, book:{_uid:'book', author:'Толстой', series:'Рассказы'}});
+        assert.equal(routes.length, 5);
+        for (const target of routes) assert.deepStrictEqual(catalogScope(target.query), filters, 'Book-list links carry the same scope as suggestions');
+        classic.$store.state.settings.catalogAppearance = 'classic'; classic.scrollToTop = () => {};
+        classic.selectAuthor('Толстой'); assert.strictEqual(classic.search.lang, 'ru');
         const title = await service.suggest({query: 'Кост'});
         assert.strictEqual(title.groups.find(group => group.kind === 'title').items[0].book.title, 'Косточка');
         const ru = await service.browse({kind: 'author', filters: {lang: 'ru'}});

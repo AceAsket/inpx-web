@@ -194,6 +194,12 @@ async function fixture(directory) {
         await page.getByRole('button', {name:'Открыть карточку: Косточка', exact:true}).waitFor();
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Author suggestions retain the language');
         assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
+        await page.goto(base + '/#/books?lang=ru&title=*Кост');
+        await page.locator('.library-result-card__author').first().click();
+        await page.getByRole('heading', {name:'Толстой Лев', exact:true}).waitFor();
+        await page.getByRole('button', {name:'Открыть карточку: Косточка', exact:true}).waitFor();
+        assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Clicking the author on a search result retains language');
+        assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
         await page.getByRole('link', {name:'Авторы', exact:true}).click();
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Alphabet navigation retains the scope');
         await page.goto(base + '/#/authors');
