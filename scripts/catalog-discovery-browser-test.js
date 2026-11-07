@@ -257,11 +257,18 @@ async function fixture(directory) {
                 field=page.locator('.catalog-search-panel__extra .catalog-text-field').nth(kind==='author'?0:1).locator('input').first();
             }
             await field.fill('Туман');
+            const listId=await field.getAttribute('aria-controls');
+            assert(listId,'Each field owns its suggestion listbox');
+            const listbox=page.locator('#'+listId);
             const expected=kind==='title'?'Туман над рекой':kind==='author'?'Туман Автор':'Туман серия';
-            await page.getByRole('option',{name:new RegExp(expected)}).waitFor();
-            assert.deepEqual((await page.locator('.catalog-suggestions__heading').allTextContents()).map(value=>value.trim()),[label],kind+' displays only matching field suggestions');
-            assert.equal(await page.getByRole('option',{name:/лишни/}).count(),0,'Old mixed responses cannot leak groups or corrections into a named field');
+            // An exiting title menu includes its book's author in the option name.
+            // Wait for this field's list, rather than matching that stale option.
+            await listbox.getByText(label,{exact:true}).waitFor();
+            await listbox.getByRole('option',{name:new RegExp('^'+expected)}).waitFor();
+            assert.deepEqual((await listbox.locator('.catalog-suggestions__heading').allTextContents()).map(value=>value.trim()),[label],kind+' displays only matching field suggestions');
+            assert.equal(await listbox.getByRole('option',{name:/лишни/}).count(),0,'Old mixed responses cannot leak groups or corrections into a named field');
             await field.press('Escape');
+            await listbox.waitFor({state:'hidden'});
         }
         const fieldRequests=suggestionScopes.filter(request=>request.query==='Туман');
         assert.deepEqual([...new Set(fieldRequests.map(request=>request.kind))].sort(),['author','series','title']);
@@ -269,9 +276,11 @@ async function fixture(directory) {
         await page.goto(base + '/#/books?lang=ru');
         const extraFieldsToggle=page.getByRole('button',{name:'Автор и серия',exact:true});
         if(await extraFieldsToggle.getAttribute('aria-expanded')!=='true')await extraFieldsToggle.click();
-        await page.locator('.catalog-search-panel__extra .catalog-text-field').first().locator('input').first().fill('Толс');
-        await page.getByRole('option', {name:/Толстой Лев/}).waitFor();
-        await page.getByRole('option', {name:/Толстой Лев/}).click();
+        const authorField=page.locator('.catalog-search-panel__extra .catalog-text-field').first().locator('input').first();
+        await authorField.fill('Толс');
+        const authorListbox=page.locator('#'+await authorField.getAttribute('aria-controls'));
+        await authorListbox.getByRole('option', {name:/^Толстой Лев/}).waitFor();
+        await authorListbox.getByRole('option', {name:/^Толстой Лев/}).click();
         await page.getByRole('heading', {name:'Толстой Лев', exact:true}).waitFor();
         await page.getByRole('button', {name:'Открыть карточку: Косточка', exact:true}).waitFor();
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Author suggestions retain the language');
