@@ -195,7 +195,7 @@ async function fixture(directory) {
         assert(await input.getAttribute('aria-activedescendant'));
         const catalogUrl = page.url();
         await input.press('Enter');
-        await page.locator('.q-dialog .library-book-actions').getByRole('heading', {name: 'Косточка', exact: true}).waitFor();
+        await page.locator('.q-dialog [data-dialog-kind="book"]').getByRole('heading', {name: 'Косточка', exact: true}).waitFor();
         assert.equal(page.url(), catalogUrl, 'Choosing a title suggestion opens a preview without changing the search URL');
         await page.getByRole('link', {name: 'Полная карточка', exact: true}).click();
         await page.locator('.catalog-book-details').waitFor();

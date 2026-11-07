@@ -106,7 +106,7 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
         await screenshot('overview-suggestions-1440');
         const overviewUrl=page.url();
         await listbox.getByRole('option',{name:new RegExp('^'+book.title)}).click();
-        const preview=page.locator('.q-dialog .library-book-actions');
+        const preview=page.locator('.q-dialog [data-dialog-kind="book"]');
         await preview.getByRole('heading',{name:book.title,exact:true}).waitFor();
         assert.equal(page.url(),overviewUrl,'Choosing a book opens a preview on overview');
         await page.getByRole('button',{name:'Закрыть окно',exact:true}).click(); await preview.waitFor({state:'hidden'});
