@@ -82,6 +82,7 @@ async function testCatalogDiscoveryPersistentIndexAndCoalescedCache() {
         assert((await reopened.ids('author', 'тол')).length);
         await reopened.close();
         await service.close();
+        await worker.db.open({table: 'catalog_lookup'});
         await worker.db.insert({table: 'catalog_lookup', replace: true, rows: [{id: 0, value: '', complete: false}]});
         const interrupted = new Lookup(worker);
         await interrupted.ensure(); await interrupted.building;
@@ -100,6 +101,90 @@ async function testCatalogDiscoveryPersistentIndexAndCoalescedCache() {
         assert(!service.cache.has('obsolete'), 'A response from an old catalog cannot enter the new cache');
     });
 }
-module.exports = {testCatalogDiscoveryIndexedSuggestionsAndScopedAlphabet, testCatalogDiscoveryPersistentIndexAndCoalescedCache};
+
+async function testCatalogLookupReadsEachNameOnceAndReleasesIdleTables() {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-lookup-resources-'));
+    const db = new (require('jembadb').JembaDb)();
+    let lookup;
+    try {
+        await db.lock({dbPath: directory, create: true});
+        const total = 5003;
+        let reads = 0;
+        for (const kind of ['author', 'series', 'title']) {
+            await db.create({table: kind});
+            await db.insert({table: kind, rows: Array.from({length: total}, (_, i) => ({
+                id: i * 2 + 7, name: `Приключения героя ${i}`, bookIds: i ? [i] : Array.from({length: 100000}, (_, j) => j),
+            }))});
+            const table = db.table.get(kind), getRow = table.rowsInterface.getRow.bind(table.rowsInterface);
+            table.rowsInterface.getRow = async id => {reads++; return getRow(id);};
+        }
+        const worker = {db, libraryAssetGeneration: 1, dbSearcher: {dbConfig: {inpxHash: 'resource-test'}}};
+        lookup = new (require('../server/core/CatalogLookupIndex'))(worker, {idleMs: 30});
+        await lookup.ensure(); await lookup.building;
+        assert.strictEqual(reads, total * 3, 'Batch limits must apply before reading/cloning source rows');
+        assert.strictEqual((await lookup.ids('title', 'приключ')).length, total, 'Posting lists preserve every match, including sparse IDs');
+        assert.deepStrictEqual(await lookup.ids('author', 'героя 5002'), [5002 * 2 + 7], 'Word intersections survive batch boundaries');
+        const indexRows = (await db.select({table: 'catalog_lookup', count: true}))[0].count;
+        assert(indexRows < total * 3 + 100, 'Repeated words share bounded posting chunks instead of a row per occurrence');
+        for (let i = 0; i < 100 && db.table.has('catalog_lookup'); i++) await new Promise(resolve => setTimeout(resolve, 10));
+        assert(!db.table.has('catalog_lookup'), 'An idle lookup releases its row and tree caches');
+        assert.strictEqual((await lookup.ids('title', 'приключ')).length, total, 'A closed index reopens without rebuilding');
+        for (const kind of ['author', 'series', 'title']) assert.strictEqual(db.table.get(kind).reducer._items.size, 0, 'Completed cursors are released');
+        await lookup.close();
+        assert(!db.table.has('catalog_lookup'));
+
+        // Existing RC10 indexes are upgraded lazily; opening the server does not
+        // require a library reindex or keep the obsolete posting rows resident.
+        await db.open({table: 'catalog_lookup'});
+        await db.insert({table: 'catalog_lookup', replace: true, rows: [{id: 0, value: '', complete: true, version: 1, signature: 'resource-test'}]});
+        await db.close({table: 'catalog_lookup'});
+        lookup = new (require('../server/core/CatalogLookupIndex'))(worker);
+        await lookup.ensure(); await lookup.building;
+        assert.strictEqual((await lookup.ids('title', 'героя')).length, total);
+        const marker = (await db.select({table: 'catalog_lookup', where: '@@id(0)'}))[0];
+        assert.strictEqual(marker.version, 2);
+
+        // Idle closing must not interrupt a database read already in flight.
+        lookup.idleMs = 10;
+        const select = db.select.bind(db);
+        let finishRead, startedRead;
+        const started = new Promise(resolve => {startedRead = resolve;});
+        const gate = new Promise(resolve => {finishRead = resolve;});
+        db.select = async options => {
+            if (options.table === 'catalog_lookup' && options.rawResult) {startedRead(); await gate;}
+            return select(options);
+        };
+        const pending = lookup.ids('title', 'приключ');
+        const rejected = assert.rejects(pending, /отменена/);
+        await started;
+        await new Promise(resolve => setTimeout(resolve, 40));
+        assert(db.table.has('catalog_lookup'), 'An active reader holds the table open');
+        let closed = false;
+        const closing = lookup.close().then(() => {closed = true;});
+        await new Promise(resolve => setImmediate(resolve));
+        assert.strictEqual(closed, false, 'Shutdown waits for active readers');
+        finishRead(); await rejected; await closing;
+        db.select = select;
+        assert(!db.table.has('catalog_lookup'));
+
+        // Cancelling a rebuild also releases database cursors and partial tables.
+        await db.open({table: 'catalog_lookup'});
+        await db.insert({table: 'catalog_lookup', replace: true, rows: [{id: 0, value: '', complete: false}]});
+        lookup = new (require('../server/core/CatalogLookupIndex'))(worker);
+        const insert = db.insert.bind(db);
+        db.insert = async options => {
+            const result = await insert(options);
+            if (options.table === 'catalog_lookup' && options.rows[0]?.id > 0) lookup.controller.abort();
+            return result;
+        };
+        await lookup.ensure();
+        await assert.rejects(lookup.building, /отменена/);
+        assert(!db.table.has('catalog_lookup'), 'A partial build releases its table immediately');
+        for (const kind of ['author', 'series', 'title']) assert.strictEqual(db.table.get(kind).reducer._items.size, 0);
+        db.insert = insert;
+    } finally {await lookup?.close(); await db.unlock(); await fs.remove(directory);}
+}
+module.exports = {testCatalogDiscoveryIndexedSuggestionsAndScopedAlphabet, testCatalogDiscoveryPersistentIndexAndCoalescedCache,
+    testCatalogLookupReadsEachNameOnceAndReleasesIdleTables};
 if (require.main === module) (async() => {for (const test of Object.values(module.exports)) {await test(); console.log(test.name + ': OK');}})()
     .catch(error => {console.error(error); process.exitCode = 1;});

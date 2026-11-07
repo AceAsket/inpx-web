@@ -90,6 +90,6 @@ async function markUntil(book) {
     try {await library.api.markSeriesUntil({name: name.value, bookUid: book._uid}); await load(); library.repository.loadReading(true);}
     catch (e) {root.stdDialog.alert(e.message, 'Прочитанность серии');} finally {marking.value = false;}
 }
-watch(() => route.fullPath, () => {if (active.value) load();});
+watch(() => route.fullPath, () => {if (active.value && ['/author-details', '/series-details'].includes(route.path)) load();});
 onDeactivated(() => {request++;}); onBeforeUnmount(() => {request++;});
 </script>

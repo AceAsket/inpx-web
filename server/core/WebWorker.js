@@ -886,7 +886,7 @@ class WebWorker {
 
             try {
                 //открываем таблицы
-                await db.openAll({exclude: ['author_id', 'series_id', 'title_id', 'book']});
+                await db.openAll({exclude: ['author_id', 'series_id', 'title_id', 'book', 'catalog_lookup']});
 
                 const bookCacheSize = 500;
                 await db.open({
@@ -917,7 +917,6 @@ class WebWorker {
 
             this.resetLibraryAssetCaches();
             this.setMyState(ssNormal);
-            this.getCatalogDiscovery().warm().catch(error => this.addAdminEvent('warn', 'search', error.message));
 
             log('Searcher DB ready');
             this.warmReviewIndexes();
@@ -6701,6 +6700,29 @@ class WebWorker {
     }
 
     async getBookInfo(bookUid, options = {}) {
+        return this.runForeground(() => this.shareBookJob('info', [bookUid, options.readerOnly === true], () => this.buildBookInfo(bookUid, options)));
+    }
+
+    // Keep only pending work, never parsed documents. A card, a reconnect, or
+    // several reader requests for the same book must not parse it concurrently.
+    async shareBookJob(kind, identity, work) {
+        this.checkMyState();
+        const db = this.db, generation = this.libraryAssetGeneration;
+        if (!this.bookInfoJobs) this.bookInfoJobs = new Map();
+        const key = JSON.stringify([kind, generation, ...identity]), jobs = this.bookInfoJobs;
+        let job = jobs.get(key);
+        if (!job) {
+            job = Promise.resolve().then(() => {this.checkLibraryAssetState(generation, db); return work();})
+                .finally(() => {if (jobs.get(key) === job) jobs.delete(key);});
+            jobs.set(key, job);
+        }
+        const result = await job;
+        this.checkLibraryAssetState(generation, db);
+        // Profile metadata and response envelopes may be decorated by callers.
+        return {...result, bookInfo: {...result.bookInfo, book: {...result.bookInfo.book}}};
+    }
+
+    async buildBookInfo(bookUid, options = {}) {
         this.checkMyState();
 
         try {
@@ -6782,7 +6804,7 @@ class WebWorker {
 
                 Object.assign(info, result);
 
-                await fs.writeFile(bookFileInfo, JSON.stringify(info));
+                await writeFileAtomic(bookFileInfo, JSON.stringify(info));
 
                 if (this.config.branch === 'development') {
                     await fs.writeFile(`${bookFile}.dev`, `${JSON.stringify(info, null, 2)}\n\n${parser ? parser.toString({format: true}) : ''}`);
@@ -6808,7 +6830,7 @@ class WebWorker {
                     bookInfo.book = book;
                     if (reviewState && tmpInfo.reviewSignature !== reviewState.signature) {
                         await refreshReviews(bookInfo);
-                        await fs.writeJson(bookFileInfo, bookInfo);
+                        await writeFileAtomic(bookFileInfo, JSON.stringify(bookInfo));
                     }
                 }
             }
@@ -6847,7 +6869,7 @@ class WebWorker {
     //Карточке книги нужны описание FB2, содержание и отзывы. Иллюстрации и обложку
     //не извлекаем: обложку клиент берёт из /cover/by-uid, иллюстрации - из getBookGallery
     async getBookCardInfo(bookUid) {
-        return await this.runForeground(() => this.buildBookCard(bookUid));
+        return await this.runForeground(() => this.shareBookJob('card', [bookUid], () => this.buildBookCard(bookUid)));
     }
 
     async buildBookCard(bookUid) {

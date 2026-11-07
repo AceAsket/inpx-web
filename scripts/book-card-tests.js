@@ -194,6 +194,42 @@ async function testCardIgnoresLateSuccessAndErrorsAcrossCloseAndReopen() {
     assert.strictEqual(alerts.length, 1, 'Closing without another card must also discard errors');
 }
 
+async function testBookRequestsSharePendingWorkWithoutRetainingDocuments() {
+    await temporary(async dir => {
+        const {worker, record} = cardFixture(dir);
+        const original = worker.readBookCardFb2.bind(worker), gate = deferred(), started = deferred();
+        worker.readBookCardFb2 = async book => {started.resolve(); await gate.promise; return original(book);};
+        const one = worker.getBookCardInfo(record._uid), two = worker.getBookCardInfo(record._uid);
+        await started.promise; gate.resolve();
+        const [a, b] = await Promise.all([one, two]);
+        assert.strictEqual((await fs.readdir(dir)).filter(name => name.endsWith('.card.json')).length, 1);
+        assert.notStrictEqual(a.bookInfo.book, b.bookInfo.book, 'Response decoration cannot mutate another caller');
+        assert.strictEqual(worker.bookInfoJobs.size, 0, 'Parsed metadata is not retained after delivery');
+
+        let parses = 0, release = deferred();
+        worker.buildBookInfo = async() => {parses++; await release.promise; return {bookInfo: {book: record, fb2: 'large document'}};};
+        const readers = Array.from({length: 12}, () => worker.getBookInfo(record._uid, {readerOnly: true}));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.strictEqual(parses, 1, 'Concurrent reader openings parse once');
+        release.resolve(); await Promise.all(readers);
+        assert.strictEqual(worker.bookInfoJobs.size, 0);
+        await worker.getBookInfo(record._uid, {readerOnly: true});
+        assert.strictEqual(parses, 2, 'Finished document promises must not become an unbounded memory cache');
+        worker.buildBookInfo = async() => {throw new Error('Failed document');};
+        await assert.rejects(worker.getBookInfo(record._uid, {readerOnly: true}), /Failed document/);
+        assert.strictEqual(worker.bookInfoJobs.size, 0, 'Failed jobs are released and may be retried');
+        release = deferred();
+        worker.buildBookInfo = async() => {await release.promise; return {bookInfo: {book: record}};};
+        const old = worker.getBookInfo(record._uid, {readerOnly: true});
+        const rejected = assert.rejects(old, {code: 'INPX_LIBRARY_CHANGED'});
+        await new Promise(resolve => setImmediate(resolve));
+        worker.resetLibraryAssetCaches();
+        const fresh = worker.getBookInfo(record._uid, {readerOnly: true});
+        release.resolve(); await rejected; await fresh;
+        assert.strictEqual(worker.bookInfoJobs.size, 0);
+    });
+}
+
 module.exports = [testCardCacheTracksIndexRecordAndSourceAcrossRestarts, testLateCardCannotOverwriteTheNewIndexCache,
     testBookPreparationSharesOnlyTheCurrentLibraryGeneration, testCardBackgroundPreparationRespectsPriorityAndSkipsOldQueue,
-    testCardIgnoresLateSuccessAndErrorsAcrossCloseAndReopen];
+    testCardIgnoresLateSuccessAndErrorsAcrossCloseAndReopen, testBookRequestsSharePendingWorkWithoutRetainingDocuments];

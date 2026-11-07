@@ -72,6 +72,6 @@ async function load() {
 }
 function go(value) {router.push({path: route.path, query: {...route.query, prefix: value || undefined}});}
 function openEntity(name) {router.push({path: kind.value === 'author' ? '/author-details' : '/series-details', query: {name, lang: language.value || undefined, sourceId: source.value || undefined}});}
-watch(() => route.fullPath, () => {if (active.value) load();});
+watch(() => route.fullPath, () => {if (active.value && ['/authors', '/series-index'].includes(route.path)) load();});
 onDeactivated(() => {request++;}); onBeforeUnmount(() => {request++;});
 </script>

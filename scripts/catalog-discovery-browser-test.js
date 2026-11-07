@@ -45,13 +45,18 @@ async function fixture(directory) {
             if (ready || child.exitCode !== null) break; await pause(500);
         }
         assert(ready, output);
+        assert(!await fs.pathExists(path.join(dataDir, 'db/catalog_lookup')), 'Startup must not build an unused suggestions index');
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [];
         let externalFixture = false;
+        const invalidBookRequests = [];
+        const inactiveReaderRequests = [];
         await page.routeWebSocket('**', socket => {
             const server = socket.connectToServer(), suggestions = new Set(), configs = new Set();
             socket.onMessage(message => {
                 const request = JSON.parse(String(message));
+                if (request.action === 'get-book-info' && !request.bookUid) invalidBookRequests.push({card: request.card, readerOnly: request.readerOnly, url: page.url()});
+                if (request.action === 'get-book-info' && request.readerOnly && !page.url().includes('#/reader')) inactiveReaderRequests.push(request.bookUid);
                 if (request.action === 'catalog-suggest') suggestions.add(request.requestId);
                 if (request.action === 'get-config') configs.add(request.requestId);
                 if (externalFixture && request.action === 'get-discovery-shelves') {
@@ -122,6 +127,11 @@ async function fixture(directory) {
         await page.getByRole('heading', {name: 'Косточка', exact: true}).waitFor();
         await page.locator('.catalog-book-details').waitFor();
         assert(!page.url().includes('/reader'));
+        const bookUrl = page.url();
+        await page.locator('.library-book-actions').getByRole('button', {name: 'Читать', exact: true}).click();
+        await page.locator('.reader-body').getByText('Текст книги для проверки.', {exact: true}).first().waitFor();
+        await page.goto(bookUrl);
+        await page.locator('.catalog-book-details').waitFor();
         for (const width of [1440, 760, 390, 320]) {
             await page.setViewportSize({width, height: 900}); await geometry('book ' + width);
             await screenshot('book-light-' + width);
@@ -218,6 +228,8 @@ async function fixture(directory) {
         await page.getByRole('button', {name: 'Включить тёмную тему', exact: true}).click();
         await screenshot('discovery-controls-dark-320');
         assert.deepEqual(errors, []);
+        assert.deepEqual(invalidBookRequests, [], 'Deactivated book pages must not reload with an empty UID');
+        assert.deepEqual(inactiveReaderRequests, [], 'A cached reader must not prepare documents while another page is active');
         await fs.writeJson(path.join(directory, 'result.json'), {base, errors, depth}, {spaces: 2});
         console.log('Catalog discovery browser: OK. Artifacts: ' + directory);
     } catch (error) {

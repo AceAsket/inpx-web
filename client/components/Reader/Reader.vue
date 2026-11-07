@@ -1646,8 +1646,9 @@ const componentOptions = {
     watch: {
         readerSourceKey: {
             immediate: true,
-            handler() {
-                this.loadReader();// no await
+            handler(key) {
+                if (key) this.loadReader();// no await
+                else this.cancelReaderLoad();
             },
         },
         currentProfileReaderPreferences: {
@@ -1671,6 +1672,7 @@ class Reader {
         },
     };
 
+    readerActive = true;
     loading = false;
     loadingMessage = '';
     bookPreparing = false;
@@ -2027,7 +2029,13 @@ class Reader {
         this.bindReaderImageListeners();
     }
 
+    activated() {
+        this.readerActive = true;
+    }
+
     deactivated() {
+        this.readerActive = false;
+        this.cancelReaderLoad();
         this.flushProgress();
         this.clearSnapTimer();
         this.clearSpacingReflowTimer();
@@ -2037,6 +2045,8 @@ class Reader {
     }
 
     beforeUnmount() {
+        this.readerActive = false;
+        this.cancelReaderLoad();
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
         document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
         window.removeEventListener('resize', this.handleWindowResize);
@@ -2216,6 +2226,7 @@ class Reader {
     }
 
     get readerSourceKey() {
+        if (!this.readerActive || (!this.isStandaloneMode && this.$route.path !== '/reader')) return '';
         if (this.isStandaloneMode) {
             const source = (this.standaloneSource || {});
             return `standalone:${String(source.sourceKey || source.fileName || source.title || source.fb2 || '').slice(0, 256)}`;
@@ -8944,8 +8955,19 @@ class Reader {
         };
     }
 
+    cancelReaderLoad() {
+        this.readerLoadJobId++;
+        this.pagedBuildJobId++;
+        this.pagedBuildNeedsRefresh = false;
+        this.loading = false;
+        this.bookPreparing = false;
+        this.loadingMessage = '';
+    }
+
     async loadReader() {
+        if (!this.readerSourceKey) return;
         const loadJobId = ++this.readerLoadJobId;
+        const bookUid = this.bookUid;
         // Invalidate queued/in-flight pagination from the previous source before
         // replacing readerHtml and the shared measurement DOM.
         this.pagedBuildJobId += 1;
@@ -9050,9 +9072,10 @@ class Reader {
                 });
             } else {
                 const [bookResponse, stateResponseRaw] = await Promise.all([
-                    api.getReaderBook(this.bookUid),
-                    api.getReaderState(this.bookUid, {suppressProfileLogin: true}).catch(() => ({preferences: {}, progress: {}})),
+                    api.getReaderBook(bookUid),
+                    api.getReaderState(bookUid, {suppressProfileLogin: true}).catch(() => ({preferences: {}, progress: {}})),
                 ]);
+                if (loadJobId !== this.readerLoadJobId) return;
                 const stateResponse = (stateResponseRaw || {preferences: {}, progress: {}});
 
                 this.bookInfo = (bookResponse ? bookResponse.bookInfo : null);

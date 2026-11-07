@@ -214,5 +214,42 @@ async function testBookGalleryReturnsFirstImagesWithoutCover() {
     assert.strictEqual(images[1].data, 'aW1n');
 }
 
+async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
+    const source = await fs.readFile(path.resolve(__dirname, '../client/components/Reader/Reader.vue'), 'utf8');
+    const key = source.slice(source.indexOf('    get readerSourceKey() {'), source.indexOf('    get readerHeaderTitle() {'));
+    const load = source.slice(source.indexOf('    cancelReaderLoad() {'), source.indexOf('    restoreProgress() {'));
+    const Reader = new Function(`return class {${key}${load}}`)();
+    const reader = new Reader();
+    Object.assign(reader, {readerActive: true, isStandaloneMode: false, bookUid: 'same-uid', $route: {path: '/book'}, currentUserId: 'test', config: {profileAuthorized: true}});
+    assert.strictEqual(reader.readerSourceKey, '', 'A book-details UID must not activate the cached reader');
+    await reader.loadReader(); // No API or layout dependencies may be touched.
+    reader.$route.path = '/reader';
+    assert.strictEqual(reader.readerSourceKey, 'book:same-uid');
+    reader.readerActive = false;
+    assert.strictEqual(reader.readerSourceKey, '');
+    reader.readerActive = true; reader.isStandaloneMode = true; reader.$route.path = '/reader-lab';
+    reader.standaloneSource = {sourceKey: 'sample'};
+    assert.strictEqual(reader.readerSourceKey, 'standalone:sample', 'The standalone reader retains its own lifecycle');
+
+    let finish, started;
+    const gate = new Promise(resolve => {finish = resolve;});
+    const requested = new Promise(resolve => {started = resolve;});
+    let parsed = 0;
+    Object.assign(reader, {isStandaloneMode: false, $route: {path: '/reader'}, readerLoadJobId: 0, pagedBuildJobId: 0, $refs: {},
+        pagedLayoutCache: new Map(), bottomClipCompensationByGeometry: new Map(), bottomClipCalibrationAttemptsByGeometry: new Map(),
+        resetBottomClipCalibrationSample() {}, cancelCompactChromeBuildPendingClear() {}, clearCompactChromeStatusHold() {},
+        afterLayoutRefreshPaint: async() => {}, uiText: {}, applyReaderDocumentSource: async() => {parsed++;},
+        $root: {api: {getReaderBook: async uid => {assert.strictEqual(uid, 'same-uid'); started(); return gate;}, getReaderState: async() => ({})}},
+    });
+    const pending = reader.loadReader();
+    await requested;
+    reader.readerActive = false; reader.cancelReaderLoad();
+    finish({bookInfo: {book: {}, fb2: 'obsolete large document'}});
+    await pending;
+    assert.strictEqual(parsed, 0, 'Leaving the reader discards late responses before parsing or pagination');
+    assert.strictEqual(reader.loading, false);
+}
+
 module.exports = [testReaderColdDocumentDoesNotWaitForReviewIndex, testCatalogOpensReaderBeforeColdFilePreparation,
+    testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments,
     testBookCardSkipsIllustrationsAndPreparesBookInBackground, testBackgroundLibraryWorkWaitsForUser, testBookGalleryReturnsFirstImagesWithoutCover];

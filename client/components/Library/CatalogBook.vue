@@ -41,20 +41,23 @@ const details = ref(null), genres = ref(new Map()), related = ref([]), loading =
 const {library, active} = useLibraryPage('Книга', load);
 let request = 0;
 async function load() {
+    if (route.path !== '/book') return;
     const id = ++request; details.value = null; related.value = []; error.value = ''; loading.value = true;
+    const bookUid = uid.value;
+    if (!bookUid) {error.value = 'В ссылке не указан идентификатор книги.'; loading.value = false; return;}
     try {
-        const result = await library.api.getBookCard(uid.value);
-        if (id !== request) return;
+        const result = await library.api.getBookCard(bookUid);
+        if (id !== request || route.path !== '/book' || uid.value !== bookUid) return;
         details.value = result.bookInfo; document.title = `${details.value.book.title} · INPX Web`;
         const book = details.value.book;
         loading.value = false;
         await Promise.allSettled([
             library.api.getGenreTree().then(tree => {if (id === request) genres.value = genreMapFromTree(tree.genreTree || []);}),
-            ...(library.config.value.profileAuthorized ? [library.api.getReaderState(uid.value, {suppressProfileLogin: true}).then(state => {
+            ...(library.config.value.profileAuthorized ? [library.api.getReaderState(bookUid, {suppressProfileLogin: true}).then(state => {
                 if (id === request && state.progress?.updatedAt) details.value = {...details.value, book: {...book, _readerProgress: state.progress}};
             })] : []),
             ...(book.series ? [library.api.catalogEntity({kind: 'series', name: book.series, limit: 12}).then(series => {
-                if (id === request) related.value = series.books.filter(book => book._uid !== uid.value);
+                if (id === request) related.value = series.books.filter(book => book._uid !== bookUid);
             })] : []),
         ]);
     } catch (e) {if (id === request) error.value = e.message;}
@@ -64,6 +67,6 @@ function navigate({type, value}) {
     if (type === 'author' || type === 'series') router.push({path: type === 'author' ? '/author-details' : '/series-details', query: {name: value}});
     else router.push({path: '/books', query: {[type === 'keyword' ? 'keywords' : type]: type === 'genre' ? value : '*' + value}});
 }
-watch(() => route.fullPath, () => {if (active.value) load();});
+watch(() => route.fullPath, () => {if (active.value && route.path === '/book') load();});
 onDeactivated(() => {request++;}); onBeforeUnmount(() => {request++;});
 </script>
