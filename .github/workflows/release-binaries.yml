@@ -7,9 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Git tag to build and publish'
+        description: 'Git tag or ref to build'
         required: true
-        default: 'v1.8.2-rc.12'
+        default: 'v1.8.2-rc.13'
+      publish:
+        description: 'Publish the built artifacts as a GitHub Release'
+        type: boolean
+        default: true
 
 permissions:
   actions: read
@@ -204,6 +208,7 @@ jobs:
 
   release:
     name: Upload release assets
+    if: github.event_name != 'workflow_dispatch' || inputs.publish
     runs-on: ubuntu-latest
     needs: build
     steps:

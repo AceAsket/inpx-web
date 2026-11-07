@@ -59,6 +59,8 @@ const stateToText = {
 
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const discoveryCacheTtl = 15*60*1000;//15 minutes
+const discoveryCacheBytes = 8 * 1024 ** 2;
+const discoveryStaleGrace = 24 * 60 * 60 * 1000;
 const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
 const fb2AssetVersion = 'fb2-encoding-v6';
@@ -761,9 +763,13 @@ class WebWorker {
     }
 
     async closeDb() {
+        await this.libraryIsbnIndex?.close?.();
+        this.libraryIsbnIndex = null;
         if (this.catalogDiscovery) {await this.catalogDiscovery.close(); this.catalogDiscovery = null;}
         if (this.dbSearcher) {await this.dbSearcher.close(); this.dbSearcher = null;}
         this.authorInfoCache?.close?.();
+        this.discoveryCache?.close?.();
+        this.discoveryCache = null;
         clearTimeout(this.authorArchiveLease?.timer);
         for (const state of this.reviewArchiveStates?.values() || []) clearTimeout(state.idleTimer);
         this.reviewArchiveStates?.clear();
@@ -799,7 +805,10 @@ class WebWorker {
         });
 
         try {
-            const dbCreator = new DbCreator({...config, indexDbPath: dbPath});
+            const oldDbPath = path.join(config.dataDir, 'db');
+            const identityDbPath = path.resolve(oldDbPath) !== path.resolve(dbPath)
+                && await fs.pathExists(path.join(oldDbPath, 'book')) ? oldDbPath : '';
+            const dbCreator = new DbCreator({...config, indexDbPath: dbPath, identityDbPath});
 
             await dbCreator.run(db, (state) => {
                 this.setMyState(ssDbCreating, state);
@@ -946,6 +955,10 @@ class WebWorker {
 
     resetLibraryAssetCaches() {
         this.libraryAssetGeneration = (this.libraryAssetGeneration || 0) + 1;
+        this.discoveryCache?.clear();
+        this.discoveryInFlight = new Map();
+        this.discoveryDiskCache = null;
+        this.discoveryDiskCacheLoading = null;
         this.fblibraryArchives = {};
         this.authorInfoCache?.close?.();
         this.authorInfoCache = new (require('./MemoryCache').MemoryCache)({bytes:8 * 1024 ** 2, entries:256});
@@ -1216,21 +1229,32 @@ class WebWorker {
         return this.getDiscoveryConfig(requestOptions);
     }
 
+    discoveryMemoryCache() {
+        const {MemoryCache} = require('./MemoryCache');
+        if (!(this.discoveryCache instanceof MemoryCache)) {
+            this.discoveryCache?.close?.();
+            this.discoveryCache = new MemoryCache({bytes:discoveryCacheBytes, entries:256, ttl:discoveryCacheTtl});
+        }
+        return this.discoveryCache;
+    }
+
     async rememberDiscovery(key, loader, ttl = discoveryCacheTtl) {
-        const cached = this.discoveryCache.get(key);
+        const cache = this.discoveryMemoryCache(), generation = this.libraryAssetGeneration;
+        const cached = cache.get(key);
         if (cached && Date.now() - cached.time < ttl)
             return _.cloneDeep(cached.value);
 
         if(!this.discoveryInFlight)this.discoveryInFlight=new Map();
-        let pending=this.discoveryInFlight.get(key);
+        const jobs = this.discoveryInFlight;
+        let pending=jobs.get(key);
         if(!pending){
             pending=Promise.resolve().then(loader).then(value=>{
-                this.discoveryCache.set(key,{time:Date.now(),value:_.cloneDeep(value)});
-                while(this.discoveryCache.size>256)this.discoveryCache.delete(this.discoveryCache.keys().next().value);
+                if (generation === this.libraryAssetGeneration)
+                    cache.set(key,{time:Date.now(),value:_.cloneDeep(value)});
                 return value;
             });
-            this.discoveryInFlight.set(key,pending);
-            pending.then(()=>this.discoveryInFlight.delete(key),()=>this.discoveryInFlight.delete(key));
+            jobs.set(key,pending);
+            pending.then(()=>{if(jobs.get(key)===pending)jobs.delete(key);},()=>{if(jobs.get(key)===pending)jobs.delete(key);});
         }
         return _.cloneDeep(await pending);
     }
@@ -1305,52 +1329,94 @@ class WebWorker {
         return result;
     }
     async getDiscoveryDiskCache() {
-        if (this.discoveryDiskCache)
-            return this.discoveryDiskCache;
-
+        if (this.discoveryDiskCache) return this.discoveryDiskCache;
+        if (this.discoveryDiskCacheLoading) return this.discoveryDiskCacheLoading;
         this.discoveryDiskCacheFile = path.join(this.config.dataDir, 'discovery-cache.json');
-        let cache = {};
-        try {
-            if (await fs.pathExists(this.discoveryDiskCacheFile))
-                cache = JSON.parse(await fs.readFile(this.discoveryDiskCacheFile, 'utf8')) || {};
-        } catch(e) {
-            cache = {};
-        }
+        const generation = this.libraryAssetGeneration;
+        const load = (async() => {
+            let cache = Object.create(null);
+            try {
+                if ((await fs.stat(this.discoveryDiskCacheFile)).size <= discoveryCacheBytes) {
+                    const parsed = JSON.parse(await fs.readFile(this.discoveryDiskCacheFile, 'utf8'));
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) cache = parsed;
+                }
+            } catch (_) { /* A cache is regenerable, including a legacy oversized file. */ }
+            this.pruneDiscoveryDiskCache(cache);
+            if (generation === this.libraryAssetGeneration) this.discoveryDiskCache = cache;
+            return cache;
+        })();
+        this.discoveryDiskCacheLoading = load;
+        try {return await load;} finally {if (this.discoveryDiskCacheLoading === load) this.discoveryDiskCacheLoading = null;}
+    }
 
-        this.discoveryDiskCache = cache;
-        return cache;
+    pruneDiscoveryDiskCache(cache = this.discoveryDiskCache, namespace = '') {
+        if (!cache) return;
+        const {sizeOf} = require('./MemoryCache');
+        let bytes = 0, encodedBytes = 2, count = 0;
+        const entries = Object.entries(cache).sort((a,b) => (Number(b[1]?.time) || 0) - (Number(a[1]?.time) || 0));
+        for (const [key, item] of entries) {
+            const ttl = Math.max(1000, Math.min(7 * discoveryStaleGrace, Number(item?.ttl) || 7 * discoveryStaleGrace));
+            let memory = 0, encoded = 0;
+            try {
+                memory = sizeOf(item, discoveryCacheBytes) + sizeOf(key);
+                if (memory <= discoveryCacheBytes) encoded = Buffer.byteLength(JSON.stringify({[key]:item}));
+            } catch (_) { /* Drop malformed imported cache values. */ }
+            if (!item || !Number.isFinite(item.time) || item.time > Date.now() || Date.now() - item.time >= ttl + discoveryStaleGrace
+                || (namespace && !key.startsWith(namespace)) || !encoded || count >= 256
+                || bytes + memory > discoveryCacheBytes || encodedBytes + encoded > discoveryCacheBytes) {
+                delete cache[key]; continue;
+            }
+            bytes += memory; encodedBytes += encoded; count++;
+        }
     }
 
     async saveDiscoveryDiskCache() {
         if (!this.discoveryDiskCacheFile)
             this.discoveryDiskCacheFile = path.join(this.config.dataDir, 'discovery-cache.json');
-        await withFileTransaction(this.discoveryDiskCacheFile, () =>
-            require('./FilePersistence').writeFileAtomic(this.discoveryDiskCacheFile, JSON.stringify(this.discoveryDiskCache || {}, null, 2)));
+        this.pruneDiscoveryDiskCache();
+        const generation = this.libraryAssetGeneration;
+        await withFileTransaction(this.discoveryDiskCacheFile, () => {
+            if (generation !== this.libraryAssetGeneration) return;
+            return require('./FilePersistence').writeFileAtomic(this.discoveryDiskCacheFile, JSON.stringify(this.discoveryDiskCache || {}));
+        });
     }
 
     async rememberPersistedDiscovery(key, loader, ttl = discoveryCacheTtl, options = {}) {
         const forceRefresh = !!(options && options.forceRefresh);
-        const cached = this.discoveryCache.get(key);
+        const memory = this.discoveryMemoryCache(), generation = this.libraryAssetGeneration;
+        const cached = memory.get(key);
         if (!forceRefresh && cached && Date.now() - cached.time < ttl)
             return _.cloneDeep(cached.value);
 
         const diskCache = await this.getDiscoveryDiskCache();
+        const namespace = String(key).match(/^discovery:[^:]*:/)?.[0] || '';
+        this.pruneDiscoveryDiskCache(diskCache, namespace);
         const persisted = diskCache[key];
         if (!forceRefresh && persisted && Date.now() - persisted.time < ttl) {
-            this.discoveryCache.set(key, {time: persisted.time, value: _.cloneDeep(persisted.value)});
+            if (generation === this.libraryAssetGeneration)
+                memory.set(key, {time: persisted.time, value: _.cloneDeep(persisted.value)});
             return _.cloneDeep(persisted.value);
         }
 
         try {
-            const value = await loader();
+            if (!this.discoveryInFlight) this.discoveryInFlight = new Map();
+            const jobs = this.discoveryInFlight, jobKey = `persisted:${key}`;
+            if (!jobs.has(jobKey)) {
+                const job = Promise.resolve().then(loader).finally(() => {if (jobs.get(jobKey) === job) jobs.delete(jobKey);});
+                jobs.set(jobKey, job);
+            }
+            const value = await jobs.get(jobKey);
             const time = Date.now();
-            this.discoveryCache.set(key, {time, value: _.cloneDeep(value)});
-            diskCache[key] = {time, value: _.cloneDeep(value)};
-            await this.saveDiscoveryDiskCache();
-            return value;
+            if (generation === this.libraryAssetGeneration) {
+                memory.set(key, {time, value: _.cloneDeep(value)});
+                diskCache[key] = {time, ttl, value: _.cloneDeep(value)};
+                this.pruneDiscoveryDiskCache(diskCache, namespace);
+                await this.saveDiscoveryDiskCache();
+            }
+            return _.cloneDeep(value);
         } catch(e) {
             const fallback = cached || persisted;
-            if (fallback) {
+            if (fallback && generation === this.libraryAssetGeneration && Date.now() - fallback.time < ttl + discoveryStaleGrace) {
                 const value = _.cloneDeep(fallback.value);
                 if (value && typeof(value) === 'object') {
                     value.discoveryStale = true;
@@ -4529,9 +4595,12 @@ class WebWorker {
         const sourceId = String(book.sourceId || '').trim();
         const cacheBase = bookAssets.coverCacheKey(book);
         const coverDir = this.config.coverDir || `${this.config.publicFilesDir}/cover`;
+        this.coverCacheGeneration = (this.coverCacheGeneration || 0) + 1;
         const removed = [];
-        for (const ext of ['.png', '.jpg', '.gif']) {
-            const filePath = path.join(coverDir, `${cacheBase}${ext}`);
+        const names = await fs.readdir(coverDir).catch(error => {if (error.code === 'ENOENT') return []; throw error;});
+        for (const name of names.filter(name => ['.png', '.jpg', '.gif'].some(ext => name === `${cacheBase}${ext}`)
+            || (name.startsWith(`${cacheBase}-abs-`) && /\.(png|jpg|gif)$/.test(name)))) {
+            const filePath = path.join(coverDir, name);
             if (await fs.pathExists(filePath)) {
                 await fs.remove(filePath);
                 removed.push(filePath);
@@ -4770,6 +4839,7 @@ class WebWorker {
             'dbCacheSize',
             'dbCacheBudgetMb',
             'queryCacheMemMb',
+            'queryCacheDiskMb',
             'maxFilesDirSize',
             'bookCacheSize',
             'coverCacheSize',
@@ -4922,7 +4992,9 @@ class WebWorker {
 
         await this.addBackupPath(zipFile, this.config.configFile, 'config.json');
         await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'secret.key'), 'secret.key');
-        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'reading-lists.json'), 'reading-lists.json');
+        // Portable backups embed image bytes; normal profile reads keep only URLs.
+        if (await fs.pathExists(path.join(this.config.dataDir, 'reading-lists.json')))
+            zipFile.addBuffer(Buffer.from(JSON.stringify(await this.readingListStore.exportSnapshot(), null, 2)), 'reading-lists.json');
         await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'discovery-cache.json'), 'discovery-cache.json');
         await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'backup-vault.json'), 'backup-vault.json');
 
@@ -6818,7 +6890,7 @@ class WebWorker {
                 const overrides = await this.readingListStore.getMetadataOverrides();
                 this.checkLibraryAssetState(generation, db);
                 this.applyMetadataOverrideToBook(book, overrides);
-                return {bookInfo:{book, fb2:info.fb2, contents:info.contents, annotationMeta:info.annotationMeta,
+                return {bookInfo:{book, contentVersion:`${path.basename(prepared.rawFile)}:epub-reader-v2`, fb2:info.fb2, contents:info.contents, annotationMeta:info.annotationMeta,
                     cover:info.coverFile ? `${this.config.bookPathStatic}/${encodeURIComponent(info.coverFile)}` : ''}};
             }
             // Reader opening only needs the document. Review archives may be
@@ -6878,7 +6950,7 @@ class WebWorker {
                 //проверим существование файла обложки, восстановим если нету
                 let coverFile = '';
                 if (tmpInfo.cover)
-                    coverFile = `${this.config.publicFilesDir}${tmpInfo.cover}`;
+                    coverFile = path.join(this.config.bookDir, path.basename(tmpInfo.cover));
 
                 if (book.id != tmpInfo.book.id || tmpInfo.infoVersion !== bookInfoVersion || (coverFile && !await fs.pathExists(coverFile))) {
                     await restoreBookInfo(bookInfo);
@@ -6895,7 +6967,7 @@ class WebWorker {
             const overrides = await this.readingListStore.getMetadataOverrides();
             if (bookInfo && bookInfo.book)
                 this.applyMetadataOverrideToBook(bookInfo.book, overrides);
-
+            bookInfo.contentVersion = `${hash}:${bookInfoVersion}`;
             return {bookInfo};
         } catch(e) {
             log(LM_ERR, `getBookInfo error: ${e.message}`);

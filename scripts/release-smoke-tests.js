@@ -826,6 +826,7 @@ async function testAdminBackupArchiveAndDownload() {
             configFile,
         });
 
+        worker.readingListStore = new (require('../server/core/ReadingListStore'))({...worker.config, adminPassword:'fixture-backup-password'});
         const result = await worker.createAdminBackup('admin', 'token');
         assert.strictEqual(result.success, true);
         assert.match(result.fileName, /^inpx-web-backup-.+\.zip$/);
@@ -844,8 +845,9 @@ async function testAdminBackupArchiveAndDownload() {
             assert.strictEqual(entries['db/index.json'], undefined);
 
             const readingLists = JSON.parse((await zip.entryData('reading-lists.json')).toString('utf8'));
-            assert.strictEqual(readingLists.users[0].readerProgress['book:1'].percent, 0.5);
-            assert.strictEqual(readingLists.users[0].readerBookmarks['book:1'][0].id, 'bookmark-1');
+            const reader = readingLists.users.find(user => user.id === 'reader');
+            assert.strictEqual(reader.readerProgress['book:1'].percent, 0.5);
+            assert.strictEqual(reader.readerBookmarks['book:1'][0].id, 'bookmark-1');
             assert.strictEqual(readingLists.lists[0].books[0].bookUid, 'book:1');
 
             const info = JSON.parse((await zip.entryData('backup-info.json')).toString('utf8'));
@@ -1719,6 +1721,10 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
 }
 
 const tests = [
+    ...require('./rc13-profile-tests'),
+    ...require('./rc13-catalog-tests'),
+    ...require('./rc13-io-tests'),
+    ...require('./rc13-client-tests'),
     ...Object.values(require('./catalog-discovery-tests')),
     ...Object.values(require('./backup-vault-tests')),
     ...Object.values(require('./telegram-bot-tests')),

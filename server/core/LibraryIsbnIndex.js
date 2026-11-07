@@ -7,11 +7,30 @@ const runtime = require('./ResourceRuntime');
 const isbn = require('../../shared/Isbn');
 
 class LibraryIsbnIndex {
-    constructor(worker) {
+    constructor(worker, {idleMs = 30000, cacheBytes = 32 * 1024 ** 2} = {}) {
         this.worker = worker;
         this.file = path.join(worker.config.dataDir, 'isbn-index.json');
         this.loading = null; this.state = null; this.job = null;
         this.lookup = new Map(); this.deleted = new Set();
+        this.idleMs = idleMs; this.cacheBytes = cacheBytes; this.users = 0; this.retainedBytes = 0;
+    }
+    release() {
+        clearTimeout(this.idleTimer);
+        this.state = null; this.loading = null; this.lookup = new Map(); this.deleted = new Set(); this.retainedBytes = 0;
+    }
+    scheduleRelease() {
+        clearTimeout(this.idleTimer);
+        if (this.users || this.job && !this.job.finishedAt) return;
+        if (this.retainedBytes > this.cacheBytes) {this.release(); return;}
+        this.idleTimer = setTimeout(() => this.release(),this.idleMs);
+        this.idleTimer.unref?.();
+    }
+    async use(work) {
+        clearTimeout(this.idleTimer); this.users++;
+        try {return await work();} finally {this.users--; this.scheduleRelease();}
+    }
+    async close() {
+        this.cancel(); await this.pending; this.release();
     }
     async signature() {
         const rows = await this.worker.db.select({table:'config', where:"@@id(['inpxHash','indexUpdate'])"});
@@ -32,16 +51,20 @@ class LibraryIsbnIndex {
         await this.loading;
     }
     rebuildLookup() {
-        this.lookup = new Map(); this.deleted = new Set();
+        this.lookup = new Map(); this.deleted = new Set(); this.retainedBytes = 0;
         for (const [id, numbers, deleted] of this.state?.entries || []) {
             if (!Number.isSafeInteger(id) || !Array.isArray(numbers)) throw new Error('Некорректная запись индекса ISBN');
-            for (const number of numbers) {
-                const key = isbn.normalize(number);
-                if (!this.lookup.has(key)) this.lookup.set(key,new Set());
-                this.lookup.get(key).add(id);
-            }
-            if (deleted) this.deleted.add(id);
+            this.addLookup(id,numbers,deleted);
         }
+    }
+    addLookup(id,numbers,deleted) {
+        this.retainedBytes += 128 + numbers.length * 96;
+        for (const number of numbers) {
+            const key = isbn.normalize(number);
+            if (!this.lookup.has(key)) {this.lookup.set(key,new Set()); this.retainedBytes += 160 + key.length * 2;}
+            this.lookup.get(key).add(id);
+        }
+        if (deleted) {this.deleted.add(id); this.retainedBytes += 32;}
     }
     async status() {
         await this.load();
@@ -79,6 +102,7 @@ class LibraryIsbnIndex {
             }).finally(() => {
                 job.finishedAt = Date.now();
                 if (job.controller.signal.aborted) tasks.update(job.id,{state:'cancelled'});
+                this.scheduleRelease();
             });
         return this.status();
     }
@@ -86,6 +110,7 @@ class LibraryIsbnIndex {
     async run(job) {
         const worker = this.worker, db = worker.db, generation = worker.libraryAssetGeneration;
         const signal = job.controller.signal, cache = new Map();
+        let checkpointAt = Date.now();
         const [{rawResult:ids}] = await db.select({table:'book',rawResult:true,where:'return Array.from(@all()).sort((a,b) => a-b);'});
         this.state.total = ids.length;
         const guard = () => {
@@ -116,16 +141,14 @@ class LibraryIsbnIndex {
                     guard();
                     if (numbers.length) {
                         this.state.entries.push([book.id,numbers,!!book.del]); this.state.found++;
-                        for (const number of numbers) {
-                            if (!this.lookup.has(number)) this.lookup.set(number,new Set());
-                            this.lookup.get(number).add(book.id);
-                        }
-                        if (book.del) this.deleted.add(book.id);
+                        this.addLookup(book.id,numbers,!!book.del);
                     }
                     this.state.checked++; this.state.lastId = book.id;
                 }
                 tasks.update(job.id,{phase:'Чтение ISBN',done:this.state.checked,total:this.state.total});
-                if (offset % 5000 === 0) await this.save();
+                // Serializing a growing full index every fixed number of books
+                // makes checkpoint CPU/write work quadratic in the catalogue.
+                if (Date.now() - checkpointAt >= 30000) {await this.save(); checkpointAt = Date.now();}
                 await require('./utils').processLoop();
             }
             guard(); this.state.complete = true;
@@ -141,6 +164,13 @@ class LibraryIsbnIndex {
         if (status.state !== 'ready') throw new Error('Индекс ISBN ещё не готов. Администратор может подготовить его в разделе «Задачи»');
         return {ids:new Uint32Array(this.lookup.get(key) || []),deletedIds:this.deleted,signature:this.state.signature + ':' + this.state.revision};
     }
+}
+
+// Nested operations share the lease; an idle/oversized cache is dropped only
+// after the outermost consumer finishes, never during an active build.
+for (const name of ['load','status','start','select']) {
+    const method = LibraryIsbnIndex.prototype[name];
+    LibraryIsbnIndex.prototype[name] = function(...args) {return this.use(() => method.apply(this,args));};
 }
 
 module.exports = LibraryIsbnIndex;

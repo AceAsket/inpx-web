@@ -8,6 +8,7 @@ const Fb2Parser = require('./fb2/Fb2Parser');
 const XmlParser = require('./xml/XmlParser');
 const ZipReader = require('./ZipReader');
 const {coverCacheKey} = require('./BookAssets');
+const {MemoryCache} = require('./MemoryCache');
 
 function plainText(value = '') {
     return he.decode(String(value ?? '')).replace(/<\s*(?:\/p|br\s*\/?)\s*>/gi, '\n')
@@ -35,16 +36,35 @@ function fb2Metadata(data) {
 }
 
 async function epubMetadata(file, config) {
-    const reader = new ZipReader(config);
+    const reader = new ZipReader({...config, resourceMaxOutputBytes:4 * 1024 * 1024});
     try {
         await reader.open(file);
-        const names = Object.values(reader.entries).filter(entry => !entry.isDirectory).map(entry => entry.name);
+        const entries = new Map(Object.values(reader.entries).filter(entry => !entry.isDirectory && !entry.isLink).map(entry => [entry.name, entry]));
+        const names = [...entries.keys()];
+        const read = async(name, maximum) => {
+            if (Number(entries.get(name)?.size) > maximum) throw new Error('Метаданные EPUB превышают лимит');
+            if (reader.archiveType === '7z') {
+                reader.maxOutputBytes = maximum;
+                const data = await reader.extractToBuf(name);
+                if (data.length > maximum) throw new Error('Метаданные EPUB превышают лимит');
+                return data;
+            }
+            const stream = await reader.zip.stream(name), chunks = [];
+            let bytes = 0;
+            try {
+                for await (const chunk of stream) {
+                    bytes += chunk.length;
+                    if (bytes > maximum) throw new Error('Метаданные EPUB превышают лимит');
+                    chunks.push(chunk);
+                }
+            } finally {stream.destroy();}
+            return Buffer.concat(chunks);
+        };
         const containerName = names.find(name => /(^|\/)META-INF\/container\.xml$/i.test(name));
         if (!containerName)
             return {};
         const container = new XmlParser();
-        if (Number(reader.entries[containerName]?.size) > 1024 * 1024) throw new Error('Метаданные EPUB превышают лимит');
-        container.fromString((await reader.extractToBuf(containerName)).toString('utf8'), {lowerCase: true});
+        container.fromString((await read(containerName, 1024 * 1024)).toString('utf8'), {lowerCase: true});
         const rootfile = container.$$('/rootfiles/rootfile');
         const packagePath = rootfile && (rootfile.attrs() || {})['full-path'];
         if (!packagePath)
@@ -53,9 +73,8 @@ async function epubMetadata(file, config) {
         const name = path.posix.normalize(`${prefix}${packagePath}`);
         if (!names.includes(name))
             return {};
-        if (Number(reader.entries[name]?.size) > 4 * 1024 * 1024) throw new Error('Метаданные EPUB превышают лимит');
         const parser = new XmlParser();
-        parser.fromString((await reader.extractToBuf(name)).toString('utf8'), {lowerCase: true});
+        parser.fromString((await read(name, 4 * 1024 * 1024)).toString('utf8'), {lowerCase: true});
         const metadata = parser.$$('/metadata/');
         if (!metadata)
             return {};
@@ -99,7 +118,9 @@ async function isbnFromData(data, ext, config, maxBytes) {
 class BookMetadata {
     constructor(worker) {
         this.worker = worker;
-        this.cache = new Map();
+        this.cache = new MemoryCache({bytes:8 * 1024 ** 2, entries:200, ttl:15 * 60 * 1000});
+        this.generation = worker.libraryAssetGeneration || 0;
+        this.coverEpoch = require('crypto').randomBytes(12).toString('hex');
         this.pending = new Map();
         this.pendingCovers = new Map();
         this.active = 0;
@@ -124,7 +145,9 @@ class BookMetadata {
     }
 
     async read(book) {
-        const key = `${this.worker.libraryAssetGeneration || 0}:${coverCacheKey(book)}`;
+        const generation = this.worker.libraryAssetGeneration || 0;
+        if (generation !== this.generation) {this.generation = generation; this.cache.clear();}
+        const key = `${generation}:${coverCacheKey(book)}`;
         const cached = this.cache.get(key);
         if (cached && Date.now() - cached.time < 15 * 60 * 1000)
             return cached.value;
@@ -164,9 +187,8 @@ class BookMetadata {
                 } finally {
                     if (file) await fs.remove(file);
                 }
-                if (this.cache.size >= 200)
-                    this.cache.delete(this.cache.keys().next().value);
-                this.cache.set(key, {time: Date.now(), value});
+                if (generation === (this.worker.libraryAssetGeneration || 0))
+                    this.cache.set(key, {time: Date.now(), value});
                 return value;
             }).finally(() => this.pending.delete(key)));
         }
@@ -174,9 +196,19 @@ class BookMetadata {
     }
 
     async cover(book) {
-        const key = coverCacheKey(book);
+        const generation = this.worker.libraryAssetGeneration || 0;
+        const coverGeneration = this.worker.coverCacheGeneration || 0;
+        // Reindexing may change sidecar images without changing the INPX row.
+        const key = `${coverCacheKey(book)}-abs-${this.coverEpoch}-${generation}-${coverGeneration}`;
+        const obsolete = () => generation !== (this.worker.libraryAssetGeneration || 0)
+            || coverGeneration !== (this.worker.coverCacheGeneration || 0);
+        const checkGeneration = () => {
+            if (obsolete())
+                throw Object.assign(new Error('Библиотека обновлена. Повторите загрузку обложки.'), {code:'INPX_LIBRARY_CHANGED', status:503});
+        };
         if (!this.pendingCovers.has(key)) {
             this.pendingCovers.set(key, this.run(async() => {
+                checkGeneration();
                 const config = this.worker.config;
                 const dir = config.coverDir || path.join(config.publicFilesDir, 'cover');
                 const formats = [['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.gif', 'image/gif']];
@@ -184,15 +216,27 @@ class BookMetadata {
                     const file = path.join(dir, key + extension);
                     if (await fs.pathExists(file)) {
                         await utils.touchFile(file);
-                        return {contentType, data: await fs.readFile(file)};
+                        const data = await fs.readFile(file);
+                        checkGeneration();
+                        return {contentType, data};
                     }
                 }
                 const cover = await this.worker.getBookCover(book);
+                checkGeneration();
                 if (cover) {
                     const format = formats.find(item => item[1] === cover.contentType);
                     if (format) {
                         await fs.ensureDir(dir);
-                        await utils.prepareCachedFile(path.join(dir, key + format[0]), file => fs.writeFile(file, cover.data));
+                        const cachedFile = path.join(dir, key + format[0]);
+                        try {
+                            await utils.prepareCachedFile(cachedFile, async file => {
+                                checkGeneration(); await fs.writeFile(file, cover.data); checkGeneration();
+                            });
+                            checkGeneration();
+                        } catch (error) {
+                            if (obsolete()) await fs.remove(cachedFile).catch(() => {});
+                            throw error;
+                        }
                     }
                 }
                 return cover;

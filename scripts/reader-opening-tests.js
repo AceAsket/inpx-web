@@ -238,7 +238,7 @@ async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
     Object.assign(reader, {isStandaloneMode: false, $route: {path: '/reader'}, readerLoadJobId: 0, pagedBuildJobId: 0, $refs: {},
         pagedLayoutCache: new Map([['old-document', {type: 'partial'}]]), bottomClipCompensationByGeometry: new Map(), bottomClipCalibrationAttemptsByGeometry: new Map(),
         resetBottomClipCalibrationSample() {}, cancelCompactChromeBuildPendingClear() {}, clearCompactChromeStatusHold() {},
-        afterLayoutRefreshPaint: async() => {}, uiText: {}, applyReaderDocumentSource: async() => {parsed++;},
+        afterLayoutRefreshPaint: async() => {}, applyStoredReaderPreferences: async() => {}, uiText: {}, applyReaderDocumentSource: async() => {parsed++;},
         $root: {api: {getReaderBook: async uid => {assert.strictEqual(uid, 'same-uid'); started(); return gate;}, getReaderState: async() => ({})}},
     });
     const pending = reader.loadReader();

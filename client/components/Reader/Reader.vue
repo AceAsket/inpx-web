@@ -162,7 +162,7 @@
                     ref="readerBackgroundInput"
                     class="reader-background-input"
                     type="file"
-                    accept="image/*"
+                    accept="image/png,image/jpeg,image/gif,image/webp"
                     @change="handleReaderBackgroundUpload"
                 />
 
@@ -1613,8 +1613,8 @@ import _ from 'lodash';
 import he from 'he';
 import ReaderAudio from './ReaderAudio.vue';
 import ReaderBrowserSpeech from './ReaderBrowserSpeech.vue';
+import readerPreferencesStorage from './readerPreferencesStorage';
 
-const readerPreferencesStorageKey = 'inpx.reader.preferences.v1';
 const readerProgressStorageKey = 'inpx.reader.progress.v1';
 const readerPreferencesVersion = 3;
 const readerDeviceProfileKeys = ['regularProfile', 'compactProfile'];
@@ -1848,6 +1848,8 @@ class Reader {
     statusClockText = '';
     statusClockTimer = null;
     profileReaderPreferencesApplied = false;
+    localReaderBackground = null;
+    readerBackgroundLoadSource = '';
     snapTimer = null;
     pageTurnTimer = null;
     pageTurnAnimating = false;
@@ -2493,9 +2495,12 @@ class Reader {
     }
 
     get readerBackgroundStyle() {
-        const image = String(this.preferences.backgroundImage || '').trim();
+        let image = String(this.preferences.backgroundImage || '').trim();
         if (!image)
             return {};
+
+        if (this.localReaderBackground?.source === image) image = this.localReaderBackground.data;
+        else image = this.readerBackgroundRequestUrl(image);
 
         const theme = String(this.preferences.theme || 'dark');
         const overlay = (theme === 'dark')
@@ -2783,7 +2788,7 @@ class Reader {
             resetReaderAppearanceConfirm: '\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0441\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u043e\u0435 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435 \u0447\u0438\u0442\u0430\u043b\u043a\u0438? \u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u0438 \u0437\u0430\u043a\u043b\u0430\u0434\u043a\u0438 \u043d\u0435 \u0438\u0437\u043c\u0435\u043d\u044f\u0442\u0441\u044f.',
             resetReaderAppearanceSuccess: '\u041e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435 \u0447\u0438\u0442\u0430\u043b\u043a\u0438 \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u043e.',
             backgroundTooLarge: '\u041a\u0430\u0440\u0442\u0438\u043d\u043a\u0430 \u0444\u043e\u043d\u0430 \u0434\u043e\u043b\u0436\u043d\u0430 \u0431\u044b\u0442\u044c \u0434\u043e 4 \u041c\u0411.',
-            backgroundInvalid: '\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0444\u0430\u0439\u043b \u043a\u0430\u0440\u0442\u0438\u043d\u043a\u0438.',
+            backgroundInvalid: 'Выберите изображение PNG, JPEG, GIF или WebP.',
             einkContrast: '\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442',
             einkPaper: '\u0411\u0443\u043c\u0430\u0433\u0430',
             einkInk: '\u0427\u0435\u0440\u043d\u0438\u043b\u0430',
@@ -9005,6 +9010,8 @@ class Reader {
             clearTimeout(this.bottomCalibrationTimer);
             this.bottomCalibrationTimer = null;
         }
+        await this.applyStoredReaderPreferences();
+        if (loadJobId !== this.readerLoadJobId || !this.readerSourceKey) return;
         if (!this.bookUid && !this.isStandaloneMode) {
             await this.loadReaderHome();
             return;
@@ -10535,14 +10542,26 @@ class Reader {
     }
 
     async persistPreferences() {
-        this.writeStoredReaderPreferences();
+        const userId = this.currentUserId;
+        const submitted = _.cloneDeep(this.preferences);
+        await this.writeStoredReaderPreferences();
 
         const api = this.$root.api;
         if (!api)
             return;
 
         try {
-            await api.updateReaderPreferences(this.preferences, {suppressProfileLogin: true});
+            const result = await api.updateReaderPreferences(submitted, {suppressProfileLogin: true});
+            if (userId !== this.currentUserId || !result?.preferences) return;
+            const canonical = result.preferences;
+            if (this.preferences.backgroundImage === submitted.backgroundImage) {
+                if (String(submitted.backgroundImage || '').startsWith('data:image/') && canonical.backgroundImage) {
+                    this.localReaderBackground = {source: canonical.backgroundImage, data: submitted.backgroundImage};
+                }
+                // A font/spacing edit made while saving must not be overwritten.
+                this.preferences = {...this.preferences, backgroundImage: canonical.backgroundImage || ''};
+                await this.writeStoredReaderPreferences();
+            }
         } catch (e) {
             if ((e && e.message) !== 'need_profile_login')
                 throw e;
@@ -10648,32 +10667,58 @@ class Reader {
         if (_.isEqual(nextPreferences, this.preferences)) {
             if (options.persistLocal)
                 this.writeStoredReaderPreferences();
+            this.cacheReaderBackground();
             return;
         }
 
         this.preferences = nextPreferences;
         if (options.persistLocal)
             this.writeStoredReaderPreferences();
+        this.cacheReaderBackground();
     }
 
-    applyStoredReaderPreferences() {
-        const preferences = this.readStoredReaderPreferences();
-        if (preferences)
-            this.applyReaderPreferences(preferences, {persistLocal: true});
+    readerBackgroundRequestUrl(image = '') {
+        if (image.startsWith('/') && image.includes('/reader-background/') && this.settings.profileAccessToken) {
+            // Tokens are used for this request only, never stored in preferences.
+            return `${image}${image.includes('?') ? '&' : '?'}access=${encodeURIComponent(this.settings.profileAccessToken)}`;
+        }
+        return image;
+    }
+
+    async cacheReaderBackground() {
+        const image = String(this.preferences.backgroundImage || '');
+        if (!image.startsWith('/') || !image.includes('/reader-background/') || this.readerBackgroundLoadSource === image
+            || this.localReaderBackground?.source === image || typeof fetch !== 'function' || typeof FileReader === 'undefined') return;
+        this.readerBackgroundLoadSource = image;
+        const userId = this.currentUserId;
+        try {
+            const response = await fetch(this.readerBackgroundRequestUrl(image), {credentials: 'same-origin', cache: 'no-store'});
+            if (!response.ok) return;
+            const blob = await response.blob();
+            if (blob.size > this.readerBackgroundMaxBytes || !blob.type.startsWith('image/')) return;
+            const data = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result || ''));
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+            if (!this.readerActive || userId !== this.currentUserId || image !== this.preferences.backgroundImage) return;
+            this.localReaderBackground = {source: image, data};
+            await this.writeStoredReaderPreferences();
+        } catch { /* The online background still works when offline storage is unavailable. */ }
+        finally {if (this.readerBackgroundLoadSource === image) this.readerBackgroundLoadSource = '';}
+    }
+
+    async applyStoredReaderPreferences() {
+        const userId = this.currentUserId;
+        const stored = await readerPreferencesStorage.read(userId);
+        if (userId !== this.currentUserId || !this.readerActive || !stored) return;
+        if (!this.profileReaderPreferencesApplied) this.applyReaderPreferences(stored.preferences);
+        if (stored.background?.source === this.preferences.backgroundImage) this.localReaderBackground = stored.background;
     }
 
     readStoredReaderPreferences() {
-        if (typeof localStorage === 'undefined')
-            return null;
-
-        try {
-            const parsed = JSON.parse(localStorage.getItem(readerPreferencesStorageKey) || '{}');
-            const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
-            const userId = String(this.currentUserId || '').trim();
-            return (userId && byUser[userId]) || parsed.preferences || null;
-        } catch (e) {
-            return null;
-        }
+        return readerPreferencesStorage.readSync(this.currentUserId);
     }
 
     readStoredReaderProgress() {
@@ -10684,7 +10729,7 @@ class Reader {
             const parsed = JSON.parse(localStorage.getItem(readerProgressStorageKey) || '{}');
             const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
             const userId = String(this.currentUserId || '').trim();
-            const bucket = (userId && byUser[userId] && typeof byUser[userId] === 'object')
+            const bucket = userId
                 ? byUser[userId]
                 : ((parsed && parsed.progress && typeof parsed.progress === 'object') ? parsed.progress : {});
             const progress = bucket && typeof bucket === 'object' ? bucket[this.bookUid] : null;
@@ -10731,12 +10776,12 @@ class Reader {
                 : [];
 
             if (clearAll) {
-                Object.keys(globalProgress).forEach((uid) => delete globalProgress[uid]);
+                if (!userId) Object.keys(globalProgress).forEach((uid) => delete globalProgress[uid]);
                 if (userId)
                     byUser[userId] = {};
-                knownBookUids.forEach((uid) => delete globalProgress[uid]);
+                if (!userId) knownBookUids.forEach((uid) => delete globalProgress[uid]);
             } else if (normalizedBookUid) {
-                delete globalProgress[normalizedBookUid];
+                if (!userId) delete globalProgress[normalizedBookUid];
                 if (userId && byUser[userId] && typeof byUser[userId] === 'object')
                     delete byUser[userId][normalizedBookUid];
             }
@@ -10751,26 +10796,7 @@ class Reader {
     }
 
     writeStoredReaderPreferences() {
-        if (typeof localStorage === 'undefined')
-            return;
-
-        try {
-            const raw = localStorage.getItem(readerPreferencesStorageKey);
-            const parsed = raw ? JSON.parse(raw) : {};
-            const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
-            const userId = String(this.currentUserId || '').trim();
-            const preferences = _.cloneDeep(this.preferences);
-
-            if (userId)
-                byUser[userId] = preferences;
-
-            localStorage.setItem(readerPreferencesStorageKey, JSON.stringify({
-                preferences,
-                byUser,
-            }));
-        } catch (e) {
-            // ignore storage failures
-        }
+        return readerPreferencesStorage.write(this.currentUserId, this.preferences, this.localReaderBackground);
     }
 
     writeStoredReaderProgress(progress = null) {
@@ -10784,9 +10810,7 @@ class Reader {
             const userId = String(this.currentUserId || '').trim();
             const nextProgress = this.normalizeReaderProgress(progress || this.progress);
             const globalProgress = (parsed && parsed.progress && typeof parsed.progress === 'object') ? parsed.progress : {};
-            const existingBucket = (userId && byUser[userId] && typeof byUser[userId] === 'object')
-                ? byUser[userId]
-                : globalProgress;
+            const existingBucket = userId ? byUser[userId] : globalProgress;
             const existingProgress = existingBucket && typeof existingBucket === 'object'
                 ? this.normalizeReaderProgress(existingBucket[this.bookUid] || {})
                 : null;
@@ -10816,7 +10840,7 @@ class Reader {
                 byUser[userId] = scoped;
             }
 
-            globalProgress[this.bookUid] = nextProgress;
+            if (!userId) globalProgress[this.bookUid] = nextProgress;
 
             localStorage.setItem(readerProgressStorageKey, JSON.stringify({
                 progress: globalProgress,
@@ -11078,7 +11102,7 @@ class Reader {
         if (!file)
             return;
 
-        if (!String(file.type || '').startsWith('image/')) {
+        if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(String(file.type || '').toLowerCase())) {
             this.$root.stdDialog.alert(this.uiText.backgroundInvalid, this.uiText.error);
             input.value = '';
             return;

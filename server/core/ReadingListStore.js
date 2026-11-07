@@ -19,6 +19,7 @@ class ReadingListStore {
     constructor(config) {
         this.config = config;
         this.file = path.join(config.dataDir, 'reading-lists.json');
+        this.assets = new (require('./ReaderAssets').ReaderAssets)(config);
     }
 
     makeDefaultData() {
@@ -818,11 +819,17 @@ class ReadingListStore {
     // state, and nearly every request loads it. Reuse the last result while the file is unchanged;
     // a write anywhere (atomic rename) changes its inode. Callers get a copy they may mutate.
     async load() {
+        return structuredClone(await this.loadSnapshot());
+    }
+
+    // Internal immutable snapshot. Public readers return copies; a single-user
+    // read must not clone every other profile's reading history.
+    async loadSnapshot() {
         await this.ensureData();
         const stat = await fs.stat(this.file);
         const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-        if (this.loaded && this.loaded.stamp === stamp && !this.config.resetAdminPassword)
-            return structuredClone(this.loaded.data);
+        if (this.loaded?.bootstrapped && this.loaded.stamp === stamp && !this.config.resetAdminPassword)
+            return this.loaded.data;
         this.loaded = null;
         let raw = null;
         let reset = false;
@@ -841,14 +848,15 @@ class ReadingListStore {
             reset = true;
         }
 
+        const assetsChanged = await this.assets.externalize(raw);
         const {data, changed} = await this.applyAdminBootstrap(raw);
-        if (changed)
+        if (changed || assetsChanged)
             await this.writeData(data);
         this.config.resetAdminPassword = false;
         // After a write the stamp read above is stale: the next load reads the file again.
-        if (!changed && !reset)
-            this.loaded = {stamp, data: structuredClone(data)};
-        return data;
+        if (!changed && !assetsChanged && !reset)
+            this.loaded = {stamp, data, bootstrapped:true};
+        return this.loaded?.data || data;
     }
 
     async backupBrokenStore(error = null) {
@@ -873,11 +881,21 @@ class ReadingListStore {
 
     async save(data, options = {}) {
         const out = this.normalizeData(data);
+        await this.assets.externalize(out);
         await this.writeData(out, options);
+        // Mutators return their own objects, including canonical asset URLs.
+        for (const user of Array.isArray(data?.users) ? data.users : []) {
+            const saved = out.users.find(item => item.id === user.id);
+            if (!saved || !user.readerPreferences) continue;
+            user.readerPreferences.backgroundImage = saved.readerPreferences.backgroundImage;
+            if (user.readerPreferences.einkProfile && saved.readerPreferences.einkProfile)
+                user.readerPreferences.einkProfile.backgroundImage = saved.readerPreferences.einkProfile.backgroundImage;
+        }
     }
 
     async writeData(data, options = {}) {
-        const snapshot = JSON.parse(JSON.stringify(data));
+        const snapshot = structuredClone(data);
+        await this.assets.externalize(snapshot);
         const prepare = async() => {
             if (options && options.rebaseProgressGeneration === true)
                 return await this.rebaseReaderProgressGeneration(snapshot);
@@ -890,7 +908,7 @@ class ReadingListStore {
         let current = null;
         if (await fs.pathExists(this.file)) {
             try {
-                current = JSON.parse(await fs.readFile(this.file, 'utf8'));
+                current = await this.currentPersistedData();
             } catch (e) {
                 current = null;
             }
@@ -921,7 +939,7 @@ class ReadingListStore {
 
         let current;
         try {
-            current = JSON.parse(await fs.readFile(this.file, 'utf8'));
+            current = await this.currentPersistedData();
         } catch (e) {
             return data;
         }
@@ -970,10 +988,30 @@ class ReadingListStore {
 
     async writeDataNow(data) {
         await writeFileAtomic(this.file, JSON.stringify(data, null, 2));
+        const stat = await fs.stat(this.file);
+        const admin = data.users?.find(user => user.isAdmin || user.id === 'admin');
+        const bootstrapped = !!(admin?.isAdmin && admin.login && admin.passwordHash
+            && admin.opdsEnabled === false && admin.opdsAuthEnabled === false && data.users[0] === admin);
+        this.loaded = {stamp:`${stat.ino}:${stat.size}:${stat.mtimeMs}`, data:structuredClone(data), bootstrapped};
+        // Only scan assets when the reference set changes, never on each page turn.
+        await this.assets.prune(data).catch(error => logWarning(`Reader background cleanup: ${error.message}`));
+    }
+
+    async currentPersistedData() {
+        const stat = await fs.stat(this.file);
+        if (this.loaded?.stamp === `${stat.ino}:${stat.size}:${stat.mtimeMs}`) return this.loaded.data;
+        return JSON.parse(await fs.readFile(this.file, 'utf8'));
+    }
+
+    async exportSnapshot() {
+        const data = await this.load();
+        for (const user of data.users)
+            user.readerPreferences = await this.assets.inlinePreferences(user.id, user.readerPreferences);
+        return data;
     }
 
     async getSharedDiscoveryConfig() {
-        const data = await this.load();
+        const data = await this.loadSnapshot();
         return this.normalizeSharedDiscoveryConfig(data.sharedDiscoveryConfig);
     }
 
@@ -985,7 +1023,7 @@ class ReadingListStore {
     }
 
     async getMetadataOverrides() {
-        const data = await this.load();
+        const data = await this.loadSnapshot();
         return this.normalizeMetadataOverrides(data.metadataOverrides);
     }
 
@@ -1046,8 +1084,11 @@ class ReadingListStore {
     }
 
     async getUser(userId = '') {
-        const {user} = await this.resolveUser(userId);
-        return user;
+        const data = await this.loadSnapshot();
+        const id = String(userId || '').trim();
+        const user = data.users.find(item => item.id === id) || data.users.find(item => item.login === id) || data.users[0];
+        if (!user) throw new Error('Пользователь не найден');
+        return structuredClone(user);
     }
 
     async findTelegramUser(botId, chatId) {
@@ -1238,7 +1279,7 @@ class ReadingListStore {
     }
 
     async getReaderState(userId = '', bookUid = '') {
-        const {user} = await this.resolveUser(userId);
+        const user = await this.getUser(userId);
         const normalizedBookUid = this.normalizeBookUid(bookUid);
         if (!normalizedBookUid)
             throw new Error('bookUid is empty');
@@ -2039,7 +2080,7 @@ class ReadingListStore {
                 telegramAsZip: user.telegramAsZip === true,
                 opdsEnabled: user.opdsEnabled,
                 opdsAuthEnabled: user.opdsAuthEnabled,
-                readerPreferences: this.normalizeReaderPreferences(user.readerPreferences),
+                readerPreferences: await this.assets.inlinePreferences(user.id, this.normalizeReaderPreferences(user.readerPreferences)),
                 readerProgress: this.normalizeReaderProgress(user.readerProgress),
                 audioProgress: this.normalizeAudioProgress(user.audioProgress),
                 readerBookmarks: this.normalizeReaderBookmarks(user.readerBookmarks),

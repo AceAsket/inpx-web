@@ -12,6 +12,44 @@ class DbCreator {
         this.config = config;
     }
 
+    // Metadata changes must not change links to progress, notes or reading lists.
+    // Keep legacy UIDs when a physical file can be identified without ambiguity.
+    physicalIdentity(rec) {
+        const source = String(rec.sourceId || '');
+        const ext = String(rec.ext || '').toLowerCase();
+        let identity;
+        if (rec.file) identity = ['file', source, String(rec.folder || '').replace(/\\/g, '/'), String(rec.file), ext, Number(rec.insno) || 0];
+        else if (rec.libid) identity = ['libid', source, String(rec.sourcelib || ''), String(rec.libid), ext];
+        else return '';
+        return require('crypto').createHash('sha256').update('inpx-physical-v1:' + JSON.stringify(identity)).digest('base64');
+    }
+
+    async previousIdentities(db, consume) {
+        const cursor = 'identity-' + require('crypto').randomBytes(8).toString('hex');
+        try {
+            while (true) {
+                const rows = await db.select({table:'book', rawResult:true, where:`
+                    let cursor = @getItem(${db.esc(cursor)});
+                    if (!cursor) {cursor = @all(); @setItem(${db.esc(cursor)}, cursor);}
+                    const rows = [];
+                    while (rows.length < 1000) {
+                        const next = cursor.next(); if (next.done) break;
+                        const row = @unsafeRow(next.value);
+                        rows.push({uid:row._uid,legacyUid:row._legacyUid,id:row.id,hash:row._recordHash,sourceId:row.sourceId,
+                            folder:row.folder,file:row.file,ext:row.ext,insno:row.insno,libid:row.libid,sourcelib:row.sourcelib});
+                    }
+                    return rows;
+                `});
+                if (!rows[0].rawResult.length) break;
+                // Only one source projection lives here at a time. Retaining
+                // paths for every prior record alongside the posting lists
+                // would substantially increase full-reindex memory usage.
+                await consume(rows[0].rawResult.map(row => ({uid:row.uid,id:row.id,hash:row.hash,
+                    identity:this.physicalIdentity(row),legacyUid:row.legacyUid,sourceId:row.sourceId})));
+            }
+        } finally {await db.select({table:'book',rawResult:true,where:`@delItem(${db.esc(cursor)}); return null;`});}
+    }
+
     async loadInpxFilter() {
         const inpxFilterFile = this.config.inpxFilterFile;
 
@@ -50,11 +88,29 @@ class DbCreator {
         else await db.open({table: 'book'});
         if (incremental && (await db.getDbInfo({table: 'book'})).book.hash.some(hash => hash.field === '_uid'))
             await db.drop({in: 'book', hash: {field: '_uid'}});
-        const previous = new Map();
+        const previous = new Map(), physical = new Map(), legacy = new Map();
         let lastBookId = 0;
+        const rememberPrevious = rows => {
+            for (const row of rows) {
+                previous.set(row.uid,row); lastBookId = Math.max(lastBookId,row.id);
+                if (row.legacyUid) {
+                    const key = JSON.stringify([row.sourceId,row.legacyUid]);
+                    legacy.set(key,legacy.has(key) ? null : row);
+                }
+                if (row.identity) physical.set(row.identity,physical.has(row.identity) ? null : row);
+            }
+        };
         if (incremental) {
-            const rows = await db.select({table: 'book', map: '(row) => ({uid: row._uid, id: row.id, hash: row._recordHash})'});
-            for (const row of rows) { previous.set(row.uid, row); lastBookId = Math.max(lastBookId, row.id); }
+            await this.previousIdentities(db,rememberPrevious);
+        } else if (config.identityDbPath) {
+            const compatibility = new (require('jembadb/src/JembaDb'))();
+            try {
+                await compatibility.lock({dbPath:config.identityDbPath,softLock:true});
+                await compatibility.open({table:'book',cacheSize:5});
+                await this.previousIdentities(compatibility,rememberPrevious);
+            } catch (error) {
+                throw new Error(`Не удалось сохранить идентификаторы прежней библиотеки: ${error.message}`);
+            } finally {await compatibility.unlock();}
         }
         let recordsChanged = 0;
 
@@ -77,8 +133,9 @@ class DbCreator {
         let librateArr = [];
         let extMap = new Map();//тип файла
         let extArr = [];
-        const wordMap = new Map();
+        let wordMap = new Map();
         let wordArr = [];
+        let sourceMap = new Map(), sourceArr = [];
 
         let uidSet = new Set();//уникальные идентификаторы
 
@@ -198,6 +255,7 @@ class DbCreator {
         };        
 
         const parseBookRec = (rec) => {
+            parseField(rec.sourceId, sourceMap, sourceArr, rec.id);
             for (const field of ['title', 'author', 'series']) {
                 for (const word of new Set(require('../../shared/CatalogSearch').words(rec[field]).map(require('../../shared/CatalogSearch').root)))
                     parseField(`${field}:${word}`, wordMap, wordArr, rec.id);
@@ -254,6 +312,16 @@ class DbCreator {
                 rec.sourceName = currentSource.name;
                 rec.sourceLibDir = currentSource.libDir;
 
+                const identity = currentSource.type === 'folder' ? '' : this.physicalIdentity(rec);
+                if (identity) rec._legacyUid = rec._uid;
+                const uidPrior = previous.get(rec._uid) || legacy.get(JSON.stringify([rec.sourceId,rec._uid]));
+                let prior = uidPrior && (!identity || uidPrior.identity === identity)
+                    ? uidPrior : identity && physical.get(identity);
+                if (prior && !uidSet.has(prior.uid)) rec._uid = prior.uid;
+                else {
+                    prior = null;
+                    if (identity && !physical.has(identity) && !uidSet.has(identity)) rec._uid = identity;
+                }
                 //сначала фильтр
                 if (!filter(rec) || uidSet.has(rec._uid)) {
                     rec.id = 0;
@@ -261,7 +329,6 @@ class DbCreator {
                     continue;
                 }
 
-                const prior = previous.get(rec._uid);
                 rec._recordHash = require('crypto').createHash('sha256').update(JSON.stringify(rec)).digest('hex');
                 rec.id = prior ? prior.id : ++id;
                 uidSet.add(rec._uid);
@@ -284,7 +351,7 @@ class DbCreator {
                 saveChunk = chunk;
             }
 
-            saveChunk = saveChunk.filter(rec => !previous.has(rec._uid) || previous.get(rec._uid).hash !== rec._recordHash);
+            saveChunk = saveChunk.filter(rec => !incremental || !previous.has(rec._uid) || previous.get(rec._uid).hash !== rec._recordHash);
             if (saveChunk.length) await db.insert({table: 'book', rows: saveChunk, replace: true});
             recordsChanged += saveChunk.length;
             callback({recordsChanged, incremental});
@@ -321,7 +388,7 @@ class DbCreator {
             });
         }
 
-        const removed = [...previous.values()].filter(row => !uidSet.has(row.uid)).map(row => row.id);
+        const removed = incremental ? [...previous.values()].filter(row => !uidSet.has(row.uid)).map(row => row.id) : [];
         for (let offset = 0; offset < removed.length; offset += 10000)
             await db.delete({table: 'book', where: `@@id(${db.esc(removed.slice(offset, offset + 10000))})`});
 
@@ -335,6 +402,8 @@ class DbCreator {
         dateMap = null;
         librateMap = null;
         extMap = null;
+        sourceMap = null;
+        physical.clear(); previous.clear(); legacy.clear();
 
         uidSet = null;
 
@@ -474,6 +543,8 @@ class DbCreator {
 
         //ext
         await saveTable('ext', extArr, () => {extArr = null});
+        await saveTable('source', sourceArr, () => {sourceArr = null});
+        wordMap = null;
         await saveTable('word', wordArr, () => {wordArr = null});
 
         //кэш-таблицы запросов

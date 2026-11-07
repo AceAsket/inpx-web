@@ -243,6 +243,10 @@ export default class BaseList {
         ].filter(Boolean).join('|');
     }
 
+    authorBooksCacheKey(authorId) {
+        return `author-${authorId}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
+    }
+
     scrollToTop() {
         this.$emit('listEvent', {action: 'scrollToTop'});
     }
@@ -604,7 +608,7 @@ export default class BaseList {
             let result;
 
             if (this.abCacheEnabled && !this.getQuery().ratingCount && !this.getQuery().isbn) {
-                const key = `author-${authorId}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
+                const key = this.authorBooksCacheKey(authorId);
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
                     result = JSON.parse(data);
@@ -809,6 +813,7 @@ export default class BaseList {
                 && authorFound
                 && filterBySearch(book.series, s.series)
                 && filterBySearch(book.title, s.title)
+                && filterBySearch(book.keywords, s.keywords)
                 && genreFound
                 && langFound
                 && dateFound

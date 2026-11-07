@@ -165,7 +165,7 @@ async function testNoIndexHeadersCoverStaticErrorsAndProtectedResponses() {
         try {
             await check('/library/',401);
             const document = await check('/library/',200,{headers});
-            assert.strictEqual(document.headers.get('cache-control'),'no-store');
+            assert.strictEqual(document.headers.get('cache-control'),'no-cache, must-revalidate');
             assert.strictEqual(document.headers.get('strict-transport-security'),null);
             const script = await check('/library/bundle.0123456789abcdef.js',200,{headers});
             assert.match(script.headers.get('cache-control'),/immutable/);
@@ -319,7 +319,9 @@ async function testStoreReadErrorKeepsData() {
         const readFile = fs.readFile;
         fs.readFile = async() => { throw Object.assign(new Error('EMFILE: too many open files'), {code: 'EMFILE'}); };
         try {
-            await assert.rejects(store.load(), /EMFILE/);
+            assert.equal((await store.load()).lists[0].name, 'Keep me', 'An unchanged warm snapshot does not need to read the file');
+            const cold = new ReadingListStore({dataDir, adminPassword:'fixture'});
+            await assert.rejects(cold.load(), /EMFILE/);
         } finally {
             fs.readFile = readFile;
         }

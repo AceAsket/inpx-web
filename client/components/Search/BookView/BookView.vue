@@ -378,6 +378,7 @@
 
 <script>
 const bookFormats = require('../../../../shared/BookFormats');
+const {coverUrl} = require('../../Library/libraryModel');
 //-----------------------------------------------------------------------------
 import vueComponent from '../../vueComponent.js';
 import LibraryResultCard from '../../Library/LibraryResultCard.vue';
@@ -533,20 +534,7 @@ class BookView {
     get coverSrc() {
         if (this.coverError)
             return '';
-
-        if (this.book.discoveryCoverUrl)
-            return this.book.discoveryCoverUrl;
-
-        const root = this.config.rootPathStatic || '';
-        const bookUid = this.getBookUid();
-        if (bookUid)
-            return `${root}/cover/by-uid?uid=${encodeURIComponent(bookUid)}`;
-        if (!this.book.libid)
-            return '';
-        const sourceId = String(this.book.sourceId || '').trim();
-        return sourceId
-            ? `${root}/cover/${encodeURIComponent(sourceId)}/${this.book.libid}`
-            : `${root}/cover/${this.book.libid}`;
+        return coverUrl(this.book, this.config.rootPathStatic || '');
     }
 
     get rateBadgeColor() {

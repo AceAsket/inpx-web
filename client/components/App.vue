@@ -23,7 +23,6 @@ import Notify from './share/Notify.vue';
 import StdDialog from './share/StdDialog.vue';
 
 import Api from './Api/Api.vue';
-import Search from './Search/Search.vue';
 import LibraryShell from './Library/LibraryShell.vue';
 import {appearance, appearanceRedirect} from './Library/libraryModel';
 
@@ -33,7 +32,6 @@ const componentOptions = {
         Notify,
         StdDialog,
 
-        Search,
         LibraryShell,
     },
     watch: {

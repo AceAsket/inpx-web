@@ -1,6 +1,7 @@
 // Shared presentation rules. Keep server records intact for existing book actions.
 const libraryRoutes = new Set(['/overview', '/my-books', '/profile']);
 const catalogRoutes = new Set(['/', '/author', '/series', '/title', '/books', '/for-you', '/newest', '/popular', '/bestsellers', '/extended']);
+const coverCacheVersion = 'rc13';
 
 function appearance(value) {
     return value === 'shelves' ? 'shelves' : 'classic';
@@ -29,9 +30,9 @@ function coverUrl(book = {}, root = '') {
     if (book.discoveryCoverUrl) return book.discoveryCoverUrl;
     const uid = bookUid(book);
     root = String(root).replace(/\/$/, '');
-    if (uid) return `${root}/cover/by-uid?uid=${encodeURIComponent(uid)}`;
+    if (uid) return `${root}/cover/by-uid?uid=${encodeURIComponent(uid)}&cache=${coverCacheVersion}`;
     if (!book.libid) return '';
-    return `${root}/cover/${book.sourceId ? `${encodeURIComponent(book.sourceId)}/` : ''}${encodeURIComponent(book.libid)}`;
+    return `${root}/cover/${book.sourceId ? `${encodeURIComponent(book.sourceId)}/` : ''}${encodeURIComponent(book.libid)}?cache=${coverCacheVersion}`;
 }
 
 function readable(book, config) {
@@ -96,5 +97,5 @@ function profileLoginError(error) {
     return error?.code === 'need_profile_login' || error?.message === 'need_profile_login';
 }
 
-module.exports = {appearance, appearanceRedirect, libraryRoutes, catalogRoutes, bookUid, progress, coverUrl,
+module.exports = {appearance, appearanceRedirect, libraryRoutes, catalogRoutes, bookUid, progress, coverUrl, coverCacheVersion,
     readable, recentBooks, homeBooks, personalAccess, identity, discoveryOptions, normalizeShelves, genreMapFromTree, profileLoginError};

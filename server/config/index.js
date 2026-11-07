@@ -46,6 +46,7 @@ const propsToSave = [
     'dbCacheSize',
     'dbCacheBudgetMb',
     'queryCacheMemMb',
+    'queryCacheDiskMb',
     'maxFilesDirSize',
     'bookCacheSize',
     'coverCacheSize',
@@ -210,7 +211,7 @@ class ConfigManager {
         result.conversionQueueTimeoutMs = require('../core/ResourceRuntime').settings.taskTimeoutMs;
         // Explicit container limits must still win after config.json has been
         // saved by a previous launch. An empty optional variable uses the file.
-        for (const [key, name] of [['dbCacheBudgetMb', 'INPX_DB_CACHE_BUDGET_MB'], ['queryCacheMemMb', 'INPX_QUERY_CACHE_MEM_MB']]) {
+        for (const [key, name] of [['dbCacheBudgetMb', 'INPX_DB_CACHE_BUDGET_MB'], ['queryCacheMemMb', 'INPX_QUERY_CACHE_MEM_MB'], ['queryCacheDiskMb', 'INPX_QUERY_CACHE_DISK_MB']]) {
             const value = process.env[name];
             if (value !== undefined && value.trim() !== '') result[key] = Number(value);
         }

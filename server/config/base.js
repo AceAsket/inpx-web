@@ -76,7 +76,7 @@ module.exports = {
 
     // Поправить в случае, если были критические изменения в DbCreator или InpxParser,
     // иначе будет рассинхронизация по кэшу между сервером и клиентом на уровне БД.
-    dbVersion: '14',
+    dbVersion: '15',
     dbCacheSize: 5,
     dbCacheBudgetMb: numberFromEnv('INPX_DB_CACHE_BUDGET_MB', null),
 
@@ -92,6 +92,7 @@ module.exports = {
     queryCacheMemSize: 50,
     queryCacheMemMb: numberFromEnv('INPX_QUERY_CACHE_MEM_MB', 32),
     queryCacheDiskSize: 500,
+    queryCacheDiskMb: numberFromEnv('INPX_QUERY_CACHE_DISK_MB', 64),
     cacheCleanInterval: numberFromEnv('INPX_CACHE_CLEAN_INTERVAL_MINUTES', 24*60),//minutes
     cacheCleanSchedule: '0 0 * * *',
     cacheCleanTargetRatio: numberFromEnv('INPX_CACHE_CLEAN_TARGET_RATIO', 0.8),

@@ -18,6 +18,9 @@ class DbSearcher {
         this.config = config;
         this.queryCacheMemSize = this.config.queryCacheMemSize;
         this.queryCacheDiskSize = this.config.queryCacheDiskSize;
+        const diskMb = Number(config.queryCacheDiskMb ?? 64);
+        if (!Number.isFinite(diskMb) || diskMb < 0 || diskMb > 1024) throw new Error('queryCacheDiskMb: expected 0–1024 MiB');
+        this.queryCacheDiskBytes = diskMb * 1024 ** 2;
         this.queryCacheEnabled = this.config.queryCacheEnabled
             && (this.queryCacheMemSize > 0 || this.queryCacheDiskSize > 0);
 
@@ -172,7 +175,7 @@ class DbSearcher {
         return new Uint32Array(matches || []);
     }
 
-    async selectBookIds(query) {
+    async selectBookIds(query, {bookPredicates = false} = {}) {
         query = await this.prepareRatingQuery(query);
         const db = this.db;
 
@@ -279,7 +282,7 @@ class DbSearcher {
 
         //языки
         if (query.lang) {
-            const key = `book-ids-lang-${query.lang}`;
+            const key = `book-ids-lang-${bookPredicates ? 'prefix-' : ''}${query.lang}`;
             let ids = await this.getCached(key);
 
             if (ids === null) {
@@ -287,11 +290,11 @@ class DbSearcher {
                     table: 'lang',
                     rawResult: true,
                     where: `
-                        const langs = ${db.esc(query.lang.split(','))};
+                    const langs = ${db.esc(query.lang.split(',').map(value => value.trim().toLowerCase()))};
 
                         const ids = new Set();
                         for (const l of langs) {
-                            for (const id of @indexLR('value', l, l))
+                            for (const id of @indexLR('value', l, l + ${db.esc(bookPredicates && !query.lang.includes(',') && query.lang !== '?' ? maxUtf8Char : '')}))
                                 ids.add(id);
                         }
                         
@@ -381,7 +384,7 @@ class DbSearcher {
 
         //тип файла
         if (query.ext) {
-            const key = `book-ids-ext-${query.ext}`;
+            const key = `book-ids-ext-${bookPredicates ? 'prefix-' : ''}${query.ext}`;
             let ids = await this.getCached(key);
 
             if (ids === null) {
@@ -389,11 +392,11 @@ class DbSearcher {
                     table: 'ext',
                     rawResult: true,
                     where: `
-                        const exts = ${db.esc(query.ext.split('|'))};
+                        const exts = ${db.esc(query.ext.split('|').map(value => value.trim().toLowerCase()))};
 
                         const ids = new Set();
                         for (const l of exts) {
-                            for (const id of @indexLR('value', l, l))
+                            for (const id of @indexLR('value', l, l + ${db.esc(bookPredicates && !query.ext.includes('|') && query.ext !== '?' ? maxUtf8Char : '')}))
                                 ids.add(id);
                         }
                         
@@ -422,6 +425,9 @@ class DbSearcher {
             let ids = await this.getCached(key);
 
             if (ids === null) {
+                if (await this.db.tableExists({table:'source'})) {
+                    ids = await tableBookIds('source', `@indexLR('value', ${db.esc(sourceId.toLowerCase())}, ${db.esc(sourceId.toLowerCase())})`);
+                } else {
                 const sourceRows = await db.select({
                     table: 'book',
                     rawResult: true,
@@ -439,6 +445,7 @@ class DbSearcher {
                 });
 
                 ids = sourceRows[0].rawResult;
+                }
                 await this.putCached(key, ids);
             }
 
@@ -794,7 +801,7 @@ class DbSearcher {
         if (bookIds === null) {
             const db = this.db;
             const filterBySearch = (bookField, searchValue) => {
-                searchValue = searchValue.toLowerCase();
+                if (searchValue[0] !== '~') searchValue = searchValue.toLowerCase();
                 //особая обработка префиксов
                 if (searchValue == emptyFieldValue) {
                     return `(row.${bookField} === '' || row.${bookField}.indexOf(${db.esc(emptyFieldValue)}) === 0)`;
@@ -887,13 +894,36 @@ class DbSearcher {
                 || this.recStruct.some(f => f.field !== 'del' && !!query[f.field]);
             // The indexed catalogue uses | for formats; direct book predicates also accept commas.
             // Explicit expressions stay in checkBook rather than becoming literal index keys.
-            const indexedQuery = {...query};
-            if (/^[=*#~?]/.test(String(query.ext || ''))) delete indexedQuery.ext;
-            else if (query.ext) indexedQuery.ext = query.ext.replace(/,/g, '|');
+            const indexedQuery = {};
+            const fields = new Set(this.recStruct.map(field => field.field));
+            const hasTable = async table => {
+                if (!this.candidateTables) this.candidateTables = new Map();
+                if (!this.candidateTables.has(table)) this.candidateTables.set(table,await db.tableExists({table}));
+                return this.candidateTables.get(table);
+            };
+            for (const field of ['title','author','series']) {
+                if (fields.has(field) && query[field] && await hasTable(field)
+                    && (/^[=*#~?]/.test(query[field]) || await hasTable('word')))
+                    indexedQuery[field] = query[field];
+            }
+            for (const field of ['genre','lang','ext','date','del','librate']) {
+                const value = String(query[field] || '');
+                if (!fields.has(field) || !value || !await hasTable(field)) continue;
+                if (field === 'del' || field === 'librate') {
+                    if (!/^\d+(?:,\d+)*$/.test(value) || field === 'del' && value.includes(',')) continue;
+                } else if (/^[=*#~]/.test(value)) {
+                    if (['lang','ext'].includes(field) && value.startsWith('=') && !/[,|]/.test(value)) {
+                        indexedQuery[field] = value.slice(1).toLowerCase();
+                    }
+                    continue;
+                }
+                indexedQuery[field] = ['genre','lang','ext'].includes(field)
+                    ? value.toLowerCase().split(field === 'ext' ? /[,|]/ : ',').map(part => part.trim()).join(field === 'ext' ? '|' : ',') : value;
+            }
+            if (query.sourceId && await hasTable('source')) indexedQuery.sourceId = query.sourceId;
             let candidateIds = hideCopies && hasNarrowingFilter
                 ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}))
-                : ['title', 'author', 'series'].some(field => query[field] && !/^[=*#~?]/.test(query[field])) && await db.tableExists({table: 'word'})
-                    ? await this.selectBookIds(indexedQuery) : null;
+                : Object.keys(indexedQuery).length ? await this.selectBookIds(indexedQuery,{bookPredicates:true}) : null;
             if (query[ratingSelection]) {
                 const selected = new Set(query[ratingSelection].ids);
                 candidateIds = candidateIds ? candidateIds.filter(id => selected.has(id)) : query[ratingSelection].ids;
@@ -1253,24 +1283,28 @@ class DbSearcher {
 
         if (this.queryCacheMemSize > 0 && memCache.has(key)) {//есть в недавних
             result = memCache.get(key);
-        } else if (this.queryCacheDiskSize > 0) {//смотрим в таблице
-            const rows = await db.select({table: 'query_cache', where: `@@id(${db.esc(key)})`});
+        } else if (this.queryCacheDiskSize > 0 && this.queryCacheDiskBytes > 0) {//смотрим в таблице
+            return this.withDiskCache(async() => {
+                await this.initDiskCache();
+                const rows = await db.select({table: 'query_cache', where: `@@id(${db.esc(key)})`});
 
-            if (rows.length) {//нашли в кеше
-                await db.insert({
-                    table: 'query_time',
-                    replace: true,
-                    rows: [{id: key, time: Date.now()}],
-                });
+                if (rows.length) {//нашли в кеше
+                    await db.insert({
+                        table: 'query_time',
+                        replace: true,
+                        rows: [{id: key, time: Date.now()}],
+                    });
+                    const item = this.diskCacheItems.get(key);
+                    if (item) {this.diskCacheItems.delete(key); this.diskCacheItems.set(key,item);}
 
-                result = rows[0].value;
+                    result = rows[0].value;
 
-                //заполняем кеш в памяти
-                if (this.queryCacheMemSize > 0) {
-                    memCache.set(key, result);
+                    //заполняем кеш в памяти
+                    if (this.queryCacheMemSize > 0) memCache.set(key, result);
 
                 }
-            }
+                return result;
+            });
         }
 
         return result;
@@ -1288,14 +1322,18 @@ class DbSearcher {
 
         }
 
-        if (this.queryCacheDiskSize > 0) {
-            //кладем в таблицу асинхронно
-            (async() => {
+        if (this.queryCacheDiskSize > 0 && this.queryCacheDiskBytes > 0) {
+            await this.withDiskCache(async() => {
                 try {
+                    await this.initDiskCache();
+                    const bytes = 128 + Buffer.byteLength(require('jembadb/src/mson').encode([key,{id:key,value}]));
+                    if (this.diskCacheItems.has(key)) await this.evictDiskCache([key]);
+                    if (bytes > this.queryCacheDiskBytes) return;
+                    await this.trimDiskCache(1,bytes);
                     await db.insert({
                         table: 'query_cache',
                         replace: true,
-                        rows: [{id: key, value}],
+                        rows: [{id: key, value, cacheBytes:bytes}],
                     });
 
                     await db.insert({
@@ -1303,11 +1341,60 @@ class DbSearcher {
                         replace: true,
                         rows: [{id: key, time: Date.now()}],
                     });
+                    this.diskCacheItems.set(key,{bytes}); this.diskCacheBytes += bytes;
                 } catch(e) {
+                    this.diskCacheItems = null;
+                    await db.delete({table:'query_cache',where:`@@id(${db.esc(key)})`}).catch(() => {});
+                    await db.delete({table:'query_time',where:`@@id(${db.esc(key)})`}).catch(() => {});
                     console.error(`putCached: ${e.message}`);
                 }
-            })();
+            });
         }
+    }
+
+    withDiskCache(work) {
+        const operation = (this.diskCacheQueue || Promise.resolve()).catch(() => {}).then(work);
+        this.diskCacheQueue = operation;
+        return operation;
+    }
+
+    async initDiskCache() {
+        if (this.diskCacheItems) return;
+        const times = new Map((await this.db.select({table:'query_time'})).map(row => [row.id,row.time]));
+        const rows = await this.db.select({table:'query_cache',map:'row => ({id:row.id,bytes:row.cacheBytes})'});
+        rows.sort((a,b) => (times.get(a.id) || 0) - (times.get(b.id) || 0));
+        this.diskCacheItems = new Map(); this.diskCacheBytes = 0;
+        const obsolete = [], present = new Set(rows.map(row => row.id));
+        for (const id of times.keys()) if (!present.has(id)) obsolete.push(id);
+        for (const row of rows) {
+            // Old entries have no size metadata; dropping a rebuildable cache is
+            // safer than materializing every old value just to size it.
+            if (!Number.isSafeInteger(row.bytes) || row.bytes < 0) obsolete.push(row.id);
+            else {this.diskCacheItems.set(row.id,{bytes:row.bytes}); this.diskCacheBytes += row.bytes;}
+        }
+        if (obsolete.length) await this.evictDiskCache(obsolete);
+        await this.trimDiskCache();
+    }
+
+    async evictDiskCache(ids) {
+        for (let offset = 0; offset < ids.length; offset += 500) {
+            const slice = ids.slice(offset,offset+500), where = `@@id(${this.db.esc(slice)})`;
+            await this.db.delete({table:'query_cache',where});
+            await this.db.delete({table:'query_time',where});
+            for (const id of slice) {
+                this.diskCacheBytes -= this.diskCacheItems.get(id)?.bytes || 0;
+                this.diskCacheItems.delete(id);
+            }
+        }
+    }
+
+    async trimDiskCache(extraEntries = 0, extraBytes = 0) {
+        const ids = []; let count = this.diskCacheItems.size, bytes = this.diskCacheBytes;
+        for (const [id,item] of this.diskCacheItems) {
+            if (count + extraEntries <= this.queryCacheDiskSize && bytes + extraBytes <= this.queryCacheDiskBytes) break;
+            ids.push(id); count--; bytes -= item.bytes;
+        }
+        if (ids.length) await this.evictDiskCache(ids);
     }
 
     async periodicCleanCache() {
@@ -1320,40 +1407,7 @@ class DbSearcher {
             if (!this.queryCacheEnabled || this.queryCacheDiskSize <= 0)
                 return;
 
-            const db = this.db;
-
-            let rows = await db.select({table: 'query_time', count: true});
-            const delCount = rows[0].count - this.queryCacheDiskSize;
-
-            if (delCount < 1)
-                return;
-
-            //выберем delCount кандидатов на удаление
-            rows = await db.select({
-                table: 'query_time',
-                rawResult: true,
-                where: `
-                    const delCount = ${delCount};
-                    const rows = [];
-
-                    @unsafeIter(@all(), (r) => {
-                        rows.push(r);
-                        return false;
-                    });
-
-                    rows.sort((a, b) => a.time - b.time);
-
-                    return rows.slice(0, delCount).map(r => r.id);
-                `
-            });
-
-            const ids = rows[0].rawResult;
-
-            //удаляем
-            await db.delete({table: 'query_cache', where: `@@id(${db.esc(ids)})`});
-            await db.delete({table: 'query_time', where: `@@id(${db.esc(ids)})`});
-            
-            //console.log('Cache clean', ids);
+            await this.withDiskCache(async() => {await this.initDiskCache(); await this.trimDiskCache();});
         } catch(e) {
             console.error(e.message);
         } finally {
@@ -1376,6 +1430,9 @@ class DbSearcher {
         }
 
         this.closed = true;
+        await this.ratingIndex?.close?.();
+        await this.diskCacheQueue?.catch(() => {});
+        this.diskCacheItems?.clear();
         this.memCache.close();
         this.bookIdMap = {};
     }

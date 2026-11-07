@@ -520,7 +520,7 @@ class AuthorList extends BaseList {
         const author = this.cachedAuthors[query.author.substring(1)];
         if (!author) return null;
         try {
-            const data = await authorBooksStorage.getData('author-' + author.id + '-' + this.list.inpxHash);
+            const data = await authorBooksStorage.getData(this.authorBooksCacheKey(author.id));
             return data ? {found: [author], totalFound: 1, inpxHash: this.list.inpxHash} : null;
         } catch (error) {
             return null;
