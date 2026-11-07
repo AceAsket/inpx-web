@@ -36,14 +36,17 @@ class CatalogLookupIndex {
             throw new Error('Подготовка подсказок отменена: библиотека обновилась');
     }
     async background(work) {
-        return runtime.run(async() => {
+        const run = async() => {
             this.check();
-            const result = this.worker.runBackground
-                ? await this.worker.runBackground(work, () => this.controller.signal.aborted, this.controller.signal)
-                : await work();
-            this.check();
-            return result;
-        }, {kind: 'background'});
+            return runtime.run(work, {kind: 'background'});
+        };
+        // Wait for foreground I/O BEFORE reserving a runtime slot. A reader
+        // may be awaiting an existing background preparation that needs it.
+        const result = this.worker.runBackground
+            ? await this.worker.runBackground(run, () => this.controller.signal.aborted, this.controller.signal)
+            : await run();
+        this.check();
+        return result;
     }
     async readNames(kind) {
         // Jemba applies offset/limit AFTER loading and cloning every matching
