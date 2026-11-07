@@ -1735,6 +1735,7 @@ const tests = [
     ...require('./browser-speech-tests'),
     ...require('./kosync-tests'),
     ...require('./book-card-tests'),
+    ...require('./memory-optimization-tests'),
     ...require('./library-io-tests'),
     ...require('./download-preference-tests'),
     ...require('./channel-format-tests'),

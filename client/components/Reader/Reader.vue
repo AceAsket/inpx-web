@@ -1642,6 +1642,7 @@ const readerDeviceScopedPreferenceKeys = new Set([
 ]);
 
 const componentOptions = {
+    name: 'Reader',
     components: {ReaderAudio, ReaderBrowserSpeech},
     watch: {
         readerSourceKey: {

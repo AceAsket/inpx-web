@@ -2,7 +2,7 @@ import { defineComponent } from 'vue';
 import _ from 'lodash';
 
 export default function(componentClass) {    
-    const comp = {};
+    const comp = {name: componentClass.name};
     const obj = new componentClass();
     
     //data, options, props
@@ -11,7 +11,7 @@ export default function(componentClass) {
         if (['_options', '_props'].includes(prop)) {//meta props
             if (prop === '_options') {
                 const options = obj[prop];
-                for (const optName of ['components', 'watch', 'emits']) {
+                for (const optName of ['name', 'components', 'watch', 'emits']) {
                     if (options[optName]) {
                         comp[optName] = options[optName];
                     }

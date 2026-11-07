@@ -44,6 +44,8 @@ const propsToSave = [
     'metricsToken',
     'metricsExemptAuth',
     'dbCacheSize',
+    'dbCacheBudgetMb',
+    'queryCacheMemMb',
     'maxFilesDirSize',
     'bookCacheSize',
     'coverCacheSize',

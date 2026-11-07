@@ -17,6 +17,8 @@ const state = {
         showCounts: true,
         showRates: true,
         showInfo: true,
+        autoLoadBookReviews: false,
+        autoLoadAuthorInfo: false,
         showGenres: true,
         bookCardView: 'cards',
         showDates: false,

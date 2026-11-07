@@ -762,6 +762,11 @@ class WebWorker {
 
     async closeDb() {
         if (this.catalogDiscovery) {await this.catalogDiscovery.close(); this.catalogDiscovery = null;}
+        if (this.dbSearcher) {await this.dbSearcher.close(); this.dbSearcher = null;}
+        this.authorInfoCache?.close?.();
+        clearTimeout(this.authorArchiveLease?.timer);
+        for (const state of this.reviewArchiveStates?.values() || []) clearTimeout(state.idleTimer);
+        this.reviewArchiveStates?.clear();
         if (this.db) {
             await this.db.unlock();
             this.db = null;
@@ -874,7 +879,7 @@ class WebWorker {
             this.setMyState(ssDbLoading);
             log('Searcher DB loading');
 
-            const db = new JembaDbThread();//в отдельном потоке
+            const db = new (require('./DatabaseThread'))(config);//bounded caches in a separate thread
             await db.lock({
                 dbPath,
                 softLock: true,
@@ -888,10 +893,9 @@ class WebWorker {
                 //открываем таблицы
                 await db.openAll({exclude: ['author_id', 'series_id', 'title_id', 'book', 'catalog_lookup']});
 
-                const bookCacheSize = 500;
                 await db.open({
                     table: 'book',
-                    cacheSize: (config.lowMemoryMode || config.dbCacheSize > bookCacheSize ? config.dbCacheSize : bookCacheSize)
+                    cacheSize: config.dbCacheSize
                 });
             } catch(e) {
                 log(LM_ERR, `Database error: ${e.message}`);
@@ -943,10 +947,14 @@ class WebWorker {
     resetLibraryAssetCaches() {
         this.libraryAssetGeneration = (this.libraryAssetGeneration || 0) + 1;
         this.fblibraryArchives = {};
-        this.authorInfoCache = new Map();
+        this.authorInfoCache?.close?.();
+        this.authorInfoCache = new (require('./MemoryCache').MemoryCache)({bytes:8 * 1024 ** 2, entries:256});
         this.authorInfoArchives = null;
         this.authorPictureArchives = null;
         this.authorToArchive = null;
+        clearTimeout(this.authorArchiveLease?.timer);
+        this.authorArchiveLease = {users:0, job:null};
+        for (const state of this.reviewArchiveStates?.values() || []) clearTimeout(state.idleTimer);
         this.reviewArchiveStates = new Map();
         this.preparedBookSizes = new Map();
         this.libraryDirListings = new Map();
@@ -4201,7 +4209,9 @@ class WebWorker {
 
     async getAdminPerformance(userId = '', profileAccessToken = '') {
         await this.requireAdmin(userId, profileAccessToken);
-        return await this.getResourceBenchmark().snapshot();
+        return {...await this.getResourceBenchmark().snapshot(), databaseCache:await this.db?.cacheStats?.(),
+            memoryCaches:{queries:{bytes:this.dbSearcher?.memCache?.bytes || 0, entries:this.dbSearcher?.memCache?.size || 0},
+                authors:{bytes:this.authorInfoCache?.bytes || 0, entries:this.authorInfoCache?.size || 0}}};
     }
 
     async startAdminBenchmark(userId = '', profileAccessToken = '', options = {}) {
@@ -4758,6 +4768,8 @@ class WebWorker {
             'metricsPath',
             'metricsExemptAuth',
             'dbCacheSize',
+            'dbCacheBudgetMb',
+            'queryCacheMemMb',
             'maxFilesDirSize',
             'bookCacheSize',
             'coverCacheSize',
@@ -5711,9 +5723,17 @@ class WebWorker {
         if (this.authorInfoArchives && this.authorPictureArchives && this.authorToArchive)
             return;
 
-        this.authorInfoArchives = [];
-        this.authorPictureArchives = [];
-        this.authorToArchive = new Map();
+        const lease = this.authorArchiveLease || (this.authorArchiveLease = {users:0, job:null});
+        if (!lease.job) lease.job = this.buildAuthorInfoArchives().then(assets => {
+            if (lease !== this.authorArchiveLease)
+                throw Object.assign(new Error('Библиотека обновлена. Повторите запрос.'), {code:'INPX_LIBRARY_CHANGED'});
+            Object.assign(this, assets);
+        }).catch(error => {lease.job = null; throw error;});
+        await lease.job;
+    }
+
+    async buildAuthorInfoArchives() {
+        const authorInfoArchives = [], authorPictureArchives = [], authorToArchive = new Map();
 
         const sources = getEnabledLibrarySources(this.config);
         const scannedAuthorDirs = new Set();
@@ -5736,7 +5756,7 @@ class WebWorker {
                         continue;
 
                     const id = path.basename(file, path.extname(file));
-                    this.authorInfoArchives.push({
+                    authorInfoArchives.push({
                         id,
                         sourceId: source.id || '',
                         sourceLibDir: source.libDir || '',
@@ -5754,7 +5774,7 @@ class WebWorker {
                         continue;
 
                     const id = path.basename(file, path.extname(file));
-                    this.authorPictureArchives.push({
+                    authorPictureArchives.push({
                         id,
                         sourceId: source.id || '',
                         sourceLibDir: source.libDir || '',
@@ -5772,10 +5792,10 @@ class WebWorker {
             return parseInt(a.id, 10) - parseInt(b.id, 10);
         };
 
-        this.authorInfoArchives.sort(bySourceAndId);
-        this.authorPictureArchives.sort(bySourceAndId);
+        authorInfoArchives.sort(bySourceAndId);
+        authorPictureArchives.sort(bySourceAndId);
 
-        for (const archive of this.authorInfoArchives) {
+        for (const archive of authorInfoArchives) {
             const zipReader = new ZipReader();
             await zipReader.open(archive.file);
 
@@ -5789,10 +5809,10 @@ class WebWorker {
                     if (!hash)
                         continue;
 
-                    if (!this.authorToArchive.has(hash))
-                        this.authorToArchive.set(hash, []);
+                    if (!authorToArchive.has(hash))
+                        authorToArchive.set(hash, []);
 
-                    this.authorToArchive.get(hash).push({
+                    authorToArchive.get(hash).push({
                         archive,
                         entryName: name,
                     });
@@ -5801,6 +5821,7 @@ class WebWorker {
                 await zipReader.close();
             }
         }
+        return {authorInfoArchives, authorPictureArchives, authorToArchive};
     }
 
     async getAuthorPictureByKey(authorKey, archiveId = '', sourceId = '') {
@@ -5900,9 +5921,23 @@ class WebWorker {
         if (this.authorInfoCache.has(cacheKey))
             return {authorInfo: this.authorInfoCache.get(cacheKey)};
 
-        const authorInfo = this.remoteLib?.metadata ? await this.remoteLib.metadata.author(authorName) : await this.findAuthorInfo(authorName);
-        this.authorInfoCache.set(cacheKey, authorInfo);
-        return {authorInfo};
+        const lease = this.authorArchiveLease || (this.authorArchiveLease = {users:0, job:null});
+        clearTimeout(lease.timer); lease.users++;
+        const db = this.db, generation = this.libraryAssetGeneration;
+        try {
+            const authorInfo = this.remoteLib?.metadata ? await this.remoteLib.metadata.author(authorName) : await this.findAuthorInfo(authorName);
+            this.checkLibraryAssetState(generation, db);
+            this.authorInfoCache.set(cacheKey, authorInfo);
+            return {authorInfo};
+        } finally {
+            if (!--lease.users) {
+                lease.timer = setTimeout(() => {
+                    if (this.authorArchiveLease !== lease) return;
+                    lease.job = null; this.authorInfoArchives = null; this.authorPictureArchives = null; this.authorToArchive = null;
+                }, 30000);
+                lease.timer.unref?.();
+            }
+        }
     }
 
     async injectFblibraryImages(bookFile, libid, sourceLibDir = '', libFolder = '') {
@@ -6454,8 +6489,23 @@ class WebWorker {
         const cached = this.reviewArchiveStates.get(libDir);
         if (cached && cached.signature === state.signature)
             return cached;
+        clearTimeout(cached?.idleTimer);
         this.reviewArchiveStates.set(libDir, state);
         return state;
+    }
+
+    async withReviewAssets(state, task) {
+        clearTimeout(state.idleTimer);
+        state.users = (state.users || 0) + 1;
+        try {return await task();} finally {
+            if (!--state.users) {
+                state.idleTimer = setTimeout(() => {
+                    state.indexPromise = null;
+                    state.ratingsPromise = null;
+                }, 30000);
+                state.idleTimer.unref?.();
+            }
+        }
     }
 
     async getReviewArchives(sourceLibDir = '') {
@@ -6594,6 +6644,11 @@ class WebWorker {
 
     async getBookReviews(book, state = null) {
         if (this.remoteLib?.metadata) return this.remoteLib.metadata.reviews(book._uid);
+        state = state || await this.getReviewArchiveState(book.sourceLibDir);
+        return this.withReviewAssets(state, () => this.readBookReviews(book, state));
+    }
+
+    async readBookReviews(book, state) {
         const entryKey = libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`);
         const reviewIndex = await this.ensureReviewIndex(book.sourceLibDir, state);
         const matches = [...reviewIndex.get(entryKey) || []];
@@ -6663,8 +6718,10 @@ class WebWorker {
     async getBookLibraryRating(book, state = null) {
         if (this.remoteLib?.metadata) return this.remoteLib.metadata.rating(book._uid);
         state = state || await this.getReviewArchiveState(book.sourceLibDir);
-        const ratings = await this.ensureLibraryRatings(state);
-        return ratings.get(libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`)) || null;
+        return this.withReviewAssets(state, async() => {
+            const ratings = await this.ensureLibraryRatings(state);
+            return ratings.get(libraryReviews.entryKey(book.folder, `${book.file}.${book.ext}`)) || null;
+        });
     }
 
     ensureLibraryRatings(state) {
@@ -6868,11 +6925,11 @@ class WebWorker {
 
     //Карточке книги нужны описание FB2, содержание и отзывы. Иллюстрации и обложку
     //не извлекаем: обложку клиент берёт из /cover/by-uid, иллюстрации - из getBookGallery
-    async getBookCardInfo(bookUid) {
-        return await this.runForeground(() => this.shareBookJob('card', [bookUid], () => this.buildBookCard(bookUid)));
+    async getBookCardInfo(bookUid, {lazyExtras = false} = {}) {
+        return await this.runForeground(() => this.shareBookJob('card', [bookUid, lazyExtras], () => this.buildBookCard(bookUid, {lazyExtras})));
     }
 
-    async buildBookCard(bookUid) {
+    async buildBookCard(bookUid, {lazyExtras = false} = {}) {
         this.checkMyState();
 
         const db = this.db;
@@ -6881,8 +6938,12 @@ class WebWorker {
         if (!rows.length)
             throw new Error('404 Файл не найден');
         const book = {...rows[0]};
-        if (String(book.ext).toLowerCase() !== 'fb2' || this.remoteLib)
-            return await this.getBookInfo(bookUid);
+        if (String(book.ext).toLowerCase() !== 'fb2' || this.remoteLib) {
+            if (!lazyExtras) return await this.getBookInfo(bookUid);
+            const overrides = await this.readingListStore.getMetadataOverrides();
+            this.applyMetadataOverrideToBook(book, overrides);
+            return {bookInfo:{book, cover:'', fb2:false, contents:[], reviews:[], libraryRating:null, reviewsDeferred:true}};
+        }
 
         const dbConfig = await this.dbConfig();
         this.checkLibraryAssetState(generation, db);
@@ -6891,7 +6952,9 @@ class WebWorker {
         // from a request that started against the previous index.
         const fingerprint = utils.getBufHash(JSON.stringify([bookUid, dbConfig.inpxHash || '', book._recordHash || '',
             book.sourceId, book.sourceLibDir || this.config.libDir, book.folder, book.file, book.ext]), 'sha256', 'hex');
-        const cardFile = `${this.config.bookDir}/${fingerprint}.card.json`;
+        // Old complete-card files can contain large review lists. The lazy path
+        // must not even parse those lists merely to display a description.
+        const cardFile = `${this.config.bookDir}/${fingerprint}.${lazyExtras ? 'core-card' : 'card'}.json`;
         let card = await fs.readJson(cardFile).catch(() => null);
         let changed = false;
         if (!card || card.bookId !== book.id || card.version !== bookCardVersion) {
@@ -6901,6 +6964,7 @@ class WebWorker {
 
         //ошибка отзывов не мешает показать описание; без reviewSignature отзывы перечитаются при следующем открытии
         try {
+            if (!lazyExtras) {
             const reviewState = await this.getReviewArchiveState(book.sourceLibDir);
             if (card.reviewSignature !== reviewState.signature) {
                 [card.reviews, card.libraryRating] = await Promise.all([
@@ -6908,6 +6972,7 @@ class WebWorker {
                 ]);
                 card.reviewSignature = reviewState.signature;
                 changed = true;
+            }
             }
         } catch (error) {
             log(LM_WARN, `book card reviews ${bookUid}: ${error.message}`);
@@ -6925,7 +6990,7 @@ class WebWorker {
         this.checkLibraryAssetState(generation, db);
         this.applyMetadataOverrideToBook(book, overrides);
         //после карточки, чтобы не читать архив книги одновременно с ней
-        this.prepareBookInBackground(bookUid);
+        if (!lazyExtras) this.prepareBookInBackground(bookUid);
 
         return {bookInfo: {
             book,
@@ -6934,9 +6999,35 @@ class WebWorker {
             contents: card.contents,
             annotationMeta: card.annotationMeta,
             galleryCount: Math.min(card.imageCount, bookGalleryLimit),
-            reviews: card.reviews || [],
-            libraryRating: card.libraryRating || null,
+            reviews: lazyExtras ? [] : card.reviews || [],
+            libraryRating: lazyExtras ? null : card.libraryRating || null,
+            reviewsDeferred: lazyExtras,
         }};
+    }
+
+    async getBookReviewDetails(bookUid) {
+        // Reuse the pending-work coalescer, but never retain completed reviews in
+        // RAM. The disk cache is invalidated by source/review archive signatures.
+        const result = await this.runForeground(() => this.shareBookJob('reviews', [bookUid], async() => {
+            const db = this.db, generation = this.libraryAssetGeneration;
+            const rows = await db.select({table:'book', where:`@@hash('_uid', ${db.esc(bookUid)})`});
+            if (!rows.length) throw new Error('404 Файл не найден');
+            const book = rows[0], state = await this.getReviewArchiveState(book.sourceLibDir);
+            const dbConfig = await this.dbConfig();
+            const key = utils.getBufHash(JSON.stringify([bookUid, book._recordHash, dbConfig.inpxHash,
+                book.folder, book.file, book.ext, state.signature]), 'sha256', 'hex');
+            const file = path.join(this.config.bookDir, `${key}.reviews.json`);
+            let details = await fs.readJson(file).catch(() => null);
+            if (!details) {
+                const [reviews, libraryRating] = await Promise.all([this.getBookReviews(book, state), this.getBookLibraryRating(book, state)]);
+                details = {reviews, libraryRating};
+                this.checkLibraryAssetState(generation, db);
+                await writeFileAtomic(file, JSON.stringify(details));
+            } else await utils.touchFile(file);
+            this.checkLibraryAssetState(generation, db);
+            return {bookInfo:{book, ...details}};
+        }));
+        return {reviews:result.bookInfo.reviews, libraryRating:result.bookInfo.libraryRating};
     }
 
     async readBookCardFb2(book) {
@@ -7023,8 +7114,10 @@ class WebWorker {
         return resourceRuntime.withBackground(async() => {for (const dir of dirs) {
             try {
                 const state = await this.getReviewArchiveState(dir);
-                await this.ensureReviewIndex(dir, state);
-                await this.ensureLibraryRatings(state);
+                await this.withReviewAssets(state, async() => {
+                    await this.ensureReviewIndex(dir, state);
+                    await this.ensureLibraryRatings(state);
+                });
                 log(`Review index ready: ${dir}`);
             } catch (error) {
                 log(LM_WARN, `review index ${dir}: ${error.message}`);

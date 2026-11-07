@@ -22,7 +22,17 @@ async function createFixture(dir) {
     zip.addBuffer(Buffer.from('Smoke library\n'), 'collection.info');
     zip.addBuffer(Buffer.from('20260914'), 'version.info');
     const row = ['Tester,Smoke:', 'sf:', 'Packaged smoke book', '', '0', '1', '100', '1', '0', 'fb2', '2026-09-14', 'en', '0', ''];
-    zip.addBuffer(Buffer.from(row.join('\x04') + '\n'), 'smoke.inp');
+    let rows = row.join('\x04') + '\n';
+    if (process.env.INPX_SMOKE_EPUB === 'true') {
+        const epubFile = path.join(dir, 'original.epub'); await require('./epub-fb2-tests').fixture(epubFile);
+        const epubData = await fs.readFile(epubFile);
+        const books = new yazl.ZipFile();
+        const done = require('stream/promises').pipeline(books.outputStream, fs.createWriteStream(path.join(dir, 'smoke.zip')));
+        books.addBuffer(epubData, '2.epub'); books.end(); await done;
+        const epubRow = [...row]; epubRow[2] = 'EPUB original'; epubRow[5] = '2'; epubRow[6] = String(epubData.length); epubRow[7] = '2'; epubRow[9] = 'epub'; epubRow[11] = 'ru';
+        rows += epubRow.join('\x04') + '\n';
+    }
+    zip.addBuffer(Buffer.from(rows), 'smoke.inp');
     zip.end();
     await complete;
     const ratings = new yazl.ZipFile();
@@ -38,6 +48,7 @@ async function createFixture(dir) {
         loggingEnabled: false,
         opds: {enabled: true, auth: false},
         adminPassword: 'local-smoke-fixture',
+        onlineReaderEnabled: true,
     });
 }
 
@@ -52,7 +63,7 @@ async function unusedPort() {
 async function checkWebSocket(url) {
     await new Promise((resolve, reject) => {
         const socket = new WebSocket(url.replace(/^http/, 'ws'));
-        const timer = setTimeout(() => finish(new Error('WebSocket response timed out')), 10000);
+        const timer = setTimeout(() => finish(new Error('WebSocket response timed out')), 60000);
         const finish = error => {
             clearTimeout(timer);
             socket.terminate();
@@ -83,8 +94,18 @@ async function checkWebSocket(url) {
                     assert.strictEqual(response.total, 1);
                     socket.send(JSON.stringify({action: 'catalog-entity', options: {kind: 'author', name: response.items[0].name}, requestId: 'author-page'}));
                 } else if (response.requestId === 'author-page') {
-                    assert.strictEqual(response.total, 1); assert.strictEqual(response.books[0].title, 'Packaged smoke book');
-                    finish();
+                    assert.strictEqual(response.total, process.env.INPX_SMOKE_EPUB === 'true' ? 2 : 1);
+                    assert(response.books.some(book => book.title === 'Packaged smoke book'));
+                    if (process.env.INPX_SMOKE_EPUB === 'true') {
+                        const epub = response.books.find(book => book.ext === 'epub'); assert(epub);
+                        socket.send(JSON.stringify({action:'get-book-info', bookUid:epub._uid, readerOnly:true, requestId:'epub-reader'}));
+                    } else finish();
+                } else if (response.requestId === 'epub-reader') {
+                    const document = JSON.stringify(response.bookInfo.fb2);
+                    assert.match(document, /Текст второй главы/);
+                    assert.match(document, /fictionbook/i);
+                    assert.equal(response.bookInfo.book.ext, 'epub');
+                    console.log('ok packaged EPUB original → FB2 reader with image default formats'); finish();
                 }
             } catch (error) {
                 finish(error);
@@ -122,7 +143,8 @@ async function main() {
         }
         const env = {...process.env, INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
             INPX_OPDS_FEEDS_FILE:path.join(library, 'opds-feeds.json'),
-            INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true', INPX_ENABLE_CONVERSION: 'false'};
+            INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true',
+            INPX_ENABLE_CONVERSION: process.env.INPX_SMOKE_EPUB === 'true' ? 'true' : 'false'};
         child = spawn(command, args, {env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
         exited = new Promise(resolve => {
             child.once('exit', resolve);

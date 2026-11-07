@@ -134,6 +134,17 @@ if (require.main === module) (async() => {
         await api(`const uids=${JSON.stringify(uids)}; for(let i=0;i<4;i++) await root.api.updateReaderProgress(uids[i], {percent:[.34,.14,.01,1][i],sectionId:'chapter'}); return true;`);
 
         await page.getByRole('button', {name: 'Настройки', exact: true}).click();
+        for (const name of ['Автоматически загружать отзывы и оценки', 'Автоматически загружать сведения об авторе']) {
+            const option = page.getByRole('checkbox', {name, exact:true});
+            assert.equal(await option.getAttribute('aria-checked'), 'false'); await option.click();
+        }
+        await page.waitForFunction(() => {const s = JSON.parse(localStorage.getItem('vuex') || '{}').settings; return s?.autoLoadBookReviews && s?.autoLoadAuthorInfo;});
+        await page.reload(); await page.locator('.search-list-toggle').waitFor();
+        await page.getByRole('button', {name: 'Настройки', exact: true}).click();
+        for (const name of ['Автоматически загружать отзывы и оценки', 'Автоматически загружать сведения об авторе']) {
+            const option = page.getByRole('checkbox', {name, exact:true});
+            assert.equal(await option.getAttribute('aria-checked'), 'true', 'Opt-in persists'); await option.click();
+        }
         await page.getByRole('button', {name: /^Новый дизайн/}).click();
         await page.getByRole('navigation', {name: 'Разделы библиотеки'}).waitFor();
         await page.getByRole('link', {name: 'Обзор', exact: true}).click();
@@ -153,6 +164,19 @@ if (require.main === module) (async() => {
             await page.goBack();
             await page.locator('.current-book').waitFor();
         }
+        assert.equal(actions.filter(action => ['get-author-info', 'get-book-reviews'].includes(action)).length, 0,
+            'Cards do not load optional details by default');
+        await page.locator('.current-book__cover').click();
+        await page.locator('.catalog-book-details').waitFor();
+        await page.getByRole('tab', {name:'Отзывы и оценки', exact:true}).click();
+        await page.getByText('Отзывов пока нет.', {exact:true}).waitFor();
+        assert.equal(actions.filter(action => action === 'get-book-reviews').length, 1);
+        await page.getByRole('tab', {name:'Об авторе', exact:true}).click();
+        await page.getByText('Информация об авторе не найдена.', {exact:true}).waitFor();
+        assert.equal(actions.filter(action => action === 'get-author-info').length, 1);
+        await page.getByRole('tab', {name:'Отзывы и оценки', exact:true}).click();
+        assert.equal(actions.filter(action => action === 'get-book-reviews').length, 1, 'Changing tabs reuses current details');
+        await page.goBack(); await page.locator('.current-book').waitFor();
 
         await page.getByRole('link', {name: 'Открыть мой профиль', exact: true}).focus();
         await page.keyboard.press('Enter');

@@ -6,7 +6,7 @@
 
         <LibraryShell v-if="accessGranted" class="col" :enabled="isShelvesLayout">
             <router-view v-slot="{ Component }">
-                <keep-alive>
+                <keep-alive exclude="Reader,ReaderLab,CatalogBook,CatalogEntity">
                     <component :is="Component" class="col" />
                 </keep-alive>
             </router-view>

@@ -637,8 +637,10 @@ class Api {
     }
 
     async getBookCard(bookUid) {
-        return await this.request({action: 'get-book-info', bookUid, card: true}, 120);
+        return await this.request({action: 'get-book-info', bookUid, card: true, lazyExtras:true}, 120);
     }
+
+    async getBookReviews(bookUid) {return this.request({action:'get-book-reviews', bookUid}, 120);}
 
     async getBookGallery(bookUid) {
         return await this.request({action: 'get-book-gallery', bookUid}, 300);

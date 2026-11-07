@@ -283,7 +283,7 @@ async function testResourceErrorsCannotBecomeCachedEmptyReviews() {
         await assert.rejects(worker.ensureLibraryRatings(state), {code:error.code});
         assert.strictEqual(state.ratingsPromise, null, 'Failed ratings must be retried');
         worker.ensureReviewIndex = async() => new Map([['collection.zip#123.fb2', [{archive:'/fixture', entryName:'review'}]]]);
-        await assert.rejects(worker.getBookReviews({folder:'collection.zip', file:'123', ext:'fb2'}), {code:error.code});
+        await assert.rejects(worker.getBookReviews({folder:'collection.zip', file:'123', ext:'fb2'}, state), {code:error.code});
     } finally {Zip.prototype.open = original;}
 }
 

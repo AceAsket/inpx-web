@@ -78,6 +78,7 @@ module.exports = {
     // иначе будет рассинхронизация по кэшу между сервером и клиентом на уровне БД.
     dbVersion: '14',
     dbCacheSize: 5,
+    dbCacheBudgetMb: numberFromEnv('INPX_DB_CACHE_BUDGET_MB', null),
 
     maxPayloadSize: 500,//in MB
     wsMessageLimitMb: numberFromEnv('INPX_WS_MESSAGE_LIMIT_MB', 1),
@@ -89,6 +90,7 @@ module.exports = {
     coverCacheSize: defaultCoverCacheSize,
     queryCacheEnabled: true,
     queryCacheMemSize: 50,
+    queryCacheMemMb: numberFromEnv('INPX_QUERY_CACHE_MEM_MB', 32),
     queryCacheDiskSize: 500,
     cacheCleanInterval: numberFromEnv('INPX_CACHE_CLEAN_INTERVAL_MINUTES', 24*60),//minutes
     cacheCleanSchedule: '0 0 * * *',

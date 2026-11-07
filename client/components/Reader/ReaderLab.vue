@@ -62,6 +62,7 @@ import vueComponent from '../vueComponent.js';
 import Reader from './Reader.vue';
 
 const componentOptions = {
+    name: 'ReaderLab',
     components: {
         Reader,
     },

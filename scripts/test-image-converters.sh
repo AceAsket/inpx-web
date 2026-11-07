@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 image="$1"
+INPX_SMOKE_EPUB=true node scripts/binary-smoke-test.js --image "$image"
 test_root=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/inpx-converters.XXXXXX")
 trap 'rm -rf "$test_root"' EXIT
 for tool in fbc kindling djxl 7z; do

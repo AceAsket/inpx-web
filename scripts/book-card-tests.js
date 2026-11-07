@@ -248,7 +248,39 @@ async function testLookupWaitingForReaderDoesNotReserveBackgroundResources() {
     } finally {release.resolve(); await foreground; await lookupJob; await lookup.close();}
 }
 
-module.exports = [testCardCacheTracksIndexRecordAndSourceAcrossRestarts, testLateCardCannotOverwriteTheNewIndexCache,
+async function testLazyCardsDoNotLoadReviewsOrPrepareReaderAndEpub() {
+    await temporary(async dir => {
+        const fixture = cardFixture(dir), {worker, record} = fixture;
+        worker.getBookReviews = async() => [{text:'Legacy complete-card reviews'}];
+        await worker.getBookCardInfo(record._uid);
+        worker.getReviewArchiveState = () => assert.fail('Card must not enumerate reviews');
+        worker.prepareBookInBackground = () => assert.fail('Opening a card must not restore all illustrations');
+        worker.getBookInfo = () => assert.fail('EPUB card must not prepare the full reader');
+        const fb2 = await worker.getBookCardInfo(record._uid, {lazyExtras:true});
+        assert(fb2.bookInfo.fb2); assert(fb2.bookInfo.reviewsDeferred);
+        assert.equal(fixture.extracted, 2, 'Do not reuse a legacy file containing reviews in the lazy description cache');
+        record.ext = 'epub';
+        const epub = await worker.getBookCardInfo(record._uid, {lazyExtras:true});
+        assert.equal(epub.bookInfo.book.ext, 'epub'); assert(epub.bookInfo.reviewsDeferred);
+    });
+}
+
+async function testRequestedReviewsShareWorkAndInvalidateDiskCache() {
+    await temporary(async dir => {
+        const {worker, record} = cardFixture(dir); let reads = 0, signature = 'first';
+        worker.getReviewArchiveState = async() => ({signature});
+        worker.getBookReviews = async() => {reads++; return [{text:signature}];};
+        const results = await Promise.all([worker.getBookReviewDetails(record._uid), worker.getBookReviewDetails(record._uid)]);
+        assert.equal(reads, 1); assert.equal(results[0].reviews[0].text, 'first');
+        assert.equal(worker.bookInfoJobs.size, 0);
+        await worker.getBookReviewDetails(record._uid); assert.equal(reads, 1);
+        signature = 'updated'; assert.equal((await worker.getBookReviewDetails(record._uid)).reviews[0].text, 'updated');
+        assert.equal(reads, 2);
+    });
+}
+
+module.exports = [testLazyCardsDoNotLoadReviewsOrPrepareReaderAndEpub, testRequestedReviewsShareWorkAndInvalidateDiskCache,
+    testCardCacheTracksIndexRecordAndSourceAcrossRestarts, testLateCardCannotOverwriteTheNewIndexCache,
     testBookPreparationSharesOnlyTheCurrentLibraryGeneration, testCardBackgroundPreparationRespectsPriorityAndSkipsOldQueue,
     testCardIgnoresLateSuccessAndErrorsAcrossCloseAndReopen, testBookRequestsSharePendingWorkWithoutRetainingDocuments,
     testLookupWaitingForReaderDoesNotReserveBackgroundResources];

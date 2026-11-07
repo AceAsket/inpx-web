@@ -66,6 +66,7 @@
                             <q-tab name="inpx" :label="shelvesAppearance ? 'Данные книги' : 'Inpx info'" />
                             <q-tab v-if="contents.length" name="contents" label="Содержание" />
                             <q-tab v-if="hasAuthorTab" name="author" :label="authorTabLabel" />
+                            <q-tab name="reviews" label="Отзывы и оценки" />
                         </q-tabs>
                     </div>
 
@@ -96,9 +97,28 @@
                                     </div>
                                 </div>
 
+                                <div v-else-if="authorInfoError" class="author-empty-state" role="alert">
+                                    {{ authorInfoError }}
+                                    <q-btn flat no-caps label="Повторить" @click="loadAuthorInfo" />
+                                </div>
                                 <div v-else class="author-empty-state">
                                     {{ noAuthorInfoLabel }}
                                 </div>
+                            </div>
+                        </template>
+
+                        <template v-else-if="selectedTab == 'reviews'">
+                            <div class="reviews-block q-pa-sm" aria-live="polite">
+                                <div v-if="reviewsLoading" class="row items-center q-gutter-sm"><q-spinner size="20px" /><span>Загрузка отзывов и оценок…</span></div>
+                                <div v-else-if="reviewsError" role="alert">{{ reviewsError }} <q-btn flat no-caps label="Повторить" @click="loadReviews" /></div>
+                                <template v-else>
+                                    <p v-if="libraryRating">Оценка читателей: {{ libraryRating.value.toFixed(2) }}/5 · голосов: {{ libraryRating.count }}</p>
+                                    <p v-if="!reviews.length">Отзывов пока нет.</p>
+                                    <div v-for="(review, index) in reviews" :key="index" class="review-card q-mb-md">
+                                        <div class="review-head"><div class="review-author">{{ review.name }}</div><div v-if="review.time" class="review-time">{{ review.time }}</div></div>
+                                        <div class="review-text">{{ review.text }}</div>
+                                    </div>
+                                </template>
                             </div>
                         </template>
 
@@ -227,24 +247,6 @@
             </div>
         </div>
 
-        <div v-if="['fb2', 'inpx'].includes(selectedTab) && reviews.length" class="reviews-block q-mt-md">
-            <div class="text-blue section-label q-mb-sm">
-                Отзывы читателей
-            </div>
-            <div v-for="(review, index) in reviews" :key="`review-${index}`" class="review-card q-mb-md">
-                <div class="review-head">
-                    <div class="review-author">
-                        {{ review.name }}
-                    </div>
-                    <div v-if="review.time" class="review-time">
-                        {{ review.time }}
-                    </div>
-                </div>
-                <div class="review-text">
-                    {{ review.text }}
-                </div>
-            </div>
-        </div>
     </div>
 
         <template #footer>
@@ -321,7 +323,7 @@ const componentOptions = {
                 this.init();
         },
         dialogVisible(newValue) {
-            if (!newValue) this.invalidateGallery();
+            if (!newValue) {this.invalidateGallery(); this.invalidateExtras();}
             this.$emit('update:modelValue', newValue);
         },
         bookInfo() {
@@ -329,8 +331,13 @@ const componentOptions = {
             if (this.dialogVisible) {
                 this.parseBookInfo();
                 this.leaveEmptyFb2Tab();
+                this.loadSelectedDetails();
             }
         },
+        selectedTab() {this.loadSelectedDetails();},
+        autoLoadBookReviews() {this.loadSelectedDetails();},
+        autoLoadAuthorInfo() {this.loadSelectedDetails();},
+        profileContext() {if (this.dialogVisible) {this.invalidateExtras(); this.loadSelectedDetails();}},
     }
 };
 class BookInfoDialog {
@@ -368,6 +375,18 @@ class BookInfoDialog {
     book = {};
     authorInfo = null;
     authorInfoLoading = false;
+    authorInfoLoaded = false;
+    authorInfoError = '';
+    reviewsLoaded = false;
+    reviewsLoading = false;
+    reviewsError = '';
+    extrasGeneration = 0;
+    extrasKey = '';
+    extrasActive = true;
+
+    get autoLoadBookReviews() {return this.$store.state.settings.autoLoadBookReviews === true;}
+    get autoLoadAuthorInfo() {return this.$store.state.settings.autoLoadAuthorInfo === true;}
+    get profileContext() {return `${this.$store.state.settings.currentUserId}:${this.$store.state.config.profileAuthorized}`;}
 
     created() {
         this.commit = this.$store.commit;
@@ -390,10 +409,17 @@ class BookInfoDialog {
     }
 
     beforeUnmount() {
+        this.extrasActive = false;
+        this.invalidateExtras();
         this.invalidateGallery();
     }
 
+    deactivated() {this.extrasActive = false; this.invalidateExtras(); this.invalidateGallery();}
+    activated() {this.extrasActive = true; this.loadSelectedDetails();}
+
     init() {
+        this.extrasActive = true;
+        this.invalidateExtras();
         this.coverSrc = '';
         this.coverError = false;
         this.annotation = '';
@@ -416,7 +442,7 @@ class BookInfoDialog {
 
         this.parseBookInfo();
         this.selectedTab = this.resolveInitialTab();
-        this.loadAuthorInfo();//no await
+        this.loadSelectedDetails();//no await
         this.leaveEmptyFb2Tab();
     }
 
@@ -843,11 +869,16 @@ class BookInfoDialog {
 
     parseBookInfo() {
         const bookInfo = this.bookInfo || {};
+        const key = JSON.stringify([bookInfo.book?._uid || bookInfo.book?.uid || bookInfo.book?.bookUid, bookInfo.book?.author]);
+        if (this.extrasKey !== key) {this.invalidateExtras(); this.extrasKey = key;}
         if (bookInfo.authorInfo)
             this.authorInfo = bookInfo.authorInfo;
         this.annotationMeta = (bookInfo.annotationMeta ? bookInfo.annotationMeta : null);
-        this.reviews = (Array.isArray(bookInfo.reviews) ? bookInfo.reviews : []);
-        this.libraryRating = bookInfo.libraryRating || null;
+        if (!this.reviewsLoaded && Array.isArray(bookInfo.reviews) && !bookInfo.reviewsDeferred) {
+            this.reviews = bookInfo.reviews;
+            this.libraryRating = bookInfo.libraryRating || null;
+            this.reviewsLoaded = true;
+        }
 
         if (bookInfo.cover)
             this.coverSrc = bookInfo.cover;
@@ -897,7 +928,7 @@ class BookInfoDialog {
     }
 
     async loadAuthorInfo() {
-        if (this.authorInfo || !this.book.author)
+        if (!this.extrasActive || !this.dialogVisible || this.authorInfoLoaded || this.authorInfoLoading || !this.book.author)
             return;
 
         const firstAuthor = this.book.author.split(',').map(item => item.trim()).filter(Boolean)[0];
@@ -905,14 +936,46 @@ class BookInfoDialog {
             return;
 
         this.authorInfoLoading = true;
+        this.authorInfoError = '';
+        const generation = this.extrasGeneration;
         try {
             const response = await this.$root.api.getAuthorInfo(0, firstAuthor);
+            if (!this.extrasCurrent(generation)) return;
             this.authorInfo = (response && response.authorInfo ? response.authorInfo : null);
+            this.authorInfoLoaded = true;
         } catch(e) {
-            this.authorInfo = null;
+            if (this.extrasCurrent(generation)) this.authorInfoError = `Не удалось загрузить сведения об авторе: ${e.message}`;
         } finally {
-            this.authorInfoLoading = false;
+            if (this.extrasCurrent(generation)) this.authorInfoLoading = false;
         }
+    }
+
+    invalidateExtras() {
+        this.extrasGeneration++;
+        this.authorInfo = null; this.authorInfoLoaded = false; this.authorInfoLoading = false; this.authorInfoError = '';
+        this.reviews = []; this.libraryRating = null; this.reviewsLoaded = false; this.reviewsLoading = false; this.reviewsError = '';
+    }
+
+    extrasCurrent(generation) {return this.extrasActive && this.dialogVisible && generation === this.extrasGeneration;}
+
+    loadSelectedDetails() {
+        if (!this.extrasActive || !this.dialogVisible || !this.bookUid || this.detailsLoading) return;
+        if (this.selectedTab === 'author' || this.autoLoadAuthorInfo) this.loadAuthorInfo();
+        if (this.selectedTab === 'reviews' || this.autoLoadBookReviews) this.loadReviews();
+    }
+
+    async loadReviews() {
+        if (!this.extrasActive || !this.dialogVisible || !this.bookUid || this.reviewsLoaded || this.reviewsLoading) return;
+        this.reviewsLoading = true; this.reviewsError = '';
+        const generation = this.extrasGeneration;
+        try {
+            const response = await this.api.getBookReviews(this.bookUid);
+            if (!this.extrasCurrent(generation)) return;
+            this.reviews = response.reviews || []; this.libraryRating = response.libraryRating || null;
+            this.reviewsLoaded = true;
+        } catch (error) {
+            if (this.extrasCurrent(generation)) this.reviewsError = `Не удалось загрузить отзывы: ${error.message}`;
+        } finally {if (this.extrasCurrent(generation)) this.reviewsLoading = false;}
     }
 
     extractContents(parser) {

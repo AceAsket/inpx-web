@@ -27,7 +27,9 @@ class DbSearcher {
         this.timer = null;
         this.closed = false;
 
-        this.memCache = new Map();
+        this.memCache = new (require('./MemoryCache').MemoryCache)({
+            bytes: (config.queryCacheMemMb ?? 32) * 1024 ** 2, entries:this.queryCacheMemSize || 0,
+        });
         this.bookIdMap = {};
 
         this.periodicCleanCache();//no await
@@ -970,8 +972,8 @@ class DbSearcher {
                     };
 
                     const pickBetterRow = (current, next) => {
-                        const currentScore = rowScore(current);
-                        const nextScore = rowScore(next);
+                        const currentScore = current.score;
+                        const nextScore = next.score;
 
                         if (nextScore !== currentScore)
                             return (nextScore > currentScore ? next : current);
@@ -987,7 +989,11 @@ class DbSearcher {
 
                         const key = dedupeKey(row);
                         const existing = deduped.get(key);
-                        deduped.set(key, existing ? pickBetterRow(existing, row) : row);
+                        // Keep only the sort keys, ID and preference score. Holding
+                        // full rows here would pin decoded blocks through a scan.
+                        const candidate = {id:row.id, author:row.author, series:row.series,
+                            serno:row.serno, title:row.title, score:rowScore(row)};
+                        deduped.set(key, existing ? pickBetterRow(existing, candidate) : candidate);
                     }
 
                     const result = Array.from(deduped.values());
@@ -1247,10 +1253,6 @@ class DbSearcher {
 
         if (this.queryCacheMemSize > 0 && memCache.has(key)) {//есть в недавних
             result = memCache.get(key);
-
-            //изменим порядок ключей, для последующей правильной чистки старых
-            memCache.delete(key);
-            memCache.set(key, result);
         } else if (this.queryCacheDiskSize > 0) {//смотрим в таблице
             const rows = await db.select({table: 'query_cache', where: `@@id(${db.esc(key)})`});
 
@@ -1267,13 +1269,6 @@ class DbSearcher {
                 if (this.queryCacheMemSize > 0) {
                     memCache.set(key, result);
 
-                    if (memCache.size > this.queryCacheMemSize) {
-                        //удаляем самый старый ключ-значение
-                        for (const k of memCache.keys()) {
-                            memCache.delete(k);
-                            break;
-                        }
-                    }
                 }
             }
         }
@@ -1291,13 +1286,6 @@ class DbSearcher {
             const memCache = this.memCache;
             memCache.set(key, value);
 
-            if (memCache.size > this.queryCacheMemSize) {
-                //удаляем самый старый ключ-значение
-                for (const k of memCache.keys()) {
-                    memCache.delete(k);
-                    break;
-                }
-            }
         }
 
         if (this.queryCacheDiskSize > 0) {
@@ -1388,6 +1376,8 @@ class DbSearcher {
         }
 
         this.closed = true;
+        this.memCache.close();
+        this.bookIdMap = {};
     }
 }
 

@@ -30,6 +30,9 @@
             <q-checkbox v-model="showCounts" size="36px" label="Показывать количество" />
             <q-checkbox v-model="showRates" size="36px" label="Показывать оценки" />
             <q-checkbox v-model="showInfo" size="36px" label="Показывать кнопку «Инфо»" />
+            <q-checkbox v-model="autoLoadBookReviews" size="36px" label="Автоматически загружать отзывы и оценки" />
+            <q-checkbox v-model="autoLoadAuthorInfo" size="36px" label="Автоматически загружать сведения об авторе" />
+            <div class="text-caption text-grey-7 q-px-sm">По умолчанию отзывы и сведения об авторе загружаются при открытии соответствующей вкладки в карточке книги.</div>
             <q-checkbox v-model="showGenres" size="36px" label="Показывать жанры" />
             <div class="settings-card-view row items-center q-ml-sm q-my-xs">
                 <div class="q-mr-sm settings-card-view-label">
@@ -624,6 +627,8 @@ const componentOptions = {
         showInfo(newValue) {
             this.commit('setSettings', {showInfo: newValue});
         },
+        autoLoadBookReviews(value) {this.commit('setSettings', {autoLoadBookReviews:value});},
+        autoLoadAuthorInfo(value) {this.commit('setSettings', {autoLoadAuthorInfo:value});},
         showGenres(newValue) {
             this.commit('setSettings', {showGenres: newValue});
         },
@@ -695,6 +700,8 @@ class SettingsDialog {
     showCounts = true;
     showRates = true;
     showInfo = true;
+    autoLoadBookReviews = false;
+    autoLoadAuthorInfo = false;
     showGenres = true;
     bookCardView = 'cards';
     showDates = false;
@@ -1063,6 +1070,8 @@ class SettingsDialog {
         this.showCounts = settings.showCounts;
         this.showRates = settings.showRates;
         this.showInfo = settings.showInfo;
+        this.autoLoadBookReviews = settings.autoLoadBookReviews === true;
+        this.autoLoadAuthorInfo = settings.autoLoadAuthorInfo === true;
         this.showGenres = settings.showGenres;
         this.bookCardView = (settings.bookCardView === 'list' ? 'list' : 'cards');
         this.showDates = settings.showDates;

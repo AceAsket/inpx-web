@@ -255,6 +255,9 @@ class WebSocketController {
                     await this.getBookLink(req, ws); break;
                 case 'get-book-info':
                     await this.getBookInfo(req, ws); break;
+                case 'get-book-reviews':
+                    if (!req.bookUid) throw new Error('bookUid is empty');
+                    this.send(await this.webWorker.getBookReviewDetails(req.bookUid), req, ws); break;
                 case 'get-book-gallery':
                     await this.getBookGallery(req, ws); break;
                 case 'get-reader-state':
@@ -789,7 +792,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error(`bookUid is empty`);
 
-        const result = (req.card === true ? await this.webWorker.getBookCardInfo(req.bookUid)
+        const result = (req.card === true ? await this.webWorker.getBookCardInfo(req.bookUid, {lazyExtras:req.lazyExtras === true})
             : await this.webWorker.getBookInfo(req.bookUid, {readerOnly: req.readerOnly === true}));
 
         this.send(result, req, ws);
