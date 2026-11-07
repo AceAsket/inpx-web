@@ -46,6 +46,7 @@ import {useRoute, useRouter} from 'vue-router';
 import './librarySurfaces.css';
 import {libraryContextKey} from './libraryContext';
 import {LibraryRepository, emptyState} from './libraryRepository';
+import {catalogTarget} from './catalogSearchModel';
 import {identity, bookUid, readable, progress, catalogRoutes, discoveryOptions, genreMapFromTree} from './libraryModel';
 
 const SettingsDialog = defineAsyncComponent(() => import('../Search/SettingsDialog/SettingsDialog.vue'));
@@ -114,7 +115,7 @@ function openActions(book) {
     actionsVisible.value = true;
 }
 function openCard(book) {
-    if (bookUid(book) && !book.discoveryMissingLocal) router.push({path: '/book', query: {bookUid: bookUid(book)}});
+    if (bookUid(book) && !book.discoveryMissingLocal) router.push(catalogTarget('/book', {bookUid:bookUid(book)}, route.query));
     else openActions(book);
 }
 async function openDetails(book) {
@@ -163,9 +164,9 @@ async function navigateFromBook({type, value}) {
     if (!fields[type] || !value) return;
     detailsVisible.value = false;
     if (type === 'author' || type === 'series') {
-        router.push({path: `/${type}-details`, query: {name: value}}); return;
+        router.push(catalogTarget(`/${type}-details`, {name:value}, route.query)); return;
     }
-    router.push({path: ['keyword', 'genre'].includes(type) ? '/books' : `/${type}`, query: {[fields[type]]: `${type === 'genre' ? '' : type === 'keyword' ? '*' : '='}${value}`}});
+    router.push(catalogTarget(['keyword', 'genre'].includes(type) ? '/books' : `/${type}`, {[fields[type]]: `${type === 'genre' ? '' : type === 'keyword' ? '*' : '='}${value}`}, route.query));
 }
 function bookActionEvent(event) {
     if (event.action === 'manageReadingLists') {listsBook.value = event.book; listsVisible.value = true;}

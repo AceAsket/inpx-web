@@ -13,6 +13,7 @@ async function fixture(directory) {
     const entries = [
         ['Толстой Лев', 'Косточка', 'Рассказы', 1, 'ru'], ['Толстой Лев', 'После бала', 'Рассказы', 2, 'ru'],
         ['Тургенев Иван', 'Ася', '', 0, 'ru'],
+        ['Толстой Лев', 'Childhood', 'Рассказы', 3, 'en'],
         ...Array.from({length: 240}, (_, i) => [`Корнеев Автор${String(i).padStart(4, '0')}`, `Книга указателя ${i}`, `Коллекция ${i}`, 1, 'ru']),
     ];
     const rows = [], files = [], date = new Date().toISOString().slice(0, 10);
@@ -121,6 +122,7 @@ async function fixture(directory) {
         await page.goto(base + '/#/');
         await page.waitForURL(url => url.hash === '#/overview');
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
+        await page.goto(base + '/#/books?lang=ru');
         const input = page.locator('.catalog-search-panel__main input').first();
         await input.fill('zzzz'); await pause(600); await input.fill('Кост');
         await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '*Кост');
@@ -146,6 +148,7 @@ async function fixture(directory) {
         assert(await input.getAttribute('aria-activedescendant'));
         await input.press('Enter');
         await page.getByRole('heading', {name: 'Косточка', exact: true}).waitFor();
+        assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Choosing a suggestion retains the language');
         await page.locator('.catalog-book-details').waitFor();
         assert(!page.url().includes('/reader'));
         const bookUrl = page.url();
@@ -165,6 +168,12 @@ async function fixture(directory) {
         await page.getByRole('heading', {name: 'Толстой Лев', exact: true}).waitFor();
         await page.locator('.catalog-book-grid .book-tile').first().waitFor();
         assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
+        assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru');
+        const authorUrl = page.url();
+        await page.goto(authorUrl.replace('lang=ru', 'lang=en'));
+        await page.getByRole('button', {name:'Открыть карточку: Childhood', exact:true}).waitFor();
+        assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 1, 'Language changes scope to the English edition');
+        await page.goBack(); await page.getByRole('button', {name:'Открыть карточку: Косточка', exact:true}).waitFor();
         await page.goBack(); await page.locator('.catalog-book-details').waitFor();
         await page.locator('.book-actions-series').click();
         await page.getByRole('heading', {name: 'Рассказы', exact: true}).waitFor();
@@ -177,6 +186,16 @@ async function fixture(directory) {
         await page.getByText('Прочитано 1 из 2', {exact: false}).waitFor();
         for (const width of [1440, 390, 320]) {await page.setViewportSize({width, height: 900}); await geometry('series ' + width);}
         await screenshot('series-light-320');
+        await page.goto(base + '/#/books?lang=ru');
+        await input.fill('Толс');
+        await page.getByRole('option', {name:/Толстой Лев/}).waitFor();
+        await page.getByRole('option', {name:/Толстой Лев/}).click();
+        await page.getByRole('heading', {name:'Толстой Лев', exact:true}).waitFor();
+        await page.getByRole('button', {name:'Открыть карточку: Косточка', exact:true}).waitFor();
+        assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Author suggestions retain the language');
+        assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
+        await page.getByRole('link', {name:'Авторы', exact:true}).click();
+        assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Alphabet navigation retains the scope');
         await page.goto(base + '/#/authors');
         await page.locator('.catalog-alphabet button').first().waitFor();
         let depth = 0;

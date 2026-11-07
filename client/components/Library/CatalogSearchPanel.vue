@@ -36,9 +36,9 @@
         </div>
         <CatalogFiltersDialog v-model="filtersVisible" :search="search" :genre-map="genreMap" :genre-tree="genreTree" :lang-list="langList" :ext-list="extList" :sources="sources" @apply="patch" />
         <nav class="catalog-index-links" aria-label="Обзор каталога">
-            <RouterLink to="/authors">
+            <RouterLink :to="catalogTarget('/authors', {}, suggestionFilters)">
                 Авторы по алфавиту <q-icon name="la la-arrow-right" />
-            </RouterLink><RouterLink to="/series-index">
+            </RouterLink><RouterLink :to="catalogTarget('/series-index', {}, suggestionFilters)">
                 Серии по алфавиту <q-icon name="la la-arrow-right" />
             </RouterLink>
         </nav>
@@ -51,14 +51,14 @@ import CatalogFiltersDialog from './CatalogFiltersDialog.vue';
 import CatalogTextField from './CatalogTextField.vue';
 import {useRouter} from 'vue-router';
 import {useStore} from 'vuex';
-import {textFields, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters} from './catalogSearchModel';
+import {textFields, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters, catalogScope, catalogTarget} from './catalogSearchModel';
 
 const props = defineProps({search: {type: Object, required: true}, selectedList: String, listOptions: Array,
     discovery: Boolean, extended: Boolean, extSummary: String, authorized: Boolean, genreMap: {type: Object, required: true},
     genreTree: Array, langList: Array, extList: Array, sources: {type: Array, default: () => []}});
 const emit = defineEmits(['patch', 'section', 'save-shelf', 'edit-extended', 'clear-extended']);
 const router = useRouter(), store = useStore();
-const suggestionFilters = computed(() => Object.fromEntries(['lang', 'ext', 'sourceId', 'genre'].filter(key => props.search[key]).map(key => [key, props.search[key]])));
+const suggestionFilters = computed(() => catalogScope(props.search));
 const suggestionContext = computed(() => `${store.state.config.profileAuthorized}:${store.state.config.currentUserProfile?.id || ''}`);
 const draft = reactive(Object.fromEntries(textFields.map(field => [field, decodeText(props.search[field])])));
 const moreFields = ref(!!(props.search.author || props.search.series)), filtersVisible = ref(false);
@@ -90,8 +90,8 @@ function chooseSuggestion(item) {
         router.push({path: item.targetKind === 'title' ? '/books' : `/${item.targetKind}`, query: {...suggestionFilters.value, [item.targetKind]: item.name}});
         return;
     }
-    router.push(item.kind === 'title' ? {path: '/book', query: {bookUid: item.book?._uid}}
-        : {path: item.kind === 'author' ? '/author-details' : '/series-details', query: {name: item.name}});
+    router.push(item.kind === 'title' ? catalogTarget('/book', {bookUid:item.book?._uid}, suggestionFilters.value)
+        : catalogTarget(item.kind === 'author' ? '/author-details' : '/series-details', {name:item.name}, suggestionFilters.value));
 }
 onDeactivated(() => {clearTimeout(timer); filtersVisible.value = false;});
 onBeforeUnmount(() => clearTimeout(timer));

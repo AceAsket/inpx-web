@@ -2,10 +2,10 @@
     <main class="library-page catalog-page">
         <div class="catalog-page__heading">
             <div>
-                <RouterLink to="/books">
+                <RouterLink :to="catalogTarget('/books', {}, route.query)">
                     Каталог
                 </RouterLink><h1>{{ kind === 'author' ? 'Авторы' : 'Серии' }}</h1>
-            </div><RouterLink :to="kind === 'author' ? '/series-index' : '/authors'">
+            </div><RouterLink :to="catalogTarget(kind === 'author' ? '/series-index' : '/authors', {}, route.query)">
                 {{ kind === 'author' ? 'Серии' : 'Авторы' }} <q-icon name="la la-arrow-right" />
             </RouterLink>
         </div>
@@ -31,7 +31,7 @@
                 </button>
             </div>
             <div v-else-if="data.items.length" class="catalog-entities">
-                <RouterLink v-for="item in data.items" :key="item.name" :to="{path: kind === 'author' ? '/author-details' : '/series-details', query: {name: item.name, lang: language || undefined, sourceId: source || undefined}}">
+                <RouterLink v-for="item in data.items" :key="item.name" :to="catalogTarget(kind === 'author' ? '/author-details' : '/series-details', {name:item.name}, route.query)">
                     <span>{{ item.name }}</span><small>{{ item.count.toLocaleString('ru') }}</small><q-icon name="la la-angle-right" />
                 </RouterLink>
             </div>
@@ -45,6 +45,7 @@
 import {computed, ref, watch, onBeforeUnmount, onDeactivated} from 'vue';
 import {useRoute, useRouter} from 'vue-router';
 import {useLibraryPage} from './useLibraryPage';
+import {catalogScope, catalogTarget} from './catalogSearchModel';
 import LibraryNotice from './LibraryNotice.vue';
 import './catalogPages.css';
 const route = useRoute(), router = useRouter(), data = ref(null), loading = ref(false), error = ref('');
@@ -62,7 +63,7 @@ let request = 0;
 async function load() {
     const id = ++request; loading.value = true; error.value = ''; data.value = null;
     try {
-        const result = await library.api.catalogBrowse({kind: kind.value, prefix: prefix.value, filters: {lang: language.value, sourceId: source.value}});
+        const result = await library.api.catalogBrowse({kind: kind.value, prefix: prefix.value, filters: catalogScope(route.query)});
         if (id !== request) return;
         data.value = result; document.title = `${kind.value === 'author' ? 'Авторы' : 'Серии'} · INPX Web`;
         const genres = await library.api.getGenreTree();
@@ -71,7 +72,7 @@ async function load() {
     finally {if (id === request) loading.value = false;}
 }
 function go(value) {router.push({path: route.path, query: {...route.query, prefix: value || undefined}});}
-function openEntity(name) {router.push({path: kind.value === 'author' ? '/author-details' : '/series-details', query: {name, lang: language.value || undefined, sourceId: source.value || undefined}});}
+function openEntity(name) {router.push(catalogTarget(kind.value === 'author' ? '/author-details' : '/series-details', {name}, route.query));}
 watch(() => route.fullPath, () => {if (active.value && ['/authors', '/series-index'].includes(route.path)) load();});
 onDeactivated(() => {request++;}); onBeforeUnmount(() => {request++;});
 </script>

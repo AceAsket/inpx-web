@@ -12,7 +12,7 @@ async function fixture(work) {
         const library = path.join(dir, 'books'); await fs.ensureDir(library);
         const entries = [
             ['Косточка', 'Толстой', 'Рассказы', 'ru'], ['Ася', 'Тургенев', 'Рассказы', 'ru'],
-            ['Детство', 'Толстой', 'Трилогия', 'ru'], ['Childhood', 'Tolstoy', 'Trilogy', 'en'],
+            ['Детство', 'Толстой', 'Трилогия', 'ru'], ['Childhood', 'Толстой', 'Trilogy', 'en'],
         ];
         for (let i = 0; i < entries.length; i++) {
             const [title, author, series, lang] = entries[i];
@@ -40,6 +40,20 @@ async function testCatalogDiscoveryIndexedSuggestionsAndScopedAlphabet() {
     await fixture(async(service, worker) => {
         const author = await service.suggest({query: 'тол'});
         assert.strictEqual(author.groups.find(group => group.kind === 'author').items[0].name, 'Толстой');
+        const selectedAuthor = (await worker.dbSearcher.search('author', {author:'тол', lang:'ru'})).found[0];
+        const expanded = await worker.dbSearcher.getAuthorBookList(selectedAuthor.id);
+        const classic = require('./catalog-list-filter-tests').createWebList();
+        for (const [lang, expected] of [['ru', 2], ['en', 1], ['ru', 2]]) {
+            classic.search = {lang};
+            assert.strictEqual(classic.filterBooks(expanded.books).length, expected, 'Classic expanded author lists apply the current language even to cached books');
+            const page = await service.entity({kind:'author', name:'Толстой', filters:{lang}});
+            assert.strictEqual(page.total, expected); assert(page.books.every(book => book.lang === lang));
+        }
+        const {catalogScope, catalogTarget} = require('../client/components/Library/catalogSearchModel');
+        const filters = {lang:'ru', ext:'fb2', genre:'prose', sourceId:'own'};
+        assert.deepStrictEqual(catalogScope({...filters, name:'Old author', page:'5', title:'*Old book'}), filters);
+        assert.deepStrictEqual(catalogTarget('/author-details', {name:'Толстой'}, {...filters, name:'Old', page:5}),
+            {path:'/author-details', query:{...filters, name:'Толстой'}});
         const title = await service.suggest({query: 'Кост'});
         assert.strictEqual(title.groups.find(group => group.kind === 'title').items[0].book.title, 'Косточка');
         const ru = await service.browse({kind: 'author', filters: {lang: 'ru'}});

@@ -1,9 +1,9 @@
 <template>
     <main class="library-page catalog-page">
         <nav class="catalog-breadcrumbs" aria-label="Путь в каталоге">
-            <RouterLink to="/books">
+            <RouterLink :to="catalogTarget('/books', {}, route.query)">
                 Каталог
-            </RouterLink><q-icon name="la la-angle-right" /><RouterLink :to="kind === 'author' ? '/authors' : '/series-index'">
+            </RouterLink><q-icon name="la la-angle-right" /><RouterLink :to="catalogTarget(kind === 'author' ? '/authors' : '/series-index', {}, route.query)">
                 {{ kind === 'author' ? 'Авторы' : 'Серии' }}
             </RouterLink>
         </nav>
@@ -25,7 +25,7 @@
         </div>
         <template v-if="data">
             <nav v-if="data.series.length" class="catalog-series-links" aria-label="Серии автора">
-                <RouterLink v-for="series in data.series" :key="series" :to="{path: '/series-details', query: {name: series}}">
+                <RouterLink v-for="series in data.series" :key="series" :to="catalogTarget('/series-details', {name:series}, route.query)">
                     {{ series }}
                 </RouterLink>
             </nav>
@@ -50,6 +50,7 @@ import {computed, ref, watch, onBeforeUnmount, onDeactivated, getCurrentInstance
 import {QPagination} from 'quasar';
 import {useRoute, useRouter} from 'vue-router';
 import {useLibraryPage} from './useLibraryPage';
+import {catalogScope, catalogTarget} from './catalogSearchModel';
 import {readable} from './libraryModel';
 import BookTile from './BookTile.vue';
 import LibraryNotice from './LibraryNotice.vue';
@@ -64,7 +65,7 @@ async function load() {
     const id = ++request; loading.value = true; error.value = ''; data.value = null; following.value = null;
     document.title = `${name.value} · INPX Web`;
     try {
-        const result = await library.api.catalogEntity({kind: kind.value, name: name.value, page: Number(route.query.page) || 1, filters: {lang: String(route.query.lang || ''), sourceId: String(route.query.sourceId || '')}});
+        const result = await library.api.catalogEntity({kind: kind.value, name: name.value, page: Number(route.query.page) || 1, filters: catalogScope(route.query)});
         if (id !== request) return; data.value = result;
         if (library.config.value.profileAuthorized) {
             const follows = await library.api.getLibraryFollows({refresh: false});

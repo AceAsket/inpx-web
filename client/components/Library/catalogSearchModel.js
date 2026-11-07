@@ -42,4 +42,13 @@ function activeFilters(query = {}, genreMap = new Map(), sources = []) {
     });
 }
 
-module.exports = {textFields, filterFields, filterLabels, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters};
+// Preserve the common scope without reusing another entity's name or page.
+function catalogScope(query = {}) {
+    return Object.fromEntries(['lang', 'ext', 'genre', 'sourceId'].map(field => [field, String(query[field] || '').trim()]).filter(([, value]) => value));
+}
+
+function catalogTarget(path, parameters = {}, scope = {}) {
+    return {path, query:{...catalogScope(scope), ...parameters}};
+}
+
+module.exports = {textFields, filterFields, filterLabels, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters, catalogScope, catalogTarget};

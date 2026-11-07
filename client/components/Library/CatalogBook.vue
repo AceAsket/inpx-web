@@ -1,10 +1,10 @@
 <template>
     <main class="library-page catalog-page">
         <nav class="catalog-breadcrumbs" aria-label="Путь в каталоге">
-            <RouterLink to="/books">
+            <RouterLink :to="catalogTarget('/books', {}, route.query)">
                 Каталог
             </RouterLink><template v-if="details?.book?.series">
-                <q-icon name="la la-angle-right" /><RouterLink :to="{path: '/series-details', query: {name: details.book.series}}">
+                <q-icon name="la la-angle-right" /><RouterLink :to="catalogTarget('/series-details', {name:details.book.series}, route.query)">
                     {{ details.book.series }}
                 </RouterLink>
             </template>
@@ -30,6 +30,7 @@
 import {computed, ref, watch, onBeforeUnmount, onDeactivated} from 'vue';
 import {useRoute, useRouter} from 'vue-router';
 import {useLibraryPage} from './useLibraryPage';
+import {catalogScope, catalogTarget} from './catalogSearchModel';
 import {genreMapFromTree} from './libraryModel';
 import BookActionsDialog from './BookActionsDialog.vue';
 import BookInfoDialog from '../Search/BookInfoDialog/BookInfoDialog.vue';
@@ -56,7 +57,7 @@ async function load() {
             ...(library.config.value.profileAuthorized ? [library.api.getReaderState(bookUid, {suppressProfileLogin: true}).then(state => {
                 if (id === request && state.progress?.updatedAt) details.value = {...details.value, book: {...book, _readerProgress: state.progress}};
             })] : []),
-            ...(book.series ? [library.api.catalogEntity({kind: 'series', name: book.series, limit: 12}).then(series => {
+            ...(book.series ? [library.api.catalogEntity({kind: 'series', name: book.series, limit: 12, filters:catalogScope(route.query)}).then(series => {
                 if (id === request) related.value = series.books.filter(book => book._uid !== bookUid);
             })] : []),
         ]);
@@ -64,8 +65,8 @@ async function load() {
     finally {if (id === request) loading.value = false;}
 }
 function navigate({type, value}) {
-    if (type === 'author' || type === 'series') router.push({path: type === 'author' ? '/author-details' : '/series-details', query: {name: value}});
-    else router.push({path: '/books', query: {[type === 'keyword' ? 'keywords' : type]: type === 'genre' ? value : '*' + value}});
+    if (type === 'author' || type === 'series') router.push(catalogTarget(type === 'author' ? '/author-details' : '/series-details', {name:value}, route.query));
+    else router.push(catalogTarget('/books', {[type === 'keyword' ? 'keywords' : type]: type === 'genre' ? value : '*' + value}, route.query));
 }
 watch(() => route.fullPath, () => {if (active.value && route.path === '/book') load();});
 onDeactivated(() => {request++;}); onBeforeUnmount(() => {request++;});
