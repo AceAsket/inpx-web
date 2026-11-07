@@ -9,7 +9,8 @@ const {chromium} = require(process.env.INPX_PLAYWRIGHT_MODULE || 'playwright');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 (async() => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-profile-toolbar-'));
+    const directory = process.env.INPX_ARTIFACT_DIR || await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-profile-toolbar-'));
+    await fs.ensureDir(directory);
     let browser, child, output = '';
     try {
         const library = path.join(directory, 'library'); await createFixture(library);
