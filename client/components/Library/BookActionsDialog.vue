@@ -7,7 +7,7 @@
             <div class="book-actions-summary">
                 <BookCover :book="book" />
                 <div>
-                    <div class="book-actions-meta"><span>{{ sourceFormat }}</span><span v-if="sizeLabel">{{ sizeLabel }}</span><span v-if="dateLabel">Добавлена {{ dateLabel }}</span></div>
+                    <div v-if="sizeLabel || dateLabel" class="book-actions-meta"><span v-if="sizeLabel">{{ sizeLabel }}</span><span v-if="dateLabel">Добавлена {{ dateLabel }}</span></div>
                     <component :is="embedded ? 'h1' : 'h2'">{{ book.title || 'Без названия' }}</component>
                     <span v-if="book.author" class="book-actions-author"><template v-for="(author,index) in authorLinks" :key="index"><span v-if="index">,</span><RouterLink :to="author.target" @click="dialogVisible = false">{{ author.label }}</RouterLink></template></span>
                     <RouterLink v-if="book.series" class="book-actions-series" :to="seriesTarget" @click="dialogVisible = false">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></RouterLink>
@@ -218,9 +218,8 @@ h2 {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0 0 10px; over
 .book-actions-author a:hover, .book-actions-series:hover {color: var(--app-primary);}
 .book-actions-series {font-size: 12px; margin-top: 6px;}
 .book-actions-details {display: grid; gap: 6px; margin: 12px 0 0; font-size: 12px; line-height: 1.55;}
-.book-actions-details > div {display: grid; grid-template-columns: 102px minmax(0, 1fr); gap: 10px;}
-.book-actions-details dt {color: var(--app-muted);}
-.book-actions-details dd {margin: 0; overflow-wrap: anywhere;}
+.book-actions-details dt {display: inline; color: var(--app-muted);}
+.book-actions-details dd {display: inline; margin: 0 0 0 8px; overflow-wrap: anywhere;}
 .book-actions-progress {color: var(--app-primary); font-size: 12px; margin-top: 10px;}
 .book-actions-primary {display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 22px;}
 .book-actions-primary .q-btn, .book-actions-download {min-height: 42px; border-radius: 12px; padding: 10px 18px; font-size: 14px;}
