@@ -9,7 +9,7 @@ on:
       tag:
         description: 'Git tag or ref to build'
         required: true
-        default: 'v1.8.2-rc.20'
+        default: 'v1.8.2-rc.21'
       publish:
         description: 'Publish the built artifacts as a GitHub Release'
         type: boolean
