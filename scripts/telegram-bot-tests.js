@@ -17,6 +17,7 @@ async function fixture(task) {
         const messages = [], deliveries = [], events = [];
         const worker = {config, readingListStore: store, libraryAssetGeneration: 1, addAdminEvent: (...args) => events.push(args),
             getBookRecordByUid: async uid => books.find(book => book._uid === uid),
+            bookSearch:async query=>({totalFound:books.length,found:books.slice(query.offset||0,(query.offset||0)+query.limit)}),
             getCatalogDiscovery: () => ({suggest: async() => ({groups: [{kind: 'title', items: [{name: books[0].title, book: books[0]}]}], corrections: []})}),
             getReadingLists: async userId => ({lists: (await store.getLists(userId)).map(list => store.listStats(list))}),
             db: {esc: JSON.stringify, select: async() => books},
@@ -211,7 +212,101 @@ async function testTelegramBotUsesProfileFormatAndThrottlesPerChat() {
         assert(sleeps.some(milliseconds => milliseconds >= 1000), 'Replies in the same chat are paced');
     });
 }
+async function testTelegramBotConfiguredChatNeedsNoLinkAndRevokesOldIdentity() {
+    await fixture(async({a,b,store,bot,run,messages,send,callback,advance})=>{
+        await store.updateUser(a.id,{telegramChatId:'101'});
+        await send(101,'/help');assert(messages.at(-1).data.text.includes('Alice'));
+        const status=await bot.account(a,'status');assert(status.linked);assert.equal(status.bindingSource,'configured');
+        const old=bot.button({run,chatId:'101',userId:a.id},'Read','read',{uid:'book-one'});
+        const restarted=new TelegramBot(bot.worker);restarted.run=run;
+        assert((await restarted.account(a,'status')).linked,'Automatic bindings survive restart');
+        await assert.rejects(store.updateUser(b.id,{telegramChatId:'101'}),/Chat ID уже/);
+        const legacy=await store.load();legacy.users.find(user=>user.id===b.id).telegramChatId='101';await store.save(legacy);
+        assert.equal(await store.findTelegramUser('42','101'),null,'Duplicate configured IDs never select a profile');
+        await store.updateUser(b.id,{telegramChatId:''});
+        assert.equal((await store.findTelegramUser('43','101')).id,a.id,'Configured IDs follow the current bot after rotation');
+        assert.equal((await store.findTelegramUser('42','101')).id,a.id);
+        await store.updateUser(a.id,{telegramChatId:'102'});
+        assert.equal(await store.findTelegramUser('42','101'),null);
+        await callback(101,old.callback_data);assert(!((await store.getUser(a.id)).readerProgress||{})['book-one']);
+        await send(102,'/help');assert(messages.at(-1).data.text.includes('Alice'));
+        await bot.account(a,'unlink');
+        assert.equal(await store.findTelegramUser('42','102'),null);
+        const afterRestart=new ReadingListStore(bot.config);assert.equal(await afterRestart.findTelegramUser('42','102'),null);
+        // Leaving a delivery address after disabling the bot cannot re-enable access.
+        const data=await store.load();const user=data.users.find(row=>row.id===a.id);user.telegramChatId='102';await store.save(data);
+        assert.equal(await store.findTelegramUser('42','102'),null);
+        await store.updateUser(a.id,{telegramChatId:'-100123'});assert.equal(await store.findTelegramUser('42','-100123'),null);
+        advance(60001);
+    });
+}
+async function testTelegramBotConfiguredChatCannotOverrideVerifiedProfile() {
+    await fixture(async({a,b,store,link})=>{
+        await link(b,102);await assert.rejects(store.updateUser(a.id,{telegramChatId:'102'}),/Chat ID уже/);
+        await assert.rejects(store.createUser({name:'Duplicate',login:'duplicate',telegramChatId:'102'}),/Chat ID уже/);
+        const legacy=await store.load();legacy.users.find(user=>user.id===a.id).telegramChatId='102';await store.save(legacy);
+        assert.equal((await store.findTelegramUser('42','102')).id,b.id,'A configured ID cannot hijack an explicitly verified binding');
+        await assert.rejects(store.changeTelegramBinding(a.id,'link',{botId:'42',chatId:'102'}),/другому профилю/);
+    });
+    await fixture(async({a,b,store,bot,link})=>{
+        await store.updateUser(a.id,{telegramChatId:'102'});await store.findTelegramUser('42','102');
+        const legacy=await store.load();legacy.users.find(user=>user.id===b.id).telegramChatId='102';await store.save(legacy);
+        const controller=new AbortController();bot.deliveries.set('102',{userId:a.id,controller,promise:Promise.resolve()});
+        await link(b,102);
+        assert.equal((await store.findTelegramUser('42','102')).id,b.id,'A verified owner can replace a configured automatic binding');
+        assert(controller.signal.aborted,'Pending delivery for the replaced profile is canceled');
+        await bot.account(b,'unlink');
+        assert.equal(await store.findTelegramUser('42','102'),null,'The superseded configured address cannot return after unlink');
+    });
+}
+async function testTelegramBotSearchIsPagedAndDoesNotUseAutocomplete() {
+    await fixture(async({a,bot,worker,messages,send,link,callback})=>{
+        await link(a,101);const calls=[];
+        worker.getCatalogDiscovery=()=>{throw new Error('Submitted search must not use autocomplete');};
+        worker.bookSearch=async query=>{calls.push(query);return {totalFound:20,found:Array.from({length:Math.min(query.limit,20-query.offset)},(_,i)=>({_uid:'s-'+(query.offset+i),title:'Книга '+(query.offset+i)}))};};
+        await send(101,'Яд');assert.equal(calls[0].title,'яд');assert.equal(calls[0].limit,8);assert.equal(calls[0].offset,0);
+        const next=messages.at(-1).data.reply_markup.inline_keyboard.flat().find(button=>button.text==='Далее →');
+        await callback(101,next.callback_data);assert.equal(calls.at(-1).offset,8);
+        const author=messages.at(-1).data.reply_markup.inline_keyboard.flat().find(button=>button.text==='По автору');
+        await callback(101,author.callback_data);assert.equal(calls.at(-1).author,'яд');assert.equal(calls.at(-1).offset,0);
+        await bot.dispatch({run:bot.run,chatId:'101',userId:a.id},a,'search',{query:'~\\D'});
+        assert.equal(calls.at(-1).title,'d','Chat input cannot activate a regular expression');
+    });
+}
+async function testTelegramBotSmartShelvesAreBoundedAndPrivate() {
+    await fixture(async({a,b,bot,worker,store,messages,link,callback})=>{
+        await link(a,101);const own=await store.createList(a.id,'Own','private',{title:'Книга'}),foreign=await store.createList(b.id,'Foreign');
+        worker.getReadingLists=worker.smartShelfEntries=()=>{throw new Error('Do not materialize smart shelves');};
+        const calls=[];worker.bookSearch=async query=>{calls.push(query);return {totalFound:10000,found:Array.from({length:query.limit},(_,i)=>({_uid:'b'+(query.offset+i),title:'Книга '+(query.offset+i)}))};};
+        const ctx={run:bot.run,chatId:'101',userId:a.id};await bot.dispatch(ctx,a,'lists');assert.equal(calls.length,0,'Listing shelf names performs no book query');
+        await bot.dispatch(ctx,a,'list',{id:own.id});assert.equal(calls.length,1);assert.equal(calls[0].limit,8);
+        const next=messages.at(-1).data.reply_markup.inline_keyboard.flat().find(button=>button.text==='Далее →');
+        await callback(101,next.callback_data);assert.equal(calls.at(-1).offset,8);
+        const previous=messages.at(-1).data.reply_markup.inline_keyboard.flat().find(button=>button.text==='← Назад');
+        await callback(101,previous.callback_data);assert.equal(calls.at(-1).offset,0);
+        const before=calls.length;await bot.dispatch(ctx,a,'list',{id:foreign.id});assert.equal(calls.length,before);assert(messages.at(-1).data.text.includes('Список недоступен'));
+        const unread=await store.createList(a.id,'Unread','private',{title:'Книга',unreadOnly:true});
+        worker.getPersonalReadBookSet=()=>({has:()=>true});calls.length=0;
+        await bot.dispatch(ctx,a,'list',{id:unread.id});assert.equal(calls.reduce((sum,query)=>sum+query.limit,0),200);
+        assert(messages.at(-1).data.reply_markup.inline_keyboard.flat().some(button=>button.text==='Далее →'),'A bounded unread scan offers continuation');
+    });
+}
+async function testTelegramBotFollowingPagesDoNotRepeatExpensiveRefresh() {
+    await fixture(async({a,bot,worker,messages,link,callback})=>{
+        await link(a,101);const refreshes=[];
+        worker.libraryFollows={list:async(id,refresh)=>{refreshes.push(refresh);return {follows:[],books:Array.from({length:20},(_,i)=>({_uid:'n'+i,title:'Новинка '+i}))};}};
+        const ctx={run:bot.run,chatId:'101',userId:a.id};await bot.dispatch(ctx,a,'following');
+        for(let i=0;i<2;i++){
+            const next=messages.at(-1).data.reply_markup.inline_keyboard.flat().find(button=>button.text==='Далее →');assert(next);await callback(101,next.callback_data);
+        }
+        assert.deepEqual(refreshes,[true,false,false]);assert(messages.at(-1).data.text.includes('Страница 3 из 3'));
+        assert(messages.at(-1).data.reply_markup.inline_keyboard.flat().some(button=>button.text==='Новинка 19'));
+    });
+}
 module.exports = {testTelegramBotPairingIsolationExpiryAndRestart, testTelegramBotSearchFormatsPrivateListsAndRevocation,
     testTelegramBotDigestIsOptInAndBounded, testTelegramBotPollingResumesOffsetAndPreservesWebhook,
-    testTelegramBotApiSanitizesFailuresAndHonorsCancellation, testTelegramBotUsesProfileFormatAndThrottlesPerChat};
+    testTelegramBotApiSanitizesFailuresAndHonorsCancellation, testTelegramBotUsesProfileFormatAndThrottlesPerChat,
+    testTelegramBotConfiguredChatNeedsNoLinkAndRevokesOldIdentity,testTelegramBotConfiguredChatCannotOverrideVerifiedProfile,
+    testTelegramBotSearchIsPagedAndDoesNotUseAutocomplete,testTelegramBotSmartShelvesAreBoundedAndPrivate,
+    testTelegramBotFollowingPagesDoNotRepeatExpensiveRefresh};
 if (require.main === module) (async() => {for (const test of Object.values(module.exports)) {await test(); console.log(test.name + ': OK');}})().catch(error => {console.error(error); process.exitCode = 1;});

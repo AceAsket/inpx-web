@@ -5,7 +5,7 @@
         </div>
         <form v-if="!discovery && !extended" role="search" @submit.prevent="flush">
             <div class="catalog-search-panel__main">
-                <CatalogTextField v-model:text="draft.title.text" v-model:mode="draft.title.mode" label="Название книги" mode-label="Совпадение названия" search-icon suggestions kind="title" :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @search="flush" @update:text="schedule" @update:mode="schedule" />
+                <CatalogTextField :key="primaryField" v-model:text="draft[primaryField].text" v-model:mode="draft[primaryField].mode" :label="textFieldLabels[primaryField]" :mode-label="primaryModeLabel" search-icon suggestions :kind="primaryField" :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @search="flush" @update:text="schedule" @update:mode="schedule" />
                 <q-btn unelevated no-caps color="primary" label="Найти" icon="la la-arrow-right" type="submit" />
             </div>
             <div v-if="moreFields" class="catalog-search-panel__extra">
@@ -17,7 +17,7 @@
         </div>
         <div v-if="!discovery && !extended" class="catalog-search-panel__tools">
             <button type="button" :aria-expanded="moreFields" @click="moreFields = !moreFields">
-                <q-icon v-if="!moreFields" name="la la-plus" /><q-icon v-else name="la la-minus" /> Автор и серия
+                <q-icon v-if="!moreFields" name="la la-plus" /><q-icon v-else name="la la-minus" /> {{ extraLabel }}
             </button>
             <button type="button" :class="{'has-filters': chips.length}" @click="flush(); filtersVisible = true">
                 <q-icon name="la la-sliders-h" size="19px" /> Фильтры <span v-if="chips.length" class="catalog-search-panel__count">{{ chips.length }}</span>
@@ -51,7 +51,7 @@ import CatalogFiltersDialog from './CatalogFiltersDialog.vue';
 import CatalogTextField from './CatalogTextField.vue';
 import {useRouter} from 'vue-router';
 import {useStore} from 'vuex';
-import {textFields, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters, catalogScope, catalogTarget} from './catalogSearchModel';
+import {textFields, textFieldLabels, primaryTextField, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters, catalogScope, catalogTarget} from './catalogSearchModel';
 import {libraryContextKey} from './libraryContext';
 import {bookUid} from './libraryModel';
 
@@ -64,11 +64,14 @@ const library = inject(libraryContextKey, null);
 const suggestionFilters = computed(() => catalogScope(props.search));
 const suggestionContext = computed(() => `${store.state.config.profileAuthorized}:${store.state.config.currentUserProfile?.id || ''}`);
 const draft = reactive(Object.fromEntries(textFields.map(field => [field, decodeText(props.search[field])])));
-const moreFields = ref(!!(props.search.author || props.search.series)), filtersVisible = ref(false);
-const extraFields = [{id: 'author', label: 'Автор'}, {id: 'series', label: 'Серия'}];
+const primaryField = computed(() => primaryTextField(props.selectedList));
+const primaryModeLabel = computed(() => ({title:'Совпадение названия',author:'Совпадение автора',series:'Совпадение серии'})[primaryField.value]);
+const extraFields = computed(() => textFields.filter(field => field !== primaryField.value).map(id => ({id,label:textFieldLabels[id]})));
+const extraLabel = computed(() => ({title:'Автор и серия',author:'Название и серия',series:'Название и автор'})[primaryField.value]);
+const moreFields = ref(extraFields.value.some(field => props.search[field.id])), filtersVisible = ref(false);
 const sections = computed(() => (props.listOptions || []).map(option => ({...option, label: option.value === 'extended' ? 'Расширенный поиск' : option.value === 'books' ? 'Все книги' : option.label})));
 const chips = computed(() => activeFilters(props.search, props.genreMap, props.sources));
-const hiddenTextChips = computed(() => moreFields.value ? [] : extraFields.filter(field => props.search[field.id])
+const hiddenTextChips = computed(() => moreFields.value ? [] : extraFields.value.filter(field => props.search[field.id])
     .map(field => ({field: field.id, label: `${field.label}: ${decodeText(props.search[field.id]).text}`})));
 let timer;
 watch(() => textFields.map(field => props.search[field]), () => {
@@ -77,8 +80,9 @@ watch(() => textFields.map(field => props.search[field]), () => {
         if (props.search[field]) Object.assign(draft[field], decodeText(props.search[field]));
         else draft[field].text = '';
     }
-    if (props.search.author || props.search.series) moreFields.value = true;
+    if (extraFields.value.some(field => props.search[field.id])) moreFields.value = true;
 });
+watch(() => props.selectedList, () => {moreFields.value = extraFields.value.some(field => props.search[field.id]);});
 function schedule() {clearTimeout(timer); if (canAutoSearch(draft)) timer = setTimeout(flush, 500);}
 function flush() {
     clearTimeout(timer);
@@ -86,7 +90,10 @@ function flush() {
     if (textFields.some(field => values[field] !== (props.search[field] || ''))) emit('patch', values);
 }
 function patch(values) {flush(); emit('patch', values);}
-function changeSection(section) {flush(); emit('section', section);}
+function changeSection(section) {
+    clearTimeout(timer);
+    emit('section', section, Object.fromEntries(textFields.map(field => [field, encodeText(draft[field].text, draft[field].mode)])));
+}
 function chooseSuggestion(item) {
     clearTimeout(timer);
     if (item.kind === 'correction') {

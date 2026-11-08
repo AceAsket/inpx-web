@@ -10,6 +10,10 @@
                 <q-icon v-if="value === option.value" name="la la-check-circle" size="20px" aria-hidden="true" />
             </button>
         </div>
+        <div class="appearance-control__app">
+            <q-checkbox :model-value="store.state.settings.showAppPromo !== false" size="32px" label="QR-код приложения в боковом меню" @update:model-value="store.commit('setSettings', {showAppPromo:$event})" />
+            <AppConnection :root-path="store.state.config.rootPathStatic || ''" button-label="Открыть QR" />
+        </div>
     </fieldset>
 </template>
 
@@ -17,6 +21,7 @@
 import {computed} from 'vue';
 import {useStore} from 'vuex';
 import {appearance} from './libraryModel';
+import AppConnection from '../Search/AppConnection.vue';
 
 const store = useStore();
 const emit = defineEmits(['change']);
@@ -42,4 +47,7 @@ button.is-selected {border-color: var(--app-primary); background: var(--app-surf
 button > span {flex: 1; font-weight: 650;}
 small {display: block; color: var(--app-muted); font-weight: 400; margin-top: 4px;}
 button:focus-visible {outline: 3px solid var(--app-primary); outline-offset: 3px;}
+.appearance-control__app {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:12px;}
+.appearance-control__app :deep(.q-checkbox) {flex:1;min-width:180px;}
+.appearance-control__app :deep(.q-checkbox__label) {font-size:12px;line-height:1.5;}
 </style>

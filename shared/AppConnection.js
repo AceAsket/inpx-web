@@ -11,4 +11,5 @@ function qrPayload(url) {
         throw new Error('Некорректный адрес сервера');
     return `inpx-reader://connect?v=1&server=${encodeURIComponent(parsed.href)}`;
 }
-module.exports={serverUrl,qrPayload};
+const downloadUrl='https://github.com/AceAsket/inpx-reader-releases/releases/latest';
+module.exports={serverUrl,qrPayload,downloadUrl};

@@ -132,6 +132,15 @@ async function executeProcess(command, args, options, scope, signal) {
                 output.once('close', done);
                 output.once('error', error => {outputError = error; stop(); done();});
             });
+            if (options.maxOutputBytes > 0) child.stdout.on('data', data => {
+                outputBytes += data.length;
+                if (outputBytes > options.maxOutputBytes && !outputError) {
+                    outputError = failure('INPX_RESOURCE_OUTPUT_LIMIT', 'Превышен размер результата проверки');
+                    child.stdout.unpipe(output);
+                    output.destroy();
+                    stop();
+                }
+            });
             child.stdout.pipe(output);
         });
         else if (options.captureStdout) child.stdout.on('data', data => {

@@ -209,7 +209,23 @@ async function testCatalogLookupReadsEachNameOnceAndReleasesIdleTables() {
         db.insert = insert;
     } finally {await lookup?.close(); await db.unlock(); await fs.remove(directory);}
 }
+async function testTelegramShortSearchUsesActualIndexedCatalog() {
+    await fixture(async(service,worker)=>{
+        const TelegramBot=require('../server/core/TelegramBot'),user={id:'reader'},messages=[];
+        worker.config={dataDir:os.tmpdir()};worker.readingListStore={findTelegramUser:async()=>user};
+        worker.bookSearch=query=>worker.dbSearcher.bookSearch(query);
+        worker.getCatalogDiscovery=()=>{throw new Error('The bot must not ask autocomplete to find a short title');};
+        const bot=new TelegramBot(worker,{sleep:async()=>{}}),run={botId:'42',controller:new AbortController(),api:{call:async(method,data)=>{messages.push(data);}}};bot.run=run;
+        try {
+            const ctx={run,chatId:'101',userId:user.id};await bot.dispatch(ctx,user,'search',{query:'Ас'});
+            assert(messages.at(-1).text.includes('Найдено: 1'));
+            assert(messages.at(-1).reply_markup.inline_keyboard.flat().some(button=>button.text==='Ася'));
+            await bot.dispatch(ctx,user,'search',{query:'Толст',kind:'author'});
+            assert(messages.at(-1).text.includes('Найдено: 3'));
+        }finally{bot.stop();}
+    });
+}
 module.exports = {testCatalogDiscoveryIndexedSuggestionsAndScopedAlphabet, testCatalogDiscoveryPersistentIndexAndCoalescedCache,
-    testCatalogLookupReadsEachNameOnceAndReleasesIdleTables};
+    testCatalogLookupReadsEachNameOnceAndReleasesIdleTables,testTelegramShortSearchUsesActualIndexedCatalog};
 if (require.main === module) (async() => {for (const test of Object.values(module.exports)) {await test(); console.log(test.name + ': OK');}})()
     .catch(error => {console.error(error); process.exitCode = 1;});

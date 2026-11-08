@@ -30,6 +30,7 @@ const state = {
         darkTheme: false,
         catalogAppearance: 'classic',
         shelvesHintDismissed: false,
+        showAppPromo: true,
         showDiscoveryNewest: true,
         showDiscoveryPopular: true,
         showDiscoveryContinueReading: true,

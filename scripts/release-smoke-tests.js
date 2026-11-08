@@ -1061,7 +1061,7 @@ async function testUserBackupExportsAndRestoresReaderState() {
 
 async function testProfileReadingSummaryLeavesOutReadBooks() {
     const worker = makeWorker();
-    worker.getBookRecordByUid = async() => ({title: 'Книга', author: 'Автор', ext: 'fb2'});
+    worker.getBookRecordByUid = async() => ({title: 'Книга', author: 'Автор', ext: 'fb2', librate:4});
     const summary = await worker.buildUserReadingSummary({readerProgress: {
         reading: {percent: 0.5},
         finished: {percent: 1},
@@ -1070,12 +1070,13 @@ async function testProfileReadingSummaryLeavesOutReadBooks() {
     }}, 48);
     assert.deepStrictEqual(summary.items.map(book => book.bookUid), ['reading']);
     assert.strictEqual(summary.count, 1);
+    assert.strictEqual(summary.items[0].librate, 4, 'The current book keeps its existing catalog rating');
 }
 
 async function testReaderHomeKeepsUnavailableProgressVisible() {
     const worker = makeWorker();
     worker.getBookRecordByUid = async(uid) => uid === 'available'
-        ? {title: 'Доступная книга', author: 'Автор', ext: 'fb2'} : null;
+        ? {title: 'Доступная книга', author: 'Автор', ext: 'fb2', librate:5} : null;
     const user = {readerProgress: Object.fromEntries(Array.from({length: 12}, (_, i) => [
         `missing-${i}`, {percent: (i + 1) / 100, hidden: false, updatedAt: `2026-01-${String(i + 1).padStart(2, '0')}`},
     ]))};
@@ -1099,6 +1100,7 @@ async function testReaderHomeKeepsUnavailableProgressVisible() {
     assert.strictEqual(found.items.length, 1);
     assert.strictEqual(found.items[0].bookUid, 'available');
     assert.strictEqual(found.items[0].unavailable, false);
+    assert.strictEqual(found.items[0].librate, 5, 'Recent reading keeps the rating without a metadata lookup');
     assert.strictEqual((await worker.getUserReadingLibrary(user, {state: 'read'})).items[0].bookUid, 'finished');
     assert.strictEqual((await worker.getUserReadingLibrary(user, {state: 'hidden'})).items[0].bookUid, 'hidden');
 
@@ -1757,10 +1759,12 @@ const tests = [
     ...require('./catalog-list-filter-tests'),
     ...require('./search-navigation-tests'),
     ...require('./fb2-encoding-tests'),
+    ...require('./fb2-image-tests'),
     ...require('./audiobookshelf-tests'),
     ...require('./catalog-regression-tests'),
     ...require('./library-metadata-tests'),
     ...require('./epub-archive-tests'),
+    ...require('./zip-ppmd-tests'),
     ...require('./image-runtime-tests'),
     ...require('./review-runtime-tests'),
     ...require('./profile-access-tests'),

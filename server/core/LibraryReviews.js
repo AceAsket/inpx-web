@@ -50,7 +50,7 @@ async function ratingRows(reader, consume, tempDir, onProgress = null) {
     const iconv = require('iconv-lite');
     let temporary;
     try {
-        if (reader.archiveType === '7z') {
+        if (reader.uses7z) {
             onProgress?.({phase:'Распаковка файла оценок',done:0,total:null});
             temporary = path.join(tempDir || require('os').tmpdir(),`ratings-${crypto.randomBytes(12).toString('hex')}.json`);
             await fs.ensureDir(path.dirname(temporary));

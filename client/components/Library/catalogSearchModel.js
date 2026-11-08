@@ -1,4 +1,21 @@
 const textFields = ['title', 'author', 'series'];
+const textFieldLabels = {title:'Название книги', author:'Автор', series:'Серия'};
+function primaryTextField(section) {
+    return section === 'author' || section === 'series' ? section : 'title';
+}
+
+function sectionSearchValues(values, fromSection, toSection) {
+    const result = Object.fromEntries(textFields.map(field => [field, String(values[field] || '')]));
+    const sections = ['books','title','author','series'];
+    const from = primaryTextField(fromSection), to = primaryTextField(toSection);
+    // A single query follows the selected search field. Explicit combinations
+    // keep their meaning and remain visible as additional conditions.
+    if (sections.includes(fromSection) && sections.includes(toSection) && from !== to
+        && result[from] && textFields.filter(field => result[field]).length === 1) {
+        result[to] = result[from]; result[from] = '';
+    }
+    return result;
+}
 const filterFields = ['genre', 'lang', 'ext', 'date', 'librate', 'ratingCount', 'isbn', 'keywords', 'sourceId', 'hideCopies'];
 const filterLabels = {genre: 'Жанр', lang: 'Язык', ext: 'Формат', date: 'Дата добавления', librate: 'Оценка',
     ratingCount: 'Число голосов', isbn: 'ISBN', keywords: 'Ключевые слова', sourceId: 'Библиотека', hideCopies: 'Без копий'};
@@ -58,4 +75,4 @@ function effectiveCatalogScope(query = {}, settings = {}, config = {}) {
     return catalogScope({...query, lang:typeof query.lang === 'string' ? query.lang : defaultLang});
 }
 
-module.exports = {textFields, filterFields, filterLabels, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters, catalogScope, catalogTarget, effectiveCatalogScope};
+module.exports = {textFields, textFieldLabels, primaryTextField, sectionSearchValues, filterFields, filterLabels, decodeText, encodeText, canAutoSearch, filtersFrom, activeFilters, catalogScope, catalogTarget, effectiveCatalogScope};

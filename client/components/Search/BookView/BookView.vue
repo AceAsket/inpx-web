@@ -46,6 +46,7 @@
                 <div v-if="book.del && showDeleted" class="cover-badge deleted-badge">
                     {{ deletedLabel }}
                 </div>
+                <BookRatingBadge v-if="showRates" :book="book" />
             </div>
 
             <div class="book-content">
@@ -61,10 +62,10 @@
                     <div class="meta-pill">
                         {{ posterExt }}
                     </div>
-                    <div v-if="showRates && !book.del && book.librate" class="meta-pill rating-pill" :class="rateBadgeColor">
+                    <div v-if="isListMode && showRates && !book.del && book.librate" class="meta-pill rating-pill" :class="rateBadgeColor">
                         {{ book.librate }}/5
                     </div>
-                    <div v-else-if="showRates && !book.del && !isExternalOnlyDiscoveryBook" class="meta-pill rating-pill rating-pill-placeholder" aria-hidden="true">
+                    <div v-else-if="isListMode && showRates && !book.del && !isExternalOnlyDiscoveryBook" class="meta-pill rating-pill rating-pill-placeholder" aria-hidden="true">
                         0/5
                     </div>
                     <div v-if="bookSize" class="meta-pill">
@@ -382,12 +383,14 @@ const {coverUrl} = require('../../Library/libraryModel');
 //-----------------------------------------------------------------------------
 import vueComponent from '../../vueComponent.js';
 import LibraryResultCard from '../../Library/LibraryResultCard.vue';
+import BookRatingBadge from '../../Library/BookRatingBadge.vue';
 
 import * as utils from '../../../share/utils';
 
 const componentOptions = {
     components: {
         LibraryResultCard,
+        BookRatingBadge,
     },
     watch: {
         settings() {

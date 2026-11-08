@@ -34,7 +34,7 @@
                         <summary><span>Отправка книг и OPDS<small>Необязательные параметры</small></span><q-icon name="la la-angle-down" size="18px" aria-hidden="true" /></summary>
                         <div class="profile-grid">
                             <q-input v-model="newProfile.emailTo" outlined dense clearable :label="uiText.emailTo" />
-                            <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
+                            <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" hint="Этот личный чат получает книги и доступ к Telegram-боту профиля." />
                             <q-toggle class="profile-toggle" v-model="newProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
                             <q-toggle class="profile-toggle" v-model="newProfile.opdsAuthEnabled" :disable="!newProfile.opdsEnabled || !newProfile.login || !newProfile.password" :label="uiText.requireOpdsAuth" />
                         </div>
@@ -330,8 +330,12 @@
                                 </template>
                             </q-input>
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
-                            <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
+                            <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" hint="Этот личный чат получает книги и доступ к Telegram-боту профиля." />
                             <TelegramAccountPanel />
+                            <div>
+                                <q-toggle class="profile-toggle" v-model="editableProfile.personalRecommendationsEnabled" label="Персональные рекомендации" />
+                                <div class="profile-format-hint">Подбирать книги по вашей истории чтения и полкам. При отключении подборка не рассчитывается на сервере.</div>
+                            </div>
                             <div class="profile-format-setting">
                                 <div class="profile-format-title">
                                     Форматы книг
@@ -637,6 +641,7 @@ class UserProfilesDialog {
             defaultOpdsFormat: 'original',
             emailAsZip: false,
             telegramAsZip: false,
+            personalRecommendationsEnabled: true,
             opdsEnabled: true,
             opdsAuthEnabled: false,
         };
@@ -661,6 +666,7 @@ class UserProfilesDialog {
             defaultOpdsFormat: bookFormats.preference(current, 'opds'),
             emailAsZip: current.emailAsZip === true,
             telegramAsZip: current.telegramAsZip === true,
+            personalRecommendationsEnabled: current.personalRecommendationsEnabled !== false,
             opdsEnabled: current.opdsEnabled !== false,
             opdsAuthEnabled: current.opdsAuthEnabled === true,
         };

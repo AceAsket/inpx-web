@@ -25,7 +25,7 @@ async function read(worker, book, cache, signal, maxBytes, content = true) {
             if (!contained(sourceReal, await fs.realpath(resolved))) throw new Error('Ссылка ведёт за пределы источника');
             const stat = await fs.stat(resolved);
             const state = {resolved,sourceReal,directory:stat.isDirectory()};
-            if (!state.directory) {state.reader = new ZipReader({...worker.config,resourceMaxOutputBytes:maxBytes});
+            if (!state.directory) {state.reader = new ZipReader({...worker.config,resourceMaxOutputBytes:maxBytes,resourceSignal:signal});
                 try {await state.reader.open(resolved);} catch (error) {await state.reader.close().catch(() => {}); throw error;}}
             cache.set(key,state);
         } catch (error) {cache.set(key,{error});}
@@ -46,7 +46,7 @@ async function read(worker, book, cache, signal, maxBytes, content = true) {
     if (!content) return null;
     if (Number(entry.size) > maxBytes) throw Object.assign(new Error('Файл превышает лимит проверки содержимого'),{code:'AUDIT_LIMIT'});
     const read = async() => {
-        if (state.reader?.archiveType === '7z') return state.reader.extractToBuf(name);
+        if (state.reader?.uses7z) return state.reader.extractToBuf(name);
         const stream = file ? fs.createReadStream(file) : await state.reader.zip.stream(name);
         const chunks = []; let size = 0;
         try {for await (const chunk of stream) {signal.throwIfAborted(); size += chunk.length;
@@ -55,7 +55,7 @@ async function read(worker, book, cache, signal, maxBytes, content = true) {
         } finally {stream.destroy();}
         return Buffer.concat(chunks);
     };
-    const data = state.reader?.archiveType === '7z' ? await read() : await runtime.run(read,{kind:'reviews',signal:signal});
+    const data = state.reader?.uses7z ? await read() : await runtime.run(read,{kind:'reviews',signal:signal});
     return data;
 }
 

@@ -156,7 +156,7 @@ class EbookController {
         const available=[{key:'raw',label:'Оригинал ('+String(book.ext).toUpperCase()+')'},...formats.available(book.ext,this.config).map(format=>({key:format,label:format.toUpperCase()}))];
         if(identity)body+=this.formatForm(req,identity,this.url('/book',{...p,uid}),String(book.ext).toLowerCase())+this.downloadButton({...book,_uid:uid},formats.preference(identity.user));
         else body+=`<form class="download-form" action="${escape(this.root+'/book/by-uid')}" method="get">${this.hidden('uid',uid)}<label for="format">Формат скачивания</label><select id="format" name="format">${available.map(format=>option(format.key,format.label,'raw')).join('')}</select><button type="submit">Скачать книгу</button></form>`;
-        if(formats.canRead(book.ext,this.config)&&!this.worker.remoteLib)body+=this.link('/read',{...p,uid,page:1,font:22,bookPage:p.page},'Читать текст','button');
+        if(formats.canRead(book.ext,this.config)&&!this.worker.remoteLib)body+=this.link('/read',{...p,uid,page:1,font:30,bookPage:p.page},'Читать текст','button');
         if(scalar(req.query,'annotation',1)!=='1')body+=this.link('/book',{...p,uid,annotation:1},'Показать аннотацию','button');
         else {
             let preview;
@@ -169,14 +169,14 @@ class EbookController {
         return {title:book.title||'Книга',body};
     }
     async reading(req) {
-        const uid=scalar(req.query,'uid',1024),page=number(req.query,'page',1,2048),font=number(req.query,'font',22,28);
-        if(!uid||![18,22,26].includes(font))throw bad('Некорректные параметры чтения.');
+        const uid=scalar(req.query,'uid',1024),page=number(req.query,'page',1,2048),font=number(req.query,'font',30,36);
+        if(!uid||![18,22,24,26,30,36].includes(font))throw bad('Некорректные параметры чтения.');
         if(!this.worker.ebookReader)this.worker.ebookReader=new EbookReader(this.worker);
         const value=await this.worker.ebookReader.read(uid),total=value.pages.length;
         if(page>total)throw bad('Страница не найдена.',404);
         const scope=parameters(req.query,this.config),bookPage=number(req.query,'bookPage',1,100000),p={...scope,uid,font,bookPage};
         let body=this.link('/book',{...scope,uid,page:bookPage},'О книге');
-        body+='<nav aria-label="Размер текста">'+[18,22,26].map(size=>this.link('/read',{...p,page,font:size},size===18?'Меньше':size===22?'Обычный':'Крупнее')).join(' ')+'</nav>';
+        body+='<nav aria-label="Размер текста">'+[24,30,36].map(size=>this.link('/read',{...p,page,font:size},size===24?'Меньше':size===30?'Обычный':'Крупнее')).join(' ')+'</nav>';
         body+=this.navigation(p,page,total,'/read')+`<div class="reading" style="font-size:${font}px">${escape(value.pages[page-1])}</div>`+this.navigation(p,page,total,'/read');
         body+='<p class="hint">Текстовое чтение. Иллюстрации доступны в скачанном файле. Ссылка на эту страницу сохраняет место; прогресс полной читалки не изменяется.</p>';
         return {title:value.book.title||'Чтение',body,reading:true};

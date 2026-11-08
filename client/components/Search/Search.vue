@@ -7,7 +7,7 @@
             <CatalogSearchPanel v-if="shelvesAppearance" :search="search" :selected-list="selectedList" :list-options="listOptions"
                 :discovery="isDiscoveryList" :extended="isExtendedSearch" :ext-summary="extSearchNames" :authorized="!!config.profileAuthorized"
                 :genre-map="genreMap" :genre-tree="genreTree" :lang-list="langList" :ext-list="extList" :sources="config.librarySources || []"
-                @patch="applyCatalogSearch" @section="selectedList = $event" @save-shelf="saveSearchShelf" @edit-extended="selectExtSearch" @clear-extended="clearExtSearch" />
+                @patch="applyCatalogSearch" @section="changeCatalogSection" @save-shelf="saveSearchShelf" @edit-extended="selectExtSearch" @clear-extended="clearExtSearch" />
             <div v-show="!shelvesAppearance" ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
                 <!-- Обновление -->
                 <div v-show="showNewReleaseAvailable && newReleaseAvailable" class="row q-py-sm bg-green-4 items-center">
@@ -1021,6 +1021,12 @@ class Search {
 
     applyCatalogSearch(patch) {
         Object.assign(this.search, patch, {page: 1});
+    }
+
+    changeCatalogSection(section, values) {
+        const {sectionSearchValues} = require('../Library/catalogSearchModel');
+        this.applyCatalogSearch(sectionSearchValues(values, this.selectedList, section));
+        this.selectedList = section;
     }
 
     get newReleaseAvailable() {

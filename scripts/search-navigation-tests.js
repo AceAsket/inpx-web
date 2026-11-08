@@ -41,6 +41,25 @@ function search() {
     result.updateSearchFromRouteQuery(result.$route);
     return result;
 }
+
+async function testCatalogSectionUsesSelectedFieldAndPreservesExplicitConditions() {
+    const catalog=require('../client/components/Library/catalogSearchModel');
+    const state=search();
+    state.selectedList='books';state.search.lang='ru';state.search.sourceId='main';state.search.page=5;
+    for(const section of ['author','series','title','books','author']) {
+        const field=catalog.primaryTextField(state.selectedList);
+        const values={title:'',author:'',series:'',[field]:'=Туман'};
+        state.changeCatalogSection(section,values);
+        assert.strictEqual(state.search[catalog.primaryTextField(section)],'=Туман');
+        assert.strictEqual(['title','author','series'].filter(f=>state.search[f]).length,1);
+        assert.strictEqual(state.search.lang,'ru');assert.strictEqual(state.search.sourceId,'main');assert.strictEqual(state.search.page,1);
+    }
+    state.changeCatalogSection('series',{title:'*Книга',author:'Толстой',series:''});
+    assert.strictEqual(state.search.title,'*Книга');assert.strictEqual(state.search.author,'Толстой');assert.strictEqual(state.search.series,'');
+    state.changeCatalogSection('extended',{title:'*Книга',author:'',series:''});
+    assert.strictEqual(state.search.title,'*Книга');
+    assert.deepStrictEqual(catalog.sectionSearchValues({author:'*Автор'},'author','newest'),{title:'',author:'*Автор',series:''});
+}
 function route(state, to) {
     const oldList = state.selectedList;
     state.$route = to;
@@ -273,7 +292,7 @@ async function testPageScrollerFollowsModelOnMountAndRemount() {
     remounted.unmount();
 }
 
-module.exports = [testSearchRoutePageAndBoundsIsolation, testSearchRouteHistoryAndNumericParameters,
+module.exports = [testCatalogSectionUsesSelectedFieldAndPreservesExplicitConditions,testSearchRoutePageAndBoundsIsolation, testSearchRouteHistoryAndNumericParameters,
     testCatalogSearchIgnoresSupersededResponses, testCatalogSearchRetryAndCoalescing,
     testCatalogSearchUnmountAndCacheRaces, testCatalogExpandedRowsDoNotPublishAfterNewQuery,
     testPageScrollerFollowsModelOnMountAndRemount];

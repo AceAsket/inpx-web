@@ -8,6 +8,7 @@
                 </RouterLink>
                 <span class="library-shell__collection" :title="collection">{{ collection }}</span>
                 <div class="library-shell__header-actions">
+                    <AppConnection class="library-shell__app-mobile" :root-path="config.rootPathStatic || ''" />
                     <q-btn flat round :icon="settings.darkTheme ? 'la la-sun' : 'la la-moon'"
                         :aria-label="settings.darkTheme ? 'Включить светлую тему' : 'Включить тёмную тему'"
                         @click="store.commit('setSettings', {darkTheme: !settings.darkTheme})" />
@@ -20,10 +21,13 @@
                     <span class="library-nav-link__icon"><q-icon :name="item.icon" size="25px" aria-hidden="true" /></span>
                     <span>{{ item.label }}</span>
                 </RouterLink>
-                <RouterLink to="/profile" class="library-shell__nav-bottom" aria-label="Открыть мой профиль">
+                <div class="library-shell__nav-footer">
+                    <AppConnection v-if="settings.showAppPromo !== false" class="library-shell__app-promo" variant="sidebar" :root-path="config.rootPathStatic || ''" @hide-promo="store.commit('setSettings', {showAppPromo:false})" />
+                    <RouterLink to="/profile" class="library-shell__nav-bottom" aria-label="Открыть мой профиль">
                     <span class="library-shell__profile-initial">{{ profileName.slice(0, 1).toUpperCase() }}</span>
                     <div><strong>{{ profileName }}</strong><small>{{ config.profileAuthorized ? 'Личная библиотека' : 'Общая библиотека' }}</small></div>
-                </RouterLink>
+                    </RouterLink>
+                </div>
             </nav>
         </template>
         <div :class="enabled ? 'library-shell__main' : 'library-shell__passthrough'"><slot /></div>
@@ -48,6 +52,7 @@ import {libraryContextKey} from './libraryContext';
 import {LibraryRepository, emptyState} from './libraryRepository';
 import {catalogTarget} from './catalogSearchModel';
 import {identity, bookUid, readable, progress, catalogRoutes, discoveryOptions, genreMapFromTree} from './libraryModel';
+import AppConnection from '../Search/AppConnection.vue';
 
 const SettingsDialog = defineAsyncComponent(() => import('../Search/SettingsDialog/SettingsDialog.vue'));
 const UserProfilesDialog = defineAsyncComponent(() => import('../Search/UserProfilesDialog/UserProfilesDialog.vue'));
@@ -87,9 +92,13 @@ watch(() => route.fullPath, () => {
     actionsVisible.value = false;
     returnToActions.value = false;
 }, {immediate: true});
-watch(() => [identity(config.value, settings.value), JSON.stringify(discoveryOptions(settings.value)), config.value.discovery?.enabled], () => {
+watch(() => [identity(config.value, settings.value), JSON.stringify(discoveryOptions(settings.value)), config.value.discovery?.enabled,
+    config.value.currentUserProfile?.personalRecommendationsEnabled], () => {
     const previous = repository.epoch;
+    const previousDiscoveryKey = repository.discoveryKey;
     repository.setContext(config.value, settings.value);
+    if (previousDiscoveryKey && previousDiscoveryKey !== repository.discoveryKey && props.enabled && route.path === '/overview')
+        repository.loadRecommendations();
     if (previous !== repository.epoch) {
         detailsVisible.value = false;
         listsVisible.value = false;
@@ -235,12 +244,14 @@ body[data-catalog-appearance="shelves"] .q-btn.bg-primary {color: var(--library-
 .library-shell__collection {color: var(--app-muted); font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1;}
 .library-shell__header-actions {display: flex; align-items: center; margin-left: auto; gap: 6px;}
 .library-shell__header-actions .q-btn {color: var(--app-text);}
-.library-shell__nav {grid-area: nav; display: flex; flex-direction: column; gap: 8px; padding: 26px 16px 22px; border-right: 1px solid var(--app-border);}
+.library-shell__nav {grid-area: nav; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding: 26px 16px 22px; border-right: 1px solid var(--app-border); scrollbar-width: thin; scrollbar-color: var(--app-border) transparent;}
 .library-nav-link {display: flex; gap: 12px; align-items: center; min-height: 52px; border-radius: 15px; padding: 0 16px; color: var(--app-muted); font-size: 14px; text-decoration: none; font-weight: 500;}
 .library-nav-link.is-active {background: var(--app-surface-2); color: var(--app-primary);}
 .library-nav-link:focus-visible {outline: 3px solid var(--app-primary); outline-offset: 2px;}
 .library-shell__main {grid-area: main; min-width: 0; min-height: 0; overflow: hidden;}
-.library-shell__nav-bottom {margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 12px 4px; min-width: 0; border-radius: 14px; color: var(--app-text); text-decoration: none;}
+.library-shell__nav-footer {margin-top: auto; padding-top: 20px; flex-shrink: 0;}
+.library-shell__nav-bottom {display: flex; gap: 10px; align-items: center; padding: 12px 4px; margin-top: 8px; min-width: 0; border-radius: 14px; color: var(--app-text); text-decoration: none;}
+.library-shell__header-actions .library-shell__app-mobile {display: none;}
 .library-shell__nav-bottom:hover {background: var(--app-surface-3);}
 .library-shell__nav-bottom:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 2px;}
 .library-shell__profile-initial {display: grid; place-items: center; background: var(--app-surface-2); border-radius: 11px; width: 34px; height: 34px; color: var(--app-primary); flex-shrink: 0; font-weight: 600;}
@@ -248,6 +259,7 @@ body[data-catalog-appearance="shelves"] .q-btn.bg-primary {color: var(--library-
 .library-shell__nav-bottom strong {display: block; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere;}
 .library-shell__nav-bottom small {display: block; color: var(--app-muted); font-size: 10px; line-height: 1.5; margin-top: 3px; white-space: nowrap;}
 @media (min-width: 600px) and (max-width: 899px) {.library-shell--active {grid-template-columns: 84px minmax(0, 1fr);} .library-shell__nav {padding: 22px 8px;} .library-nav-link {flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; padding: 8px 2px;} .library-shell__nav-bottom {justify-content: center;} .library-shell__nav-bottom > div, .library-shell__nav-bottom > .q-icon {display: none;}}
+@media (max-width: 899px) {.library-shell__app-promo {display: none;} .library-shell__header-actions .library-shell__app-mobile {display: inline-flex;}}
 @media (max-width: 599px) {
     .library-shell--active {grid-template: 'header' 64px 'main' minmax(0, 1fr) 'nav' auto / minmax(0, 1fr);}
     .library-shell__header {padding: 0 16px; gap: 8px; border-bottom: 0;}
@@ -261,6 +273,6 @@ body[data-catalog-appearance="shelves"] .q-btn.bg-primary {color: var(--library-
     .library-nav-link.is-active {background: transparent; color: var(--app-text);}
     .library-nav-link__icon {display: grid; place-items: center; width: 54px; height: 30px; border-radius: 12px;}
     .is-active .library-nav-link__icon {background: var(--app-surface-2); color: var(--app-primary);}
-    .library-shell__nav-bottom {display: none;}
+    .library-shell__nav-footer {display: none;}
 }
 </style>

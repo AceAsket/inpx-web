@@ -5,6 +5,7 @@
         <span v-else class="book-cover__placeholder" aria-hidden="true">
             <span>{{ letter }}</span><small>{{ (book.ext || 'КНИГА').toUpperCase() }}</small>
         </span>
+        <BookRatingBadge v-if="showRating && store.state.settings.showRates !== false" :book="book" />
     </span>
 </template>
 
@@ -12,8 +13,9 @@
 import {computed, ref, watch, onMounted, onBeforeUnmount} from 'vue';
 import {useStore} from 'vuex';
 import {coverUrl, bookUid} from './libraryModel';
+import BookRatingBadge from './BookRatingBadge.vue';
 
-const props = defineProps({book: {type: Object, required: true}});
+const props = defineProps({book: {type: Object, required: true}, showRating:{type:Boolean,default:true}});
 const emit = defineEmits(['load', 'error']);
 const store = useStore();
 const element = ref(null), visible = ref(false), failed = ref(false);

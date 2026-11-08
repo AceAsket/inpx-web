@@ -19,9 +19,10 @@
                 <template v-else>
                     <p v-if="status.linked">
                         Этот профиль подключён к личному чату {{ status.chatId }}<span v-if="status.username"> у @{{ status.username }}</span>.
+                        <span v-if="status.bindingSource === 'configured'"> Используется Chat ID из настроек профиля; дополнительная ссылка не нужна.</span>
                     </p>
                     <p v-else>
-                        Подключите свой личный чат, чтобы искать книги, получать файлы и открывать свои списки. Ссылка действует 10 минут и используется один раз.
+                        Если в настройках профиля указан уникальный личный Chat ID, бот подключится автоматически. Иначе используйте одноразовую ссылку: она действует 10 минут.
                     </p>
                     <div class="telegram-account__actions">
                         <q-btn v-if="!status.linked" color="primary" no-caps unelevated label="Подключить Telegram" :loading="busy" @click="connect" /><q-btn v-else outline no-caps label="Отключить Telegram" :loading="busy" @click="disconnect" /><q-btn flat no-caps label="Обновить состояние" :disable="busy" @click="load" />

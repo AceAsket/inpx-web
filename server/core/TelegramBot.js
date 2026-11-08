@@ -5,7 +5,9 @@ const {setTimeout: delay} = require('timers/promises');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const bookFormats = require('../../shared/BookFormats');
 const {escapeHtml} = require('../../shared/safeHtml');
+const shelfData = require('./EbookShelves');
 const PAGE_SIZE = 8;
+const pageNumber = value => Math.min(100000, Math.max(1, Math.floor(Number(value) || 1)));
 const short = (value, length = 100) => Array.from(String(value || '')).slice(0, length).join('');
 const html = value => escapeHtml(short(value, 500));
 const privateChat = update => {
@@ -55,6 +57,7 @@ class TelegramBot {
             this.cancelDeliveries(user.id);
             for (const [key, value] of this.pairs) if (value.userId === user.id) this.pairs.delete(key);
         } else if (operation === 'digest') {
+            if(this.run?.botId&&user.telegramChatId)await this.worker.readingListStore.findTelegramUser(this.run.botId,user.telegramChatId);
             await this.worker.readingListStore.changeTelegramBinding(user.id, 'digest', {enabled: options.enabled});
         } else if (operation === 'link') {
             if (!this.enabled() || !this.run?.botId || !this.run?.username) throw new Error('Бот ещё не подключён. Проверьте настройки Telegram у администратора');
@@ -65,10 +68,13 @@ class TelegramBot {
             this.pairs.set(crypto.createHash('sha256').update(token).digest('hex'), {userId: user.id, botId: this.run.botId, expiresAt});
             return {url: `https://t.me/${this.run.username}?start=link_${token}`, expiresAt: new Date(expiresAt).toISOString()};
         } else if (operation !== 'status') throw new Error('Неизвестное действие Telegram');
-        const fresh = (await this.worker.readingListStore.load()).users.find(row => row.id === user.id);
+        let fresh = (await this.worker.readingListStore.load()).users.find(row => row.id === user.id);
         if (!fresh) throw new Error('Профиль удалён');
+        const binding = this.run?.botId ? await this.worker.readingListStore.findTelegramUser(this.run.botId,fresh.telegramBotChatId||fresh.telegramChatId) : null;
+        const linked = this.run?.botId ? binding?.id===fresh.id : !!fresh.telegramBotLinkedAt&&!fresh.telegramBotBlocked;
+        if(binding?.id===fresh.id)fresh=binding;
         return {enabled: this.enabled(), state: this.health.state, username: this.health.username,
-            linked: !!fresh.telegramBotLinkedAt && (!this.run?.botId || fresh.telegramBotId === this.run.botId),
+            linked, bindingSource:linked ? (fresh.telegramBotAutoLinked?'configured':'link'):'',
             chatId: fresh.telegramBotChatId, linkedAt: fresh.telegramBotLinkedAt, digest: fresh.telegramDigest};
     }
     async loop(run) {
@@ -128,6 +134,7 @@ class TelegramBot {
     async authorize(ctx) {
         if (this.run !== ctx.run || ctx.run.controller.signal.aborted) throw new Error('Telegram остановлен');
         const user = await this.worker.readingListStore.findTelegramUser(ctx.run.botId, ctx.chatId);
+        if (this.run !== ctx.run || ctx.run.controller.signal.aborted) throw new Error('Telegram остановлен');
         if (!user || ctx.userId && user.id !== ctx.userId) throw new Error('Привязка Telegram отключена');
         return user;
     }
@@ -172,14 +179,17 @@ class TelegramBot {
                 this.pairs.delete(key);
                 if (!pair || pair.expiresAt <= this.now() || pair.botId !== run.botId)
                     return await this.reply(ctx, 'Ссылка недействительна или истекла. Создайте новую ссылку в своём профиле inpx-web.');
+                const previous=(await this.worker.readingListStore.load()).users.filter(user=>user.id!==pair.userId
+                    &&user.telegramBotId===run.botId&&user.telegramBotChatId===ctx.chatId&&user.telegramBotLinkedAt).map(user=>user.id);
                 await this.worker.readingListStore.changeTelegramBinding(pair.userId, 'link', {botId: run.botId, chatId: ctx.chatId});
+                previous.forEach(userId=>this.cancelDeliveries(userId));
                 ctx.userId = pair.userId;
                 return await this.reply(ctx, 'Профиль подключён. Отправьте название книги, имя автора или серии. Команда /help покажет все возможности.', [this.menu(ctx)]);
             }
             const user = await this.worker.readingListStore.findTelegramUser(run.botId, ctx.chatId);
             if (!user) {
                 if (!this.rate(ctx.chatId, 'unknown', 2)) return;
-                return await this.reply(ctx, 'Для доступа к библиотеке откройте свой профиль inpx-web → Telegram-бот → «Подключить Telegram». Пароль в чат отправлять не нужно.');
+                return await this.reply(ctx, 'Укажите личный Chat ID в настройках своего профиля inpx-web или откройте Telegram-бот → «Подключить Telegram». Один чат должен соответствовать одному профилю. Пароль в чат отправлять не нужно.');
             }
             ctx.userId = user.id;
             if (callback) {
@@ -217,12 +227,24 @@ class TelegramBot {
         }
         if (action === 'help') return this.reply(ctx, `<b>INPX Web</b> · ${html(user.name)}\n\nОтправьте название, автора или серию.\n/search запрос — поиск\n/reading — сейчас читаю\n/lists — личные списки\n/favorites — избранные авторы и серии\n/following — новые книги подписок\n/unlink — отключить профиль`, [this.menu(ctx)]);
         if (action === 'search') {
-            const result = await this.worker.getCatalogDiscovery().suggest({query: payload.query});
-            if (result.warming) return this.reply(ctx, 'Индекс подсказок готовится. Повторите поиск немного позже.', [this.menu(ctx)]);
-            const rows = result.groups.flatMap(group => group.items.map(item => [button(`${group.kind === 'author' ? 'Автор: ' : group.kind === 'series' ? 'Серия: ' : ''}${item.name}`,
-                group.kind === 'title' ? 'book' : 'entity', group.kind === 'title' ? {uid: item.book._uid} : {kind: group.kind, name: item.name})]));
-            for (const correction of result.corrections) rows.push([button(`Возможно: ${correction.query}`, 'search', {query: correction.query})]);
-            return this.reply(ctx, `<b>Поиск: ${html(payload.query)}</b>\n${rows.length ? 'Выберите книгу, автора или серию.' : 'Ничего не найдено. Попробуйте другие слова.'}`, [...rows, this.menu(ctx)]);
+            const query = short(payload.query,120).trim(), kind = ['author','series'].includes(payload.kind) ? payload.kind : 'title';
+            // Chat messages are submitted searches, not autocomplete. Keep short
+            // titles searchable and use ordinary indexed words, never regex input.
+            const words = require('../../shared/CatalogSearch').words(query).join(' ');
+            if (!words) return this.reply(ctx,'Введите название, автора или серию.',[this.menu(ctx)]);
+            let page = pageNumber(payload.page);
+            const search = () => this.worker.bookSearch({[kind]:words,del:'0',limit:PAGE_SIZE,offset:(page-1)*PAGE_SIZE});
+            let result = await search();
+            const totalPages = Math.max(1,Math.ceil(result.totalFound/PAGE_SIZE));
+            if (page > totalPages) {page = totalPages;result = await search();}
+            const rows = result.found.map(book => [button(book.title,'book',{uid:book._uid})]);
+            const pages = [];
+            if (page > 1) pages.push(button('← Назад','search',{query,kind,page:page-1}));
+            if (page < totalPages) pages.push(button('Далее →','search',{query,kind,page:page+1}));
+            if (pages.length) rows.push(pages);
+            const labels = {title:'По названию',author:'По автору',series:'По серии'};
+            rows.push(Object.entries(labels).map(([field,label]) => button((field===kind?'✓ ':'')+label,'search',{query,kind:field,page:1})));
+            return this.reply(ctx,`<b>Поиск: ${html(query)}</b>\n${labels[kind]} · Найдено: ${result.totalFound}\n${result.totalFound ? `Страница ${page} из ${totalPages}` : 'Ничего не найдено. Попробуйте другие слова.'}`,[...rows,this.menu(ctx)]);
         }
         if (action === 'entity') {
             const result = await this.worker.getCatalogDiscovery().entity({...payload, limit: PAGE_SIZE}, user);
@@ -272,28 +294,35 @@ class TelegramBot {
             return this.reply(ctx, 'Добавлено в список «Хочу прочитать».', [this.menu(ctx)]);
         }
         if (action === 'lists') {
-            const result = await this.worker.getReadingLists(user.id);
-            const page = Math.max(1, Math.floor(Number(payload.page) || 1)), slice = result.lists.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-            const rows = slice.map(list => [button(`${list.name} (${list.bookCount || list.total || 0})`, 'list', {id: list.id})]);
+            const lists = (await shelfData.lists(this.worker,user.id)).sort((a,b)=>a.name.localeCompare(b.name,'ru'));
+            const page = Math.min(pageNumber(payload.page),Math.max(1,Math.ceil(lists.length/PAGE_SIZE))), slice = lists.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+            const rows = slice.map(list => [button(`${list.name} (${list.smart ? 'умная полка' : list.bookCount})`, 'list', {id: list.id})]);
             const pages = [];
             if (page > 1) pages.push(button('← Назад', 'lists', {page: page - 1}));
-            if (page * PAGE_SIZE < result.lists.length) pages.push(button('Далее →', 'lists', {page: page + 1}));
+            if (page * PAGE_SIZE < lists.length) pages.push(button('Далее →', 'lists', {page: page + 1}));
             if (pages.length) rows.push(pages);
-            return this.reply(ctx, result.lists.length ? '<b>Ваши списки</b>' : 'Личных списков пока нет. Их можно создать на сайте или кнопкой «Хочу прочитать» у книги.', [...rows, this.menu(ctx)]);
+            return this.reply(ctx, lists.length ? '<b>Ваши списки</b>' : 'Личных списков пока нет. Их можно создать на сайте или кнопкой «Хочу прочитать» у книги.', [...rows, this.menu(ctx)]);
         }
-        if (action === 'list' || action === 'reading') {
-            let uids, title;
-            if (action === 'reading') {
-                title = 'Сейчас читаю';
-                uids = Object.entries(user.readerProgress || {}).filter(([, progress]) => !progress.hidden && !progress.relinkedTo && Number(progress.percent) < .999)
-                    .sort((a, b) => String(b[1].updatedAt).localeCompare(String(a[1].updatedAt))).map(([uid]) => uid);
-            } else {
-                const list = await this.worker.readingListStore.getList(user.id, payload.id);
-                if (!list) return this.reply(ctx, 'Список недоступен.', [this.menu(ctx)]);
-                title = list.name;
-                const entries = list.filters ? await this.worker.smartShelfEntries(user.id, list) : list.books;
-                uids = entries.map(entry => entry.bookUid);
-            }
+        if (action === 'list') {
+            const cursor = Math.min(10000000,Math.max(0,Math.floor(Number(payload.cursor)||0)));
+            const trail = (Array.isArray(payload.trail)?payload.trail:[]).filter(value=>Number.isSafeInteger(value)&&value>=0&&value<cursor).slice(-20);
+            let result;
+            try {result = await shelfData.page(this.worker,user,payload.id,{offset:cursor,size:PAGE_SIZE});}
+            catch (error) {if (error.status===404) return this.reply(ctx,'Список недоступен.',[this.menu(ctx)]);throw error;}
+            const visible = result.books.filter(book=>!book.unavailable&&!book.del);
+            const rows = visible.map(book=>[button(book.title,'book',{uid:book._uid})]);
+            const pages = [];
+            if (cursor) pages.push(button(trail.length?'← Назад':'К началу','list',{id:payload.id,cursor:trail.at(-1)||0,trail:trail.slice(0,-1)}));
+            if (result.next!==null) pages.push(button('Далее →','list',{id:payload.id,cursor:result.next,trail:[...trail,cursor].slice(-20)}));
+            if (pages.length) rows.push(pages);
+            const message = visible.length ? `Показано книг: ${visible.length}`
+                : result.next!==null ? 'В этой части полки подходящих книг нет. Продолжите просмотр.' : 'Доступных книг пока нет.';
+            return this.reply(ctx,`<b>${html(result.name)}</b>\n${message}`,[...rows,this.menu(ctx)]);
+        }
+        if (action === 'reading') {
+            const title = 'Сейчас читаю';
+            const uids = Object.entries(user.readerProgress || {}).filter(([, progress]) => !progress.hidden && !progress.relinkedTo && Number(progress.percent) < .999)
+                .sort((a, b) => String(b[1].updatedAt).localeCompare(String(a[1].updatedAt))).map(([uid]) => uid);
             const totalPages = Math.max(1, Math.ceil(uids.length / PAGE_SIZE)), page = Math.min(totalPages, Math.max(1, Math.floor(Number(payload.page) || 1)));
             const slice = uids.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), db = this.worker.db;
             const books = slice.length ? await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(slice)})`}) : [];
@@ -306,12 +335,20 @@ class TelegramBot {
             return this.reply(ctx, `<b>${html(title)}</b>\n${uids.length ? `Страница ${page} из ${totalPages}` : 'Книг пока нет.'}`, [...rows, this.menu(ctx)]);
         }
         if (action === 'favorites' || action === 'following') {
-            if (action === 'following' && !this.rate(ctx.chatId, 'following', 2)) return this.reply(ctx, 'Подождите минуту перед повторной проверкой новинок.', [this.menu(ctx)]);
+            const refresh = action === 'following' && payload.page === undefined;
+            if (refresh && !this.rate(ctx.chatId, 'following', 2)) return this.reply(ctx, 'Подождите минуту перед повторной проверкой новинок.', [this.menu(ctx)]);
             const follows = this.worker.libraryFollows || (this.worker.libraryFollows = new (require('./LibraryFollows'))(this.worker));
-            const result = await follows.list(user.id, action === 'following');
+            const result = await follows.list(user.id, refresh);
+            const totalPages = Math.max(1,Math.ceil(result.books.length/PAGE_SIZE)),page = Math.min(pageNumber(payload.page),totalPages);
             const rows = action === 'favorites' ? result.follows.map(follow => [button(follow.value, 'entity', {kind: follow.kind, name: follow.value})])
-                : result.books.slice(0, 12).map(book => [button(book.title, 'book', {uid: book._uid})]);
-            return this.reply(ctx, action === 'favorites' ? '<b>Избранные авторы и серии</b>' : `<b>Новое у любимых</b>\n${result.books.length ? `Найдено: ${result.books.length}. Показаны первые 12.` : 'Новых книг пока нет.'}`, [...rows, this.menu(ctx)]);
+                : result.books.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE).map(book => [button(book.title, 'book', {uid: book._uid})]);
+            if (action === 'following') {
+                const pages = [];
+                if (page>1) pages.push(button('← Назад','following',{page:page-1}));
+                if (page<totalPages) pages.push(button('Далее →','following',{page:page+1}));
+                if (pages.length) rows.push(pages);
+            }
+            return this.reply(ctx, action === 'favorites' ? '<b>Избранные авторы и серии</b>' : `<b>Новое у любимых</b>\n${result.books.length ? `Найдено: ${result.books.length} · Страница ${page} из ${totalPages}${result.truncated ? '\nПоказаны первые 200 совпадений.' : ''}` : 'Новых книг пока нет.'}`, [...rows, this.menu(ctx)]);
         }
         throw new Error('Неизвестная команда бота');
     }

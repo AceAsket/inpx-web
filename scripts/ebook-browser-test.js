@@ -123,7 +123,7 @@ async function pageRecent(context,base,title){
         assert(Buffer.byteLength(firstText)<10000,'A reader document sends one small page');
         await page.locator('.pagination').first().getByRole('link',{name:'Следующая',exact:true}).click();
         assert.notEqual(await page.locator('.reading').textContent(),firstText);assert.equal(new URL(page.url()).searchParams.get('page'),'2');
-        await page.getByRole('navigation',{name:'Размер текста'}).getByRole('link',{name:'Крупнее',exact:true}).click();assert.equal(new URL(page.url()).searchParams.get('font'),'26');assert.equal(new URL(page.url()).searchParams.get('page'),'2');
+        await page.getByRole('navigation',{name:'Размер текста'}).getByRole('link',{name:'Крупнее',exact:true}).click();assert.equal(new URL(page.url()).searchParams.get('font'),'36');assert.equal(new URL(page.url()).searchParams.get('page'),'2');
         await page.screenshot({path:path.join(directory,'ebook-read-320.png'),fullPage:true});
         assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
         await page.getByRole('link',{name:'О книге',exact:true}).click();

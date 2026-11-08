@@ -40,7 +40,8 @@ class LibraryRepository {
             this.discoveryKey = '';
             this.patch({...emptyState(), revision: this.epoch, locked: !personalAccess(config, settings)});
         }
-        const discoveryKey = JSON.stringify([discoveryOptions(settings), config.discovery?.enabled, settings.showDiscoverySimilar !== false]);
+        const discoveryKey = JSON.stringify([discoveryOptions(settings), config.discovery?.enabled, settings.showDiscoverySimilar !== false,
+            config.currentUserProfile?.personalRecommendationsEnabled !== false]);
         if (discoveryKey !== this.discoveryKey) {
             this.discoveryKey = discoveryKey;
             delete this.loadedAt.shelves;
@@ -48,7 +49,7 @@ class LibraryRepository {
             delete this.loadedAt.recommendations;
             delete this.pending.recommendations;
             this.patch({shelvesLoading: false, recommendationsLoading: false,
-                ...(settings.showDiscoverySimilar === false ? {recommendations: []} : {})});
+                ...(settings.showDiscoverySimilar === false || config.currentUserProfile?.personalRecommendationsEnabled === false ? {recommendations: []} : {})});
         }
     }
 
@@ -118,6 +119,7 @@ class LibraryRepository {
 
     loadRecommendations(force = false) {
         if (this.config.discovery?.enabled === false || !this.config.profileAuthorized || this.settings.showDiscoverySimilar === false
+            || this.config.currentUserProfile?.personalRecommendationsEnabled === false
             || !this.config.clientApi?.features?.includes('overviewRecommendations')) {
             this.patch({recommendations: [], recommendationsLoaded: true});
             return Promise.resolve();

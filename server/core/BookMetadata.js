@@ -48,7 +48,7 @@ async function epubMetadata(file, config = {}) {
         const read = async(name, maximum) => {
             checkAbort();
             if (Number(entries.get(name)?.size) > maximum) throw oversized();
-            if (reader.archiveType === '7z') {
+            if (reader.uses7z) {
                 reader.maxOutputBytes = maximum;
                 const data = await reader.extractToBuf(name);
                 if (data.length > maximum) throw oversized();

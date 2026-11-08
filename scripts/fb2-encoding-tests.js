@@ -70,7 +70,7 @@ async function testFb2DownloadsNormalizeEncodingAndRepairLegacyCache() {
         const parser = new Fb2Parser(); parser.fromString(raw.toString(), {lowerCase: true});
         assert.strictEqual(parser.bookInfo().titleInfo.bookTitle, record.title);
         const descriptor = await fs.readJson(path.join(bookDir, `${fileHash.hash}.d.json`));
-        assert.strictEqual(descriptor.assetVersion, 'fb2-encoding-v6');
+        assert.strictEqual(descriptor.assetVersion, 'fb2-images-v7');
         assert.strictEqual(descriptor.size, raw.length);
         const zip = await fetch(`${base}/book/by-uid?uid=encoding-fixture&zip=1`);
         const file = path.join(dir, 'download.zip'); await fs.writeFile(file, Buffer.from(await zip.arrayBuffer()));

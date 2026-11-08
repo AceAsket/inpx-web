@@ -55,6 +55,7 @@ async function fixture(directory) {
         assert(!await fs.pathExists(path.join(dataDir, 'db/catalog_lookup')), 'Startup must not build an unused suggestions index');
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [];
+        page.setDefaultTimeout(15000); page.setDefaultNavigationTimeout(15000);
         let externalFixture = false;
         let cardGridFixture = false;
         const gridBooks = Array.from({length:6}, (_, index) => ({_uid:`card-grid-${index}`, ext:'fb2', lang:'ru', genre:'prose', size:300,
@@ -65,12 +66,15 @@ async function fixture(directory) {
         let galleryFixture = 'actual';
         const suggestionRequests = new Map();
         const suggestionScopes = [];
+        const searchRequests = [];
+        const profilePreferenceReplies = [];
         const invalidBookRequests = [];
         const inactiveReaderRequests = [];
         await page.routeWebSocket('**', socket => {
             const server = socket.connectToServer(), suggestions = new Map(), configs = new Set(), galleries = new Set();
             socket.onMessage(message => {
                 const request = JSON.parse(String(message));
+                if (request.query && /search/i.test(request.action)) searchRequests.push({action:request.action,from:request.from,query:request.query});
                 if (request.action === 'get-book-info' && !request.bookUid) invalidBookRequests.push({card: request.card, readerOnly: request.readerOnly, url: page.url()});
                 if (request.action === 'get-book-info' && request.readerOnly && !page.url().includes('#/reader')) inactiveReaderRequests.push(request.bookUid);
                 if (request.action === 'catalog-suggest') {
@@ -98,6 +102,7 @@ async function fixture(directory) {
                 const response = JSON.parse(String(message));
                 if (configs.has(response.requestId) && !response._rok) {
                     configs.delete(response.requestId);
+                    if (response.currentUserProfile) profilePreferenceReplies.push(response.currentUserProfile.personalRecommendationsEnabled);
                     if (externalFixture) {
                         response.discovery = {...response.discovery, enabled: true, externalSource: 'web-page', externalName: 'Тестовая витрина', externalUrl: 'https://example.invalid/catalog'};
                         socket.send(JSON.stringify(response)); return;
@@ -154,6 +159,37 @@ async function fixture(directory) {
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
         await page.goto(base + '/#/books?lang=ru');
         const input = page.locator('.catalog-search-panel__main input').first();
+        // A lone query follows the selected field without a hidden title filter.
+        // Theme changes must preserve the same primary field immediately.
+        for (const [section,label,field] of [['Авторы','Автор','author'],['Серии','Серия','series'],['Названия','Название книги','title']]) {
+            await input.fill('Туман');await input.press('Enter');
+            await page.locator('.catalog-search-panel__section').click();
+            await page.getByRole('option',{name:section,exact:true}).click();
+            await page.waitForURL(url=>new URLSearchParams(url.hash.split('?')[1]).get(field)==='*Туман');
+            assert.equal(await input.getAttribute('aria-label'),label);
+            const params=new URLSearchParams(page.url().split('?')[1]);
+            for(const other of ['author','series','title'].filter(name=>name!==field))assert(!params.get(other),'Switching a single query must clear the previous field');
+            await input.press('Escape');
+            await page.getByRole('button',{name:'Настройки библиотеки',exact:true}).click();
+            await page.getByRole('button',{name:/^Классический/}).click();
+            await page.locator('.search-list-toggle').waitFor();
+            await page.getByRole('button',{name:'Настройки',exact:true}).click();
+            await page.getByRole('button',{name:/^Новый дизайн/}).click();
+            await page.getByRole('navigation',{name:'Разделы библиотеки'}).waitFor();
+            assert.equal(await input.getAttribute('aria-label'),label);
+            assert.equal(await input.inputValue(),'Туман');
+            await input.fill('Туман');await input.press('Enter');
+            for(let i=0;i<30&&!searchRequests.some(request=>request.from===field&&request.query[field]==='*Туман');i++)await pause(100);
+            assert(searchRequests.some(request=>request.from===field&&request.query[field]==='*Туман'),field+' reaches the server in the selected query field');
+            await screenshot('search-'+field+'-1440');
+            await page.setViewportSize({width:320,height:780});await geometry('search '+field+' 320');
+            await screenshot('search-'+field+'-320');await page.setViewportSize({width:1440,height:1000});
+        }
+        await page.goto(base+'/#/series?lang=ru&author=*Туман&title=*Туман');
+        await page.locator('.catalog-search-panel__extra input').last().waitFor();
+        assert.equal(await input.getAttribute('aria-label'),'Серия');
+        assert.deepEqual(await page.locator('.catalog-search-panel__extra .catalog-text-field__input input').evaluateAll(nodes=>nodes.map(node=>node.value)),['Туман','Туман']);
+        await page.goto(base+'/#/books?lang=ru');
         await input.fill('Те'); await input.press('Enter');
         await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).get('title') === '*Те');
         await pause(600);
@@ -413,10 +449,28 @@ async function fixture(directory) {
         assert((await fullPreview.locator('.book-actions-series').textContent()).includes(gridBooks[0].series));
         const seriesHref=await fullPreview.locator('.book-actions-series').getAttribute('href');
         assert.equal(new URLSearchParams(seriesHref.split('?')[1]).get('name'),gridBooks[0].series);
+        for(const enabled of [false,true]) {
+            await page.setViewportSize({width:1440,height:1000});
+            await page.goto(base+'/#/profile');
+            await page.getByRole('button',{name:/^Профили и личные настройки/}).click();
+            await page.locator('.profile-card--current').getByRole('button',{name:'Настройки',exact:true}).click();
+            const preference=page.getByRole('switch',{name:'Персональные рекомендации',exact:true});
+            await preference.waitFor();assert.equal(await preference.getAttribute('aria-checked'),String(!enabled));
+            await preference.click();const replies=profilePreferenceReplies.length;
+            await page.getByRole('button',{name:'Сохранить изменения',exact:true}).click();
+            for(let i=0;i<100&&!profilePreferenceReplies.slice(replies).includes(enabled);i++)await pause(100);
+            assert(profilePreferenceReplies.slice(replies).includes(enabled),'The saved profile preference is returned by the server');
+            await page.reload();
+            await page.getByRole('button',{name:/^Профили и личные настройки/}).click();
+            await page.locator('.profile-card--current').getByRole('button',{name:'Настройки',exact:true}).click();
+            await preference.waitFor();assert.equal(await preference.getAttribute('aria-checked'),String(enabled));
+            await preference.scrollIntoViewIfNeeded();await screenshot('profile-recommendations-'+enabled+'-1440');
+            await page.getByRole('button',{name:'Закрыть',exact:true}).click();
+        }
         assert.deepEqual(errors, []);
         assert.deepEqual(invalidBookRequests, [], 'Deactivated book pages must not reload with an empty UID');
         assert.deepEqual(inactiveReaderRequests, [], 'A cached reader must not prepare documents while another page is active');
-        await fs.writeJson(path.join(directory, 'result.json'), {base, errors, depth, cardGridGeometry, suggestionScopes, suggestionRequests: Object.fromEntries(suggestionRequests)}, {spaces: 2});
+        await fs.writeJson(path.join(directory, 'result.json'), {base, errors, depth, cardGridGeometry, suggestionScopes, searchRequests, suggestionRequests: Object.fromEntries(suggestionRequests)}, {spaces: 2});
         console.log('Catalog discovery browser: OK. Artifacts: ' + directory);
     } catch (error) {
         if (browser) {const page = browser.contexts().flatMap(context => context.pages())[0]; if (page) {await page.screenshot({path: path.join(directory, 'failure.png')}).catch(() => {}); await fs.writeFile(path.join(directory, 'failure.html'), await page.content());}}

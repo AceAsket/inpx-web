@@ -8,9 +8,9 @@
 
 ### Возможности
 
-**Для тестирования: 1.8.2-rc.18.** [OPDS 2.0](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/opds-v2.md) по `/opds/v2`, отдельная полка рекомендаций в «Обзоре», MOBI по умолчанию. В карточке — иконки приложения, отдельная отправка Telegram/Email и возврат из полного описания. Обновлён индикатор поиска и остановка процессов Windows. Сохраняются `/ebook`, форматы профиля, системные голоса и [KOSync для KOReader](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/koreader-sync.md). [Изменения RC18](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/rc18-release-notes.md). Стабильный `latest` остаётся на 1.8.1.
+**Для тестирования: 1.8.2-rc.19.** Исправлено переключение поиска по названию, автору и серии. ZIP PPMd читается через 7-Zip; можно отключать персональные рекомендации, исправлены картинки FB2 при конвертации; обновлены Telegram-бот, `/ebook`, имена скачивания, оценки на обложках и компактный QR приложения. [Изменения RC19](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.19/docs/rc19-release-notes.md). Стабильный `latest` остаётся на 1.8.1.
 
-- RC14 исправляет исчерпание памяти базы при проверке производительности: проба читает одну запись. «Свои значения» проверяют лимиты с метриками CPU и памяти; отказ базы показан явно. Клик по книге снова открывает превью, полная карточка доступна отдельно. Обновлены вкладки и «Об авторе», отзывы и оценки показывают реальный прогресс. [Изменения RC14](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/rc14-release-notes.md), [профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/resource-profiles.md). Сохраняются изоляция профилей, стабильные ссылки и бюджеты кэшей RC13; [настройки памяти](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/memory-and-loading.md). Полный образ поддерживает EPUB → FB2.
+- RC14 исправляет исчерпание памяти базы при проверке производительности: проба читает одну запись. «Свои значения» проверяют лимиты с метриками CPU и памяти; отказ базы показан явно. Клик по книге снова открывает превью, полная карточка доступна отдельно. Обновлены вкладки и «Об авторе», отзывы и оценки показывают реальный прогресс. [Изменения RC14](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.19/docs/rc14-release-notes.md), [профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.19/docs/resource-profiles.md). Сохраняются изоляция профилей, стабильные ссылки и бюджеты кэшей RC13; [настройки памяти](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.19/docs/memory-and-loading.md). Полный образ поддерживает EPUB → FB2.
 - Подсказки от трёх символов работают без подготовки и опроса; обычный поиск доступен сразу. Галерея: до 18 иллюстраций, 2 МиБ на изображение, 8 МиБ суммарно, 32 МиБ FB2 XML. Диагностика: `failedByCode`, `failedByKind`. Telegram: напрямую, через окружение сервера или свой HTTP(S)/SOCKS5; пароль хранится отдельно.
 - Поиск по автору, названию, серии, жанру, языку и источнику; несколько библиотек в одном каталоге.
 - Обложки и их кэширование, поддержка WebP и JXL.
@@ -32,8 +32,8 @@ Android-клиент подключается по QR с адресом без �
 
 | Тег | Назначение |
 | --- | --- |
-| `1.8.2-rc.18` | Ограниченная проверка ресурсов, свои лимиты и метрики CPU/памяти, превью и прогресс загрузки; все возможности RC13. |
-| `1.8.2-rc.18-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
+| `1.8.2-rc.19` | Ограниченная проверка ресурсов, свои лимиты и метрики CPU/памяти, превью и прогресс загрузки; все возможности RC13. |
+| `1.8.2-rc.19-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
 | `1.8.1` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.1`. |
 | `1.8.1-silero` | Отдельный сервис озвучки для стабильной версии. |
@@ -126,9 +126,9 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 ### Features
 
-**For testing: 1.8.2-rc.18.** [OPDS 2.0](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/opds-v2.md) at `/opds/v2`, an independently loaded recommendation shelf, and MOBI enabled by default. Book cards use the application icons, separate Telegram/email delivery, and return from full details. Updated loading indicators and Windows process-tree cancellation. Includes `/ebook`, profile formats, system voices, and [KOReader KOSync](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/koreader-sync.md). [RC18 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/rc18-release-notes.md). Stable `latest` remains at 1.8.1.
+**For testing: 1.8.2-rc.19.** Fixed search-field switching, ZIP PPMd decoding through 7-Zip, Telegram profile linking and pagination, larger `/ebook` controls, readable download names, cover ratings and compact optional app QR. [RC19 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.19/docs/rc19-release-notes.md). Stable `latest` remains at 1.8.1.
 
-- RC14 fixes database-worker memory exhaustion during performance checks by probing one catalog row. Custom values test limits with CPU/memory metrics; database failure is reported clearly. Book previews return with a separate full-card link. Tabs and author details are updated, and reviews and ratings show measured progress. [RC14 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/rc14-release-notes.md), [resource profiles](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/resource-profiles.md). Includes RC13 profile isolation, stable links and bounded caches; [memory settings](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.18/docs/memory-and-loading.md). Full images support EPUB → FB2 reading.
+- RC14 fixes database-worker memory exhaustion during performance checks by probing one catalog row. Custom values test limits with CPU/memory metrics; database failure is reported clearly. Book previews return with a separate full-card link. Tabs and author details are updated, and reviews and ratings show measured progress. [RC14 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.19/docs/rc14-release-notes.md), [resource profiles](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.19/docs/resource-profiles.md). Includes RC13 profile isolation, stable links and bounded caches; [memory settings](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.19/docs/memory-and-loading.md). Full images support EPUB → FB2 reading.
 - Suggestions from three characters need no preparation or polling; search is available immediately. Gallery: up to 18 illustrations, 2 MiB/image, 8 MiB total, 32 MiB FB2 XML. Diagnostics: `failedByCode`, `failedByKind`. Telegram: direct, server-environment or custom HTTP(S)/SOCKS5 proxy; passwords stored separately.
 - Search by author, title, series, genre, language and source; multiple libraries in one catalog.
 - Cover extraction and caching, including WebP and JXL support.
@@ -150,8 +150,8 @@ Connect Android through a QR containing the server address without credentials. 
 
 | Tag | Purpose |
 | --- | --- |
-| `1.8.2-rc.18` | Bounded resource checks, custom limits and CPU/memory metrics, book previews and loading progress; all RC13 features. |
-| `1.8.2-rc.18-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
+| `1.8.2-rc.19` | Bounded resource checks, custom limits and CPU/memory metrics, book previews and loading progress; all RC13 features. |
+| `1.8.2-rc.19-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
 | `1.8.1` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.1`. |
 | `1.8.1-silero` | Separate speech service for the stable release. |

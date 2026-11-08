@@ -661,6 +661,8 @@ class ReadingListStore {
         normalized.telegramBotId = /^\d{1,20}$/.test(String(normalized.telegramBotId || '')) ? String(normalized.telegramBotId) : '';
         normalized.telegramBotChatId = /^\d{1,20}$/.test(String(normalized.telegramBotChatId || '')) ? String(normalized.telegramBotChatId) : '';
         normalized.telegramBotLinkedAt = String(normalized.telegramBotLinkedAt || '').slice(0, 40);
+        normalized.telegramBotAutoLinked = normalized.telegramBotAutoLinked === true;
+        normalized.telegramBotBlocked = normalized.telegramBotBlocked === true;
         normalized.telegramDigest = normalized.telegramDigest === true;
         normalized.telegramDigestAt = String(normalized.telegramDigestAt || '').slice(0, 40);
         normalized.telegramDigestSeen = (Array.isArray(normalized.telegramDigestSeen) ? normalized.telegramDigestSeen : [])
@@ -672,6 +674,7 @@ class ReadingListStore {
         normalized.emailAsZip = normalized.emailAsZip === true;
         normalized.telegramAsZip = normalized.telegramAsZip === true;
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
+        normalized.personalRecommendationsEnabled = normalized.personalRecommendationsEnabled !== false;
         normalized.opdsAuthEnabled = (normalized.opdsAuthEnabled === true);
         normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
         normalized.readerProgress = this.normalizeReaderProgress(normalized.readerProgress);
@@ -1092,23 +1095,47 @@ class ReadingListStore {
     }
 
     async findTelegramUser(botId, chatId) {
+        botId=String(botId);chatId=String(chatId);
+        if(!/^[1-9]\d{0,19}$/.test(botId)||!/^[1-9]\d{0,19}$/.test(chatId)||!Number.isSafeInteger(Number(chatId)))return null;
         const data = await this.load();
-        return data.users.find(user => user.telegramBotId === String(botId) && user.telegramBotChatId === String(chatId) && user.telegramBotLinkedAt) || null;
+        const configured=data.users.filter(user=>user.telegramChatId===chatId && (user.id!=='default'||user.login));
+        const linked=data.users.filter(user=>user.telegramBotId===botId&&user.telegramBotChatId===chatId&&user.telegramBotLinkedAt);
+        if(linked.length) {
+            const user=linked[0];
+            return linked.length===1&&!user.telegramBotBlocked&&(!user.telegramBotAutoLinked||configured.length===1&&configured[0].id===user.id) ? user:null;
+        }
+        if(configured.length!==1||configured[0].telegramBotBlocked||configured[0].telegramBotLinkedAt&&!configured[0].telegramBotAutoLinked)return null;
+        // Persist once so digests and profile status use the same binding. The
+        // serialized mutation rechecks uniqueness after concurrent profile edits.
+        return this.changeTelegramBinding(configured[0].id,'auto-link',{botId,chatId});
     }
 
     async changeTelegramBinding(userId, operation, patch = {}) {
         const data = await this.load(), user = data.users.find(user => user.id === userId);
         if (!user || user.id === 'default' && !user.login) throw new Error('Личный профиль не найден');
-        if (operation === 'link') {
+        if (operation === 'link' || operation === 'auto-link') {
             const botId = String(patch.botId || ''), chatId = String(patch.chatId || '');
             if (!/^\d{1,20}$/.test(botId) || !/^\d{1,20}$/.test(chatId)) throw new Error('Некорректная привязка Telegram');
-            if (data.users.some(row => row.id !== userId && row.telegramBotId === botId && row.telegramBotChatId === chatId))
+            if(operation==='auto-link') {
+                const configured=data.users.filter(row=>row.telegramChatId===chatId&&(row.id!=='default'||row.login));
+                if(configured.length!==1||configured[0].id!==userId||user.telegramBotBlocked)return null;
+                if(user.telegramBotLinkedAt&&user.telegramBotId===botId&&user.telegramBotChatId===chatId)return user;
+                if(user.telegramBotLinkedAt&&!user.telegramBotAutoLinked)return null;
+                if(data.users.some(row=>row.id!==userId&&row.telegramBotId===botId&&row.telegramBotChatId===chatId&&row.telegramBotLinkedAt))return null;
+            }
+            const previous=data.users.filter(row=>row.id!==userId&&row.telegramBotId===botId&&row.telegramBotChatId===chatId);
+            if(previous.some(row=>!row.telegramBotAutoLinked))
                 throw new Error('Этот Telegram уже привязан к другому профилю. Сначала отключите прежнюю привязку');
+            // A one-time link proves ownership of the Telegram account. A
+            // configured address must not reserve someone else's chat forever.
+            for(const row of previous) Object.assign(row,{telegramBotId:'',telegramBotChatId:'',telegramBotLinkedAt:'',
+                telegramBotAutoLinked:false,telegramBotBlocked:true,telegramDigest:false,telegramDigestAt:'',telegramDigestSeen:[]});
             Object.assign(user, {telegramBotId: botId, telegramBotChatId: chatId, telegramChatId: chatId,
-                telegramBotLinkedAt: this.nowIso(), telegramDigest: false, telegramDigestAt: '', telegramDigestSeen: []});
+                telegramBotLinkedAt: this.nowIso(), telegramBotAutoLinked:operation==='auto-link',telegramBotBlocked:false,
+                telegramDigest: false, telegramDigestAt: '', telegramDigestSeen: []});
         } else if (operation === 'unlink') {
             if (user.telegramChatId === user.telegramBotChatId) user.telegramChatId = '';
-            Object.assign(user, {telegramBotId: '', telegramBotChatId: '', telegramBotLinkedAt: '', telegramDigest: false,
+            Object.assign(user, {telegramBotId: '', telegramBotChatId: '', telegramBotLinkedAt: '', telegramBotAutoLinked:false,telegramBotBlocked:true,telegramDigest: false,
                 telegramDigestAt: '', telegramDigestSeen: []});
         } else if (operation === 'digest') user.telegramDigest = patch.enabled === true;
         else if (operation === 'digest-sent') {
@@ -1223,11 +1250,13 @@ class ReadingListStore {
             emailAsZip: profile.emailAsZip,
             telegramAsZip: profile.telegramAsZip,
             opdsEnabled: profile.opdsEnabled,
+            personalRecommendationsEnabled: profile.personalRecommendationsEnabled,
             opdsAuthEnabled: profile.opdsAuthEnabled,
             isAdmin: false,
         });
         if (user.opdsAuthEnabled && (!user.login || !user.passwordHash))
             throw new Error('Для OPDS-авторизации у профиля должен быть логин и пароль');
+        this.checkTelegramChatOwner(data,user.id,user.telegramChatId);
 
         data.users.push(user);
         await this.save(data);
@@ -1254,8 +1283,13 @@ class ReadingListStore {
             target.passwordHash = String(patch.passwordHash || '').trim();
         if (utilsHasProp(patch, 'emailTo'))
             target.emailTo = String(patch.emailTo || '').trim();
-        if (utilsHasProp(patch, 'telegramChatId'))
-            target.telegramChatId = String(patch.telegramChatId || '').trim();
+        if (utilsHasProp(patch, 'telegramChatId')) {
+            const chatId=String(patch.telegramChatId || '').trim();
+            if(chatId!==target.telegramChatId)this.checkTelegramChatOwner(data,target.id,chatId);
+            if(chatId!==target.telegramChatId) Object.assign(target,{telegramBotId:'',telegramBotChatId:'',telegramBotLinkedAt:'',
+                telegramBotAutoLinked:false,telegramBotBlocked:false,telegramDigest:false,telegramDigestAt:'',telegramDigestSeen:[]});
+            target.telegramChatId = chatId;
+        }
         if (utilsHasProp(patch, 'defaultDownloadFormat'))
             target.defaultDownloadFormat = bookFormats.normalize(patch.defaultDownloadFormat);
         for (const field of ['defaultEmailFormat', 'defaultTelegramFormat', 'defaultOpdsFormat']) {
@@ -1266,6 +1300,8 @@ class ReadingListStore {
         }
         if (utilsHasProp(patch, 'opdsEnabled'))
             target.opdsEnabled = (patch.opdsEnabled !== false);
+        if (utilsHasProp(patch, 'personalRecommendationsEnabled'))
+            target.personalRecommendationsEnabled = patch.personalRecommendationsEnabled !== false;
         if (utilsHasProp(patch, 'opdsAuthEnabled'))
             target.opdsAuthEnabled = (patch.opdsAuthEnabled === true);
         if (utilsHasProp(patch, 'readerPreferences'))
@@ -1276,6 +1312,12 @@ class ReadingListStore {
 
         await this.save(data);
         return target;
+    }
+
+    checkTelegramChatOwner(data,userId,chatId) {
+        if(this.config.telegramBotEnabled!==true||!/^[1-9]\d{0,19}$/.test(chatId))return;
+        if(data.users.some(row=>row.id!==userId&&(row.telegramChatId===chatId||row.telegramBotChatId===chatId&&row.telegramBotLinkedAt)))
+            throw new Error('Этот личный Chat ID уже используется другим профилем');
     }
 
     async getReaderState(userId = '', bookUid = '') {
@@ -2079,6 +2121,7 @@ class ReadingListStore {
                 emailAsZip: user.emailAsZip === true,
                 telegramAsZip: user.telegramAsZip === true,
                 opdsEnabled: user.opdsEnabled,
+                personalRecommendationsEnabled: user.personalRecommendationsEnabled !== false,
                 opdsAuthEnabled: user.opdsAuthEnabled,
                 readerPreferences: await this.assets.inlinePreferences(user.id, this.normalizeReaderPreferences(user.readerPreferences)),
                 readerProgress: this.normalizeReaderProgress(user.readerProgress),
@@ -2133,6 +2176,8 @@ class ReadingListStore {
             }
             if (utilsHasProp(incomingUser, 'opdsEnabled'))
                 target.opdsEnabled = (incomingUser.opdsEnabled !== false);
+            if (utilsHasProp(incomingUser, 'personalRecommendationsEnabled'))
+                target.personalRecommendationsEnabled = incomingUser.personalRecommendationsEnabled !== false;
             if (utilsHasProp(incomingUser, 'opdsAuthEnabled'))
                 target.opdsAuthEnabled = (incomingUser.opdsAuthEnabled === true);
             if (utilsHasProp(incomingUser, 'readerPreferences'))

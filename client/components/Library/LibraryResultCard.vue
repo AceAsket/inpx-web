@@ -1,11 +1,11 @@
 <template>
     <article class="library-result-card" :class="{'library-result-card--compact': compact}">
         <div class="library-result-card__cover">
-            <button type="button" :aria-label="`Открыть карточку: ${book.title}`" @click="library.openCard(book)"><BookCover :book="book" /></button>
+            <button type="button" :aria-label="`Открыть карточку: ${book.title}`" @click="library.openCard(book)"><BookCover :book="book" :show-rating="showRates" /></button>
             <q-checkbox v-if="selectable" :model-value="selected" dense class="library-result-card__select" :aria-label="`Выбрать: ${book.title}`" @update:model-value="$emit('selection', $event)" />
         </div>
         <div class="library-result-card__body">
-            <div class="library-result-card__top"><span>{{ (book.ext || 'КНИГА').toUpperCase() }}<span v-if="showRates && book.librate"> · ★ {{ book.librate }}/5</span></span><button type="button" :aria-label="`Действия с книгой: ${book.title}`" @click="library.openActions(book)"><q-icon name="la la-ellipsis-v" size="22px" /></button></div>
+            <div class="library-result-card__top"><span>{{ (book.ext || 'КНИГА').toUpperCase() }}</span><button type="button" :aria-label="`Действия с книгой: ${book.title}`" @click="library.openActions(book)"><q-icon name="la la-ellipsis-v" size="22px" /></button></div>
             <button type="button" class="library-result-card__title" @click="library.openCard(book)">{{ book.title || 'Без названия' }}</button>
             <button v-if="book.author" type="button" class="library-result-card__author" @click="$emit('action', 'authorClick')">{{ book.author }}</button>
             <button v-if="book.series" type="button" class="library-result-card__series" @click="$emit('action', 'seriesClick')">{{ book.series }}<span v-if="book.serno"> · {{ book.serno }}</span></button>

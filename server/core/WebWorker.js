@@ -64,8 +64,8 @@ const discoveryCacheBytes = 8 * 1024 ** 2;
 const discoveryStaleGrace = 24 * 60 * 60 * 1000;
 const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
-const fb2AssetVersion = 'fb2-encoding-v6';
-const bookInfoVersion = 'fb2-encoding-v8';
+const fb2AssetVersion = 'fb2-images-v7';
+const bookInfoVersion = 'fb2-images-v9';
 const bookCardVersion = 'card-v1';
 const bookGalleryLimit = 18;
 
@@ -2454,6 +2454,7 @@ class WebWorker {
 
         if (options.recommendationsOnly === true) {
             const user = await this.requireAuthorizedUser(options.userId, options.profileAccessToken);
+            if (user.personalRecommendationsEnabled === false) return {shelves:[]};
             const limit = Math.max(1, Math.min(parseInt(options.personalLimit,10) || 12,24));
             const shelf = await this.buildSimilarBooksShelfV2(user,limit);
             return {shelves:shelf?.items?.length ? [shelf] : []};
@@ -3176,6 +3177,9 @@ class WebWorker {
     }
 
     async buildSimilarBooksShelfV2(user = null, limit = 8, context = null) {
+        if (user?.personalRecommendationsEnabled === false)
+            return {id:'similar-books',title:'Персональные рекомендации',source:'personal',items:[],
+                emptyMessage:'Персональные рекомендации отключены в настройках профиля.'};
         if (!user || !user.id) {
             return {
                 id: 'similar-books',
@@ -3491,7 +3495,7 @@ class WebWorker {
             await this.buildUnfinishedSeriesShelfV2(user, limit, context),
         ];
 
-        if (options && options.personalSimilarEnabled !== false) {
+        if (options && options.personalSimilarEnabled !== false && user.personalRecommendationsEnabled !== false) {
             const similarLimit = Math.max(limit, Math.min(parseInt(options.personalSimilarLimit, 10) || Math.max(limit, 16), 96));
             shelves.push(await this.buildSimilarBooksShelfV2(user, similarLimit, context));
         }
@@ -3545,6 +3549,8 @@ class WebWorker {
                 series: book.series || '',
                 serno: book.serno || '',
                 ext: book.ext || '',
+                librate: book.librate || 0,
+                del: book.del || 0,
                 percent: Math.max(0, Math.min(1, Number(item.progress.percent || 0) || 0)),
                 sectionId: String(item.progress.sectionId || '').trim(),
                 pageIndex: Math.max(0, Math.round(Number(item.progress.pageIndex || 0) || 0)),
@@ -3610,6 +3616,8 @@ class WebWorker {
                 series: metadata.series || '',
                 serno: metadata.serno || '',
                 ext: metadata.ext || '',
+                librate: metadata.librate || 0,
+                del: metadata.del || 0,
                 unavailable: !book,
                 percent: item.progress.percent,
                 hidden: item.progress.hidden === true,
@@ -3814,6 +3822,7 @@ class WebWorker {
                 defaultOpdsFormat: profileAuthorized ? bookFormats.preference(user, 'opds') : 'original',
                 emailAsZip: profileAuthorized && user.emailAsZip === true,
                 telegramAsZip: profileAuthorized && user.telegramAsZip === true,
+                personalRecommendationsEnabled: user.personalRecommendationsEnabled !== false,
                 opdsEnabled: user.opdsEnabled !== false,
                 opdsAuthEnabled: user.opdsAuthEnabled === true,
                 readerPreferences: (profileAuthorized ? this.readingListStore.normalizeReaderPreferences(user.readerPreferences) : null),
@@ -3848,6 +3857,7 @@ class WebWorker {
         return withFileTransaction(this.readingListStore.file, async() => {
             const previous = await this.readingListStore.getUser(userId);
             const user = await this.readingListStore.updateUser(userId, patch);
+            if(previous.telegramChatId!==user.telegramChatId)this.telegramBot?.cancelDeliveries(userId);
             if (previous.passwordHash !== user.passwordHash || previous.login !== user.login)
                 this.revokeUserSessions(userId);
             return {user};
@@ -6168,6 +6178,7 @@ class WebWorker {
                     const libid = parseInt(path.basename(libFile, path.extname(libFile)), 10);
                     if (libid && await this.shouldInjectFblibraryImages(extractedFile, libFolder))
                         await this.injectFblibraryImages(extractedFile, libid, sourceLibDir, libFolder);
+                    await require('./Fb2Images').normalizeEmbeddedImages(extractedFile, this.config, this.libraryToolDirs(sourceLibDir));
                 } catch (error) {
                     await fs.remove(extractedFile);
                     throw error;
@@ -6427,7 +6438,8 @@ class WebWorker {
         const form = new FormData();
 
         form.append('chat_id', chatId);
-        form.append('caption', formatTemplate(this.config.telegramCaptionTemplate, book).trim());
+        const caption = formatTemplate(this.config.telegramCaptionTemplate, book).trim();
+        form.append('caption',caption.length>1024 ? caption.slice(0,1023).replace(/[\ud800-\udbff]$/,'').trimEnd()+'…' : caption);
         const document=fs.createReadStream(rawFile);
         form.append('document', document, downFileName);
 

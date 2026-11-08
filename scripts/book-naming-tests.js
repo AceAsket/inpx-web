@@ -98,7 +98,7 @@ async function testBookNamingAppliesToLegacyCacheAndSharedHttpDownloads() {
         const source = Buffer.from('<FictionBook><body><section><p>Original source</p></section></body></FictionBook>');
         const utils = require('../server/core/utils');
         await fs.writeFile(path.join(bookDir,hash), await utils.gzipBuffer(source));
-        await fs.writeJson(path.join(bookDir,hash+'.d.json'), {assetVersion:'fb2-encoding-v6',downFileName:'old.fb2',size:source.length});
+        await fs.writeJson(path.join(bookDir,hash+'.d.json'), {assetVersion:'fb2-images-v7',downFileName:'old.fb2',size:source.length});
         const worker = Object.create(require('../server/core/WebWorker').prototype);
         const config = {bookDir,bookPathStatic:'/book',rootPathStatic:'',publicFilesDir:dir,publicDir:dir,libDir:dir,
             bookFilenameTemplate:'[${NUMBER_PADDED} - ]${TITLE}'};
@@ -118,6 +118,8 @@ async function testBookNamingAppliesToLegacyCacheAndSharedHttpDownloads() {
                 assert.ok(response.headers.get('content-disposition').includes(encodeURIComponent(name)));
                 assert.match(response.headers.get('content-disposition'), /^attachment; filename="[A-Za-z0-9._ -]+\.fb2"; filename\*=UTF-8''/);
                 assert.ok(new URL(response.url).pathname.endsWith('.fb2'), 'Legacy devices can read the extension from the final URL');
+                assert.equal(decodeURIComponent(new URL(response.url).pathname.split('/').at(-1)), uid === 'one' ? '02 - Nazvanie.fb2' : '03 - Vtoraya.fb2',
+                    'A device using the URL instead of filename* gets a readable book name');
                 assert.ok(Buffer.from(await response.arrayBuffer()).equals(source));
             }
             let archiveIndex = 0;
@@ -135,7 +137,7 @@ async function testBookNamingAppliesToLegacyCacheAndSharedHttpDownloads() {
             await fs.remove(path.join(bookDir,hash+'.d.json'));
             worker.restoreBook = async(uid,folder,file,defaultName) => {
                 assert.strictEqual(defaultName, 'Автор О._Название.fb2', 'Cache descriptor must retain default name when launch template is removed');
-                await fs.writeJson(path.join(bookDir,hash+'.d.json'), {bookUid:uid,assetVersion:'fb2-encoding-v6',downFileName:defaultName,size:source.length});
+                await fs.writeJson(path.join(bookDir,hash+'.d.json'), {bookUid:uid,assetVersion:'fb2-images-v7',downFileName:defaultName,size:source.length});
                 return `/book/${hash}`;
             };
             assert.strictEqual((await fetch(`${base}/book/by-uid?uid=one&format=raw`)).status,200);
@@ -169,7 +171,16 @@ async function testBookNamingBatchZipKeepsDistinctNames() {
 async function testBookDownloadHeadersKeepOneExtensionForLegacyAndUnicodeForModernBrowsers() {
     const {fallbackFilename, disposition} = require('../server/core/BookDownloadHeaders');
     assert.equal(fallbackFilename('A. Writer.Book.mobi'), 'A_ Writer_Book.mobi');
-    assert.match(fallbackFilename('А. Автор.Книга.mobi'), /^book-[a-f0-9]+\.mobi$/);
+    assert.equal(fallbackFilename('А. Автор.Книга.mobi'), 'A_ Avtor_Kniga.mobi');
+    assert.equal(fallbackFilename('Anetta78_Туман.mobi'), 'Anetta78_Tuman.mobi');
+    assert.equal(fallbackFilename('Ёжик, Щука и Фьорд.epub'), 'Yozhik Shchuka i Ford.epub');
+    assert.equal(fallbackFilename('François – Café.pdf'), 'Francois Cafe.pdf');
+    assert.equal(fallbackFilename('..\\folder/../../Книга.mobi'), 'Kniga.mobi');
+    assert.equal(fallbackFilename('CON.mobi'), 'book-CON.mobi');
+    assert.match(fallbackFilename('漢字.mobi'), /^book-[a-f0-9]{12}\.mobi$/);
+    const long = 'Название '.repeat(100);
+    const first = fallbackFilename(long + 'Первый.mobi'), second = fallbackFilename(long + 'Второй.mobi');
+    assert(first.length <= 185); assert.match(first, /^Nazvanie.*-[a-f0-9]{12}\.mobi$/); assert.notEqual(first, second);
     assert.notEqual(fallbackFilename('Первая.mobi'), fallbackFilename('Вторая.mobi'));
     const header = disposition('А. Автор.Книга.mobi');
     assert.match(header, /^attachment; filename="[^".]+\.mobi"; filename\*=UTF-8''/);

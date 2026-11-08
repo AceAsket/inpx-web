@@ -107,5 +107,31 @@ async function testTelegramProbeAndDocumentUseSelectedFamilyOverRealHttps() {
     });
 }
 
+async function testTelegramLongCaptionStaysWithinLimitAndPreservesEmojiOverHttps() {
+    await temporary(async directory=>{
+        const certificate=await fs.readFile(path.join(__dirname,'fixtures/tls/localhost-cert.pem'));
+        const key=await fs.readFile(path.join(__dirname,'fixtures/tls/localhost-key.pem'));
+        const file=path.join(directory,'book.fb2');await fs.writeFile(file,'fixture');const captions=[];
+        const server=https.createServer({key,cert:certificate},(request,response)=>{
+            const chunks=[];request.on('data',chunk=>chunks.push(chunk));request.on('end',()=>{
+                const body=Buffer.concat(chunks).toString('utf8');captions.push(body.match(/name="caption"\r\n\r\n([\s\S]*?)\r\n--/)[1]);
+                response.setHeader('content-type','application/json');response.end('{"ok":true}');
+            });
+        });
+        await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+        const agent=new https.Agent({ca:certificate}),original=axios.post;
+        axios.post=(url,form,options)=>original(`https://localhost:${server.address().port}/sendDocument`,form,{...options,httpsAgent:agent,proxy:false});
+        try {
+            const value=worker({telegramShareEnabled:true,telegramBotToken:'fixture',telegramIpFamily:4,telegramCaptionTemplate:'${AUTHOR} - ${TITLE}'});
+            value.readingListStore={load:async()=>({users:[{id:'reader',telegramChatId:'101'}]})};
+            for(const author of ['Автор '.repeat(250),'😀'.repeat(600)]){
+                value.getDeliveryBookFile=async()=>({book:{author,title:'Книга'},rawFile:file,downFileName:'book.fb2'});
+                assert((await value.sendBookToTelegram('book','raw','reader')).success);
+            }
+            assert(captions.every(caption=>caption.length<=1024&&caption.endsWith('…')));
+            assert(captions[1].startsWith('😀😀'));assert(!captions[1].includes('\ufffd'),'No partial surrogate enters multipart UTF-8');
+        } finally {axios.post=original;agent.destroy();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+    });
+}
 module.exports = [testTelegramFamilyValidationAdminSettingsAndBackup, testTelegramFamilyPersistsAndEnvironmentOverridesSavedChoice,
-    testTelegramProbeAndDocumentUseSelectedFamilyOverRealHttps];
+    testTelegramProbeAndDocumentUseSelectedFamilyOverRealHttps,testTelegramLongCaptionStaysWithinLimitAndPreservesEmojiOverHttps];
