@@ -35,14 +35,24 @@ async function testConverterProcessTimeoutAndBoundedErrors() {
     try {
         const marker = path.join(dir, 'leaked-child');
         const ready = path.join(dir, 'child-ready');
-        const grandchild = `require('fs').writeFileSync(process.argv[1], 'ready');setTimeout(()=>require('fs').writeFileSync(process.argv[2], 'leaked'), 2200);`;
-        const parent = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)},process.argv[1],process.argv[2]],{stdio:'ignore',windowsHide:true});setInterval(()=>{},100);`;
+        const probe = path.join(dir, 'probe-after-timeout');
+        const grandchild = `const fs=require('fs');fs.writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{if(fs.existsSync(process.argv[3]))fs.writeFileSync(process.argv[2],'leaked');},20);`;
+        const parent = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)},process.argv[1],process.argv[2],process.argv[3]],{stdio:'ignore',windowsHide:true});setInterval(()=>{},100);`;
         const start = Date.now();
-        await assert.rejects(runtime.run(() => runProcess(process.execPath, ['-e', parent, ready, marker])), {code: 'INPX_CONVERSION_TIMEOUT'});
+        await assert.rejects(runtime.run(() => runProcess(process.execPath, ['-e', parent, ready, marker, probe])), {code: 'INPX_CONVERSION_TIMEOUT'});
         assert.ok(Date.now() - start < 10000);
         assert.ok(await fs.pathExists(ready), 'Grandchild must have started before timeout');
-        await sleep(1500);
-        assert.strictEqual(await fs.pathExists(marker), false, 'Timeout must kill descendant processes');
+        try {
+            // Probe only after cancellation has completed. A busy test runner can
+            // delay its timeout timer without implying a surviving descendant.
+            await fs.writeFile(probe,'probe');await sleep(500);
+            assert.strictEqual(await fs.pathExists(marker), false, 'Timeout must kill descendant processes before releasing the task');
+        } finally {
+            if (await fs.pathExists(marker)) {
+                const pid=Number(await fs.readFile(ready,'utf8'));
+                if(Number.isInteger(pid)&&pid>0)try{process.kill(pid,'SIGKILL');}catch{/* Test-owned process already terminated. */}
+            }
+        }
         await assert.rejects(runtime.run(() => runProcess(process.execPath, ['-e', "process.stderr.write('x'.repeat(200000));process.exitCode=1"])), error => {
             assert.match(error.message, /exit code 1/);
             assert.ok(Buffer.byteLength(error.message) < 66000);

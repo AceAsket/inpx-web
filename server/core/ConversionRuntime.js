@@ -1,6 +1,7 @@
 const {AsyncLocalStorage} = require('async_hooks');
 const {spawn} = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const resourceRuntime = require('./ResourceRuntime');
 
 const context = new AsyncLocalStorage();
@@ -68,14 +69,27 @@ class ConversionRuntime {
 
 function killTree(child) {
     if (!Number.isInteger(child.pid) || child.pid <= 0)
-        return;
+        return Promise.resolve();
     if (process.platform === 'win32') {
-        const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {windowsHide: true, stdio: 'ignore'});
-        killer.on('error', () => child.kill());
-        killer.on('exit', code => { if (code) child.kill(); });
+        const root = process.env.SystemRoot || process.env.WINDIR;
+        const command = root ? path.join(root,'System32','taskkill.exe') : 'taskkill.exe';
+        return new Promise(resolve => {
+            const killer = spawn(command, ['/PID', String(child.pid), '/T', '/F'], {windowsHide: true, stdio: 'ignore'});
+            let finished = false;
+            const finish = failed => {
+                if (finished) return;
+                finished = true;clearTimeout(timer);
+                if (failed) child.kill();
+                resolve();
+            };
+            const timer = setTimeout(() => {killer.kill();finish(true);},5000);
+            killer.once('error', () => finish(true));
+            killer.once('close', code => finish(code !== 0));
+        });
     } else {
         try { process.kill(-child.pid, 'SIGKILL'); }
         catch (error) { if (error.code !== 'ESRCH') child.kill('SIGKILL'); }
+        return Promise.resolve();
     }
 }
 
@@ -105,16 +119,18 @@ async function executeProcess(command, args, options, scope, signal) {
         let stderr = Buffer.alloc(0);
         let timedOut = false;
         let outputError = null, spawnError = null, outputBytes = 0, prefixComplete = false;
+        let termination = null;
+        const stop = () => {if (!termination) termination = killTree(child);};
         const chunks = [];
         let output = null, outputDone = Promise.resolve();
-        const abort = () => {outputError = Object.assign(new Error('Проверка отменена'), {code:'ABORT_ERR'}); killTree(child);};
+        const abort = () => {outputError = Object.assign(new Error('Проверка отменена'), {code:'ABORT_ERR'}); stop();};
         signal?.addEventListener('abort', abort, {once:true});
         if (options.outputFile) child.once('spawn', () => {
             output = fs.createWriteStream(options.outputFile);
             outputDone = new Promise(done => {
                 output.once('finish', done);
                 output.once('close', done);
-                output.once('error', error => {outputError = error; killTree(child); done();});
+                output.once('error', error => {outputError = error; stop(); done();});
             });
             child.stdout.pipe(output);
         });
@@ -123,16 +139,16 @@ async function executeProcess(command, args, options, scope, signal) {
             if (options.capturePrefixBytes) {
                 const part = data.subarray(0, options.capturePrefixBytes - outputBytes);
                 chunks.push(part); outputBytes += part.length;
-                if (outputBytes >= options.capturePrefixBytes) {prefixComplete = true; killTree(child);}
+                if (outputBytes >= options.capturePrefixBytes) {prefixComplete = true; stop();}
                 return;
             }
             outputBytes += data.length;
             if (outputBytes > (options.maxOutputBytes || Infinity)) {
                 outputError = Object.assign(new Error('Превышен размер результата проверки'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'});
-                killTree(child);
+                stop();
             } else chunks.push(data);
         });
-        const timer = setTimeout(() => { timedOut = true; killTree(child); }, Math.max(1, scope.deadline - Date.now()));
+        const timer = setTimeout(() => { timedOut = true; stop(); }, Math.max(1, scope.deadline - Date.now()));
         child.stderr.on('data', data => {
             stderr = Buffer.concat([stderr, data]).subarray(-scope.stderrBytes);
         });
@@ -143,6 +159,9 @@ async function executeProcess(command, args, options, scope, signal) {
         child.once('close', async code => {
             clearTimeout(timer);
             signal?.removeEventListener('abort', abort);
+            // On Windows the parent may close before taskkill has finished
+            // terminating its descendants. Retain the resource slot until then.
+            if (termination) await termination;
             await outputDone;
             if (spawnError) reject(spawnError);
             else if (timedOut) reject(timeoutError());
