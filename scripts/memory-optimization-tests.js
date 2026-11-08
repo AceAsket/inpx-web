@@ -130,20 +130,36 @@ async function testIndexReadinessRejectsUnavailableDatabaseWorker() {
 }
 
 async function testReviewIndexesReleaseOnlyAfterLastConsumer() {
-    const worker = Object.create(require('../server/core/WebWorker').prototype);
-    const original = global.setTimeout;
     const timers = [];
-    global.setTimeout = (fn, delay) => {assert.equal(delay, 30000); const timer = original(fn, 5); timers.push(timer); return timer;};
-    try {
-        const state = {indexPromise:Promise.resolve(new Map()), ratingsPromise:Promise.resolve(new Map())};
-        let release; const gate = new Promise(resolve => {release = resolve;});
-        const first = worker.withReviewAssets(state, () => gate);
-        await worker.withReviewAssets(state, async() => {});
-        assert.equal(timers.length, 0, 'A concurrent reader still owns the indexes');
-        release(); await first;
-        await new Promise(resolve => original(resolve, 20));
-        assert.equal(state.indexPromise, null); assert.equal(state.ratingsPromise, null);
-    } finally {global.setTimeout = original; for (const timer of timers) clearTimeout(timer);}
+    // Scope fake timers to this method: Logger and worker callbacks can still run
+    // while its task is pending and must keep the real process timers.
+    const method = require('../server/core/WebWorker').prototype.withReviewAssets;
+    const withReviewAssets = new Function('setTimeout', 'clearTimeout', `return ({${method.toString()}}).withReviewAssets;`)(
+        (fn, delay) => {
+            assert.equal(delay, 30000);
+            const timer = {fn, canceled:false, unref() {this.unreferenced = true;}};
+            timers.push(timer); return timer;
+        },
+        timer => {if (timer) timer.canceled = true;}
+    );
+    const state = {indexPromise:Promise.resolve(new Map()), ratingsPromise:Promise.resolve(new Map())};
+    let release; const gate = new Promise(resolve => {release = resolve;});
+    const first = withReviewAssets(state, () => gate);
+    await withReviewAssets(state, async() => {});
+    assert.equal(timers.length, 0, 'A concurrent reader still owns the indexes');
+    release(); await first;
+    assert.equal(timers.length, 1);
+    assert(timers[0].unreferenced, 'An idle index must not keep the process alive');
+    assert(state.indexPromise); assert(state.ratingsPromise);
+
+    let releaseNext; const nextGate = new Promise(resolve => {releaseNext = resolve;});
+    const next = withReviewAssets(state, () => nextGate);
+    assert(timers[0].canceled, 'A new consumer cancels the previous idle release');
+    assert.equal(timers.length, 1);
+    releaseNext(); await next;
+    assert.equal(timers.length, 2); assert.equal(state.users, 0);
+    timers[1].fn();
+    assert.equal(state.indexPromise, null); assert.equal(state.ratingsPromise, null);
 }
 
 async function testLazyDetailsRejectLateResponsesAndRetry() {

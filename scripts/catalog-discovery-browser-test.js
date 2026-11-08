@@ -197,7 +197,8 @@ async function fixture(directory) {
         await input.press('Enter');
         await page.locator('.q-dialog [data-dialog-kind="book"]').getByRole('heading', {name: 'Косточка', exact: true}).waitFor();
         assert.equal(page.url(), catalogUrl, 'Choosing a title suggestion opens a preview without changing the search URL');
-        await page.getByRole('link', {name: 'Полная карточка', exact: true}).click();
+        await page.locator('.q-dialog [data-dialog-kind="book"]').getByRole('button', {name:'Поделиться книгой', exact:true}).click();
+        await page.getByRole('menu', {name:'Поделиться книгой', exact:true}).getByRole('menuitem', {name:'Открыть страницу книги', exact:true}).click();
         await page.locator('.catalog-book-details').waitFor();
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Choosing a suggestion retains the language');
         await page.locator('.catalog-book-details').waitFor();
