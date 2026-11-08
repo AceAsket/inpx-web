@@ -129,7 +129,7 @@ class EbookController {
         const wanted=identity?formats.preference(identity.user):this.guestFormat(req);
         const {selected,label,suffix}=this.downloadSelection(book,wanted);
         if(!selected)throw bad(`Скачивание ${label} для этой книги недоступно. Выберите другой формат в профиле.`,415);
-        return {redirect:this.root+'/book/by-uid'+suffix+'?'+new URLSearchParams({uid,format:selected})};
+        return {redirect:this.root+'/book/by-uid'+suffix+'?'+new URLSearchParams({uid,format:selected,filename:'ascii'})};
     }
     formatForm(req,identity,next,ext=''){
         const selected=formats.preference(identity.user),values=[...new Set(['original',...formats.configured(this.config),...(formats.formats.includes(ext)?[ext]:[]),selected])];

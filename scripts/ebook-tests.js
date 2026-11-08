@@ -181,7 +181,7 @@ async function testEbookShelfDownloadFormatsRespectAvailabilityAndPreferences(){
         user.defaultDownloadFormat='epub';worker.readingListStore.getList=async()=>({id:'own',name:'Own',books:[{bookUid:'known'}]});
         let r=await request('/library/ebook/login');await request('/library/ebook/login',{csrf:csrf(r.text),login:'reader',password:' pass '});
         r=await request('/library/ebook/shelf?id=own');assert.match(r.text,/Скачать EPUB/);
-        r=await request('/library/ebook/download?uid=known&format=raw');assert.equal(r.response.status,302);assert.match(r.response.headers.get('location'),/format=epub$/,'A URL cannot override the profile download format');
+        r=await request('/library/ebook/download?uid=known&format=raw');assert.equal(r.response.status,302);assert.match(r.response.headers.get('location'),/[?&]format=epub(?:&|$)/,'A URL cannot override the profile download format');
         user.defaultDownloadFormat='mobi';r=await request('/library/ebook/shelf?id=own');assert.match(r.text,/MOBI для этой книги недоступно/);assert(!r.text.includes('class="quick-download'));
         user.defaultDownloadFormat='epub';worker.config.conversionEnabled=false;r=await request('/library/ebook/book?uid=known');assert.match(r.text,/EPUB для этой книги недоступно/);assert(!r.text.includes('name="format" value="raw"'));
         r=await request('/library/ebook/download?uid=known');assert.equal(r.response.status,415);assert.equal(r.response.headers.get('location'),null,'An unavailable format never redirects to the original');
@@ -195,7 +195,7 @@ async function testEbookFormatChoicePersistsOnlyInAuthenticatedProfileWithCsrf()
         assert.equal((await request('/library/ebook/format',{csrf:token,format:'exe'})).response.status,400);
         r=await request('/library/ebook/format',{csrf:token,format:'epub',userId:'foreign',next:'/library/ebook/book?uid=known'});assert.equal(r.response.status,303);assert.equal(user.defaultDownloadFormat,'epub');
         r=await request('/library/ebook/book?uid=known');assert.match(r.text,/Скачать EPUB/);assert(!r.text.includes('name="format" value="raw"'));
-        r=await request('/library/ebook/download?uid=known');assert.match(r.response.headers.get('location'),/format=epub$/);
+        r=await request('/library/ebook/download?uid=known');assert.match(r.response.headers.get('location'),/[?&]format=epub(?:&|$)/);
         r=await request('/library/ebook/format',{csrf:token,format:'original',next:'https://evil.invalid'});assert.equal(r.response.headers.get('location'),'/library/ebook');assert.equal(user.defaultDownloadFormat,'original');
     });
 }
@@ -223,14 +223,14 @@ async function testEbookMobiPreferenceAppliesToSearchRecentShelfAndCardWithLegac
         }
         // A stale FB2 link and an explicit raw query still use the current profile.
         r=await request('/library/ebook/download/book.fb2?uid=known&format=raw');
-        assert.equal(r.response.status,302);assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.mobi?uid=known&format=mobi');
+        assert.equal(r.response.status,302);assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.mobi?uid=known&format=mobi&filename=ascii');
         user.defaultDownloadFormat='epub';r=await request('/library/ebook/download/book.mobi?uid=known');
-        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub');
+        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub&filename=ascii');
         worker.config.conversionFormats.push('epub3','kepub');
         user.defaultDownloadFormat='epub3';r=await request('/library/ebook/download/book.mobi?uid=known');
-        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub3');
+        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub3&filename=ascii');
         user.defaultDownloadFormat='kepub';r=await request('/library/ebook/download/book.kepub.epub?uid=known');
-        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.kepub.epub?uid=known&format=kepub');
+        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.kepub.epub?uid=known&format=kepub&filename=ascii');
         worker.config.conversionEnabled=false;r=await request('/library/ebook/download/book.mobi?uid=known');assert.equal(r.response.status,415);
     });
 }
@@ -248,7 +248,7 @@ async function testEbookGuestFormatAppliesBeforeTypedDownloadWithoutChangingProf
         r=await request(annotation);assert.match(r.text,/<option value="mobi" selected>/);
         assert(!r.text.includes('action="/library/book/by-uid"'),'No extensionless guest download form');
         r=await request('/library/ebook/download/book.mobi?uid=known&format=mobi');
-        assert.equal(r.response.status,302);assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.mobi?uid=known&format=mobi');
+        assert.equal(r.response.status,302);assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.mobi?uid=known&format=mobi&filename=ascii');
         assert.equal(user.defaultDownloadFormat,'epub','A guest selection must not modify any profile');
         assert.equal((await request('/library/ebook/book?uid=known&format=unknown')).response.status,400);
         assert.equal((await request('/library/ebook/download/book.mobi?uid=known&format=mobi&format=raw')).response.status,400);
@@ -258,7 +258,7 @@ async function testEbookGuestFormatAppliesBeforeTypedDownloadWithoutChangingProf
         worker.config.mobiEnabled=true;
         r=await request('/library/ebook/login');await request('/library/ebook/login',{csrf:csrf(r.text),login:'reader',password:' pass '});
         r=await request('/library/ebook/download/book.mobi?uid=known&format=mobi');
-        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub','The signed-in profile remains authoritative');
+        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub&filename=ascii','The signed-in profile remains authoritative');
     });
     await fixture({authMode:'local',requireAuth:true,allowAnonymousAccess:false},async({request})=>{
         assert.equal((await request('/library/ebook/download/book.mobi?uid=known&format=mobi')).response.status,401);

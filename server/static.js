@@ -719,7 +719,9 @@ module.exports = (app, config, webWorker = null, security = null) => {
                 href += '/' + encodeURIComponent(bookDownloadHeaders.fallbackFilename(name));
             }
 
-            res.redirect(302, `${href}?uid=${encodeURIComponent(bookUid)}`);
+            const query = new URLSearchParams({uid: bookUid});
+            if (req.query.filename === 'ascii') query.set('filename', 'ascii');
+            res.redirect(302, `${href}?${query}`);
         } catch(e) {
             log(LM_ERR, `book by uid error: ${e.message}`);
             res.status(e.message && e.message.indexOf('404') >= 0 ? 404 : 500).send(e.message);
@@ -788,7 +790,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
                     //отдача файла
                     if (gzipped)
                         res.set('Content-Encoding', 'gzip');
-                    res.set('Content-Disposition', bookDownloadHeaders.disposition(downFileName));
+                    res.set('Content-Disposition', bookDownloadHeaders.disposition(downFileName, {asciiOnly: req.query.filename === 'ascii'}));
                     const mimeType = getBookDownloadMimeType(downFileName);
                     if (mimeType)
                         res.set('Content-Type', mimeType);

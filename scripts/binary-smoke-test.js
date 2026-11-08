@@ -150,8 +150,8 @@ async function checkEbookProfileDownload(url,html,password='local-smoke-fixture'
     }
     // An old or manipulated query must not replace the selected profile format.
     const response=await fetch(url+'/ebook/download?'+new URLSearchParams({uid:decodeURIComponent(encoded),format:'raw'}),{headers:{cookie}});
-    assert.equal(response.status,200);assert.match(response.headers.get('content-disposition'),new RegExp('\\.'+format+'$'));
-    assert.match(response.headers.get('content-disposition'),/filename="[A-Za-z0-9._ -]+"; filename\*=UTF-8''/);
+    assert.equal(response.status,200);
+    assert.match(response.headers.get('content-disposition'),new RegExp('^attachment; filename="[A-Za-z0-9_ -]+\\.'+format+'"$'));
     assert(new URL(response.url).pathname.endsWith('.'+format),'The final URL has the actual file extension');
     const bytes=Buffer.from(await response.arrayBuffer());
     if(format==='epub'){assert.equal(bytes.readUInt32LE(0),0x04034b50);assert.match(response.headers.get('content-type'),/application\/epub\+zip/);}
@@ -177,7 +177,7 @@ async function checkEbookGuestDownload(url,html,format='fb2'){
         next=new URL(response.headers.get('location'),next);assert(next.pathname.endsWith('.'+format),'Every guest redirect keeps the actual extension');await response.body.cancel();
     }
     if(response.status!==200)throw new Error('Guest '+format+' download returned HTTP '+response.status+': '+(await response.text()).slice(0,800));
-    assert.match(response.headers.get('content-disposition'),new RegExp('filename="[A-Za-z0-9_ -]+\\.'+format+'";'));
+    assert.match(response.headers.get('content-disposition'),new RegExp('^attachment; filename="[A-Za-z0-9_ -]+\\.'+format+'"$'));
     const bytes=Buffer.from(await response.arrayBuffer());assert.equal(Number(response.headers.get('content-length')),bytes.length);
     if(format==='mobi'){assert.equal(bytes.toString('ascii',60,68),'BOOKMOBI');assert.match(response.headers.get('content-type'),/application\/x-mobipocket-ebook/);}
     else assert.match(bytes.toString('utf8'),/FictionBook/);

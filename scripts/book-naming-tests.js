@@ -122,6 +122,23 @@ async function testBookNamingAppliesToLegacyCacheAndSharedHttpDownloads() {
                     'A device using the URL instead of filename* gets a readable book name');
                 assert.ok(Buffer.from(await response.arrayBuffer()).equals(source));
             }
+            for (const [title,ascii] of [
+                ['Калгари 88. Том 10','Kalgari 88_ Tom 10'],
+                ['Grüße aus Köln — Straße','Grusse aus Koln Strasse'],
+                ['Viņi bez maskās. 1966','Vini bez maskas_ 1966'],
+            ]) {
+                records[0].title=title;
+                const response=await fetch(`${base}/book/by-uid/book.fb2?uid=one&format=raw&filename=ascii`);
+                assert.equal(response.status,200);
+                assert.equal(response.headers.get('content-disposition'),`attachment; filename="02 - ${ascii}.fb2"`);
+                assert.equal(new URL(response.url).searchParams.get('filename'),'ascii','The redirect preserves the e-reader naming mode');
+                assert.equal(decodeURIComponent(new URL(response.url).pathname.split('/').at(-1)),`02 - ${ascii}.fb2`);
+                assert.ok(Buffer.from(await response.arrayBuffer()).equals(source),'Renaming must not change the book contents');
+                const modern=await fetch(`${base}/book/by-uid?uid=one&format=raw`);
+                assert(modern.headers.get('content-disposition').includes(`filename*=UTF-8''${encodeURIComponent('02 - '+title+'.fb2')}`));
+                await modern.body.cancel();
+            }
+            records[0].title='Название';
             let archiveIndex = 0;
             const assertZipName = async expected => {
                 const response = await fetch(`${base}/book/by-uid?uid=one&zip=1`);
@@ -175,6 +192,8 @@ async function testBookDownloadHeadersKeepOneExtensionForLegacyAndUnicodeForMode
     assert.equal(fallbackFilename('Anetta78_Туман.mobi'), 'Anetta78_Tuman.mobi');
     assert.equal(fallbackFilename('Ёжик, Щука и Фьорд.epub'), 'Yozhik Shchuka i Ford.epub');
     assert.equal(fallbackFilename('François – Café.pdf'), 'Francois Cafe.pdf');
+    assert.equal(fallbackFilename('Grüße – Straße – ÜBER.mobi'), 'Grusse Strasse UBER.mobi');
+    assert.equal(fallbackFilename('Книга. Том 1.kepub.epub'), 'Kniga_ Tom 1.kepub.epub');
     assert.equal(fallbackFilename('..\\folder/../../Книга.mobi'), 'Kniga.mobi');
     assert.equal(fallbackFilename('CON.mobi'), 'book-CON.mobi');
     assert.match(fallbackFilename('漢字.mobi'), /^book-[a-f0-9]{12}\.mobi$/);
@@ -186,6 +205,11 @@ async function testBookDownloadHeadersKeepOneExtensionForLegacyAndUnicodeForMode
     assert.match(header, /^attachment; filename="[^".]+\.mobi"; filename\*=UTF-8''/);
     assert(header.endsWith(encodeURIComponent('А. Автор.Книга.mobi')));
     assert(!disposition('bad"\r\nname.mobi').includes('\r\n'));
+    assert.equal(disposition('Калгари 88. Том 10.mobi',{asciiOnly:true}),'attachment; filename="Kalgari 88_ Tom 10.mobi"');
+    assert.equal(disposition('Grüße – Straße.mobi',{asciiOnly:true}),'attachment; filename="Grusse Strasse.mobi"');
+    assert.equal(disposition('Книга.kepub.epub',{asciiOnly:true}),'attachment; filename="Kniga.kepub.epub"');
+    assert.match(disposition('漢字.mobi',{asciiOnly:true}),/^attachment; filename="book-[a-f0-9]{12}\.mobi"$/);
+    assert(!disposition('bad"\r\nname.mobi',{asciiOnly:true}).includes('\r\n'));
 }
 
 module.exports = [testBookDownloadHeadersKeepOneExtensionForLegacyAndUnicodeForModernBrowsers,testBookNamingConditionalTemplatesAndSafeFilenames, testBookTitleOverrideKeepsConfigAndSeparatesConversionCache,
