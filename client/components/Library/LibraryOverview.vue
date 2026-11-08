@@ -127,7 +127,7 @@ input {min-width: 0; flex: 1; background: transparent; color: var(--app-text); b
 input::placeholder {color: var(--app-muted); opacity: 1;}
 .overview-search__filters, .overview-search__submit {color: var(--app-muted); border: 0; background: transparent; display: grid; place-items: center; width: 32px; height: 42px; border-radius: 8px; cursor: pointer; flex-shrink: 0;}
 .overview-reading {min-width: 0;}
-.current-book {max-width: 440px; border-radius: 20px; padding: 20px; background: var(--library-hero);}
+.current-book {display: flex; flex-direction: column; max-width: 440px; border-radius: 20px; padding: 20px; background: var(--library-hero);}
 .current-book__caption {display: flex; align-items: center; gap: 9px; color: var(--library-on-hero); margin-bottom: 16px;}
 .current-book__caption h1 {font-size: 14px; font-weight: 550; letter-spacing: 0; flex: 1;}
 .current-book__caption button {border: 0; color: var(--library-on-hero); background: transparent; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; margin: -4px -7px -4px 0;}
@@ -137,7 +137,7 @@ input::placeholder {color: var(--app-muted); opacity: 1;}
 .current-book__title {display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; padding: 0; background: transparent; color: var(--app-text); border: 0; text-align: left; font: inherit; font-weight: 550; font-size: 19px; line-height: 1.4; cursor: pointer; overflow-wrap: anywhere;}
 .current-book__author {color: var(--app-muted); margin-top: 6px; font-size: 14px; line-height: 1.5;}
 .current-book__series {color: var(--app-muted); font-size: 12px; margin-top: 4px; line-height: 1.5;}
-.current-book__footer {display: flex; align-items: flex-end; gap: 20px; margin-top: 16px;}
+.current-book__footer {display: flex; align-items: flex-end; gap: 20px; margin-top: auto; padding-top: 16px;}
 .current-book__progress {flex: 1; min-width: 0; font-size: 12px; color: var(--app-muted); padding-bottom: 5px;}
 progress {display: block; margin-top: 7px; width: 100%; height: 4px; border: 0; border-radius: 0; appearance: none; background: var(--app-border); color: var(--app-primary);}
 progress::-webkit-progress-bar {background: var(--app-border);} progress::-webkit-progress-value {background: var(--app-primary);} progress::-moz-progress-bar {background: var(--app-primary);}
@@ -152,6 +152,6 @@ progress::-webkit-progress-bar {background: var(--app-border);} progress::-webki
 .overview-loading__covers {display: grid; grid-template-columns: repeat(6, minmax(0, 130px)); gap: 24px; margin-top: 16px; overflow: hidden;}
 .overview-skeleton {aspect-ratio: 2 / 3; background: var(--app-surface-3); border-radius: 10px;}
 .overview-skeleton--hero {aspect-ratio: auto; height: 295px; max-width: 460px; border-radius: 22px;}
-@media (min-width: 1100px) {.overview-reading--paired {display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 960px); align-items: start; gap: 38px;} .overview-reading--paired > :deep(.book-shelf) {margin-top: 0;}}
-@media (max-width: 599px) {.overview-search {height: 54px; gap: 10px; margin-bottom: 24px; padding: 0 12px;} input {font-size: 14px;} .current-book {padding: 18px; max-width: none;} .current-book__body {gap: 15px;} .current-book__cover {width: 76px; flex-basis: 76px;} .current-book__title {font-size: 18px;} .current-book__caption {margin-bottom: 22px;} .current-book__footer {margin-top: 22px;} .overview-loading__covers {grid-template-columns: repeat(6, 112px); gap: 20px;}}
+@media (min-width: 1100px) {.overview-reading--paired {display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 960px); align-items: stretch; gap: 38px;} .overview-reading--paired > :deep(.book-shelf) {margin-top: 0;}}
+@media (max-width: 599px) {.overview-search {height: 54px; gap: 10px; margin-bottom: 24px; padding: 0 12px;} input {font-size: 14px;} .current-book {padding: 18px; max-width: none;} .current-book__body {gap: 15px;} .current-book__cover {width: 76px; flex-basis: 76px;} .current-book__title {font-size: 18px;} .current-book__caption {margin-bottom: 22px;} .current-book__footer {padding-top: 22px;} .overview-loading__covers {grid-template-columns: repeat(6, 112px); gap: 20px;}}
 </style>

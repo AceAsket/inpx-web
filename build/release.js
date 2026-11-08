@@ -1,6 +1,6 @@
 const fs = require('fs-extra');
 const path = require('path');
-const { execSync } = require('child_process');
+const {createReleaseArchive} = require('./release-archive');
 
 const pckg = require('../package.json');
 const platform = process.argv[2];
@@ -14,7 +14,8 @@ async function makeRelease(target) {
     if (await fs.pathExists(srcDir)) {
         const zipFile = `${outDir}/${pckg.name}-${pckg.version}-${target}.zip`;
 
-        execSync(`zip -r ${zipFile} .`, {cwd: srcDir, stdio: 'inherit'});
+        await createReleaseArchive(srcDir, zipFile, target);
+        console.log(`Release archive: ${zipFile}`);
     }
 }
 

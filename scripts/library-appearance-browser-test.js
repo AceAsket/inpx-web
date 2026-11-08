@@ -280,6 +280,13 @@ if (require.main === module) (async() => {
             }
             assert.equal(geometry.shelfColumns, 1, 'Every discovery shelf gets a full row');
             const recent = page.locator('.book-shelf').filter({has: page.locator('#recent-books-heading')});
+            if (width >= 1100) {
+                const currentBox = await page.locator('.current-book').boundingBox(), recentBox = await recent.boundingBox();
+                assert(Math.abs(currentBox.height - recentBox.height) < 1, 'Current and recent reading blocks have equal heights');
+                assert(Math.abs(currentBox.y + currentBox.height - recentBox.y - recentBox.height) < 1, 'Reading blocks align along their lower edge');
+                assert(currentBox.width >= 320 && currentBox.width > (await recent.locator('.book-tile').first().boundingBox()).width * 2,
+                    'The current book keeps its wide card layout');
+            }
             const heading = await recent.locator('h2').boundingBox(), all = await recent.getByRole('link', {name: 'Все', exact: true}).boundingBox();
             assert(all.x - heading.x - heading.width < 24, 'All stays next to its shelf title');
             if (await recent.locator('.book-shelf__strip').evaluate(node => node.scrollWidth <= node.clientWidth + 2))
