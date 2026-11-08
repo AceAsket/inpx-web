@@ -51,6 +51,9 @@ Silero: `aceasket/inpx-web-7z:1.8.2-rc.19-silero`.
 готовности `/ready`. Для ZIP PPMd нужен 7-Zip: полный Docker-образ и
 Windows-поставка включают его; для остальных standalone-сборок установите
 7-Zip CLI в системе либо задайте путь в настройках конвертеров.
+Для FB2 со сжатыми картинками также нужны `dwebp` (WebP) или `djxl` (JXL).
+Полный Docker-образ и Windows-поставка содержат эти декодеры; в остальных
+standalone-поставках установите нужный декодер отдельно.
 Стабильный `latest` остаётся на 1.8.1. Старые RC не перезаписываются.
 
 ## Проверки и ограничения
@@ -75,3 +78,33 @@ Windows-поставка включают его; для остальных stan
 
 Динамические папки LightLib с `edit.zip`/`anno.zip` пока не импортируют
 пользовательские исправления; ZIP PPMd подключается обычным INPX-источником.
+
+## Подтверждённая публикация
+
+8 ноября 2026 года опубликован prerelease
+[`v1.8.2-rc.19`](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.19)
+из коммита `b171192d720d255a973a8ae95bb53e8a6e68caf1` ветки `develop`.
+
+- [Полный CI](https://github.com/AceAsket/inpx-web/actions/runs/42497604167):
+  457 smoke-проверок на Linux и Windows, TTS, готовые бинарники,
+  Docker lite/full и настоящие конвертеры, браузерные сценарии.
+  [Скриншоты CI](https://github.com/AceAsket/inpx-web/actions/runs/42497604167/artifacts/13624023696).
+- [Релизные сборки](https://github.com/AceAsket/inpx-web/actions/runs/42498624895):
+  все пять файлов Linux x64/ARM64, macOS x64, Windows ZIP и установщик
+  загружены; для каждого проверены состояние и SHA-256 GitHub API.
+- [Docker](https://github.com/AceAsket/inpx-web/actions/runs/42498624884):
+  основной образ и Silero опубликованы после проверок конвертации и аудио.
+- [Описание Docker Hub](https://github.com/AceAsket/inpx-web/actions/runs/42499525223)
+  обновлено; очистка старых RC выключена.
+
+Проверка публичного registry подтвердила revision обоих образов и digest:
+
+| Тег | Digest |
+| --- | --- |
+| `1.8.2-rc.19` | `sha256:573c76d8cfaf7e78d211d7f59abccd7fa193fd8e852a0c1f222780c85964d44c` |
+| `1.8.2-rc.19-silero` | `sha256:51ce010d39592a1ff363aeefefbbacc2cd671d9db89979f1955d1e9eb91c5bfe` |
+
+Все восемь проверенных прежних тегов сохранили digest: `latest`, `1.8.1`,
+RC16/RC17/RC18 и соответствующие Silero. `latest`/`1.8.1` остались на
+`sha256:d721ca43e17d04ecd538b8200b21f82addc5df63f672c25d2fa1031795117396`.
+GitHub latest по-прежнему `v1.8.1`.
