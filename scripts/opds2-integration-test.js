@@ -1,12 +1,12 @@
 const assert = require('assert/strict');
 const WebSocket = require('ws');
 
-module.exports = async function checkOpds2(url) {
+module.exports = async function checkOpds2(url, {adminPassword='browser-speech-test'} = {}) {
     const response = await fetch(url + '/');
     const cookie = response.headers.get('set-cookie').split(';')[0];
     const socket = new WebSocket(url.replace(/^http/,'ws') + '/ws',{headers:{cookie,origin:url}});
     await new Promise((resolve,reject) => {socket.once('open',resolve);socket.once('error',reject);});
-    let sequence=0,common={},admin,userId;const samples=[];
+    let sequence=0,common={},admin,userId,changedOpds=false;const samples=[];
     const request = data => new Promise((resolve,reject) => {
         const requestId='opds2-'+(++sequence),timer=setTimeout(()=>{socket.off('message',listener);reject(new Error('OPDS 2 fixture timeout'));},15000);
         const listener=raw=>{const result=JSON.parse(raw);if(result.requestId!==requestId||result._rok)return;
@@ -23,7 +23,8 @@ module.exports = async function checkOpds2(url) {
         const atom=await fetch(url+'/opds');assert.match(atom.headers.get('content-type'),/^application\/atom\+xml/);assert((await atom.text()).includes('http://www.w3.org/2005/Atom'));
         const search=root.body.links.find(link=>link.rel==='search');assert(search.templated);assert(search.href.includes('{?query}'));
         const found=await read(search.href.replace('{?query}','?query=Packaged'));
-        assert.equal(found.body.publications.length,1);const book=found.body.publications[0];
+        const book=found.body.publications.find(book=>book.links.some(link=>link.type==='application/fb2+xml'
+            && new URL(link.href,url).searchParams.get('format')==='raw'));assert(book,'Search includes the original FB2 fixture');
         const self=book.links.find(link=>link.rel==='self');assert.equal(self.type,'application/opds-publication+json');
         const uid=new URL(self.href,url).searchParams.get('uid');assert(uid);assert.equal(book.metadata.identifier,'urn:inpx:book:'+encodeURIComponent(uid));
         const detail=await read(self.href);assert.equal(detail.body.metadata.identifier,book.metadata.identifier);assert(!detail.body.publications);
@@ -35,7 +36,7 @@ module.exports = async function checkOpds2(url) {
         const empty=await read('/opds/v2/search?query=NoSuchUniqueBook099910');assert.equal(empty.body.metadata.numberOfItems,0);assert(!empty.body.publications);
 
         common.csrfToken=(await request({action:'get-config'})).csrfToken;
-        const login=await request({action:'login-user-profile',login:'admin',password:'browser-speech-test'});
+        const login=await request({action:'login-user-profile',login:'admin',password:adminPassword});
         common={csrfToken:common.csrfToken,...login};delete common.requestId;admin={...common};
         const created=await request({action:'create-user-profile',profile:{name:'OPDS 2 private fixture',login:'opds-two',password:'opds-two-fixture',opdsEnabled:true,opdsAuthEnabled:true}});
         userId=created.user.id;const headers={authorization:'Basic '+Buffer.from('opds-two:opds-two-fixture').toString('base64')};
@@ -51,9 +52,25 @@ module.exports = async function checkOpds2(url) {
         const shelf=await read('/opds/v2/reading-lists/list?'+new URLSearchParams({user:userId,id:list.list.id}),headers);
         assert.equal(shelf.body.publications[0].metadata.identifier,book.metadata.identifier);
         assert.equal((await fetch(url+'/opds/v2/reading-lists/list?'+new URLSearchParams({user:userId,id:list.list.id}))).status,401);
-        console.log('OPDS 2 integration: JSON routes, trailing slash, URI-template search, native publication, real download, private shelves/progress, Basic Auth, pagination links and unchanged Atom passed');
+        common=admin;
+        const credentials=password=>({authorization:'Basic '+Buffer.from('catalog-fixture:'+password).toString('base64')});
+        await request({action:'update-admin-opds',opds:{user:'catalog-fixture',password:'first-fixture'}});changedOpds=true;
+        for(const endpoint of ['/opds','/opds/v2']) {
+            assert.equal((await fetch(url+endpoint)).status,401,'Changing shared credentials must protect '+endpoint+' immediately');
+            assert.equal((await fetch(url+endpoint,{headers:credentials('first-fixture')})).status,200);
+        }
+        await request({action:'update-admin-opds',opds:{password:'second-fixture'}});
+        for(const endpoint of ['/opds','/opds/v2']) {
+            assert.equal((await fetch(url+endpoint,{headers:credentials('first-fixture')})).status,401,'Old credentials are revoked on '+endpoint);
+            assert.equal((await fetch(url+endpoint,{headers:credentials('second-fixture')})).status,200);
+        }
+        await request({action:'update-admin-opds',opds:{enabled:false}});
+        for(const endpoint of ['/opds','/opds/v2'])assert.equal((await fetch(url+endpoint,{headers:credentials('second-fixture')})).status,404);
+        await request({action:'update-admin-opds',opds:{enabled:true,user:'',password:''}});changedOpds=false;
+        console.log('OPDS 2 integration: JSON/search/publication/download, private shelves/progress, live credential changes and disable/enable, Basic Auth, pagination links and unchanged Atom passed');
         return samples;
     } finally {
+        if(changedOpds&&admin){common=admin;await request({action:'update-admin-opds',opds:{enabled:true,user:'',password:''}}).catch(()=>{});}
         if(userId&&admin){common=admin;await request({action:'delete-user-profile',targetUserId:userId}).catch(()=>{});}
         socket.terminate();
     }

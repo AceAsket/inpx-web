@@ -45,8 +45,9 @@ function scopeGuard(getWorker) {
 }
 
 function mountCatalog(app, config, security, catalogRoot, version) {
-    const catalogConfig = version === 2 ? {...config, opdsRoot:catalogRoot, opdsVersion:2,
-        opds:{...config.opds, compatibility:''}} : config;
+    // Inherit live server settings: copying config/opds would retain old
+    // credentials after an administrator changes them without a restart.
+    const catalogConfig = version === 2 ? Object.assign(Object.create(config), {opdsRoot:catalogRoot, opdsVersion:2}) : config;
     const opdsRoot = catalogRoot;
 
     const root = new RootPage(catalogConfig);
@@ -97,6 +98,7 @@ function mountCatalog(app, config, security, catalogRoot, version) {
 
     const opds = async(req, res, next) => {
         try {
+            if (catalogConfig.opds?.enabled === false) return res.sendStatus(404);
             const page = pages.get(version === 2 ? req.path.replace(/\/$/,'') : req.path);
 
             if (page) {
@@ -131,7 +133,10 @@ function mountCatalog(app, config, security, catalogRoot, version) {
     app.use(opdsPaths, require('./Auth')(catalogConfig, (...args) => root.webWorker.verifyOpdsPassword(...args), security));
     app.use(opdsPaths, scopeGuard(() => root.webWorker));
 
-    require('./Compatibility').mount(app, opdsPaths, opds, catalogConfig);
+    if (version === 2) {
+        app.get(opdsPaths,opds);
+        app.post(opdsPaths,(req,res) => res.sendStatus(405));
+    } else require('./Compatibility').mount(app, opdsPaths, opds, catalogConfig);
 }
 
 module.exports = function(app, config, security = new (require('../Security'))(config)) {

@@ -240,6 +240,7 @@ async function main() {
         assert.strictEqual(shelf.status, 200);
         assert.match(await shelf.text(), /Packaged smoke book/);
         await checkWebSocket(url);
+        await require('./opds2-integration-test')(url,{adminPassword:'local-smoke-fixture'});
         console.log(`ok packaged application: indexing, health, web UI, OPDS, WebSocket (${target === '--image' ? imageName : target})`);
     } finally {
         if (target === '--image')
