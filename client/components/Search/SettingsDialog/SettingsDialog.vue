@@ -1,5 +1,5 @@
 <template>
-    <Dialog ref="dialog" v-model="dialogVisible">
+    <Dialog ref="dialog" v-model="dialogVisible" variant="settings">
         <template #header>
             <div class="row items-center" style="font-size: 110%">
                 <q-icon class="q-mr-sm text-green" name="la la-cog" size="28px"></q-icon>
@@ -7,7 +7,8 @@
             </div>
         </template>
 
-        <div class="q-mx-md column settings-dialog-body" style="min-width: 300px; font-size: 120%;">
+        <div class="q-mx-md column settings-dialog-body" style="min-width: min(300px, calc(100vw - 96px)); font-size: 120%;">
+            <AppearanceControl @change="dialogVisible = false" />
             <div class="row items-center q-ml-sm">
                 <div class="q-mr-sm">
                     Результатов на странице
@@ -29,6 +30,9 @@
             <q-checkbox v-model="showCounts" size="36px" label="Показывать количество" />
             <q-checkbox v-model="showRates" size="36px" label="Показывать оценки" />
             <q-checkbox v-model="showInfo" size="36px" label="Показывать кнопку «Инфо»" />
+            <q-checkbox v-model="autoLoadBookReviews" size="36px" label="Автоматически загружать отзывы и оценки" />
+            <q-checkbox v-model="autoLoadAuthorInfo" size="36px" label="Автоматически загружать сведения об авторе" />
+            <div class="text-caption text-grey-7 q-px-sm">По умолчанию отзывы и сведения об авторе загружаются при открытии соответствующей вкладки в карточке книги.</div>
             <q-checkbox v-model="showGenres" size="36px" label="Показывать жанры" />
             <div class="settings-card-view row items-center q-ml-sm q-my-xs">
                 <div class="q-mr-sm settings-card-view-label">
@@ -121,18 +125,12 @@
                 </button>
 
                 <div v-show="backupExpanded" class="admin-collapse-body">
+                    <BackupPanel v-if="backupExpanded" />
                     <div class="admin-backup-note">
-                        <div>{{ backupUi.fullBackupInfo }}</div>
+                        <strong>Перенос только настроек</strong>
                         <div>{{ backupUi.settingsBackupInfo }}</div>
-                        <div>{{ backupUi.restoreNote }}</div>
                     </div>
                     <div class="admin-backup-actions">
-                        <q-btn color="primary" dense no-caps icon="la la-download" :loading="backupLoading" @click="createBackup">
-                            {{ backupUi.backup }}
-                        </q-btn>
-                        <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="backupImportLoading" @click="openBackupImport">
-                            {{ backupUi.backupImport }}
-                        </q-btn>
                         <q-btn outline color="primary" dense no-caps icon="la la-file-export" :loading="settingsExportLoading" @click="exportSettings">
                             {{ backupUi.settings }}
                         </q-btn>
@@ -145,13 +143,6 @@
                             accept="application/json,.json"
                             style="display: none"
                             @change="onSettingsImportSelected"
-                        />
-                        <input
-                            ref="backupImportInput"
-                            type="file"
-                            accept="application/zip,.zip"
-                            style="display: none"
-                            @change="onBackupImportSelected"
                         />
                     </div>
                 </div>
@@ -168,6 +159,7 @@
 
                 <div v-show="adminExpanded" class="admin-collapse-body">
                     <div class="admin-toolbar">
+                        <q-btn outline color="primary" dense no-caps icon="la la-tasks" label="Задачи и состояние библиотеки" @click="$emit('open-library-tasks')" />
                         <q-btn outline color="primary" dense no-caps icon="la la-sync" :loading="adminLoading" @click="loadAdminPanel">
                             {{ adminUi.refresh }}
                         </q-btn>
@@ -531,8 +523,26 @@
                                     <q-icon :name="telegramTokenVisible ? 'la la-eye-slash' : 'la la-eye'" class="password-visibility-toggle" @click="telegramTokenVisible = !telegramTokenVisible" />
                                 </template>
                             </q-input>
+                            <q-select v-model="integrations.telegramProxyMode" outlined dense emit-value map-options behavior="dialog" label="Маршрут Telegram" :options="telegramProxyModes" />
+                            <q-select v-model="integrations.telegramIpFamily" outlined dense emit-value map-options behavior="dialog"
+                                label="IP-семейство Telegram" :options="[{label:'Авто (IPv4 / IPv6)',value:'auto'},{label:'Только IPv4',value:'4'},{label:'Только IPv6',value:'6'}]" />
+                            <p class="admin-mail-wide admin-mail-subtitle telegram-connection-hint">{{ telegramConnectionHint }}</p>
+                            <template v-if="integrations.telegramProxyMode === 'custom'">
+                                <q-select v-model="integrations.telegramProxyProtocol" outlined dense emit-value map-options behavior="dialog" label="Протокол прокси" :options="telegramProxyProtocols" />
+                                <q-input v-model="integrations.telegramProxyHost" outlined dense clearable label="Адрес прокси" placeholder="Имя сервера или IP" maxlength="253" autocomplete="off" spellcheck="false" />
+                                <q-input v-model.number="integrations.telegramProxyPort" outlined dense type="number" min="1" max="65535" label="Порт прокси" />
+                                <q-input v-model="integrations.telegramProxyUsername" outlined dense clearable label="Пользователь прокси" autocomplete="off" maxlength="1024" />
+                                <q-input v-model="integrations.telegramProxyPassword" outlined dense clearable :type="telegramProxyPasswordVisible ? 'text' : 'password'" label="Пароль прокси" autocomplete="new-password" maxlength="1024" :hint="integrations.telegramProxyPassword === '__KEEP__' ? 'Пароль сохранён. Введите новый или очистите поле.' : undefined">
+                                    <template #append>
+                                        <q-icon :name="telegramProxyPasswordVisible ? 'la la-eye-slash' : 'la la-eye'" class="password-visibility-toggle" @click="telegramProxyPasswordVisible = !telegramProxyPasswordVisible" />
+                                    </template>
+                                </q-input>
+                            </template>
                             <q-input class="admin-mail-wide" v-model="integrations.telegramCaptionTemplate" outlined dense clearable :label="mailUi.telegramCaption" />
                         </div>
+                        <q-toggle v-model="integrations.telegramBotEnabled" :disable="!integrations.telegramShareEnabled" label="Интерактивный бот: поиск, списки и получение книг" />
+                        <p class="admin-mail-subtitle">Используйте отдельного бота без webhook. Если в профиле указан личный Chat ID, дополнительная привязка не нужна. Если Chat ID не заполнен, подключите чат одноразовой ссылкой из профиля.</p>
+                        <TelegramBotStatus v-if="mailExpanded && dialogVisible" ref="telegramBotStatus" />
                     </div>
 
                     <div class="admin-mail-section">
@@ -583,12 +593,20 @@ import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
 import DiscoverySourceDialog from '../DiscoverySourceDialog/DiscoverySourceDialog.vue';
 import PerformancePanel from './PerformancePanel.vue';
+import AppearanceControl from '../../Library/AppearanceControl.vue';
+import BackupPanel from './BackupPanel.vue';
+import TelegramBotStatus from './TelegramBotStatus.vue';
+import {telegramProbeNotice} from './telegramStatusModel';
 
 const componentOptions = {
+    emits: ['update:modelValue', 'open-library-tasks'],
     components: {
         Dialog,
         DiscoverySourceDialog,
         PerformancePanel,
+        AppearanceControl,
+        BackupPanel,
+        TelegramBotStatus,
     },
     watch: {
         modelValue(newValue) {
@@ -623,6 +641,8 @@ const componentOptions = {
         showInfo(newValue) {
             this.commit('setSettings', {showInfo: newValue});
         },
+        autoLoadBookReviews(value) {this.commit('setSettings', {autoLoadBookReviews:value});},
+        autoLoadAuthorInfo(value) {this.commit('setSettings', {autoLoadAuthorInfo:value});},
         showGenres(newValue) {
             this.commit('setSettings', {showGenres: newValue});
         },
@@ -694,6 +714,8 @@ class SettingsDialog {
     showCounts = true;
     showRates = true;
     showInfo = true;
+    autoLoadBookReviews = false;
+    autoLoadAuthorInfo = false;
     showGenres = true;
     bookCardView = 'cards';
     showDates = false;
@@ -719,14 +741,14 @@ class SettingsDialog {
     integrationSaveLoading = false;
     smtpTestLoading = false;
     telegramTestLoading = false;
-    backupLoading = false;
-    backupImportLoading = false;
+    telegramNotice = null;
     settingsExportLoading = false;
     settingsImportLoading = false;
     backupExpanded = false;
     opdsSaveLoading = false;
     smtpPassVisible = false;
     telegramTokenVisible = false;
+    telegramProxyPasswordVisible = false;
     opdsPasswordVisible = false;
     opdsExpanded = false;
     mailExpanded = false;
@@ -758,6 +780,8 @@ class SettingsDialog {
     adminEventLogEnabled = true;
     adminEventLogSize = 300;
     integrations = this.makeDefaultIntegrations();
+    telegramProxyModes = [{label:'Прямое соединение',value:'direct'}, {label:'Прокси окружения сервера',value:'system'}, {label:'Свой прокси',value:'custom'}];
+    telegramProxyProtocols = [{label:'HTTP',value:'http'}, {label:'HTTPS',value:'https'}, {label:'SOCKS5',value:'socks5'}, {label:'SOCKS5 (DNS через прокси)',value:'socks5h'}];
     opdsSettings = this.makeDefaultOpdsSettings();
     adminUi = {
         title: 'Администрирование',
@@ -843,16 +867,9 @@ class SettingsDialog {
     backupUi = {
         title: 'Резервная копия',
         subtitle: 'Полный бэкап и отдельный экспорт конфигурации.',
-        fullBackupInfo: 'Полный ZIP сохраняет состояние сервиса: настройки, secret.key, профили, списки, прогресс чтения, закладки и кэш витрины. Архивы книг, обложки, временные кэши и поисковая БД не входят.',
         settingsBackupInfo: 'JSON настроек нужен только для переноса конфигурации. Пользователи, списки, прогресс и закладки в него не входят.',
-        backup: 'Скачать полный бэкап',
-        backupImport: 'Восстановить полный ZIP',
         settings: 'Экспорт настроек JSON',
         settingsImport: 'Восстановить настройки JSON',
-        restoreNote: 'Восстановление полного ZIP заменяет текущее состояние данными из архива. После восстановления перезапустите контейнер или приложение; если в бэкапе другие источники библиотек, выполните переиндексацию.',
-        restoreConfirm: 'Восстановить полный ZIP-бэкап? Текущие настройки, профили, списки, прогресс чтения и закладки будут заменены данными из архива.',
-        restored: 'Полный бэкап восстановлен. Перезапустите приложение; если менялись источники библиотек, выполните переиндексацию.',
-        ready: 'Резервная копия готова',
     };
     mailUi = {
         title: 'Отправка книг',
@@ -939,6 +956,10 @@ class SettingsDialog {
         this.loadSettings();
     }
 
+    mounted() {
+        this.dialogVisible = this.modelValue;
+    }
+
     unmounted() {
         this.stopAdminMetricsPolling();
         this.stopAdminIndexPolling();
@@ -1001,7 +1022,15 @@ class SettingsDialog {
     makeDefaultIntegrations() {
         return {
             telegramShareEnabled: false,
+            telegramBotEnabled: false,
             telegramBotToken: '',
+            telegramIpFamily: 'auto',
+            telegramProxyMode: 'system',
+            telegramProxyProtocol: 'http',
+            telegramProxyHost: '',
+            telegramProxyPort: '',
+            telegramProxyUsername: '',
+            telegramProxyPassword: '',
             telegramChatId: '',
             telegramCaptionTemplate: '${AUTHOR} - ${TITLE}',
             emailShareEnabled: false,
@@ -1024,13 +1053,28 @@ class SettingsDialog {
         };
     }
 
-    loadIntegrations() {
-        const source = this.config.adminIntegrations || {};
-        this.integrations = Object.assign(this.makeDefaultIntegrations(), source, {
+    integrationValues(source = {}) {
+        return Object.assign(this.makeDefaultIntegrations(), source, {
             smtpPort: parseInt(source.smtpPort, 10) || 587,
             telegramBotToken: source.telegramBotToken || (source.telegramBotTokenSet ? '__KEEP__' : ''),
+            telegramProxyPassword: source.telegramProxyPasswordSet || source.telegramProxyPassword === '__KEEP__' ? '__KEEP__' : '',
             smtpPass: source.smtpPass || (source.smtpPassSet ? '__KEEP__' : ''),
         });
+    }
+
+    loadIntegrations() {
+        this.integrations = this.integrationValues(this.config.adminIntegrations || {});
+        this.telegramProxyPasswordVisible = false;
+    }
+
+    get telegramConnectionHint() {
+        if (this.integrations.telegramProxyMode === 'custom')
+            return 'IPv4/IPv6 применяется к соединению сервера с прокси. ' + (this.integrations.telegramProxyProtocol === 'socks5'
+                ? 'SOCKS5 также использует это IP-семейство при локальном разрешении адреса Telegram.'
+                : 'Адрес Telegram разрешает прокси-сервер.');
+        if (this.integrations.telegramProxyMode === 'direct')
+            return 'Сервер подключается к Telegram напрямую. IP-семейство применяется к соединению с Telegram.';
+        return 'Используются HTTPS_PROXY, ALL_PROXY и NO_PROXY в окружении процесса сервера. Настройки браузера, ОС и PAC не читаются.';
     }
 
     loadOpdsSettings() {
@@ -1065,6 +1109,8 @@ class SettingsDialog {
         this.showCounts = settings.showCounts;
         this.showRates = settings.showRates;
         this.showInfo = settings.showInfo;
+        this.autoLoadBookReviews = settings.autoLoadBookReviews === true;
+        this.autoLoadAuthorInfo = settings.autoLoadAuthorInfo === true;
         this.showGenres = settings.showGenres;
         this.bookCardView = (settings.bookCardView === 'list' ? 'list' : 'cards');
         this.showDates = settings.showDates;
@@ -1883,12 +1929,20 @@ class SettingsDialog {
 
         this.integrationSaveLoading = true;
         try {
-            const result = await this.api.updateAdminIntegrations(this.integrations);
+            const patch = {...this.integrations};
+            // Hidden custom drafts must not block direct/environment routing.
+            // Omitted fields preserve the server's saved custom connection.
+            if (patch.telegramProxyMode !== 'custom')
+                for (const key of Object.keys(patch))
+                    if (key.startsWith('telegramProxy') && key !== 'telegramProxyMode') delete patch[key];
+            const result = await this.api.updateAdminIntegrations(patch);
             if (result && result.integrations)
-                this.integrations = Object.assign(this.makeDefaultIntegrations(), result.integrations);
+                this.integrations = this.integrationValues(result.integrations);
+            this.telegramProxyPasswordVisible = false;
             await this.api.updateConfig();
             if (!options.quiet)
                 this.$root.notify.success(this.mailUi.saved);
+            await this.$refs?.telegramBotStatus?.refresh?.();
             return true;
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
@@ -1915,6 +1969,7 @@ class SettingsDialog {
     }
 
     async testTelegram() {
+        this.telegramNotice?.(); this.telegramNotice = null;
         const saved = await this.saveIntegrations({quiet: true});
         if (!saved)
             return;
@@ -1922,9 +1977,12 @@ class SettingsDialog {
         this.telegramTestLoading = true;
         try {
             const result = await this.api.testAdminIntegration('telegram');
-            this.$root.notify.success((result && result.message) || 'Telegram ok');
+            const status = await this.$refs?.telegramBotStatus?.refresh?.() || result?.telegramBotStatus;
+            const notice = telegramProbeNotice(result,status,this.integrations.telegramBotEnabled);
+            this.telegramNotice = this.$root.notify[notice.kind](notice.message,notice.caption);
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
+            await this.$refs?.telegramBotStatus?.refresh?.();
+            this.telegramNotice = this.$root.notify.error('Не удалось проверить подключение к Telegram',e.message);
         } finally {
             this.telegramTestLoading = false;
         }
@@ -1984,24 +2042,6 @@ class SettingsDialog {
         input.click();
     }
 
-    openBackupImport() {
-        const input = this.$refs.backupImportInput;
-        if (!input)
-            return;
-
-        input.value = '';
-        input.click();
-    }
-
-    arrayBufferToBase64(buffer) {
-        const bytes = new Uint8Array(buffer);
-        const chunkSize = 0x8000;
-        let binary = '';
-        for (let i = 0; i < bytes.length; i += chunkSize)
-            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-        return btoa(binary);
-    }
-
     async onSettingsImportSelected(event) {
         const input = event && event.target;
         const file = input && input.files && input.files[0];
@@ -2021,52 +2061,6 @@ class SettingsDialog {
             this.settingsImportLoading = false;
             if (input)
                 input.value = '';
-        }
-    }
-
-    async onBackupImportSelected(event) {
-        const input = event && event.target;
-        const file = input && input.files && input.files[0];
-        if (!file)
-            return;
-
-        const confirmed = await this.$root.stdDialog.confirm(
-            this.backupUi.restoreConfirm,
-            this.backupUi.backupImport,
-        );
-        if (!confirmed) {
-            input.value = '';
-            return;
-        }
-
-        this.backupImportLoading = true;
-        try {
-            const contentBase64 = this.arrayBufferToBase64(await file.arrayBuffer());
-            await this.api.importAdminBackup({fileName: file.name, contentBase64});
-            await this.api.updateConfig();
-            this.loadSettings();
-            this.$root.notify.success(this.backupUi.restored);
-        } catch (e) {
-            this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
-        } finally {
-            this.backupImportLoading = false;
-            if (input)
-                input.value = '';
-        }
-    }
-
-    async createBackup() {
-        this.backupLoading = true;
-        try {
-            const result = await this.api.createAdminBackup();
-            if (result && result.link) {
-                window.location.href = result.link;
-                this.$root.notify.success(this.backupUi.ready);
-            }
-        } catch (e) {
-            this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
-        } finally {
-            this.backupLoading = false;
         }
     }
 
@@ -2585,7 +2579,7 @@ export default vueComponent(SettingsDialog);
     }
 
     .admin-mail-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .admin-mail-wide,

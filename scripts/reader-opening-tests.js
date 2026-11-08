@@ -74,8 +74,8 @@ async function testCatalogOpensReaderBeforeColdFilePreparation() {
     const source = await fs.readFile(path.resolve(__dirname, '../client/components/Search/BaseList.js'), 'utf8');
     const method = source.slice(source.indexOf('    async download(book, action, format = '), source.indexOf('    getBookUid(book = {}'));
     const pendingPreparation = new Promise(() => {});
-    const BaseList = new Function('utils', 'axios', 'window', `return class {${method}}`)(
-        {sleep: () => pendingPreparation}, {}, {location: {origin: 'http://localhost'}});
+    const BaseList = new Function('utils', 'axios', 'window', 'bookFormats', `return class {${method}}`)(
+        {sleep: () => pendingPreparation}, {}, {location: {origin: 'http://localhost'}}, require('../shared/BookFormats'));
     const list = new BaseList();
     list.config = {onlineReaderEnabled: true};
     const events = [];
@@ -87,6 +87,8 @@ async function testCatalogOpensReaderBeforeColdFilePreparation() {
     assert.deepStrictEqual(events, [{path: '/reader', query: {bookUid: 'cold-book'}}]);
     assert.strictEqual(list.downloadFlag, false);
     assert.strictEqual(list.loadingMessage2, '');
+    await list.download({_uid: 'epub-book', ext: 'epub'}, 'readBook');
+    assert.deepStrictEqual(events.pop(), {path: '/reader', query: {bookUid: 'epub-book'}});
     // External readers still need a prepared URL.
     list.config.onlineReaderEnabled = false;
     list.list = {liberamaReady: true};
@@ -195,22 +197,62 @@ async function testBackgroundLibraryWorkWaitsForUser() {
 }
 
 async function testBookGalleryReturnsFirstImagesWithoutCover() {
-    const Fb2Parser = require('../server/core/fb2/Fb2Parser');
-    const parser = new Fb2Parser();
-    parser.fromString('<FictionBook xmlns:l="x"><description><title-info><coverpage><image l:href="#cover"/></coverpage></title-info></description>' +
-        '<binary id="cover" content-type="image/png">Y292ZXI=</binary>' +
-        Array.from({length: 20}, (_, num) => `<binary id="${num}" content-type="${num ? 'image/png' : 'image/jpg'}">aW1n</binary>`).join('') +
-        '</FictionBook>', {lowerCase: true});
-    const worker = Object.create(require('../server/core/WebWorker').prototype);
-    worker.getBookInfo = async(bookUid, options) => {
-        assert.deepStrictEqual(options, {readerOnly: true}, 'The gallery does not wait for reviews');
-        return {bookInfo: {fb2: parser.rawNodes}};
-    };
-    const {images} = await worker.getBookGallery('gallery-book');
-    assert.deepStrictEqual(images.map(image => image.id), Array.from({length: 18}, (_, num) => String(num)));
-    assert.strictEqual(images[0].contentType, 'image/jpeg');
-    assert.strictEqual(images[1].data, 'aW1n');
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'inpx-gallery-opening-'));
+    try {
+        const image=Buffer.from('89504e470d0a1a0a','hex').toString('base64');
+        const xml='<FictionBook xmlns:l="x"><description><title-info><coverpage><image l:href="#cover"/></coverpage></title-info></description>' +
+            `<binary id="cover" content-type="image/png">${image}</binary>` +
+            Array.from({length:20},(_,num)=>`<binary id="${num}" content-type="image/png">${image}</binary>`).join('')+'</FictionBook>';
+        const worker=Object.create(require('../server/core/WebWorker').prototype);
+        worker.config={bookDir:dir,tempDir:dir};worker.fb2Helper=new Fb2Helper();worker.checkMyState=()=>{};
+        worker.db={esc:JSON.stringify,select:async()=>[{_uid:'gallery-book',ext:'fb2',file:'123',folder:'book.7z'}]};
+        worker.dbConfig=async()=>({inpxHash:'fixture'});worker.scheduleCacheClean=()=>{};
+        worker.getBookInfo=async()=>assert.fail('Gallery must not prepare the full reader document');
+        worker.extractBook=async()=>{const file=path.join(dir,'extracted');await fs.writeFile(file,xml);return file;};
+        const {images,limited}=await worker.getBookGallery('gallery-book');
+        assert.deepStrictEqual(images.map(image=>image.id),Array.from({length:18},(_,num)=>String(num)));
+        assert.strictEqual(images[0].contentType,'image/png');assert.strictEqual(images[1].data,image);
+        assert.strictEqual(limited,true);
+    } finally {await fs.remove(dir);}
+}
+
+async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
+    const source = await fs.readFile(path.resolve(__dirname, '../client/components/Reader/Reader.vue'), 'utf8');
+    const key = source.slice(source.indexOf('    get readerSourceKey() {'), source.indexOf('    get readerHeaderTitle() {'));
+    const load = source.slice(source.indexOf('    cancelReaderLoad() {'), source.indexOf('    restoreProgress() {'));
+    const Reader = new Function(`return class {${key}${load}}`)();
+    const reader = new Reader();
+    Object.assign(reader, {readerActive: true, isStandaloneMode: false, bookUid: 'same-uid', $route: {path: '/book'}, currentUserId: 'test', config: {profileAuthorized: true}});
+    assert.strictEqual(reader.readerSourceKey, '', 'A book-details UID must not activate the cached reader');
+    await reader.loadReader(); // No API or layout dependencies may be touched.
+    reader.$route.path = '/reader';
+    assert.strictEqual(reader.readerSourceKey, 'book:same-uid');
+    reader.readerActive = false;
+    assert.strictEqual(reader.readerSourceKey, '');
+    reader.readerActive = true; reader.isStandaloneMode = true; reader.$route.path = '/reader-lab';
+    reader.standaloneSource = {sourceKey: 'sample'};
+    assert.strictEqual(reader.readerSourceKey, 'standalone:sample', 'The standalone reader retains its own lifecycle');
+
+    let finish, started;
+    const gate = new Promise(resolve => {finish = resolve;});
+    const requested = new Promise(resolve => {started = resolve;});
+    let parsed = 0;
+    Object.assign(reader, {isStandaloneMode: false, $route: {path: '/reader'}, readerLoadJobId: 0, pagedBuildJobId: 0, $refs: {},
+        pagedLayoutCache: new Map([['old-document', {type: 'partial'}]]), bottomClipCompensationByGeometry: new Map(), bottomClipCalibrationAttemptsByGeometry: new Map(),
+        resetBottomClipCalibrationSample() {}, cancelCompactChromeBuildPendingClear() {}, clearCompactChromeStatusHold() {},
+        afterLayoutRefreshPaint: async() => {}, applyStoredReaderPreferences: async() => {}, uiText: {}, applyReaderDocumentSource: async() => {parsed++;},
+        $root: {api: {getReaderBook: async uid => {assert.strictEqual(uid, 'same-uid'); started(); return gate;}, getReaderState: async() => ({})}},
+    });
+    const pending = reader.loadReader();
+    await requested;
+    assert.strictEqual(reader.pagedLayoutCache.size, 0, 'A new document clears pagination checkpoints before fetching its text');
+    reader.readerActive = false; reader.cancelReaderLoad();
+    finish({bookInfo: {book: {}, fb2: 'obsolete large document'}});
+    await pending;
+    assert.strictEqual(parsed, 0, 'Leaving the reader discards late responses before parsing or pagination');
+    assert.strictEqual(reader.loading, false);
 }
 
 module.exports = [testReaderColdDocumentDoesNotWaitForReviewIndex, testCatalogOpensReaderBeforeColdFilePreparation,
+    testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments,
     testBookCardSkipsIllustrationsAndPreparesBookInBackground, testBackgroundLibraryWorkWaitsForUser, testBookGalleryReturnsFirstImagesWithoutCover];

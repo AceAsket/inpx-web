@@ -7,9 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Git tag to build and publish'
+        description: 'Git tag or ref to build'
         required: true
-        default: 'v1.8.2-rc.1'
+        default: 'v1.8.2-rc.20'
+      publish:
+        description: 'Publish the built artifacts as a GitHub Release'
+        type: boolean
+        default: true
 
 permissions:
   actions: read
@@ -106,10 +110,6 @@ jobs:
       - name: Build binary
         run: npm run ${{ matrix.build_script }}
 
-      - name: Test packaged application
-        shell: bash
-        run: node scripts/binary-smoke-test.js dist/${{ matrix.target }}/inpx-web${{ matrix.target == 'win' && '.exe' || '' }}
-
       - name: Install Inno Setup
         if: matrix.target == 'win'
         shell: pwsh
@@ -161,34 +161,19 @@ jobs:
             chmod +x $fbcTarget
           }
 
-      - name: Test bundled fb2cng conversion and naming
-        shell: bash
-        run: node scripts/fb2cng-integration-tests.js --fbc dist/${{ matrix.target }}/bin/${{ matrix.target == 'win' && 'fbc.exe' || 'fbc' }}
-
       - name: Bundle pinned Kindling converter
         run: node scripts/bundle-kindling.js ${{ matrix.target }}
 
-      - name: Test real MOBI conversion
-        shell: bash
-        run: node scripts/mobi-integration-tests.js --fbc dist/${{ matrix.target }}/bin/${{ matrix.target == 'win' && 'fbc.exe' || 'fbc' }} --kindling dist/${{ matrix.target }}/bin/${{ matrix.target == 'win' && 'kindling.exe' || 'kindling' }}
-
       - name: Archive release payload
-        shell: pwsh
+        shell: bash
         run: |
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $srcDir = Join-Path $PWD ("dist/{0}" -f "${{ matrix.target }}")
-          if (-not (Test-Path $srcDir)) {
-            throw "Build output directory not found: $srcDir"
-          }
-          $outDir = Join-Path $PWD "dist/release"
-          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          $archiveName = "inpx-web-$version-${{ matrix.target }}.zip"
-          $archivePath = Join-Path $outDir $archiveName
-          if (Test-Path $archivePath) {
-            Remove-Item $archivePath -Force
-          }
-          Compress-Archive -Path (Join-Path $srcDir '*') -DestinationPath $archivePath -Force
-          "ARCHIVE_PATH=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          node build/release.js ${{ matrix.target }}
+          version=$(node -p "require('./package.json').version")
+          echo "ARCHIVE_PATH=dist/release/inpx-web-$version-${{ matrix.target }}.zip" >> "$GITHUB_ENV"
+
+      - name: Test extracted release permissions, application and converters
+        shell: bash
+        run: node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$ARCHIVE_PATH"
 
       - name: Build Windows installer
         if: matrix.target == 'win'
@@ -204,6 +189,7 @@ jobs:
 
   release:
     name: Upload release assets
+    if: github.event_name != 'workflow_dispatch' || inputs.publish
     runs-on: ubuntu-latest
     needs: build
     steps:

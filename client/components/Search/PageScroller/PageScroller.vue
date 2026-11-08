@@ -1,5 +1,6 @@
 <template>
-    <div class="page-scroller row items-center q-ml-md q-my-xs">
+    <LibraryPagination v-if="shelvesAppearance" :model-value="page" :page-count="pageCount" :disable="disable" @update:model-value="page = $event" />
+    <div v-else class="page-scroller row items-center q-ml-md q-my-xs">
         <div class="page-scroller-label q-mr-xs">
             Страница
         </div>
@@ -20,11 +21,13 @@
 import vueComponent from '../../vueComponent.js';
 
 import NumInput from '../../share/NumInput.vue';
+import LibraryPagination from '../../Library/LibraryPagination.vue';
 import * as utils from '../../../share/utils';
 
 const componentOptions = {
     components: {
-        NumInput
+        NumInput,
+        LibraryPagination,
     },
 };
 class PageScroller {
@@ -37,6 +40,10 @@ class PageScroller {
 
     get page() {
         return this.modelValue || 1;
+    }
+
+    get shelvesAppearance() {
+        return this.$store?.state.settings.catalogAppearance === 'shelves';
     }
 
     set page(value) {

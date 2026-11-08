@@ -18,6 +18,9 @@ let branch = '';
 const argvStrings = ['host', 'port', 'config', 'data-dir', 'app-dir', 'lib-dir', 'inpx', 'library-sources', 'admin-login', 'admin-password'];
 
 function applyEnvSecurityOverrides(targetConfig) {
+    Object.assign(targetConfig,require('../shared/TelegramNetwork').environmentPatch(process.env));
+    if (Object.prototype.hasOwnProperty.call(process.env, 'TELEGRAM_IP_FAMILY'))
+        targetConfig.telegramIpFamily = require('../shared/TelegramNetwork').normalizeIpFamily(process.env.TELEGRAM_IP_FAMILY);
     targetConfig.reviewWarmupEnabled = process.env.INPX_REVIEWS_WARMUP === 'true';
     targetConfig.reviewIndexMaxEntries = Math.max(1, parseInt(process.env.INPX_REVIEW_INDEX_MAX_ENTRIES || '100000',10) || 100000);
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_LOW_MEMORY_MODE'))
@@ -267,9 +270,12 @@ async function main() {
         .catch(e => log(LM_WARN, `Cannot check the admin password: ${e.message}`));
 
     require('./core/AudiobookshelfProvider').init(app, config, webSocketController.webWorker, security);
+    require('./core/KoSync').register(app, config, webSocketController.webWorker, security);
 
     const initHealthRoutes = require('./core/HealthRoutes');
     initHealthRoutes(app, config, webSocketController.webWorker, security, webSocketController);
+
+    require('./controllers/EbookController').register(app,config,webSocketController.webWorker,security,webAccess);
 
     const initStatic = require('./static');
     initStatic(app, config, webSocketController.webWorker, security);

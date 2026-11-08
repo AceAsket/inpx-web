@@ -3,10 +3,6 @@
         <div v-if="$root.api && $root.api.indexWaitMessage" class="library-index-status" role="status">
             <q-spinner size="18px" /> {{ $root.api.indexWaitMessage }}
         </div>
-        <div v-if="authorized" class="library-tools-buttons">
-            <q-btn dense flat no-caps icon="la la-tasks" label="Задачи" @click="openTasks" />
-            <q-btn dense flat no-caps icon="la la-star" label="Избранные авторы и серии" @click="openFollows" />
-        </div>
         <q-dialog v-model="tasksOpen" @hide="stopPolling">
             <q-card class="library-tools-card">
                 <q-card-section class="row items-center">
@@ -162,7 +158,10 @@ export default {
     methods:{
         stateLabel(state) {return {queued:'В очереди',running:'В работе',generating:'В работе',ready:'Готово',error:'Ошибка',cancelled:'Отменено'}[state] || state;},
         stopPolling() {clearTimeout(this.pollTimer); this.generation++;},
-        openTasks() {this.tasksOpen = true; this.stopPolling(); this.loadTasks(this.generation);},
+        openTasks() {
+            if (!this.authorized || !this.$store.state.config.currentUserProfile?.isAdmin) return;
+            this.tasksOpen = true; this.stopPolling(); this.loadTasks(this.generation);
+        },
         async loadTasks(generation) {
             this.loading = true;
             try {const result = await this.$root.api.getBackgroundTasks(); if (generation !== this.generation) return;
@@ -186,6 +185,7 @@ export default {
             const link = document.createElement('a'); link.href = url; link.download = 'inpx-library-audit.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
         },
         openFollows() {
+            if (!this.authorized) return;
             this.followsOpen = true;
             this.kind = this.author ? 'author' : this.series ? 'series' : 'author';
             this.value = (this.author || this.series || '').replace(/^=/,'');
@@ -208,7 +208,7 @@ export default {
 </script>
 
 <style scoped>
-.library-tools { color:inherit; }
+.library-tools { color:inherit; min-width:0; }
 .library-tools-buttons,.library-index-status { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
 .library-tools-buttons { padding:4px 8px; }
 .library-index-status { padding:10px 16px; }

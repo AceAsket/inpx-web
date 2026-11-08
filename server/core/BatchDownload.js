@@ -3,11 +3,28 @@ const path = require('path');
 const crypto = require('crypto');
 const yazl = require('yazl');
 const {pipeline} = require('stream/promises');
+const {Readable, Transform} = require('stream');
 const bookNaming = require('./BookNaming');
 
 const tickets = new Map();
 let running = false;
 const maximum = 200;
+const lifetime = 15 * 60 * 1000;
+const cacheLimit = 1024 ** 3;
+let cleanupTimer;
+async function cleanup(now = Date.now()) {
+    for (const [key, ticket] of tickets) {
+        if (ticket.expires <= now && !ticket.readers) {await fs.remove(ticket.file); tickets.delete(key);}
+        else if (!await fs.pathExists(ticket.file)) tickets.delete(key);
+    }
+    return [...tickets.values()].reduce((total, ticket) => total + ticket.bytes, 0);
+}
+
+function ensureCleanup() {
+    if (cleanupTimer) return;
+    cleanupTimer = setInterval(() => cleanup().catch(() => {}), 60000);
+    cleanupTimer.unref?.();
+}
 function safeName(value, fallback) {
     const clean = Array.from(String(value || '')).filter(char => char.charCodeAt(0) >= 32).join('');
     const name = clean.normalize('NFC').replace(/[\\/:*?"<>|]/g, '_').replace(/^\.+|[. ]+$/g, '').trim().slice(0, 120);
@@ -19,6 +36,10 @@ async function create(worker, userId, selection) {
     let output;
     try {
         worker.checkMyState();
+        ensureCleanup();
+        const retained = await cleanup();
+        if (tickets.size >= 256 || retained >= cacheLimit)
+            throw new Error('Кэш пакетных ZIP заполнен. Повторите через 15 минут.');
         let uids = selection.bookUids;
         if (selection.listId) {
             const item = await worker.readingListStore.getList(userId, selection.listId);
@@ -42,15 +63,32 @@ async function create(worker, userId, selection) {
         const token = crypto.randomBytes(32).toString('hex');
         output = path.join(worker.config.tempDir, `batch-${token}.zip`);
         const zip = new yazl.ZipFile();
-        const complete = pipeline(zip.outputStream, fs.createWriteStream(output));
-        complete.catch(() => {});
-        zip.on('error', error => zip.outputStream.destroy(error));
+        let outputBytes = 0;
+        const limiter = new Transform({transform(chunk, encoding, callback) {
+            outputBytes += chunk.length;
+            callback(outputBytes > cacheLimit - retained ? new Error('Кэш пакетных ZIP заполнен. Повторите через 15 минут.') : null, chunk);
+        }});
+        const inputs = new Set();
+        let pipelineError;
+        const abort = error => {
+            pipelineError = pipelineError || error;
+            for (const input of inputs) input.destroy();
+            zip.outputStream.destroy(pipelineError);
+        };
+        const checkOutput = () => {if (pipelineError) throw pipelineError;};
+        const complete = pipeline(zip.outputStream, limiter, fs.createWriteStream(output));
+        complete.catch(abort);
+        zip.on('error', abort);
         let bytes = 0;
         const names = new Set();
         try {
             for (let index = 0; index < uids.length; index++) {
+                checkOutput();
                 const prepared = await worker.getPreparedBookFile(uids[index]);
-                bytes += (await fs.stat(prepared.rawFile)).size;
+                checkOutput();
+                const stat = await fs.stat(prepared.rawFile);
+                checkOutput();
+                bytes += stat.size;
                 if (bytes > 512 * 1024 * 1024) throw new Error('ZIP превышает лимит 512 МБ');
                 const book = prepared.book;
                 const folder = safeName(book.series, 'Вне серий');
@@ -64,15 +102,30 @@ async function create(worker, userId, selection) {
                     entry = `${folder}/${path.basename(fileName, `.${ext}`)}_${duplicate}.${ext}`;
                 }
                 names.add(entry.toLowerCase());
-                zip.addFile(prepared.rawFile, entry);
+                // Open a descriptor only when yazl reaches this entry, while
+                // retaining control of every active reader on output failure.
+                const input = Readable.from((async function*() {
+                    const source = fs.createReadStream(prepared.rawFile);
+                    inputs.add(source); source.once('close', () => inputs.delete(source));
+                    try {for await (const chunk of source) yield chunk;}
+                    finally {source.destroy();}
+                })());
+                inputs.add(input);
+                input.once('close', () => inputs.delete(input));
+                input.on('error', abort);
+                zip.addReadStream(input, entry, {size:stat.size, mtime:stat.mtime, mode:stat.mode});
             }
             zip.end();
             await complete;
-        } catch (error) { zip.outputStream.destroy(error); await complete.catch(() => {}); throw error; }
-        for (const [key, ticket] of tickets) {
-            if (ticket.expires < Date.now()) { tickets.delete(key); await fs.remove(ticket.file); }
+        } catch (error) {abort(error); await complete.catch(() => {}); throw pipelineError;}
+        finally {
+            const closing = [...inputs].map(input => new Promise(resolve => {
+                if (input.closed) return resolve();
+                input.once('close', resolve); input.destroy();
+            }));
+            await Promise.all(closing);
         }
-        tickets.set(token, {file: output, userId, expires: Date.now() + 15 * 60 * 1000});
+        tickets.set(token, {file: output, userId, bytes:outputBytes, readers:0, expires: Date.now() + lifetime});
         return {url: `${worker.config.bookPathStatic}/batch/${token}`, count: uids.length};
     } catch (error) { if (output) await fs.remove(output); throw error; }
     finally { running = false; }
@@ -80,11 +133,15 @@ async function create(worker, userId, selection) {
 function register(app, config) {
     app.get(`${config.bookPathStatic}/batch/:token`, (req, res) => {
         const ticket = tickets.get(req.params.token);
-        if (!ticket || ticket.expires < Date.now()) return res.sendStatus(404);
+        if (!ticket || ticket.expires <= Date.now()) {cleanup().catch(() => {}); return res.sendStatus(404);}
         if (req.profileAccessIdentity && req.profileAccessIdentity.user && req.profileAccessIdentity.user.id !== ticket.userId)
             return res.sendStatus(403);
         res.set('Cache-Control', 'private, no-store');
-        res.download(ticket.file, 'books.zip');
+        ticket.readers++;
+        let finished = false;
+        const finish = () => {if (finished) return; finished = true; ticket.readers--; cleanup().catch(() => {});};
+        res.once('finish', finish); res.once('close', finish);
+        res.download(ticket.file, 'books.zip', error => {finish(); if (error && !res.headersSent) res.sendStatus(500);});
     });
 }
-module.exports = {create, register, safeName, maximum};
+module.exports = {create, register, safeName, maximum, cleanup};

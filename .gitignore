@@ -8,5 +8,7 @@ dev*.sh
 /data-local-*/
 /local-test-library/
 /tmp/
+/.review-tmp/
+/output/
 /*.fb2
 /remote-one-page-check.png

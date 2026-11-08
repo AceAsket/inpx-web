@@ -245,7 +245,7 @@ final class DashboardView {
       TextView help =
           text(
               "↑ ↓ ← →  Выбор     OK  Открыть     Назад  Вернуться                         ANDROID"
-                  + " TV · 0.6",
+                  + " TV · 0.7.0",
               11,
               MUTED,
               false);
@@ -277,7 +277,7 @@ final class DashboardView {
       LinearLayout.LayoutParams opt = new LinearLayout.LayoutParams(-1, -2);
       opt.topMargin = dp(10);
       content.addView(options, opt);
-      TextView footer = text("INPX SERVER  /  ANDROID 9+  /  0.6", 11, MUTED, false);
+      TextView footer = text("INPX SERVER  /  ANDROID 9+  /  0.7.0", 11, MUTED, false);
       footer.setTag("dashboard-footer");
       footer.setGravity(Gravity.CENTER);
       footer.setPadding(0, dp(24), 0, dp(10));

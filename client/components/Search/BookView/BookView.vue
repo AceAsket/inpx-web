@@ -1,5 +1,9 @@
 <template>
-    <div class="book-view q-my-sm" :class="{'is-list-mode': isListMode}">
+    <LibraryResultCard v-if="shelvesResult" :book="book" :download-href="getDirectBookDownloadHref()" :selectable="selectable" :selected="selected"
+        :show-rates="showRates" :show-info="showInfo" :date-label="showDates ? bookDate : ''" :genres="showGenres ? bookGenreItems : []"
+        :feedback="showDiscoveryDismiss" :restore="showDiscoveryRestore" :reason="book.discoveryReason || ''" :compact="compactDiscovery"
+        @action="emit($event)" @selection="emitSelection" @genre="emit('genreClick', $event)" @feedback="selectDiscoveryFeedback" @restore="emit('discoveryRestore')" />
+    <div v-else class="book-view q-my-sm" :class="{'is-list-mode': isListMode}">
         <div
             class="book-card"
             :class="{'is-poster-mode': isPosterMode, 'is-list-mode': isListMode, 'is-compact-discovery': compactDiscovery, 'has-inline-actions': hasInlineActionsLayout, 'has-book-author': showBookAuthor}"
@@ -42,6 +46,7 @@
                 <div v-if="book.del && showDeleted" class="cover-badge deleted-badge">
                     {{ deletedLabel }}
                 </div>
+                <BookRatingBadge v-if="showRates" :book="book" />
             </div>
 
             <div class="book-content">
@@ -57,10 +62,10 @@
                     <div class="meta-pill">
                         {{ posterExt }}
                     </div>
-                    <div v-if="showRates && !book.del && book.librate" class="meta-pill rating-pill" :class="rateBadgeColor">
+                    <div v-if="isListMode && showRates && !book.del && book.librate" class="meta-pill rating-pill" :class="rateBadgeColor">
                         {{ book.librate }}/5
                     </div>
-                    <div v-else-if="showRates && !book.del && !isExternalOnlyDiscoveryBook" class="meta-pill rating-pill rating-pill-placeholder" aria-hidden="true">
+                    <div v-else-if="isListMode && showRates && !book.del && !isExternalOnlyDiscoveryBook" class="meta-pill rating-pill rating-pill-placeholder" aria-hidden="true">
                         0/5
                     </div>
                     <div v-if="bookSize" class="meta-pill">
@@ -374,13 +379,18 @@
 
 <script>
 const bookFormats = require('../../../../shared/BookFormats');
+const {coverUrl} = require('../../Library/libraryModel');
 //-----------------------------------------------------------------------------
 import vueComponent from '../../vueComponent.js';
+import LibraryResultCard from '../../Library/LibraryResultCard.vue';
+import BookRatingBadge from '../../Library/BookRatingBadge.vue';
 
 import * as utils from '../../../share/utils';
 
 const componentOptions = {
     components: {
+        LibraryResultCard,
+        BookRatingBadge,
     },
     watch: {
         settings() {
@@ -396,6 +406,7 @@ class BookView {
     _props = {
         book: Object,
         mode: String,
+        presentation: String,
         genreMap: Object,
         showReadLink: Boolean,
         showDiscoveryDismiss: { type: Boolean, default: false},
@@ -449,6 +460,10 @@ class BookView {
 
     get settings() {
         return this.$store.state.settings;
+    }
+
+    get shelvesResult() {
+        return this.settings.catalogAppearance === 'shelves' && this.presentation !== 'full';
     }
 
     get config() {
@@ -522,20 +537,7 @@ class BookView {
     get coverSrc() {
         if (this.coverError)
             return '';
-
-        if (this.book.discoveryCoverUrl)
-            return this.book.discoveryCoverUrl;
-
-        const root = this.config.rootPathStatic || '';
-        const bookUid = this.getBookUid();
-        if (bookUid)
-            return `${root}/cover/by-uid?uid=${encodeURIComponent(bookUid)}`;
-        if (!this.book.libid)
-            return '';
-        const sourceId = String(this.book.sourceId || '').trim();
-        return sourceId
-            ? `${root}/cover/${encodeURIComponent(sourceId)}/${this.book.libid}`
-            : `${root}/cover/${this.book.libid}`;
+        return coverUrl(this.book, this.config.rootPathStatic || '');
     }
 
     get rateBadgeColor() {

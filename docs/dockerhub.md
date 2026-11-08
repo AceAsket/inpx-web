@@ -8,8 +8,12 @@
 
 ### Возможности
 
-**Для тестирования: 1.8.2-rc.1.** Общие подборки в корне OPDS без выбора профиля: фильтры задаются подключённым JSON-файлом через `INPX_OPDS_FEEDS_FILE`, изменения применяются без перезапуска. Действующая авторизация сохраняется. Добавлены ссылки `related` на соавторов и серии. [Примеры Unraid и Compose](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.1/docs/opds-catalog-shelves.md).
+- RC20 исправляет гостевой `/ebook` для Kindle: после применения формата MOBI скачивается отдельной ссылкой с расширением файла. Команды бота проверены по личному Chat ID без одноразовой ссылки и webhook.
 
+**Для тестирования: 1.8.2-rc.20.** ZIP сохраняет права исполняемых файлов; запуск и EPUB/MOBI проверяются после распаковки. В «Сейчас читаю» добавлены жанр и год, высота выровнена с «Недавно читали». Уточнены статусы Telegram и обновлён стиль уведомлений. README описывает ZIP PPMd/7z с WebP/JXL. Включает возможности RC19. [Изменения RC20](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/rc20-release-notes.md). Стабильный `latest` остаётся на 1.8.1.
+
+- RC14 исправляет исчерпание памяти базы при проверке производительности: проба читает одну запись. «Свои значения» проверяют лимиты с метриками CPU и памяти; отказ базы показан явно. Клик по книге снова открывает превью, полная карточка доступна отдельно. Обновлены вкладки и «Об авторе», отзывы и оценки показывают реальный прогресс. [Изменения RC14](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/rc14-release-notes.md), [профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/resource-profiles.md). Сохраняются изоляция профилей, стабильные ссылки и бюджеты кэшей RC13; [настройки памяти](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/memory-and-loading.md). Полный образ поддерживает EPUB → FB2.
+- Подсказки от трёх символов работают без подготовки и опроса; обычный поиск доступен сразу. Галерея: до 18 иллюстраций, 2 МиБ на изображение, 8 МиБ суммарно, 32 МиБ FB2 XML. Диагностика: `failedByCode`, `failedByKind`. Telegram: напрямую, через окружение сервера или свой HTTP(S)/SOCKS5; пароль хранится отдельно.
 - Поиск по автору, названию, серии, жанру, языку и источнику; несколько библиотек в одном каталоге.
 - Обложки и их кэширование, поддержка WebP и JXL.
 - Чтение FB2 в браузере: темы, шрифты, закладки, заметки, сохранение позиции и отдельный PWA-ярлык читалки.
@@ -24,14 +28,14 @@
 
 Android-клиент подключается по QR с адресом без паролей. API поддерживает восстановление сессий, события чтения, быстрый снимок главной и отмену озвучки. Для остановки синтеза обновите основной контейнер и Silero. HTTP разрешён с предупреждением; HTTPS поддерживается через reverse proxy. [Контракт клиента](https://github.com/AceAsket/inpx-web/blob/v1.8.1/docs/native-client-protocol.md).
 
-**MOBI:** встроенный лёгкий Kindling конвертирует FB2/EPUB в MOBI7/KF8 без Calibre. Опция выключена по умолчанию: для включения добавьте `-e INPX_MOBI_ENABLED=true` перед именем образа. Совместимость с конкретным Kindle остаётся экспериментальной. [Настройка и ограничения](https://github.com/AceAsket/inpx-web/blob/v1.8.1/README.md#лёгкая-конвертация-mobi-181-rc2).
+**MOBI в стабильной 1.8.1:** встроенный лёгкий Kindling конвертирует FB2/EPUB в MOBI7/KF8 без Calibre. Опция выключена по умолчанию: для включения добавьте `-e INPX_MOBI_ENABLED=true` перед именем образа. Совместимость с конкретным Kindle остаётся экспериментальной. [Настройка и ограничения](https://github.com/AceAsket/inpx-web/blob/v1.8.1/README.md#лёгкая-конвертация-mobi-181-rc2).
 
 ### Образы и версии
 
 | Тег | Назначение |
 | --- | --- |
-| `1.8.2-rc.1` | Предварительная сборка с общими подборками OPDS. |
-| `1.8.2-rc.1-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
+| `1.8.2-rc.20` | Ограниченная проверка ресурсов, свои лимиты и метрики CPU/памяти, превью и прогресс загрузки; все возможности RC13. |
+| `1.8.2-rc.20-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
 | `1.8.1` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.1`. |
 | `1.8.1-silero` | Отдельный сервис озвучки для стабильной версии. |
@@ -124,8 +128,10 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 ### Features
 
-**For testing: 1.8.2-rc.1.** Shared shelves appear at the OPDS root without selecting a profile. Set `INPX_OPDS_FEEDS_FILE` to a mounted JSON configuration; edits take effect without restarting. Existing authentication still applies. Adds `related` links to coauthors and series. [Unraid and Compose examples](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.1/docs/opds-catalog-shelves.md).
+**For testing: 1.8.2-rc.20.** Release ZIPs retain Unix executable permissions; application and EPUB/MOBI checks run after extraction. The wide current-reading card matches the recent-reading block height and shows genres/year. Telegram token checks and polling health are distinct; notifications follow the theme. README documents ZIP PPMd/7z collections with WebP/JXL. Includes RC19 features. [RC20 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/rc20-release-notes.md). Stable `latest` remains at 1.8.1.
 
+- RC14 fixes database-worker memory exhaustion during performance checks by probing one catalog row. Custom values test limits with CPU/memory metrics; database failure is reported clearly. Book previews return with a separate full-card link. Tabs and author details are updated, and reviews and ratings show measured progress. [RC14 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/rc14-release-notes.md), [resource profiles](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/resource-profiles.md). Includes RC13 profile isolation, stable links and bounded caches; [memory settings](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/memory-and-loading.md). Full images support EPUB → FB2 reading.
+- Suggestions from three characters need no preparation or polling; search is available immediately. Gallery: up to 18 illustrations, 2 MiB/image, 8 MiB total, 32 MiB FB2 XML. Diagnostics: `failedByCode`, `failedByKind`. Telegram: direct, server-environment or custom HTTP(S)/SOCKS5 proxy; passwords stored separately.
 - Search by author, title, series, genre, language and source; multiple libraries in one catalog.
 - Cover extraction and caching, including WebP and JXL support.
 - Browser-based FB2 reading with themes, fonts, bookmarks, notes, saved positions and a dedicated reader PWA shortcut.
@@ -140,14 +146,14 @@ Cards and galleries load on demand. A shared archive/image/conversion budget bou
 
 Connect Android through a QR containing the server address without credentials. The compatible API adds session resume, reading events, fast home snapshots and speech cancellation. Update both the web and Silero containers to stop synthesis. HTTP remains allowed with a warning; HTTPS works through a reverse proxy. [Client contract](https://github.com/AceAsket/inpx-web/blob/v1.8.1/docs/native-client-protocol.md).
 
-**MOBI:** bundled lightweight Kindling converts FB2/EPUB to MOBI7/KF8 without Calibre. Disabled by default; add `-e INPX_MOBI_ENABLED=true` before the image name. Compatibility with a particular Kindle remains experimental. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/v1.8.1/README.md#лёгкая-конвертация-mobi-181-rc2).
+**MOBI in stable 1.8.1:** bundled lightweight Kindling converts FB2/EPUB to MOBI7/KF8 without Calibre. Disabled by default; add `-e INPX_MOBI_ENABLED=true` before the image name. Compatibility with a particular Kindle remains experimental. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/v1.8.1/README.md#лёгкая-конвертация-mobi-181-rc2).
 
 ### Images and versions
 
 | Tag | Purpose |
 | --- | --- |
-| `1.8.2-rc.1` | Prerelease with shared OPDS shelves. |
-| `1.8.2-rc.1-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
+| `1.8.2-rc.20` | Bounded resource checks, custom limits and CPU/memory metrics, book previews and loading progress; all RC13 features. |
+| `1.8.2-rc.20-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
 | `1.8.1` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.1`. |
 | `1.8.1-silero` | Separate speech service for the stable release. |

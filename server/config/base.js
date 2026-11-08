@@ -31,6 +31,7 @@ module.exports = {
     isbnMaxBookBytes: Math.max(MB, sizeFromEnv('INPX_ISBN_MAX_BOOK_BYTES','INPX_ISBN_MAX_BOOK_MB',64 * MB)),
     reviewWarmupEnabled: process.env.INPX_REVIEWS_WARMUP === 'true',
     opdsFeedsFile: String(process.env.INPX_OPDS_FEEDS_FILE || '').trim(),
+    kosyncEnabled: process.env.INPX_KOSYNC_ENABLED !== 'false',
     reviewIndexMaxEntries: Math.max(1, parseInt(process.env.INPX_REVIEW_INDEX_MAX_ENTRIES || '100000',10) || 100000),
     latestVersion: '',
     name: pckg.name,
@@ -75,8 +76,9 @@ module.exports = {
 
     // Поправить в случае, если были критические изменения в DbCreator или InpxParser,
     // иначе будет рассинхронизация по кэшу между сервером и клиентом на уровне БД.
-    dbVersion: '14',
+    dbVersion: '15',
     dbCacheSize: 5,
+    dbCacheBudgetMb: numberFromEnv('INPX_DB_CACHE_BUDGET_MB', null),
 
     maxPayloadSize: 500,//in MB
     wsMessageLimitMb: numberFromEnv('INPX_WS_MESSAGE_LIMIT_MB', 1),
@@ -88,7 +90,9 @@ module.exports = {
     coverCacheSize: defaultCoverCacheSize,
     queryCacheEnabled: true,
     queryCacheMemSize: 50,
+    queryCacheMemMb: numberFromEnv('INPX_QUERY_CACHE_MEM_MB', 32),
     queryCacheDiskSize: 500,
+    queryCacheDiskMb: numberFromEnv('INPX_QUERY_CACHE_DISK_MB', 64),
     cacheCleanInterval: numberFromEnv('INPX_CACHE_CLEAN_INTERVAL_MINUTES', 24*60),//minutes
     cacheCleanSchedule: '0 0 * * *',
     cacheCleanTargetRatio: numberFromEnv('INPX_CACHE_CLEAN_TARGET_RATIO', 0.8),
@@ -136,10 +140,10 @@ module.exports = {
     conversionQueueLimit: 16,
     conversionTimeoutMs: 120000,
     conversionQueueTimeoutMs: 120000,
-    conversionFormats: Array.from(new Set(String(process.env.INPX_CONVERSION_FORMATS || 'epub,epub3,kepub,kfx,azw8,pdf').split(',')
+    conversionFormats: Array.from(new Set(String(process.env.INPX_CONVERSION_FORMATS || 'fb2,epub,epub3,kepub,kfx,azw8,pdf').split(',')
         .map(item => item.trim().toLowerCase()).filter(item => item && item !== 'mobi')
-        .concat(process.env.INPX_MOBI_ENABLED === 'true' ? ['mobi'] : []))),
-    mobiEnabled: process.env.INPX_MOBI_ENABLED === 'true',
+        .concat(process.env.INPX_MOBI_ENABLED !== 'false' ? ['mobi'] : []))),
+    mobiEnabled: process.env.INPX_MOBI_ENABLED !== 'false',
     kindlingPath: process.env.INPX_KINDLING_PATH || '',
     kindlingVersion: process.env.INPX_KINDLING_VERSION || 'v0.45.6',
     converterPaths: {},
@@ -150,6 +154,10 @@ module.exports = {
     bookTitleTemplate: process.env.INPX_BOOK_TITLE_TEMPLATE || '',
     telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN),
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    telegramBotEnabled: process.env.INPX_TELEGRAM_BOT_ENABLED === 'true',
+    telegramIpFamily: require('../../shared/TelegramNetwork').normalizeIpFamily(process.env.TELEGRAM_IP_FAMILY),
+    ...require('../../shared/TelegramNetwork').proxyDefaults,
+    ...require('../../shared/TelegramNetwork').environmentPatch(process.env),
     telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
     telegramCaptionTemplate: process.env.TELEGRAM_CAPTION_TEMPLATE || '${AUTHOR} - ${TITLE}',
     emailShareEnabled: Boolean(process.env.SMTP_HOST),

@@ -8,6 +8,7 @@
                 <q-btn flat dense round icon="la la-minus" aria-label="Свернуть плеер" @click="minimized = true" />
                 <q-btn flat dense round icon="la la-times" aria-label="Закрыть и остановить озвучку" @click="close" />
             </div>
+            <q-btn v-if="browserSpeechAvailable" flat no-caps icon="la la-volume-up" label="Голоса устройства" @click="$emit('use-browser')" />
             <div class="reader-audio-options">
                 <label>Голос
                     <select v-model="speaker" :disabled="busy">
@@ -140,8 +141,9 @@ export default {
         title: {type: String, default: ''},
         author: {type: String, default: ''},
         cover: {type: String, default: ''},
+        browserSpeechAvailable: {type: Boolean, default: false},
     },
-    emits: ['read-here','listen-here'],
+    emits: ['read-here','listen-here','use-browser'],
     data() {
         return {
             visible: false, minimized: false, speaker: 'xenia', rate: 1, mode: 'online',

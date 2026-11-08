@@ -1,0 +1,338 @@
+const assert = require('assert/strict');
+const {LibraryRepository} = require('../client/components/Library/libraryRepository');
+const model = require('../client/components/Library/libraryModel');
+const catalog = require('../client/components/Library/catalogSearchModel');
+const pagination = require('../client/components/Library/paginationModel');
+
+const deferred = () => {let resolve, reject; const promise = new Promise((yes, no) => {resolve = yes; reject = no;}); return {promise, resolve, reject};};
+function fixture() {
+    const calls = [];
+    const api = Object.fromEntries(['getMobileHome', 'getUserReadingLibrary', 'getReadingLists', 'getDiscoveryShelves'].map(name => [name, async(...args) => {
+        calls.push({name, args});
+        if (name === 'getMobileHome') return {reading: {items: [{bookUid: 'first'}]}, lists: [{id: 'list'}]};
+        if (name === 'getUserReadingLibrary') return {items: [{bookUid: 'first'}]};
+        if (name === 'getReadingLists') return {lists: [{id: 'list'}]};
+        return {shelves: [{id: 'newest', items: [{_uid: 'first'}]}]};
+    }]));
+    let time = 0;
+    const repository = new LibraryRepository(api, () => {}, () => time);
+    const config = {currentUserId: 'one', profileAuthorized: true, clientApi: {features: ['mobileHome']}};
+    const settings = {currentUserId: 'one', profileAccessToken: 'session-one'};
+    repository.setContext(config, settings);
+    return {repository, api, calls, config, settings, advance: value => {time += value;}};
+}
+
+async function testLibraryHomeCachesExpensiveShelvesAndRefreshesReadingIndependently() {
+    const {repository, calls, advance} = fixture();
+    await repository.loadHome();
+    await repository.loadHome();
+    assert.deepEqual(calls.map(call => call.name), ['getMobileHome', 'getDiscoveryShelves']);
+    assert.equal(repository.state.shelves[0].books[0]._uid, 'first', 'Discovery uses the real server items contract');
+    advance(31000);
+    await repository.loadHome();
+    assert.equal(calls.filter(call => call.name === 'getMobileHome').length, 2);
+    assert.equal(calls.filter(call => call.name === 'getDiscoveryShelves').length, 1);
+    await repository.loadHome({freshReading: true});
+    assert.equal(calls.filter(call => call.name === 'getDiscoveryShelves').length, 1, 'Returning from the reader must not recalculate discovery');
+    advance(15 * 60000);
+    await repository.loadHome();
+    assert.equal(calls.filter(call => call.name === 'getDiscoveryShelves').length, 2);
+}
+
+async function testLibraryHomeCoalescesConcurrentRefreshes() {
+    const {repository, api} = fixture(), response = deferred();
+    let requests = 0;
+    api.getMobileHome = () => {requests++; return response.promise;};
+    const first = repository.loadReading(), second = repository.loadReading(true);
+    assert.equal(requests, 1);
+    response.resolve({reading: {items: []}, lists: []});
+    await Promise.all([first, second]);
+    assert.equal(repository.state.readingLoading, false);
+}
+
+async function testLibraryHomeClearsPrivateDataAndRejectsLateProfileResponses() {
+    const {repository, api, config} = fixture();
+    await repository.loadHome();
+    const response = deferred();
+    api.getMobileHome = () => response.promise;
+    const old = repository.loadReading(true);
+    repository.setContext({...config, currentUserId: 'two'}, {currentUserId: 'two', profileAccessToken: 'session-two'});
+    assert.equal(repository.state.reading, null);
+    assert.deepEqual(repository.state.lists, []);
+    assert.deepEqual(repository.state.shelves, []);
+    api.getMobileHome = async() => ({reading: {items: [{bookUid: 'second'}]}, lists: []});
+    await repository.loadReading();
+    response.resolve({reading: {items: [{bookUid: 'private-first'}]}, lists: [{id: 'private-list'}]});
+    await old;
+    assert.equal(repository.state.reading.items[0].bookUid, 'second');
+    assert.deepEqual(repository.state.lists, []);
+}
+
+async function testLibraryHomeProtectsProfileSwitchBeforeNewConfigArrives() {
+    const {repository, config, calls} = fixture();
+    await repository.loadHome();
+    repository.setContext(config, {currentUserId: 'two', profileAccessToken: ''});
+    assert.equal(repository.state.reading, null);
+    assert.equal(repository.state.locked, true);
+    const before = calls.length;
+    await repository.loadHome();
+    assert.equal(calls.length, before, 'No background request may use credentials during a profile switch');
+}
+
+async function testLibraryHomeFallbackDoesNotOpenLoginAndKeepsHistoryWhenListsFail() {
+    const {repository, api, config, settings, calls} = fixture();
+    repository.setContext({...config, clientApi: {}}, settings);
+    api.getReadingLists = async() => {throw new Error('Lists unavailable');};
+    await repository.loadHome();
+    assert.equal(repository.state.reading.items[0].bookUid, 'first');
+    assert.equal(repository.state.listsError, 'Lists unavailable');
+    assert.equal(calls.some(call => call.name === 'getMobileHome'), false);
+    assert.equal(calls.find(call => call.name === 'getUserReadingLibrary').args[1].suppressProfileLogin, true);
+    assert.equal(calls.find(call => call.name === 'getDiscoveryShelves').args[1].suppressProfileLogin, true);
+}
+
+async function testLibraryHomeRetainsCachedShelvesOnFailureAndAllowsRetry() {
+    const {repository, api} = fixture();
+    await repository.loadShelves();
+    api.getDiscoveryShelves = async() => {throw new Error('Network unavailable');};
+    await repository.loadShelves(true);
+    assert.equal(repository.state.shelves[0].id, 'newest');
+    assert.equal(repository.state.shelvesError, 'Network unavailable');
+    assert.equal(repository.state.shelvesLoading, false);
+    api.getDiscoveryShelves = async() => ({shelves: []});
+    await repository.loadShelves(true);
+    assert.deepEqual(repository.state.shelves, []);
+    assert.equal(repository.state.shelvesError, '');
+}
+
+async function testLibraryHomeShowsSignInForExpiredHistoryAndRecoversWithNewSession() {
+    const {repository, api, config, settings} = fixture();
+    await repository.loadHome();
+    let requests = 0;
+    api.getMobileHome = async() => {requests++; throw new Error('need_profile_login');};
+    await repository.loadReading(true);
+    assert.equal(repository.state.readingLoginRequired, true);
+    assert.equal(repository.state.readingError, '', 'Authorization is not a retryable loading error');
+    assert.equal(repository.state.reading, null); assert.deepEqual(repository.state.lists, []);
+    assert.equal(repository.state.shelves[0].id, 'newest', 'Public shelves stay available');
+    await repository.loadReading(true); assert.equal(requests, 1, 'Do not retry expired credentials in the background');
+    repository.setContext(config, {...settings, profileAccessToken: 'renewed-session'});
+    api.getMobileHome = async() => ({reading: {items: [{bookUid: 'restored'}]}, lists: []});
+    await repository.loadReading();
+    assert.equal(repository.state.readingLoginRequired, false);
+    assert.equal(repository.state.reading.items[0].bookUid, 'restored');
+    api.getMobileHome = async() => {throw new Error('Network unavailable');};
+    await repository.loadReading(true);
+    assert.equal(repository.state.readingLoginRequired, false);
+    assert.equal(repository.state.reading.items[0].bookUid, 'restored', 'Network errors retain cached history');
+    assert.equal(repository.state.readingError, 'Network unavailable');
+}
+
+async function testLibraryHomeRejectsLateLoginFailureAndClearsProtectedShelves() {
+    const {repository, api, config, settings} = fixture(), response = deferred();
+    api.getMobileHome = () => response.promise;
+    const pending = repository.loadReading();
+    repository.setContext({...config, currentUserId: 'two'}, {currentUserId: 'two', profileAccessToken: 'new-session'});
+    api.getMobileHome = async() => ({reading: {items: [{bookUid: 'new-profile'}]}, lists: []});
+    await repository.loadHome();
+    response.reject(Object.assign(new Error('Sign in'), {code: 'need_profile_login'})); await pending;
+    assert.equal(repository.state.readingLoginRequired, false);
+    assert.equal(repository.state.reading.items[0].bookUid, 'new-profile');
+    api.getDiscoveryShelves = async() => {throw Object.assign(new Error('Sign in'), {code: 'need_profile_login'});};
+    await repository.loadShelves(true);
+    assert.equal(repository.state.shelvesLoginRequired, true); assert.equal(repository.state.shelvesError, '');
+    assert.deepEqual(repository.state.shelves, []);
+    assert.equal(repository.state.reading.items[0].bookUid, 'new-profile');
+    repository.setContext(config, settings); assert.equal(repository.state.shelvesLoginRequired, false);
+}
+
+async function testLibraryHomeRejectsLateShelvesAfterOptionsChange() {
+    const {repository, api, config, settings} = fixture(), old = deferred();
+    api.getDiscoveryShelves = () => old.promise;
+    const first = repository.loadShelves();
+    repository.setContext(config, {...settings, discoveryNewestLimit: 16});
+    api.getDiscoveryShelves = async options => ({shelves: [{id: String(options.newestLimit)}]});
+    await repository.loadShelves();
+    old.resolve({shelves: [{id: 'old'}]}); await first;
+    assert.equal(repository.state.shelves[0].id, '16');
+}
+
+async function testLibraryHomeDisabledDiscoveryAndProtectedProfileAvoidRequests() {
+    const {repository, config, settings, calls} = fixture();
+    repository.setContext({...config, discovery: {enabled: false}}, settings);
+    await repository.loadShelves();
+    assert.equal(calls.length, 0);
+    assert.equal(repository.state.shelvesLoaded, true);
+    repository.setContext({...config, profileAuthorized: false, profileLoginRequired: true}, settings);
+    await repository.loadHome();
+    assert.equal(calls.length, 0);
+    assert.equal(repository.state.locked, true);
+}
+
+async function testLibraryAppearancePreservesCatalogLinksAndReaderRoutes() {
+    for (const path of ['/reader', '/reader-lab', '/books', '/title', '/extended'])
+        assert.equal(model.appearanceRedirect({path, query: {title: 'test'}}, 'shelves'), '');
+    assert.equal(model.appearanceRedirect({path: '/', query: {}}, 'shelves'), '/overview');
+    assert.equal(model.appearanceRedirect({path: '/', query: {author: 'Толстой'}}, 'shelves'), '');
+    assert.equal(model.appearanceRedirect({path: '/overview'}, 'classic'), '/for-you');
+    assert.equal(model.appearanceRedirect({path: '/profile'}, 'invalid-old-setting'), '/books');
+    assert.equal(model.appearance('unknown'), 'classic');
+}
+
+async function testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability() {
+    const items = [
+        {bookUid: 'read', state: 'read', percent: 1, updatedAt: '2026-11-05'},
+        {bookUid: 'hidden', hidden: true, percent: .2, updatedAt: '2026-11-06'},
+        {bookUid: 'gone', unavailable: true, percent: .4, updatedAt: '2026-11-06'},
+        {bookUid: 'current', percent: .34, updatedAt: '2026-11-04'},
+        {bookUid: 'current', percent: .1, updatedAt: '2026-11-03'},
+    ];
+    const home = model.homeBooks(items);
+    assert.equal(home.current.bookUid, 'current');
+    assert.deepEqual(home.recent.map(book => book.bookUid), ['read']);
+    assert.equal(model.progress({_readerProgress: {percent: .23}}), .23);
+    assert.equal(model.progress({discoveryReason: '37% прочитано'}), null, 'Never parse UI text as reading state');
+    assert.equal(model.readable({bookUid: 'a', ext: 'epub'}, {onlineReaderEnabled: true}), true);
+    assert.equal(model.readable({bookUid: 'a', ext: 'epub'}, {onlineReaderEnabled: true, conversionEnabled:false}), false);
+    assert.equal(model.readable({bookUid: 'a', ext: 'fb2'}, {onlineReaderEnabled: true}), true);
+    assert.equal(model.readable({bookUid: 'a', ext: 'fb2', unavailable: true}, {onlineReaderEnabled: true}), false);
+    assert.equal(model.coverUrl({bookUid: 'source:a/b'}, '/library/'), '/library/cover/by-uid?uid=source%3Aa%2Fb&cache=rc13');
+    assert.equal(model.coverUrl({libid: 7, sourceId: 'other lib'}, '/library'), '/library/cover/other%20lib/7?cache=rc13');
+    assert.deepEqual(Array.from(model.genreMapFromTree([{value: [{value: 'sf', name: 'Фантастика'}, {value: 'prose', name: 'Проза'}]}, {}])), [['sf', 'Фантастика'], ['prose', 'Проза']]);
+}
+
+async function testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards() {
+    for (const value of ['*Ася', '=Ася', 'Ася', '~^Ася', '?', '#Книга']) {
+        const decoded = catalog.decodeText(value);
+        assert.equal(catalog.encodeText(decoded.text, decoded.mode), value);
+    }
+    assert.equal(catalog.encodeText('   ', 'contains'), '');
+    assert.equal(catalog.encodeText(null, 'exact'), '');
+    assert.equal(catalog.encodeText('Тургенев', 'contains'), '*Тургенев');
+    assert.equal(catalog.encodeText('Тургенев', 'exact'), '=Тургенев');
+    assert.equal(catalog.canAutoSearch({title: {text: 'А'}}), false, 'A single typed letter cannot start an expensive substring search');
+    assert.equal(catalog.canAutoSearch({title: {text: 'Ася'}, author: {text: 'Иван'}}), true);
+    const original = {title: '*Ася', author: '*Иван', genre: 'prose', ext: 'fb2', hideCopies: true};
+    const draft = catalog.filtersFrom(original);
+    draft.ext = 'epub';
+    assert.equal(original.ext, 'fb2', 'Editing a filter draft must not mutate the applied query');
+    assert.equal(Object.hasOwn(draft, 'title'), false, 'Resetting filters keeps the title/author/series independent');
+    const chips = catalog.activeFilters(original, new Map([['prose', 'Проза']]));
+    assert(chips.some(chip => chip.label === 'Жанр: Проза'));
+    assert(chips.some(chip => chip.label === 'Формат: FB2'));
+    assert(chips.some(chip => chip.field === 'hideCopies'));
+}
+
+async function testOverviewSearchUsesEffectiveCatalogLanguageScope() {
+    assert.deepEqual(catalog.effectiveCatalogScope(),{});
+    assert.deepEqual(catalog.effectiveCatalogScope({}, {defaultsSet:false,langDefault:'en'}, {uiDefaults:{langDefault:'ru'}}),{lang:'ru'},
+        'A first overview visit uses the same server defaults as the catalog');
+    assert.deepEqual(catalog.effectiveCatalogScope({}, {defaultsSet:true,langDefault:'en'}, {uiDefaults:{langDefault:'ru'}}),{lang:'en'},
+        'Applied browser settings take precedence after initialization');
+    assert.deepEqual(catalog.effectiveCatalogScope({}, {langDefault:'en'}, {uiDefaults:{}}),{lang:'en'});
+    assert.deepEqual(catalog.effectiveCatalogScope({lang:'uk',sourceId:'one',genre:'prose',ext:'fb2',title:'Old'},
+        {defaultsSet:true,langDefault:'en'}),{lang:'uk',ext:'fb2',genre:'prose',sourceId:'one'});
+    assert.deepEqual(catalog.effectiveCatalogScope({lang:''},{defaultsSet:true,langDefault:'ru'}),{},'An explicit all-language scope is not replaced by a default');
+}
+
+async function testInitialUiDefaultsWaitForConfigAndPreserveManualSettings() {
+    const path=require('path'),{loadClient}=require('./catalog-list-filter-tests');
+    const App=loadClient(path.resolve(__dirname,'../client/components/App.vue')).default;
+    for(const configFirst of [false,true]) {
+        const app=new App(),commits=[];
+        app.$store={state:{config:{},settings:{defaultsSet:false,langDefault:'en',limit:20}}};
+        app.commit=(type,patch)=>{assert.equal(type,'setSettings');commits.push(patch);Object.assign(app.$store.state.settings,patch);};
+        if(configFirst) {
+            app.$store.state.config={uiDefaults:{langDefault:'ru',limit:40}};
+            app._options.watch.config.call(app);
+        }
+        assert.equal(commits.length,0);
+        app.accessGranted=true;app._options.watch.accessGranted.call(app,true);
+        if(!configFirst) {
+            assert.equal(app.settings.defaultsSet,false,'Access before config cannot consume the one-time defaults');
+            assert.equal(app.settings.langDefault,'en');assert.equal(commits.length,0);
+            app.$store.state.config={uiDefaults:{langDefault:'ru',limit:40}};
+            app._options.watch.config.call(app);
+        }
+        assert.equal(commits.length,1);
+        assert.equal(app.settings.defaultsSet,true);assert.equal(app.settings.langDefault,'ru');assert.equal(app.settings.limit,40);
+        app.$store.state.settings.langDefault='de';app.$store.state.settings.limit=7;
+        app.$store.state.config={uiDefaults:{langDefault:'fr',limit:80}};app._options.watch.config.call(app);
+        app._options.watch.accessGranted.call(app,true);
+        assert.equal(commits.length,1,'Later config updates do not overwrite applied or manually edited settings');
+        assert.equal(app.settings.langDefault,'de');assert.equal(app.settings.limit,7);
+    }
+    const existing=new App();
+    existing.$store={state:{config:{uiDefaults:{langDefault:'ru'}},settings:{defaultsSet:true,langDefault:'uk'}}};
+    existing.accessGranted=true;existing.commit=()=>{throw new Error('Saved manual settings must remain untouched');};
+    existing._options.watch.config.call(existing);existing._options.watch.accessGranted.call(existing,true);
+    assert.equal(existing.settings.langDefault,'uk');
+}
+
+async function testLibraryDialogsSupportLazyInitialOpening() {
+    const path = require('path');
+    const {loadClient} = require('./catalog-list-filter-tests');
+    for (const [name, method] of [['BookInfoDialog', 'init'], ['ReadingListsDialog', 'init'], ['UserProfilesDialog', 'loadProfiles'], ['SettingsDialog', '']]) {
+        const Type = loadClient(path.resolve(__dirname, `../client/components/Search/${name}/${name}.vue`)).default;
+        let loads = 0;
+        const instance = {modelValue: true, dialogVisible: false, init() {loads++;}, loadProfiles() {loads++;}};
+        Type.prototype.mounted.call(instance);
+        assert.equal(instance.dialogVisible, true, `${name} must honor the first model value after lazy loading`);
+        if (method) assert.equal(loads, 1, `${name} must populate its initial contents`);
+    }
+}
+
+async function testLibraryPaginationHandlesLargeCatalogsWithoutUnboundedButtons() {
+    for (const total of [0, 1, 7, 8, 33066, 1000000]) {
+        for (const page of [1, 2, 4, 10, total - 1, total, total + 1]) {
+            const max = pagination.pageLimit(total), current = pagination.boundedPage(page, max);
+            const window = pagination.pageWindow(page, max), pages = window.filter(item => typeof item === 'number');
+            assert(pages.includes(current), 'Current page must remain visible');
+            assert.equal(pages[0], 1); assert.equal(pages.at(-1), max);
+            assert(pages.every((value, index) => value >= 1 && value <= max && (!index || value > pages[index - 1])));
+            assert(window.length <= 9, 'A million pages cannot produce a million controls');
+        }
+    }
+    assert.equal(pagination.parsePage('999999', 33066), 33066);
+    assert.equal(pagination.parsePage('0', 33066), 1);
+    for (const invalid of ['', '-1', '2.5', '1e3', 'Infinity', 'NaN', '999999999999999999999']) assert.equal(pagination.parsePage(invalid, 33066), null);
+}
+
+async function testLibraryBookActionsHideUnsupportedReadingAndUnknownSize() {
+    const {loadClient} = require('./catalog-list-filter-tests');
+    const path = require('path');
+    const Type = loadClient(path.resolve(__dirname, '../client/components/Library/BookActionsDialog.vue')).default;
+    const value = new Type();
+    value.$store = {state: {settings: {}, config: {onlineReaderEnabled: true, bookReadLink: '', conversionEnabled: true, conversionFormats: ['epub', 'pdf']}}};
+    value.book = {_uid: 'one', ext: 'epub', size: 0};
+    value.$route = {query: {lang: 'ru', sourceId: 'main'}};
+    assert.deepEqual(value.fullCardTarget, {path: '/book', query: {lang: 'ru', sourceId: 'main', bookUid: 'one'}},
+        'Preview retains an explicit full-card deep link and catalogue scope');
+    assert.equal(value.canRead, false, 'An EPUB must not offer unsupported in-browser reading');
+    value.$store.state.config.conversionFormats.push('fb2'); assert.equal(value.canRead, true, 'EPUB reading is offered when FB2 conversion is enabled');
+    value.$store.state.config.conversionFormats.pop();
+    assert.equal(value.sizeLabel, '', 'An unknown file size is not 0 KB');
+    assert.deepEqual(value.downloadFormats.map(format => format.value), ['raw', 'pdf']);
+    value.book.ext = 'fb2'; assert.equal(value.canRead, true);
+    value.book.discoveryUrl = 'javascript:alert(1)'; assert.equal(value.externalUrl, '');
+    value.book.discoveryUrl = 'https://example.org/book'; assert.equal(value.externalUrl, 'https://example.org/book');
+    const events = [], errors = [];
+    value.$emit = type => events.push(type);
+    value.$root = {stdDialog: {alert: error => errors.push(error)}, notify: {success() {}}};
+    value.api = {markReaderBooksRead: async() => {throw new Error('Save failed');}};
+    assert.equal(await value.markBooksRead(['one'], true), false);
+    assert.equal(value.readOverride, null); assert.deepEqual(events, []);
+    value.api.markReaderBooksRead = async() => ({changedBooks: 1});
+    assert.equal(await value.markBooksRead(['one'], true), true);
+    assert.equal(value.markedRead, true); assert.deepEqual(events, ['updated']); assert.equal(errors.length, 1);
+}
+
+module.exports = [testLibraryHomeCachesExpensiveShelvesAndRefreshesReadingIndependently, testLibraryHomeCoalescesConcurrentRefreshes,
+    testLibraryHomeClearsPrivateDataAndRejectsLateProfileResponses, testLibraryHomeProtectsProfileSwitchBeforeNewConfigArrives,
+    testLibraryHomeFallbackDoesNotOpenLoginAndKeepsHistoryWhenListsFail, testLibraryHomeRetainsCachedShelvesOnFailureAndAllowsRetry,
+    testLibraryHomeShowsSignInForExpiredHistoryAndRecoversWithNewSession, testLibraryHomeRejectsLateLoginFailureAndClearsProtectedShelves,
+    testLibraryHomeRejectsLateShelvesAfterOptionsChange, testLibraryHomeDisabledDiscoveryAndProtectedProfileAvoidRequests,
+    testLibraryAppearancePreservesCatalogLinksAndReaderRoutes, testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability,
+    testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards, testOverviewSearchUsesEffectiveCatalogLanguageScope,
+    testInitialUiDefaultsWaitForConfigAndPreserveManualSettings, testLibraryDialogsSupportLazyInitialOpening,
+    testLibraryPaginationHandlesLargeCatalogsWithoutUnboundedButtons, testLibraryBookActionsHideUnsupportedReadingAndUnknownSize];

@@ -1,0 +1,5 @@
+<!-- INPX Reader ic_brand.xml, preserved as SVG for the web interface. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <path fill="#00998B" d="M8,1h16a7,7 0,0 1,7 7v16a7,7 0,0 1,-7 7h-16a7,7 0,0 1,-7 -7v-16a7,7 0,0 1,7 -7z"/>
+  <path fill="#FFFFFF" d="M7,9c3.5,-0.5 6.2,0.6 8,2.5v13c-2.2,-2 -4.7,-2.8 -8,-2.3zM17,11.5c1.8,-1.9 4.5,-3 8,-2.5v13.2c-3.3,-0.5 -5.8,0.3 -8,2.3z"/>
+</svg>

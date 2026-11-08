@@ -22,7 +22,20 @@ async function createFixture(dir) {
     zip.addBuffer(Buffer.from('Smoke library\n'), 'collection.info');
     zip.addBuffer(Buffer.from('20260914'), 'version.info');
     const row = ['Tester,Smoke:', 'sf:', 'Packaged smoke book', '', '0', '1', '100', '1', '0', 'fb2', '2026-09-14', 'en', '0', ''];
-    zip.addBuffer(Buffer.from(row.join('\x04') + '\n'), 'smoke.inp');
+    let rows = row.join('\x04') + '\n';
+    const books = new yazl.ZipFile();
+    const bookDone = require('stream/promises').pipeline(books.outputStream, fs.createWriteStream(path.join(dir, 'smoke.zip')));
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZcQAAAAASUVORK5CYII=';
+    books.addBuffer(Buffer.from('<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>Packaged smoke book</book-title><lang>en</lang></title-info></description><body><section><p>Smoke text</p><image l:href="#illustration"/></section></body><binary id="illustration" content-type="image/png">'+png+'</binary></FictionBook>'), '1.fb2');
+    if (process.env.INPX_SMOKE_EPUB === 'true') {
+        const epubFile = path.join(dir, 'original.epub'); await require('./epub-fb2-tests').fixture(epubFile);
+        const epubData = await fs.readFile(epubFile);
+        books.addBuffer(epubData, '2.epub');
+        const epubRow = [...row]; epubRow[2] = 'EPUB original'; epubRow[5] = '2'; epubRow[6] = String(epubData.length); epubRow[7] = '2'; epubRow[9] = 'epub'; epubRow[11] = 'ru';
+        rows += epubRow.join('\x04') + '\n';
+    }
+    books.end(); await bookDone;
+    zip.addBuffer(Buffer.from(rows), 'smoke.inp');
     zip.end();
     await complete;
     const ratings = new yazl.ZipFile();
@@ -38,6 +51,8 @@ async function createFixture(dir) {
         loggingEnabled: false,
         opds: {enabled: true, auth: false},
         adminPassword: 'local-smoke-fixture',
+        onlineReaderEnabled: true,
+        ...(process.env.INPX_SMOKE_EPUB === 'true' ? {conversionFormats:['fb2','epub']} : {}),
     });
 }
 
@@ -52,7 +67,8 @@ async function unusedPort() {
 async function checkWebSocket(url) {
     await new Promise((resolve, reject) => {
         const socket = new WebSocket(url.replace(/^http/, 'ws'));
-        const timer = setTimeout(() => finish(new Error('WebSocket response timed out')), 10000);
+        let epubUid;
+        const timer = setTimeout(() => finish(new Error('WebSocket response timed out')), 60000);
         const finish = error => {
             clearTimeout(timer);
             socket.terminate();
@@ -71,13 +87,101 @@ async function checkWebSocket(url) {
                     socket.send(JSON.stringify({action:'search',from:'title',query:{ratingCount:'1'},requestId:'ratings'}));
                 } else if (response.requestId === 'ratings') {
                     assert.strictEqual(response.totalFound,1,'Packaged ratings search must load its streaming JSON dependency');
-                    finish();
+                    socket.send(JSON.stringify({action: 'catalog-suggest', options: {query: 'Packaged'}, requestId: 'suggestions'}));
+                } else if (response.requestId === 'suggestions') {
+                    if (response.warming) {
+                        setTimeout(() => {if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({action: 'catalog-suggest', options: {query: 'Packaged'}, requestId: 'suggestions'}));}, 100);
+                        return;
+                    }
+                    assert.strictEqual(response.groups.find(group => group.kind === 'title').items[0].book.title, 'Packaged smoke book');
+                    socket.send(JSON.stringify({action: 'catalog-browse', options: {kind: 'author'}, requestId: 'authors'}));
+                } else if (response.requestId === 'authors') {
+                    assert.strictEqual(response.total, 1);
+                    socket.send(JSON.stringify({action: 'catalog-entity', options: {kind: 'author', name: response.items[0].name}, requestId: 'author-page'}));
+                } else if (response.requestId === 'author-page') {
+                    assert.strictEqual(response.total, process.env.INPX_SMOKE_EPUB === 'true' ? 2 : 1);
+                    assert(response.books.some(book => book.title === 'Packaged smoke book'));
+                    if (process.env.INPX_SMOKE_EPUB === 'true') {
+                        const epub = response.books.find(book => book.ext === 'epub'); assert(epub);
+                        epubUid = epub._uid;
+                    }
+                    const book = response.books.find(book => book.ext === 'fb2'); assert(book);
+                    socket.send(JSON.stringify({action:'get-book-gallery', bookUid:book._uid, requestId:'gallery'}));
+                } else if (response.requestId === 'gallery') {
+                    assert.strictEqual(response.images.length, 1, 'Packaged gallery includes its bounded parser and original FB2 image');
+                    assert.strictEqual(response.images[0].id, 'illustration');
+                    assert.strictEqual(response.images[0].contentType, 'image/png');
+                    assert(Buffer.from(response.images[0].data, 'base64').length > 0);
+                    if (epubUid) socket.send(JSON.stringify({action:'get-book-info', bookUid:epubUid, readerOnly:true, requestId:'epub-reader'}));
+                    else finish();
+                } else if (response.requestId === 'epub-reader') {
+                    const document = JSON.stringify(response.bookInfo.fb2);
+                    assert.match(document, /Текст второй главы/);
+                    assert.match(document, /fictionbook/i);
+                    assert.equal(response.bookInfo.book.ext, 'epub');
+                    console.log('ok packaged EPUB original → FB2 reader with image default formats'); finish();
                 }
             } catch (error) {
                 finish(error);
             }
         });
     });
+}
+
+async function checkEbookProfileDownload(url,html,password='local-smoke-fixture',format=process.env.INPX_SMOKE_EPUB==='true'?'epub':'fb2'){
+    const login=await fetch(url+'/ebook/login');
+    const cookie=login.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session=')).split(';')[0];
+    const csrf=(await login.text()).match(/name="csrf" value="([^"]+)"/)[1];
+    const post=(path,body)=>fetch(url+path,{method:'POST',redirect:'manual',headers:{cookie,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(body)});
+    assert.equal((await post('/ebook/login',{csrf,login:'admin',password})).status,303);
+    assert.equal((await post('/ebook/format',{csrf,format})).status,303);
+    const shelves=await fetch(url+'/ebook/shelves',{headers:{cookie}});assert.equal(shelves.status,200);assert.match(await shelves.text(),/Мои полки/);
+    const encoded=html.match(/[?&](?:amp;)?uid=([^"&]+)/)?.[1];assert(encoded,'The ebook result has a stable UID');
+    const card=await fetch(url+'/ebook/book?'+new URLSearchParams({uid:decodeURIComponent(encoded)}),{headers:{cookie}});
+    const downloadHref=(await card.text()).match(/class="button" href="([^\"]*\/ebook\/download\/[^\"]+)"/)?.[1];
+    assert(downloadHref,'The profile download is an ordinary link');
+    let next=new URL(downloadHref.replace(/&amp;/g,'&'),url);assert(next.pathname.endsWith('.'+format));
+    next.searchParams.set('format','raw');
+    for(let redirects=0;redirects<4;redirects++){
+        const step=await fetch(next,{headers:{cookie},redirect:'manual'});
+        if(step.status!==302){assert.equal(step.status,200);await step.body.cancel();break;}
+        next=new URL(step.headers.get('location'),next);assert(next.pathname.endsWith('.'+format),'Each redirect keeps the actual download extension');await step.body.cancel();
+        assert(redirects<3,'The download redirect chain is bounded');
+    }
+    // An old or manipulated query must not replace the selected profile format.
+    const response=await fetch(url+'/ebook/download?'+new URLSearchParams({uid:decodeURIComponent(encoded),format:'raw'}),{headers:{cookie}});
+    assert.equal(response.status,200);assert.match(response.headers.get('content-disposition'),new RegExp('\\.'+format+'$'));
+    assert.match(response.headers.get('content-disposition'),/filename="[A-Za-z0-9._ -]+"; filename\*=UTF-8''/);
+    assert(new URL(response.url).pathname.endsWith('.'+format),'The final URL has the actual file extension');
+    const bytes=Buffer.from(await response.arrayBuffer());
+    if(format==='epub'){assert.equal(bytes.readUInt32LE(0),0x04034b50);assert.match(response.headers.get('content-type'),/application\/epub\+zip/);}
+    else if(format==='mobi'){assert.equal(bytes.toString('ascii',60,68),'BOOKMOBI');assert.match(response.headers.get('content-type'),/application\/x-mobipocket-ebook/);assert.match(response.headers.get('content-disposition'),/filename="[^".]+\.mobi"/);assert.equal(Number(response.headers.get('content-length')),bytes.length);}
+    else assert.match(bytes.toString('utf8'),/FictionBook/);
+    assert.equal((await post('/ebook/logout',{csrf})).status,303);
+    console.log('ok packaged ebook profile → exact '+format.toUpperCase()+' download, no original fallback');
+}
+
+async function checkEbookGuestDownload(url,html,format='fb2'){
+    const encoded=html.match(/[?&](?:amp;)?uid=([^"&]+)/)?.[1];assert(encoded);
+    const card=await fetch(url+'/ebook/book?'+new URLSearchParams({uid:decodeURIComponent(encoded),format}));
+    assert.equal(card.status,200);const text=await card.text();
+    assert(text.includes('guest-format-form'),'This check uses a guest, not the configured profile');
+    assert(!text.includes('action="'+new URL(url).pathname+'/book/by-uid"'),'The guest form must apply an HTML selection before downloading');
+    const href=text.match(/class="button" href="([^\"]*\/ebook\/download\/[^\"]+)"/)?.[1];assert(href);
+    const cookie=card.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session='))?.split(';')[0]||'';
+    let next=new URL(href.replace(/&amp;/g,'&'),url),response;
+    assert(next.pathname.endsWith('.'+format),'The first guest download URL includes the actual extension');
+    for(let redirects=0;redirects<4;redirects++){
+        response=await fetch(next,{headers:{cookie,'user-agent':'Mozilla/5.0 (Linux; U; en-US) AppleWebKit/534.26 Version/4.0 Kindle/3.0+'},redirect:'manual'});
+        if(response.status!==302)break;
+        next=new URL(response.headers.get('location'),next);assert(next.pathname.endsWith('.'+format),'Every guest redirect keeps the actual extension');await response.body.cancel();
+    }
+    if(response.status!==200)throw new Error('Guest '+format+' download returned HTTP '+response.status+': '+(await response.text()).slice(0,800));
+    assert.match(response.headers.get('content-disposition'),new RegExp('filename="[A-Za-z0-9_ -]+\\.'+format+'";'));
+    const bytes=Buffer.from(await response.arrayBuffer());assert.equal(Number(response.headers.get('content-length')),bytes.length);
+    if(format==='mobi'){assert.equal(bytes.toString('ascii',60,68),'BOOKMOBI');assert.match(response.headers.get('content-type'),/application\/x-mobipocket-ebook/);}
+    else assert.match(bytes.toString('utf8'),/FictionBook/);
+    console.log('ok packaged ebook guest → typed '+format.toUpperCase()+' URLs, exact headers/body, no original fallback');
 }
 
 async function main() {
@@ -100,6 +204,8 @@ async function main() {
             args = ['run', '--rm', '--name', containerName,
                 '-p', `127.0.0.1:${port}:12380`, '--tmpfs', '/data',
                 '-e', 'INPX_OPDS_FEEDS_FILE=/library/opds-feeds.json',
+                '-e', 'INPX_ADMIN_PASSWORD=local-smoke-fixture',
+                ...(process.env.INPX_SMOKE_EPUB === 'true' ? ['-e','INPX_CONVERSION_FORMATS=fb2,epub'] : []),
                 '--mount', `type=bind,source=${library},target=/library,readonly`, imageName,
                 'sh', '-c', 'cp /library/config.json /data/config.json && exec inpx-web --data-dir=/data --config=/data/config.json --lib-dir=/library --host=0.0.0.0 --port=12380'];
         } else {
@@ -109,9 +215,12 @@ async function main() {
             if (target === '--runtime') args.unshift(path.resolve(imageName, 'server/index.js'));
         }
         const env = {...process.env, INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
+            INPX_ADMIN_PASSWORD:'local-smoke-fixture',
             INPX_OPDS_FEEDS_FILE:path.join(library, 'opds-feeds.json'),
-            INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true', INPX_ENABLE_CONVERSION: 'false'};
+            INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true',
+            INPX_ENABLE_CONVERSION: process.env.INPX_SMOKE_EPUB === 'true' ? 'true' : 'false'};
         if (target === '--runtime') delete env.NODE_PATH;
+        if(process.env.INPX_SMOKE_EPUB==='true'){delete env.INPX_MOBI_ENABLED;env.INPX_CONVERSION_FORMATS='fb2,epub';}
         child = spawn(command, args, {env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
         exited = new Promise(resolve => {
             child.once('exit', resolve);
@@ -140,6 +249,16 @@ async function main() {
         assert.strictEqual(home.status, 200);
         assert.strictEqual(home.headers.get('x-robots-tag'),'noindex, nofollow');
         assert.match(await home.text(), /<html/i);
+        const ebook=await fetch(`${url}/ebook?q=Packaged&lang=en`);
+        assert.strictEqual(ebook.status,200);
+        const ebookHtml=await ebook.text();
+        assert.match(ebookHtml,/Packaged smoke book/);
+        assert(!/<script\b|\.woff2?\b/.test(ebookHtml),'The packaged electronic-reader interface needs no client bundle');
+        const ebookSlash=await fetch(`${url}/ebook/`);assert.equal(ebookSlash.status,200);assert.match(await ebookSlash.text(),/Поиск книг/);
+        await checkEbookProfileDownload(url,ebookHtml);
+        if(process.env.INPX_SMOKE_EPUB==='true')await checkEbookProfileDownload(url,ebookHtml,'local-smoke-fixture','mobi');
+        await checkEbookGuestDownload(url,ebookHtml);
+        if(process.env.INPX_SMOKE_EPUB==='true')await checkEbookGuestDownload(url,ebookHtml,'mobi');
         assert.match(await (await fetch(`${url}/robots.txt`)).text(),/Disallow: \/\s*$/);
         const opds = await fetch(`${url}/opds`);
         assert.strictEqual(opds.status, 200);
@@ -148,6 +267,7 @@ async function main() {
         assert.strictEqual(shelf.status, 200);
         assert.match(await shelf.text(), /Packaged smoke book/);
         await checkWebSocket(url);
+        await require('./opds2-integration-test')(url,{adminPassword:'local-smoke-fixture'});
         console.log(`ok packaged application: indexing, health, web UI, OPDS, WebSocket (${target === '--image' ? imageName : target})`);
     } finally {
         if (target === '--image')
@@ -162,6 +282,6 @@ async function main() {
     }
 }
 
-module.exports = {createFixture, unusedPort};
+module.exports = {createFixture, unusedPort, checkEbookProfileDownload,checkEbookGuestDownload};
 if (require.main === module)
     main().catch(error => { console.error(error); process.exitCode = 1; });

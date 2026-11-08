@@ -56,7 +56,7 @@ with zipfile.ZipFile(args.apk) as apk:
         assert contents.read("server/config/application_env").decode().strip() == "production"
         for name in manifest["backendPackages"]:
             assert f"node_modules/{name}/package.json" in contents.namelist(), f"Missing backend package: {name}"
-        for name in ["sax", "qrcode", "@streamparser/json-node"]:
+        for name in ["sax", "qrcode", "@streamparser/json-node", "https-proxy-agent", "socks-proxy-agent", "proxy-from-env", "socks"]:
             assert name in manifest["backendPackages"], f"Missing current backend dependency: {name}"
         assert "dist/public.json" in contents.namelist()
 with args.apk.open("rb") as stream:

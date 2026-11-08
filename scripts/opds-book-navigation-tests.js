@@ -24,11 +24,12 @@ function fixture(options = {}) {
     const calls = {info:0, authors:[], series:[]};
     const config = {opdsRoot:root, opds:{root}, bookPathStatic:'/library/book', rootPathStatic:'/library'};
     const worker = {
+        remoteLib:options.remote || null,
         getGenreMap:async() => new Map([['sf','Фантастика']]),
         getGenreTree:async() => ({genreTree:[]}),
         getBookRecordByUid:async uid => books.find(item => item._uid === uid),
         applyMetadataOverridesToSearchResult:async() => {},
-        getBookCardInfo:async uid => {calls.info++; return {bookInfo:{book:books.find(item => item._uid === uid), fb2:options.fb2 || false}};},
+        getBookCardInfo:async(uid,settings) => {assert.deepStrictEqual(settings,{lazyExtras:!options.remote},'Local OPDS skips reviews; remote OPDS retains its existing metadata path'); calls.info++; return {bookInfo:{book:books.find(item => item._uid === uid), fb2:options.fb2 || false}};},
         getAuthorBookList:async(id, name) => {calls.authors.push(name); return {books:books.filter(item => item.author.split(',').includes(name))};},
         getSeriesBookList:async name => {calls.series.push(name); return {books:books.filter(item => item.series === name)};},
     };
@@ -128,7 +129,8 @@ async function testOpdsFb2AuthorsAndMultipleSeriesAreClickable() {
     const parser = readXml('<FictionBook><description><title-info><genre>sf</genre><author><last-name>Тестов</last-name><first-name>Автор</first-name></author>' +
         '<book-title>Книга</book-title><annotation><p>Аннотация <strong>жирная</strong><a href="javascript:bad()">ссылка</a></p></annotation>' +
         '<sequence name="Цикл &amp; первый" number="4"/><sequence name="Вторая серия" number="7"/><lang>ru</lang></title-info></description></FictionBook>');
-    const value = fixture({book:{ext:'fb2', author:'', series:'', serno:0}, fb2:parser.rawNodes});
+    for(const remote of [false,true]){
+    const value = fixture({book:{ext:'fb2', author:'', series:'', serno:0}, fb2:parser.rawNodes,remote});
     const result = await value.detail({user:'reader'});
     assert.strictEqual(value.calls.info, 1);
     assert.deepStrictEqual(result.links.map(link => link.label), ['Тестов Автор', 'Цикл & первый #4', 'Вторая серия #7']);
@@ -139,6 +141,7 @@ async function testOpdsFb2AuthorsAndMultipleSeriesAreClickable() {
     assert.strictEqual(he.decode(result.entry.$$array('author')[0].text('/name')), 'Тестов Автор');
     const related = result.entry.$$array('link').map(link => link.attrs()).filter(link => link.rel === 'related' && /\/(author|series)\?/.test(he.decode(link.href)));
     assert.deepStrictEqual(new Set(related.map(link => he.decode(link.href))), new Set(result.links.map(link => link.href)));
+    }
 }
 
 async function testOpdsBookNavigationEscapesMetadataAndHandlesMissingValues() {

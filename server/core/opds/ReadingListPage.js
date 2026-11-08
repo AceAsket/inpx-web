@@ -26,7 +26,7 @@ class ReadingListPage extends BasePage {
                 continue;
             }
             const title = [book._readingListRead ? '✓' : '', book.serno ? book.serno + '.' : '', book.title || 'Без названия', '(' + book.ext + ')'].filter(Boolean).join(' ');
-            entry.push(this.makeEntry({id:book._uid, title,
+            entry.push(this.makeBookEntry(book, {id:book._uid, title,
                 link:this.acqLink({href:'/book?uid=' + encodeURIComponent(book._uid), req}),
                 content:{'*ATTRS':{type:'text'}, '*TEXT':this.escape([book.author || '', book.series ? 'Серия: ' + book.series : '',
                     personal ? (book._readingListRead ? 'Прочитано' : 'Не прочитано') : ''].filter(Boolean).join(' · '))}}));

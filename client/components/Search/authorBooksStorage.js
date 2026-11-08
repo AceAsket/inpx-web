@@ -1,80 +1,120 @@
 import localForage from 'localforage';
-//import _ from 'lodash';
-import * as utils from '../../share/utils';
 
-const maxDataSize = 100*1024*1024;//100 Mb
-
-const abStore = localForage.createInstance({
-    name: 'authorBooksStorage'
-});
-
+const maxDataSize = 100 * 1024 * 1024;
 const storageVersion = '1';
+const metadataPrefix = 'cache-meta-';
+const abStore = localForage.createInstance({name: 'authorBooksStorage'});
 
-class AuthorBooksStorage {
-    constructor() {
+// Cache failures must never discard a successful server response. Serialize
+// mutations so concurrent requests share the same payload budget and LRU index.
+export class AuthorBooksStorage {
+    constructor(storage = abStore, maxBytes = maxDataSize, now = () => Date.now()) {
+        this.storage = storage;
+        this.maxBytes = maxBytes;
+        this.now = now;
+        this.entries = new Map();
+        this.bytes = 0;
+        this.loaded = false;
+        this.pending = Promise.resolve();
     }
 
-    async init() {
-        this.cleanStorage(); //no await
+    enqueue(work, fallback = false) {
+        const result = this.pending.then(work).catch(() => fallback);
+        this.pending = result.then(() => {});
+        return result;
     }
 
-    async setData(key, data) {
-        key += storageVersion;
-
-        if (typeof data !== 'string')
-            throw new Error('AuthorBooksStorage: data must be a string');
-
-        await abStore.setItem(key, data);
-        await abStore.setItem(`addTime-${key}`, Date.now());    
+    async remove(fullKey) {
+        await this.storage.removeItem(fullKey);
+        await this.storage.removeItem(metadataPrefix + fullKey);
+        await this.storage.removeItem(`addTime-${fullKey}`);
+        const entry = this.entries.get(fullKey);
+        if (entry) this.bytes -= entry.bytes;
+        this.entries.delete(fullKey);
     }
 
-    async getData(key) {
-        key += storageVersion;
-
-        const item = await abStore.getItem(key);
-        
-        //обновим addTime
-        if (item !== undefined)
-            abStore.setItem(`addTime-${key}`, Date.now());//no await
-
-        return item;
-    }
-
-    async _removeData(fullKey) {
-        await abStore.removeItem(fullKey);
-        await abStore.removeItem(`addTime-${fullKey}`);
-    }
-
-    async cleanStorage() {
-        await utils.sleep(5000);
-
-        while (1) {// eslint-disable-line no-constant-condition
-            let size = 0;
-            let min = Date.now();
-            let toDel = null;
-            for (const key of (await abStore.keys())) {
-                if (key.indexOf('addTime-') == 0)
-                    continue;
-
-                const item = await abStore.getItem(key);
-                const addTime = await abStore.getItem(`addTime-${key}`);
-
-                size += item.length;
-
-                if (addTime < min) {
-                    toDel = key;
-                    min = addTime;
-                }
-            }
-
-            if (size > maxDataSize && toDel) {
-                await this._removeData(toDel);
-            } else {
-                break;
-            }
+    async evict(reservedBytes = 0, replacingKey = '') {
+        const previous = this.entries.get(replacingKey);
+        const available = () => this.bytes - (previous && this.entries.has(replacingKey) ? previous.bytes : 0) + reservedBytes;
+        if (available() <= this.maxBytes) return;
+        const oldest = [...this.entries].filter(([key]) => key !== replacingKey)
+            .sort((a, b) => a[1].time - b[1].time);
+        for (const [key] of oldest) {
+            if (available() <= this.maxBytes) break;
+            await this.remove(key);
         }
     }
 
+    async ensureLoaded() {
+        if (this.loaded) return;
+        const keys = await this.storage.keys();
+        const dataKeys = new Set(keys.filter(key => !key.startsWith('addTime-') && !key.startsWith(metadataPrefix)));
+        const entries = new Map();
+        let bytes = 0;
+        for (const key of dataKeys) {
+            const data = await this.storage.getItem(key);
+            if (typeof data !== 'string') {await this.storage.removeItem(key); continue;}
+            const metadata = await this.storage.getItem(metadataPrefix + key);
+            const time = Number(metadata?.time ?? await this.storage.getItem(`addTime-${key}`)) || 0;
+            // Count UTF-16 payload bytes conservatively, rather than treating a
+            // string's character count as its storage size.
+            const entry = {bytes: data.length * 2, time};
+            entries.set(key, entry);
+            bytes += entry.bytes;
+        }
+        for (const key of keys) {
+            if (key.startsWith('addTime-') || (key.startsWith(metadataPrefix) && !dataKeys.has(key.slice(metadataPrefix.length))))
+                await this.storage.removeItem(key);
+        }
+        this.entries = entries;
+        this.bytes = bytes;
+        await this.evict();
+        this.loaded = true;
+    }
+
+    init() {return this.cleanStorage();}
+
+    setData(key, data) {
+        if (typeof data !== 'string') return Promise.reject(new Error('AuthorBooksStorage: data must be a string'));
+        const bytes = data.length * 2;
+        if (bytes > this.maxBytes) return Promise.resolve(false);
+        const fullKey = key + storageVersion;
+        return this.enqueue(async() => {
+            await this.ensureLoaded();
+            await this.evict(bytes, fullKey);
+            await this.storage.setItem(fullKey, data);
+            const previous = this.entries.get(fullKey);
+            const metadata = {bytes, time: this.now()};
+            this.bytes += bytes - (previous?.bytes || 0);
+            this.entries.set(fullKey, metadata);
+            // The payload is usable even if writing its optional LRU metadata fails.
+            try {await this.storage.setItem(metadataPrefix + fullKey, metadata);} catch { /* Best-effort cache. */ }
+            return true;
+        });
+    }
+
+    getData(key) {
+        const fullKey = key + storageVersion;
+        return this.enqueue(async() => {
+            await this.ensureLoaded();
+            const data = await this.storage.getItem(fullKey);
+            if (typeof data !== 'string') {
+                if (this.entries.has(fullKey)) await this.remove(fullKey);
+                return null;
+            }
+            const metadata = {bytes: data.length * 2, time: this.now()};
+            const previous = this.entries.get(fullKey);
+            this.bytes += metadata.bytes - (previous?.bytes || 0);
+            this.entries.set(fullKey, metadata);
+            await this.evict();
+            try {await this.storage.setItem(metadataPrefix + fullKey, metadata);} catch { /* Best-effort cache. */ }
+            return data;
+        }, null);
+    }
+
+    cleanStorage() {
+        return this.enqueue(async() => {await this.ensureLoaded(); await this.evict(); return true;});
+    }
 }
 
 export default new AuthorBooksStorage();

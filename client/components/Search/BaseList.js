@@ -9,6 +9,7 @@ import LoadingMessage from './LoadingMessage/LoadingMessage.vue';
 import * as utils from '../../share/utils';
 const {match: catalogMatch} = require('../../../shared/CatalogSearch');
 const bookFormats = require('../../../shared/BookFormats');
+const {catalogTarget} = require('../Library/catalogSearchModel');
 
 const showMoreCount = 100;//значение для "Показать еще"
 const maxItemCount = 500;//выше этого значения показываем "Загрузка"
@@ -209,6 +210,10 @@ export default class BaseList {
         return this.$store.state.settings;
     }
 
+    get shelvesAppearance() {
+        return this.settings.catalogAppearance === 'shelves';
+    }
+
     get currentSearch() {
         return (this.isExtendedSearch ? this.extSearch : this.search);
     }
@@ -238,17 +243,27 @@ export default class BaseList {
         ].filter(Boolean).join('|');
     }
 
+    authorBooksCacheKey(authorId) {
+        return `author-${authorId}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
+    }
+
     scrollToTop() {
         this.$emit('listEvent', {action: 'scrollToTop'});
     }
 
     selectAuthor(author) {
+        if (this.settings.catalogAppearance === 'shelves') {
+            this.$router.push(catalogTarget('/author-details', {name:author}, this.currentSearch)); return;
+        }
         const search = (this.isExtendedSearch ? this.extSearch : this.search);
         search.author = `=${author}`;
         this.scrollToTop();
     }
 
     selectSeries(series) {
+        if (this.settings.catalogAppearance === 'shelves') {
+            this.$router.push(catalogTarget('/series-details', {name:series}, this.currentSearch)); return;
+        }
         const search = (this.isExtendedSearch ? this.extSearch : this.search);
         search.series = `=${series}`;
     }
@@ -382,7 +397,7 @@ export default class BaseList {
         })();
 
         try {
-            if (action === 'readBook' && this.config.onlineReaderEnabled && String(book.ext || '').toLowerCase() === 'fb2') {
+            if (action === 'readBook' && bookFormats.canRead(book.ext, this.config)) {
                 await this.$router.push({path: '/reader', query: {bookUid: book._uid}});
                 return;
             }
@@ -498,12 +513,20 @@ export default class BaseList {
             const result = await this.api.markReaderBooksRead(normalized, read);
             const count = (result && result.changedBooks) || normalized.length;
             this.$root.notify.success(read ? `Помечено прочитанными: ${count}` : `Отметка снята: ${count}`);
+            return true;
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
+            return false;
         }
     }
 
     bookEvent(event) {
+        if (this.settings.catalogAppearance === 'shelves' && ['bookInfo', 'authorClick', 'seriesClick'].includes(event.action)) {
+            const kind = {bookInfo: 'book', authorClick: 'author', seriesClick: 'series'}[event.action];
+            this.$router.push(catalogTarget(kind === 'book' ? '/book' : `/${kind}-details`,
+                kind === 'book' ? {bookUid:this.getBookUid(event.book)} : {name:event.book[kind]}, this.currentSearch));
+            return;
+        }
         switch (event.action) {
             case 'authorClick':
                 this.selectAuthor(event.book.author);
@@ -585,7 +608,7 @@ export default class BaseList {
             let result;
 
             if (this.abCacheEnabled && !this.getQuery().ratingCount && !this.getQuery().isbn) {
-                const key = `author-${authorId}-${this.list.inpxHash}-${this.sourceFilterCacheSuffix}`;
+                const key = this.authorBooksCacheKey(authorId);
                 const data = await authorBooksStorage.getData(key);
                 if (data) {
                     result = JSON.parse(data);
@@ -790,6 +813,7 @@ export default class BaseList {
                 && authorFound
                 && filterBySearch(book.series, s.series)
                 && filterBySearch(book.title, s.title)
+                && filterBySearch(book.keywords, s.keywords)
                 && genreFound
                 && langFound
                 && dateFound

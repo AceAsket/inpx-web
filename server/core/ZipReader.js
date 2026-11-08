@@ -9,12 +9,38 @@ class ZipReader {
         this.zip = null;
         this.archiveFile = '';
         this.archiveType = '';
+        this.zipNeeds7z = false;
         this.converterPaths = config.converterPaths || null;
         this.maxOutputBytes = config.resourceMaxOutputBytes || 0;
+        this.signal = config.resourceSignal;
+        this.timeoutMs = config.resourceTimeoutMs;
     }
 
     get sevenZipCommands() {
         return externalTools.sevenZipCommandCandidates(this.converterPaths);
+    }
+
+    get uses7z() {
+        // Container format stays ZIP; callers that stream directly must still
+        // use this reader when a ZIP entry needs an external decoder.
+        return this.archiveType === '7z' || this.zipNeeds7z;
+    }
+
+    async zipEntry(name) {
+        const entry = await this.zip.entry(name);
+        if (!entry || entry.isDirectory)
+            throw new Error(`Entry not found: ${name}`);
+        return entry;
+    }
+
+    externalEntry(entry) {
+        // node-stream-zip streams only stored and deflated entries. Select the
+        // decoder from metadata; CRC/header errors must never trigger a retry.
+        return entry.method !== 0 && entry.method !== 8;
+    }
+
+    extractArgs(name) {
+        return ['x', '-y', '-bd', '-spd', '-so', '--', this.archiveFile, name];
     }
 
     checkState() {
@@ -32,7 +58,7 @@ class ZipReader {
 
     async run7zCommand(args, options) {
         for (const command of this.sevenZipCommands) {
-            try { return await runProcess(command, args, {...options, resourceKind:'reviews'}); }
+            try { return await runProcess(command, args, {...(this.signal ? {signal:this.signal}:{}), ...(this.timeoutMs ? {timeoutMs:this.timeoutMs}:{}), ...options, resourceKind:'reviews'}); }
             catch (error) { if (error.code !== 'ENOENT') throw error; }
         }
         throw externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage());
@@ -121,9 +147,17 @@ class ZipReader {
         const zip = new StreamUnzip.async({file: zipFile, skipEntryNameValidation: true});
 
         this.zip = zip;
+        this.archiveFile = zipFile;
         this.archiveType = 'zip';
-        if (zipEntries)
-            this.zipEntries = await zip.entries();
+        try {
+            const entries = await zip.entries();
+            this.zipNeeds7z = Object.values(entries).some(entry => !entry.isDirectory && this.externalEntry(entry));
+            if (zipEntries)
+                this.zipEntries = entries;
+        } catch (error) {
+            await this.close().catch(() => {});
+            throw error;
+        }
     }
 
     get entries() {
@@ -134,18 +168,70 @@ class ZipReader {
 
     async extractToBuf(entryFilePath) {
         this.checkState();
+        this.signal?.throwIfAborted();
 
         if (this.archiveType === '7z')
-            return await this.run7zStdout(['x', '-y', '-bd', '-spd', '-so', this.archiveFile, entryFilePath]);
+            return await this.run7zStdout(this.extractArgs(entryFilePath));
 
+        const entry = await this.zipEntry(entryFilePath);
+        if (this.maxOutputBytes > 0 && Number(entry.size) > this.maxOutputBytes)
+            throw Object.assign(new Error('Превышен размер извлечённого файла'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'});
+        if (this.externalEntry(entry))
+            return await this.run7zStdout(this.extractArgs(entryFilePath));
+
+        if (this.maxOutputBytes > 0) {
+            const oversized = () => Object.assign(new Error('Превышен размер извлечённого файла'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'});
+            const stream = await this.zip.stream(entryFilePath), chunks = [];
+            let bytes = 0;
+            try {
+                for await (const chunk of stream) {
+                    bytes += chunk.length;
+                    if (bytes > this.maxOutputBytes) throw oversized();
+                    chunks.push(chunk);
+                }
+            } finally {stream.destroy();}
+            return Buffer.concat(chunks, bytes);
+        }
         return await this.zip.entryData(entryFilePath);
+    }
+
+    async extractPrefixToBuf(entryFilePath, maximum) {
+        this.checkState();
+        if (!Number.isSafeInteger(maximum) || maximum < 1) throw new Error('Invalid archive prefix limit');
+        this.signal?.throwIfAborted();
+        if (this.archiveType === '7z')
+            return await this.run7zCommand(this.extractArgs(entryFilePath),{captureStdout:true,capturePrefixBytes:maximum});
+        const entry = await this.zipEntry(entryFilePath);
+        if (this.externalEntry(entry))
+            return await this.run7zCommand(this.extractArgs(entryFilePath),{captureStdout:true,capturePrefixBytes:maximum});
+        const stream = await this.zip.stream(entryFilePath), chunks=[];
+        let bytes=0;
+        const abort=()=>stream.destroy(this.signal.reason || Object.assign(new Error('Preview cancelled'),{code:'ABORT_ERR'}));
+        this.signal?.addEventListener('abort',abort,{once:true});
+        try {
+            this.signal?.throwIfAborted();
+            for await (const chunk of stream) {
+                const part=chunk.subarray(0,maximum-bytes);chunks.push(part);bytes+=part.length;
+                if (bytes>=maximum) break;
+            }
+        } finally {this.signal?.removeEventListener('abort',abort);stream.destroy();}
+        return Buffer.concat(chunks,bytes);
     }
 
     async extractToFile(entryFilePath, outputFile) {
         this.checkState();
+        this.signal?.throwIfAborted();
 
-        if (this.archiveType === '7z') {
-            await this.run7z(['x', '-y', '-bd', '-spd', '-so', this.archiveFile, entryFilePath], outputFile);
+        const entry = this.archiveType === 'zip' ? await this.zipEntry(entryFilePath) : null;
+        if (this.maxOutputBytes > 0 && Number(entry?.size) > this.maxOutputBytes)
+            throw Object.assign(new Error('Превышен размер извлечённого файла'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'});
+        if (this.archiveType === '7z' || this.externalEntry(entry)) {
+            try {
+                await this.run7zCommand(this.extractArgs(entryFilePath), {outputFile, maxOutputBytes:this.maxOutputBytes});
+            } catch (error) {
+                await fs.remove(outputFile);
+                throw error;
+            }
             return;
         }
 
@@ -155,7 +241,7 @@ class ZipReader {
     async extractAllToDir(outputDir) {
         this.checkState();
 
-        if (this.archiveType === '7z') {
+        if (this.uses7z) {
             await this.run7z(['x', '-y', '-bd', `-o${outputDir}`, this.archiveFile]);
             return;
         }
@@ -164,14 +250,15 @@ class ZipReader {
     }
 
     async close() {
-        if (this.zip) {
-            await this.zip.close();
+        try {
+            if (this.zip) await this.zip.close();
+        } finally {
             this.zip = null;
+            this.archiveFile = '';
+            this.archiveType = '';
+            this.zipNeeds7z = false;
+            this.zipEntries = undefined;
         }
-
-        this.archiveFile = '';
-        this.archiveType = '';
-        this.zipEntries = undefined;
     }
 }
 

@@ -26,7 +26,7 @@ function checkRequest(req, bytes, config) {
         maximum = Math.max(maximum, preferencesLimit);
     if (req.action === 'import-reading-lists' || req.action === 'import-admin-settings')
         maximum = value.import + 65536;
-    if (req.action === 'import-admin-backup')
+    if (req.action === 'import-admin-backup' || req.action === 'preview-admin-backup')
         maximum = Math.ceil(value.backup/3)*4 + 65536;
     if (bytes > maximum)
         throw new Error('Превышен размер запроса');

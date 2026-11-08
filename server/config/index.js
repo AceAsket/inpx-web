@@ -44,6 +44,9 @@ const propsToSave = [
     'metricsToken',
     'metricsExemptAuth',
     'dbCacheSize',
+    'dbCacheBudgetMb',
+    'queryCacheMemMb',
+    'queryCacheDiskMb',
     'maxFilesDirSize',
     'bookCacheSize',
     'coverCacheSize',
@@ -72,6 +75,9 @@ const propsToSave = [
     'checkReleaseLink',
     'telegramShareEnabled',
     'telegramBotToken',
+    'telegramBotEnabled',
+    'telegramIpFamily',
+    ...require('../../shared/TelegramNetwork').proxyFields,
     'telegramChatId',
     'telegramCaptionTemplate',
     'emailShareEnabled',
@@ -199,11 +205,18 @@ class ConfigManager {
         if (!this.inited)
             throw new Error('not inited');
         const result = _.cloneDeep(this._config);
+        Object.assign(result, require('../../shared/TelegramNetwork').environmentPatch(process.env));
         // Resource policy is launch-only and cannot be replaced by saved settings
         // or an administrator's imported configuration.
         result.conversionConcurrency = require('../core/ResourceRuntime').settings.limits.conversions;
         result.conversionTimeoutMs = require('../core/ResourceRuntime').settings.taskTimeoutMs;
         result.conversionQueueTimeoutMs = require('../core/ResourceRuntime').settings.taskTimeoutMs;
+        // Explicit container limits must still win after config.json has been
+        // saved by a previous launch. An empty optional variable uses the file.
+        for (const [key, name] of [['dbCacheBudgetMb', 'INPX_DB_CACHE_BUDGET_MB'], ['queryCacheMemMb', 'INPX_QUERY_CACHE_MEM_MB'], ['queryCacheDiskMb', 'INPX_QUERY_CACHE_DISK_MB']]) {
+            const value = process.env[name];
+            if (value !== undefined && value.trim() !== '') result[key] = Number(value);
+        }
         return result;
     }
 
@@ -247,6 +260,9 @@ class ConfigManager {
 
                 const discovery = Object.assign({}, this._config.discovery || {}, config.discovery || {});
 
+                if (Object.prototype.hasOwnProperty.call(config, 'telegramIpFamily'))
+                    config.telegramIpFamily = require('../../shared/TelegramNetwork').normalizeIpFamily(config.telegramIpFamily);
+                Object.assign(config,require('../../shared/TelegramNetwork').normalizeProxyConfig({...this._config,...config}));
                 this.config = config;
                 this._config.discovery = discovery;
                 this._config.updateChannel = resolveUpdateChannel(this._config);

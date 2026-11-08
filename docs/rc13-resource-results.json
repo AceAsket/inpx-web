@@ -1,0 +1,283 @@
+{
+  "baselineCommit": "866263b82a563719f1eede5c5b4050433d7303ba",
+  "candidateVersion": "1.8.2-rc.13",
+  "description": "Synthetic profile state; fresh process per fixture, forced GC, sampled peaks exclude image migration/setup. CPU timing on Windows is coarse for short operations.",
+  "before": {
+    "node": "v24.22.1",
+    "forcedGc": true,
+    "freshProcessPerCase": true,
+    "results": [
+      {
+        "profiles": 1,
+        "imageBytes": 0,
+        "fileBytes": 9204,
+        "baseline": {
+          "rssMiB": 49.61,
+          "heapTotalMiB": 10.99,
+          "heapUsedMiB": 6,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmCache": {
+          "rssMiB": 49.78,
+          "heapTotalMiB": 10.99,
+          "heapUsedMiB": 6.08,
+          "externalMiB": 2.48,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmGetUser": {
+          "operations": 10,
+          "averageWallMs": 0.58,
+          "averageCpuMs": 0
+        },
+        "progressUpdate": {
+          "operations": 3,
+          "averageWallMs": 13.23,
+          "averageCpuMs": 5
+        },
+        "sampledPeak": {
+          "rssMiB": 50.33,
+          "heapTotalMiB": 10.99,
+          "heapUsedMiB": 7.59,
+          "externalMiB": 2.52,
+          "arrayBuffersMiB": 0.18
+        },
+        "afterGc": {
+          "rssMiB": 50.37,
+          "heapTotalMiB": 11.49,
+          "heapUsedMiB": 6.22,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "cacheStillRetained": true
+      },
+      {
+        "profiles": 1,
+        "imageBytes": 4194304,
+        "fileBytes": 5601634,
+        "baseline": {
+          "rssMiB": 50.24,
+          "heapTotalMiB": 22.99,
+          "heapUsedMiB": 6,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmCache": {
+          "rssMiB": 55.75,
+          "heapTotalMiB": 28.58,
+          "heapUsedMiB": 11.42,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmGetUser": {
+          "operations": 10,
+          "averageWallMs": 4.17,
+          "averageCpuMs": 3.1
+        },
+        "progressUpdate": {
+          "operations": 3,
+          "averageWallMs": 59.65,
+          "averageCpuMs": 62.67
+        },
+        "sampledPeak": {
+          "rssMiB": 148.3,
+          "heapTotalMiB": 167.27,
+          "heapUsedMiB": 54.43,
+          "externalMiB": 50.55,
+          "arrayBuffersMiB": 16.16
+        },
+        "afterGc": {
+          "rssMiB": 59.99,
+          "heapTotalMiB": 140.83,
+          "heapUsedMiB": 11.58,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "cacheStillRetained": true
+      },
+      {
+        "profiles": 10,
+        "imageBytes": 4194304,
+        "fileBytes": 55973455,
+        "baseline": {
+          "rssMiB": 52.59,
+          "heapTotalMiB": 70.74,
+          "heapUsedMiB": 6.07,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmCache": {
+          "rssMiB": 108.38,
+          "heapTotalMiB": 188.1,
+          "heapUsedMiB": 59.51,
+          "externalMiB": 55.85,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmGetUser": {
+          "operations": 10,
+          "averageWallMs": 40.31,
+          "averageCpuMs": 40.6
+        },
+        "progressUpdate": {
+          "operations": 3,
+          "averageWallMs": 552.59,
+          "averageCpuMs": 567.67
+        },
+        "sampledPeak": {
+          "rssMiB": 695.76,
+          "heapTotalMiB": 615.28,
+          "heapUsedMiB": 486.77,
+          "externalMiB": 216,
+          "arrayBuffersMiB": 106.9
+        },
+        "afterGc": {
+          "rssMiB": 108.98,
+          "heapTotalMiB": 187.85,
+          "heapUsedMiB": 58.62,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "cacheStillRetained": true
+      }
+    ]
+  },
+  "after": {
+    "node": "v24.22.1",
+    "forcedGc": true,
+    "freshProcessPerCase": true,
+    "results": [
+      {
+        "profiles": 1,
+        "imageBytes": 0,
+        "fileBytes": 9204,
+        "baseline": {
+          "rssMiB": 54.03,
+          "heapTotalMiB": 11.25,
+          "heapUsedMiB": 6.06,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmCache": {
+          "rssMiB": 54.06,
+          "heapTotalMiB": 11.25,
+          "heapUsedMiB": 6.09,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmGetUser": {
+          "operations": 10,
+          "averageWallMs": 0.53,
+          "averageCpuMs": 1.5
+        },
+        "progressUpdate": {
+          "operations": 3,
+          "averageWallMs": 6.96,
+          "averageCpuMs": 0
+        },
+        "sampledPeak": {
+          "rssMiB": 54.23,
+          "heapTotalMiB": 11.5,
+          "heapUsedMiB": 7.27,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "afterGc": {
+          "rssMiB": 54.23,
+          "heapTotalMiB": 11.5,
+          "heapUsedMiB": 6.22,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "cacheStillRetained": true
+      },
+      {
+        "profiles": 1,
+        "imageBytes": 4194304,
+        "fileBytes": 9298,
+        "baseline": {
+          "rssMiB": 54.08,
+          "heapTotalMiB": 11,
+          "heapUsedMiB": 6.09,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmCache": {
+          "rssMiB": 54.08,
+          "heapTotalMiB": 11,
+          "heapUsedMiB": 6.11,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmGetUser": {
+          "operations": 10,
+          "averageWallMs": 0.86,
+          "averageCpuMs": 1.6
+        },
+        "progressUpdate": {
+          "operations": 3,
+          "averageWallMs": 5.42,
+          "averageCpuMs": 5.33
+        },
+        "sampledPeak": {
+          "rssMiB": 54.25,
+          "heapTotalMiB": 11,
+          "heapUsedMiB": 7.17,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "afterGc": {
+          "rssMiB": 54.25,
+          "heapTotalMiB": 11.25,
+          "heapUsedMiB": 6.24,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "cacheStillRetained": true
+      },
+      {
+        "profiles": 10,
+        "imageBytes": 4194304,
+        "fileBytes": 50095,
+        "baseline": {
+          "rssMiB": 55.54,
+          "heapTotalMiB": 15,
+          "heapUsedMiB": 6.31,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmCache": {
+          "rssMiB": 55.54,
+          "heapTotalMiB": 15,
+          "heapUsedMiB": 6.32,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "warmGetUser": {
+          "operations": 10,
+          "averageWallMs": 0.65,
+          "averageCpuMs": 1.5
+        },
+        "progressUpdate": {
+          "operations": 3,
+          "averageWallMs": 7.97,
+          "averageCpuMs": 5.33
+        },
+        "sampledPeak": {
+          "rssMiB": 57.15,
+          "heapTotalMiB": 15.25,
+          "heapUsedMiB": 8.87,
+          "externalMiB": 2.61,
+          "arrayBuffersMiB": 0.28
+        },
+        "afterGc": {
+          "rssMiB": 56.94,
+          "heapTotalMiB": 15.5,
+          "heapUsedMiB": 6.42,
+          "externalMiB": 2.47,
+          "arrayBuffersMiB": 0.14
+        },
+        "cacheStillRetained": true
+      }
+    ]
+  }
+}

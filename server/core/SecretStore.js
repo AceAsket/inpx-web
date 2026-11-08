@@ -5,6 +5,7 @@ const fs = require('fs-extra');
 const encryptedPrefix = 'enc:v1:';
 const secretFields = [
     'telegramBotToken',
+    'telegramProxyPassword',
     'smtpPass',
     'opds.password',
     'metricsToken',

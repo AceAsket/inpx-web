@@ -544,7 +544,7 @@ async function testReaderBookNotesMenuAndReturnLayout() {
     assert.doesNotMatch(readerSource, /\{\{ readerNoteReturnPoint \? uiText\.noteReturn : uiText\.back \}\}/);
     assert.match(readerSource, /\.reader-back-btn--note-return :deep\(\.block\) \{\s*display: none;/);
     assert.doesNotMatch(readerSource, /class="reader-note-return-btn"/);
-    assert.match(readerSource, /v-if="bookUid && isCompactLayout && \(showCompactStatusBar \|\| !compactChromeHidden \|\| controlsOpen\)"/);
+    assert.match(readerSource, /v-if="\(bookUid \|\| isStandaloneMode\) && isCompactLayout && \(showCompactStatusBar \|\| !compactChromeHidden \|\| controlsOpen\)"/);
     assert.match(readerSource, /v-if="bookUid && showDesktopStatusBar"/);
 
     const goBackStart = readerSource.indexOf('    goBack() {');
@@ -635,7 +635,9 @@ async function testReaderPaginationResumesAcrossViewportGeometry() {
     assert.match(readerSource, /for \(let index = startIndex; index < queue\.length; index \+= 1\)/);
     assert.match(readerSource, /storePartialLayout\(index\);\s*return false;/);
     assert.match(readerSource, /type: 'complete',\s*pages: finalPages/);
-    assert.match(readerSource, /async loadReader\(\) \{[\s\S]{0,400}this\.pagedLayoutCache\.clear\(\);/);
+    // Cache reset on a new document is exercised by
+    // testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments. Avoid a source
+    // length assertion: adding the active-route guard shifted the same reset.
 }
 
 async function testReaderDefersViewportRefreshAcrossScreenUnlock() {
@@ -824,6 +826,7 @@ async function testAdminBackupArchiveAndDownload() {
             configFile,
         });
 
+        worker.readingListStore = new (require('../server/core/ReadingListStore'))({...worker.config, adminPassword:'fixture-backup-password'});
         const result = await worker.createAdminBackup('admin', 'token');
         assert.strictEqual(result.success, true);
         assert.match(result.fileName, /^inpx-web-backup-.+\.zip$/);
@@ -842,8 +845,9 @@ async function testAdminBackupArchiveAndDownload() {
             assert.strictEqual(entries['db/index.json'], undefined);
 
             const readingLists = JSON.parse((await zip.entryData('reading-lists.json')).toString('utf8'));
-            assert.strictEqual(readingLists.users[0].readerProgress['book:1'].percent, 0.5);
-            assert.strictEqual(readingLists.users[0].readerBookmarks['book:1'][0].id, 'bookmark-1');
+            const reader = readingLists.users.find(user => user.id === 'reader');
+            assert.strictEqual(reader.readerProgress['book:1'].percent, 0.5);
+            assert.strictEqual(reader.readerBookmarks['book:1'][0].id, 'bookmark-1');
             assert.strictEqual(readingLists.lists[0].books[0].bookUid, 'book:1');
 
             const info = JSON.parse((await zip.entryData('backup-info.json')).toString('utf8'));
@@ -1057,7 +1061,7 @@ async function testUserBackupExportsAndRestoresReaderState() {
 
 async function testProfileReadingSummaryLeavesOutReadBooks() {
     const worker = makeWorker();
-    worker.getBookRecordByUid = async() => ({title: 'Книга', author: 'Автор', ext: 'fb2'});
+    worker.getBookRecordByUid = async() => ({title: 'Книга', author: 'Автор', ext: 'fb2', librate:4,genre:'prose_classic',year:'2025'});
     const summary = await worker.buildUserReadingSummary({readerProgress: {
         reading: {percent: 0.5},
         finished: {percent: 1},
@@ -1066,12 +1070,15 @@ async function testProfileReadingSummaryLeavesOutReadBooks() {
     }}, 48);
     assert.deepStrictEqual(summary.items.map(book => book.bookUid), ['reading']);
     assert.strictEqual(summary.count, 1);
+    assert.strictEqual(summary.items[0].librate, 4, 'The current book keeps its existing catalog rating');
+    assert.strictEqual(summary.items[0].genre, 'prose_classic');
+    assert.strictEqual(summary.items[0].publishedYear, '2025');
 }
 
 async function testReaderHomeKeepsUnavailableProgressVisible() {
     const worker = makeWorker();
     worker.getBookRecordByUid = async(uid) => uid === 'available'
-        ? {title: 'Доступная книга', author: 'Автор', ext: 'fb2'} : null;
+        ? {title: 'Доступная книга', author: 'Автор', ext: 'fb2', librate:5,genre:'prose_classic',publishedYear:'2024-01-01'} : null;
     const user = {readerProgress: Object.fromEntries(Array.from({length: 12}, (_, i) => [
         `missing-${i}`, {percent: (i + 1) / 100, hidden: false, updatedAt: `2026-01-${String(i + 1).padStart(2, '0')}`},
     ]))};
@@ -1095,6 +1102,10 @@ async function testReaderHomeKeepsUnavailableProgressVisible() {
     assert.strictEqual(found.items.length, 1);
     assert.strictEqual(found.items[0].bookUid, 'available');
     assert.strictEqual(found.items[0].unavailable, false);
+    assert.strictEqual(found.items[0].librate, 5, 'Recent reading keeps the rating without a metadata lookup');
+    assert.strictEqual(found.items[0].genre, 'prose_classic');
+    assert.strictEqual(found.items[0].publishedYear, '2024');
+    assert(missing.items.every(book => !book.genre && !book.publishedYear), 'Missing metadata is not invented from the progress date');
     assert.strictEqual((await worker.getUserReadingLibrary(user, {state: 'read'})).items[0].bookUid, 'finished');
     assert.strictEqual((await worker.getUserReadingLibrary(user, {state: 'hidden'})).items[0].bookUid, 'hidden');
 
@@ -1717,6 +1728,15 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
 }
 
 const tests = [
+    ...require('./rc13-profile-tests'),
+    ...require('./rc13-catalog-tests'),
+    ...require('./rc13-io-tests'),
+    ...require('./rc13-client-tests'),
+    ...Object.values(require('./catalog-discovery-tests')),
+    ...Object.values(require('./backup-vault-tests')),
+    ...Object.values(require('./telegram-bot-tests')),
+    ...require('./library-appearance-tests'),
+    ...require('./epub-fb2-tests'),
     ...require('./book-naming-tests'),
     ...require('./reader-measurement-tests'),
     ...require('./reader-scroll-anchor-tests'),
@@ -1726,10 +1746,14 @@ const tests = [
     ...require('./opds-book-navigation-tests'),
     ...require('./opds-catalog-shelves-tests'),
     ...require('./reader-opening-tests'),
+    ...require('./browser-speech-tests'),
+    ...require('./kosync-tests'),
     ...require('./book-card-tests'),
+    ...require('./memory-optimization-tests'),
     ...require('./library-io-tests'),
     ...require('./download-preference-tests'),
     ...require('./channel-format-tests'),
+    ...require('./telegram-network-tests'),
     ...require('./library-feature-tests'),
     ...require('./server-audit-regression-tests'),
     ...require('./client-audit-regression-tests'),
@@ -1741,16 +1765,34 @@ const tests = [
     ...require('./catalog-list-filter-tests'),
     ...require('./search-navigation-tests'),
     ...require('./fb2-encoding-tests'),
+    ...require('./fb2-image-tests'),
+    ...require('./release-archive-tests'),
+    ...require('./notification-tests'),
     ...require('./audiobookshelf-tests'),
     ...require('./catalog-regression-tests'),
     ...require('./library-metadata-tests'),
     ...require('./epub-archive-tests'),
+    ...require('./zip-ppmd-tests'),
     ...require('./image-runtime-tests'),
     ...require('./review-runtime-tests'),
     ...require('./profile-access-tests'),
+    ...require('./profile-logout-tests'),
     ...require('./audit-stage4-tests'),
     ...require('./resource-limit-tests'),
     ...require('./resource-policy-tests'),
+    ...require('./resource-benchmark-summary-tests'),
+    ...require('./performance-panel-tests'),
+    ...require('./book-preview-tests'),
+    ...require('./book-preview-process-tests'),
+    ...require('./book-preview-server-tests'),
+    ...require('./ebook-tests'),
+    ...require('./opds-progress-tests'),
+    ...require('./opds2-tests'),
+    ...require('./overview-recommendations-tests'),
+    ...require('./review-progress-tests'),
+    ...require('./catalog-suggest-fast-tests'),
+    ...require('./telegram-proxy-client-tests'),
+    ...require('./telegram-proxy-tests'),
     ...require('./dependency-smoke-tests'),
     ...require('./security-regression-tests'),
     testConfigSecretsSurviveRestart,
@@ -1795,5 +1837,6 @@ const tests = [
     }
 })().catch((e) => {
     console.error(e && e.stack || e);
+    if (e?.errors) for (const error of e.errors) console.error(error);
     process.exitCode = 1;
 });

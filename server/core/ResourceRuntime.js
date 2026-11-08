@@ -12,6 +12,7 @@ class ResourceRuntime {
         this.queue = [];
         this.normal = {active:0, kinds:{}, background:0};
         this.completed = 0; this.failed = 0; this.foregroundStreak = 0;
+        this.failedByCode = Object.create(null); this.failedByKind = Object.create(null); this.lastFailure = null;
         this.waits = []; this.durations = [];
     }
 
@@ -68,7 +69,7 @@ class ResourceRuntime {
             const started = Date.now();
             entry.runInContext(async() => {
                 try { entry.resolve(await entry.task()); this.completed++; }
-                catch (error) { this.failed++; entry.reject(error); }
+                catch (error) { this.recordFailure(error, entry.kind); entry.reject(error); }
                 finally {
                     this.sample(this.durations, Date.now() - started);
                     this.active--; entry.group.active--; entry.group.kinds[entry.kind]--;
@@ -81,10 +82,25 @@ class ResourceRuntime {
 
     sample(list, value) {list.push(value); if (list.length > 120) list.shift();}
 
+    recordFailure(error, kind) {
+        // Never retain an Error, message or request data. Reserve one of the
+        // 32 keys for overflow so dynamic tool codes cannot grow metrics forever.
+        const code = typeof error?.code === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(error.code) ? error.code : 'UNKNOWN';
+        const safeKind = typeof kind === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(kind) ? kind : 'OTHER';
+        const increment = (counts, key) => {
+            if (!Object.hasOwn(counts, key) && Object.keys(counts).filter(name => name !== 'OTHER').length >= 31) key = 'OTHER';
+            counts[key] = (counts[key] || 0) + 1;
+        };
+        this.failed++;
+        increment(this.failedByCode, code); increment(this.failedByKind, safeKind);
+        this.lastFailure = {code, kind:safeKind, at:new Date().toISOString()};
+    }
+
     snapshot() {
         const p95 = list => list.length ? list.slice().sort((a,b) => a-b)[Math.floor((list.length - 1) * 0.95)] : 0;
         return {active:this.active, queued:this.queue.length, foreground:this.normal.active - this.normal.background,
             background:this.normal.background, kinds:{...this.normal.kinds}, completed:this.completed, failed:this.failed,
+            failedByCode:{...this.failedByCode}, failedByKind:{...this.failedByKind}, lastFailure:this.lastFailure ? {...this.lastFailure} : null,
             waitP95Ms:p95(this.waits), durationP95Ms:p95(this.durations)};
     }
 

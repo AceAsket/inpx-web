@@ -33,6 +33,9 @@ function scopeGuard(getWorker) {
                 // Every page and generated link must refer to the profile checked above.
                 req.query.user = user.id;
                 req.opdsUser = user;
+                res.set('Cache-Control','private, no-store');
+                res.vary('Cookie');
+                res.vary('Authorization');
             }
             next();
         } catch (error) {
@@ -41,31 +44,30 @@ function scopeGuard(getWorker) {
     };
 }
 
-module.exports = function(app, config, security = new (require('../Security'))(config)) {
-    if (!config.opds || !config.opds.enabled)
-        return;
-    
-    const opdsRoot = config.opds.root || '/opds';
-    config.opdsRoot = opdsRoot;
+function mountCatalog(app, config, security, catalogRoot, version) {
+    // Inherit live server settings: copying config/opds would retain old
+    // credentials after an administrator changes them without a restart.
+    const catalogConfig = version === 2 ? Object.assign(Object.create(config), {opdsRoot:catalogRoot, opdsVersion:2}) : config;
+    const opdsRoot = catalogRoot;
 
-    const root = new RootPage(config);
-    const author = new AuthorPage(config);
-    const series = new SeriesPage(config);
-    const title = new TitlePage(config);
-    const genre = new GenrePage(config);
-    const book = new BookPage(config);
+    const root = new RootPage(catalogConfig);
+    const author = new AuthorPage(catalogConfig);
+    const series = new SeriesPage(catalogConfig);
+    const title = new TitlePage(catalogConfig);
+    const genre = new GenrePage(catalogConfig);
+    const book = new BookPage(catalogConfig);
     const BookExtrasPage = require('./BookExtrasPage');
-    const reviews = new BookExtrasPage(config, 'reviews');
-    const authors = new BookExtrasPage(config, 'authors');
-    const readingLists = new ReadingListsPage(config);
-    const readingList = new ReadingListPage(config);
-    const catalogShelf = new CatalogShelfPage(config);
-    const readingProfiles = new ReadingProfilesPage(config);
-    const readingProgress = new ReadingProgressPage(config);
+    const reviews = new BookExtrasPage(catalogConfig, 'reviews');
+    const authors = new BookExtrasPage(catalogConfig, 'authors');
+    const readingLists = new ReadingListsPage(catalogConfig);
+    const readingList = new ReadingListPage(catalogConfig);
+    const catalogShelf = new CatalogShelfPage(catalogConfig);
+    const readingProfiles = new ReadingProfilesPage(catalogConfig);
+    const readingProgress = new ReadingProgressPage(catalogConfig);
 
-    const opensearch = new OpensearchPage(config);
-    const search = new SearchPage(config);
-    const searchHelp = new SearchHelpPage(config);
+    const opensearch = new OpensearchPage(catalogConfig);
+    const search = new SearchPage(catalogConfig);
+    const searchHelp = new SearchHelpPage(catalogConfig);
 
     const routes = [
         ['', root],
@@ -90,24 +92,34 @@ module.exports = function(app, config, security = new (require('../Security'))(c
 
     const pages = new Map();
     for (const r of routes) {
+        if (version === 2 && r[0] === '/opensearch') continue;
         pages.set(`${opdsRoot}${r[0]}`, r[1]);
     }
 
     const opds = async(req, res, next) => {
         try {
-            const page = pages.get(req.path);
+            if (catalogConfig.opds?.enabled === false) return res.sendStatus(404);
+            const page = pages.get(version === 2 ? req.path.replace(/\/$/,'') : req.path);
 
             if (page) {
-                res.set('Content-Type', req.path === `${opdsRoot}/opensearch`
+                res.set('Content-Type', version === 2
+                    ? (page === book ? 'application/opds-publication+json; charset=utf-8' : 'application/opds+json; charset=utf-8')
+                    : req.path === `${opdsRoot}/opensearch`
                     ? 'application/opensearchdescription+xml; charset=utf-8'
                     : 'application/atom+xml; charset=utf-8');
+
+                if (version === 2 && page === search && Object.hasOwn(req.query,'query')) {
+                    req.query.term = String(req.query.query || '');
+                    if (!req.query.type) req.query.type = 'title';
+                }
 
                 const result = await page.body(req, res);
 
                 if (result !== false)
                     res.send(result);
             } else {
-                next();
+                if (version === 2) res.status(404).json({error:'Каталог не найден'});
+                else next();
             }
         } catch (e) {
             log(LM_ERR, `OPDS: ${e.message}, url: ${req.originalUrl}`);
@@ -117,11 +129,27 @@ module.exports = function(app, config, security = new (require('../Security'))(c
 
     const opdsPaths = [opdsRoot, `${opdsRoot}/*`];
 
-    app.use(opdsPaths, new (require('../ProfileAccess'))(config, root.webWorker, security).httpGuard(true));
-    app.use(opdsPaths, require('./Auth')(config, (...args) => root.webWorker.verifyOpdsPassword(...args), security));
+    app.use(opdsPaths, new (require('../ProfileAccess'))(catalogConfig, root.webWorker, security).httpGuard(true));
+    app.use(opdsPaths, require('./Auth')(catalogConfig, (...args) => root.webWorker.verifyOpdsPassword(...args), security));
     app.use(opdsPaths, scopeGuard(() => root.webWorker));
 
-    require('./Compatibility').mount(app, opdsPaths, opds, config);
+    if (version === 2) {
+        app.get(opdsPaths,opds);
+        app.post(opdsPaths,(req,res) => res.sendStatus(405));
+    } else require('./Compatibility').mount(app, opdsPaths, opds, catalogConfig);
+}
+
+module.exports = function(app, config, security = new (require('../Security'))(config)) {
+    if (!config.opds || !config.opds.enabled) return;
+    const opdsRoot = config.opds.root || '/opds';
+    config.opdsRoot = opdsRoot;
+    // WebWorker is shared: its first construction must use the server config,
+    // never the presentation config whose catalog root points to OPDS 2.
+    new (require('../WebWorker'))(config);
+
+    // The more specific routes must precede the OPDS 1 wildcard and its guards.
+    mountCatalog(app, config, security, `${opdsRoot}/v2`, 2);
+    mountCatalog(app, config, security, opdsRoot, 1);
 };
 
 module.exports.scopeGuard = scopeGuard;

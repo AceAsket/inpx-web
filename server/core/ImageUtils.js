@@ -57,11 +57,17 @@ function shouldSkipToolError(err, command) {
     return /MZ[\s\S]*(?:not found|Syntax error)/i.test(stderr);
 }
 
-async function jxlToImage(buf, tempDir, toolDirs = [], converterPaths = null, extension = 'png') {
-    return await imageRuntime.run(() => decodeJxl(buf, tempDir, toolDirs, converterPaths, extension));
+async function jxlToImage(buf, tempDir, toolDirs = [], converterPaths = null, extension = 'png', maxOutputBytes = 0) {
+    return await imageRuntime.run(() => decodeJxl(buf, tempDir, toolDirs, converterPaths, extension, maxOutputBytes));
 }
 
-async function decodeJxl(buf, tempDir, toolDirs, converterPaths, extension) {
+async function readDecodedImage(file, maximum) {
+    if (maximum > 0 && (await fs.stat(file)).size > maximum)
+        throw Object.assign(new Error('Размер изображения превышает лимит превью'), {code:'INPX_RESOURCE_IMAGE_OUTPUT_LIMIT'});
+    return await fs.readFile(file);
+}
+
+async function decodeJxl(buf, tempDir, toolDirs, converterPaths, extension, maxOutputBytes) {
     const id = utils.randomHexString(30);
     const inputFile = `${tempDir}/${id}.jxl`;
     const outputFile = `${tempDir}/${id}.${extension}`;
@@ -77,7 +83,7 @@ async function decodeJxl(buf, tempDir, toolDirs, converterPaths, extension) {
                     continue;
 
                 await run(command, [inputFile, outputFile, '--num_threads=1'], 'INPX_MISSING_DJXL', externalTools.missingDjxlMessage());
-                return await fs.readFile(outputFile);
+                return await readDecodedImage(outputFile, maxOutputBytes);
             } catch (err) {
                 lastError = err;
                 if (shouldSkipToolError(err, command))
@@ -111,11 +117,11 @@ async function normalizeForEpub(buf, fileName, tempDir, toolDirs = [], converter
     return buf;
 }
 
-async function webpToPng(buf, tempDir, toolDirs = [], converterPaths = null) {
-    return await imageRuntime.run(() => decodeWebp(buf, tempDir, toolDirs, converterPaths));
+async function webpToPng(buf, tempDir, toolDirs = [], converterPaths = null, maxOutputBytes = 0) {
+    return await imageRuntime.run(() => decodeWebp(buf, tempDir, toolDirs, converterPaths, maxOutputBytes));
 }
 
-async function decodeWebp(buf, tempDir, toolDirs, converterPaths) {
+async function decodeWebp(buf, tempDir, toolDirs, converterPaths, maxOutputBytes) {
     const id = utils.randomHexString(30);
     const inputFile = `${tempDir}/${id}.webp`;
     const outputFile = `${tempDir}/${id}.png`;
@@ -131,7 +137,7 @@ async function decodeWebp(buf, tempDir, toolDirs, converterPaths) {
                     continue;
 
                 await run(command, [inputFile, '-o', outputFile], 'INPX_MISSING_DWEBP', externalTools.missingDwebpMessage());
-                return await fs.readFile(outputFile);
+                return await readDecodedImage(outputFile, maxOutputBytes);
             } catch (err) {
                 lastError = err;
                 if (shouldSkipToolError(err, command))
@@ -148,12 +154,12 @@ async function decodeWebp(buf, tempDir, toolDirs, converterPaths) {
     }
 }
 
-async function normalizeForFb2(buf, tempDir, toolDirs = [], converterPaths = null) {
+async function normalizeForFb2(buf, tempDir, toolDirs = [], converterPaths = null, maxOutputBytes = 0) {
     const type = contentType(buf);
     if (type === 'image/jxl')
-        return {data: await jxlToPng(buf, tempDir, toolDirs, converterPaths), contentType: 'image/png'};
+        return {data: await jxlToImage(buf, tempDir, toolDirs, converterPaths, 'png', maxOutputBytes), contentType: 'image/png'};
     if (type === 'image/webp')
-        return {data: await webpToPng(buf, tempDir, toolDirs, converterPaths), contentType: 'image/png'};
+        return {data: await webpToPng(buf, tempDir, toolDirs, converterPaths, maxOutputBytes), contentType: 'image/png'};
 
     return {data: buf, contentType: type};
 }

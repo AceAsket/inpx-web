@@ -7,6 +7,7 @@ const {Transform} = require('stream');
 const Fb2Parser = require('./fb2/Fb2Parser');
 const he = require('he');
 const {normalizeSpeechOptions, hasSpeechOptions} = require('../../shared/speechOptions');
+const {MemoryCache} = require('./MemoryCache');
 
 const speakers = ['aidar', 'baya', 'kseniya', 'xenia', 'eugene'];
 const maxTextLength = 3000000;
@@ -136,6 +137,10 @@ class ReaderSpeech {
         this.running = false;
         this.secret = crypto.randomBytes(32);
         this.directory = path.resolve(config.dataDir, 'speech');
+        // Only immutable document data is shared; users, consumers and jobs stay separate.
+        this.partsCache = new MemoryCache({bytes:12 * 1024 ** 2, entries:16, ttl:15 * 60 * 1000});
+        this.planCache = new MemoryCache({bytes:4 * 1024 ** 2, entries:16, ttl:15 * 60 * 1000});
+        this.documentIds = new WeakMap(); this.nextDocumentId = 0;
     }
 
     get enabled() { return Boolean(this.config.ttsEnabled && this.config.ttsUrl); }
@@ -158,30 +163,52 @@ class ReaderSpeech {
         if (!this.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!speakers.includes(speaker)) throw new Error('Неизвестный голос Silero.');
         if (!bookInfo || !bookInfo.fb2) throw new Error('Озвучка доступна для книг FB2.');
-        const text = extractSpeechText(bookInfo.fb2);
+        const text = this.parts(bookInfo, 'book')[0].text;
         options = normalizeSpeechOptions(options);
         return this.prepareText(userId, bookUid, text, speaker, false, options,
-            hasSpeechOptions(options) ? extractSpeechChapters(bookInfo.fb2) : undefined, consumerId);
+            hasSpeechOptions(options) ? this.parts(bookInfo, 'chapters') : undefined, consumerId);
+    }
+
+    documentKey(bookInfo, mode) {
+        let version = bookInfo.contentVersion;
+        if (!version) {
+            if (!this.documentIds.has(bookInfo.fb2)) this.documentIds.set(bookInfo.fb2, ++this.nextDocumentId);
+            version = `object:${this.documentIds.get(bookInfo.fb2)}`;
+        }
+        return JSON.stringify(['speech-parts-v1', version, mode]);
     }
 
     parts(bookInfo, mode = 'chapters') {
         if (!this.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!bookInfo || !bookInfo.fb2) throw new Error('Озвучка доступна для книг FB2.');
-        if (mode === 'book') return [{index: 0, title: 'Вся книга', text: extractSpeechText(bookInfo.fb2)}];
-        if (!['online', 'chapters'].includes(mode)) throw new Error('Неизвестный режим озвучки.');
-        return extractSpeechChapters(bookInfo.fb2, mode === 'online' ? 700 : chapterLimit);
+        if (!['book', 'online', 'chapters'].includes(mode)) throw new Error('Неизвестный режим озвучки.');
+        const key = this.documentKey(bookInfo, mode);
+        const cached = this.partsCache.get(key);
+        if (cached) return cached;
+        const parts = mode === 'book' ? [{index:0, title:'Вся книга', text:extractSpeechText(bookInfo.fb2)}]
+            : extractSpeechChapters(bookInfo.fb2, mode === 'online' ? 700 : chapterLimit);
+        for (const part of parts) Object.freeze(part);
+        Object.freeze(parts);
+        this.partsCache.set(key, parts);
+        return parts;
     }
 
     async plan(bookInfo, mode, anchor = null) {
         const parts = this.parts(bookInfo, mode);
         const startChapter = anchor ? require('../../shared/SpeechAnchor').locate(parts,anchor) : null;
-        let sourceOffset = 0;
-        const chapters = parts.map(({index, title, text, chapterEnd}) => {
-            const result = {index,title,characters:text.length,chapterEnd:chapterEnd !== false,
-                anchor:{textSnippet:text.replace(/\s+/g,' ').trim().slice(0,180),textOffset:-1,sourceOffset}};
-            sourceOffset += require('../../shared/SpeechAnchor').key(text).length;
-            return result;
-        });
+        const planKey = this.documentKey(bookInfo, mode);
+        let publicChapters = this.planCache.get(planKey);
+        if (!publicChapters) {
+            let sourceOffset = 0;
+            publicChapters = parts.map(({index, title, text, chapterEnd}) => {
+                const result = {index,title,characters:text.length,chapterEnd:chapterEnd !== false,
+                    anchor:{textSnippet:text.replace(/\s+/g,' ').trim().slice(0,180),textOffset:-1,sourceOffset}};
+                sourceOffset += require('../../shared/SpeechAnchor').key(text).length;
+                return result;
+            });
+            this.planCache.set(planKey, publicChapters);
+        }
+        const chapters = publicChapters.map(chapter => ({...chapter, anchor:{...chapter.anchor}}));
         const characters = chapters.reduce((sum, part) => sum + part.characters, 0);
         let estimate, engineId = '';
         try {
@@ -212,7 +239,7 @@ class ReaderSpeech {
             throw new Error('Глава озвучки не найдена.');
         const chapter = chapters[chapterIndex];
         options = normalizeSpeechOptions(options);
-        const segments = hasSpeechOptions(options) ? mode === 'book' ? extractSpeechChapters(bookInfo.fb2) : [chapter] : undefined;
+        const segments = hasSpeechOptions(options) ? mode === 'book' ? this.parts(bookInfo, 'chapters') : [chapter] : undefined;
         return this.prepareText(userId, mode === 'book' ? bookUid : `${bookUid}:${mode}:${chapterIndex}`, chapter.text, speaker, false, options, segments, consumerId);
     }
 

@@ -1,12 +1,14 @@
 <template>
-    <div class="root column fit" style="position: relative">
-        <LibraryTools :author="search.author || ''" :series="search.series || ''" />
+    <div class="root column fit" :class="{'search--shelves': shelvesAppearance}" style="position: relative">
+        <LibraryTools ref="libraryTools" :author="search.author || ''" :series="search.series || ''" />
         <div ref="scroller" class="col fit column no-wrap search-scroll" style="overflow: auto; position: relative" @scroll="onScroll">
+            <AppearanceHint v-if="!shelvesAppearance && !settings.shelvesHintDismissed" />
             <!-- Tool Panel begin -->
-            <div v-if="config.profileAuthorized && !isCompactMobile" class="q-px-md q-py-xs">
-                <q-btn outline dense no-caps padding="6px 12px" icon="la la-bookmark" label="Сохранить поиск как полку" @click="saveSearchShelf" />
-            </div>
-            <div ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
+            <CatalogSearchPanel v-if="shelvesAppearance" :search="search" :selected-list="selectedList" :list-options="listOptions"
+                :discovery="isDiscoveryList" :extended="isExtendedSearch" :ext-summary="extSearchNames" :authorized="!!config.profileAuthorized"
+                :genre-map="genreMap" :genre-tree="genreTree" :lang-list="langList" :ext-list="extList" :sources="config.librarySources || []"
+                @patch="applyCatalogSearch" @section="changeCatalogSection" @save-shelf="saveSearchShelf" @edit-extended="selectExtSearch" @clear-extended="clearExtSearch" />
+            <div v-show="!shelvesAppearance" ref="toolPanel" class="tool-panel column bg-cyan-2" :class="{'tool-panel--mobile-collapsed': isCompactMobile && mobileFiltersCollapsed}" style="position: sticky; top: 0; z-index: 10;">
                 <!-- Обновление -->
                 <div v-show="showNewReleaseAvailable && newReleaseAvailable" class="row q-py-sm bg-green-4 items-center">
                     <div class="q-ml-sm" style="font-size: 120%">
@@ -103,6 +105,8 @@
                                             </q-tooltip>
                                         </template>
                                     </DivBtn>
+
+                                    <ProfileLogout />
 
                                     <q-btn
                                         v-if="isCompactMobile"
@@ -377,18 +381,19 @@
                         </div>
                     </div><!-- 1-1 -->
                     <!-- 1-2 -->
-                    <div class="toolbar-actions q-mx-sm">
+                    <div class="toolbar-actions q-mx-sm" role="toolbar" aria-label="Действия библиотеки">
                         <div style="height: 3px" />
                         <q-btn
                             v-if="isCompactMobile && showMobileFiltersBody && !isExtendedSearch && !isDiscoveryList"
                             outline dense no-caps icon="la la-sliders-h" class="mobile-extra-filters-toggle"
+                            aria-label="Дополнительные фильтры"
                             :aria-expanded="mobileExtraFiltersOpen"
                             @click="mobileExtraFiltersOpen = !mobileExtraFiltersOpen"
                         >
                             {{ mobileExtraFiltersOpen ? 'Скрыть фильтры' : 'Фильтры' }}
                             <q-badge v-if="mobileExtraFilterCount" class="q-ml-xs" color="primary">{{ mobileExtraFilterCount }}</q-badge>
                         </q-btn>
-                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-cog" round @click.stop.prevent="settingsDialogVisible = true">
+                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-cog" round role="button" aria-label="Настройки" tabindex="0" @click.stop.prevent="settingsDialogVisible = true" @keydown.enter.stop.prevent="settingsDialogVisible = true" @keydown.space.stop.prevent="settingsDialogVisible = true">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     Настройки
@@ -396,7 +401,7 @@
                             </template>
                         </DivBtn>
 
-                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-bookmark" round @click.stop.prevent="openReadingLists()">
+                        <DivBtn class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-bookmark" round role="button" aria-label="Списки чтения" tabindex="0" @click.stop.prevent="openReadingLists()" @keydown.enter.stop.prevent="openReadingLists()" @keydown.space.stop.prevent="openReadingLists()">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
                                     Списки чтения
@@ -412,10 +417,22 @@
                             </template>
                         </DivBtn>
 
+                        <DivBtn v-if="config.profileAuthorized" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-star" round role="button" aria-label="Избранные авторы и серии" tabindex="0" @click.stop.prevent="$refs.libraryTools.openFollows()" @keydown.enter.stop.prevent="$refs.libraryTools.openFollows()" @keydown.space.stop.prevent="$refs.libraryTools.openFollows()">
+                            <template #tooltip>
+                                <q-tooltip :delay="700" anchor="bottom middle">Избранные авторы и серии</q-tooltip>
+                            </template>
+                        </DivBtn>
+
+                        <DivBtn v-if="config.profileAuthorized && (!isCompactMobile || list.totalFound > 0)" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-folder-plus" round role="button" aria-label="Сохранить поиск как полку" tabindex="0" @click.stop.prevent="saveSearchShelf" @keydown.enter.stop.prevent="saveSearchShelf" @keydown.space.stop.prevent="saveSearchShelf">
+                            <template #tooltip>
+                                <q-tooltip :delay="700" anchor="bottom middle">Сохранить поиск как полку</q-tooltip>
+                            </template>
+                        </DivBtn>
+
                         <DivBtn v-if="!config.freeAccess" class="q-mt-sm text-white bg-secondary" :size="28" :icon-size="24" :imt="1" icon="la la-sign-out-alt" round @click.stop.prevent="logout">
                             <template #tooltip>
                                 <q-tooltip :delay="1500" anchor="bottom middle" content-style="font-size: 80%" max-width="400px">
-                                    Выход
+                                    Выйти из библиотеки
                                 </q-tooltip>
                             </template>
                         </DivBtn>
@@ -442,21 +459,12 @@
 
             <div v-if="!isDiscoveryList" class="result-bar row items-center q-ml-lg q-mt-sm">
                 <div v-show="pageCount > 1" class="result-scroller-wrap">
-                    <PageScroller ref="pageScroller1" v-model="search.page" :page-count="pageCount" />
+                    <PageScroller ref="pageScroller1" v-model="search.page" :page-count="pageCount" :disable="list.totalFound < 0" />
                 </div>
 
                 <div v-show="list.totalFound > 0" class="text-bold" style="font-size: 120%; padding-bottom: 2px">
                     {{ foundCountMessage }}
                 </div>
-
-                <q-btn
-                    v-if="isCompactMobile && config.profileAuthorized && list.totalFound > 0"
-                    outline dense no-caps padding="4px 10px" icon="la la-bookmark"
-                    class="mobile-save-shelf" label="В полку" aria-label="Сохранить поиск как полку"
-                    @click="saveSearchShelf"
-                >
-                    <q-tooltip :delay="700">Сохранить поиск как умную полку</q-tooltip>
-                </q-btn>
 
                 <div v-show="list.totalFound > 0 && isExtendedSearch" class="q-ml-md">
                     <q-checkbox v-model="showJson" size="36px" label="Показывать JSON" />
@@ -520,7 +528,7 @@
             <!-- Формирование списка конец ------------------------------------------------------------------>
 
             <div v-if="!isDiscoveryList" class="bottom-scroller-bar row q-ml-lg q-mb-sm">
-                <PageScroller v-show="pageCount > 1" v-model="search.page" :page-count="pageCount" />
+                <PageScroller v-show="pageCount > 1" v-model="search.page" :page-count="pageCount" :disable="list.totalFound < 0" />
             </div>
 
             <footer class="catalog-footer">
@@ -540,7 +548,7 @@
             </footer>
         </div>
 
-        <SettingsDialog v-model="settingsDialogVisible" />
+        <SettingsDialog v-model="settingsDialogVisible" @open-library-tasks="$refs.libraryTools.openTasks()" />
         <SelectGenreDialog v-model="selectGenreDialogVisible" v-model:genre="search.genre" :genre-tree="genreTree" />
         <SelectLangDialog v-model="selectLangDialogVisible" v-model:lang="search.lang" :lang-list="langList" :lang-default="langDefault" />        
         <SelectLibRateDialog v-model="selectLibRateDialogVisible" v-model:librate="search.librate" />
@@ -611,6 +619,9 @@ import UserProfilesDialog from './UserProfilesDialog/UserProfilesDialog.vue';
 import authorBooksStorage from './authorBooksStorage';
 import DivBtn from '../share/DivBtn.vue';
 import Dialog from '../share/Dialog.vue';
+import ProfileLogout from '../share/ProfileLogout.vue';
+import CatalogSearchPanel from '../Library/CatalogSearchPanel.vue';
+import AppearanceHint from '../Library/AppearanceHint.vue';
 
 import * as utils from '../../share/utils';
 
@@ -653,6 +664,9 @@ const componentOptions = {
         UserProfilesDialog,
         SelectExtSearchDialog,
         Dialog,
+        ProfileLogout,
+        CatalogSearchPanel,
+        AppearanceHint,
         DivBtn
     },
     watch: {
@@ -708,6 +722,7 @@ const componentOptions = {
 
             this.updateListFromRoute(to);
             this.updateSearchFromRouteQuery(to);
+            this.makeTitle();
         },
         langDefault() {
             this.updateSearchFromRouteQuery(this.$route);
@@ -889,6 +904,10 @@ class Search {
         this.loadSettings();
     }
 
+    activated() {
+        this.makeTitle();
+    }
+
     mounted() {
         (async() => {
             //для срабатывания watch.config
@@ -918,8 +937,8 @@ class Search {
             //локальный кеш
             await authorBooksStorage.init();
 
-            if (!this.$root.isMobileDevice)
-                this.$refs.authorInput.focus();
+            if (!this.$root.isMobileDevice && !this.shelvesAppearance)
+                this.$refs.authorInput?.focus();
 
             this.updateListFromRoute(this.$route);
 
@@ -994,6 +1013,20 @@ class Search {
 
     get config() {
         return this.$store.state.config;
+    }
+
+    get shelvesAppearance() {
+        return this.settings.catalogAppearance === 'shelves';
+    }
+
+    applyCatalogSearch(patch) {
+        Object.assign(this.search, patch, {page: 1});
+    }
+
+    changeCatalogSection(section, values) {
+        const {sectionSearchValues} = require('../Library/catalogSearchModel');
+        this.applyCatalogSearch(sectionSearchValues(values, this.selectedList, section));
+        this.selectedList = section;
     }
 
     get newReleaseAvailable() {
@@ -1519,7 +1552,7 @@ class Search {
             newList = '';
         if (!this.isDiscoveryListEnabled(newList))
             newList = '';
-        newList = (newList ? newList : 'author');
+        newList = (newList ? newList : 'books');
 
         if (this.selectedList != newList)
             this.selectedList = newList;
@@ -1604,6 +1637,7 @@ class Search {
     }
 
     makeTitle() {
+        if (!this.isSearchRoute(this.$route)) return;
         if (!this.collection)
             return;
 
@@ -1809,6 +1843,7 @@ class Search {
     }
     
     onScroll() {
+        if (this.shelvesAppearance) return;
         const curScrollTop = this.$refs.scroller.scrollTop;
         const toolPanelOffset = this.$refs.toolPanel.getBoundingClientRect().top;
 
@@ -2461,7 +2496,7 @@ class Search {
     }
 
     async refreshDiscoveryShelves(force = false) {
-        if (!this.showDiscoveryShelves)
+        if (!this.isSearchRoute(this.$route) || !this.showDiscoveryShelves)
             return;
         if (this.discoveryShelvesLoading && !force)
             return;
@@ -2563,6 +2598,20 @@ export default vueComponent(Search);
 </script>
 
 <style scoped>
+.search--shelves .header .logo-link,
+.search--shelves .header .profile-controls,
+.search--shelves .header .collection-title {display: none;}
+.search--shelves .tool-panel {background: var(--app-surface) !important; box-shadow: none; border-bottom: 1px solid var(--app-border);}
+.search--shelves .header {margin: 14px 12px 8px;}
+.search--shelves .search-list-toggle {margin-left: 0; box-shadow: none;}
+.search--shelves .toolbar-actions {padding-top: 10px;}
+.search--shelves .result-bar {margin-top: 18px;}
+.search--shelves .catalog-footer {background: transparent;}
+.search--shelves :deep(.books-grid:not(.books-grid--list)) {grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); grid-auto-rows: auto; align-items: stretch; gap: 16px 20px;}
+.search--shelves :deep(.books-grid:not(.books-grid--list) > .library-result-card) {margin: 0;}
+.search--shelves :deep(.rating-toolbar) {display: none;}
+.search--shelves :deep(.bulk-read-toolbar) {margin-top: 12px; margin-bottom: 4px;}
+.search--shelves .result-bar {font-size: 12px;}
 .save-shelf-form {
     display: flex;
     flex-direction: column;
@@ -2934,7 +2983,7 @@ export default vueComponent(Search);
 
     .header > .row.no-wrap.items-center {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: 34px minmax(0, 1fr);
         grid-template-areas:
             'tabs tabs'
             'logo controls';
@@ -2980,7 +3029,7 @@ export default vueComponent(Search);
 
     .profile-controls .profile-select {
         width: auto;
-        min-width: 0;
+        min-width: 0 !important;
         max-width: min(240px, calc(100vw - 96px));
     }
 
@@ -2990,6 +3039,7 @@ export default vueComponent(Search);
 
     .toolbar-actions {
         width: 100%;
+        gap: 6px;
         justify-content: flex-start;
         margin-left: 8px !important;
         margin-right: 8px !important;
@@ -3089,12 +3139,6 @@ export default vueComponent(Search);
         width: 100%;
     }
 
-    .mobile-save-shelf {
-        margin-left: auto;
-        min-height: 36px;
-        font-size: 13px;
-    }
-
     .bottom-scroller-bar {
         margin-left: 8px !important;
         margin-right: 8px !important;
@@ -3105,5 +3149,12 @@ export default vueComponent(Search);
         margin-left: 8px;
         margin-right: 8px;
     }
+}
+
+@media (max-width: 360px) {
+    .toolbar-actions { gap: 4px; }
+    .mobile-extra-filters-toggle { font-size: 0; padding: 4px 8px; min-width: 36px; }
+    .mobile-extra-filters-toggle :deep(.q-icon) { font-size: 20px; margin-right: 0; }
+    .mobile-extra-filters-toggle :deep(.q-badge) { position: absolute; top: -3px; right: -3px; margin: 0; font-size: 11px; }
 }
 </style>

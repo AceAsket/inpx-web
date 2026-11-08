@@ -4,6 +4,12 @@ on:
   push:
     branches: [develop, master, main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      browser_only:
+        description: Run browser checks without rebuilding platform binaries
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -13,8 +19,77 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  browser-ui:
+    name: Classic and shelves UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.62.1
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build:client
+      - run: node scripts/library-appearance-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/catalog-ui
+      - run: node scripts/telegram-status-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/telegram-status-ui
+      - run: node scripts/profile-toolbar-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/profile-toolbar-ui
+      - run: node scripts/performance-panel-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/performance-panel-ui
+      - run: node scripts/overview-suggestions-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/overview-suggestions-ui
+      - run: node scripts/book-preview-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/book-preview-ui
+      - run: node scripts/ebook-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/ebook-ui
+      - run: node scripts/rc13-profile-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/rc13-profile
+      - run: node scripts/catalog-discovery-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/catalog-discovery-ui
+      - run: node scripts/review-progress-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/review-progress-ui
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catalog-ui-screenshots
+          path: |
+            ${{ runner.temp }}/catalog-ui/*.png
+            ${{ runner.temp }}/telegram-status-ui/*.png
+            ${{ runner.temp }}/telegram-status-ui/result.json
+            ${{ runner.temp }}/catalog-ui/result.json
+            ${{ runner.temp }}/catalog-discovery-ui/*.png
+            ${{ runner.temp }}/catalog-discovery-ui/result.json
+            ${{ runner.temp }}/rc13-profile/*.png
+            ${{ runner.temp }}/rc13-profile/result.json
+            ${{ runner.temp }}/profile-toolbar-ui/*.png
+            ${{ runner.temp }}/performance-panel-ui/*.png
+            ${{ runner.temp }}/performance-panel-ui/result.json
+            ${{ runner.temp }}/overview-suggestions-ui/*.png
+            ${{ runner.temp }}/overview-suggestions-ui/result.json
+            ${{ runner.temp }}/book-preview-ui/*.png
+            ${{ runner.temp }}/book-preview-ui/result.json
+            ${{ runner.temp }}/ebook-ui/*.png
+            ${{ runner.temp }}/ebook-ui/result.json
+            ${{ runner.temp }}/review-progress-ui/*.png
+            ${{ runner.temp }}/review-progress-ui/result.json
   validate:
     name: Test and package ${{ matrix.target }}
+    if: github.event_name != 'workflow_dispatch' || !inputs.browser_only
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     strategy:
@@ -40,7 +115,12 @@ jobs:
       - run: npm run test:release
       - run: npm run test:tts
       - run: npm run build:${{ matrix.target }}
-      - run: node scripts/binary-smoke-test.js dist/${{ matrix.target }}/inpx-web${{ matrix.extension }}
+      - name: Test extracted release application and permissions
+        shell: bash
+        run: |
+          node build/release.js ${{ matrix.target }}
+          version=$(node -p "require('./package.json').version")
+          node scripts/release-archive-smoke-test.js ${{ matrix.target }} "dist/release/inpx-web-$version-${{ matrix.target }}.zip" --application-only
       - if: matrix.target == 'linux'
         run: docker build --target runtime-lite -t inpx-web:ci .
       - if: matrix.target == 'linux'

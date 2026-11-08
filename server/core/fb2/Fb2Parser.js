@@ -5,7 +5,7 @@ class Fb2Parser extends XmlParser {
         if (!this._xlinkNS) {
             const rootAttrs = this.selectFirstSelf().attrs();
             let ns = 'l';
-            for (const [key, value] of rootAttrs) {
+            for (const [key, value] of rootAttrs || []) {
                 if (value == 'http://www.w3.org/1999/xlink') {
                     ns = key.split(':')[1] || ns;
                     break;

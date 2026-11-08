@@ -1,5 +1,5 @@
 <template>
-    <Dialog ref="dialog" v-model="dialogVisible">
+    <DialogSurface ref="dialog" v-model="dialogVisible" variant="book-info" :embedded="embedded">
         <template #header>
             <div class="row items-center">
                 <div style="font-size: 110%">
@@ -8,7 +8,10 @@
             </div>
         </template>
 
-        <div ref="box" class="fit column q-mt-xs overflow-auto no-wrap info-box">
+        <div ref="box" class="fit column q-mt-xs overflow-auto no-wrap info-box" :class="{'info-box--embedded': embedded}">
+            <div v-if="!hideSummary" :class="{'book-info-summary': shelvesAppearance}">
+                <button v-if="shelvesAppearance" type="button" class="book-info-cover" :aria-label="`Обложка: ${book.title || 'Книга'}`" @click="posterClick"><BookCover :book="book" @error="onCoverError" /></button>
+                <div>
             <div v-if="bookAuthor" class="text-green-10 info-link" @click.stop.prevent="emitNavigate('author', book.author)">
                 {{ bookAuthor }}
             </div>
@@ -21,9 +24,13 @@
             <div v-if="book.series" class="q-mt-xs info-series-link" @click.stop.prevent="emitNavigate('series', book.series)">
                 {{ seriesLabel }}: {{ book.series }}<span v-if="book.serno"> #{{ book.serno }}</span>
             </div>
+                </div>
+            </div>
 
-            <div class="row q-mt-sm no-wrap">
-                <div class="poster-size">
+            <div v-if="shelvesAppearance && selectedTab == 'fb2' && annotation" class="book-info-annotation" v-html="annotation" />
+
+            <div class="row q-mt-sm no-wrap book-info-data">
+                <div v-if="!shelvesAppearance" class="poster-size">
                     <div class="column justify-center items-center" :class="{'poster': coverSrc, 'no-poster': !coverSrc}" @click.stop.prevent="posterClick">
                         <img v-if="coverSrc" :src="coverSrc" class="poster-image fit row justify-center items-center" @error="onCoverError" />
                         <div v-else class="poster-placeholder">
@@ -41,57 +48,70 @@
                 </div>
 
                 <div class="col column q-ml-sm info-panel">
-                    <div class="bg-grey-3 row">
+                    <div class="book-info-tabs-wrap">
                         <q-tabs
                             v-model="selectedTab"
-                            active-color="black"
-                            active-bg-color="white"
-                            indicator-color="white"
+                            active-color="primary"
+                            indicator-color="primary"
                             align="left"
                             dense
                             no-caps
                             inline-label
                             outside-arrows
                             mobile-arrows
-                            class="bg-grey-4 text-grey-7 info-tabs"
+                            class="info-tabs"
                         >
-                            <q-tab v-if="fb2.length || detailsLoading" name="fb2" label="Fb2 info" />
-                            <q-tab name="inpx" label="Inpx info" />
+                            <q-tab v-if="fb2.length || detailsLoading" name="fb2" :label="shelvesAppearance ? 'Сведения FB2' : 'Fb2 info'" />
+                            <q-tab name="inpx" :label="shelvesAppearance ? 'Данные книги' : 'Inpx info'" />
                             <q-tab v-if="contents.length" name="contents" label="Содержание" />
                             <q-tab v-if="hasAuthorTab" name="author" :label="authorTabLabel" />
+                            <q-tab name="reviews" label="Отзывы и оценки" />
                         </q-tabs>
                     </div>
 
                     <div class="overflow-auto full-width info-scroll">
                         <template v-if="selectedTab == 'author'">
-                            <div class="author-tab-wrap">
-                                <div v-if="authorInfoLoading" class="author-info-panel">
-                                    <div class="author-info-head">
-                                        Об авторе
-                                    </div>
-                                    <div class="row items-center text-grey-7">
-                                        <q-icon class="la la-spinner icon-rotate text-green-8" size="24px" />
-                                        <div class="q-ml-sm">
-                                            Загрузка информации об авторе...
-                                        </div>
-                                    </div>
-                                </div>
+                            <section class="author-tab-wrap" aria-label="Об авторе" :aria-busy="authorInfoLoading">
+                                <LoadingState v-if="authorInfoLoading" label="Загружаем сведения об авторе" detail="Ищем биографию и фотографию в материалах библиотеки." />
 
                                 <div v-else-if="authorInfo" class="author-info-panel">
                                     <div class="author-info-head">
-                                        Об авторе
+                                        <q-icon name="la la-user-edit" size="20px" aria-hidden="true" /> Об авторе
                                     </div>
-                                    <div class="row no-wrap author-info-body">
+                                    <div class="author-info-body">
                                         <div v-if="authorInfo.photo" class="author-photo-box">
-                                            <img :src="authorInfo.photo" class="author-photo" />
+                                            <img :src="authorInfo.photo" :alt="bookAuthor ? `Фото: ${bookAuthor}` : 'Фотография автора'" class="author-photo" />
                                         </div>
-                                        <div class="col author-info-html" v-html="authorInfoHtml"></div>
+                                        <div class="author-info-html" v-html="authorInfoHtml"></div>
                                     </div>
                                 </div>
 
-                                <div v-else class="author-empty-state">
-                                    {{ noAuthorInfoLabel }}
+                                <div v-else-if="authorInfoError" class="author-empty-state" role="alert">
+                                    <q-icon name="la la-exclamation-circle" size="26px" aria-hidden="true" />
+                                    <div><h3>Не удалось загрузить сведения</h3><p>{{ authorInfoError }}</p><q-btn outline no-caps label="Повторить" @click="loadAuthorInfo" /></div>
                                 </div>
+                                <div v-else class="author-empty-state">
+                                    <q-icon name="la la-user-edit" size="26px" aria-hidden="true" />
+                                    <div><h3>Сведения об авторе</h3><p>{{ noAuthorInfoLabel }}</p></div>
+                                </div>
+                            </section>
+                        </template>
+
+                        <template v-else-if="selectedTab == 'reviews'">
+                            <div class="reviews-block q-pa-sm" aria-live="polite" :aria-busy="reviewsLoading">
+                                <div v-if="reviewsLoading" class="column q-gutter-sm">
+                                    <LoadingState v-if="!reviewsProgress.length" label="Загружаем отзывы и оценки" detail="Проверяем материалы библиотеки." />
+                                    <LoadingState v-for="step in reviewsProgress" :key="step.id" :label="step.phase" :detail="reviewStepDetail(step)" :percent="reviewStepPercent(step)" />
+                                </div>
+                                <div v-else-if="reviewsError" role="alert">{{ reviewsError }} <q-btn flat no-caps label="Повторить" @click="loadReviews" /></div>
+                                <template v-else>
+                                    <p v-if="libraryRating">Оценка читателей: {{ libraryRating.value.toFixed(2) }}/5 · голосов: {{ libraryRating.count }}</p>
+                                    <p v-if="!reviews.length">Отзывов пока нет.</p>
+                                    <div v-for="(review, index) in reviews" :key="index" class="review-card q-mb-md">
+                                        <div class="review-head"><div class="review-author">{{ review.name }}</div><div v-if="review.time" class="review-time">{{ review.time }}</div></div>
+                                        <div class="review-text">{{ review.text }}</div>
+                                    </div>
+                                </template>
                             </div>
                         </template>
 
@@ -156,17 +176,14 @@
                                 <div class="text-blue section-label q-mb-sm">
                                     Иллюстрации
                                 </div>
-                                <div v-if="galleryLoading" class="row items-center no-wrap text-grey-7">
-                                    <q-spinner size="20px" class="q-mr-sm" />
-                                    Загрузка иллюстраций: {{ galleryCount }}
-                                </div>
+                                <LoadingState v-if="galleryLoading" label="Загружаем иллюстрации" />
                                 <div v-else-if="galleryError" class="text-red-8">
                                     Не удалось загрузить иллюстрации: {{ galleryError }}
                                 </div>
-                                <div v-else-if="galleryRequested && !fb2Images.length" class="text-grey-7">
+                                <div v-else-if="galleryRequested && !fb2Images.length && !galleryLimited" class="text-grey-7">
                                     Иллюстрации не найдены
                                 </div>
-                                <div v-else class="fb2-gallery-grid">
+                                <div v-else-if="fb2Images.length" class="fb2-gallery-grid">
                                     <img
                                         v-for="image in fb2Images"
                                         :key="image.id"
@@ -175,6 +192,9 @@
                                         class="fb2-gallery-image"
                                     />
                                 </div>
+                                <p v-if="galleryRequested && !galleryLoading && !galleryError && galleryLimited" class="gallery-limit-note" role="status">
+                                    {{ fb2Images.length ? `Показаны первые ${fb2Images.length}. Остальные иллюстрации доступны в читалке.` : 'Превью иллюстраций ограничено. Откройте книгу в читалке.' }}
+                                </p>
                             </div>
                         </template>
 
@@ -183,7 +203,7 @@
                 </div>
             </div>
 
-        <div v-if="selectedTab == 'fb2' && annotation" class="q-mt-md" v-html="annotation" />
+        <div v-if="!shelvesAppearance && selectedTab == 'fb2' && annotation" class="q-mt-md" v-html="annotation" />
         <div v-if="selectedTab == 'fb2' && hasAnnotationMeta" class="annotation-meta q-mt-md">
             <div class="text-blue section-label q-mb-sm">
                 Аннотация и статистика
@@ -220,32 +240,14 @@
             </div>
         </div>
 
-        <div v-if="['fb2', 'inpx'].includes(selectedTab) && reviews.length" class="reviews-block q-mt-md">
-            <div class="text-blue section-label q-mb-sm">
-                Отзывы читателей
-            </div>
-            <div v-for="(review, index) in reviews" :key="`review-${index}`" class="review-card q-mb-md">
-                <div class="review-head">
-                    <div class="review-author">
-                        {{ review.name }}
-                    </div>
-                    <div v-if="review.time" class="review-time">
-                        {{ review.time }}
-                    </div>
-                </div>
-                <div class="review-text">
-                    {{ review.text }}
-                </div>
-            </div>
-        </div>
     </div>
 
         <template #footer>
             <q-btn v-if="canEditMetadata" class="q-px-md q-ml-sm" color="secondary" dense no-caps icon="la la-edit" @click="openMetadataEditor">
                 Редактировать
             </q-btn>
-            <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps @click="okClick">
-                OK
+            <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps :icon="backToBook ? 'la la-arrow-left' : undefined" @click="okClick">
+                {{ backToBook ? 'Назад к книге' : 'OK' }}
             </q-btn>
         </template>
 
@@ -287,14 +289,16 @@
                 </q-card-actions>
             </q-card>
         </q-dialog>
-    </Dialog>
+    </DialogSurface>
 </template>
 
 <script>
 //-----------------------------------------------------------------------------
 import vueComponent from '../../vueComponent.js';
 
-import Dialog from '../../share/Dialog.vue';
+import DialogSurface from '../../share/DialogSurface.vue';
+import BookCover from '../../Library/BookCover.vue';
+import LoadingState from '../../share/LoadingState.vue';
 import Fb2Parser from '../../../../server/core/fb2/Fb2Parser';
 const {escapeHtml, safeHtml} = require('../../../../shared/safeHtml');
 import * as utils from '../../../share/utils';
@@ -302,9 +306,11 @@ import _ from 'lodash';
 
 const componentOptions = {
     components: {
-        Dialog
+        DialogSurface,
+        BookCover,
+        LoadingState,
     },
-    emits: ['update:modelValue', 'navigate'],
+    emits: ['update:modelValue', 'navigate', 'updated'],
     watch: {
         modelValue(newValue) {
             this.dialogVisible = newValue;
@@ -312,7 +318,7 @@ const componentOptions = {
                 this.init();
         },
         dialogVisible(newValue) {
-            if (!newValue) this.invalidateGallery();
+            if (!newValue) {this.invalidateGallery(); this.invalidateExtras();}
             this.$emit('update:modelValue', newValue);
         },
         bookInfo() {
@@ -320,8 +326,13 @@ const componentOptions = {
             if (this.dialogVisible) {
                 this.parseBookInfo();
                 this.leaveEmptyFb2Tab();
+                this.loadSelectedDetails();
             }
         },
+        selectedTab() {this.loadSelectedDetails();},
+        autoLoadBookReviews() {this.loadSelectedDetails();},
+        autoLoadAuthorInfo() {this.loadSelectedDetails();},
+        profileContext() {if (this.dialogVisible) {this.invalidateExtras(); this.loadSelectedDetails();}},
     }
 };
 class BookInfoDialog {
@@ -331,6 +342,9 @@ class BookInfoDialog {
         bookInfo: Object,
         genreMap: Object,
         initialTab: {type: String, default: 'fb2'},
+        embedded: Boolean,
+        hideSummary: Boolean,
+        backToBook: Boolean,
     };
 
     dialogVisible = false;
@@ -350,6 +364,7 @@ class BookInfoDialog {
     galleryRequested = false;
     galleryLoading = false;
     galleryError = '';
+    galleryLimited = false;
     galleryGeneration = 0;
     annotationMeta = null;
     reviews = [];
@@ -357,10 +372,34 @@ class BookInfoDialog {
     book = {};
     authorInfo = null;
     authorInfoLoading = false;
+    authorInfoLoaded = false;
+    authorInfoError = '';
+    reviewsLoaded = false;
+    reviewsLoading = false;
+    reviewsError = '';
+    reviewsProgress = [];
+    extrasGeneration = 0;
+    extrasKey = '';
+    extrasActive = true;
+
+    get autoLoadBookReviews() {return this.$store.state.settings.autoLoadBookReviews === true;}
+    get autoLoadAuthorInfo() {return this.$store.state.settings.autoLoadAuthorInfo === true;}
+    get profileContext() {return `${this.$store.state.settings.currentUserId}:${this.$store.state.config.profileAuthorized}`;}
 
     created() {
         this.commit = this.$store.commit;
         this.api = this.$root.api;
+    }
+
+    get shelvesAppearance() {
+        return this.embedded || this.$store.state.settings.catalogAppearance === 'shelves';
+    }
+
+    mounted() {
+        if (this.modelValue) {
+            this.dialogVisible = true;
+            this.init();
+        }
     }
 
     updated() {
@@ -368,10 +407,17 @@ class BookInfoDialog {
     }
 
     beforeUnmount() {
+        this.extrasActive = false;
+        this.invalidateExtras();
         this.invalidateGallery();
     }
 
+    deactivated() {this.extrasActive = false; this.invalidateExtras(); this.invalidateGallery();}
+    activated() {this.extrasActive = true; this.loadSelectedDetails();}
+
     init() {
+        this.extrasActive = true;
+        this.invalidateExtras();
         this.coverSrc = '';
         this.coverError = false;
         this.annotation = '';
@@ -382,6 +428,7 @@ class BookInfoDialog {
         this.galleryRequested = false;
         this.galleryLoading = false;
         this.galleryError = '';
+        this.galleryLimited = false;
         this.invalidateGallery();
         this.annotationMeta = null;
         this.reviews = [];
@@ -394,7 +441,7 @@ class BookInfoDialog {
 
         this.parseBookInfo();
         this.selectedTab = this.resolveInitialTab();
-        this.loadAuthorInfo();//no await
+        this.loadSelectedDetails();//no await
         this.leaveEmptyFb2Tab();
     }
 
@@ -450,6 +497,7 @@ class BookInfoDialog {
             });
             this.metadataDialogVisible = false;
             this.$root.notify.success('Метаданные сохранены');
+            this.$emit('updated');
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         } finally {
@@ -757,6 +805,7 @@ class BookInfoDialog {
             const response = await this.api.getBookGallery(bookUid);
             if (!isCurrent())
                 return;
+            this.galleryLimited = response.limited === true;
             this.fb2Images = (response.images || []).map(image => ({
                 id: image.id,
                 src: `data:${image.contentType};base64,${image.data}`,
@@ -820,11 +869,16 @@ class BookInfoDialog {
 
     parseBookInfo() {
         const bookInfo = this.bookInfo || {};
+        const key = JSON.stringify([bookInfo.book?._uid || bookInfo.book?.uid || bookInfo.book?.bookUid, bookInfo.book?.author]);
+        if (this.extrasKey !== key) {this.invalidateExtras(); this.extrasKey = key;}
         if (bookInfo.authorInfo)
             this.authorInfo = bookInfo.authorInfo;
         this.annotationMeta = (bookInfo.annotationMeta ? bookInfo.annotationMeta : null);
-        this.reviews = (Array.isArray(bookInfo.reviews) ? bookInfo.reviews : []);
-        this.libraryRating = bookInfo.libraryRating || null;
+        if (!this.reviewsLoaded && Array.isArray(bookInfo.reviews) && !bookInfo.reviewsDeferred) {
+            this.reviews = bookInfo.reviews;
+            this.libraryRating = bookInfo.libraryRating || null;
+            this.reviewsLoaded = true;
+        }
 
         if (bookInfo.cover)
             this.coverSrc = bookInfo.cover;
@@ -874,7 +928,7 @@ class BookInfoDialog {
     }
 
     async loadAuthorInfo() {
-        if (this.authorInfo || !this.book.author)
+        if (!this.extrasActive || !this.dialogVisible || this.authorInfoLoaded || this.authorInfoLoading || !this.book.author)
             return;
 
         const firstAuthor = this.book.author.split(',').map(item => item.trim()).filter(Boolean)[0];
@@ -882,14 +936,67 @@ class BookInfoDialog {
             return;
 
         this.authorInfoLoading = true;
+        this.authorInfoError = '';
+        const generation = this.extrasGeneration;
         try {
             const response = await this.$root.api.getAuthorInfo(0, firstAuthor);
+            if (!this.extrasCurrent(generation)) return;
             this.authorInfo = (response && response.authorInfo ? response.authorInfo : null);
+            this.authorInfoLoaded = true;
         } catch(e) {
-            this.authorInfo = null;
+            if (this.extrasCurrent(generation)) this.authorInfoError = `Не удалось загрузить сведения об авторе: ${e.message}`;
         } finally {
-            this.authorInfoLoading = false;
+            if (this.extrasCurrent(generation)) this.authorInfoLoading = false;
         }
+    }
+
+    invalidateExtras() {
+        this.extrasGeneration++;
+        this.authorInfo = null; this.authorInfoLoaded = false; this.authorInfoLoading = false; this.authorInfoError = '';
+        this.reviews = []; this.libraryRating = null; this.reviewsLoaded = false; this.reviewsLoading = false; this.reviewsError = '';
+        this.reviewsProgress = [];
+    }
+
+    extrasCurrent(generation) {return this.extrasActive && this.dialogVisible && generation === this.extrasGeneration;}
+
+    loadSelectedDetails() {
+        if (!this.extrasActive || !this.dialogVisible || !this.bookUid || this.detailsLoading) return;
+        if (this.selectedTab === 'author' || this.autoLoadAuthorInfo) this.loadAuthorInfo();
+        if (this.selectedTab === 'reviews' || this.autoLoadBookReviews) this.loadReviews();
+    }
+
+    async loadReviews() {
+        if (!this.extrasActive || !this.dialogVisible || !this.bookUid || this.reviewsLoaded || this.reviewsLoading) return;
+        this.reviewsLoading = true; this.reviewsError = ''; this.reviewsProgress = [];
+        const generation = this.extrasGeneration;
+        try {
+            const response = await this.api.getBookReviews(this.bookUid,{onProgress:progress => {
+                if (!this.extrasCurrent(generation)) return;
+                this.reviewsProgress = Array.isArray(progress?.steps) ? progress.steps.filter(step => ['reviews','ratings'].includes(step.id)) : [];
+            }});
+            if (!this.extrasCurrent(generation)) return;
+            this.reviews = response.reviews || []; this.libraryRating = response.libraryRating || null;
+            this.reviewsLoaded = true;
+        } catch (error) {
+            if (this.extrasCurrent(generation)) this.reviewsError = `Не удалось загрузить отзывы: ${error.message}`;
+        } finally {if (this.extrasCurrent(generation)) {this.reviewsLoading = false; this.reviewsProgress = [];}}
+    }
+
+    reviewStepPercent(step) {
+        return Number.isFinite(step.total) && step.total > 0 && Number.isFinite(step.done)
+            ? Math.max(0,Math.min(100,step.done / step.total * 100)) : null;
+    }
+
+    reviewStepDetail(step) {
+        const label = step.id === 'ratings' ? 'Оценки' : 'Отзывы';
+        const done = Number.isFinite(step.done) ? Math.max(0,step.done) : 0;
+        const total = Number.isFinite(step.total) && step.total > 0 ? step.total : null;
+        if (step.unit === 'bytes') {
+            const bytes = value => value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} МиБ` : `${Math.floor(value / 1024).toLocaleString('ru-RU')} КиБ`;
+            return `${label} · ${bytes(done)}${total === null ? '' : ` из ${bytes(total)}`}`;
+        }
+        const unit = {archives:'архивов',files:'файлов',reviews:'отзывов',ratings:'оценок'}[step.unit];
+        return unit ? `${label} · ${done.toLocaleString('ru-RU')}${total === null ? '' : ` из ${total.toLocaleString('ru-RU')}`} ${unit}` : label;
     }
 
     extractContents(parser) {
@@ -983,6 +1090,8 @@ export default vueComponent(BookInfoDialog);
 </script>
 
 <style scoped>
+.book-info-cover {display: block; width: 100%; border: 0; padding: 0; background: transparent; border-radius: 9px; cursor: pointer;}
+.book-info-cover:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}
 .info-box {
     padding: 0 10px 10px;
     min-height: min(74vh, 760px);
@@ -1007,7 +1116,9 @@ export default vueComponent(BookInfoDialog);
 
 .info-panel {
     min-width: 400px;
-    border: 1px solid #ccc;
+    border: 1px solid var(--app-border);
+    border-radius: 14px;
+    overflow: hidden;
 }
 
 .info-scroll {
@@ -1023,6 +1134,12 @@ export default vueComponent(BookInfoDialog);
 .fb2-gallery {
     border-top: 1px solid #ccc;
     padding-top: 12px;
+}
+.gallery-limit-note {
+    color: var(--app-muted, #52696d);
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 12px 0 0;
 }
 
 .fb2-contents {
@@ -1272,26 +1389,26 @@ export default vueComponent(BookInfoDialog);
 }
 
 .author-info-panel {
-    padding: 16px;
-    border: 1px solid color-mix(in srgb, var(--app-border) 84%, var(--app-primary));
-    border-radius: 16px;
-    background:
-        radial-gradient(circle at top right, rgba(15, 159, 143, 0.08), transparent 30%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
-        var(--app-surface);
+    padding: 18px;
+    border: 1px solid var(--app-border);
+    border-radius: 14px;
+    background: var(--app-surface);
 }
 
 .author-info-head {
-    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
     color: var(--app-muted);
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    font-size: 13px;
+    font-weight: 550;
 }
 
 .author-info-body {
-    gap: 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
 }
 
 .author-photo-box {
@@ -1303,15 +1420,16 @@ export default vueComponent(BookInfoDialog);
     display: block;
     width: 110px;
     height: 146px;
-    border-radius: 14px;
+    border-radius: 10px;
     object-fit: cover;
-    box-shadow: 0 10px 24px rgba(23, 32, 38, 0.12);
+    background: var(--app-surface-2);
 }
 
 .author-info-html {
+    flex: 1;
     min-width: 0;
     font-size: inherit;
-    line-height: 1.55;
+    line-height: 1.7;
     word-break: break-word;
 }
 
@@ -1320,18 +1438,28 @@ export default vueComponent(BookInfoDialog);
 }
 
 .author-empty-state {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
     padding: 18px;
-    border: 1px dashed color-mix(in srgb, var(--app-border) 78%, var(--app-primary));
-    border-radius: 16px;
+    border: 1px solid var(--app-border);
+    border-radius: 14px;
     color: var(--app-muted);
-    background: rgba(15, 159, 143, 0.04);
+    background: var(--app-surface);
     font-size: inherit;
 }
+.author-empty-state h3 {margin: 0 0 6px; color: var(--app-text); font-size: 14px; font-weight: 550; line-height: 1.5;}
+.author-empty-state p {margin: 0; line-height: 1.65;}
+.author-empty-state .q-btn {margin-top: 14px; border-radius: 10px;}
+.book-info-tabs-wrap {background: var(--app-surface-2); border-bottom: 1px solid var(--app-border);}
 
 .info-tabs {
     width: 100%;
     min-width: 0;
+    color: var(--app-muted);
 }
+.info-tabs :deep(.q-tab) {font-size: 13px; font-weight: 500; min-height: 42px;}
+.info-tabs :deep(.q-tab--active) {background: var(--app-surface); color: var(--app-primary);}
 
 .info-tabs :deep(.q-tabs__content) {
     min-width: 0;

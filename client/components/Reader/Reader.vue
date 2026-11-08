@@ -8,7 +8,7 @@
         <div
             v-show="!readerChromeHidden"
             class="reader-toolbar"
-            :class="{'reader-toolbar--home': !bookUid}"
+            :class="{'reader-toolbar--home': !bookUid && !isStandaloneMode}"
         >
             <div class="reader-toolbar-main">
                 <q-btn
@@ -49,6 +49,7 @@
                     </div>
                 </div>
 
+                <slot name="source-actions" />
                 <button
                     v-if="bookUid && !isStandaloneMode"
                     type="button"
@@ -60,7 +61,7 @@
                     <span>{{ readerProfileChipLabel }}</span>
                 </button>
 
-                <div v-if="bookUid" class="reader-toolbar-quick-actions">
+                <div v-if="bookUid || isStandaloneMode" class="reader-toolbar-quick-actions">
                     <q-btn
                         v-if="hasPrevSection"
                         flat
@@ -122,9 +123,10 @@
                         @click="toggleHelpDialog"
                     />
                     <q-btn
-                        v-if="config.ttsEnabled && !isStandaloneMode"
+                        v-if="canUseReaderAudio"
                         flat dense round icon="la la-headphones" class="reader-icon-btn"
-                        aria-label="Озвучка книги" title="Озвучка книги — Silero"
+                        aria-label="Озвучка книги" title="Озвучка книги"
+                        :disable="loading || !readerHtml"
                         @click="openReaderAudio"
                     />
                     <q-btn
@@ -149,7 +151,7 @@
             </div>
 
             <div
-                v-show="bookUid && showToolbarActions"
+                v-show="(bookUid || isStandaloneMode) && showToolbarActions"
                 ref="readerToolbarActions"
                 class="reader-toolbar-actions"
                 :class="{
@@ -160,7 +162,7 @@
                     ref="readerBackgroundInput"
                     class="reader-background-input"
                     type="file"
-                    accept="image/*"
+                    accept="image/png,image/jpeg,image/gif,image/webp"
                     @change="handleReaderBackgroundUpload"
                 />
 
@@ -964,7 +966,7 @@
         </template>
 
         <div
-            v-if="bookUid && isCompactLayout && (showCompactStatusBar || !compactChromeHidden || controlsOpen)"
+            v-if="(bookUid || isStandaloneMode) && isCompactLayout && (showCompactStatusBar || !compactChromeHidden || controlsOpen)"
             ref="readerMobileFooter"
             class="reader-mobile-footer"
             :style="readerMobileFooterStyle"
@@ -997,7 +999,7 @@
                 class="reader-mobile-bar"
                 :class="{
                     'reader-mobile-bar--with-contents': hasContentsMenu,
-                    'reader-mobile-bar--tts': config.ttsEnabled && !isStandaloneMode,
+                    'reader-mobile-bar--tts': canUseReaderAudio,
                 }"
             >
                 <q-btn
@@ -1020,9 +1022,10 @@
                     @click="toggleContentsDialog"
                 />
                 <q-btn
-                    v-if="config.ttsEnabled && !isStandaloneMode"
+                    v-if="canUseReaderAudio"
                     flat no-caps stack icon="la la-headphones" label="Озвучка"
                     class="reader-mobile-btn" aria-label="Озвучка книги"
+                    :disable="loading || !readerHtml"
                     @click="openReaderAudio"
                 />
                 <q-btn
@@ -1531,7 +1534,14 @@
         <reader-audio
             v-if="bookUid && config.ttsEnabled && !isStandaloneMode"
             ref="audioPlayer" :book-uid="bookUid" :title="title" :author="authorLine" :cover="coverSrc"
+            :browser-speech-available="browserSpeechSupported" @use-browser="useBrowserAudio"
             @listen-here="listenFromReader" @read-here="readFromAudio"
+        />
+        <reader-browser-speech
+            v-if="(bookUid || isStandaloneMode) && browserSpeechSupported"
+            ref="browserAudio" :html="readerHtml" :source-key="readerSourceKey" :title="title" :language="readerLanguage"
+            :scope-key="`${currentUserId}:${!!config.profileAuthorized}`" :silero-enabled="serverSpeechAvailable"
+            @listen-here="listenFromReader" @use-silero="useSileroAudio"
         />
 
         <q-dialog v-model="readerReplacementOpen" :persistent="readerReplacementSaving">
@@ -1602,8 +1612,9 @@ import readerContent from '../../../server/core/fb2/ReaderContent';
 import _ from 'lodash';
 import he from 'he';
 import ReaderAudio from './ReaderAudio.vue';
+import ReaderBrowserSpeech from './ReaderBrowserSpeech.vue';
+import readerPreferencesStorage from './readerPreferencesStorage';
 
-const readerPreferencesStorageKey = 'inpx.reader.preferences.v1';
 const readerProgressStorageKey = 'inpx.reader.progress.v1';
 const readerPreferencesVersion = 3;
 const readerDeviceProfileKeys = ['regularProfile', 'compactProfile'];
@@ -1631,12 +1642,14 @@ const readerDeviceScopedPreferenceKeys = new Set([
 ]);
 
 const componentOptions = {
-    components: {ReaderAudio},
+    name: 'Reader',
+    components: {ReaderAudio, ReaderBrowserSpeech},
     watch: {
         readerSourceKey: {
             immediate: true,
-            handler() {
-                this.loadReader();// no await
+            handler(key) {
+                if (key) this.loadReader();// no await
+                else this.cancelReaderLoad();
             },
         },
         currentProfileReaderPreferences: {
@@ -1660,6 +1673,7 @@ class Reader {
         },
     };
 
+    readerActive = true;
     loading = false;
     loadingMessage = '';
     bookPreparing = false;
@@ -1674,6 +1688,8 @@ class Reader {
     coverIntrinsicHeight = 0;
     coverIntrinsicLoadId = 0;
     readerHtml = '';
+    readerLanguage = 'ru';
+    useBrowserSpeech = false;
     readerAnnotationHtml = '';
     readerNotesAnchorId = '';
     readerSearchText = '';
@@ -1832,6 +1848,8 @@ class Reader {
     statusClockText = '';
     statusClockTimer = null;
     profileReaderPreferencesApplied = false;
+    localReaderBackground = null;
+    readerBackgroundLoadSource = '';
     snapTimer = null;
     pageTurnTimer = null;
     pageTurnAnimating = false;
@@ -2014,7 +2032,13 @@ class Reader {
         this.bindReaderImageListeners();
     }
 
+    activated() {
+        this.readerActive = true;
+    }
+
     deactivated() {
+        this.readerActive = false;
+        this.cancelReaderLoad();
         this.flushProgress();
         this.clearSnapTimer();
         this.clearSpacingReflowTimer();
@@ -2024,6 +2048,8 @@ class Reader {
     }
 
     beforeUnmount() {
+        this.readerActive = false;
+        this.cancelReaderLoad();
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
         document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
         window.removeEventListener('resize', this.handleWindowResize);
@@ -2093,6 +2119,14 @@ class Reader {
     get isStandaloneMode() {
         return !!(this.standaloneSource && String(this.standaloneSource.fb2 || '').trim());
     }
+
+    get browserSpeechSupported() {
+        return typeof window !== 'undefined' && require('./browserSpeech').supported(window);
+    }
+
+    get serverSpeechAvailable() { return !!(this.config.ttsEnabled && !this.isStandaloneMode); }
+
+    get canUseReaderAudio() { return this.browserSpeechSupported || this.serverSpeechAvailable; }
 
     get config() {
         return this.$store.state.config || {};
@@ -2195,6 +2229,7 @@ class Reader {
     }
 
     get readerSourceKey() {
+        if (!this.readerActive || (!this.isStandaloneMode && this.$route.path !== '/reader')) return '';
         if (this.isStandaloneMode) {
             const source = (this.standaloneSource || {});
             return `standalone:${String(source.sourceKey || source.fileName || source.title || source.fb2 || '').slice(0, 256)}`;
@@ -2204,11 +2239,11 @@ class Reader {
     }
 
     get readerHeaderTitle() {
-        return this.bookUid ? (this.title || this.uiText.readerHomeTitle) : this.uiText.readerHomeTitle;
+        return this.bookUid || this.isStandaloneMode ? (this.title || this.uiText.readerHomeTitle) : this.uiText.readerHomeTitle;
     }
 
     get readerHeaderSubtitle() {
-        return this.bookUid ? this.authorLine : this.readerHomeSubtitle;
+        return this.bookUid || this.isStandaloneMode ? this.authorLine : this.readerHomeSubtitle;
     }
 
     get readerHomeAuthorized() {
@@ -2460,9 +2495,12 @@ class Reader {
     }
 
     get readerBackgroundStyle() {
-        const image = String(this.preferences.backgroundImage || '').trim();
+        let image = String(this.preferences.backgroundImage || '').trim();
         if (!image)
             return {};
+
+        if (this.localReaderBackground?.source === image) image = this.localReaderBackground.data;
+        else image = this.readerBackgroundRequestUrl(image);
 
         const theme = String(this.preferences.theme || 'dark');
         const overlay = (theme === 'dark')
@@ -2750,7 +2788,7 @@ class Reader {
             resetReaderAppearanceConfirm: '\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0441\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u043e\u0435 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435 \u0447\u0438\u0442\u0430\u043b\u043a\u0438? \u041f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u0438 \u0437\u0430\u043a\u043b\u0430\u0434\u043a\u0438 \u043d\u0435 \u0438\u0437\u043c\u0435\u043d\u044f\u0442\u0441\u044f.',
             resetReaderAppearanceSuccess: '\u041e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435 \u0447\u0438\u0442\u0430\u043b\u043a\u0438 \u0441\u0431\u0440\u043e\u0448\u0435\u043d\u043e.',
             backgroundTooLarge: '\u041a\u0430\u0440\u0442\u0438\u043d\u043a\u0430 \u0444\u043e\u043d\u0430 \u0434\u043e\u043b\u0436\u043d\u0430 \u0431\u044b\u0442\u044c \u0434\u043e 4 \u041c\u0411.',
-            backgroundInvalid: '\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0444\u0430\u0439\u043b \u043a\u0430\u0440\u0442\u0438\u043d\u043a\u0438.',
+            backgroundInvalid: 'Выберите изображение PNG, JPEG, GIF или WebP.',
             einkContrast: '\u041a\u043e\u043d\u0442\u0440\u0430\u0441\u0442',
             einkPaper: '\u0411\u0443\u043c\u0430\u0433\u0430',
             einkInk: '\u0427\u0435\u0440\u043d\u0438\u043b\u0430',
@@ -8907,6 +8945,7 @@ class Reader {
     } = {}) {
         const parser = this.createFb2Parser(fb2);
         const fb2Info = parser.bookInfo();
+        this.readerLanguage = String(book.lang || fb2Info.titleInfo?.lang || 'ru');
         const authorFallback = ((fb2Info.titleInfo && fb2Info.titleInfo.author) ? fb2Info.titleInfo.author.join(', ') : '');
 
         this.title = this.decodeReaderText(book.title || (fb2Info.titleInfo && fb2Info.titleInfo.bookTitle) || 'Без названия');
@@ -8978,14 +9017,27 @@ class Reader {
         };
     }
 
+    cancelReaderLoad() {
+        this.readerLoadJobId++;
+        this.pagedBuildJobId++;
+        this.pagedBuildNeedsRefresh = false;
+        this.loading = false;
+        this.bookPreparing = false;
+        this.loadingMessage = '';
+    }
+
     async loadReader() {
+        if (!this.readerSourceKey) return;
         const loadJobId = ++this.readerLoadJobId;
+        const bookUid = this.bookUid;
         // Invalidate queued/in-flight pagination from the previous source before
         // replacing readerHtml and the shared measurement DOM.
         this.pagedBuildJobId += 1;
         this.pagedBuildNeedsRefresh = false;
         this.pagedLayoutSignature = '';
         this.pagedLayoutCache.clear();
+        this.$refs?.browserAudio?.close();
+        this.$refs?.audioPlayer?.close();
         this.progressPersistPendingAfterPagedBuild = false;
         this.compactChromePagedBuildPending = false;
         this.compactChromeAwaitingCalibration = false;
@@ -9014,6 +9066,8 @@ class Reader {
             clearTimeout(this.bottomCalibrationTimer);
             this.bottomCalibrationTimer = null;
         }
+        await this.applyStoredReaderPreferences();
+        if (loadJobId !== this.readerLoadJobId || !this.readerSourceKey) return;
         if (!this.bookUid && !this.isStandaloneMode) {
             await this.loadReaderHome();
             return;
@@ -9082,15 +9136,16 @@ class Reader {
                 });
             } else {
                 const [bookResponse, stateResponseRaw] = await Promise.all([
-                    api.getReaderBook(this.bookUid),
-                    api.getReaderState(this.bookUid, {suppressProfileLogin: true}).catch(() => ({preferences: {}, progress: {}})),
+                    api.getReaderBook(bookUid),
+                    api.getReaderState(bookUid, {suppressProfileLogin: true}).catch(() => ({preferences: {}, progress: {}})),
                 ]);
+                if (loadJobId !== this.readerLoadJobId) return;
                 const stateResponse = (stateResponseRaw || {preferences: {}, progress: {}});
 
                 this.bookInfo = (bookResponse ? bookResponse.bookInfo : null);
                 const info = (this.bookInfo || {});
                 if (!info.fb2)
-                    throw new Error('Встроенная читалка пока поддерживает только FB2.');
+                    throw new Error('Для этой книги недоступна подготовка текста для чтения.');
 
                 await this.applyReaderDocumentSource({
                     book: (info.book || {}),
@@ -10550,14 +10605,26 @@ class Reader {
     }
 
     async persistPreferences() {
-        this.writeStoredReaderPreferences();
+        const userId = this.currentUserId;
+        const submitted = _.cloneDeep(this.preferences);
+        await this.writeStoredReaderPreferences();
 
         const api = this.$root.api;
         if (!api)
             return;
 
         try {
-            await api.updateReaderPreferences(this.preferences, {suppressProfileLogin: true});
+            const result = await api.updateReaderPreferences(submitted, {suppressProfileLogin: true});
+            if (userId !== this.currentUserId || !result?.preferences) return;
+            const canonical = result.preferences;
+            if (this.preferences.backgroundImage === submitted.backgroundImage) {
+                if (String(submitted.backgroundImage || '').startsWith('data:image/') && canonical.backgroundImage) {
+                    this.localReaderBackground = {source: canonical.backgroundImage, data: submitted.backgroundImage};
+                }
+                // A font/spacing edit made while saving must not be overwritten.
+                this.preferences = {...this.preferences, backgroundImage: canonical.backgroundImage || ''};
+                await this.writeStoredReaderPreferences();
+            }
         } catch (e) {
             if ((e && e.message) !== 'need_profile_login')
                 throw e;
@@ -10663,32 +10730,58 @@ class Reader {
         if (_.isEqual(nextPreferences, this.preferences)) {
             if (options.persistLocal)
                 this.writeStoredReaderPreferences();
+            this.cacheReaderBackground();
             return;
         }
 
         this.preferences = nextPreferences;
         if (options.persistLocal)
             this.writeStoredReaderPreferences();
+        this.cacheReaderBackground();
     }
 
-    applyStoredReaderPreferences() {
-        const preferences = this.readStoredReaderPreferences();
-        if (preferences)
-            this.applyReaderPreferences(preferences, {persistLocal: true});
+    readerBackgroundRequestUrl(image = '') {
+        if (image.startsWith('/') && image.includes('/reader-background/') && this.settings.profileAccessToken) {
+            // Tokens are used for this request only, never stored in preferences.
+            return `${image}${image.includes('?') ? '&' : '?'}access=${encodeURIComponent(this.settings.profileAccessToken)}`;
+        }
+        return image;
+    }
+
+    async cacheReaderBackground() {
+        const image = String(this.preferences.backgroundImage || '');
+        if (!image.startsWith('/') || !image.includes('/reader-background/') || this.readerBackgroundLoadSource === image
+            || this.localReaderBackground?.source === image || typeof fetch !== 'function' || typeof FileReader === 'undefined') return;
+        this.readerBackgroundLoadSource = image;
+        const userId = this.currentUserId;
+        try {
+            const response = await fetch(this.readerBackgroundRequestUrl(image), {credentials: 'same-origin', cache: 'no-store'});
+            if (!response.ok) return;
+            const blob = await response.blob();
+            if (blob.size > this.readerBackgroundMaxBytes || !blob.type.startsWith('image/')) return;
+            const data = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result || ''));
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+            if (!this.readerActive || userId !== this.currentUserId || image !== this.preferences.backgroundImage) return;
+            this.localReaderBackground = {source: image, data};
+            await this.writeStoredReaderPreferences();
+        } catch { /* The online background still works when offline storage is unavailable. */ }
+        finally {if (this.readerBackgroundLoadSource === image) this.readerBackgroundLoadSource = '';}
+    }
+
+    async applyStoredReaderPreferences() {
+        const userId = this.currentUserId;
+        const stored = await readerPreferencesStorage.read(userId);
+        if (userId !== this.currentUserId || !this.readerActive || !stored) return;
+        if (!this.profileReaderPreferencesApplied) this.applyReaderPreferences(stored.preferences);
+        if (stored.background?.source === this.preferences.backgroundImage) this.localReaderBackground = stored.background;
     }
 
     readStoredReaderPreferences() {
-        if (typeof localStorage === 'undefined')
-            return null;
-
-        try {
-            const parsed = JSON.parse(localStorage.getItem(readerPreferencesStorageKey) || '{}');
-            const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
-            const userId = String(this.currentUserId || '').trim();
-            return (userId && byUser[userId]) || parsed.preferences || null;
-        } catch (e) {
-            return null;
-        }
+        return readerPreferencesStorage.readSync(this.currentUserId);
     }
 
     readStoredReaderProgress() {
@@ -10699,7 +10792,7 @@ class Reader {
             const parsed = JSON.parse(localStorage.getItem(readerProgressStorageKey) || '{}');
             const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
             const userId = String(this.currentUserId || '').trim();
-            const bucket = (userId && byUser[userId] && typeof byUser[userId] === 'object')
+            const bucket = userId
                 ? byUser[userId]
                 : ((parsed && parsed.progress && typeof parsed.progress === 'object') ? parsed.progress : {});
             const progress = bucket && typeof bucket === 'object' ? bucket[this.bookUid] : null;
@@ -10746,12 +10839,12 @@ class Reader {
                 : [];
 
             if (clearAll) {
-                Object.keys(globalProgress).forEach((uid) => delete globalProgress[uid]);
+                if (!userId) Object.keys(globalProgress).forEach((uid) => delete globalProgress[uid]);
                 if (userId)
                     byUser[userId] = {};
-                knownBookUids.forEach((uid) => delete globalProgress[uid]);
+                if (!userId) knownBookUids.forEach((uid) => delete globalProgress[uid]);
             } else if (normalizedBookUid) {
-                delete globalProgress[normalizedBookUid];
+                if (!userId) delete globalProgress[normalizedBookUid];
                 if (userId && byUser[userId] && typeof byUser[userId] === 'object')
                     delete byUser[userId][normalizedBookUid];
             }
@@ -10766,26 +10859,7 @@ class Reader {
     }
 
     writeStoredReaderPreferences() {
-        if (typeof localStorage === 'undefined')
-            return;
-
-        try {
-            const raw = localStorage.getItem(readerPreferencesStorageKey);
-            const parsed = raw ? JSON.parse(raw) : {};
-            const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
-            const userId = String(this.currentUserId || '').trim();
-            const preferences = _.cloneDeep(this.preferences);
-
-            if (userId)
-                byUser[userId] = preferences;
-
-            localStorage.setItem(readerPreferencesStorageKey, JSON.stringify({
-                preferences,
-                byUser,
-            }));
-        } catch (e) {
-            // ignore storage failures
-        }
+        return readerPreferencesStorage.write(this.currentUserId, this.preferences, this.localReaderBackground);
     }
 
     writeStoredReaderProgress(progress = null) {
@@ -10799,9 +10873,7 @@ class Reader {
             const userId = String(this.currentUserId || '').trim();
             const nextProgress = this.normalizeReaderProgress(progress || this.progress);
             const globalProgress = (parsed && parsed.progress && typeof parsed.progress === 'object') ? parsed.progress : {};
-            const existingBucket = (userId && byUser[userId] && typeof byUser[userId] === 'object')
-                ? byUser[userId]
-                : globalProgress;
+            const existingBucket = userId ? byUser[userId] : globalProgress;
             const existingProgress = existingBucket && typeof existingBucket === 'object'
                 ? this.normalizeReaderProgress(existingBucket[this.bookUid] || {})
                 : null;
@@ -10831,7 +10903,7 @@ class Reader {
                 byUser[userId] = scoped;
             }
 
-            globalProgress[this.bookUid] = nextProgress;
+            if (!userId) globalProgress[this.bookUid] = nextProgress;
 
             localStorage.setItem(readerProgressStorageKey, JSON.stringify({
                 progress: globalProgress,
@@ -10994,12 +11066,27 @@ class Reader {
     }
 
     async openReaderAudio() {
+        if (this.browserSpeechSupported && (this.useBrowserSpeech || !this.serverSpeechAvailable)) {
+            this.$refs.browserAudio?.open();
+            return;
+        }
         if (await this.ensureReaderProfileReady())
             this.$refs.audioPlayer?.open();
     }
 
+    useBrowserAudio() {
+        this.$refs.audioPlayer?.close(); this.useBrowserSpeech = true;
+        this.$refs.browserAudio?.open();
+    }
+
+    async useSileroAudio() {
+        this.$refs.browserAudio?.close(); this.useBrowserSpeech = false;
+        await this.openReaderAudio();
+    }
+
     async listenFromReader() {
-        if (!await this.ensureReaderProfileReady()) return;
+        const browserSpeech = this.browserSpeechSupported && (this.useBrowserSpeech || !this.serverSpeechAvailable);
+        if (!browserSpeech && !await this.ensureReaderProfileReady()) return;
         let anchor;
         if (this.isPagedMode) {
             anchor = this.capturePagedReflowAnchor();
@@ -11008,7 +11095,7 @@ class Reader {
                 .reduce((sum,page,index) => sum + key(this.getPagedPageSearchText(index)).length,0);
         } else anchor = require('../../../shared/VisibleTextAnchor').capture(this.$refs.scroller);
         if (!anchor) {this.$root.stdDialog.alert('Не удалось определить место в тексте'); return;}
-        await this.$refs.audioPlayer?.openAt({...anchor,percent:this.progress.percent});
+        await this.$refs[browserSpeech ? 'browserAudio' : 'audioPlayer']?.openAt({...anchor,percent:this.progress.percent});
     }
 
     readFromAudio(anchor) {
@@ -11078,7 +11165,7 @@ class Reader {
         if (!file)
             return;
 
-        if (!String(file.type || '').startsWith('image/')) {
+        if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(String(file.type || '').toLowerCase())) {
             this.$root.stdDialog.alert(this.uiText.backgroundInvalid, this.uiText.error);
             input.value = '';
             return;

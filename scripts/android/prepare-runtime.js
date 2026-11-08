@@ -42,7 +42,8 @@ async function main() {
 
     // Copy only backend dependency trees. Resolve from the installed lockfile tree, including nested versions.
     const backendPackages = ['axios', 'chardet', 'dayjs', 'express', 'express-basic-auth', 'form-data', 'fs-extra', 'he', 'iconv-lite', 'jembadb', 'lodash',
-        'minimist', 'node-stream-zip', 'nodemailer', 'safe-buffer', 'ws', 'yazl', 'js-yaml', 'sax', '@streamparser/json-node', 'qrcode'];
+        'minimist', 'node-stream-zip', 'nodemailer', 'safe-buffer', 'ws', 'yazl', 'js-yaml', 'sax', '@streamparser/json-node', 'qrcode',
+        'https-proxy-agent', 'socks-proxy-agent', 'proxy-from-env', 'socks'];
     const pending = backendPackages.map(name => [name, root]);
     const copied = new Set();
     while (pending.length) {

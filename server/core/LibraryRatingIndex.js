@@ -6,11 +6,36 @@ const {getEnabledLibrarySources} = require('./LibrarySources');
 const tasks = require('./BackgroundTasks');
 
 class LibraryRatingIndex {
-    constructor(worker) {
+    constructor(worker, {idleMs = 30000, cacheBytes = 32 * 1024 ** 2} = {}) {
         this.worker = worker;
         this.instanceId = crypto.randomBytes(16).toString('hex');
         this.cached = null;
         this.pending = new Map();
+        this.idleMs = idleMs; this.cacheBytes = cacheBytes;
+    }
+
+    retain(index) {
+        clearTimeout(this.idleTimer);
+        // Arrays/boxed numbers cost substantially more than their JSON form.
+        this.cached = index.entries.length * 80 <= this.cacheBytes ? index : null;
+        if (this.cached) {
+            this.idleTimer = setTimeout(() => {if (this.cached === index) this.cached = null;},this.idleMs);
+            this.idleTimer.unref?.();
+        }
+        return index;
+    }
+
+    withRatings(states, work, offset = 0, ratings = []) {
+        if (offset === states.length) return work(ratings);
+        const state = states[offset];
+        const next = async() => this.withRatings(states,work,offset+1,[...ratings,await this.worker.ensureLibraryRatings(state)]);
+        return this.worker.withReviewAssets ? this.worker.withReviewAssets(state,next) : next();
+    }
+
+    async close() {
+        clearTimeout(this.idleTimer);
+        await Promise.allSettled(this.pending.values());
+        clearTimeout(this.idleTimer); this.cached = null;
     }
 
     async load() {
@@ -19,7 +44,7 @@ class LibraryRatingIndex {
         const dirs = [...new Set([worker.config.libDir, ...getEnabledLibrarySources(worker.config).map(source => source.libDir)].filter(Boolean).map(dir => path.resolve(dir)))];
         const states = remote ? [] : await Promise.all(dirs.map(dir => worker.getReviewArchiveState(dir)));
         const signature = crypto.createHash('sha256').update(JSON.stringify([this.instanceId, generation, remote?.signature, states.map(state => state.signature)])).digest('hex');
-        if (this.cached?.signature === signature) return this.cached;
+        if (this.cached?.signature === signature) return this.retain(this.cached);
         if (this.pending.size && !this.pending.has(signature)) {
             await Promise.allSettled(this.pending.values());
             return this.load();
@@ -28,11 +53,11 @@ class LibraryRatingIndex {
             const build = async() => {
                 const task = this.taskId = tasks.start('ratings', 'Индекс числа голосов', {visibility:'public'});
                 try {
-                const ratings = await Promise.all(states.map(state => worker.ensureLibraryRatings(state)));
+                return await this.withRatings(states,async ratings => {
                 if (worker.db !== db || worker.libraryAssetGeneration !== generation) throw new Error('Библиотека обновилась. Повторите поиск');
                 const sources = new Map(dirs.map((dir, index) => [dir, ratings[index]]));
                 const entries = [];
-                if (remote ? !remote.counts.size : ratings.every(map => !map.size)) return (this.cached = {signature, entries});
+                if (remote ? !remote.counts.size : ratings.every(map => !map.size)) return this.retain({signature, entries});
                 // JembaDb applies offset/limit after loading and cloning every matching row.
                 // Enumerate lightweight IDs once, then restrict each read before materialization.
                 const [{rawResult:ids}] = await db.select({table:'book', rawResult:true, where:'return Array.from(@all());'});
@@ -51,7 +76,8 @@ class LibraryRatingIndex {
                 }
                 entries.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
                 if (worker.db !== db || worker.libraryAssetGeneration !== generation) throw new Error('Библиотека обновилась. Повторите поиск');
-                return (this.cached = {signature, entries});
+                return this.retain({signature, entries});
+                });
                 } catch (error) { tasks.finish(task, error); throw error; }
                 finally { if (tasks.tasks.get(task)?.state === 'running') tasks.finish(task); }
             };

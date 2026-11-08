@@ -31,6 +31,7 @@ class WebSocketConnection {
     //рассылаем сообщение и удаляем те обработчики, которые его получили
     emit(mes, isError) {
         const len = this.listeners.length;
+        let delivered = false;
         if (len > 0) {
             let newListeners = [];
             for (const listener of this.listeners) {
@@ -38,11 +39,12 @@ class WebSocketConnection {
                 if (isError) {
                     listener.onError(mes);
                     emitted = true;
+                    delivered = true;
                 } else {
                     if ( (listener.requestId && mes.requestId && listener.requestId === mes.requestId) ||
                         (!listener.requestId && !mes.requestId) ) {
-                        listener.onMessage(mes);
-                        emitted = true;
+                        emitted = listener.onMessage(mes) !== false;
+                        delivered = true;
                     }
                 }
 
@@ -52,7 +54,7 @@ class WebSocketConnection {
             this.listeners = newListeners;
         }
         
-        return this.listeners.length != len;
+        return delivered;
     }
 
     get isOpen() {
@@ -144,19 +146,25 @@ class WebSocketConnection {
     }
 
     //timeout в секундах (проверка каждый cleanPeriod интервал)
-    message(requestId, timeoutSecs = 4) {
+    message(requestId, timeoutSecs = 4, onProgress = null) {
         return new Promise((resolve, reject) => {
-            this.listeners.push({
+            const listener = {
                 regTime: Date.now(),
                 requestId,
                 timeout: timeoutSecs*1000,
                 onMessage: (mes) => {
+                    if (mes._progress) {
+                        listener.regTime = Date.now();
+                        try {onProgress?.(mes.progress);} catch (_) { /* Ignore observers detached from their view. */ }
+                        return false;
+                    }
                     resolve(mes);
                 },
                 onError: (mes) => {
                     reject(new Error(mes));
                 }
-            });
+            };
+            this.listeners.push(listener);
             
             this.processMessageQueue();
         });

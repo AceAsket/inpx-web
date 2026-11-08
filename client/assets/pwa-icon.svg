@@ -1,12 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect x="18" y="8" width="476" height="496" rx="52" fill="#f7fffc"/>
-  <rect x="62" y="58" width="388" height="92" rx="20" fill="#c8f5ee"/>
-  <rect x="62" y="212" width="388" height="92" rx="20" fill="#c8f5ee"/>
-  <rect x="62" y="366" width="322" height="92" rx="20" fill="#c8f5ee"/>
-  <rect x="108" y="94" width="184" height="28" rx="14" fill="#149484"/>
-  <rect x="108" y="248" width="230" height="28" rx="14" fill="#149484"/>
-  <rect x="108" y="402" width="150" height="28" rx="14" fill="#149484"/>
-  <path d="M326 103l43 43 79-100 25 20-102 130-68-68z" fill="#149484"/>
-  <rect x="360" y="248" width="62" height="28" rx="14" fill="#149484"/>
-  <rect x="300" y="402" width="62" height="28" rx="14" fill="#149484"/>
+<!-- INPX Reader ic_brand.xml, preserved as SVG for the web interface. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <path fill="#00998B" d="M8,1h16a7,7 0,0 1,7 7v16a7,7 0,0 1,-7 7h-16a7,7 0,0 1,-7 -7v-16a7,7 0,0 1,7 -7z"/>
+  <path fill="#FFFFFF" d="M7,9c3.5,-0.5 6.2,0.6 8,2.5v13c-2.2,-2 -4.7,-2.8 -8,-2.3zM17,11.5c1.8,-1.9 4.5,-3 8,-2.5v13.2c-3.3,-0.5 -5.8,0.3 -8,2.3z"/>
 </svg>

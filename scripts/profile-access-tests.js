@@ -275,5 +275,31 @@ async function testOpdsScopeCanonicalizesProfileIds() {
     });
 }
 
-module.exports = [testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
+async function testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices() {
+    for (const allowAnonymousAccess of [true, false]) await fixture({allowAnonymousAccess}, async({worker, request, session, connect}) => {
+        const browser = session(), call = await connect({cookie: browser.cookie});
+        const config = await call({action: 'get-config'});
+        const first = await call({action: 'login-user-profile', login: 'admin', password: 'admin-fixture', csrfToken: config.csrfToken});
+        const second = await call({action: 'login-user-profile', login: 'admin', password: 'admin-fixture', csrfToken: config.csrfToken});
+        const anotherDevice = worker.createProfileSession('admin');
+        assert(first.profileAccessToken && second.profileAccessToken);
+        assert.equal(browser.value.profileAccessToken, second.profileAccessToken);
+        const result = await call({action: 'logout-user-profile', userId: 'admin', profileAccessToken: first.profileAccessToken, csrfToken: config.csrfToken});
+        assert.equal(result.success, true);
+        assert.equal(browser.value.profileAccessToken, undefined);
+        for (const token of [first.profileAccessToken, second.profileAccessToken]) {
+            assert(!worker.getProfileSessionUser(token));
+            const denied = await call({action: 'create-user-profile', userId: 'admin', profileAccessToken: token,
+                csrfToken: config.csrfToken, profile: {name: 'Should not be created'}});
+            assert.equal(denied.error, 'need_profile_login');
+        }
+        assert.equal(worker.getProfileSessionUser(anotherDevice), 'admin', 'Leaving this browser does not sign out another device');
+        const afterReload = await connect({cookie: browser.cookie});
+        const current = await afterReload({action: 'get-config', userId: 'default'});
+        assert.equal(current.profileAuthorized, false);
+        assert.equal((await request('/book/fixture.txt', {cookie: browser.cookie})).status, allowAnonymousAccess ? 200 : 401);
+    });
+}
+
+module.exports = [testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
     testProxyProfileBindingAndIdentityChange, testLegacyAccessAndGlobalOpdsCredentials];

@@ -7,7 +7,7 @@ const policy = require('../server/core/ResourcePolicy');
 const globalRuntime = require('../server/core/ResourceRuntime');
 const {ResourceRuntime} = globalRuntime;
 const {runProcess} = require('../server/core/ConversionRuntime');
-const {ResourceBenchmark, recommend} = require('../server/core/ResourceBenchmark');
+const {ResourceBenchmark, recommend, customProfile, percentile, median, criteria} = require('../server/core/ResourceBenchmark');
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const GiB = 1024 * 1024 * 1024;
@@ -112,6 +112,42 @@ async function testResourceQueueCancellationAndCallerContext() {
     assert.strictEqual(await runtime.run(() => 42), 42);
 }
 
+async function testRuntimeFailureDiagnosticsAreBoundedAndExcludePayloads() {
+    const runtime = new ResourceRuntime(policy.resolve({INPX_RESOURCE_MAX_PROCESSES:'1'}, machine()));
+    const rejected = async(code, kind) => {
+        const error = Object.assign(new Error('private request details'), {code, request:{token:'private-token'}});
+        await assert.rejects(runtime.run(() => {throw error;}, {kind}), actual => actual === error);
+    };
+    // Expected native-tool fallback failures are counted even when a caller
+    // catches them and later succeeds. The original rejection is preserved.
+    await rejected('ENOENT', 'images'); await rejected('ENOENT', 'images');
+    assert.strictEqual(await runtime.run(() => 'fallback succeeded', {kind:'images'}), 'fallback succeeded');
+    const first = runtime.snapshot();
+    assert.strictEqual(first.failed, 2); assert.strictEqual(first.completed, 1);
+    assert.deepStrictEqual(first.failedByCode, {ENOENT:2});
+    assert.deepStrictEqual(first.failedByKind, {images:2});
+    assert.deepStrictEqual(Object.keys(first.lastFailure).sort(), ['at','code','kind']);
+    assert(Number.isFinite(Date.parse(first.lastFailure.at)));
+    first.failedByCode.ENOENT=900;first.failedByKind.images=900;first.lastFailure.code='changed';
+    assert.strictEqual(runtime.snapshot().failedByCode.ENOENT, 2);
+    assert.strictEqual(runtime.snapshot().lastFailure.code, 'ENOENT');
+    for (let i=0;i<40;i++) await rejected(`FIXTURE_${i}`, `kind_${i}`);
+    await rejected('unsafe code with private text', 'unsafe kind with private text');
+    const last=runtime.snapshot();
+    assert(Object.keys(last.failedByCode).length <= 32); assert(Object.keys(last.failedByKind).length <= 32);
+    assert(last.failedByCode.OTHER > 0); assert(last.failedByKind.OTHER > 0);
+    assert.strictEqual(Object.values(last.failedByCode).reduce((a,b)=>a+b,0),last.failed);
+    assert.strictEqual(Object.values(last.failedByKind).reduce((a,b)=>a+b,0),last.failed);
+    assert(!JSON.stringify([last.failedByCode,last.failedByKind,last.lastFailure]).includes('private'));
+    let release;
+    const active=runtime.run(()=>new Promise(resolve=>{release=resolve;}));
+    const controller=new AbortController();
+    const queued=runtime.run(()=>assert.fail('Cancelled work must not start'),{signal:controller.signal});
+    controller.abort();await assert.rejects(queued,{code:'ABORT_ERR'});
+    release();await active;
+    assert.strictEqual(runtime.snapshot().failed,last.failed,'Queued cancellation does not change the existing started-task counter');
+}
+
 async function testNativeOutputCaptureLimitsAndAbortTree() {
     await temporary(async dir => {
         const output = path.join(dir, 'output');
@@ -135,10 +171,30 @@ async function testNativeOutputCaptureLimitsAndAbortTree() {
 
 async function testRecommendationPrefersSmallestSafeNearBestProfile() {
     const row = (profile, elapsedMs, extra = {}) => ({profile, elapsedMs, completed:true, probeSamples:10,
-        probeP95Ms:5, timerLagP95Ms:2, memoryRatio:0.4, ...extra});
+        probeP95Ms:5, timerLagP95Ms:2, memoryRatio:0.4, probeTimeouts:0, probeFailures:0, ...extra});
     assert.strictEqual(recommend([row('economy', 200), row('balanced', 105), row('performance', 100)], 'economy').profile, 'balanced');
     assert.strictEqual(recommend([row('economy', 200), row('balanced', 150), row('performance', 100, {memoryRatio:0.95})], 'economy').profile, 'balanced');
     assert.strictEqual(recommend([row('performance', 10, {probeP95Ms:500})], 'economy').measured, false);
+    assert.strictEqual(recommend([row('performance', 10, {probeTimeouts:1})], 'economy').measured, false);
+    assert.strictEqual(recommend([row('performance', 10, {probeFailures:1})], 'economy').measured, false);
+    assert.strictEqual(recommend([row('performance', 10, {probeTimeouts:undefined, probeFailures:undefined})], 'economy').measured, false,
+        'Legacy measurements without timeout counts cannot establish safe responsiveness');
+    for (const key of ['elapsedMs','probeP95Ms','timerLagP95Ms','memoryRatio'])
+        for (const value of [null,undefined,NaN,Infinity,-1])
+            assert.strictEqual(recommend([row('performance', 10, {[key]:value})], 'economy').measured, false,
+                `Unavailable ${key} is not a passing zero measurement`);
+}
+
+async function testBenchmarkPercentileKeepsRareSlowProbesVisible() {
+    assert.strictEqual(percentile([]), null);
+    assert.strictEqual(percentile([3,4,4,5,250]), 250, 'One slow query among five is part of p95');
+    assert.strictEqual(percentile(Array.from({length:20}, (_, i) => i + 1)), 19);
+    assert.strictEqual(percentile([10,1,4], .5), 4);
+    assert.strictEqual(median([]), null);
+    assert.strictEqual(median([100,200]), 150, 'The repeat median averages the middle pair');
+    assert.strictEqual(median([10,1,4]), 4);
+    assert.strictEqual(criteria.probeTimeoutMs, 250);
+    assert.strictEqual(criteria.probeP95Ms, 100);
 }
 
 async function testBenchmarkPersistsResultsAndDetectsChangedEnvironment() {
@@ -283,15 +339,175 @@ async function testResourceErrorsCannotBecomeCachedEmptyReviews() {
         await assert.rejects(worker.ensureLibraryRatings(state), {code:error.code});
         assert.strictEqual(state.ratingsPromise, null, 'Failed ratings must be retried');
         worker.ensureReviewIndex = async() => new Map([['collection.zip#123.fb2', [{archive:'/fixture', entryName:'review'}]]]);
-        await assert.rejects(worker.getBookReviews({folder:'collection.zip', file:'123', ext:'fb2'}), {code:error.code});
+        await assert.rejects(worker.getBookReviews({folder:'collection.zip', file:'123', ext:'fb2'}, state), {code:error.code});
     } finally {Zip.prototype.open = original;}
+}
+
+async function testCustomBenchmarkLimitsAndLaunchSettingsAgree() {
+    const settings = policy.resolve({INPX_RESOURCE_MAX_PROCESSES:'12'}, machine());
+    const values = {total:9, images:3, reviews:9, conversions:5};
+    const custom = customProfile(values, settings);
+    const resolved = policy.resolve({INPX_RESOURCE_PROFILE:'performance', INPX_RESOURCE_MAX_PROCESSES:'9',
+        INPX_RESOURCE_TOTAL:'9', INPX_RESOURCE_IMAGES:'3', INPX_RESOURCE_REVIEWS:'9', INPX_RESOURCE_CONVERSIONS:'5', INPX_RESOURCE_BACKGROUND:'1'}, machine());
+    assert.deepStrictEqual(resolved.limits, custom.limits, 'Copied launch values must reproduce the tested concurrency');
+    assert.strictEqual(resolved.launchEnv.INPX_RESOURCE_TOTAL, '9');
+    for (const limits of [{...values, total:13}, {...values, reviews:10}, {...values, total:1.5}, {...values, total:'9'}, {...values, images:0}])
+        assert.throws(() => customProfile(limits, settings), /Параллельность|Лимит/);
+    await temporary(async dir => {
+        const runtime = new ResourceRuntime(settings), before = JSON.stringify(runtime.settings);
+        const service = new ResourceBenchmark({dataDir:dir, libDir:dir, librarySources:[{id:'source', libDir:dir}]}, {
+            runtime, hardware:machine, prepare:async() => ({coverage:['Изображения','Архивы','Хранилище'], warnings:[],
+                stages:[{name:'fixture', task:() => runtime.run(() => pause(10))}]})});
+        await assert.rejects(service.start({mode:'custom', limits:{...values, images:0}}), /Параллельность/);
+        await service.start({mode:'custom', limits:values}); await service.completion;
+        assert.strictEqual(service.job.state, 'completed');
+        assert.strictEqual(service.last.mode, 'custom');
+        assert.strictEqual(service.last.rows.length, 1);
+        const row = service.last.rows[0];
+        assert.strictEqual(row.profile, 'custom'); assert.deepStrictEqual(row.limits, custom.limits);
+        for (const name of ['cpuTimeMs','cpuPercent','cpuQuotaPercent','memoryDelta','peakRss','peakHeap'])
+            assert(Number.isFinite(row[name]) && row[name] >= 0, `Measured ${name}`);
+        assert.strictEqual(service.last.recommendation.measured, false, 'One custom run cannot select the best profile');
+        assert.strictEqual(JSON.stringify(runtime.settings), before);
+        const restored = new ResourceBenchmark(service.config, {runtime, hardware:machine});
+        assert.strictEqual((await restored.snapshot()).report.rows[0].profile, 'custom');
+    });
+}
+
+async function testBenchmarkProbesRemainSingleFlightAfterTimeout() {
+    await temporary(async dir => {
+        const settings = policy.resolve({}, machine()), runtime = new ResourceRuntime(settings);
+        let active = 0, peak = 0;
+        const service = new ResourceBenchmark({dataDir:dir, libDir:dir, librarySources:[{id:'source', libDir:dir}]}, {
+            runtime, hardware:machine, probe:async() => {peak = Math.max(peak, ++active); await pause(800); active--;},
+            prepare:async() => ({coverage:['fixture'], warnings:[], stages:[{name:'fixture', task:() => pause(100)}]})});
+        await service.start(); await service.completion;
+        assert.strictEqual(service.job.state, 'completed');
+        assert.strictEqual(peak, 1, 'Timed-out DB work must not overlap across samples or profiles');
+        assert(service.last.rows.some(row => row.probeTimeouts > 0));
+        for (const row of service.last.rows) {
+            assert.strictEqual(row.probeFailures, 0);
+            assert.strictEqual(row.probeSuccessfulSamples + row.probeTimeouts, row.probeSamples);
+            assert(row.probeP95Ms >= criteria.probeP95Ms);
+        }
+        assert.strictEqual(service.last.recommendation.measured, false);
+        if (service.probeInFlight) await service.probeInFlight;
+        assert.strictEqual(active, 0);
+    });
+}
+
+async function testSelectedProfileRunsOnlySelectedLimitsAndLegacyReportsNeedRetest() {
+    await temporary(async dir => {
+        const runtime = new ResourceRuntime(policy.resolve({}, machine())), before = JSON.stringify(runtime.settings);
+        const started = new Set();
+        const config = {dataDir:dir, libDir:dir, librarySources:[{id:'source', libDir:dir}]};
+        const service = new ResourceBenchmark(config, {runtime, hardware:machine,
+            prepare:async() => ({coverage:['Изображения','Архивы','Хранилище'], warnings:[],
+                stages:[{name:'fixture', task:id => runtime.run(async() => {started.add(id.split('-')[0]); await pause(15);})}]})});
+        await assert.rejects(service.start({mode:'profile', profileId:'custom'}), /стандартный профиль/);
+        await assert.rejects(service.start({mode:'profile', profileId:'missing'}), /стандартный профиль/);
+        await service.start({mode:'profile', profileId:'economy', sourceId:'source'}); await service.completion;
+        assert.strictEqual(service.job.state, 'completed');
+        assert.deepStrictEqual([...started], ['economy']);
+        assert.deepStrictEqual(service.job.candidates.map(item => item.id), ['economy']);
+        const report = service.last, row = report.rows[0];
+        assert.strictEqual(report.schema, 2); assert.strictEqual(report.mode, 'profile');
+        assert.strictEqual(report.rows.length, 1); assert.strictEqual(row.profile, 'economy');
+        assert.deepStrictEqual(row.limits, runtime.settings.profiles.find(item => item.id === 'economy').limits);
+        assert.deepStrictEqual(report.criteria, criteria);
+        assert.strictEqual(row.probeTimeouts, 0); assert.strictEqual(row.probeFailures, 0);
+        assert(row.probeSuccessfulSamples >= criteria.minProbeSamples);
+        assert.strictEqual(row.memoryBefore, GiB); assert.strictEqual(row.memoryScope, 'container');
+        assert.strictEqual(row.tasksPerPass, 6);
+        assert.strictEqual(report.recommendation.measured, false, 'A single profile is not a comparison');
+        assert.strictEqual(JSON.stringify(runtime.settings), before, 'Testing selected limits never applies them');
+        const restored = new ResourceBenchmark(config, {runtime, hardware:machine});
+        assert.strictEqual((await restored.snapshot()).report.legacy, false);
+        await fs.writeJson(service.resultFile, {...report, schema:1,
+            recommendation:{profile:'performance', measured:true, reason:'Legacy recommendation'}});
+        const legacy = await new ResourceBenchmark(config, {runtime, hardware:machine}).snapshot();
+        assert.strictEqual(legacy.report.rows[0].profile, 'economy', 'Keep historical results visible');
+        assert.strictEqual(legacy.report.legacy, true);
+        assert.strictEqual(legacy.recommendation.measured, false);
+        assert.match(legacy.recommendation.reason, /прежней методики/);
+    });
+}
+
+async function testBenchmarkUnknownMemoryDoesNotBecomeZeroOrForceCancellation() {
+    await temporary(async dir => {
+        for (const alwaysMissing of [true,false]) {
+            const runtime = new ResourceRuntime(policy.resolve({}, machine()));
+            let samples = 0;
+            const service = new ResourceBenchmark({dataDir:dir, libDir:dir, librarySources:[{id:'source',libDir:dir}]}, {
+                runtime, hardware:() => ({...machine(), ...((alwaysMissing || ++samples === 3)
+                    ? {memoryUsed:null,memoryAvailable:null} : {})}),
+                prepare:async() => ({coverage:['Изображения','Архивы','Хранилище'], warnings:[],
+                    stages:[{name:'fixture',task:() => runtime.run(() => pause(15))}]})});
+            await service.start({mode:'profile',profileId:'economy'}); await service.completion;
+            assert.strictEqual(service.job.state,'completed','Unknown reserve is not an observed low-memory condition');
+            const row = service.last.rows[0];
+            assert.strictEqual(row.memoryRatio,null,'An unknown memory sample prevents certification of the complete window');
+            if (alwaysMissing) {
+                assert.strictEqual(row.peakMemory,null); assert.strictEqual(row.memoryDelta,null);
+            } else assert(row.peakMemory > 0, 'Keep the available observations visible');
+            assert.strictEqual(service.last.recommendation.measured,false);
+        }
+    });
+}
+
+async function testBenchmarkProbeUsesBoundedPrimaryKeyAndSurvivesClosedMetrics() {
+    const Worker = require('../server/core/WebWorker');
+    await temporary(async dir => {
+        const worker = Object.create(Worker.prototype); worker.config = {dataDir:dir};
+        worker.checkMyState = () => {}; worker.requireAdmin = async() => {};
+        const db = new (require('jembadb').JembaDb)();
+        try {
+            await db.lock({dbPath:path.join(dir,'db'), create:true});
+            await db.create({table:'book'});
+            await db.insert({table:'book', rows:Array.from({length:1000}, (_, id) => ({id, title:`Book ${id}`}))});
+            const rows = db.table.get('book').tableRowsFile, getRow = rows.getRow.bind(rows);
+            let reads = 0; rows.getRow = async id => {reads++; return getRow(id);};
+            worker.db = db;
+            await worker.getResourceBenchmark().probe();
+            assert.strictEqual(reads, 1, 'The real Jemba probe must read one row, regardless of library size');
+            await db.delete({table:'book', where:'@@id(1)'}); reads = 0;
+            await worker.getResourceBenchmark().probe();
+            assert(reads <= 1, 'A deleted probe ID must not fall back to a table scan');
+        } finally {await db.unlock();}
+        worker.db = {available:false, cacheStats:async() => {throw new Error('Worker does not exist');}};
+        const info = await worker.getAdminPerformance();
+        assert.strictEqual(info.databaseCache.available, false);
+        assert(info.processMemory.rss > 0);
+        assert(Number.isFinite(info.processCpu.user));
+        assert(info.machine.memoryLimit > 0, 'Admin resource metrics remain available after a database worker failure');
+        await assert.rejects(worker.startAdminBenchmark(), /Каталог недоступен/);
+    });
+}
+
+async function testBenchmarkDatabaseFailureStopsBeforeFurtherCandidates() {
+    await temporary(async dir => {
+        const settings = policy.resolve({}, machine()), runtime = new ResourceRuntime(settings);
+        const service = new ResourceBenchmark({dataDir:dir, libDir:dir, librarySources:[{id:'source', libDir:dir}]}, {
+            runtime, hardware:machine, probe:async() => {throw new Error('Worker terminated');},
+            prepare:async() => ({coverage:['fixture'], warnings:[], stages:[{name:'fixture', task:() => runtime.run(() => pause(30))}]})});
+        await service.start(); await service.completion;
+        assert.strictEqual(service.job.state, 'failed');
+        assert.strictEqual(service.job.errorCode, 'BENCHMARK_PROBE_FAILED');
+        assert.match(service.job.message, /каталог недоступен/);
+        assert.strictEqual(runtime.active, 0); assert.strictEqual(runtime.queue.length, 0);
+        assert.strictEqual(service.last, null);
+    });
 }
 
 module.exports = [testLaunchResourceProfilesAndOverrides, testCgroupV2InheritedCpuAndMemoryLimits, testCgroupV1QuotasAndEscapedMountPaths,
     testGlobalResourceAdmissionAndForegroundPriority,
-    testResourceQueueCancellationAndCallerContext, testNativeOutputCaptureLimitsAndAbortTree,
-    testRecommendationPrefersSmallestSafeNearBestProfile, testBenchmarkPersistsResultsAndDetectsChangedEnvironment,
+    testResourceQueueCancellationAndCallerContext, testRuntimeFailureDiagnosticsAreBoundedAndExcludePayloads, testNativeOutputCaptureLimitsAndAbortTree,
+    testRecommendationPrefersSmallestSafeNearBestProfile, testBenchmarkPercentileKeepsRareSlowProbesVisible,
+    testSelectedProfileRunsOnlySelectedLimitsAndLegacyReportsNeedRetest, testBenchmarkPersistsResultsAndDetectsChangedEnvironment,
+    testBenchmarkUnknownMemoryDoesNotBecomeZeroOrForceCancellation,
     testBenchmarkCancellationDrainsProcessesBeforeCleanup, testPerformanceEndpointsRequireAdministratorAndCsrf,
     testRealBenchmarkFixturesReadSelectedStorage, testReviewBackgroundCannotOccupyAllForegroundSlots,
     testSavedConfigurationCannotOverrideLaunchResourcePolicy, testBenchmarkTimeoutKeepsPreviousResultAndCleansFiles,
-    testResourceErrorsCannotBecomeCachedEmptyReviews];
+    testResourceErrorsCannotBecomeCachedEmptyReviews, testCustomBenchmarkLimitsAndLaunchSettingsAgree,
+    testBenchmarkProbesRemainSingleFlightAfterTimeout, testBenchmarkProbeUsesBoundedPrimaryKeyAndSurvivesClosedMetrics,
+    testBenchmarkDatabaseFailureStopsBeforeFurtherCandidates];

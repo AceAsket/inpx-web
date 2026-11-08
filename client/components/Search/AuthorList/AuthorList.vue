@@ -7,8 +7,9 @@
 
         <!-- Формирование списка ------------------------------------------------------------------------>
         <div v-for="item in tableData" :key="item.key" class="column author-group">
-            <div class="row items-center q-ml-md q-mr-xs no-wrap">
-                <div class="row items-center clickable2 q-py-xs no-wrap" @click="expandAuthor(item)">
+            <div class="catalog-group-heading row items-center q-ml-md q-mr-xs no-wrap">
+                <q-btn v-if="shelvesAppearance" flat dense round :icon="isExpandedAuthor(item) ? 'la la-angle-down' : 'la la-angle-right'" :aria-label="`${isExpandedAuthor(item) ? 'Свернуть' : 'Развернуть'} автора: ${item.name}`" :aria-expanded="isExpandedAuthor(item)" @click="expandAuthor(item)" />
+                <div v-else class="row items-center clickable2 q-py-xs no-wrap" @click="expandAuthor(item)">
                     <div style="min-width: 30px">
                         <div v-if="!isExpandedAuthor(item)">
                             <q-icon name="la la-plus-square" size="28px" />
@@ -77,8 +78,9 @@
                 <div v-for="book in item.books" :key="book.key" class="book-row column">
                     <!-- серия книг -->
                     <div v-if="book.type == 'series'" class="column">
-                        <div class="row items-center q-mr-xs no-wrap text-grey-9">
-                            <div class="row items-center clickable2 q-py-xs no-wrap" @click="expandSeries(book)">
+                        <div class="catalog-group-heading row items-center q-mr-xs no-wrap text-grey-9">
+                            <q-btn v-if="shelvesAppearance" flat dense round :icon="isExpandedSeries(book) ? 'la la-angle-down' : 'la la-angle-right'" :aria-label="`${isExpandedSeries(book) ? 'Свернуть' : 'Развернуть'} серию: ${book.series}`" :aria-expanded="isExpandedSeries(book)" @click="expandSeries(book)" />
+                            <div v-else class="row items-center clickable2 q-py-xs no-wrap" @click="expandSeries(book)">
                                 <div style="min-width: 30px">
                                     <div v-if="!isExpandedSeries(book)">
                                         <q-icon name="la la-plus-square" size="28px" />
@@ -518,7 +520,7 @@ class AuthorList extends BaseList {
         const author = this.cachedAuthors[query.author.substring(1)];
         if (!author) return null;
         try {
-            const data = await authorBooksStorage.getData('author-' + author.id + '-' + this.list.inpxHash);
+            const data = await authorBooksStorage.getData(this.authorBooksCacheKey(author.id));
             return data ? {found: [author], totalFound: 1, inpxHash: this.list.inpxHash} : null;
         } catch (error) {
             return null;

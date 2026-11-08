@@ -85,6 +85,7 @@ class Api {
     accessToken = '';
     currentUserId = '';
     profileAccessToken = '';
+    profileSigningOut = false;
     profileLoginPromise = null;
     indexWaitMessage = '';
     ratingIndexWait = null;
@@ -190,9 +191,11 @@ class Api {
     }
 
     async updateConfig(options = {}) {
+        if (this.profileSigningOut) return;
         try {
             this.loadSettings();
             const config = await this.getConfig();
+            if (this.profileSigningOut) return;
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
             if (config.profileLoginRequired && !config.profileAuthorized) {
@@ -234,6 +237,7 @@ class Api {
                 this.writeStoredProfileSession(rememberedUserId, '');
             }
         } catch (e) {
+            if (this.profileSigningOut) return;
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
     }
@@ -331,6 +335,9 @@ class Api {
     async request(params, timeoutSecs = 10, options = {}) {
         let errCount = 0;
         while (1) {// eslint-disable-line
+            if(options.signal?.aborted)throw options.signal.reason || new Error('Запрос отменён');
+            if (this.profileSigningOut && params.action !== 'logout-user-profile')
+                throw new Error('Выполняется выход из профиля');
             try {
                 const settings = this.settings;
                 const accessToken = settings.accessToken || this.accessToken;
@@ -347,7 +354,10 @@ class Api {
                 if (csrfToken)
                     params.csrfToken = csrfToken;
 
-                const response = await wsc.message(await wsc.send(params), timeoutSecs);
+                const response = await wsc.message(await wsc.send(params), timeoutSecs, options.onProgress);
+                if(options.signal?.aborted)throw options.signal.reason || new Error('Запрос отменён');
+                if (this.profileSigningOut && params.action !== 'logout-user-profile')
+                    throw new Error('Выполняется выход из профиля');
 
                 if (response && response.error == 'need_access_token') {
                     this.accessGranted = false;
@@ -381,6 +391,7 @@ class Api {
 
                 errCount = 0;
             } catch(e) {
+                if(options.signal?.aborted)throw options.signal.reason || new Error('Запрос отменён');
                 errCount++;
                 if (e.message !== 'WebSocket не отвечает' || errCount > 10) {
                     errCount = 0;
@@ -389,6 +400,34 @@ class Api {
                 await utils.sleep(100);
             }
         }
+    }
+
+    async catalogSuggest(options) {
+        return this.request({action: 'catalog-suggest', options}, 30, {suppressProfileLogin: true});
+    }
+
+    async telegramBotAccount(operation, options = {}) {
+        return this.request({action: 'telegram-bot-account', operation, options}, 30);
+    }
+
+    async getLibraryFollows(options = {}) {
+        return this.request({action: 'get-library-follows', options}, 60);
+    }
+
+    async changeLibraryFollow(operation, payload) {
+        return this.request({action: 'change-library-follow', operation, payload}, 60);
+    }
+
+    async catalogBrowse(options) {
+        return this.request({action: 'catalog-browse', options}, 30);
+    }
+
+    async catalogEntity(options) {
+        return this.request({action: 'catalog-entity', options}, 60);
+    }
+
+    async markSeriesUntil(options) {
+        return this.request({action: 'mark-series-until', options}, 120);
     }
 
     async search(from, query, signal) {
@@ -480,8 +519,8 @@ class Api {
         return await this.request({action: 'get-genre-tree'});
     }
 
-    async getDiscoveryShelves(options = {}) {
-        return await this.request(Object.assign({action: 'get-discovery-shelves'}, options || {}), 300);
+    async getDiscoveryShelves(options = {}, requestOptions = {}) {
+        return await this.request(Object.assign({action: 'get-discovery-shelves'}, options || {}), 300, requestOptions);
     }
 
     async updateDiscoveryPreferences(preferences = {}) {
@@ -584,6 +623,14 @@ class Api {
         return await this.request({action: 'import-admin-backup', data}, 300);
     }
 
+    async previewAdminBackup(data) {
+        return this.request({action: 'preview-admin-backup', data}, 300);
+    }
+
+    async adminBackupVault(operation, options = {}) {
+        return this.request({action: 'admin-backup-vault', operation, options}, 300);
+    }
+
     async updateBookMetadata(bookUid, metadata = {}) {
         return await this.request({action: 'update-book-metadata', bookUid, metadata}, 120);
     }
@@ -593,7 +640,26 @@ class Api {
     }
 
     async getBookCard(bookUid) {
-        return await this.request({action: 'get-book-info', bookUid, card: true}, 120);
+        return await this.request({action: 'get-book-info', bookUid, card: true, lazyExtras:true}, 120);
+    }
+
+    async getBookPreview(bookUid, options = {}) {
+        const {signal}=options;
+        if(signal?.aborted)throw signal.reason || new Error('Запрос отменён');
+        // The server's bounded shared read may finish for another consumer;
+        // detach this view immediately without cancelling their operation.
+        const pending=this.request({action:'get-book-preview',bookUid},30,{...options,suppressProfileLogin:true});
+        if(!signal)return pending;
+        return new Promise((resolve,reject)=>{
+            const cleanup=()=>signal.removeEventListener('abort',abort);
+            const abort=()=>{cleanup();reject(signal.reason || new Error('Запрос отменён'));};
+            pending.then(value=>{cleanup();resolve(value);},error=>{cleanup();reject(error);});
+            if(signal.aborted)abort();else signal.addEventListener('abort',abort,{once:true});
+        });
+    }
+
+    async getBookReviews(bookUid, options = {}) {
+        return this.request({action:'get-book-reviews', bookUid, wantProgress:typeof options.onProgress === 'function'},120,options);
     }
 
     async getBookGallery(bookUid) {
@@ -610,6 +676,10 @@ class Api {
 
     async getUserReadingLibrary(options = {}, requestOptions = {}) {
         return await this.request({action: 'get-user-reading-library', options}, 120, requestOptions);
+    }
+
+    async getMobileHome(limit = 100, requestOptions = {}) {
+        return await this.request({action: 'get-mobile-home', limit}, 120, requestOptions);
     }
 
     async updateReaderProgress(bookUid, progress = {}, options = {}) {
@@ -655,8 +725,8 @@ class Api {
         return await this.request({action: 'delete-reader-bookmark', bookUid, bookmarkId}, 120);
     }
 
-    async getReadingLists(bookUid = '') {
-        return await this.request({action: 'get-reading-lists', bookUid}, 120);
+    async getReadingLists(bookUid = '', requestOptions = {}) {
+        return await this.request({action: 'get-reading-lists', bookUid}, 120, requestOptions);
     }
 
     async getUserProfiles() {
@@ -671,6 +741,21 @@ class Api {
         return await this.request({action: 'logout-user-profile'}, 120);
     }
 
+    async signOutProfile() {
+        if (this.$store.state.config.profileBoundId)
+            throw new Error('Профиль выбран через SSO. Для выхода завершите сеанс SSO.');
+        this.profileSigningOut = true;
+        try { await this.logoutUserProfile(); }
+        catch (error) { this.profileSigningOut = false; throw error; }
+        // Clear the stored credentials before settings watchers can restore them.
+        this.writeStoredProfileSession('', '');
+        this.currentUserId = 'default';
+        this.profileAccessToken = '';
+        this.commit('setSettings', {currentUserId: 'default', profileAccessToken: ''});
+        this.commit('setConfig', {...this.$store.state.config,
+            profileAuthorized: false, currentUserId: 'default', currentUserProfile: null, userProfiles: []});
+    }
+
     async createUserProfile(profile) {
         return await this.request({action: 'create-user-profile', profile}, 120);
     }
@@ -679,12 +764,16 @@ class Api {
         return await this.request({action: 'update-user-profile', targetUserId, profile}, 120);
     }
 
+    async koSyncSettings(operation = 'status') {
+        return await this.request({action: 'kosync-settings', operation}, 120);
+    }
+
     async deleteUserProfile(targetUserId) {
         return await this.request({action: 'delete-user-profile', targetUserId}, 120);
     }
 
-    async getReadingList(listId) {
-        return await this.request({action: 'get-reading-list', listId}, 120);
+    async getReadingList(listId, requestOptions = {}) {
+        return await this.request({action: 'get-reading-list', listId}, 120, requestOptions);
     }
 
     async createReadingList(name) {

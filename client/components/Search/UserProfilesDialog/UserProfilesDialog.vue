@@ -1,31 +1,18 @@
 ﻿<template>
-    <Dialog ref="dialog" v-model="dialogVisible">
+    <Dialog ref="dialog" v-model="dialogVisible" variant="profiles">
         <template #header>
             <div class="row items-center full-width dialog-header">
                 <div style="font-size: 110%">
-                    {{ uiText.dialogTitle }}
+                    {{ showCreateProfileForm ? uiText.showCreateForm : uiText.dialogTitle }}
                 </div>
             </div>
         </template>
 
-        <div class="dialog-box">
-            <template v-if="canManageProfiles">
-                <div class="section-title section-title--actions">
-                    <span>{{ uiText.createProfile }}</span>
-                    <q-btn
-                        flat
-                        dense
-                        no-caps
-                        color="primary"
-                        icon="la la-user-plus"
-                        @click="showCreateProfileForm = !showCreateProfileForm"
-                    >
-                        {{ showCreateProfileForm ? uiText.hideCreateForm : uiText.showCreateForm }}
-                    </q-btn>
-                </div>
-
-                <div v-if="showCreateProfileForm" class="profile-grid create-grid">
-                    <q-input v-model="newProfile.name" outlined dense clearable :label="uiText.profileName" />
+        <div class="dialog-box profiles-dialog" :class="{'profiles-dialog--new': shelvesAppearance}">
+            <template v-if="canManageProfiles && showCreateProfileForm">
+                <p class="profile-form-intro">У каждого профиля свои книги, прогресс и настройки. Логин и пароль нужны для входа с другого устройства.</p>
+                <form class="profile-grid create-grid" @submit.prevent="createProfile">
+                    <q-input v-model="newProfile.name" autofocus outlined dense clearable :label="uiText.profileName" class="profile-name-field" />
                     <q-input v-model="newProfile.login" outlined dense clearable :label="uiText.login" />
                     <q-input
                         v-model="newProfile.password"
@@ -36,54 +23,44 @@
                         :label="uiText.password"
                     >
                         <template #append>
-                            <q-icon
-                                :name="newProfilePasswordVisible ? 'la la-eye-slash' : 'la la-eye'"
-                                class="password-visibility-toggle"
+                            <q-btn flat round dense
+                                :icon="newProfilePasswordVisible ? 'la la-eye-slash' : 'la la-eye'"
+                                :aria-label="newProfilePasswordVisible ? 'Скрыть пароль' : 'Показать пароль'"
                                 @click="newProfilePasswordVisible = !newProfilePasswordVisible"
                             />
                         </template>
                     </q-input>
-                    <q-input v-model="newProfile.emailTo" outlined dense clearable :label="uiText.emailTo" />
-                    <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
-                    <q-toggle class="profile-toggle" v-model="newProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
-                    <q-toggle class="profile-toggle" v-model="newProfile.opdsAuthEnabled" :disable="!newProfile.login || !newProfile.password" :label="uiText.requireOpdsAuth" />
-                    <div class="profile-submit-row">
-                        <q-btn flat dense no-caps @click="showCreateProfileForm = false">
-                            {{ uiText.cancel }}
-                        </q-btn>
-                        <q-btn class="profile-submit" color="primary" dense no-caps @click="createProfile">
-                            {{ uiText.create }}
-                        </q-btn>
-                    </div>
-                </div>
+                    <details class="profile-create-extra">
+                        <summary><span>Отправка книг и OPDS<small>Необязательные параметры</small></span><q-icon name="la la-angle-down" size="18px" aria-hidden="true" /></summary>
+                        <div class="profile-grid">
+                            <q-input v-model="newProfile.emailTo" outlined dense clearable :label="uiText.emailTo" />
+                            <q-input v-model="newProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" hint="Этот личный чат получает книги и доступ к Telegram-боту профиля." />
+                            <q-toggle class="profile-toggle" v-model="newProfile.opdsEnabled" :label="uiText.showProfileInOpds" />
+                            <q-toggle class="profile-toggle" v-model="newProfile.opdsAuthEnabled" :disable="!newProfile.opdsEnabled || !newProfile.login || !newProfile.password" :label="uiText.requireOpdsAuth" />
+                        </div>
+                    </details>
+                    <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
+                </form>
             </template>
 
-            <div v-else class="admin-note">
+            <template v-if="!showCreateProfileForm">
+            <div v-if="!canManageProfiles" class="admin-note">
                 {{ uiText.adminOnly }}
             </div>
 
-            <div class="section-title">
-                {{ uiText.availableProfiles }}
+            <div class="section-title section-title--actions profiles-title">
+                <span>{{ uiText.availableProfiles }}</span>
+                <q-btn v-if="canManageProfiles" outline no-caps color="primary" icon="la la-user-plus" @click="showCreateProfileForm = true">{{ uiText.showCreateForm }}</q-btn>
             </div>
 
             <div v-if="config.profileBoundId" class="admin-note">
                 Профиль выбран по вашему входу через SSO. Для смены пользователя выйдите из SSO.
             </div>
-            <div v-else-if="!canViewAllProfiles" class="profile-session-actions">
-                <q-btn flat dense no-caps color="primary" icon="la la-sign-in-alt" @click="loginOtherProfile">
+            <div v-else class="profile-session-actions">
+                <q-btn v-if="!canViewAllProfiles" flat dense no-caps color="primary" icon="la la-sign-in-alt" @click="loginOtherProfile">
                     {{ uiText.loginOtherProfile }}
                 </q-btn>
-                <q-btn
-                    v-if="config.profileAuthorized"
-                    flat
-                    dense
-                    no-caps
-                    color="warning"
-                    icon="la la-sign-out-alt"
-                    @click="logoutCurrentProfile"
-                >
-                    {{ uiText.logout }}
-                </q-btn>
+                <ProfileLogout :label="uiText.logout" />
             </div>
 
             <div v-if="!profiles.length" class="state-box text-grey-7">
@@ -91,32 +68,28 @@
             </div>
 
             <div v-else class="profiles-box">
-                <div v-for="item in profiles" :key="item.id" class="profile-card">
+                <div v-for="item in displayProfiles" :key="item.id" class="profile-card" :class="{'profile-card--current': item.id === currentUserId}">
                     <div class="profile-head">
                         <div class="profile-name">
-                            {{ item.name }}
+                            <span class="profile-avatar" aria-hidden="true">{{ (item.name || '?').slice(0, 1).toUpperCase() }}</span>
+                            <strong>{{ item.name }}</strong>
                             <span v-if="item.id === currentUserId" class="current-badge">{{ uiText.current }}</span>
                             <span v-if="item.id === currentUserId && item.requiresLogin && !config.profileAuthorized" class="pending-badge">{{ uiText.loginNotCompleted }}</span>
-                            <span v-if="item.isAdmin" class="admin-badge">Admin</span>
-                            <span v-if="item.requiresLogin && !item.isAdmin" class="lock-badge">{{ uiText.login }}</span>
+                            <span v-if="item.isAdmin && item.name !== 'Администратор'" class="admin-badge">Администратор</span>
+                            <span v-if="item.requiresLogin && !item.isAdmin" class="lock-badge"><q-icon name="la la-lock" size="14px" /> Пароль</span>
                         </div>
                         <div class="profile-actions">
-                            <q-btn v-if="profiles.length > 1" :disable="!!config.profileBoundId && item.id !== config.profileBoundId" flat dense no-caps color="primary" @click="selectProfile(item)">
+                            <q-btn v-if="item.id !== currentUserId" :disable="!!config.profileBoundId && item.id !== config.profileBoundId" outline dense no-caps color="primary" @click="selectProfile(item)">
                                 {{ uiText.select }}
                             </q-btn>
                             <q-btn
                                 v-if="canManageProfiles && !item.isAdmin && !item.anonymousProfile"
-                                flat dense round icon="la la-key" color="warning"
+                                flat dense round icon="la la-key" color="primary" :aria-label="`Сменить пароль: ${item.name}`" :title="`Сменить пароль: ${item.name}`"
                                 @click="resetPassword(item)"
                             />
                             <q-btn
-                                v-if="item.id === currentUserId && config.profileAuthorized && !item.anonymousProfile"
-                                flat dense round icon="la la-save" color="primary"
-                                @click="saveCurrentProfile"
-                            />
-                            <q-btn
                                 v-if="canManageProfiles && !item.isAdmin && !item.anonymousProfile"
-                                flat dense round icon="la la-trash" color="negative"
+                                flat dense round icon="la la-trash" color="negative" :aria-label="`Удалить профиль: ${item.name}`" :title="`Удалить профиль: ${item.name}`"
                                 @click="deleteProfile(item)"
                             />
                         </div>
@@ -357,7 +330,12 @@
                                 </template>
                             </q-input>
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
-                            <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" />
+                            <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" hint="Этот личный чат получает книги и доступ к Telegram-боту профиля." />
+                            <TelegramAccountPanel />
+                            <div>
+                                <q-toggle class="profile-toggle" v-model="editableProfile.personalRecommendationsEnabled" label="Персональные рекомендации" />
+                                <div class="profile-format-hint">Подбирать книги по вашей истории чтения и полкам. При отключении подборка не рассчитывается на сервере.</div>
+                            </div>
                             <div class="profile-format-setting">
                                 <div class="profile-format-title">
                                     Форматы книг
@@ -378,9 +356,13 @@
                                 </div>
                             </div>
                             <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :disable="!!currentProfile.isAdmin" :label="uiText.showProfileInOpds" />
-                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!!currentProfile.isAdmin || !editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
+                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!!currentProfile.isAdmin || !editableProfile.opdsEnabled || !editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
                             <div v-if="currentProfile.isAdmin" class="profile-backup-hint profile-opds-admin-note">
                                 {{ uiText.adminNotInOpds }}
+                            </div>
+                            <KoSyncSettings :user-id="currentUserId" />
+                            <div class="profile-submit-row">
+                                <q-btn v-if="config.profileAuthorized" unelevated no-caps color="primary" label="Сохранить изменения" :loading="savingProfile" @click="saveCurrentProfile" />
                             </div>
                         </div>
 
@@ -407,7 +389,7 @@
                         </div>
                     </div>
 
-                    <div v-if="item.id === currentUserId" class="opds-link">
+                    <div v-if="item.id === currentUserId && item.opdsEnabled && !item.isAdmin" class="opds-link">
                         OPDS: <code>{{ opdsUrl(item.publicId || item.id) }}</code>
                         <div v-if="item.opdsAuthEnabled" class="opds-link-hint">
                             {{ uiText.opdsAuthHint }}
@@ -415,6 +397,7 @@
                     </div>
                 </div>
             </div>
+            </template>
         </div>
 
         <ReadingListsDialog
@@ -423,7 +406,11 @@
         />
 
         <template #footer>
-            <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps @click="dialogVisible = false">
+            <template v-if="showCreateProfileForm">
+                <q-btn flat no-caps :disable="creatingProfile" @click="cancelCreateProfile">{{ uiText.cancel }}</q-btn>
+                <q-btn unelevated no-caps color="primary" :loading="creatingProfile" :disable="!String(newProfile.name || '').trim()" @click="createProfile">{{ uiText.create }}</q-btn>
+            </template>
+            <q-btn v-else class="q-px-md q-ml-sm" color="primary" dense no-caps @click="dialogVisible = false">
                 {{ uiText.close }}
             </q-btn>
         </template>
@@ -433,13 +420,19 @@
 <script>
 import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
+import TelegramAccountPanel from '../../Library/TelegramAccountPanel.vue';
 import ReadingListsDialog from '../ReadingListsDialog/ReadingListsDialog.vue';
+import KoSyncSettings from './KoSyncSettings.vue';
+import ProfileLogout from '../../share/ProfileLogout.vue';
 const bookFormats = require('../../../../shared/BookFormats');
 
 const componentOptions = {
     components: {
+        TelegramAccountPanel,
         Dialog,
         ReadingListsDialog,
+        KoSyncSettings,
+        ProfileLogout,
     },
     watch: {
         modelValue(newValue) {
@@ -470,12 +463,21 @@ class UserProfilesDialog {
     showCreateProfileForm = false;
     newProfilePasswordVisible = false;
     editableProfilePasswordVisible = false;
+    creatingProfile = false;
+    savingProfile = false;
     editableProfile = this.makeEmptyEditable();
     newProfile = this.makeEmptyNew();
 
     created() {
         this.api = this.$root.api;
         this.commit = this.$store.commit;
+    }
+
+    mounted() {
+        if (this.modelValue) {
+            this.dialogVisible = true;
+            this.loadProfiles();
+        }
     }
 
     get config() {
@@ -488,6 +490,12 @@ class UserProfilesDialog {
 
     get currentProfile() {
         return this.config.currentUserProfile || {};
+    }
+
+    get shelvesAppearance() {return this.$store.state.settings.catalogAppearance === 'shelves';}
+
+    get displayProfiles() {
+        return [...this.profiles].sort((a, b) => Number(b.id === this.currentUserId) - Number(a.id === this.currentUserId));
     }
 
     get downloadFormatOptions() {
@@ -633,6 +641,7 @@ class UserProfilesDialog {
             defaultOpdsFormat: 'original',
             emailAsZip: false,
             telegramAsZip: false,
+            personalRecommendationsEnabled: true,
             opdsEnabled: true,
             opdsAuthEnabled: false,
         };
@@ -657,6 +666,7 @@ class UserProfilesDialog {
             defaultOpdsFormat: bookFormats.preference(current, 'opds'),
             emailAsZip: current.emailAsZip === true,
             telegramAsZip: current.telegramAsZip === true,
+            personalRecommendationsEnabled: current.personalRecommendationsEnabled !== false,
             opdsEnabled: current.opdsEnabled !== false,
             opdsAuthEnabled: current.opdsAuthEnabled === true,
         };
@@ -676,6 +686,7 @@ class UserProfilesDialog {
             publicId: item.login || item.id,
             requiresLogin: !!item.requiresLogin,
             isAdmin: !!item.isAdmin,
+            opdsEnabled: item.opdsEnabled !== false,
             opdsAuthEnabled: item.opdsAuthEnabled === true,
             anonymousProfile: !!item.anonymousProfile,
             currentReadingCount: Number(item.currentReadingCount || 0) || 0,
@@ -969,7 +980,15 @@ class UserProfilesDialog {
             await this.loadCurrentReadingLists();
     }
 
+    cancelCreateProfile() {
+        this.showCreateProfileForm = false;
+        this.newProfile = this.makeEmptyNew();
+        this.newProfilePasswordVisible = false;
+    }
+
     async createProfile() {
+        if (this.creatingProfile || !String(this.newProfile.name || '').trim()) return;
+        this.creatingProfile = true;
         try {
             await this.api.createUserProfile(this.newProfile);
             this.newProfile = this.makeEmptyNew();
@@ -978,10 +997,12 @@ class UserProfilesDialog {
             await this.loadProfiles();
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
-        }
+        } finally {this.creatingProfile = false;}
     }
 
     async saveCurrentProfile() {
+        if (this.savingProfile) return;
+        this.savingProfile = true;
         try {
             await this.api.updateUserProfile(this.currentUserId, this.editableProfile);
             this.editableProfile.password = '';
@@ -989,7 +1010,7 @@ class UserProfilesDialog {
             this.$root.notify.success(this.uiText.profileSaved);
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
-        }
+        } finally {this.savingProfile = false;}
     }
 
     async deleteProfile(item) {
@@ -1081,20 +1102,6 @@ class UserProfilesDialog {
         }
     }
 
-    async logoutCurrentProfile() {
-        try {
-            await this.api.logoutUserProfile();
-        } catch (e) {
-            // Ignore stale profile session cleanup errors during profile logout.
-        }
-
-        this.commit('setSettings', {
-            currentUserId: '',
-            profileAccessToken: '',
-        });
-        await this.loadProfiles();
-    }
-
     opdsUrl(userId) {
         const root = this.config.opdsRoot || '/opds';
         return `${window.location.origin}${root}?user=${encodeURIComponent(userId)}`;
@@ -1115,6 +1122,40 @@ export default vueComponent(UserProfilesDialog);
 
 .dialog-header {
     justify-content: space-between;
+}
+
+.profiles-dialog--new {max-height: none; overflow: visible;}
+.profiles-dialog--new .profiles-title {margin: 0 0 16px;}
+.profile-form-intro {color: var(--app-muted); line-height: 1.6; margin: 0 0 20px; font-size: 13px;}
+.profile-name-field, .profile-create-extra {grid-column: 1 / -1;}
+.profile-create-extra {border: 1px solid var(--app-border); border-radius: 12px; overflow: hidden; margin-top: 6px;}
+.profile-create-extra summary {display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; cursor: pointer; list-style: none; font-size: 13px;}
+.profile-create-extra summary::-webkit-details-marker {display: none;}
+.profile-create-extra summary small {display: block; margin-top: 4px; color: var(--app-muted); font-size: 11px;}
+.profile-create-extra[open] summary {border-bottom: 1px solid var(--app-border);}
+.profile-create-extra[open] summary .q-icon {transform: rotate(180deg);}
+.profile-create-extra summary:focus-visible {outline: 2px solid var(--app-primary); outline-offset: -3px; border-radius: 10px;}
+.profile-create-extra .profile-grid {padding: 16px;}
+.profile-avatar {display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0; background: var(--app-surface-2); color: var(--app-primary); font-size: 13px;}
+.profiles-dialog--new .profile-card:not(.profile-card--current) {padding: 12px 14px;}
+.profiles-dialog--new .profile-card--current {border-color: var(--app-primary);}
+.profiles-dialog--new .profile-head {margin-bottom: 0; min-height: 36px; flex-direction: row;}
+.profiles-dialog--new .profile-card--current .profile-head {margin-bottom: 14px;}
+.profiles-dialog--new .profile-name {display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px;}
+.profiles-dialog--new .profile-name strong {overflow-wrap: anywhere; font-weight: 600;}
+.profiles-dialog--new .profile-name > span:not(.profile-avatar) {margin-left: 0; font-size: 10px; font-weight: 500;}
+.profiles-dialog--new .profile-actions .q-btn {font-size: 12px; min-height: 32px;}
+.profiles-dialog--new .profile-actions .q-btn--outline {padding: 0 10px; border-radius: 9px;}
+.profiles-dialog--new .profile-actions {width: auto;}
+.profiles-dialog--new .profile-tabs {gap: 4px; border-bottom: 1px solid var(--app-border); padding-bottom: 10px;}
+.profiles-dialog--new .profile-tab-btn {border: 0; border-radius: 9px; font-size: 12px; padding: 8px 12px;}
+.profiles-dialog--new .profile-session-actions {justify-content: flex-end; margin: 0 0 14px;}
+@media (max-width: 599px) {
+    .profiles-dialog--new .profile-head {flex-wrap: wrap; align-items: flex-start; gap: 10px;}
+    .profiles-dialog--new .profile-actions {margin-left: auto;}
+    .profiles-dialog--new .profiles-title {font-size: 14px;}
+    .profiles-dialog--new .profiles-title .q-btn {font-size: 12px;}
+    .profile-create-extra .profile-grid {padding: 12px;}
 }
 
 .section-title {
@@ -1146,7 +1187,7 @@ export default vueComponent(UserProfilesDialog);
 }
 
 .profile-submit-row {
-    grid-column: span 2;
+    grid-column: 1 / -1;
     display: flex;
     justify-content: flex-end;
     gap: 8px;

@@ -19,6 +19,7 @@ class ReadingListStore {
     constructor(config) {
         this.config = config;
         this.file = path.join(config.dataDir, 'reading-lists.json');
+        this.assets = new (require('./ReaderAssets').ReaderAssets)(config);
     }
 
     makeDefaultData() {
@@ -657,6 +658,15 @@ class ReadingListStore {
         normalized.passwordHash = String(normalized.passwordHash || '').trim();
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
+        normalized.telegramBotId = /^\d{1,20}$/.test(String(normalized.telegramBotId || '')) ? String(normalized.telegramBotId) : '';
+        normalized.telegramBotChatId = /^\d{1,20}$/.test(String(normalized.telegramBotChatId || '')) ? String(normalized.telegramBotChatId) : '';
+        normalized.telegramBotLinkedAt = String(normalized.telegramBotLinkedAt || '').slice(0, 40);
+        normalized.telegramBotAutoLinked = normalized.telegramBotAutoLinked === true;
+        normalized.telegramBotBlocked = normalized.telegramBotBlocked === true;
+        normalized.telegramDigest = normalized.telegramDigest === true;
+        normalized.telegramDigestAt = String(normalized.telegramDigestAt || '').slice(0, 40);
+        normalized.telegramDigestSeen = (Array.isArray(normalized.telegramDigestSeen) ? normalized.telegramDigestSeen : [])
+            .filter(uid => typeof uid === 'string' && uid.length <= 512).slice(-1000);
         normalized.defaultDownloadFormat = bookFormats.normalize(normalized.defaultDownloadFormat);
         normalized.defaultEmailFormat = bookFormats.preference(normalized, 'email');
         normalized.defaultTelegramFormat = bookFormats.preference(normalized, 'telegram');
@@ -664,6 +674,7 @@ class ReadingListStore {
         normalized.emailAsZip = normalized.emailAsZip === true;
         normalized.telegramAsZip = normalized.telegramAsZip === true;
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
+        normalized.personalRecommendationsEnabled = normalized.personalRecommendationsEnabled !== false;
         normalized.opdsAuthEnabled = (normalized.opdsAuthEnabled === true);
         normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
         normalized.readerProgress = this.normalizeReaderProgress(normalized.readerProgress);
@@ -811,11 +822,17 @@ class ReadingListStore {
     // state, and nearly every request loads it. Reuse the last result while the file is unchanged;
     // a write anywhere (atomic rename) changes its inode. Callers get a copy they may mutate.
     async load() {
+        return structuredClone(await this.loadSnapshot());
+    }
+
+    // Internal immutable snapshot. Public readers return copies; a single-user
+    // read must not clone every other profile's reading history.
+    async loadSnapshot() {
         await this.ensureData();
         const stat = await fs.stat(this.file);
         const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-        if (this.loaded && this.loaded.stamp === stamp && !this.config.resetAdminPassword)
-            return structuredClone(this.loaded.data);
+        if (this.loaded?.bootstrapped && this.loaded.stamp === stamp && !this.config.resetAdminPassword)
+            return this.loaded.data;
         this.loaded = null;
         let raw = null;
         let reset = false;
@@ -834,14 +851,15 @@ class ReadingListStore {
             reset = true;
         }
 
+        const assetsChanged = await this.assets.externalize(raw);
         const {data, changed} = await this.applyAdminBootstrap(raw);
-        if (changed)
+        if (changed || assetsChanged)
             await this.writeData(data);
         this.config.resetAdminPassword = false;
         // After a write the stamp read above is stale: the next load reads the file again.
-        if (!changed && !reset)
-            this.loaded = {stamp, data: structuredClone(data)};
-        return data;
+        if (!changed && !assetsChanged && !reset)
+            this.loaded = {stamp, data, bootstrapped:true};
+        return this.loaded?.data || data;
     }
 
     async backupBrokenStore(error = null) {
@@ -866,11 +884,21 @@ class ReadingListStore {
 
     async save(data, options = {}) {
         const out = this.normalizeData(data);
+        await this.assets.externalize(out);
         await this.writeData(out, options);
+        // Mutators return their own objects, including canonical asset URLs.
+        for (const user of Array.isArray(data?.users) ? data.users : []) {
+            const saved = out.users.find(item => item.id === user.id);
+            if (!saved || !user.readerPreferences) continue;
+            user.readerPreferences.backgroundImage = saved.readerPreferences.backgroundImage;
+            if (user.readerPreferences.einkProfile && saved.readerPreferences.einkProfile)
+                user.readerPreferences.einkProfile.backgroundImage = saved.readerPreferences.einkProfile.backgroundImage;
+        }
     }
 
     async writeData(data, options = {}) {
-        const snapshot = JSON.parse(JSON.stringify(data));
+        const snapshot = structuredClone(data);
+        await this.assets.externalize(snapshot);
         const prepare = async() => {
             if (options && options.rebaseProgressGeneration === true)
                 return await this.rebaseReaderProgressGeneration(snapshot);
@@ -883,7 +911,7 @@ class ReadingListStore {
         let current = null;
         if (await fs.pathExists(this.file)) {
             try {
-                current = JSON.parse(await fs.readFile(this.file, 'utf8'));
+                current = await this.currentPersistedData();
             } catch (e) {
                 current = null;
             }
@@ -914,7 +942,7 @@ class ReadingListStore {
 
         let current;
         try {
-            current = JSON.parse(await fs.readFile(this.file, 'utf8'));
+            current = await this.currentPersistedData();
         } catch (e) {
             return data;
         }
@@ -963,10 +991,30 @@ class ReadingListStore {
 
     async writeDataNow(data) {
         await writeFileAtomic(this.file, JSON.stringify(data, null, 2));
+        const stat = await fs.stat(this.file);
+        const admin = data.users?.find(user => user.isAdmin || user.id === 'admin');
+        const bootstrapped = !!(admin?.isAdmin && admin.login && admin.passwordHash
+            && admin.opdsEnabled === false && admin.opdsAuthEnabled === false && data.users[0] === admin);
+        this.loaded = {stamp:`${stat.ino}:${stat.size}:${stat.mtimeMs}`, data:structuredClone(data), bootstrapped};
+        // Only scan assets when the reference set changes, never on each page turn.
+        await this.assets.prune(data).catch(error => logWarning(`Reader background cleanup: ${error.message}`));
+    }
+
+    async currentPersistedData() {
+        const stat = await fs.stat(this.file);
+        if (this.loaded?.stamp === `${stat.ino}:${stat.size}:${stat.mtimeMs}`) return this.loaded.data;
+        return JSON.parse(await fs.readFile(this.file, 'utf8'));
+    }
+
+    async exportSnapshot() {
+        const data = await this.load();
+        for (const user of data.users)
+            user.readerPreferences = await this.assets.inlinePreferences(user.id, user.readerPreferences);
+        return data;
     }
 
     async getSharedDiscoveryConfig() {
-        const data = await this.load();
+        const data = await this.loadSnapshot();
         return this.normalizeSharedDiscoveryConfig(data.sharedDiscoveryConfig);
     }
 
@@ -978,7 +1026,7 @@ class ReadingListStore {
     }
 
     async getMetadataOverrides() {
-        const data = await this.load();
+        const data = await this.loadSnapshot();
         return this.normalizeMetadataOverrides(data.metadataOverrides);
     }
 
@@ -1000,12 +1048,12 @@ class ReadingListStore {
         return data.metadataOverrides[uid];
     }
 
-    async resolveUser(userId = '') {
+    async resolveUser(userId = '', options = {}) {
         const data = await this.load();
         const normalizedUserId = String(userId || '').trim();
         const user = data.users.find((item) => item.id === normalizedUserId)
             || data.users.find((item) => item.login === normalizedUserId)
-            || data.users[0];
+            || (!normalizedUserId || !options.strict ? data.users[0] : null);
         if (!user)
             throw new Error('Пользователь не найден');
 
@@ -1039,8 +1087,63 @@ class ReadingListStore {
     }
 
     async getUser(userId = '') {
-        const {user} = await this.resolveUser(userId);
-        return user;
+        const data = await this.loadSnapshot();
+        const id = String(userId || '').trim();
+        const user = data.users.find(item => item.id === id) || data.users.find(item => item.login === id) || data.users[0];
+        if (!user) throw new Error('Пользователь не найден');
+        return structuredClone(user);
+    }
+
+    async findTelegramUser(botId, chatId) {
+        botId=String(botId);chatId=String(chatId);
+        if(!/^[1-9]\d{0,19}$/.test(botId)||!/^[1-9]\d{0,19}$/.test(chatId)||!Number.isSafeInteger(Number(chatId)))return null;
+        const data = await this.load();
+        const configured=data.users.filter(user=>user.telegramChatId===chatId && (user.id!=='default'||user.login));
+        const linked=data.users.filter(user=>user.telegramBotId===botId&&user.telegramBotChatId===chatId&&user.telegramBotLinkedAt);
+        if(linked.length) {
+            const user=linked[0];
+            return linked.length===1&&!user.telegramBotBlocked&&(!user.telegramBotAutoLinked||configured.length===1&&configured[0].id===user.id) ? user:null;
+        }
+        if(configured.length!==1||configured[0].telegramBotBlocked||configured[0].telegramBotLinkedAt&&!configured[0].telegramBotAutoLinked)return null;
+        // Persist once so digests and profile status use the same binding. The
+        // serialized mutation rechecks uniqueness after concurrent profile edits.
+        return this.changeTelegramBinding(configured[0].id,'auto-link',{botId,chatId});
+    }
+
+    async changeTelegramBinding(userId, operation, patch = {}) {
+        const data = await this.load(), user = data.users.find(user => user.id === userId);
+        if (!user || user.id === 'default' && !user.login) throw new Error('Личный профиль не найден');
+        if (operation === 'link' || operation === 'auto-link') {
+            const botId = String(patch.botId || ''), chatId = String(patch.chatId || '');
+            if (!/^\d{1,20}$/.test(botId) || !/^\d{1,20}$/.test(chatId)) throw new Error('Некорректная привязка Telegram');
+            if(operation==='auto-link') {
+                const configured=data.users.filter(row=>row.telegramChatId===chatId&&(row.id!=='default'||row.login));
+                if(configured.length!==1||configured[0].id!==userId||user.telegramBotBlocked)return null;
+                if(user.telegramBotLinkedAt&&user.telegramBotId===botId&&user.telegramBotChatId===chatId)return user;
+                if(user.telegramBotLinkedAt&&!user.telegramBotAutoLinked)return null;
+                if(data.users.some(row=>row.id!==userId&&row.telegramBotId===botId&&row.telegramBotChatId===chatId&&row.telegramBotLinkedAt))return null;
+            }
+            const previous=data.users.filter(row=>row.id!==userId&&row.telegramBotId===botId&&row.telegramBotChatId===chatId);
+            if(previous.some(row=>!row.telegramBotAutoLinked))
+                throw new Error('Этот Telegram уже привязан к другому профилю. Сначала отключите прежнюю привязку');
+            // A one-time link proves ownership of the Telegram account. A
+            // configured address must not reserve someone else's chat forever.
+            for(const row of previous) Object.assign(row,{telegramBotId:'',telegramBotChatId:'',telegramBotLinkedAt:'',
+                telegramBotAutoLinked:false,telegramBotBlocked:true,telegramDigest:false,telegramDigestAt:'',telegramDigestSeen:[]});
+            Object.assign(user, {telegramBotId: botId, telegramBotChatId: chatId, telegramChatId: chatId,
+                telegramBotLinkedAt: this.nowIso(), telegramBotAutoLinked:operation==='auto-link',telegramBotBlocked:false,
+                telegramDigest: false, telegramDigestAt: '', telegramDigestSeen: []});
+        } else if (operation === 'unlink') {
+            if (user.telegramChatId === user.telegramBotChatId) user.telegramChatId = '';
+            Object.assign(user, {telegramBotId: '', telegramBotChatId: '', telegramBotLinkedAt: '', telegramBotAutoLinked:false,telegramBotBlocked:true,telegramDigest: false,
+                telegramDigestAt: '', telegramDigestSeen: []});
+        } else if (operation === 'digest') user.telegramDigest = patch.enabled === true;
+        else if (operation === 'digest-sent') {
+            if (user.telegramBotId !== String(patch.botId) || user.telegramBotChatId !== String(patch.chatId)) return null;
+            user.telegramDigestAt = this.nowIso();
+            user.telegramDigestSeen = [...new Set([...(user.telegramDigestSeen || []), ...(patch.uids || [])])].slice(-1000);
+        } else throw new Error('Неизвестное действие Telegram');
+        user.updatedAt = this.nowIso(); await this.save(data); return user;
     }
 
     async findUserByLogin(login = '') {
@@ -1147,11 +1250,13 @@ class ReadingListStore {
             emailAsZip: profile.emailAsZip,
             telegramAsZip: profile.telegramAsZip,
             opdsEnabled: profile.opdsEnabled,
+            personalRecommendationsEnabled: profile.personalRecommendationsEnabled,
             opdsAuthEnabled: profile.opdsAuthEnabled,
             isAdmin: false,
         });
         if (user.opdsAuthEnabled && (!user.login || !user.passwordHash))
             throw new Error('Для OPDS-авторизации у профиля должен быть логин и пароль');
+        this.checkTelegramChatOwner(data,user.id,user.telegramChatId);
 
         data.users.push(user);
         await this.save(data);
@@ -1178,8 +1283,13 @@ class ReadingListStore {
             target.passwordHash = String(patch.passwordHash || '').trim();
         if (utilsHasProp(patch, 'emailTo'))
             target.emailTo = String(patch.emailTo || '').trim();
-        if (utilsHasProp(patch, 'telegramChatId'))
-            target.telegramChatId = String(patch.telegramChatId || '').trim();
+        if (utilsHasProp(patch, 'telegramChatId')) {
+            const chatId=String(patch.telegramChatId || '').trim();
+            if(chatId!==target.telegramChatId)this.checkTelegramChatOwner(data,target.id,chatId);
+            if(chatId!==target.telegramChatId) Object.assign(target,{telegramBotId:'',telegramBotChatId:'',telegramBotLinkedAt:'',
+                telegramBotAutoLinked:false,telegramBotBlocked:false,telegramDigest:false,telegramDigestAt:'',telegramDigestSeen:[]});
+            target.telegramChatId = chatId;
+        }
         if (utilsHasProp(patch, 'defaultDownloadFormat'))
             target.defaultDownloadFormat = bookFormats.normalize(patch.defaultDownloadFormat);
         for (const field of ['defaultEmailFormat', 'defaultTelegramFormat', 'defaultOpdsFormat']) {
@@ -1190,6 +1300,8 @@ class ReadingListStore {
         }
         if (utilsHasProp(patch, 'opdsEnabled'))
             target.opdsEnabled = (patch.opdsEnabled !== false);
+        if (utilsHasProp(patch, 'personalRecommendationsEnabled'))
+            target.personalRecommendationsEnabled = patch.personalRecommendationsEnabled !== false;
         if (utilsHasProp(patch, 'opdsAuthEnabled'))
             target.opdsAuthEnabled = (patch.opdsAuthEnabled === true);
         if (utilsHasProp(patch, 'readerPreferences'))
@@ -1202,8 +1314,14 @@ class ReadingListStore {
         return target;
     }
 
+    checkTelegramChatOwner(data,userId,chatId) {
+        if(this.config.telegramBotEnabled!==true||!/^[1-9]\d{0,19}$/.test(chatId))return;
+        if(data.users.some(row=>row.id!==userId&&(row.telegramChatId===chatId||row.telegramBotChatId===chatId&&row.telegramBotLinkedAt)))
+            throw new Error('Этот личный Chat ID уже используется другим профилем');
+    }
+
     async getReaderState(userId = '', bookUid = '') {
-        const {user} = await this.resolveUser(userId);
+        const user = await this.getUser(userId);
         const normalizedBookUid = this.normalizeBookUid(bookUid);
         if (!normalizedBookUid)
             throw new Error('bookUid is empty');
@@ -1218,7 +1336,7 @@ class ReadingListStore {
     }
 
     async changeLibraryFollow(userId, operation, patch = {}) {
-        const {data, user} = await this.resolveUser(userId);
+        const {data, user} = await this.resolveUser(userId, {strict: true});
         const target = data.users.find(row => row.id === user.id);
         const normalize = require('../../shared/LibraryFollows').normalize;
         const follows = normalize(target.libraryFollows);
@@ -1725,7 +1843,7 @@ class ReadingListStore {
     }
 
     async getLists(userId = '', options = {}) {
-        const {data, user} = await this.resolveUser(userId);
+        const {data, user} = await this.resolveUser(userId, {strict: true});
         const visibility = (options && options.visibility ? this.normalizeVisibility(options.visibility) : '');
 
         return data.lists
@@ -1747,7 +1865,7 @@ class ReadingListStore {
             return null;
 
         if (!allowForeign) {
-            const {user} = await this.resolveUser(userId);
+            const {user} = await this.resolveUser(userId, {strict: true});
             if (item.userId !== user.id)
                 return null;
         }
@@ -1765,7 +1883,7 @@ class ReadingListStore {
     }
 
     async createList(userId = '', name, visibility = 'private', filters = null) {
-        const {data, user} = await this.resolveUser(userId);
+        const {data, user} = await this.resolveUser(userId, {strict: true});
         const normalized = this.validateName(name);
         this.ensureUniqueListName(data.lists, user.id, normalized);
 
@@ -1831,7 +1949,7 @@ class ReadingListStore {
     }
 
     async setBookMembership(userId = '', listId, bookUid, enabled) {
-        const {data, user} = await this.resolveUser(userId);
+        const {data, user} = await this.resolveUser(userId, {strict: true});
         const item = data.lists.find((row) => row.id === listId && row.userId === user.id);
         if (!item)
             throw new Error('Список не найден');
@@ -1888,7 +2006,7 @@ class ReadingListStore {
     }
 
     async setBooksReadNow(userId = '', bookUids = [], read = true, options = {}) {
-        const {data, user} = await this.resolveUser(userId);
+        const {data, user} = await this.resolveUser(userId, {strict: true});
         const target = data.users.find((item) => item.id === user.id);
         if (!target)
             throw new Error('Пользователь не найден');
@@ -2003,8 +2121,9 @@ class ReadingListStore {
                 emailAsZip: user.emailAsZip === true,
                 telegramAsZip: user.telegramAsZip === true,
                 opdsEnabled: user.opdsEnabled,
+                personalRecommendationsEnabled: user.personalRecommendationsEnabled !== false,
                 opdsAuthEnabled: user.opdsAuthEnabled,
-                readerPreferences: this.normalizeReaderPreferences(user.readerPreferences),
+                readerPreferences: await this.assets.inlinePreferences(user.id, this.normalizeReaderPreferences(user.readerPreferences)),
                 readerProgress: this.normalizeReaderProgress(user.readerProgress),
                 audioProgress: this.normalizeAudioProgress(user.audioProgress),
                 readerBookmarks: this.normalizeReaderBookmarks(user.readerBookmarks),
@@ -2057,6 +2176,8 @@ class ReadingListStore {
             }
             if (utilsHasProp(incomingUser, 'opdsEnabled'))
                 target.opdsEnabled = (incomingUser.opdsEnabled !== false);
+            if (utilsHasProp(incomingUser, 'personalRecommendationsEnabled'))
+                target.personalRecommendationsEnabled = incomingUser.personalRecommendationsEnabled !== false;
             if (utilsHasProp(incomingUser, 'opdsAuthEnabled'))
                 target.opdsAuthEnabled = (incomingUser.opdsAuthEnabled === true);
             if (utilsHasProp(incomingUser, 'readerPreferences'))

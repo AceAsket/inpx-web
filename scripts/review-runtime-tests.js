@@ -65,7 +65,7 @@ async function testRatingsStreamInASmallHeapAndKeepLegacyEncoding() {
         const rows = [];
         await require('../server/core/LibraryReviews').ratingRows({archiveType:'zip',zip:{stream:async() => fs.createReadStream(file)}},row => rows.push(row));
         assert.strictEqual(rows.length,1); assert.strictEqual(rows[0].folder,'Книги.zip');
-        const reader = {archiveType:'7z',extractToFile:async(name,target) => {
+        const reader = {archiveType:'7z',uses7z:true,extractToFile:async(name,target) => {
             assert.strictEqual(name,'books.json'); await fs.writeFile(target,raw);
         },extractToBuf:() => assert.fail('7z ratings must use a temporary file instead of buffering stdout')};
         const temporaryDir = path.join(dir,'tmp');

@@ -112,7 +112,11 @@ async function testDiscoveryConcurrentLoadsShareWorkAndReturnIndependentValues()
 }
 
 async function testConnectionQrPreservesHttpHttpsAndRootWithoutCredentials(){
-    const {serverUrl,qrPayload}=require('../shared/AppConnection');
+    const {serverUrl,qrPayload,downloadUrl}=require('../shared/AppConnection');
+    const downloadSvg=await require('qrcode').toString(downloadUrl,{type:'svg',width:288,margin:4,errorCorrectionLevel:'M'});
+    const storedSvg=await require('fs-extra').readFile(require('path').join(__dirname,'../client/assets/inpx-reader-download-qr.svg'),'utf8');
+    assert.equal(storedSvg.replace(/\r\n/g,'\n'),downloadSvg.replace(/\r\n/g,'\n'),
+        'The static download QR must encode the current download URL');
     for(const origin of ['http://192.168.50.50:12380','https://books.example']){
         const address=serverUrl(origin,'/library/');assert.strictEqual(address,origin+'/library/');
         const payload=new URL(qrPayload(address));assert.strictEqual(payload.protocol,'inpx-reader:');

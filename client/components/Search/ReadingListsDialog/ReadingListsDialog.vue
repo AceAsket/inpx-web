@@ -1,5 +1,5 @@
 <template>
-    <Dialog ref="dialog" v-model="dialogVisible">
+    <Dialog ref="dialog" v-model="dialogVisible" variant="reading-lists">
         <template #header>
             <div class="row items-center full-width dialog-header">
                 <div style="font-size: 110%">
@@ -234,6 +234,13 @@ class ReadingListsDialog {
 
     created() {
         this.api = this.$root.api;
+    }
+
+    mounted() {
+        if (this.modelValue) {
+            this.dialogVisible = true;
+            this.init();
+        }
     }
 
     get dialogTitle() {

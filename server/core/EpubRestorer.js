@@ -51,14 +51,14 @@ async function restore(bookFile, config = {}, loadImage = async() => null) {
         const indexes = entries.filter(entry => path.posix.basename(entry.name).toLowerCase() === imageIndexName.toLowerCase());
         const indexSources = new Set(indexes.map(entry => entry.sourceName));
         const indexNames = indexes.map(entry => entry.name.startsWith(prefix) ? entry.name.slice(prefix.length) : entry.name);
-        if (reader.archiveType === 'zip' && !indexes.length)
+        if (reader.archiveType === 'zip' && !reader.uses7z && !indexes.length)
             return false;
         if (indexes.length > 1)
             throw new Error('Несколько индексов изображений EPUB');
 
         stagingDir = await fs.mkdtemp(path.join(config.tempDir || path.dirname(bookFile), 'epub-'));
         let extractedDir = '';
-        if (reader.archiveType === '7z') {
+        if (reader.uses7z) {
             // A solid PPMd container must be decompressed once. Extracting each
             // chapter separately replays the solid block for every file.
             extractedDir = path.join(stagingDir, 'source');

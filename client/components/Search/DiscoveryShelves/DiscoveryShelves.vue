@@ -1,5 +1,5 @@
 <template>
-    <div class="discovery-wrap q-mx-md q-mt-md q-mb-lg">
+    <div class="discovery-wrap q-mx-md q-mt-md q-mb-lg" :class="{'discovery-wrap--modern': shelvesAppearance}">
         <div class="discovery-page-head">
             <div class="discovery-page-copy">
                 <div class="discovery-page-title">
@@ -24,7 +24,11 @@
         </div>
 
         <div class="discovery-toolbar">
+            <button v-if="shelvesAppearance" type="button" class="discovery-view-toggle" :aria-pressed="compactMode" @click.stop.prevent="$emit('toggle-compact')">
+                <q-icon :name="compactMode ? 'la la-check' : 'la la-compress-arrows-alt'" size="18px" /><span>Компактные карточки</span>
+            </button>
             <q-btn
+                v-else
                 unelevated
                 no-caps
                 class="discovery-toolbar-btn"
@@ -77,18 +81,27 @@
             />
 
             <div v-if="showExternalPagination && externalPagination" class="discovery-filter-group">
-                <q-btn
-                    v-for="pageSize in [12, 24, 48]"
-                    :key="pageSize"
-                    unelevated
-                    no-caps
-                    class="discovery-toolbar-btn"
-                    :class="{'discovery-toolbar-btn--active': externalPagination.perPage === pageSize}"
-                    @click.stop.prevent="$emit('set-external-limit', pageSize)"
-                >
-                    {{ pageSize }}
-                </q-btn>
-
+                <template v-if="shelvesAppearance">
+                    <span class="discovery-limit-label">Книг на странице</span>
+                    <div class="discovery-limit-buttons" role="group" aria-label="Книг на странице">
+                        <button v-for="pageSize in [12, 24, 48]" :key="pageSize" type="button" :aria-pressed="externalPagination.perPage === pageSize" @click.stop.prevent="$emit('set-external-limit', pageSize)">
+                            {{ pageSize }}
+                        </button>
+                    </div>
+                </template>
+                <template v-else>
+                    <q-btn
+                        v-for="pageSize in [12, 24, 48]"
+                        :key="pageSize"
+                        unelevated
+                        no-caps
+                        class="discovery-toolbar-btn"
+                        :class="{'discovery-toolbar-btn--active': externalPagination.perPage === pageSize}"
+                        @click.stop.prevent="$emit('set-external-limit', pageSize)"
+                    >
+                        {{ pageSize }}
+                    </q-btn>
+                </template>
             </div>
         </div>
 
@@ -210,10 +223,10 @@
         >
             <div class="discovery-head">
                 <div class="discovery-head-copy">
-                    <div class="discovery-kicker">
+                    <div v-if="!shelvesAppearance || (shelfSourceLabel(shelf) !== shelf.title && shelfSourceLabel(shelf) !== sectionTitle)" class="discovery-kicker">
                         {{ shelfSourceLabel(shelf) }}
                     </div>
-                    <div class="discovery-title">
+                    <div v-if="!shelvesAppearance || shelf.title !== sectionTitle" class="discovery-title">
                         {{ shelf.title }}
                     </div>
                     <div v-if="shelf.subtitle" class="discovery-subtitle">
@@ -709,6 +722,38 @@ export default vueComponent(DiscoveryShelves);
 .discovery-genre-select {
     min-width: 220px;
 }
+
+.discovery-view-toggle, .discovery-limit-buttons button {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--app-muted);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.discovery-view-toggle {min-height: 44px; border: 1px solid var(--app-border); border-radius: 12px; background: var(--app-surface);}
+.discovery-view-toggle[aria-pressed="true"] {border-color: var(--app-primary); color: var(--app-primary); background: var(--app-surface-2);}
+.discovery-view-toggle:hover, .discovery-limit-buttons button:hover {color: var(--app-text); background: var(--app-surface-3);}
+.discovery-view-toggle:focus-visible, .discovery-limit-buttons button:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}
+.discovery-limit-label {font-size: 12px; color: var(--app-muted);}
+.discovery-limit-buttons {display: inline-flex; padding: 3px; gap: 3px; border: 1px solid var(--app-border); border-radius: 12px; background: var(--app-surface);}
+.discovery-limit-buttons button {min-width: 40px; min-height: 36px; padding: 6px 10px;}
+.discovery-limit-buttons button[aria-pressed="true"] {color: var(--app-primary); background: var(--app-surface-2); font-weight: 600;}
+.discovery-wrap--modern .discovery-toolbar {align-items: center; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--app-border); margin-bottom: 20px;}
+.discovery-wrap--modern .discovery-filter-group {align-items: center; gap: 10px; margin-left: auto;}
+.discovery-wrap--modern .discovery-page-title {font-size: 26px; font-weight: 550; line-height: 1.3; letter-spacing: -.03em;}
+.discovery-wrap--modern .discovery-page-subtitle {font-size: 13px; font-weight: 400; line-height: 1.6;}
+.discovery-wrap--modern .discovery-toolbar-btn, .discovery-wrap--modern .discovery-source-btn {border-radius: 12px; background: var(--app-surface); box-shadow: none; font-weight: 500;}
+.discovery-wrap--modern .discovery-toolbar-btn--active {background: var(--app-surface-2); border-color: var(--app-primary); color: var(--app-primary);}
+.discovery-wrap--modern .discovery-title {font-size: 22px; font-weight: 550; line-height: 1.3;}
+@media (max-width: 599px) {.discovery-wrap--modern .discovery-filter-group {margin-left: 0; flex-wrap: nowrap;} .discovery-view-toggle {max-width: 100%;}}
 
 .discovery-genre-select :deep(.q-field__control) {
     border-radius: 14px;

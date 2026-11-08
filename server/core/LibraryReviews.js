@@ -44,19 +44,30 @@ async function snapshot(dirs) {
     return {archives, signature};
 }
 
-async function ratingRows(reader, consume, tempDir) {
+async function ratingRows(reader, consume, tempDir, onProgress = null) {
     const {pipeline} = require('stream/promises');
     const {Transform} = require('stream');
     const iconv = require('iconv-lite');
     let temporary;
     try {
-        if (reader.archiveType === '7z') {
+        if (reader.uses7z) {
+            onProgress?.({phase:'Распаковка файла оценок',done:0,total:null});
             temporary = path.join(tempDir || require('os').tmpdir(),`ratings-${crypto.randomBytes(12).toString('hex')}.json`);
             await fs.ensureDir(path.dirname(temporary));
             await reader.extractToFile('books.json',temporary);
         }
         for (const encoding of ['utf8','win1251']) {
+            const entry = temporary ? await fs.stat(temporary) : await reader.zip.entry?.('books.json');
             const source = temporary ? fs.createReadStream(temporary) : await reader.zip.stream('books.json');
+            const total = Number.isFinite(entry?.size) && entry.size > 0 ? entry.size : null;
+            const phase = encoding === 'utf8' ? 'Чтение файла оценок' : 'Чтение оценок в Windows-1251';
+            let bytes = 0;
+            onProgress?.({phase,done:0,total,unit:'bytes'});
+            const meter = new Transform({transform(chunk, unused, callback) {
+                bytes += chunk.length;
+                onProgress?.({phase,done:bytes,total,unit:'bytes'});
+                callback(null,chunk);
+            }});
             const decoded = iconv.decodeStream(encoding);
             const verify = new Transform({decodeStrings:false, transform(chunk, unused, callback) {
                 if (encoding === 'utf8' && String(chunk).includes('\uFFFD')) return callback(Object.assign(new Error('Invalid UTF-8'),{code:'INVALID_RATING_ENCODING'}));
@@ -64,7 +75,7 @@ async function ratingRows(reader, consume, tempDir) {
             }});
             try {
                 const parser = new (require('@streamparser/json-node').JSONParser)({paths:['$.*'],keepStack:false,stringBufferSize:64 * 1024});
-                await pipeline(source,decoded,verify,parser,async rows => {
+                await pipeline(source,meter,decoded,verify,parser,async rows => {
                     for await (const row of rows) consume(row.value);
                 });
                 return;

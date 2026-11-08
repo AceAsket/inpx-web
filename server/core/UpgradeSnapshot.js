@@ -8,7 +8,8 @@ async function prepare(config) {
     let previous;
     try {previous = await fs.readJson(marker);} catch (error) {if (error.code !== 'ENOENT') throw error;}
     if (previous?.version === config.version) return previous.snapshot || null;
-    const targets = {...require('./BackupTransaction').targets(config), public:path.join(config.dataDir, 'public')};
+    const targets = {...require('./BackupTransaction').targets(config), public:path.join(config.dataDir, 'public'),
+        'reader-backgrounds':path.join(config.dataDir, 'reader-backgrounds')};
     const existing = [];
     for (const [name, target] of Object.entries(targets)) {
         if (target && await fs.pathExists(target)) existing.push([name, target]);

@@ -179,7 +179,7 @@ class BookPage extends BasePage {
                 // loading reviews here can time out before Kindle gets a link.
                 bookInfo = {book: record, cover: '', fb2: false};
             } else if (record) {
-                ({bookInfo} = await this.webWorker.getBookCardInfo(bookUid));
+                ({bookInfo} = await this.webWorker.getBookCardInfo(bookUid, {lazyExtras:!this.webWorker.remoteLib}));
             }
 
             if (bookInfo) {
@@ -190,7 +190,7 @@ class BookPage extends BasePage {
                 const links = acquisitionLinks.forBook({...bookInfo.book, _uid:bookUid}, this.config, req.opdsUser);
 
                 //entry
-                const e = this.makeEntry({
+                const e = this.makeBookEntry({...bookInfo.book, _uid:bookUid}, {
                     id: bookUid,
                     title: bookInfo.book.title || 'Без названия',
                 });

@@ -9,6 +9,7 @@ const ZipReader = require('./core/ZipReader');
 const imageUtils = require('./core/ImageUtils');
 const bookConverter = require('./core/BookConverter');
 const bookNaming = require('./core/BookNaming');
+const bookDownloadHeaders = require('./core/BookDownloadHeaders');
 const crypto = require('crypto');
 const webAppDir = require('../build/appdir');
 const externalTools = require('./core/ExternalTools');
@@ -218,7 +219,7 @@ function imageCacheExt(contentType = '') {
     return '';
 }
 
-async function sendCachedCover(res, cacheDir, cacheKey) {
+async function sendCachedCover(res, cacheDir, cacheKey, checkState = () => {}) {
     for (const item of [
         {ext: '.png', type: 'image/png'},
         {ext: '.jpg', type: 'image/jpeg'},
@@ -228,8 +229,10 @@ async function sendCachedCover(res, cacheDir, cacheKey) {
         if (!await fs.pathExists(cacheFile))
             continue;
 
+        checkState();
         await fs.utimes(cacheFile, new Date(), new Date());
-        res.set('Cache-Control', 'public, max-age=2592000, immutable');
+        checkState();
+        res.set('Cache-Control', 'private, no-cache');
         res.type(item.type);
         res.sendFile(cacheFile);
         return true;
@@ -462,6 +465,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
     const webAppBasePath = normalizeWebAppBasePath(config.rootPathStatic);
     const webAppRoutePrefix = (webAppBasePath === '/' ? '' : webAppBasePath.slice(0, -1));
     require('./core/ReaderSpeech').registerSpeechRoute(app, config);
+    if (webWorker) require('./core/ReaderAssets').register(app, config, webWorker, security);
     if (webWorker && security) {
         const guard = new (require('./core/ProfileAccess'))(config, webWorker, security).httpGuard();
         app.use([config.bookPathStatic, `${webAppRoutePrefix}/cover`, `${webAppRoutePrefix}/reader-lab-source`, `${webAppRoutePrefix}/admin-backups`], guard);
@@ -522,7 +526,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
 
                     await writeCachedCover(cacheDir, coverCacheKey(libid, archive.sourceId), {data: cover, contentType: type});
 
-                    res.set('Cache-Control', 'public, max-age=2592000, immutable');
+                    res.set('Cache-Control', 'private, no-cache');
                     res.type(type);
                     res.send(cover);
                     return;
@@ -541,7 +545,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
             if (embeddedCover) {
                 await writeCachedCover(cacheDir, coverCacheKey(libid, normalizedSourceId), embeddedCover);
 
-                res.set('Cache-Control', 'public, max-age=2592000, immutable');
+                res.set('Cache-Control', 'private, no-cache');
                 res.type(embeddedCover.contentType);
                 res.send(embeddedCover.data);
                 return;
@@ -564,35 +568,51 @@ module.exports = (app, config, webWorker = null, security = null) => {
         const abort = () => controller.abort();
         const close = () => {if (!res.writableFinished) abort();};
         req.once('aborted', abort); res.once('close', close);
+        const db = webWorker?.db, generation = webWorker?.libraryAssetGeneration, coverGeneration = webWorker?.coverCacheGeneration;
+        const checkState = () => {
+            if (db !== webWorker?.db || generation !== webWorker?.libraryAssetGeneration || coverGeneration !== webWorker?.coverCacheGeneration)
+                throw Object.assign(new Error('Библиотека обновлена. Повторите загрузку обложки.'), {code:'INPX_LIBRARY_CHANGED'});
+        };
+        let publishedFile = '';
         try {
+            checkState();
             const book = await webWorker.getBookRecordByUid(String(req.query.uid || '').trim());
+            checkState();
             if (!book) {
                 res.sendStatus(404);
                 return;
             }
             const cacheDir = config.coverDir || `${config.publicFilesDir}/cover`;
             const cacheKey = require('./core/BookAssets').coverCacheKey(book);
-            if (await sendCachedCover(res, cacheDir, cacheKey))
+            if (await sendCachedCover(res, cacheDir, cacheKey, checkState))
                 return;
             //Обложки списка - фоновая работа: они не должны задерживать открытую карточку.
             //Пока запрос ждёт очереди, обложку мог сохранить в кэш другой запрос
             await webWorker.runBackground(async() => {
-                if (await sendCachedCover(res, cacheDir, cacheKey))
+                checkState();
+                if (await sendCachedCover(res, cacheDir, cacheKey, checkState))
                     return;
+                checkState();
                 const cover = await webWorker.getBookCover(book);
+                checkState();
                 if (!cover) {
                     //без кэша браузер снова запрашивает обложку, которой нет, при каждом показе списка
-                    res.set('Cache-Control', 'public, max-age=86400');
+                    res.set('Cache-Control', 'private, no-cache');
                     res.sendStatus(404);
                     return;
                 }
+                checkState();
+                const extension = imageCacheExt(cover.contentType);
+                if (extension) publishedFile = path.join(cacheDir, cacheKey + extension);
                 await writeCachedCover(cacheDir, cacheKey, cover);
-                res.set('Cache-Control', 'public, max-age=2592000, immutable');
+                checkState();
+                res.set('Cache-Control', 'private, no-cache');
                 res.type(cover.contentType).send(cover.data);
             }, () => req.socket.destroyed || res.destroyed, controller.signal);
         } catch (error) {
+            if (error.code === 'INPX_LIBRARY_CHANGED' && publishedFile) await fs.remove(publishedFile).catch(() => {});
             if (res.destroyed) return;
-            if (isResourceError(error)) {
+            if (isResourceError(error) || error.code === 'INPX_LIBRARY_CHANGED') {
                 res.set('Cache-Control', 'no-store');
                 res.set('Retry-After', '1');
                 res.status(503).type('text/plain; charset=utf-8').send(error.message);
@@ -649,7 +669,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
             return res.sendStatus(403);
         }
         const fileName = path.basename(String(req.params.fileName || '').trim());
-        if (!fileName || fileName !== req.params.fileName || path.extname(fileName).toLowerCase() !== '.zip') {
+        if (!fileName || fileName !== req.params.fileName || !/\.zip(?:\.enc)?$/i.test(fileName)) {
             res.sendStatus(404);
             return;
         }
@@ -665,7 +685,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
     });
 
     require('./core/BatchDownload').register(app, config);
-    app.get(`${config.bookPathStatic}/by-uid`, async(req, res) => {
+    app.get([`${config.bookPathStatic}/by-uid`, `${config.bookPathStatic}/by-uid/:downloadName`], async(req, res) => {
         if (!webWorker) {
             res.sendStatus(404);
             return;
@@ -686,13 +706,18 @@ module.exports = (app, config, webWorker = null, security = null) => {
                 return;
             }
 
-            const {link} = await webWorker.getBookLink(bookUid);
+            const {link, downFileName} = await webWorker.getBookLink(bookUid);
             let href = link;
 
             if (fileType)
                 href += `/${fileType}`;
             else if (zip)
                 href += '/zip';
+
+            if (fileType || zip) {
+                const name = fileType === 'raw' ? downFileName : bookConverter.getConvertedFileName(downFileName || 'book', fileType || 'zip');
+                href += '/' + encodeURIComponent(bookDownloadHeaders.fallbackFilename(name));
+            }
 
             res.redirect(302, `${href}?uid=${encodeURIComponent(bookUid)}`);
         } catch(e) {
@@ -763,10 +788,19 @@ module.exports = (app, config, webWorker = null, security = null) => {
                     //отдача файла
                     if (gzipped)
                         res.set('Content-Encoding', 'gzip');
-                    res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(downFileName)}`);
+                    res.set('Content-Disposition', bookDownloadHeaders.disposition(downFileName));
                     const mimeType = getBookDownloadMimeType(downFileName);
                     if (mimeType)
                         res.set('Content-Type', mimeType);
+                    if (config.kosyncEnabled !== false && webWorker?.koSync && fileType !== 'zip'
+                        && ['fb2', 'epub', 'pdf', 'djvu'].includes(path.extname(downFileName).slice(1).toLowerCase())
+                        && await fs.pathExists(webWorker.koSync.file)) {
+                        try {
+                            const syncFile = gzipped ? `${bookFile}.raw` : bookFile;
+                            if (gzipped) await utils.ensureGunzipFile(bookFile, syncFile, desc.size);
+                            await webWorker.koSync.linkDownload(syncFile, desc.bookUid, path.extname(downFileName).slice(1).toLowerCase());
+                        } catch (error) { log(LM_WARN, `KOSync: не удалось связать скачанный файл: ${error.message}`); }
+                    }
                     res.sendFile(bookFile);
                     return;
                 } else {
@@ -821,6 +855,10 @@ module.exports = (app, config, webWorker = null, security = null) => {
     const webAppStaticOptions = {
         setHeaders(res, filePath) {
             const fileName = path.basename(filePath).toLowerCase();
+            if (fileName === 'index.html') {
+                res.set('Cache-Control', 'no-cache, must-revalidate');
+                return;
+            }
             if (['index.html', 'sw.js', 'manifest.webmanifest', 'reader.webmanifest', 'build-id.txt', 'version.txt'].includes(fileName)) {
                 res.set('Cache-Control', 'no-store');
                 return;

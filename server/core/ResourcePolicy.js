@@ -115,17 +115,19 @@ function resolve(env = process.env, machine = hardware()) {
     const estimated = Math.max(1, Math.min(8, Math.ceil(machine.cpu * 2), Math.floor((machine.memoryLimit * 0.7) / (256 * MiB))));
     const hardMax = integer(env, 'INPX_RESOURCE_MAX_PROCESSES', estimated, 1, 16);
     const overrides = {};
+    if (env.INPX_RESOURCE_TOTAL !== undefined && env.INPX_RESOURCE_TOTAL !== '')
+        overrides.total = integer(env, 'INPX_RESOURCE_TOTAL', 1, 1, 16);
     for (const [key, variable] of Object.entries({images:'INPX_RESOURCE_IMAGES', reviews:'INPX_RESOURCE_REVIEWS', conversions:'INPX_RESOURCE_CONVERSIONS', background:'INPX_RESOURCE_BACKGROUND'})) {
         if (env[variable] !== undefined && env[variable] !== '') overrides[key] = integer(env, variable, 1, 1, 16);
     }
     const choices = Object.entries(profiles).map(([id, item]) => {
-        const limits = {total:Math.min(item.total, hardMax, estimated)};
+        const limits = {total:overrides.total ? Math.min(overrides.total, hardMax) : Math.min(item.total, hardMax, estimated)};
         for (const key of ['images','reviews','conversions','background']) limits[key] = Math.min(overrides[key] || item[key], limits.total);
         return {id, name:item.name, limits};
     });
     const current = choices.find(item => item.id === selected);
     const launchEnv = {};
-    for (const name of ['INPX_RESOURCE_MAX_PROCESSES', 'INPX_RESOURCE_IMAGES', 'INPX_RESOURCE_REVIEWS',
+    for (const name of ['INPX_RESOURCE_MAX_PROCESSES', 'INPX_RESOURCE_TOTAL', 'INPX_RESOURCE_IMAGES', 'INPX_RESOURCE_REVIEWS',
         'INPX_RESOURCE_CONVERSIONS', 'INPX_RESOURCE_BACKGROUND', 'INPX_RESOURCE_TASK_TIMEOUT_MS', 'INPX_RESOURCE_BENCH_TIMEOUT_MS']) {
         if (env[name] !== undefined && env[name] !== '') launchEnv[name] = String(Number(env[name]));
     }

@@ -44,19 +44,16 @@
             </div>
         </div>
 
-        <Reader v-else :standalone-source="standaloneSource" />
-
-        <div v-if="standaloneSource" class="reader-lab-floating-actions">
-            <q-btn flat dense no-caps icon="la la-file-upload" label="Другой FB2" @click="openFilePicker" />
-            <q-btn flat dense no-caps icon="la la-times" label="Сбросить" @click="resetStandaloneSource" />
-            <input
-                ref="floatingFileInput"
-                class="reader-lab-file-input"
-                type="file"
-                accept=".fb2,application/xml,text/xml"
-                @change="handleFileSelected"
-            >
-        </div>
+        <Reader v-else :standalone-source="standaloneSource">
+            <template #source-actions>
+                <q-btn flat dense round icon="la la-file-upload" aria-label="Другой FB2" title="Другой FB2" @click="openFilePicker" />
+                <q-btn flat dense round icon="la la-times" aria-label="Сбросить локальную книгу" title="Сбросить" @click="resetStandaloneSource" />
+                <input
+                    ref="floatingFileInput" class="reader-lab-file-input" type="file"
+                    accept=".fb2,application/xml,text/xml" @change="handleFileSelected"
+                >
+            </template>
+        </Reader>
     </div>
 </template>
 
@@ -65,6 +62,7 @@ import vueComponent from '../vueComponent.js';
 import Reader from './Reader.vue';
 
 const componentOptions = {
+    name: 'ReaderLab',
     components: {
         Reader,
     },
@@ -326,20 +324,6 @@ export default vueComponent(ReaderLab);
     display: none;
 }
 
-.reader-lab-floating-actions {
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    z-index: 30;
-    display: flex;
-    gap: 8px;
-    padding: 8px;
-    border: 1px solid rgba(76, 53, 36, 0.14);
-    border-radius: 999px;
-    background: rgba(255, 251, 244, 0.9);
-    backdrop-filter: blur(10px);
-}
-
 @media (max-width: 720px) {
     .reader-lab-empty {
         padding: 14px;
@@ -350,13 +334,5 @@ export default vueComponent(ReaderLab);
         border-radius: 22px;
     }
 
-    .reader-lab-floating-actions {
-        top: auto;
-        right: 10px;
-        bottom: 10px;
-        left: 10px;
-        justify-content: center;
-        border-radius: 18px;
-    }
 }
 </style>

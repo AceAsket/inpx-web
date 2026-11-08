@@ -4,11 +4,13 @@
         <Notify ref="notify" />
         <StdDialog ref="stdDialog" />
 
-        <router-view v-if="accessGranted" v-slot="{ Component }">
-            <keep-alive>
-                <component :is="Component" class="col" />
-            </keep-alive>
-        </router-view>        
+        <LibraryShell v-if="accessGranted" class="col" :enabled="isShelvesLayout">
+            <router-view v-slot="{ Component }">
+                <keep-alive exclude="Reader,ReaderLab,CatalogBook,CatalogEntity">
+                    <component :is="Component" class="col" />
+                </keep-alive>
+            </router-view>
+        </LibraryShell>
     </div>
 </template>
 
@@ -21,7 +23,8 @@ import Notify from './share/Notify.vue';
 import StdDialog from './share/StdDialog.vue';
 
 import Api from './Api/Api.vue';
-import Search from './Search/Search.vue';
+import LibraryShell from './Library/LibraryShell.vue';
+import {appearance, appearanceRedirect} from './Library/libraryModel';
 
 const componentOptions = {
     components: {
@@ -29,7 +32,7 @@ const componentOptions = {
         Notify,
         StdDialog,
 
-        Search,
+        LibraryShell,
     },
     watch: {
         darkTheme(newValue) {
@@ -37,13 +40,27 @@ const componentOptions = {
         },
         '$route.path'() {
             this.applyPwaManifest();
+            this.applyCatalogAppearance();
         },
+        catalogAppearance() {
+            const redirect = appearanceRedirect(this.$route, this.catalogAppearance);
+            if (redirect) this.$router.replace(redirect);
+            this.applyCatalogAppearance();
+        },
+        accessGranted() {this.applyInitialUiDefaults();},
+        config() {this.applyInitialUiDefaults();},
     },
 
 };
 class App {
     _options = componentOptions;
     accessGranted = false;
+
+    applyInitialUiDefaults() {
+        const defaults = this.config.uiDefaults;
+        if (this.accessGranted && !this.settings.defaultsSet && defaults && typeof defaults === 'object' && !Array.isArray(defaults))
+            this.commit('setSettings', {...defaults, defaultsSet: true});
+    }
 
     created() {
         this.commit = this.$store.commit;
@@ -99,6 +116,7 @@ class App {
 
         this.applyTheme(this.darkTheme);
         this.applyPwaManifest();
+        this.applyCatalogAppearance();
         this.setAppTitle();
     }
 
@@ -122,6 +140,21 @@ class App {
         return !!this.settings.darkTheme;
     }
 
+    get catalogAppearance() {
+        return appearance(this.settings.catalogAppearance);
+    }
+
+    get isShelvesLayout() {
+        return this.catalogAppearance === 'shelves' && !this.$route.path.startsWith('/reader');
+    }
+
+    applyCatalogAppearance() {
+        if (this.catalogAppearance === 'shelves' && !this.settings.shelvesHintDismissed)
+            this.commit('setSettings', {shelvesHintDismissed: true});
+        if (this.isShelvesLayout) document.body.dataset.catalogAppearance = 'shelves';
+        else delete document.body.dataset.catalogAppearance;
+    }
+
     applyTheme(value) {
         this.$q.dark.set(!!value);
     }
@@ -131,14 +164,14 @@ class App {
         if (!manifest)
             return;
 
-        manifest.setAttribute('href', this.isReaderRoute ? 'reader.webmanifest?v=reader-icon-4' : 'manifest.webmanifest?v=catalog-icon-4');
+        manifest.setAttribute('href', this.isReaderRoute ? 'reader.webmanifest?v=reader-icon-4' : 'manifest.webmanifest?v=catalog-icon-5');
         const appleTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
         if (appleTitle)
             appleTitle.setAttribute('content', this.isReaderRoute ? 'INPX Reader' : 'INPX Web');
 
         const appleIcon = document.querySelector('link[rel="apple-touch-icon"]');
         if (appleIcon)
-            appleIcon.setAttribute('href', this.isReaderRoute ? 'reader-icon-192.png?v=reader-icon-4' : 'pwa-icon-192.png?v=catalog-icon-4');
+            appleIcon.setAttribute('href', this.isReaderRoute ? 'reader-icon-192.png?v=reader-icon-4' : 'pwa-icon-192.png?v=catalog-icon-5');
 
         let favicon = document.querySelector('link[rel="icon"]');
         if (!favicon) {
@@ -147,7 +180,7 @@ class App {
             document.head.appendChild(favicon);
         }
         favicon.setAttribute('type', 'image/x-icon');
-        favicon.setAttribute('href', this.isReaderRoute ? 'reader-favicon.ico?v=reader-icon-4' : 'favicon.ico?v=catalog-icon-4');
+        favicon.setAttribute('href', this.isReaderRoute ? 'reader-favicon.ico?v=reader-icon-4' : 'favicon.ico?v=catalog-icon-5');
     }
 
     setAppTitle(title) {
