@@ -1061,7 +1061,7 @@ async function testUserBackupExportsAndRestoresReaderState() {
 
 async function testProfileReadingSummaryLeavesOutReadBooks() {
     const worker = makeWorker();
-    worker.getBookRecordByUid = async() => ({title: 'Книга', author: 'Автор', ext: 'fb2', librate:4});
+    worker.getBookRecordByUid = async() => ({title: 'Книга', author: 'Автор', ext: 'fb2', librate:4,genre:'prose_classic',year:'2025'});
     const summary = await worker.buildUserReadingSummary({readerProgress: {
         reading: {percent: 0.5},
         finished: {percent: 1},
@@ -1071,12 +1071,14 @@ async function testProfileReadingSummaryLeavesOutReadBooks() {
     assert.deepStrictEqual(summary.items.map(book => book.bookUid), ['reading']);
     assert.strictEqual(summary.count, 1);
     assert.strictEqual(summary.items[0].librate, 4, 'The current book keeps its existing catalog rating');
+    assert.strictEqual(summary.items[0].genre, 'prose_classic');
+    assert.strictEqual(summary.items[0].publishedYear, '2025');
 }
 
 async function testReaderHomeKeepsUnavailableProgressVisible() {
     const worker = makeWorker();
     worker.getBookRecordByUid = async(uid) => uid === 'available'
-        ? {title: 'Доступная книга', author: 'Автор', ext: 'fb2', librate:5} : null;
+        ? {title: 'Доступная книга', author: 'Автор', ext: 'fb2', librate:5,genre:'prose_classic',publishedYear:'2024-01-01'} : null;
     const user = {readerProgress: Object.fromEntries(Array.from({length: 12}, (_, i) => [
         `missing-${i}`, {percent: (i + 1) / 100, hidden: false, updatedAt: `2026-01-${String(i + 1).padStart(2, '0')}`},
     ]))};
@@ -1101,6 +1103,9 @@ async function testReaderHomeKeepsUnavailableProgressVisible() {
     assert.strictEqual(found.items[0].bookUid, 'available');
     assert.strictEqual(found.items[0].unavailable, false);
     assert.strictEqual(found.items[0].librate, 5, 'Recent reading keeps the rating without a metadata lookup');
+    assert.strictEqual(found.items[0].genre, 'prose_classic');
+    assert.strictEqual(found.items[0].publishedYear, '2024');
+    assert(missing.items.every(book => !book.genre && !book.publishedYear), 'Missing metadata is not invented from the progress date');
     assert.strictEqual((await worker.getUserReadingLibrary(user, {state: 'read'})).items[0].bookUid, 'finished');
     assert.strictEqual((await worker.getUserReadingLibrary(user, {state: 'hidden'})).items[0].bookUid, 'hidden');
 

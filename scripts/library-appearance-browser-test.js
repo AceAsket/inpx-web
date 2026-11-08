@@ -27,13 +27,13 @@ async function fixture(directory) {
     ];
     const books = Array.from({length: 3}, (_, edition) => seedBooks.map(([author, title]) => [author, edition ? `${title} · Издание ${edition + 1}` : title])).flat();
     const date = new Date().toISOString().slice(0, 10);
-    const rows = books.map(([author, title], index) => [author + ':', 'prose:', title, index % 4 === 0 ? 'Избранные произведения' : '', String(index % 4 + 1), String(index + 1), '100', String(index + 1), '0', 'fb2', date, 'ru', '4', ''].join('\x04'));
+    const rows = books.map(([author, title], index) => [author + ':', 'prose_classic:', title, index % 4 === 0 ? 'Избранные произведения' : '', String(index % 4 + 1), String(index + 1), '100', String(index + 1), '0', 'fb2', date, 'ru', '4', ''].join('\x04'));
     const epubFile = path.join(directory, 'source.epub');
     await require('./epub-fb2-tests').fixture(epubFile);
     const epub = await fs.readFile(epubFile);
-    rows.push(['Тестовый Автор:', 'prose:', 'Я. Книга EPUB', '', '', '37', String(epub.length), '37', '0', 'epub', date, 'ru', '4', ''].join('\x04'));
+    rows.push(['Тестовый Автор:', 'prose_classic:', 'Я. Книга EPUB', '', '', '37', String(epub.length), '37', '0', 'epub', date, 'ru', '4', ''].join('\x04'));
     await archive(path.join(directory, 'sample.inpx'), [['collection.info', 'Библиотека для проверки интерфейса\n'], ['version.info', '20261104'], ['sample.inp', rows.join('\n') + '\n']]);
-    await archive(path.join(directory, 'sample.zip'), books.map(([author, title], index) => [`${index + 1}.fb2`, `<?xml version="1.0" encoding="utf-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>prose</genre><author><first-name>${author}</first-name></author><book-title>${title}</book-title><annotation><p>Книга для проверки интерфейса INPX Reader.</p></annotation><lang>ru</lang></title-info></description><body><section id="chapter"><title><p>Глава первая</p></title>${Array.from({length: 120}, (_, i) => `<p>Абзац ${i + 1}. За окном начиналось утро. Это текст тестовой библиотеки для проверки чтения, сохранения позиции и возвращения к книге.</p>`).join('')}</section></body></FictionBook>`]).concat([['37.epub', epub]]));
+    await archive(path.join(directory, 'sample.zip'), books.map(([author, title], index) => [`${index + 1}.fb2`, `<?xml version="1.0" encoding="utf-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>prose_classic</genre><author><first-name>${author}</first-name></author><book-title>${title}</book-title><date value="2025-01-01">2025</date><annotation><p>Книга для проверки интерфейса INPX Reader.</p></annotation><lang>ru</lang></title-info></description><body><section id="chapter"><title><p>Глава первая</p></title>${Array.from({length: 120}, (_, i) => `<p>Абзац ${i + 1}. За окном начиналось утро. Это текст тестовой библиотеки для проверки чтения, сохранения позиции и возвращения к книге.</p>`).join('')}</section></body></FictionBook>`]).concat([['37.epub', epub]]));
     await fs.writeJson(path.join(directory, 'config.json'), {loggingEnabled: false, adminPassword: 'appearance-local-test',
         allowAnonymousAccess: true, onlineReaderEnabled: true, discovery: {enabled: true}});
 }
@@ -61,11 +61,13 @@ if (require.main === module) (async() => {
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [], actions = [];
         let readingFailure = '', recommendationMode = 'full', recommendationBook = null, heldRecommendation = null;
+        const overviewPreviews = [];
         await page.routeWebSocket('**/ws', socket => {
             const server = socket.connectToServer(), bookRequests = new Set(), authorRequests = new Set();
             socket.onMessage(message => {
                 try {
                     const request = JSON.parse(String(message));
+                    if (request.action === 'get-book-preview') overviewPreviews.push(request.bookUid);
                     if (request.action === 'get-discovery-shelves' && request.recommendationsOnly && recommendationBook) {
                         socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));
                         const reply = () => socket.send(JSON.stringify({requestId:request.requestId,shelves:recommendationMode === 'empty' ? []
@@ -203,6 +205,9 @@ if (require.main === module) (async() => {
         assert((await appPromo.boundingBox()).height<=96,'Restoring from settings persists and keeps the compact size');
         await page.getByRole('link', {name: 'Обзор', exact: true}).click();
         await page.locator('.current-book').waitFor();
+        await page.getByText('Год: 2025',{exact:true}).waitFor();
+        assert.equal(await page.locator('.current-book__genres').innerText(),'Жанр: Классическая проза');
+        assert.deepEqual([...new Set(overviewPreviews)],[uids[2]],'Only the current book loads missing metadata, not the rest of the history');
         assert.equal(await page.locator('.current-book .book-cover-rating').getAttribute('aria-label'),'Оценка библиотеки: 4 из 5','The reading summary carries the existing INPX rating');
         await page.locator('.book-shelf').first().waitFor();
         await page.waitForFunction(() => !document.querySelector('.overview-loading'));

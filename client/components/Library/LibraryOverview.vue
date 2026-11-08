@@ -28,6 +28,8 @@
                                 <button type="button" class="current-book__title" @click="library.openCard(books.current)">{{ books.current.title }}</button>
                                 <div class="current-book__author">{{ books.current.author || 'Автор не указан' }}</div>
                                 <div v-if="books.current.series" class="current-book__series">{{ books.current.series }}<span v-if="books.current.serno"> · {{ books.current.serno }}</span></div>
+                                <div v-if="currentGenres.length" class="current-book__genres" :title="currentGenres.join(', ')">Жанр: {{ currentGenres.join(', ') }}</div>
+                                <div v-if="currentYear" class="current-book__year">Год: {{ currentYear }}</div>
                             </div>
                         </div>
                         <div class="current-book__footer">
@@ -81,6 +83,7 @@ import CatalogSuggestions from './CatalogSuggestions.vue';
 import {homeBooks, progress, readable, bookUid} from './libraryModel';
 import {useLibraryPage} from './useLibraryPage';
 import {catalogTarget, effectiveCatalogScope} from './catalogSearchModel';
+import previewMetadata from '../../../shared/BookPreview';
 
 const {library, active} = useLibraryPage('Обзор', value => value.repository.loadHome({freshReading: true}));
 const {state, repository, config, settings} = library;
@@ -91,6 +94,26 @@ const searchFilters = computed(() => effectiveCatalogScope({}, settings.value, c
 const suggestionContext = computed(() => String(state.revision));
 watch(() => [active.value, state.revision], () => {searchFocused.value = false; activeSuggestionId.value = undefined; suggestionsExpanded.value = false;});
 const books = computed(() => homeBooks(state.reading?.items || []));
+const currentDetails = ref({});
+const currentGenres = computed(() => previewMetadata.tokens(books.value.current?.genre || currentDetails.value.genres)
+    .map(code => library.genreMap.value.get(code) || code));
+const currentYear = computed(() => previewMetadata.year(books.value.current?.publishedYear)
+    || previewMetadata.year(books.value.current?.year) || previewMetadata.year(currentDetails.value.publishedYear));
+watch([active, () => state.revision, () => bookUid(books.value.current || {})], async([enabled, revision, uid], previous, cleanup) => {
+    currentDetails.value = {};
+    if (!enabled || !uid) return;
+    library.ensureGenres().catch(() => {});
+    if (currentYear.value && previewMetadata.tokens(books.value.current.genre).length) return;
+    const controller = new AbortController();
+    cleanup(() => controller.abort());
+    try {
+        // Only the current book needs a bounded prefix read; the rest of the
+        // reading history remains an index-only query.
+        const response = await library.api.getBookPreview(uid, {signal:controller.signal});
+        if (!controller.signal.aborted && response?.bookPreview?.bookUid === uid)
+            currentDetails.value = {publishedYear:previewMetadata.year(response.bookPreview.publishedYear), genres:previewMetadata.tokens(response.bookPreview.genres)};
+    } catch (_) { /* Optional metadata must not block the reading card. */ }
+}, {immediate:true});
 const recommendations = computed(() => {
     const reading = new Map((state.reading?.items || []).map(book => [bookUid(book),book]));
     return state.recommendations.map(book => {
@@ -137,6 +160,8 @@ input::placeholder {color: var(--app-muted); opacity: 1;}
 .current-book__title {display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; padding: 0; background: transparent; color: var(--app-text); border: 0; text-align: left; font: inherit; font-weight: 550; font-size: 19px; line-height: 1.4; cursor: pointer; overflow-wrap: anywhere;}
 .current-book__author {color: var(--app-muted); margin-top: 6px; font-size: 14px; line-height: 1.5;}
 .current-book__series {color: var(--app-muted); font-size: 12px; margin-top: 4px; line-height: 1.5;}
+.current-book__genres, .current-book__year {color: var(--app-muted); font-size: 12px; margin-top: 6px; line-height: 1.5;}
+.current-book__genres {display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;}
 .current-book__footer {display: flex; align-items: flex-end; gap: 20px; margin-top: auto; padding-top: 16px;}
 .current-book__progress {flex: 1; min-width: 0; font-size: 12px; color: var(--app-muted); padding-bottom: 5px;}
 progress {display: block; margin-top: 7px; width: 100%; height: 4px; border: 0; border-radius: 0; appearance: none; background: var(--app-border); color: var(--app-primary);}

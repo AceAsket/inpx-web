@@ -14,7 +14,7 @@ inpx-web-7z
 
 Стабильная версия — **1.8.1**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.1`. Для разработки используется ветка `develop`.
 
-Тестовая версия — **1.8.2-rc.19**: [релиз и загрузки](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.19), Docker `aceasket/inpx-web-7z:1.8.2-rc.19`. Исправлено переключение поиска по названию, автору и серии. Добавлено чтение ZIP PPMd через 7-Zip; обновлены Telegram-бот, шрифт и имена файлов `/ebook`, рейтинги обложек и компактный скрываемый QR приложения. [Изменения RC19](./docs/rc19-release-notes.md). Стабильный `latest` остаётся на 1.8.1.
+Тестовая версия — **1.8.2-rc.20**: [релиз и загрузки](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.20), Docker `aceasket/inpx-web-7z:1.8.2-rc.20`. Исправлены права исполняемых файлов в ZIP; приложение и конвертеры проверяются после распаковки. Широкая карточка «Сейчас читаю» выровнена по высоте с «Недавно читали», добавлены жанр и год. Включает возможности RC19: ZIP PPMd, WebP/JXL, обновлённые Telegram-бот, `/ebook`, рейтинги и QR приложения. [Изменения RC20](./docs/rc20-release-notes.md). Стабильный `latest` остаётся на 1.8.1.
 
 **Сжатые библиотеки с WebP/JXL:** поддерживаются коллекции INPX в ZIP/7z,
 включая ZIP PPMd для LightLib. Обложки и иллюстрации доступны в веб-читалке
@@ -1035,9 +1035,9 @@ npm ci
 npm run release:linux
 ```
 
-Это пример сборки Linux x64. Для упаковки стабильной 1.8.1 нужна утилита `zip`; в `develop` после RC19 используется общий потоковый ZIP-упаковщик Node.js без внешнего `zip`. Для Linux ARM64 используйте `npm run build:linux-arm64 && node build/release.js linux-arm64`, для Windows — `npm run release:win`, для macOS Intel — `npm run release:macos`. Команда `npm run release` собирает все четыре платформы. Результат сборки будет доступен в каталоге `dist/release`.
+Это пример сборки Linux x64. Для упаковки стабильной 1.8.1 нужна утилита `zip`; начиная с RC20 используется общий потоковый ZIP-упаковщик Node.js без внешнего `zip`. Для Linux ARM64 используйте `npm run build:linux-arm64 && node build/release.js linux-arm64`, для Windows — `npm run release:win`, для macOS Intel — `npm run release:macos`. Команда `npm run release` собирает все четыре платформы. Результат сборки будет доступен в каталоге `dist/release`.
 
-В `develop` после RC19 Unix-программа и конвертеры записываются в ZIP с
+Начиная с RC20 Unix-программа и конвертеры записываются в ZIP с
 правами `755`. Actions проверяет права внутри ZIP, распаковывает его системной
 утилитой и запускает приложение и настоящую EPUB/MOBI-конвертацию из
 распакованного каталога без дополнительного `chmod`.

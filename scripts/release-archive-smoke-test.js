@@ -22,7 +22,9 @@ async function extractArchive(archive, directory) {
     // Use the platform's extractor, without repairing permissions afterwards.
     // Our Node ZIP reader writes fresh files and cannot verify this contract.
     if (process.platform === 'win32')
-        execFileSync('tar.exe', ['-xf', path.resolve(archive), '-C', directory], {stdio:'inherit', windowsHide:true});
+        // Git Bash also supplies tar.exe, which treats D: as a remote host.
+        execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows','System32','tar.exe'),
+            ['-xf', path.resolve(archive), '-C', directory], {stdio:'inherit', windowsHide:true});
     else execFileSync('unzip', ['-q', path.resolve(archive), '-d', directory], {stdio:'inherit'});
 }
 

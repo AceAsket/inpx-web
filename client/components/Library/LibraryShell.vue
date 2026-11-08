@@ -197,7 +197,7 @@ async function login() {
     try {await root.api.showProfileLoginDialog('', {required: false}); await root.api.updateConfig();}
     catch (error) {root.stdDialog.alert(error.message, 'Вход в профиль');}
 }
-provide(libraryContextKey, {state, repository, config, settings, api: root.api, openBook, openDetails, openActions, openCard, login,
+provide(libraryContextKey, {state, repository, config, settings, genreMap, ensureGenres, api: root.api, openBook, openDetails, openActions, openCard, login,
     openSettings: () => {settingsVisible.value = true;},
     openProfiles: () => {profilesVisible.value = true;},
     openLists: book => {listsBook.value = book ? {...book, _uid: bookUid(book)} : null; listsVisible.value = true;},

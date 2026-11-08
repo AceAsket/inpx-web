@@ -33,6 +33,7 @@ const bookAssets = require('./BookAssets');
 const bookConverter = require('./BookConverter');
 const bookNaming = require('./BookNaming');
 const bookFormats = require('../../shared/BookFormats');
+const previewMetadata = require('../../shared/BookPreview');
 const runtimeMetrics = require('./RuntimeMetrics');
 const resourceRuntime = require('./ResourceRuntime');
 const {isResourceError} = require('./ResourcePolicy');
@@ -3551,6 +3552,8 @@ class WebWorker {
                 ext: book.ext || '',
                 librate: book.librate || 0,
                 del: book.del || 0,
+                genre: book.genre || '',
+                publishedYear: previewMetadata.year(book.publishedYear) || previewMetadata.year(book.year),
                 percent: Math.max(0, Math.min(1, Number(item.progress.percent || 0) || 0)),
                 sectionId: String(item.progress.sectionId || '').trim(),
                 pageIndex: Math.max(0, Math.round(Number(item.progress.pageIndex || 0) || 0)),
@@ -3618,6 +3621,8 @@ class WebWorker {
                 ext: metadata.ext || '',
                 librate: metadata.librate || 0,
                 del: metadata.del || 0,
+                genre: metadata.genre || '',
+                publishedYear: previewMetadata.year(metadata.publishedYear) || previewMetadata.year(metadata.year),
                 unavailable: !book,
                 percent: item.progress.percent,
                 hidden: item.progress.hidden === true,
