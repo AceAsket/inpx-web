@@ -75,3 +75,27 @@ standalone-поставок установите нужные декодеры �
 [RC19](rc19-release-notes.md). Проверка физических Kindle/KOReader и
 длительные замеры пользовательского стенда остаются аппаратными проверками
 после обновления.
+
+## Публикация проверена 8 ноября 2026
+
+Релиз собран из `4ce423752cf5c8df3e7418310a132afd525e6208` в `develop`.
+
+- [CI Linux, Windows и браузера](https://github.com/AceAsket/inpx-web/actions/runs/42509042745) — успешно.
+- [Четыре standalone-платформы и установщик](https://github.com/AceAsket/inpx-web/actions/runs/42510002955) — успешно; пять файлов загружены в GitHub Release.
+- [Docker web и Silero](https://github.com/AceAsket/inpx-web/actions/runs/42510003033) — успешно, включая настоящую конвертацию и генерацию аудио.
+- [Описание Docker Hub](https://github.com/AceAsket/inpx-web/actions/runs/42510003648) — обновлено без очистки прежних RC.
+
+Публичные Unix ZIP скачаны повторно: SHA-256 совпадают с данными GitHub;
+`inpx-web`, `bin/fbc` и `bin/kindling` имеют права `755` в Linux x64,
+Linux ARM64 и macOS. Выполнение после системной распаковки проверено Actions.
+В полном Linux-образе отдельно прошли гостевая и персональная загрузки MOBI:
+расширения адресов, MIME-тип, имя, длина и сигнатура файла.
+
+| Docker-тег | Проверенный digest |
+| --- | --- |
+| `1.8.2-rc.20` | `sha256:b5f0ac0f45d8c67a21bceb594a06d151177b96e2fc721c1858ddbfa077c1e319` |
+| `1.8.2-rc.20-silero` | `sha256:ca9979f322b921b63f2e17bf74af0890a8444942ebd6d733531a30c3f0d924be` |
+
+Оба образа указывают на исходную ревизию релиза. Сравнение с сохранённым
+снимком подтвердило неизменность десяти старых тегов: `latest`, `1.8.1`,
+RC16–RC19 и их Silero-вариантов. GitHub Latest также остаётся `v1.8.1`.
