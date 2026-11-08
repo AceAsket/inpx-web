@@ -45,3 +45,29 @@ Silero: `aceasket/inpx-web-7z:1.8.2-rc.21-silero`.
 Пересоздайте контейнер с новым тегом, сохранив тома и параметры. Для standalone
 распакуйте весь архив вместе с `bin` в отдельный каталог. Прежние RC
 не перезаписываются; стабильный `latest` остаётся на 1.8.1.
+
+## Публикация проверена 9 ноября 2026
+
+Ревизия релиза: `89e0c49719f2b8934eab576882fdf5be7c6df4e9` из `develop`.
+
+- [CI Linux, Windows и браузера](https://github.com/AceAsket/inpx-web/actions/runs/42526068111) — успешно.
+- [Четыре standalone-платформы и установщик](https://github.com/AceAsket/inpx-web/actions/runs/42526071184) — успешно; пять файлов опубликованы в GitHub Release.
+- [Docker web и Silero](https://github.com/AceAsket/inpx-web/actions/runs/42526071132) — успешно, включая настоящую MOBI-конвертацию и генерацию аудио.
+- [Описание Docker Hub](https://github.com/AceAsket/inpx-web/actions/runs/42526071441) — обновлено без удаления прежних RC.
+
+В публикуемом полном Docker-образе прошли персональная и гостевая загрузки
+MOBI: ASCII-заголовок, расширения адресов, MIME-тип, длина и сигнатура файла.
+Проверены также EPUB/EPUB3 → MOBI, иллюстрации, кириллица, главы и сноски.
+
+Публичные Linux x64, Linux ARM64 и macOS ZIP скачаны повторно. SHA-256
+совпадают с данными GitHub; `inpx-web`, `bin/fbc` и `bin/kindling` имеют
+права `755`. Запуск после системной распаковки проверен релизной матрицей.
+
+| Docker-тег | Проверенный digest |
+| --- | --- |
+| `1.8.2-rc.21` | `sha256:36e78717b7559cacbff56ea2b4259383f02922da10409a92cef2ce0d733e5f22` |
+| `1.8.2-rc.21-silero` | `sha256:abfa23e9365b49dbd6a96d6e34cf89d01020800bc9c1a50b0fcd5ce884542755` |
+
+Оба образа указывают на ревизию релиза. Двенадцать старых тегов — `latest`,
+`1.8.1`, RC16–RC20 и их Silero-варианты — сохранили прежние digest.
+GitHub Latest остаётся `v1.8.1`.
