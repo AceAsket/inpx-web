@@ -523,12 +523,12 @@
                                     <q-icon :name="telegramTokenVisible ? 'la la-eye-slash' : 'la la-eye'" class="password-visibility-toggle" @click="telegramTokenVisible = !telegramTokenVisible" />
                                 </template>
                             </q-input>
-                            <q-select v-model="integrations.telegramProxyMode" outlined dense emit-value map-options label="Маршрут Telegram" :options="telegramProxyModes" />
-                            <q-select v-model="integrations.telegramIpFamily" outlined dense emit-value map-options
+                            <q-select v-model="integrations.telegramProxyMode" outlined dense emit-value map-options behavior="dialog" label="Маршрут Telegram" :options="telegramProxyModes" />
+                            <q-select v-model="integrations.telegramIpFamily" outlined dense emit-value map-options behavior="dialog"
                                 label="IP-семейство Telegram" :options="[{label:'Авто (IPv4 / IPv6)',value:'auto'},{label:'Только IPv4',value:'4'},{label:'Только IPv6',value:'6'}]" />
                             <p class="admin-mail-wide admin-mail-subtitle telegram-connection-hint">{{ telegramConnectionHint }}</p>
                             <template v-if="integrations.telegramProxyMode === 'custom'">
-                                <q-select v-model="integrations.telegramProxyProtocol" outlined dense emit-value map-options label="Протокол прокси" :options="telegramProxyProtocols" />
+                                <q-select v-model="integrations.telegramProxyProtocol" outlined dense emit-value map-options behavior="dialog" label="Протокол прокси" :options="telegramProxyProtocols" />
                                 <q-input v-model="integrations.telegramProxyHost" outlined dense clearable label="Адрес прокси" placeholder="Имя сервера или IP" maxlength="253" autocomplete="off" spellcheck="false" />
                                 <q-input v-model.number="integrations.telegramProxyPort" outlined dense type="number" min="1" max="65535" label="Порт прокси" />
                                 <q-input v-model="integrations.telegramProxyUsername" outlined dense clearable label="Пользователь прокси" autocomplete="off" maxlength="1024" />
@@ -541,7 +541,7 @@
                             <q-input class="admin-mail-wide" v-model="integrations.telegramCaptionTemplate" outlined dense clearable :label="mailUi.telegramCaption" />
                         </div>
                         <q-toggle v-model="integrations.telegramBotEnabled" :disable="!integrations.telegramShareEnabled" label="Интерактивный бот: поиск, списки и получение книг" />
-                        <p class="admin-mail-subtitle">Используйте отдельного бота без webhook. Личный Chat ID указывается в настройках профиля; одноразовая ссылка доступна там же.</p>
+                        <p class="admin-mail-subtitle">Используйте отдельного бота без webhook. Если в профиле указан личный Chat ID, дополнительная привязка не нужна. Если Chat ID не заполнен, подключите чат одноразовой ссылкой из профиля.</p>
                         <TelegramBotStatus v-if="mailExpanded && dialogVisible" ref="telegramBotStatus" />
                     </div>
 

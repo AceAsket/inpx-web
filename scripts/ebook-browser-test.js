@@ -64,6 +64,41 @@ async function pageRecent(context,base,title){
     const text=await response.text();assert(text.includes(he.escape(title))||text.includes(title));assert(text.includes('40%'));
 }
 
+async function checkGuestFormats(browser,directory){
+    const lib=path.join(directory,'guest-library'),data=path.join(directory,'guest-data');await fixture(lib);
+    await fs.copy(path.resolve('dist/tmp/public'),path.join(data,'public'));
+    const port=await unusedPort(),base=`http://127.0.0.1:${port}`;let output='';
+    const child=spawn(process.execPath,[path.resolve('server'),`--data-dir=${data}`,`--config=${lib}/config.json`,`--lib-dir=${lib}`,`--port=${port}`,'--host=127.0.0.1'],
+        {windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,INPX_LIBRARY_SOURCES:'',LIBRARY_SOURCES:'',INPX_TTS_ENABLED:'false',INPX_AUTH_MODE:'local',INPX_REQUIRE_AUTH:'false',INPX_ALLOW_ANONYMOUS_ACCESS:'true',INPX_ENABLE_CONVERSION:'true',INPX_CONVERSION_FORMATS:'fb2,epub,mobi',INPX_MOBI_ENABLED:'true',INPX_ADMIN_PASSWORD:'ebook-guest-fixture'}});
+    for(const stream of[child.stdout,child.stderr])stream.on('data',chunk=>{output=(output+chunk).slice(-5000);});
+    let context;
+    try{
+        let ready=false;for(let i=0;i<120;i++){try{const r=await fetch(base+'/ready');ready=r.ok&&(await r.json()).ready;}catch{}if(ready||child.exitCode!==null)break;await pause(500);}assert(ready,output);
+        context=await browser.newContext({javaScriptEnabled:false,viewport:{width:600,height:900},userAgent:'Mozilla/5.0 (Linux; U; en-US) AppleWebKit/534.26 Version/4.0 Kindle/3.0+'});
+        const page=await context.newPage(),resources=[];page.on('request',r=>resources.push(r.resourceType()));
+        assert.equal((await page.goto(base+'/library/ebook?q='+encodeURIComponent('Книга'))).status(),200);
+        await page.locator('.result h3 a').first().click();await page.locator('.guest-format-form').waitFor();
+        await page.getByLabel('Формат скачивания',{exact:true}).selectOption('mobi');
+        await page.getByRole('button',{name:'Применить формат',exact:true}).click();
+        assert.equal(new URL(page.url()).searchParams.get('format'),'mobi');
+        assert.equal(await page.getByLabel('Формат скачивания',{exact:true}).inputValue(),'mobi');
+        const href=await page.locator('.quick-download a').getAttribute('href');
+        assert(new URL(href,base).pathname.endsWith('.mobi'));
+        const response=await context.request.get(base+href,{maxRedirects:0});
+        assert.equal(response.status(),302);assert(new URL(response.headers().location,base).pathname.endsWith('.mobi'));
+        for(const width of[600,320]){
+            await page.setViewportSize({width,height:900});
+            assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+            await page.screenshot({path:path.join(directory,'ebook-guest-mobi-'+width+'.png'),fullPage:true});
+        }
+        await page.getByLabel('Формат скачивания',{exact:true}).selectOption('raw');await page.getByRole('button',{name:'Применить формат',exact:true}).click();
+        const pending=page.waitForEvent('download');await page.locator('.quick-download a').click();const file=await pending;
+        assert(file.suggestedFilename().endsWith('.fb2'));assert((await fs.readFile(await file.path(),'utf8')).includes('FictionBook'));
+        assert(!resources.some(type=>['script','stylesheet','font','websocket'].includes(type)));
+        console.log('Ebook guest: native format form, typed MOBI links, real FB2 download and 320/600 px without JavaScript passed');
+    }finally{if(context)await context.close();child.kill();}
+}
+
 (async()=>{
     const directory=process.env.INPX_ARTIFACT_DIR||await fs.mkdtemp(path.join(os.tmpdir(),'inpx-ebook-browser-'));await fs.ensureDir(directory);
     let child,browser,page,output='';
@@ -149,6 +184,7 @@ async function pageRecent(context,base,title){
         const denied=await page.goto(base+'/library/ebook/read?'+new URLSearchParams({uid}));assert.equal(denied.status(),401);assert.equal(await page.locator('.reading').count(),0);
         const privateShelf=await page.goto(base+'/library/ebook/shelf?'+new URLSearchParams({id:shelves.own}));assert.equal(privateShelf.status(),401);assert.equal(await page.locator('.result').count(),0);
         await checkEbookProfileDownload(base+'/library',searchHtml,'ebook-browser-fixture','fb2');
+        await checkGuestFormats(browser,directory);
         assert.deepEqual(errors,[]);assert.equal(sockets,0);assert(resources.every(resource=>!['script','stylesheet','font','image'].includes(resource.type)),JSON.stringify(resources));
         await fs.writeJson(path.join(directory,'result.json'),{javaScriptEnabled:false,sockets,resourceTypes:[...new Set(resources.map(resource=>resource.type))],cardGeometry,
             login:true,search:true,combinedAuthorSearch:true,pagination:true,annotation:true,readerPaging:true,fontRetainsPage:true,originalDownload:true,opdsProgress:true,privateShelves:true,shelfDownload:true,profileFormatPersists:true,unavailableFormatNeverFallsBack:true,smartShelfPaging:true,logoutProtected:true,errors},{spaces:2});

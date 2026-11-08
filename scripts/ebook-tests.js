@@ -59,7 +59,8 @@ async function testEbookInputAndPaginationRejectAmbiguousAndOversizedRequests(){
 async function testEbookBookCardDefersMetadataAndReusesDownloadAndReadPaths(){
     await fixture({},async({request,calls})=>{
         let result=await request('/library/ebook/book?uid=known&lang=ru&sourceId=one');
-        assert.equal(result.response.status,200);assert(!calls.includes('preview'));assert.match(result.text,/action="\/library\/book\/by-uid"/);
+        assert.equal(result.response.status,200);assert(!calls.includes('preview'));assert.match(result.text,/action="\/library\/ebook\/book"/);
+        assert.match(result.text,/href="\/library\/ebook\/download\/book\.fb2\?uid=known&amp;format=raw"/);
         assert.match(result.text,/Читать текст/);assert.match(result.text,/Показать аннотацию/);assert.match(result.text,/field=author/);assert.match(result.text,/sourceId=one/);
         result=await request('/library/ebook/book?uid=known&annotation=1');assert(calls.includes('preview'));assert.match(result.text,/&lt;img src=x onerror=alert\(1\)&gt;/);assert(!result.text.includes('<img src=x'));
         assert.equal((await request('/library/ebook/book?uid=missing')).response.status,404);
@@ -234,6 +235,36 @@ async function testEbookMobiPreferenceAppliesToSearchRecentShelfAndCardWithLegac
     });
 }
 
+async function testEbookGuestFormatAppliesBeforeTypedDownloadWithoutChangingProfile(){
+    await fixture({conversionEnabled:true,conversionFormats:['epub','mobi'],mobiEnabled:true},async({request,user,csrf,worker})=>{
+        user.defaultDownloadFormat='epub';
+        let r=await request('/library/ebook/book?uid=known&format=mobi');
+        assert.equal(r.response.status,200);
+        assert.match(r.text,/class="shelf-options guest-format-form" action="\/library\/ebook\/book" method="get"/);
+        assert.match(r.text,/<option value="mobi" selected>/);
+        assert.match(r.text,/>Применить формат<\/button>/);
+        assert.match(r.text,/href="\/library\/ebook\/download\/book\.mobi\?uid=known&amp;format=mobi"/);
+        const annotation=r.text.match(/href="([^"]+)"[^>]*>Показать аннотацию<\/a>/)[1].replace(/&amp;/g,'&');
+        r=await request(annotation);assert.match(r.text,/<option value="mobi" selected>/);
+        assert(!r.text.includes('action="/library/book/by-uid"'),'No extensionless guest download form');
+        r=await request('/library/ebook/download/book.mobi?uid=known&format=mobi');
+        assert.equal(r.response.status,302);assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.mobi?uid=known&format=mobi');
+        assert.equal(user.defaultDownloadFormat,'epub','A guest selection must not modify any profile');
+        assert.equal((await request('/library/ebook/book?uid=known&format=unknown')).response.status,400);
+        assert.equal((await request('/library/ebook/download/book.mobi?uid=known&format=mobi&format=raw')).response.status,400);
+        worker.config.mobiEnabled=false;
+        assert.equal((await request('/library/ebook/book?uid=known&format=mobi')).response.status,415);
+        assert.equal((await request('/library/ebook/download/book.mobi?uid=known&format=mobi')).response.status,415);
+        worker.config.mobiEnabled=true;
+        r=await request('/library/ebook/login');await request('/library/ebook/login',{csrf:csrf(r.text),login:'reader',password:' pass '});
+        r=await request('/library/ebook/download/book.mobi?uid=known&format=mobi');
+        assert.equal(r.response.headers.get('location'),'/library/book/by-uid/book.epub?uid=known&format=epub','The signed-in profile remains authoritative');
+    });
+    await fixture({authMode:'local',requireAuth:true,allowAnonymousAccess:false},async({request})=>{
+        assert.equal((await request('/library/ebook/download/book.mobi?uid=known&format=mobi')).response.status,401);
+    });
+}
+
 module.exports=[testEbookHtmlWorksWithoutSpaAndSearchIsBoundedExplicitAndEscaped,testEbookInputAndPaginationRejectAmbiguousAndOversizedRequests,
     testEbookBookCardDefersMetadataAndReusesDownloadAndReadPaths,testEbookProfileLoginCsrfPasswordAndRevokedSessionStayProtected,
     testEbookLibraryPasswordLogoutAndSafeReturnPaths,testEbookLatePrivateResponseIsRejectedAfterProfileLogout,
@@ -241,5 +272,6 @@ module.exports=[testEbookHtmlWorksWithoutSpaAndSearchIsBoundedExplicitAndEscaped
     testEbookQuickSearchCombinesTitleAndAuthorAndAllowsAuthorOnly,testEbookShelvesRequireIdentityAndNeverAcceptForeignProfileScope,
     testEbookOrdinaryShelfResolvesOnlyOnePageAndPreservesMissingPositions,testEbookSmartShelfListingDoesNotRecomputeAndUnreadScanIsBounded,
     testEbookShelfDownloadFormatsRespectAvailabilityAndPreferences,testEbookShelfLateResponseCannotRevealLoggedOutProfile,
-    testEbookFormatChoicePersistsOnlyInAuthenticatedProfileWithCsrf,testEbookMobiPreferenceAppliesToSearchRecentShelfAndCardWithLegacySafeLinks];
+    testEbookFormatChoicePersistsOnlyInAuthenticatedProfileWithCsrf,testEbookMobiPreferenceAppliesToSearchRecentShelfAndCardWithLegacySafeLinks,
+    testEbookGuestFormatAppliesBeforeTypedDownloadWithoutChangingProfile];
 if(require.main===module)(async()=>{for(const test of module.exports){await test();console.log('ok '+test.name);}})().catch(error=>{console.error(error);process.exitCode=1;});

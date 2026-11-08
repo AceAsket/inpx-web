@@ -240,6 +240,54 @@ async function testTelegramBotConfiguredChatNeedsNoLinkAndRevokesOldIdentity() {
         advance(60001);
     });
 }
+async function testTelegramBotPollingExecutesCommandsWithConfiguredChatOnly() {
+    await fixture(async({a,b,store,bot:original,worker,messages,deliveries,events})=>{
+        original.stop();
+        await store.updateUser(a.id,{telegramChatId:'101',defaultTelegramFormat:'epub'});
+        await store.createList(a.id,'Alice private');await store.createList(b.id,'Bob private');
+        let bot, polls=0;const methods=[];
+        const commands=['/start','/help','/search Book','/reading','/lists','/favorites','/following'];
+        const message=(id,chat,text,type='private')=>({update_id:id,message:{message_id:id,text,chat:{id:chat,type},from:{id:chat}}});
+        const callback=(id,data)=>({update_id:id,callback_query:{id:String(id),data,from:{id:101},message:{message_id:1,chat:{id:101,type:'private'}}}});
+        const api={call:async(method,data)=>{
+            methods.push(method);
+            if(method==='getMe')return {id:42,username:'inpx_test_bot'};
+            if(method==='getWebhookInfo')return {url:''};
+            if(method==='getUpdates'){
+                assert.equal(data.timeout,25);assert.deepEqual(data.allowed_updates,['message','callback_query']);
+                polls++;
+                if(polls===1)return [...commands.map((command,index)=>message(501+index,101,command)),message(508,999,'/lists'),message(509,-100123,'/search Book','group')];
+                if(polls===2){
+                    assert.equal(data.offset,510);
+                    const search=messages.find(row=>row.data.text?.startsWith('<b>Поиск:'));
+                    assert(search,'A configured Chat ID can search without a pairing link');
+                    return [callback(510,search.data.reply_markup.inline_keyboard[0][0].callback_data)];
+                }
+                if(polls===3){
+                    const book=messages.find(row=>row.data.text?.startsWith('<b>Book &lt;one&gt;'));
+                    assert(book);assert.equal(book.data.reply_markup.inline_keyboard[0][0].text,'Получить EPUB');
+                    return [callback(511,book.data.reply_markup.inline_keyboard[0][0].callback_data)];
+                }
+                await bot.idle();bot.stop();return [];
+            }
+            if(['sendMessage','editMessageText'].includes(method))messages.push({method,data});
+            return {message_id:messages.length};
+        }};
+        bot=new TelegramBot(worker,{apiFactory:()=>api,sleep:async()=>{}});
+        bot.configure();await bot.task;
+        assert.equal(polls,4);assert.equal(bot.pairs.size,0,'No one-time link was requested');
+        const own=messages.filter(row=>row.data.chat_id==='101');
+        for(const text of ['Alice','Поиск:','Сейчас читаю','Alice private','Избранные авторы и серии','Новое у любимых'])
+            assert(own.some(row=>JSON.stringify(row.data).includes(text)),text);
+        assert(!own.some(row=>JSON.stringify(row.data).includes('Bob private')));
+        assert(messages.filter(row=>row.data.chat_id==='999').every(row=>row.data.text.includes('Chat ID')));
+        assert(!messages.some(row=>row.data.chat_id==='-100123'),'Group updates cannot read a personal profile');
+        assert.deepEqual(events,[]);
+        assert.deepEqual(deliveries,[{uid:'book-one',format:'epub',userId:a.id,chatId:'101'}],JSON.stringify(messages));
+        assert((await store.getUser(a.id)).telegramBotAutoLinked);
+        assert(!methods.some(method=>/^(set|delete)Webhook$/.test(method)));
+    });
+}
 async function testTelegramBotConfiguredChatCannotOverrideVerifiedProfile() {
     await fixture(async({a,b,store,link})=>{
         await link(b,102);await assert.rejects(store.updateUser(a.id,{telegramChatId:'102'}),/Chat ID уже/);
@@ -306,7 +354,7 @@ async function testTelegramBotFollowingPagesDoNotRepeatExpensiveRefresh() {
 module.exports = {testTelegramBotPairingIsolationExpiryAndRestart, testTelegramBotSearchFormatsPrivateListsAndRevocation,
     testTelegramBotDigestIsOptInAndBounded, testTelegramBotPollingResumesOffsetAndPreservesWebhook,
     testTelegramBotApiSanitizesFailuresAndHonorsCancellation, testTelegramBotUsesProfileFormatAndThrottlesPerChat,
-    testTelegramBotConfiguredChatNeedsNoLinkAndRevokesOldIdentity,testTelegramBotConfiguredChatCannotOverrideVerifiedProfile,
+    testTelegramBotConfiguredChatNeedsNoLinkAndRevokesOldIdentity,testTelegramBotPollingExecutesCommandsWithConfiguredChatOnly,testTelegramBotConfiguredChatCannotOverrideVerifiedProfile,
     testTelegramBotSearchIsPagedAndDoesNotUseAutocomplete,testTelegramBotSmartShelvesAreBoundedAndPrivate,
     testTelegramBotFollowingPagesDoNotRepeatExpensiveRefresh};
 if (require.main === module) (async() => {for (const test of Object.values(module.exports)) {await test(); console.log(test.name + ': OK');}})().catch(error => {console.error(error); process.exitCode = 1;});

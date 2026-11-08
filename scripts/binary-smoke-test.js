@@ -161,6 +161,29 @@ async function checkEbookProfileDownload(url,html,password='local-smoke-fixture'
     console.log('ok packaged ebook profile → exact '+format.toUpperCase()+' download, no original fallback');
 }
 
+async function checkEbookGuestDownload(url,html,format='fb2'){
+    const encoded=html.match(/[?&](?:amp;)?uid=([^"&]+)/)?.[1];assert(encoded);
+    const card=await fetch(url+'/ebook/book?'+new URLSearchParams({uid:decodeURIComponent(encoded),format}));
+    assert.equal(card.status,200);const text=await card.text();
+    assert(text.includes('guest-format-form'),'This check uses a guest, not the configured profile');
+    assert(!text.includes('action="'+new URL(url).pathname+'/book/by-uid"'),'The guest form must apply an HTML selection before downloading');
+    const href=text.match(/class="button" href="([^\"]*\/ebook\/download\/[^\"]+)"/)?.[1];assert(href);
+    const cookie=card.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session='))?.split(';')[0]||'';
+    let next=new URL(href.replace(/&amp;/g,'&'),url),response;
+    assert(next.pathname.endsWith('.'+format),'The first guest download URL includes the actual extension');
+    for(let redirects=0;redirects<4;redirects++){
+        response=await fetch(next,{headers:{cookie,'user-agent':'Mozilla/5.0 (Linux; U; en-US) AppleWebKit/534.26 Version/4.0 Kindle/3.0+'},redirect:'manual'});
+        if(response.status!==302)break;
+        next=new URL(response.headers.get('location'),next);assert(next.pathname.endsWith('.'+format),'Every guest redirect keeps the actual extension');await response.body.cancel();
+    }
+    if(response.status!==200)throw new Error('Guest '+format+' download returned HTTP '+response.status+': '+(await response.text()).slice(0,800));
+    assert.match(response.headers.get('content-disposition'),new RegExp('filename="[A-Za-z0-9_ -]+\\.'+format+'";'));
+    const bytes=Buffer.from(await response.arrayBuffer());assert.equal(Number(response.headers.get('content-length')),bytes.length);
+    if(format==='mobi'){assert.equal(bytes.toString('ascii',60,68),'BOOKMOBI');assert.match(response.headers.get('content-type'),/application\/x-mobipocket-ebook/);}
+    else assert.match(bytes.toString('utf8'),/FictionBook/);
+    console.log('ok packaged ebook guest → typed '+format.toUpperCase()+' URLs, exact headers/body, no original fallback');
+}
+
 async function main() {
     const [target, imageName] = process.argv.slice(2);
     if (!target || (target === '--image' && !imageName))
@@ -232,6 +255,8 @@ async function main() {
         const ebookSlash=await fetch(`${url}/ebook/`);assert.equal(ebookSlash.status,200);assert.match(await ebookSlash.text(),/Поиск книг/);
         await checkEbookProfileDownload(url,ebookHtml);
         if(process.env.INPX_SMOKE_EPUB==='true')await checkEbookProfileDownload(url,ebookHtml,'local-smoke-fixture','mobi');
+        await checkEbookGuestDownload(url,ebookHtml);
+        if(process.env.INPX_SMOKE_EPUB==='true')await checkEbookGuestDownload(url,ebookHtml,'mobi');
         assert.match(await (await fetch(`${url}/robots.txt`)).text(),/Disallow: \/\s*$/);
         const opds = await fetch(`${url}/opds`);
         assert.strictEqual(opds.status, 200);
@@ -255,6 +280,6 @@ async function main() {
     }
 }
 
-module.exports = {createFixture, unusedPort, checkEbookProfileDownload};
+module.exports = {createFixture, unusedPort, checkEbookProfileDownload,checkEbookGuestDownload};
 if (require.main === module)
     main().catch(error => { console.error(error); process.exitCode = 1; });

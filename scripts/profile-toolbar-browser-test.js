@@ -65,7 +65,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
                 } else if (request.action === 'test-admin-integration' && request.kind === 'telegram') {
                     // The real save/config path runs first. No request reaches Telegram or a proxy.
                     telegramProbeModes.push(lastSavedIntegrations.telegramProxyMode);
-                    response = {message:'Проверка соединения в браузерном сценарии завершена'};
+                    response = {success:true,checked:'token',username:'fixture_bot',message:'Токен Telegram проверен: fixture_bot'};
                 } else {server.send(message); return;}
                 socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
                 socket.send(JSON.stringify({requestId: request.requestId, ...response}));
@@ -166,7 +166,8 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await proxyPassword.fill('client-proxy-browser-fixture');
         const testTelegram = telegramSettings.getByRole('button', {name:'Проверить',exact:true});
         await testTelegram.click();
-        await page.getByText('Проверка соединения в браузерном сценарии завершена', {exact:true}).waitFor();
+        await page.locator('.app-notification--success').getByText('Подключение к Telegram проверено', {exact:true}).waitFor();
+        assert((await page.locator('.app-notification--success').innerText()).includes('@fixture_bot'));
         assert.equal(integrationUpdates.at(-1).telegramProxyMode,'custom');
         assert.equal(integrationUpdates.at(-1).telegramProxyProtocol,'socks5h');
         assert.equal(integrationUpdates.at(-1).telegramProxyHost,'proxy.example.invalid');
@@ -190,6 +191,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await telegramSettings.getByRole('textbox', {name:'Адрес прокси',exact:true}).fill('https://invalid.example/path');
         await telegramSettings.getByRole('spinbutton', {name:'Порт прокси',exact:true}).fill('99999');
         for (const name of ['Прямое соединение','Прокси окружения сервера']) {
+            await route.scrollIntoViewIfNeeded();await pause(200);
             await route.click(); await page.getByRole('option', {name,exact:true}).click();
             await testTelegram.click();
             for(let i=0;i<30 && telegramProbeModes.length < (name === 'Прямое соединение' ? 2 : 3);i++) await pause(100);

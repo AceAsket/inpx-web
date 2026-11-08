@@ -113,15 +113,21 @@ class EbookController {
         const suffix=/^[a-z0-9]{1,12}(?:\.[a-z0-9]{1,12})?$/.test(extension)?'/book.'+extension:'';
         return {selected,label,suffix};
     }
-    downloadButton(book,format){
+    guestFormat(req){
+        const format=scalar(req.query,'format',12).toLowerCase()||'raw';
+        if(!['raw','original',...formats.formats].includes(format))throw bad('Неизвестный формат скачивания.');
+        return format;
+    }
+    downloadButton(book,format,anonymous=false){
         const {selected,label,suffix}=this.downloadSelection(book,format);
         if(!selected)return `<p class="hint">Скачивание ${escape(label)} для этой книги недоступно. Выберите другой формат в профиле.</p>`;
-        return `<p class="quick-download download-form"><a class="button" href="${escape(this.url('/download'+suffix,{uid:book._uid||book.bookUid}))}" aria-label="${escape('Скачать «'+book.title+'» в формате '+label)}">Скачать ${escape(label)}</a></p>`;
+        return `<p class="quick-download download-form"><a class="button" href="${escape(this.url('/download'+suffix,{uid:book._uid||book.bookUid,...(anonymous?{format}:{})}))}" aria-label="${escape('Скачать «'+book.title+'» в формате '+label)}">Скачать ${escape(label)}</a></p>`;
     }
     async download(req,identity){
         const uid=scalar(req.query,'uid',1024);if(!uid)throw bad('Не указана книга.');
         const book=await this.worker.getBookRecordByUid(uid);if(!book)throw bad('Книга не найдена.',404);
-        const {selected,label,suffix}=this.downloadSelection(book,formats.preference(identity.user));
+        const wanted=identity?formats.preference(identity.user):this.guestFormat(req);
+        const {selected,label,suffix}=this.downloadSelection(book,wanted);
         if(!selected)throw bad(`Скачивание ${label} для этой книги недоступно. Выберите другой формат в профиле.`,415);
         return {redirect:this.root+'/book/by-uid'+suffix+'?'+new URLSearchParams({uid,format:selected})};
     }
@@ -155,9 +161,21 @@ class EbookController {
         body+=`<p class="meta">${escape(String(book.ext).toUpperCase())} · ${Number(book.size)>0?Math.ceil(book.size/1024)+' КБ':''}${book.lang?' · '+escape(book.lang):''}</p>`;
         const available=[{key:'raw',label:'Оригинал ('+String(book.ext).toUpperCase()+')'},...formats.available(book.ext,this.config).map(format=>({key:format,label:format.toUpperCase()}))];
         if(identity)body+=this.formatForm(req,identity,this.url('/book',{...p,uid}),String(book.ext).toLowerCase())+this.downloadButton({...book,_uid:uid},formats.preference(identity.user));
-        else body+=`<form class="download-form" action="${escape(this.root+'/book/by-uid')}" method="get">${this.hidden('uid',uid)}<label for="format">Формат скачивания</label><select id="format" name="format">${available.map(format=>option(format.key,format.label,'raw')).join('')}</select><button type="submit">Скачать книгу</button></form>`;
+        else {
+            const wanted=this.guestFormat(req),selection=this.downloadSelection(book,wanted);
+            if(!selection.selected)throw bad(`Скачивание ${selection.label} для этой книги недоступно. Выберите другой формат.`,415);
+            const selected=selection.selected==='raw'?'raw':wanted;
+            // A GET download form has a fixed extensionless action. Old Kindle
+            // browsers can reject that URL before following the file redirect.
+            // Apply the choice as an HTML page, then offer a real typed link.
+            body+=`<form class="shelf-options guest-format-form" action="${escape(this.url('/book'))}" method="get">${this.hidden('uid',uid)}`+
+                Object.entries(p).map(([key,value])=>this.hidden(key,value)).join('')+
+                `<label for="format">Формат скачивания</label><select id="format" name="format">${available.map(format=>option(format.key,format.label,selected)).join('')}</select>`+
+                '<p class="hint">После выбора нажмите «Применить формат», затем кнопку скачивания ниже.</p><button type="submit">Применить формат</button></form>'+
+                this.downloadButton({...book,_uid:uid},wanted,true);
+        }
         if(formats.canRead(book.ext,this.config)&&!this.worker.remoteLib)body+=this.link('/read',{...p,uid,page:1,font:30,bookPage:p.page},'Читать текст','button');
-        if(scalar(req.query,'annotation',1)!=='1')body+=this.link('/book',{...p,uid,annotation:1},'Показать аннотацию','button');
+        if(scalar(req.query,'annotation',1)!=='1')body+=this.link('/book',{...p,uid,annotation:1,...(!identity?{format:this.guestFormat(req)}:{})},'Показать аннотацию','button');
         else {
             let preview;
             try{preview=(await this.worker.getBookPreview(uid)).bookPreview;}catch{preview={annotationStatus:'unavailable'};}
@@ -245,7 +263,7 @@ class EbookController {
                 if(path==='/login')return res.type('html').send(this.access.bindingEnabled?this.document(req,'Вход',`<p>Профиль задаётся входом через proxy.</p>${this.link('',{},'К поиску')}`,identity):this.form(req,'profile'));
                 if(this.access.loginRequired&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
                 const isDownload=path==='/download'||/^\/download\/book\.[a-z0-9]{1,12}(?:\.[a-z0-9]{1,12})?$/.test(path);
-                if((['/shelves','/shelf'].includes(path)||isDownload)&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
+                if((['/shelves','/shelf'].includes(path)||isDownload&&req.query.format===undefined)&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
                 const handler=path==='/'?()=>this.search(req,identity):path==='/book'?()=>this.book(req,identity):path==='/read'?()=>this.reading(req):path==='/recent'?()=>this.recent(req,identity):path==='/shelves'?()=>this.shelfIndex(req,identity):path==='/shelf'?()=>this.shelf(req,identity):isDownload?()=>this.download(req,identity):null;
                 if(!handler)throw bad('Страница не найдена.',404);
                 const db=this.worker.db,generation=this.worker.libraryAssetGeneration;
