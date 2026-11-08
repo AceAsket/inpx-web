@@ -1775,6 +1775,8 @@ const tests = [
     ...require('./book-preview-server-tests'),
     ...require('./ebook-tests'),
     ...require('./opds-progress-tests'),
+    ...require('./opds2-tests'),
+    ...require('./overview-recommendations-tests'),
     ...require('./review-progress-tests'),
     ...require('./catalog-suggest-fast-tests'),
     ...require('./telegram-proxy-client-tests'),

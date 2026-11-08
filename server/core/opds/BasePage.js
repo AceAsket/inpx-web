@@ -46,6 +46,12 @@ class BasePage {
         return Object.assign(result, entry);
     }
 
+    makeBookEntry(book, entry) {
+        const result = this.makeEntry(entry);
+        if (this.config?.opdsVersion === 2) result[require('./JsonFeed').bookRecord] = book;
+        return result;
+    }
+
     myEntry(req = null) {
         return this.makeEntry({
             id: this.id,
@@ -170,8 +176,10 @@ class BasePage {
                 entry:(content.entry||[]).map(entry=>({...entry,...(entry.link?{link:links(entry.link)}:{})}))};
         }
         content = require('./Progress').decorate(content,req,this.id==='reading-progress');
-        content = require('./Compatibility').decorate(content, this.config);
+        if (this.config?.opdsVersion !== 2) content = require('./Compatibility').decorate(content, this.config);
         const base = this.makeEntry({id: this.id, title: this.title});
+        if (this.config?.opdsVersion === 2)
+            return require('./JsonFeed').makeFeed(Object.assign(base,content), req, this);
         base['*ATTRS'] = {
             'xmlns': 'http://www.w3.org/2005/Atom',
             'xmlns:dc': 'http://purl.org/dc/terms/',

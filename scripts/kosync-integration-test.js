@@ -3,7 +3,6 @@ const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
 const WebSocket = require('ws');
-const ZipReader = require('../server/core/ZipReader');
 const {partialMd5} = require('../server/core/KoSync');
 
 module.exports = async function checkKoSync(url, directory) {
@@ -34,9 +33,9 @@ module.exports = async function checkKoSync(url, directory) {
         const headers = {'x-auth-user': settings.username, 'x-auth-key': crypto.createHash('md5').update(settings.password).digest('hex'), 'content-type': 'application/json'};
         assert.equal((await fetch(url + settings.path + '/users/auth', {headers})).status, 200);
         assert.equal((await request({action: 'kosync-settings', operation: 'status'})).password, undefined);
-        const archive = new ZipReader(); await archive.open(path.join(directory, 'library', 'smoke.inpx'));
-        const row = (await archive.extractToBuf('smoke.inp')).toString().trimEnd(); await archive.close();
-        const bookUid = crypto.createHash('sha256').update(row).digest('base64');
+        // Use the current catalog UID, not the historical hash of the INPX row.
+        const found = await request({action:'bookSearch',query:{title:'=Packaged smoke book',ext:'fb2',del:'0',limit:1}});
+        const bookUid = found.found?.[0]?._uid;assert(bookUid,'The fixture book is indexed');
         const prepared = await request({action: 'get-book-link', bookUid}); assert(prepared.link, prepared.error);
         const book = await fetch(url + prepared.link + '/raw', {headers: {cookie}}); assert.equal(book.status, 200);
         const downloaded = path.join(directory, 'downloaded.fb2'); await fs.writeFile(downloaded, Buffer.from(await book.arrayBuffer()));

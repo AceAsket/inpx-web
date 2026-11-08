@@ -57,6 +57,9 @@
                     <div class="overview-loading__covers"><div v-for="i in 6" :key="i" class="overview-skeleton" /></div>
                 </div>
                 <div class="overview-shelves">
+                    <BookShelf v-if="state.recommendations.length" title="Рекомендуем вам" :books="recommendations" heading-id="recommended-books-heading">
+                        <template #action><RouterLink to="/for-you" class="overview-text-link">Все</RouterLink></template>
+                    </BookShelf>
                     <BookShelf v-for="shelf in shelves" :key="shelf.id" :title="shelf.title" :books="shelf.books" :heading-id="`shelf-${shelf.id}`" />
                 </div>
                 <div class="overview-footer">
@@ -88,6 +91,13 @@ const searchFilters = computed(() => effectiveCatalogScope({}, settings.value, c
 const suggestionContext = computed(() => String(state.revision));
 watch(() => [active.value, state.revision], () => {searchFocused.value = false; activeSuggestionId.value = undefined; suggestionsExpanded.value = false;});
 const books = computed(() => homeBooks(state.reading?.items || []));
+const recommendations = computed(() => {
+    const reading = new Map((state.reading?.items || []).map(book => [bookUid(book),book]));
+    return state.recommendations.map(book => {
+        const item = reading.get(bookUid(book));
+        return item ? {...book,percent:item.percent} : book;
+    });
+});
 const shelves = computed(() => {
     const reading = new Map((state.reading?.items || []).map(book => [bookUid(book), book]));
     const flags = {'newest': 'showDiscoveryNewest', 'popular': 'showDiscoveryPopular', 'from-your-lists': 'showDiscoveryFromLists',

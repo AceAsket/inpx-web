@@ -40,7 +40,7 @@ class TitlePage extends BasePage {
                     const title = `${book.serno ? `${book.serno}. `: ''}${book.title || 'Без названия'} (${book.ext})`;
 
                     entry.push(
-                        this.makeEntry({
+                        this.makeBookEntry(book, {
                             id: book._uid,
                             title,
                             link: this.acqLink({href: `/book?uid=${encodeURIComponent(book._uid)}`}),

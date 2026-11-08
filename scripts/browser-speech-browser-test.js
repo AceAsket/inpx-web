@@ -37,6 +37,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         }
         assert(ready, output);
         await require('./kosync-integration-test')(url, directory);
+        await require('./opds2-integration-test')(url);
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1100, height: 820}}), errors = [], serverSpeech = [];
         page.on('pageerror', error => errors.push(error.message));

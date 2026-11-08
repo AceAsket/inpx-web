@@ -60,12 +60,20 @@ if (require.main === module) (async() => {
         assert(ready, output);
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [], actions = [];
-        let readingFailure = '';
+        let readingFailure = '', recommendationMode = 'full', recommendationBook = null, heldRecommendation = null;
         await page.routeWebSocket('**/ws', socket => {
             const server = socket.connectToServer(), bookRequests = new Set(), authorRequests = new Set();
             socket.onMessage(message => {
                 try {
                     const request = JSON.parse(String(message));
+                    if (request.action === 'get-discovery-shelves' && request.recommendationsOnly && recommendationBook) {
+                        socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));
+                        const reply = () => socket.send(JSON.stringify({requestId:request.requestId,shelves:recommendationMode === 'empty' ? []
+                            : [{id:'similar-books',items:[recommendationBook]}]}));
+                        if (recommendationMode === 'hold') heldRecommendation = reply;
+                        else reply();
+                        return;
+                    }
                     if (readingFailure && ['get-mobile-home', 'get-user-reading-library'].includes(request.action)) {
                         socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
                         socket.send(JSON.stringify({requestId: request.requestId, error: readingFailure}));
@@ -137,6 +145,7 @@ if (require.main === module) (async() => {
         await page.locator('.profile-controls .profile-logout').waitFor();
         const uids = await api(`const response = await root.api.search('title', {lang:'ru',limit:40}); const books = response.found.flatMap(item=>item.books||[]); return books.map(book=>book._uid);`);
         assert(uids.length >= 8, 'Fixture must contain real indexed books');
+        recommendationBook = await api(`const response = await root.api.search('title', {lang:'ru',limit:40}); return response.found.flatMap(item=>item.books||[])[8];`);
         await api(`const uids=${JSON.stringify(uids)}; for(let i=0;i<4;i++) await root.api.updateReaderProgress(uids[i], {percent:[.34,.14,.01,1][i],sectionId:'chapter'}); return true;`);
 
         await page.getByRole('button', {name: 'Настройки', exact: true}).click();
@@ -157,6 +166,16 @@ if (require.main === module) (async() => {
         await page.locator('.current-book').waitFor();
         await page.locator('.book-shelf').first().waitFor();
         await page.waitForFunction(() => !document.querySelector('.overview-loading'));
+        const recommendations = page.locator('#recommended-books-heading');
+        await recommendations.waitFor();await screenshot('overview-recommendations-light-1440');
+        recommendationMode = 'empty';await page.getByRole('button', {name:'Обновить',exact:true}).click();
+        await recommendations.waitFor({state:'hidden'});
+        assert(await page.getByRole('heading',{name:/Новинки/}).count(), 'Empty recommendations leave global shelves visible');
+        recommendationMode = 'hold';await page.getByRole('button', {name:'Обновить',exact:true}).click();
+        for(let i=0;i<100&&!heldRecommendation;i++)await pause(30);assert(heldRecommendation);
+        assert.equal(await recommendations.count(),0);assert(await page.locator('.current-book').isVisible());
+        assert(await page.getByRole('heading',{name:/Новинки/}).count(), 'Pending recommendations do not block global shelves');
+        recommendationMode = 'full';heldRecommendation();heldRecommendation = null;await recommendations.waitFor();
         assert(await page.locator('.book-shelf').count() >= 2, 'Home must render server discovery shelves in addition to recent books');
         assert(await page.getByRole('heading', {name: /Новинки/}).count() >= 1, 'Server shelf titles must reach the UI');
         assert.equal(await page.locator('.current-book progress').getAttribute('value'), '0.01', 'Most recently opened unfinished book is current');
@@ -489,6 +508,7 @@ if (require.main === module) (async() => {
         await page.getByRole('link', {name: 'Обзор', exact: true}).click();
         await page.locator('.overview-welcome').waitFor();
         assert.equal(await page.locator('.current-book').count(), 0, 'Logout clears private reading history');
+        assert.equal(await recommendations.count(), 0, 'Logout clears private recommendations');
         await page.reload(); await page.locator('.overview-welcome').waitFor();
         assert.equal(await page.locator('.library-shell--active').count(), 1, 'Shelves selection persists');
         const fresh = await browser.newPage({viewport: {width: 390, height: 844}});

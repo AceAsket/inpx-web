@@ -107,7 +107,7 @@ class AuthorPage extends BasePage {
                     const title = `${book.serno ? `${book.serno}. `: ''}${book.title || 'Без названия'} (${book.ext})`;
 
                     entry.push(
-                        this.makeEntry({
+                        this.makeBookEntry(book, {
                             id: book._uid,
                             title,
                             link: this.acqLink({req, href: `/book?uid=${encodeURIComponent(book._uid)}`}),
@@ -146,7 +146,7 @@ class AuthorPage extends BasePage {
                     } else {
                         const title = `${b.book.title || 'Без названия'} (${b.book.ext})`;
                         entry.push(
-                            this.makeEntry({
+                            this.makeBookEntry(b.book, {
                                 id: b.book._uid,
                                 title,
                                 link: this.acqLink({req, href: `/book?uid=${encodeURIComponent(b.book._uid)}`}),

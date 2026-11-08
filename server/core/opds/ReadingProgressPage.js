@@ -77,7 +77,7 @@ class ReadingProgressPage extends BasePage {
             ].filter(Boolean).join(' · ');
 
             entry.push(
-                this.makeEntry({
+                this.makeBookEntry(book.unavailable ? null : book, {
                     id: book.bookUid,
                     title,
                     link: book.unavailable

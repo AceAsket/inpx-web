@@ -2452,6 +2452,13 @@ class WebWorker {
         if (!discovery.enabled)
             return {shelves: []};
 
+        if (options.recommendationsOnly === true) {
+            const user = await this.requireAuthorizedUser(options.userId, options.profileAccessToken);
+            const limit = Math.max(1, Math.min(parseInt(options.personalLimit,10) || 12,24));
+            const shelf = await this.buildSimilarBooksShelfV2(user,limit);
+            return {shelves:shelf?.items?.length ? [shelf] : []};
+        }
+
         const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
         const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
         const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 120));

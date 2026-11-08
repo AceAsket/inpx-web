@@ -642,6 +642,8 @@ class WebSocketController {
             profileAccessToken: req.profileAccessToken,
             forceRefresh: req.forceRefresh === true,
             personalSimilarEnabled: req.personalSimilarEnabled,
+            recommendationsOnly: req.recommendationsOnly === true,
+            personalLimit: req.personalLimit,
             newestLimit: req.newestLimit,
             popularLimit: req.popularLimit,
             externalLimit: req.externalLimit,

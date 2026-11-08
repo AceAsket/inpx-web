@@ -69,7 +69,7 @@ class SearchPage extends BasePage {
                         const subtitle = [this.bookAuthor(book.author), book.series ? `Серия: ${book.series}` : ''].filter(Boolean).join(' · ');
 
                         entry.push(
-                            this.makeEntry({
+                            this.makeBookEntry(book, {
                                 id: book._uid,
                                 title,
                                 link: this.acqLink({href: `/book?uid=${encodeURIComponent(book._uid)}`}),
