@@ -21,11 +21,14 @@ async function checkArchivePermissions(archive, target, converters = true) {
 async function extractArchive(archive, directory) {
     // Use the platform's extractor, without repairing permissions afterwards.
     // Our Node ZIP reader writes fresh files and cannot verify this contract.
-    if (process.platform === 'win32')
-        // Git Bash also supplies tar.exe, which treats D: as a remote host.
-        execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows','System32','tar.exe'),
-            ['-xf', path.resolve(archive), '-C', directory], {stdio:'inherit', windowsHide:true});
-    else execFileSync('unzip', ['-q', path.resolve(archive), '-d', directory], {stdio:'inherit'});
+    if (process.platform === 'win32') {
+        // Use Windows' ZIP extractor: Git's tar treats D: as a remote host,
+        // and some system tar versions cannot extract UTF-8 ZIP filenames.
+        const powershell = path.join(process.env.SystemRoot || 'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
+        execFileSync(powershell, ['-NoLogo','-NoProfile','-NonInteractive','-Command',
+            "$ErrorActionPreference='Stop'; [void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem'); [IO.Compression.ZipFile]::ExtractToDirectory($env:INPX_RELEASE_TEST_ARCHIVE,$env:INPX_RELEASE_TEST_DIRECTORY)"],
+        {stdio:'inherit',windowsHide:true,env:{...process.env,INPX_RELEASE_TEST_ARCHIVE:path.resolve(archive),INPX_RELEASE_TEST_DIRECTORY:directory}});
+    } else execFileSync('unzip', ['-q', path.resolve(archive), '-d', directory], {stdio:'inherit'});
 }
 
 async function main() {
