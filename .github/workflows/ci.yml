@@ -36,6 +36,9 @@ jobs:
       - run: node scripts/library-appearance-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/catalog-ui
+      - run: node scripts/telegram-status-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/telegram-status-ui
       - run: node scripts/profile-toolbar-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/profile-toolbar-ui
@@ -66,6 +69,8 @@ jobs:
           name: catalog-ui-screenshots
           path: |
             ${{ runner.temp }}/catalog-ui/*.png
+            ${{ runner.temp }}/telegram-status-ui/*.png
+            ${{ runner.temp }}/telegram-status-ui/result.json
             ${{ runner.temp }}/catalog-ui/result.json
             ${{ runner.temp }}/catalog-discovery-ui/*.png
             ${{ runner.temp }}/catalog-discovery-ui/result.json

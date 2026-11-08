@@ -167,7 +167,7 @@ class WebSocketController {
                     this.send(await this.webWorker.telegramBotAccount(req.userId, req.profileAccessToken, req.operation, req.options), req, ws); break;
                 case 'admin-telegram-bot-status':
                     await this.webWorker.requireAdmin(req.userId, req.profileAccessToken);
-                    this.send(this.webWorker.getTelegramBot().status(), req, ws); break;
+                    this.send({telegramBotStatus:this.webWorker.getTelegramBot().status()}, req, ws); break;
                 case 'catalog-browse':
                     this.send(await this.readWithBudget(req, ws, () => this.webWorker.getCatalogDiscovery().browse(req.options)), req, ws); break;
                 case 'catalog-entity': {

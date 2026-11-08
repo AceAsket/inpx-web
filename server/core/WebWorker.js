@@ -4839,7 +4839,10 @@ class WebWorker {
 
             return {
                 success: true,
-                message: `Telegram бот доступен: ${((response.data.result || {}).username || (response.data.result || {}).first_name || 'ok')}`,
+                checked: 'token',
+                username: String(response.data.result?.username || ''),
+                message: `Токен Telegram проверен: ${((response.data.result || {}).username || (response.data.result || {}).first_name || 'ok')}`,
+                telegramBotStatus: this.telegramBot?.status() || {state:'disabled',enabled:false,error:'',username:'',lastPollAt:''},
             };
         }
 

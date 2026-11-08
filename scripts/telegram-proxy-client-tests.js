@@ -91,5 +91,22 @@ async function testTelegramProxyClientInactiveDraftCannotBlockDirectOrSystem() {
     }
 }
 
+async function testTelegramClientProbeRefreshesPollingAndReplacesPreviousNotice() {
+    const {value,calls} = settings(true,{telegramBotEnabled:true});let state = 'error', dismissed = 0;
+    value.$refs = {telegramBotStatus:{refresh:async() => {calls.push(['status',state]);return {state,error:state === 'error' ? 'Polling failed' : ''};}}};
+    for (const kind of ['success','warning','info','error']) value.$root.notify[kind] = (message,caption) => {
+        calls.push([kind,message,caption]);return () => {dismissed++;};
+    };
+    await value.testTelegram();
+    assert.equal(calls.at(-1)[0],'warning');assert(calls.at(-1)[2].includes('Polling failed'));
+    state = 'running';await value.testTelegram();
+    assert.equal(dismissed,1,'A repeated probe removes the obsolete notification');
+    assert.equal(calls.at(-1)[0],'success');assert(calls.at(-1)[1].includes('принимает сообщения'));
+    assert.equal(calls.filter(call => call[0] === 'status').length,4,'Saving and probing immediately refresh the live status');
+    value.api.testAdminIntegration = async() => {throw new Error('Connection failed');};
+    await value.testTelegram();assert.equal(calls.at(-1)[0],'error');assert.equal(calls.at(-1)[2],'Connection failed');
+}
+
 module.exports = [testTelegramProxyClientDefaultsAndSecretPlaceholder,testTelegramProxyClientProbeUsesSavedModeAndKeepsPassword,
-    testTelegramProxyClientSaveFailureAndGuestCannotProbe,testTelegramProxyClientInactiveDraftCannotBlockDirectOrSystem];
+    testTelegramProxyClientSaveFailureAndGuestCannotProbe,testTelegramProxyClientInactiveDraftCannotBlockDirectOrSystem,
+    testTelegramClientProbeRefreshesPollingAndReplacesPreviousNotice];

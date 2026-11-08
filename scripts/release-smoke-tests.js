@@ -1766,6 +1766,7 @@ const tests = [
     ...require('./fb2-encoding-tests'),
     ...require('./fb2-image-tests'),
     ...require('./release-archive-tests'),
+    ...require('./notification-tests'),
     ...require('./audiobookshelf-tests'),
     ...require('./catalog-regression-tests'),
     ...require('./library-metadata-tests'),

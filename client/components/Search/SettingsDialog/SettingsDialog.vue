@@ -541,8 +541,8 @@
                             <q-input class="admin-mail-wide" v-model="integrations.telegramCaptionTemplate" outlined dense clearable :label="mailUi.telegramCaption" />
                         </div>
                         <q-toggle v-model="integrations.telegramBotEnabled" :disable="!integrations.telegramShareEnabled" label="Интерактивный бот: поиск, списки и получение книг" />
-                        <p class="admin-mail-subtitle">Используйте отдельного бота без webhook. Пользователи подключают личный чат одноразовой ссылкой из профиля.</p>
-                        <TelegramBotStatus v-if="mailExpanded && dialogVisible" />
+                        <p class="admin-mail-subtitle">Используйте отдельного бота без webhook. Личный Chat ID указывается в настройках профиля; одноразовая ссылка доступна там же.</p>
+                        <TelegramBotStatus v-if="mailExpanded && dialogVisible" ref="telegramBotStatus" />
                     </div>
 
                     <div class="admin-mail-section">
@@ -596,6 +596,7 @@ import PerformancePanel from './PerformancePanel.vue';
 import AppearanceControl from '../../Library/AppearanceControl.vue';
 import BackupPanel from './BackupPanel.vue';
 import TelegramBotStatus from './TelegramBotStatus.vue';
+import {telegramProbeNotice} from './telegramStatusModel';
 
 const componentOptions = {
     emits: ['update:modelValue', 'open-library-tasks'],
@@ -740,6 +741,7 @@ class SettingsDialog {
     integrationSaveLoading = false;
     smtpTestLoading = false;
     telegramTestLoading = false;
+    telegramNotice = null;
     settingsExportLoading = false;
     settingsImportLoading = false;
     backupExpanded = false;
@@ -1940,6 +1942,7 @@ class SettingsDialog {
             await this.api.updateConfig();
             if (!options.quiet)
                 this.$root.notify.success(this.mailUi.saved);
+            await this.$refs?.telegramBotStatus?.refresh?.();
             return true;
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
@@ -1966,6 +1969,7 @@ class SettingsDialog {
     }
 
     async testTelegram() {
+        this.telegramNotice?.(); this.telegramNotice = null;
         const saved = await this.saveIntegrations({quiet: true});
         if (!saved)
             return;
@@ -1973,9 +1977,12 @@ class SettingsDialog {
         this.telegramTestLoading = true;
         try {
             const result = await this.api.testAdminIntegration('telegram');
-            this.$root.notify.success((result && result.message) || 'Telegram ok');
+            const status = await this.$refs?.telegramBotStatus?.refresh?.() || result?.telegramBotStatus;
+            const notice = telegramProbeNotice(result,status,this.integrations.telegramBotEnabled);
+            this.telegramNotice = this.$root.notify[notice.kind](notice.message,notice.caption);
         } catch (e) {
-            this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
+            await this.$refs?.telegramBotStatus?.refresh?.();
+            this.telegramNotice = this.$root.notify.error('Не удалось проверить подключение к Telegram',e.message);
         } finally {
             this.telegramTestLoading = false;
         }
