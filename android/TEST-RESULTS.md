@@ -1,5 +1,20 @@
 # Проверки прототипа Android
 
+## Версия 0.7.0, versionCode 8 · 8 ноября 2026
+
+Сервер обновлён до опубликованного 1.8.2-rc.20 (`v1.8.2-rc.20`, `4ce423752cf5c8df3e7418310a132afd525e6208`). Commit сборки обоих APK — `48ee3edcf7c30423422a011028359a3b00ba3d6e`. В runtime включены новые зависимости HTTP/SOCKS-прокси Telegram. Сохранены панель Android, Node.js 24.22.1, minSdk 28 / Android 9+, targetSdk 36 и прежний сертификат подписи.
+
+| APK | Байт | SHA256 |
+| --- | ---: | --- |
+| `inpx-server-0.7.0-arm32-debug.apk` | 107 561 729 | `7180f523c86059541d41aecb5526d2f7fbfe98ba34212a80e0ef974d1e7d061d` |
+| `inpx-server-0.7.0-arm64-debug.apk` | 108 821 571 | `23bb83cbb113dc38d5b6581de0769d1d29f60eba8a05a40842c2b391709cf5db` |
+
+Проверено локально и в [GitHub Actions](https://github.com/AceAsket/inpx-web/actions/runs/42512032668): 467 серверных проверок, TTS, Android-хранилище; production-сборка веб-интерфейса; отдельный runtime с 25 корневыми зависимостями и 148 пакетами вместе с транзитивными. Изолированно прошли индексирование, готовность HTTP, веб-каталог, WebSocket, поиск и подсказки, скачивание FB2 через `/ebook`, OPDS 2 и прежний Atom. Обе архитектуры проходят 8 JVM-тестов и Android Lint (0 ошибок, 8 предупреждений). В каждом APK проверены версия 0.7.0, backend rc20, одинаковый commit и runtime, ABI всех нативных файлов и сертификат `a1678205a058b9e2d4b50e138b28d54cd68e0f638d061fe04a3eda0876241b66`.
+
+ARM64 установлен поверх ранее установленной 0.6.0 на Lenovo TB321FU, Android 16 / API 36. Прошли 52 пункта отчёта, в том числе изолированные проверки Repository и 6 сценариев фоновой службы. После завершения процесса сервер и HTTP восстановлены: PID 14223 → 14348. Успешны все 7 нативных конвертаций: EPUB, EPUB3, KEPUB, KFX, AZW8, PDF, MOBI. Источники и пользовательский Vault не менялись. До обновления сервер был выключен; instrumentation завершает процессы приложения.
+
+Локальные отчёты: `output/android-0.7.0/server-checks.log`, `tts-checks.log`, `runtime-checks.log`, `device/ui-checks/report.json`, `background-checks.json`; состав APK — `dist/android/inpx-server-0.7.0-*-debug.metadata.json`. ARM32 проверен сборкой и анализом APK; запуска на физическом ARM32-устройстве и Android 9–11 этот отчёт не подтверждает.
+
 ## Обновление 0.6.0, versionCode 7 · 3 ноября 2026
 
 Backend обновлён до 1.8.2-rc.1 с сохранением панели MVP/Repository и исправлений точного текстового якоря в режиме прокрутки. Версия Node.js остаётся 24.22.1, minSdk — 28, targetSdk — 36. Прежние данные Vault и настройки службы используются без смены формата.
