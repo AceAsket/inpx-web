@@ -10,7 +10,7 @@
 
 - RC20 исправляет гостевой `/ebook` для Kindle: после применения формата MOBI скачивается отдельной ссылкой с расширением файла. Команды бота проверены по личному Chat ID без одноразовой ссылки и webhook.
 
-**Для тестирования: 1.8.2-rc.21.** `/ebook` передаёт только ASCII-имя файла для совместимости с новым браузером Kindle: кириллица транслитерируется, диакритика удаляется, параметр `filename*` опускается. Название внутри MOBI сохраняется; проверены гостевой доступ и профиль. Требуется подтверждение на физическом Kindle 12. Включает возможности RC20: права ZIP `755`, метаданные и высоту карточки чтения, новые уведомления и статусы Telegram, ZIP PPMd/7z с WebP/JXL. [Изменения RC21](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.21/docs/rc21-release-notes.md). Стабильный `latest` остаётся на 1.8.1.
+**Для тестирования 1.8.2-rc.22.** Веб-читалка определяет границы страниц по фактической высоте текста и сохраняет нижнюю панель во время фонового пересчёта. Включает ASCII-имена скачивания для Kindle из RC21, поддержку ZIP PPMd/7z с WebP/JXL и новые статусы Telegram. Стабильный `latest` соответствует версии 1.8.1. [Изменения RC22](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.22/docs/rc22-release-notes.md)
 
 - RC14 исправляет исчерпание памяти базы при проверке производительности: проба читает одну запись. «Свои значения» проверяют лимиты с метриками CPU и памяти; отказ базы показан явно. Клик по книге снова открывает превью, полная карточка доступна отдельно. Обновлены вкладки и «Об авторе», отзывы и оценки показывают реальный прогресс. [Изменения RC14](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/rc14-release-notes.md), [профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/resource-profiles.md). Сохраняются изоляция профилей, стабильные ссылки и бюджеты кэшей RC13; [настройки памяти](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/memory-and-loading.md). Полный образ поддерживает EPUB → FB2.
 - Подсказки от трёх символов работают без подготовки и опроса; обычный поиск доступен сразу. Галерея: до 18 иллюстраций, 2 МиБ на изображение, 8 МиБ суммарно, 32 МиБ FB2 XML. Диагностика: `failedByCode`, `failedByKind`. Telegram: напрямую, через окружение сервера или свой HTTP(S)/SOCKS5; пароль хранится отдельно.
@@ -34,8 +34,8 @@ Android-клиент подключается по QR с адресом без �
 
 | Тег | Назначение |
 | --- | --- |
-| `1.8.2-rc.21` | ASCII-имена скачивания `/ebook` для новых Kindle, все возможности RC20. |
-| `1.8.2-rc.21-silero` | Сервис озвучки из того же RC; настройки и том моделей совместимы с 1.8.1. |
+| `1.8.2-rc.22` | Исправленная разбивка на страницы и стабильная нижняя панель веб-читалки. |
+| `1.8.2-rc.22-silero` | Сервис озвучки из того же RC с поддержкой настроек и тома моделей 1.8.1. |
 | `1.8.1` | Стабильный релиз с конвертацией книг. |
 | `latest` | Стабильный основной образ; сейчас соответствует `1.8.1`. |
 | `1.8.1-silero` | Отдельный сервис озвучки для стабильной версии. |
@@ -128,7 +128,7 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 ### Features
 
-**For testing: 1.8.2-rc.21.** `/ebook` sends ASCII-only download filenames for newer Kindle browsers: Cyrillic is transliterated, diacritics removed and the Unicode `filename*` parameter omitted. MOBI metadata keeps its original title; guest and profile downloads are tested. Physical Kindle 12 confirmation is still required. Includes all RC20 features: executable ZIP permissions, current-reading metadata and height, themed notifications, Telegram status and ZIP PPMd/7z with WebP/JXL. [RC21 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.21/docs/rc21-release-notes.md). Stable `latest` remains at 1.8.1.
+**Version 1.8.2-rc.22 is available for testing.** The web reader breaks pages based on rendered text height and keeps the footer stable during background pagination. It includes RC21's ASCII download filenames for Kindle, ZIP PPMd/7z support with WebP/JXL, and Telegram status updates. Stable `latest` points to 1.8.1. [RC22 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.22/docs/rc22-release-notes.md)
 
 - RC14 fixes database-worker memory exhaustion during performance checks by probing one catalog row. Custom values test limits with CPU/memory metrics; database failure is reported clearly. Book previews return with a separate full-card link. Tabs and author details are updated, and reviews and ratings show measured progress. [RC14 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/rc14-release-notes.md), [resource profiles](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/resource-profiles.md). Includes RC13 profile isolation, stable links and bounded caches; [memory settings](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/memory-and-loading.md). Full images support EPUB → FB2 reading.
 - Suggestions from three characters need no preparation or polling; search is available immediately. Gallery: up to 18 illustrations, 2 MiB/image, 8 MiB total, 32 MiB FB2 XML. Diagnostics: `failedByCode`, `failedByKind`. Telegram: direct, server-environment or custom HTTP(S)/SOCKS5 proxy; passwords stored separately.
@@ -152,8 +152,8 @@ Connect Android through a QR containing the server address without credentials. 
 
 | Tag | Purpose |
 | --- | --- |
-| `1.8.2-rc.21` | ASCII-only `/ebook` download filenames for newer Kindle browsers; all RC20 features. |
-| `1.8.2-rc.21-silero` | Speech service from the same RC; settings and model volumes remain compatible with 1.8.1. |
+| `1.8.2-rc.22` | Corrected web reader pagination and a stable footer during background pagination. |
+| `1.8.2-rc.22-silero` | Speech service from the same RC with support for 1.8.1 settings and model volumes. |
 | `1.8.1` | Stable release with book conversion. |
 | `latest` | Stable main image; currently points to `1.8.1`. |
 | `1.8.1-silero` | Separate speech service for the stable release. |
