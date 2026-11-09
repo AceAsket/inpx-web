@@ -93,8 +93,8 @@ class DbCreator {
         const rememberPrevious = rows => {
             for (const row of rows) {
                 previous.set(row.uid,row); lastBookId = Math.max(lastBookId,row.id);
-                if (row.legacyUid) {
-                    const key = JSON.stringify([row.sourceId,row.legacyUid]);
+                if (row.identity && row.legacyUid) {
+                    const key = `${row.identity}:${row.legacyUid}`;
                     legacy.set(key,legacy.has(key) ? null : row);
                 }
                 if (row.identity) physical.set(row.identity,physical.has(row.identity) ? null : row);
@@ -313,14 +313,24 @@ class DbCreator {
                 rec.sourceLibDir = currentSource.libDir;
 
                 const identity = currentSource.type === 'folder' ? '' : this.physicalIdentity(rec);
-                if (identity) rec._legacyUid = rec._uid;
-                const uidPrior = previous.get(rec._uid) || legacy.get(JSON.stringify([rec.sourceId,rec._uid]));
-                let prior = uidPrior && (!identity || uidPrior.identity === identity)
-                    ? uidPrior : identity && physical.get(identity);
+                const parsedUid = rec._uid;
+                if (identity) rec._legacyUid = parsedUid;
+                const uidPrior = previous.get(parsedUid);
+                // The same INPX line can occur in several archives, since the
+                // archive name can come from the enclosing .inp entry.
+                let prior = uidPrior;
+                if (identity && uidPrior?.identity !== identity)
+                    prior = legacy.get(`${identity}:${parsedUid}`) || physical.get(identity);
                 if (prior && !uidSet.has(prior.uid)) rec._uid = prior.uid;
                 else {
                     prior = null;
-                    if (identity && !physical.has(identity) && !uidSet.has(identity)) rec._uid = identity;
+                    if (identity && !physical.has(identity) && !uidSet.has(identity) && !previous.has(identity)) {
+                        rec._uid = identity;
+                    } else if (identity && uidPrior && uidPrior.identity !== identity) {
+                        rec._uid = require('crypto').createHash('sha256').update(`inpx-record-v1:${identity}:${parsedUid}`).digest('base64');
+                        const variant = previous.get(rec._uid);
+                        if (variant && variant.identity === identity) prior = variant;
+                    }
                 }
                 //сначала фильтр
                 if (!filter(rec) || uidSet.has(rec._uid)) {
@@ -331,6 +341,7 @@ class DbCreator {
 
                 rec._recordHash = require('crypto').createHash('sha256').update(JSON.stringify(rec)).digest('hex');
                 rec.id = prior ? prior.id : ++id;
+                if (prior) prior.retained = true;
                 uidSet.add(rec._uid);
 
                 if (!rec.del) {
@@ -351,7 +362,10 @@ class DbCreator {
                 saveChunk = chunk;
             }
 
-            saveChunk = saveChunk.filter(rec => !incremental || !previous.has(rec._uid) || previous.get(rec._uid).hash !== rec._recordHash);
+            if (incremental) saveChunk = saveChunk.filter(rec => {
+                const old = previous.get(rec._uid);
+                return old?.id !== rec.id || old.hash !== rec._recordHash;
+            });
             if (saveChunk.length) await db.insert({table: 'book', rows: saveChunk, replace: true});
             recordsChanged += saveChunk.length;
             callback({recordsChanged, incremental});
@@ -388,7 +402,7 @@ class DbCreator {
             });
         }
 
-        const removed = incremental ? [...previous.values()].filter(row => !uidSet.has(row.uid)).map(row => row.id) : [];
+        const removed = incremental ? [...previous.values()].filter(row => !row.retained).map(row => row.id) : [];
         for (let offset = 0; offset < removed.length; offset += 10000)
             await db.delete({table: 'book', where: `@@id(${db.esc(removed.slice(offset, offset + 10000))})`});
 
@@ -750,55 +764,48 @@ class DbCreator {
     }
 
     async countStats(db, callback, stats) {
-        //статистика по количеству файлов
+        let percent = 0;
+        const timer = setInterval(() => {
+            percent = Math.min(95, percent + 5);
+            callback({progress: percent / 100});
+        }, 1000);
+        try {
+            const countRes = await db.select({table: 'book', rawResult: true, where: `
+                const files = new Set();
+                const filesDel = new Set();
 
-        //эмуляция прогресса
-        let countDone = false;
-        (async() => {
-            let i = 0;
-            while (!countDone) {
-                callback({progress: i/100});
-                i = (i < 100 ? i + 5 : 100);
-                await utils.sleep(1000);
-            }
-        })();
-
-        //подчсет
-        const countRes = await db.select({table: 'book', rawResult: true, where: `
-            const files = new Set();
-            const filesDel = new Set();
-
-            for (const id of @all()) {
-                const r = @row(id);
-                const file = ${"`${r.folder}/${r.file}.${r.ext}`"};
-                if (!r.del) {
-                    files.add(file);
-                } else {
-                    filesDel.add(file);
+                for (const id of @all()) {
+                    const r = @row(id);
+                    const file = ${"`${r.folder}/${r.file}.${r.ext}`"};
+                    if (!r.del) {
+                        files.add(file);
+                    } else {
+                        filesDel.add(file);
+                    }
                 }
+
+                for (const file of filesDel)
+                    if (files.has(file))
+                        filesDel.delete(file);
+
+                return {filesCount: files.size, filesDelCount: filesDel.size};
+            `});
+
+            if (countRes.length) {
+                const res = countRes[0].rawResult;
+                stats.filesCount = res.filesCount;
+                stats.filesCountAll = res.filesCount + res.filesDelCount;
+                stats.filesDelCount = res.filesDelCount;
             }
 
-            for (const file of filesDel)
-                if (files.has(file))
-                    filesDel.delete(file);
-
-            return {filesCount: files.size, filesDelCount: filesDel.size};
-        `});
-
-        if (countRes.length) {
-            const res = countRes[0].rawResult;
-            stats.filesCount = res.filesCount;
-            stats.filesCountAll = res.filesCount + res.filesDelCount;
-            stats.filesDelCount = res.filesDelCount;
+            await db.create({
+                in: 'book',
+                hash: {field: '_uid', type: 'string', depth: 100, unique: true},
+            });
+            callback({progress: 1});
+        } finally {
+            clearInterval(timer);
         }
-
-        //заодно добавим нужный индекс
-        await db.create({
-            in: 'book',
-            hash: {field: '_uid', type: 'string', depth: 100, unique: true},
-        });
-
-        countDone = true;
     }
 }
 
