@@ -7347,10 +7347,16 @@ class Reader {
 
             chunks.push(chunk);
             start = best;
+            if (baseHtml.length && start < words.length) {
+                // Only the first part shares the current page. The remaining
+                // text will be measured again on the next page.
+                chunks.push(words.slice(start).join(' '));
+                start = words.length;
+            }
         }
 
         measureHtml.innerHTML = '';
-        if (chunks.length <= 1)
+        if (chunks.length <= 1 || start < words.length)
             return (allowOverflowFallback ? this.wrapSplitTextChunks(root, unit, fallbackChunks) : []);
 
         return this.wrapSplitTextChunks(root, unit, chunks);
@@ -8202,10 +8208,8 @@ class Reader {
         let currentUnits = checkpoint ? checkpoint.currentUnits : [];
         let activeSectionId = checkpoint ? checkpoint.activeSectionId : '';
         let currentPageSectionId = checkpoint ? checkpoint.currentPageSectionId : '';
-        let currentEstimatedLines = checkpoint ? checkpoint.currentEstimatedLines : 0;
         let buildProgressPercent = Math.max(1, (checkpoint && checkpoint.buildProgressPercent) || 1);
         const startIndex = Math.max(0, Math.min(queue.length, (checkpoint && checkpoint.nextIndex) || 0));
-        const fastLineBudget = this.getFastPagedLineBudget(measureHost);
         const buildStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
         const fallbackRoots = new Map((checkpoint && checkpoint.fallbackRoots) || []);
         const stats = Object.assign({
@@ -8255,7 +8259,6 @@ class Reader {
             stats.pages = pages.length;
             currentUnits = [];
             currentPageSectionId = activeSectionId || '';
-            currentEstimatedLines = 0;
             applyUnits([]);
         };
         const maybeYield = async(index) => {
@@ -8281,7 +8284,6 @@ class Reader {
                 currentUnits,
                 activeSectionId,
                 currentPageSectionId,
-                currentEstimatedLines,
                 buildProgressPercent,
                 nextIndex: Math.max(0, Math.min(queue.length, nextIndex)),
                 fallbackRoots: Array.from(fallbackRoots.entries()),
@@ -8322,82 +8324,15 @@ class Reader {
                     currentPageSectionId = unit.sectionId || activeSectionId || '';
                 }
 
-                // Compact pages must use one exact DOM measurement strategy on
-                // every pass. The canvas estimator can disagree with the live
-                // mobile sheet and used to make the first and later builds differ.
-                const fastInfo = this.isCompactLayout ? null : this.getFastPagedUnitInfo(unit);
-                if (fastInfo && fastLineBudget > 2 && (!currentUnits.length || currentEstimatedLines > 0)) {
-                    if (currentUnits.length && currentEstimatedLines + fastInfo.lines > fastLineBudget) {
-                        if (this.isCompactLayout) {
-                            const fitCurrentPageDomSplit = this.splitUnitToFitCurrentPage(unit, currentUnits);
-                            if (fitCurrentPageDomSplit.length) {
-                                stats.domSplits += 1;
-                                stats.generatedDomSplitUnits += fitCurrentPageDomSplit.length;
-                                queue.splice(index, 1, ...fitCurrentPageDomSplit);
-                                index -= 1;
-                                applyUnits(currentUnits);
-                                await maybeYield(index + 1);
-                                continue;
-                            }
-                        }
-
-                        const fitCurrentPageSplit = this.splitFastRootByLineBudget(
-                            fastInfo.root,
-                            unit,
-                            Math.max(1, fastLineBudget - currentEstimatedLines),
-                        );
-                        if (fitCurrentPageSplit.length) {
-                            stats.fastSplits += 1;
-                            stats.generatedFastSplitUnits += fitCurrentPageSplit.length;
-                            queue.splice(index, 1, ...fitCurrentPageSplit);
-                            index -= 1;
-                            await maybeYield(index + 1);
-                            continue;
-                        }
-
-                        if (this.isCompactLayout) {
-                            const fitCurrentPageDomSplit = this.splitUnitToFitCurrentPage(unit, currentUnits);
-                            if (fitCurrentPageDomSplit.length) {
-                                stats.domSplits += 1;
-                                stats.generatedDomSplitUnits += fitCurrentPageDomSplit.length;
-                                queue.splice(index, 1, ...fitCurrentPageDomSplit);
-                                index -= 1;
-                                applyUnits(currentUnits);
-                                await maybeYield(index + 1);
-                                continue;
-                            }
-                        }
-
-                        finalizePage();
-                        currentPageSectionId = unit.sectionId || activeSectionId || '';
-                    }
-
-                    if (fastInfo.lines > fastLineBudget) {
-                        const splitUnits = this.splitFastRootByLineBudget(fastInfo.root, unit, fastLineBudget);
-                        if (splitUnits.length) {
-                            stats.fastSplits += 1;
-                            stats.generatedFastSplitUnits += splitUnits.length;
-                            queue.splice(index, 1, ...splitUnits);
-                            index -= 1;
-                            await maybeYield(index + 1);
-                            continue;
-                        }
-                    }
-
-                    currentUnits = currentUnits.concat(unit.html);
-                    currentEstimatedLines += fastInfo.lines;
-                    stats.fastUnits += 1;
-                    if (unit.sectionId && !currentPageSectionId)
-                        currentPageSectionId = unit.sectionId;
-                    await maybeYield(index + 1);
-                    continue;
-                }
+                const candidateUnits = currentUnits.concat(unit.html);
+                applyUnits(candidateUnits);
+                // Use the rendered height for page breaks, including after the
+                // reader toolbar changes the space available to the page.
+                const candidateOverflows = this.doesPagedMeasureOverflow(measureHost, measureHtml);
 
                 stats.domUnits += 1;
                 recordFallbackRoot(unit);
-                const candidateUnits = currentUnits.concat(unit.html);
-                applyUnits(candidateUnits);
-                if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && !currentUnits.length) {
+                if (candidateOverflows && !currentUnits.length) {
                     const splitUnits = this.splitOversizedUnit(unit);
                     if (splitUnits.length) {
                         stats.domSplits += 1;
@@ -8410,7 +8345,7 @@ class Reader {
                     }
                 }
 
-                if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && currentUnits.length) {
+                if (candidateOverflows && currentUnits.length) {
                     const fitCurrentPageSplit = this.splitUnitToFitCurrentPage(unit, currentUnits);
                     if (fitCurrentPageSplit.length) {
                         stats.domSplits += 1;
@@ -8441,7 +8376,6 @@ class Reader {
                     }
                 } else {
                     currentUnits = candidateUnits;
-                    currentEstimatedLines = 0;
                     if (unit.sectionId && !currentPageSectionId)
                         currentPageSectionId = unit.sectionId;
                 }
