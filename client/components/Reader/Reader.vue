@@ -864,7 +864,7 @@
 
                         <template v-else>
                             <div class="reader-pages">
-                                <div ref="pageStage" class="reader-page-stage">
+                                <div ref="pageStage" class="reader-page-stage" :class="{'reader-page-stage--waiting': isPagedLayoutTooLarge}">
                                     <article
                                         v-if="showPagedPreparingSheet"
                                         class="reader-page-sheet reader-page-sheet--placeholder"
@@ -883,6 +883,7 @@
                                             class="reader-page-sheet reader-page-sheet--live"
                                     :class="[{'reader-page-sheet--dual': isDualPagedSpread}, isDualPagedSpread ? '' : pagePaddingPreviewClass]"
                                             :data-page-index="currentPageIndex"
+                                            :aria-hidden="isPagedLayoutTooLarge || undefined"
                                         >
                                             <template v-if="isDualPagedSpread">
                                                 <div class="reader-page-spread" :style="{gap: `${dualPageGap}px`}">
@@ -1868,6 +1869,7 @@ class Reader {
     progressPersistPendingAfterPagedBuild = false;
     pagedBuildJobId = 0;
     pagedLayoutSignature = '';
+    committedPagedContentSize = null;
     pagedLayoutCache = new Map();
     pagedLayoutCacheLimit = 2;
     restoreProgressFrame = 0;
@@ -2938,6 +2940,9 @@ class Reader {
     }
 
     get showPagedPreparingSheet() {
+        if (this.isPagedLayoutTooLarge)
+            return true;
+
         return !!(
             this.isPagedMode
             && !this.activePagedPage
@@ -3012,6 +3017,14 @@ class Reader {
             return null;
 
         return this.pagedPages[Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex))] || null;
+    }
+
+    get isPagedLayoutTooLarge() {
+        if (!this.activePagedPage || !this.committedPagedContentSize)
+            return false;
+
+        const {width, height} = this.pagedContentSize;
+        return width < this.committedPagedContentSize.width || height < this.committedPagedContentSize.height;
     }
 
     get isDualPagedSpread() {
@@ -3547,6 +3560,13 @@ class Reader {
             return Math.max(120, availableHeight - this.configuredReaderShellVerticalPadding);
         }
         return Math.max(180, scrollerHeight - this.configuredReaderShellVerticalPadding - 2);
+    }
+
+    get pagedContentSize() {
+        return {
+            width: this.pageMeasureFrameWidth - this.pagePaddingLeft - this.pagePaddingRight,
+            height: this.pageMinHeight - this.pagePaddingTop - this.pagePaddingBottom,
+        };
     }
 
     get configuredReaderShellVerticalPadding() {
@@ -4900,7 +4920,7 @@ class Reader {
     }
 
     captureStableReaderStatus(force = false) {
-        if (!force && this.stableReaderStatus.ready && (this.layoutRefreshing || this.isPagedBuildPending))
+        if (this.isPagedBuildPending || (!force && this.stableReaderStatus.ready && this.layoutRefreshing))
             return;
 
         const pageMeta = this.showPagedPageCounter ? `${this.currentPage}/${this.totalPages}` : '';
@@ -6866,7 +6886,7 @@ class Reader {
     }
 
     setCurrentPagedPage(index = 0, save = false) {
-        if (!this.isPagedMode)
+        if (!this.isPagedMode || (save && this.isPagedLayoutTooLarge))
             return;
         if (save)
             this.clearPendingReaderNavigationRestore();
@@ -8145,6 +8165,7 @@ class Reader {
         this.pagedPages = finalPages;
         this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
         this.pagedLayoutSignature = this.getPagedLayoutSignature();
+        this.committedPagedContentSize = this.pagedContentSize;
         this.noteCompactChromeTotalPages();
         this.rebuildSearchResults(false);
     }
@@ -8175,6 +8196,7 @@ class Reader {
         const buildCalibrationKey = this.getBottomClipCompensationGeometryKey();
         const buildLayoutSignature = this.getPagedLayoutSignature();
         const buildGeometrySignature = this.getPagedGeometrySignature();
+        const buildContentSize = this.pagedContentSize;
         const buildSourceKey = this.readerSourceKey;
         const layoutCacheKey = this.getPagedLayoutCacheKey(
             buildLayoutSignature,
@@ -8186,6 +8208,7 @@ class Reader {
             this.pagedPages = cachedLayout.pages;
             this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
             this.pagedLayoutSignature = buildLayoutSignature;
+            this.committedPagedContentSize = buildContentSize;
             this.pagedCommittedCalibrationKey = buildCalibrationKey;
             this.pagedCommittedCalibrationGeneration = buildOwnerJobId;
             this.pagedCommittedCalibrationAt = Date.now();
@@ -8437,6 +8460,7 @@ class Reader {
             this.pagedPages = finalPages;
             this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
             this.pagedLayoutSignature = buildLayoutSignature;
+            this.committedPagedContentSize = buildContentSize;
             this.pagedCommittedCalibrationKey = buildCalibrationKey;
             this.pagedCommittedCalibrationGeneration = buildOwnerJobId;
             this.pagedCommittedCalibrationAt = Date.now();
@@ -8909,6 +8933,7 @@ class Reader {
         this.pagedBuildJobId += 1;
         this.pagedBuildNeedsRefresh = false;
         this.pagedLayoutSignature = '';
+        this.committedPagedContentSize = null;
         this.pagedLayoutCache.clear();
         this.$refs?.browserAudio?.close();
         this.$refs?.audioPlayer?.close();
@@ -12206,6 +12231,10 @@ export default vueComponent(Reader);
     position: absolute;
     inset: 0 0 auto;
     margin: 0 auto;
+}
+
+.reader-page-stage--waiting .reader-page-sheet--live {
+    visibility: hidden;
 }
 
 .reader-page-sheet--placeholder {

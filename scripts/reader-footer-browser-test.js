@@ -125,6 +125,17 @@ function readRenderedPage(page) {
         const before = await page.evaluate(() => {window.__readerFooterSamples.length = 0; return window.__readFooter();});
         await page.locator('.reader-desktop-footer').screenshot({path: path.join(directory, 'reader-footer-before.png')});
         await page.setViewportSize({width: 1440, height: 740});
+        const pendingTurn = await page.waitForFunction(() => {
+            if (!document.querySelector('.reader-page-stage--waiting .reader-page-sheet--placeholder')) return null;
+            const sheet = document.querySelector('.reader-page-sheet--live');
+            const result = {index: sheet.dataset.pageIndex, hidden: getComputedStyle(sheet).visibility === 'hidden'};
+            window.dispatchEvent(new KeyboardEvent('keydown', {key: 'PageDown', cancelable: true}));
+            queueMicrotask(() => {result.next = document.querySelector('.reader-page-sheet--live').dataset.pageIndex;});
+            return result;
+        });
+        const {hidden, index, next} = await pendingTurn.jsonValue();
+        assert(hidden, 'A page built for a taller viewport is hidden while the smaller layout is prepared');
+        assert.equal(next, index, 'PageDown cannot skip text while the old page is clipped');
         await page.waitForFunction(total => {
             const state = window.__readFooter(); return state?.total > total && state.visiblePage;
         }, before.total);
@@ -134,7 +145,7 @@ function readRenderedPage(page) {
         await page.locator('.reader-desktop-footer').screenshot({path: path.join(directory, 'reader-footer-after.png')});
         assert(!samples.some(state => state.visiblePage && state.busy), 'A background rebuild must not replace the visible page status: ' + JSON.stringify(samples.slice(0, 8)));
         assert(samples.filter(state => state.total === before.total).every(state => state.text === before.text && Math.abs(state.width - before.width) <= 1 && Math.abs(state.height - before.height) <= 1),
-            'The previous page and footer dimensions stay stable until the new pagination commits');
+            'The previous page number and footer dimensions stay stable until the new pagination commits');
         assert(after.page >= 2 && after.total > before.total, 'Viewport repagination preserves the reading position');
 
         const regular = await readRenderedPage(page);
