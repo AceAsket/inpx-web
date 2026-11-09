@@ -152,10 +152,12 @@ function readRenderedPage(page) {
         await page.waitForFunction(total => !document.querySelector('.reader-page--immersive') && window.__readFooter()?.total === total, after.total);
 
         const fullscreen = page.locator('.reader-toolbar-quick-actions button:has(.la-expand-arrows-alt)');
+        const viewport = await context.newCDPSession(page);
+        const phaseOffset = await page.evaluate(() => window.__readerBuildPhases.length);
         await fullscreen.click();
         await page.waitForFunction(() => !!document.fullscreenElement);
-        const phaseOffset = await page.evaluate(() => window.__readerBuildPhases.length);
-        await page.setViewportSize({width: 1440, height: 960});
+        // Chromium does not allow resizing the browser window while fullscreen.
+        await viewport.send('Emulation.setDeviceMetricsOverride', {width: 1440, height: 960, deviceScaleFactor: 1, mobile: false});
         await page.waitForFunction(({total, phaseOffset}) => {
             const phases = window.__readerBuildPhases.slice(phaseOffset);
             return innerHeight === 960 && window.__readFooter()?.total < total
@@ -168,7 +170,8 @@ function readRenderedPage(page) {
             'Pagination stays idle after fullscreen geometry settles: ' + fullscreenPhases.join(', '));
         await page.locator('.reader-toolbar-quick-actions button:has(.la-compress-arrows-alt)').click();
         await page.waitForFunction(() => !document.fullscreenElement);
-        await page.setViewportSize({width: 1440, height: 740});
+        await viewport.send('Emulation.setDeviceMetricsOverride', {width: 1440, height: 740, deviceScaleFactor: 1, mobile: false});
+        await viewport.detach();
         await page.waitForFunction(total => window.__readFooter()?.total === total, after.total);
 
         const waitForPage = index => page.waitForFunction(index =>
