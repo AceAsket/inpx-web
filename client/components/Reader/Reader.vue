@@ -1067,21 +1067,12 @@
             :class="{'reader-desktop-footer--edge': activePreferences.statusBarAlign === 'edge'}"
         >
             <div class="reader-status-bar reader-status-bar--desktop" :class="statusBarClass" :style="statusBarStyle">
-                <template v-if="showDesktopPagedBuildIndicator">
-                    <q-icon class="la la-spinner icon-rotate reader-status-bar-spinner" size="14px" />
-                    <span class="reader-status-main">{{ compactStatusBarBuildText }}</span>
-                    <span v-if="activePreferences.statusBarClock" class="reader-status-clock">{{ statusClockText }}</span>
-                    <div v-if="activePreferences.statusBarProgressBar" class="reader-status-progress">
-                        <div :style="{width: `${statusBarProgressPercent}%`}"></div>
-                    </div>
-                </template>
-                <template v-else>
-                    <span class="reader-status-main">{{ desktopStatusBarText }}</span>
-                    <span v-if="activePreferences.statusBarClock" class="reader-status-clock">{{ statusClockText }}</span>
-                    <div v-if="activePreferences.statusBarProgressBar" class="reader-status-progress">
-                        <div :style="{width: `${statusBarProgressPercent}%`}"></div>
-                    </div>
-                </template>
+                <q-icon v-if="showDesktopPagedBuildIndicator" class="la la-spinner icon-rotate reader-status-bar-spinner" size="14px" />
+                <span class="reader-status-main">{{ showDesktopPagedBuildIndicator ? compactStatusBarBuildText : desktopStatusBarText }}</span>
+                <span v-if="activePreferences.statusBarClock" class="reader-status-clock">{{ statusClockText }}</span>
+                <div v-if="activePreferences.statusBarProgressBar" class="reader-status-progress">
+                    <div :style="{width: `${statusBarProgressPercent}%`}"></div>
+                </div>
             </div>
         </div>
 
@@ -2871,8 +2862,8 @@ class Reader {
 
     get desktopStatusBarText() {
         const parts = [this.compactStatusBarText];
-        if (this.currentSectionTitle)
-            parts.push(this.currentSectionTitle);
+        if (this.readerSectionMeta)
+            parts.push(this.readerSectionMeta);
 
         return parts.join(' · ');
     }
@@ -2942,6 +2933,7 @@ class Reader {
             !this.isCompactLayout
             && this.showDesktopStatusBar
             && this.isPagedBuildPending
+            && !this.activePagedPage
         );
     }
 
@@ -8297,6 +8289,10 @@ class Reader {
             });
         };
 
+        // A viewport rebuild can start after the reader has advanced several
+        // pages since the last explicit layout refresh.
+        if (this.activePagedPage)
+            this.captureStableReaderStatus();
         this.pagedBuildOwnerJobId = buildOwnerJobId;
         this.pagedBuildInProgress = true;
         this.pagedBuildNeedsRefresh = false;

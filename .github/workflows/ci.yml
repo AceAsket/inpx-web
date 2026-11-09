@@ -54,6 +54,9 @@ jobs:
       - run: node scripts/ebook-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/ebook-ui
+      - run: node scripts/reader-footer-browser-test.js
+        env:
+          INPX_ARTIFACT_DIR: ${{ runner.temp }}/reader-footer-ui
       - run: node scripts/rc13-profile-browser-test.js
         env:
           INPX_ARTIFACT_DIR: ${{ runner.temp }}/rc13-profile
@@ -71,6 +74,8 @@ jobs:
             ${{ runner.temp }}/catalog-ui/*.png
             ${{ runner.temp }}/telegram-status-ui/*.png
             ${{ runner.temp }}/telegram-status-ui/result.json
+            ${{ runner.temp }}/reader-footer-ui/*.png
+            ${{ runner.temp }}/reader-footer-ui/result.json
             ${{ runner.temp }}/catalog-ui/result.json
             ${{ runner.temp }}/catalog-discovery-ui/*.png
             ${{ runner.temp }}/catalog-discovery-ui/result.json
