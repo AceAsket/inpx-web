@@ -9858,20 +9858,25 @@ class Reader {
             return -1;
 
         let bestIndex = -1;
+        let bestMatchLength = 0;
         let bestDistance = Infinity;
         for (let index = 0; index < this.pagedPages.length; index += 1) {
             const page = this.pagedPages[index] || {};
             const pageText = this.getHtmlReaderSearchText(page.html || '');
             if (!pageText)
                 continue;
-            if (!needles.some((needle) => pageText.includes(needle)))
+            const matchLength = needles.find(needle => pageText.includes(needle))?.length || 0;
+            if (!matchLength)
                 continue;
 
             const distance = (preferredIndex >= 0 ? Math.abs(index - preferredIndex) : 0);
-            if (bestIndex < 0 || distance < bestDistance) {
+            // Page numbers can shift after resizing. A nearer page with only
+            // a short prefix must not win over a more specific match.
+            if (matchLength > bestMatchLength || (matchLength === bestMatchLength && distance < bestDistance)) {
                 bestIndex = index;
+                bestMatchLength = matchLength;
                 bestDistance = distance;
-                if (!distance)
+                if (!distance && matchLength === needles[0].length)
                     break;
             }
         }

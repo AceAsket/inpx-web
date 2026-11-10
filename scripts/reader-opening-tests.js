@@ -253,6 +253,23 @@ async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
     assert.strictEqual(reader.loading, false);
 }
 
+async function testReaderReflowPrefersTheMostSpecificTextMatch() {
+    const source = await fs.readFile(path.join(__dirname, '../client/components/Reader/Reader.vue'), 'utf8');
+    const method = source.slice(source.indexOf('    findPagedPageIndexByTextSnippet('), source.indexOf('    findPagedPageIndexByReaderTextAnchor('));
+    const Reader = new Function(`return class {${method}}`)();
+    const reader = new Reader();
+    const position = 'После длинной паузы собеседник повторил свой вопрос и развернул старую карту.';
+    reader.pagedPages = [
+        {html: 'После длинной паузы собеседник встал и вышел из комнаты.'},
+        {html: 'Он посмотрел в окно.'},
+        {html: position},
+    ];
+    reader.normalizeReaderSearchText = value => value.trim();
+    reader.getHtmlReaderSearchText = value => value.toLowerCase();
+    assert.strictEqual(reader.findPagedPageIndexByTextSnippet(position, 0), 2, 'A short repeated phrase must not send the reader to an earlier scene');
+}
+
 module.exports = [testReaderColdDocumentDoesNotWaitForReviewIndex, testCatalogOpensReaderBeforeColdFilePreparation,
     testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments,
-    testBookCardSkipsIllustrationsAndPreparesBookInBackground, testBackgroundLibraryWorkWaitsForUser, testBookGalleryReturnsFirstImagesWithoutCover];
+    testBookCardSkipsIllustrationsAndPreparesBookInBackground, testBackgroundLibraryWorkWaitsForUser,
+    testBookGalleryReturnsFirstImagesWithoutCover, testReaderReflowPrefersTheMostSpecificTextMatch];
