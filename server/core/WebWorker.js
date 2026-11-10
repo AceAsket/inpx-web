@@ -806,7 +806,9 @@ class WebWorker {
         }
 
         const android = config.installMode === 'android';
-        const db = android ? new (require('./DatabaseThread'))({...config, dbCacheBudgetMb:4}) : new JembaDbThread();
+        // A decoded 1 MiB Jemba block is budgeted at slightly over 4 MiB.
+        // Keep a few blocks through sequential scans instead of reopening one per row.
+        const db = android ? new (require('./DatabaseThread'))({...config, dbCacheBudgetMb:12}) : new JembaDbThread();
         await db.lock({
             dbPath,
             create: true,
