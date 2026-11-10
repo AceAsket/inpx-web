@@ -601,7 +601,8 @@ class WebSocketController {
         if (!req.query)
             throw new Error(`query is empty`);
 
-        const result = await this.readWithBudget(req,ws,()=>this.webWorker.bookSearch(req.query));
+        const onProgress = progress => this.send({_progress:1, progress}, req, ws);
+        const result = await this.readWithBudget(req,ws,()=>this.webWorker.bookSearch(req.query,onProgress));
 
         this.send(result, req, ws);
     }

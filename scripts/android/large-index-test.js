@@ -8,6 +8,7 @@ const {spawn} = require('node:child_process');
 const {pipeline} = require('node:stream/promises');
 const {setTimeout: sleep} = require('node:timers/promises');
 const yazl = require('yazl');
+const WebSocket = require('ws');
 const root = path.resolve(__dirname, '../..');
 
 async function stageRuntime(directory) {
@@ -66,6 +67,33 @@ async function search(url, title) {
     const uid = new URL(result[1].replace(/&amp;/g, '&'), url).searchParams.get('uid');
     assert.ok(uid, 'Search result must link to a book by UID');
     return uid;
+}
+
+async function browse(url, query, expected) {
+    await new Promise((resolve, reject) => {
+        const socket = new WebSocket(url.replace('http:', 'ws:') + '/ws', {origin:url});
+        const finish = error => {
+            clearTimeout(timer);
+            socket.terminate();
+            if (error) reject(error);
+            else resolve();
+        };
+        const timer = setTimeout(() => finish(new Error('Book list did not respond')), 90000);
+        socket.once('error', finish);
+        socket.once('open', () => socket.send(JSON.stringify({
+            action:'bookSearch', requestId:'browse', query:{...query, offset:0, limit:20},
+        })));
+        socket.on('message', raw => {
+            try {
+                const message = JSON.parse(raw);
+                if (message.requestId !== 'browse' || message._rok || message._progress) return;
+                assert.ok(!message.error, message.error);
+                assert.equal(message.totalFound, expected);
+                assert.equal(message.found.length, Math.min(20, expected));
+                finish();
+            } catch (error) {finish(error);}
+        });
+    });
 }
 
 async function run(directory, name, heap, body) {
@@ -140,8 +168,15 @@ async function main() {
             assert(!await fs.pathExists(orphan), 'Staging left by an interrupted import must be cleaned');
         return search(url, title);
     };
-    const first = await run(directory, 'first', heap,
-        url => inspect(url, 'Уникальный Маркер', count));
+    const first = await run(directory, 'first', heap, async url => {
+        const uid = await inspect(url, 'Уникальный Маркер', count);
+        if (process.argv.includes('--browse')) {
+            await browse(url, {del:'0'}, count - Math.floor(count / 79));
+            // With no filters, the server also has to scan the book table.
+            if (count <= 10000) await browse(url, {}, count);
+        }
+        return uid;
+    });
     if (process.argv.includes('--update')) {
         await fixture(library, count, 1);
         const second = await run(directory, 'update', heap,

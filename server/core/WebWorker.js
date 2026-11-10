@@ -1074,10 +1074,10 @@ class WebWorker {
         return result;
     }
 
-    async bookSearch(query) {
+    async bookSearch(query, onProgress) {
         this.checkMyState();
 
-        const result = await this.dbSearcher.bookSearch(query);
+        const result = await this.dbSearcher.bookSearch(query, onProgress);
         await this.applyMetadataOverridesToSearchResult(result);
 
         const config = await this.dbConfig();

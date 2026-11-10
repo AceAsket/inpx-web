@@ -12,6 +12,22 @@ const enruArr = (ruAlphabet + enAlphabet).split('');
 const titleSearchLeadingChars = ['«', '"', "'", '„', '“', '”', '‘', '’', '`', '(', '[', '{'];
 const copyDedupeVersion = 'copy-dedupe-v5-catalog-words';
 const ratingSelection = Symbol('ratingSelection');
+const androidScanBatchSize = 2000;
+
+function compareBooks(a, b) {
+    let cmp = a.author.localeCompare(b.author);
+    if (cmp === 0 && (a.series || b.series))
+        cmp = a.series && b.series ? a.series.localeCompare(b.series) : (a.series ? -1 : 1);
+    if (cmp === 0) cmp = a.serno - b.serno;
+    if (cmp === 0) cmp = a.title.localeCompare(b.title);
+    return cmp;
+}
+
+function pickBetterBook(current, next) {
+    if (next.score !== current.score)
+        return next.score > current.score ? next : current;
+    return next.id < current.id ? next : current;
+}
 
 class DbSearcher {
     constructor(config, db) {
@@ -792,7 +808,7 @@ class DbSearcher {
         }
     }
 
-    async bookSearchIds(query) {
+    async bookSearchIds(query, onProgress) {
         query = await this.prepareRatingQuery(query);
         const queryKey = this.queryKey(query);
         const bookKey = `book-search-ids-v2-formats-${queryKey}`;
@@ -922,17 +938,13 @@ class DbSearcher {
             }
             if (query.sourceId && await hasTable('source')) indexedQuery.sourceId = query.sourceId;
             let candidateIds = hideCopies && hasNarrowingFilter
-                ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}))
+                ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}), onProgress)
                 : Object.keys(indexedQuery).length ? await this.selectBookIds(indexedQuery,{bookPredicates:true}) : null;
             if (query[ratingSelection]) {
                 const selected = new Set(query[ratingSelection].ids);
                 candidateIds = candidateIds ? candidateIds.filter(id => selected.has(id)) : query[ratingSelection].ids;
             }
-            const iterator = candidateIds ? db.esc(Array.from(candidateIds)) : '@all()';
-            const rows = await db.select({
-                table: 'book',
-                rawResult: true,
-                where: `
+            const projection = `
                     const enru = new Set(${db.esc(enruArr)});
                     const hideCopies = ${hideCopies ? 'true' : 'false'};
 
@@ -1001,15 +1013,19 @@ class DbSearcher {
                         return score;
                     };
 
-                    const pickBetterRow = (current, next) => {
-                        const currentScore = current.score;
-                        const nextScore = next.score;
-
-                        if (nextScore !== currentScore)
-                            return (nextScore > currentScore ? next : current);
-
-                        return (next.id < current.id ? next : current);
-                    };
+                    const project = row => ({id:row.id, author:row.author, series:row.series,
+                        serno:row.serno, title:row.title, score:rowScore(row)});
+            `;
+            if (this.config.installMode === 'android' && (!candidateIds || candidateIds.length > 20000)) {
+                bookIds = await this.scanAndroidBookIds(bookKey, candidateIds, projection, onProgress);
+            } else {
+                const iterator = candidateIds ? db.esc(Array.from(candidateIds)) : '@all()';
+                const rows = await db.select({
+                    table: 'book',
+                    rawResult: true,
+                    where: `
+                    ${projection}
+                    const pickBetterRow = ${pickBetterBook.toString()};
 
                     const deduped = new Map();
                     for (const id of ${iterator}) {
@@ -1021,40 +1037,83 @@ class DbSearcher {
                         const existing = deduped.get(key);
                         // Keep only the sort keys, ID and preference score. Holding
                         // full rows here would pin decoded blocks through a scan.
-                        const candidate = {id:row.id, author:row.author, series:row.series,
-                            serno:row.serno, title:row.title, score:rowScore(row)};
+                        const candidate = project(row);
                         deduped.set(key, existing ? pickBetterRow(existing, candidate) : candidate);
                     }
 
                     const result = Array.from(deduped.values());
 
-                    result.sort((a, b) => {
-                        let cmp = a.author.localeCompare(b.author);
-                        if (cmp === 0 && (a.series || b.series)) {
-                            cmp = (a.series && b.series ? a.series.localeCompare(b.series) : (a.series ? -1 : 1));
-                        }
-                        if (cmp === 0)
-                            cmp = a.serno - b.serno;
-                        if (cmp === 0)
-                            cmp = a.title.localeCompare(b.title);
-
-                        return cmp;
-                    });
+                    result.sort(${compareBooks.toString()});
 
                     return new Uint32Array(result.map(row => row.id));
                 `
-            });
+                });
 
-            bookIds = rows[0].rawResult;
-    
-            await this.putCached(bookKey, bookIds);
+                bookIds = rows[0].rawResult;
+                await this.putCached(bookKey, bookIds);
+            }
         }
 
         return bookIds;
     }
 
+    scanAndroidBookIds(cacheKey, candidateIds, projection, onProgress) {
+        // The database worker already holds the search indexes. Move one page
+        // of sort keys at a time to the server and allow one full scan at once.
+        const run = (this.androidBookScan || Promise.resolve()).catch(() => {}).then(async() => {
+            const cached = await this.getCached(cacheKey);
+            if (cached !== null) return cached;
+            const db = this.db;
+            const cursorKey = db.esc('book-search-' + utils.randomHexString(8));
+            const best = new Map();
+            let reportAt = Date.now() + 5000;
+            try {
+                for (let offset = 0;; offset += androidScanBatchSize) {
+                    const input = candidateIds
+                        ? `const iterator = ${db.esc(Array.from(candidateIds.slice(offset, offset + androidScanBatchSize)))}[Symbol.iterator]();`
+                        : `let iterator = @getItem(${cursorKey});
+                            if (!iterator) {iterator = @all(); @setItem(${cursorKey}, iterator);}`;
+                    const [response] = await db.select({table:'book', rawResult:true, where:`
+                        ${projection}
+                        ${input}
+                        const rows = [];
+                        for (let i = 0; i < ${androidScanBatchSize}; i++) {
+                            const item = iterator.next();
+                            if (item.done) return {rows, done:true};
+                            const row = @unsafeRow(item.value);
+                            if (checkBook(row)) rows.push([dedupeKey(row), project(row)]);
+                        }
+                        return {rows, done:false};
+                    `});
+                    for (const [key, book] of response.rawResult.rows) {
+                        const existing = best.get(key);
+                        best.set(key, existing ? pickBetterBook(existing, book) : book);
+                    }
+                    if (onProgress && Date.now() >= reportAt) {
+                        const total = candidateIds?.length ?? null;
+                        onProgress({phase:'Подготовка списка книг', done:Math.min(offset + androidScanBatchSize, total ?? Infinity), total});
+                        reportAt = Date.now() + 5000;
+                    }
+                    if (response.rawResult.done || (candidateIds && offset + androidScanBatchSize >= candidateIds.length))
+                        break;
+                }
+            } finally {
+                if (!candidateIds)
+                    await db.select({table:'book', rawResult:true, where:`@delItem(${cursorKey}); return null;`});
+            }
+            onProgress?.({phase:'Сортировка списка книг', done:null, total:null});
+            const ordered = [...best.values()].sort(compareBooks);
+            const ids = Uint32Array.from(ordered, book => book.id);
+            best.clear();
+            await this.putCached(cacheKey, ids);
+            return ids;
+        });
+        this.androidBookScan = run.then(() => {}, () => {});
+        return run;
+    }
+
     //неоптимизированный поиск по всем книгам, по всем полям
-    async bookSearch(query) {
+    async bookSearch(query, onProgress) {
         if (this.closed)
             throw new Error('DbSearcher closed');
 
@@ -1063,7 +1122,7 @@ class DbSearcher {
         try {
             const db = this.db;
 
-            const ids = await this.bookSearchIds(query);
+            const ids = await this.bookSearchIds(query, onProgress);
 
             const totalFound = ids.length;            
             let limit = (query.limit ? query.limit : 100);
