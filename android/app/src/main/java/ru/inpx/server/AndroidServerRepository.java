@@ -6,7 +6,7 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.PowerManager;
 import java.io.File;
-import java.io.RandomAccessFile;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.NetworkInterface;
@@ -16,12 +16,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import ru.inpx.server.presentation.DashboardState;
 import ru.inpx.server.presentation.PowerSettings;
 import ru.inpx.server.presentation.ServerRepository;
+import ru.inpx.server.presentation.ServerMemory;
 import ru.inpx.server.presentation.SourceDraft;
 import ru.inpx.server.presentation.SourceInfo;
 
@@ -84,23 +86,43 @@ final class AndroidServerRepository implements ServerRepository {
         message = "Подготавливаем библиотеку. Дождитесь готовности каталога.";
     } catch (Exception ignored) {
     }
-    boolean ready = running && ready(port);
+    JSONObject readiness = running ? readiness(port) : new JSONObject();
+    boolean ready = readiness.optBoolean("ready");
+    String journal = ServerDiagnostics.journal(context);
+    boolean exhausted = control.optBoolean("requested") && !ready
+        && (control.optBoolean("heapExhausted")
+            || (!running && ServerDiagnostics.exhausted(context, control, journal)));
+    ServerMemory memory = ServerDiagnostics.memory(context, control, running, exhausted);
     DashboardState.Phase phase;
     if (running && !control.optBoolean("requested")) {
       phase = DashboardState.Phase.STOPPING;
       message = "Завершаем работу сервера…";
     } else if (ready) phase = DashboardState.Phase.RUNNING;
-    else if (control.optBoolean("blocked") || message.startsWith("Ошибка"))
+    else if (exhausted) {
+      phase = DashboardState.Phase.ERROR;
+      message = memory.suggestedMiB() > 0
+          ? "Не хватает памяти для индексации. Увеличьте лимит и запустите сервер снова."
+          : "Не хватает памяти. Лимит уже максимальный для этого устройства. Попробуйте меньший каталог.";
+    } else if (control.optBoolean("blocked") || message.startsWith("Ошибка"))
       phase = DashboardState.Phase.ERROR;
     else if (running
         || (control.optBoolean("requested")
             && System.currentTimeMillis() - control.optLong("explicitStart") < 30000))
       phase = DashboardState.Phase.STARTING;
     else phase = DashboardState.Phase.STOPPED;
+    if (phase == DashboardState.Phase.STARTING) {
+      long records = readiness.optLong("recsLoaded");
+      if (records > 0) {
+        String step = readiness.optString("jobMessage");
+        message = String.format(new Locale("ru"), "Индексация · %,d записей", records);
+        if (!step.isEmpty() && !step.startsWith("Loading INPX")) message += "\n" + step;
+      }
+    }
     boolean demo = control.optBoolean("demo");
     boolean changed =
         running
             && (port != preferred
+                || (memory.activeMiB > 0 && memory.activeMiB != memory.nextStartMiB())
                 || (demo && !items.isEmpty())
                 || (!demo
                     && !control.optString("sourceVersion").isEmpty()
@@ -110,39 +132,41 @@ final class AndroidServerRepository implements ServerRepository {
         items,
         addresses(),
         message,
-        journal(),
+        journal,
         preferences.getString("ui_mode", "auto"),
         preferred,
         port,
         demo,
         changed,
         false,
-        context.getFilesDir().getUsableSpace());
+        context.getFilesDir().getUsableSpace(),
+        memory);
   }
 
-  private boolean ready(int port) {
+  private JSONObject readiness(int port) {
     HttpURLConnection connection = null;
     try {
       connection =
           (HttpURLConnection) new URL("http://127.0.0.1:" + port + "/ready").openConnection();
       connection.setConnectTimeout(700);
       connection.setReadTimeout(700);
-      return connection.getResponseCode() == 200;
+      connection.setInstanceFollowRedirects(false);
+      int code = connection.getResponseCode();
+      if (code != 200 && code != 503) return new JSONObject();
+      try (InputStream input = code == 200 ? connection.getInputStream() : connection.getErrorStream()) {
+        if (input == null) return new JSONObject();
+        byte[] buffer = new byte[16384];
+        int size = 0, n;
+        while (size < buffer.length && (n = input.read(buffer, size, buffer.length - size)) != -1)
+          size += n;
+        JSONObject result = new JSONObject(new String(buffer, 0, size, StandardCharsets.UTF_8));
+        if (code != 200) result.put("ready", false);
+        return result;
+      }
     } catch (Exception ignored) {
-      return false;
+      return new JSONObject();
     } finally {
       if (connection != null) connection.disconnect();
-    }
-  }
-
-  private String journal() {
-    try (RandomAccessFile log = new RandomAccessFile(file("data/node.log"), "r")) {
-      log.seek(Math.max(0, log.length() - 14000));
-      byte[] bytes = new byte[(int) (log.length() - log.getFilePointer())];
-      log.readFully(bytes);
-      return new String(bytes, StandardCharsets.UTF_8);
-    } catch (Exception ignored) {
-      return "";
     }
   }
 
@@ -285,6 +309,14 @@ final class AndroidServerRepository implements ServerRepository {
       throw new IllegalArgumentException("Неизвестный режим интерфейса");
     if (!preferences.edit().putString("ui_mode", mode).commit())
       throw new IllegalStateException("Не удалось сохранить режим");
+  }
+
+  @Override
+  public void saveMemoryLimit(int mib) throws Exception {
+    ServerMemory memory = ServerDiagnostics.memory(context, ServerControl.read(context), false, false);
+    if (mib != 0 && java.util.Arrays.stream(memory.choices()).noneMatch(value -> value == mib))
+      throw new IllegalArgumentException("Этот лимит недоступен на устройстве.");
+    ServerControl.memoryLimit(context, mib);
   }
 
   @Override

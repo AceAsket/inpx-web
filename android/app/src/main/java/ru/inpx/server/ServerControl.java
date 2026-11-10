@@ -72,6 +72,8 @@ final class ServerControl {
               .put("explicitStart", System.currentTimeMillis())
               .put("attempts", 0)
               .put("attemptWindow", 0)
+              .put("attemptStarted", 0)
+              .put("heapExhausted", false)
               .put("blocked", false);
         });
     File data = new File(context.getFilesDir(), "data");
@@ -91,6 +93,19 @@ final class ServerControl {
     transaction(
         context,
         s -> s.put("keepAwake", awake).put("autoBoot", boot).put("stopOnBattery", stopOnBattery));
+  }
+
+  static void memoryLimit(Context context, int mib) throws Exception {
+    transaction(context, state -> state.put("heapLimitMiB", mib));
+  }
+
+  static void launchMemory(Context context, int mib) throws Exception {
+    transaction(context, state -> state.put("lastHeapMiB", mib)
+        .put("attemptStarted", System.currentTimeMillis()));
+  }
+
+  static void blockForMemory(Context context) throws Exception {
+    transaction(context, state -> state.put("heapExhausted", true).put("blocked", true));
   }
 
   static boolean recordAttempt(Context context) throws Exception {

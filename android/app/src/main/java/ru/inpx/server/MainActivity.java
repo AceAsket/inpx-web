@@ -121,7 +121,8 @@ public final class MainActivity extends Activity
       return;
     }
     if (!state.online()) {
-      if (state.sources.isEmpty()) sources.add();
+      if (state.memory.suggestedMiB() > 0) settings.recoverMemory();
+      else if (state.sources.isEmpty()) sources.add();
       else presenter.start(false);
       return;
     }

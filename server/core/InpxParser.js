@@ -29,8 +29,9 @@ const recStructType = {
 }
 
 class InpxParser {
-    constructor() {
+    constructor(chunkSize = 10000) {
         this.inpxInfo = {};
+        this.chunkSize = chunkSize;
     }
 
     async safeExtractToString(zipReader, fileName) {
@@ -169,7 +170,7 @@ class InpxParser {
             //пушим
             this.chunk.push(rec);
 
-            if (this.chunk.length >= 10000) {
+            if (this.chunk.length >= this.chunkSize) {
                 await parsedCallback(this.chunk);
                 this.chunk = [];
             }

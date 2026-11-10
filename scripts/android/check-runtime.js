@@ -26,6 +26,6 @@ const {execFileSync} = require('child_process');
             console.log('ok isolated Android dependencies: ' + manifest.backendPackages.length);
         `, runtime], {env:{...process.env, NODE_PATH:''}, windowsHide:true, stdio:'inherit'});
         execFileSync(process.execPath, [path.join(root, 'scripts/binary-smoke-test.js'), '--runtime', runtime],
-            {env:{...process.env, NODE_PATH:''}, windowsHide:true, stdio:'inherit', timeout:90000});
+            {env:{...process.env, NODE_PATH:'', INPX_INSTALL_MODE:'android'}, windowsHide:true, stdio:'inherit', timeout:90000});
     } finally {await fs.remove(sandbox);}
 })().catch(error => {console.error(error.stack); process.exitCode = 1;});

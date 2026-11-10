@@ -22,6 +22,8 @@ public interface ServerRepository {
 
   void saveMode(String mode) throws Exception;
 
+  void saveMemoryLimit(int mib) throws Exception;
+
   PowerSettings power() throws Exception;
 
   void savePower(boolean awake, boolean boot, boolean stopOnBattery) throws Exception;

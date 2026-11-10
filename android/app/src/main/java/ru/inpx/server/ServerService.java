@@ -138,6 +138,13 @@ public final class ServerService extends Service {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
       else startForeground(1, notification("Подготовка библиотеки…"));
       if (launched) return START_STICKY;
+      if (ServerDiagnostics.exhausted(this, request, ServerDiagnostics.journal(this))) {
+        ServerControl.blockForMemory(this);
+        state("Ошибка: не хватает памяти для сервера.");
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        stopSelf();
+        return START_NOT_STICKY;
+      }
       if (!ServerControl.recordAttempt(this)) {
         state("Ошибка: три сбоя запуска за 10 минут. Проверьте журнал и запустите сервер вручную.");
         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -266,6 +273,7 @@ public final class ServerService extends Service {
           .put("librarySources", libraries)
           .put("server", new JSONObject().put("host", "0.0.0.0").put("port", port).put("root", ""))
           .put("lowMemoryMode", true)
+          .put("fullOptimization", false)
           .put("dbCacheSize", 32)
           .put("bookCacheSize", 268435456)
           .put("coverCacheSize", 67108864)
@@ -320,11 +328,14 @@ public final class ServerService extends Service {
       state("Сервер запускается на порту " + port);
       getSystemService(NotificationManager.class)
           .notify(1, notification("Библиотека в домашней сети · порт " + port));
+      int heapMiB = ServerDiagnostics.memory(this, request, false, false).nextStartMiB();
+      new File(data(), "memory.json").delete();
+      ServerControl.launchMemory(this, heapMiB);
       NativeRuntime.start(
           new String[] {
             "node",
             "--expose-gc",
-            android.os.Process.is64Bit() ? "--max-old-space-size=512" : "--max-old-space-size=256",
+            "--max-old-space-size=" + heapMiB,
             new File(runtime, "bootstrap.js").getAbsolutePath()
           },
           storage,

@@ -226,6 +226,24 @@ public final class DashboardPresenter {
         success);
   }
 
+  public void saveMemoryLimit(int mib, Runnable success) {
+    command(() -> {
+      repository.saveMemoryLimit(mib);
+      return null;
+    }, null, success);
+  }
+
+  public void retryWithMoreMemory() {
+    int next = state.memory.suggestedMiB();
+    if (next == 0 || state.phase != DashboardState.Phase.ERROR) return;
+    boolean demo = state.demo;
+    command(() -> {
+      repository.saveMemoryLimit(next);
+      repository.start(demo);
+      return null;
+    }, DashboardState.Phase.STARTING, null);
+  }
+
   public void savePower(boolean awake, boolean boot, boolean battery, Runnable success) {
     command(
         () -> {

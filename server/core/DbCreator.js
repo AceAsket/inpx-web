@@ -75,6 +75,13 @@ class DbCreator {
 
     //процедура формировани БД несколько усложнена, в целях экономии памяти
     async run(db, callback) {
+        const scratch = this.config.installMode === 'android'
+            ? await require('./DiskIndexScratch').open(this.config.indexDbPath) : null;
+        try {return await this.build(db, callback, scratch);}
+        finally {if (scratch) await scratch.close();}
+    }
+
+    async build(db, callback, scratch) {
         const config = this.config;
         const inpxHashCreator = new InpxHashCreator(config);
         const sourceHash = await inpxHashCreator.getHash();
@@ -91,6 +98,11 @@ class DbCreator {
         const previous = new Map(), physical = new Map(), legacy = new Map();
         let lastBookId = 0;
         const rememberPrevious = rows => {
+            if (scratch) {
+                scratch.remember(rows);
+                for (const row of rows) lastBookId = Math.max(lastBookId, row.id);
+                return;
+            }
             for (const row of rows) {
                 previous.set(row.uid,row); lastBookId = Math.max(lastBookId,row.id);
                 if (row.legacyUid) {
@@ -218,7 +230,8 @@ class DbCreator {
                 callback({progress: (readState.current || 0)/totalFiles});
         };
 
-        const parseField = (fieldValue, fieldMap, fieldArr, bookId, rec, fillBookIds = true) => {
+        const parseField = (kind, fieldValue, fieldMap, fieldArr, bookId, rec, fillBookIds = true) => {
+            if (scratch) {scratch.add(kind, fieldValue, bookId, rec, !fillBookIds); return;}
             let value = fieldValue;
 
             if (typeof(fieldValue) == 'string') {
@@ -255,10 +268,10 @@ class DbCreator {
         };        
 
         const parseBookRec = (rec) => {
-            parseField(rec.sourceId, sourceMap, sourceArr, rec.id);
+            parseField('source', rec.sourceId, sourceMap, sourceArr, rec.id);
             for (const field of ['title', 'author', 'series']) {
                 for (const word of new Set(require('../../shared/CatalogSearch').words(rec[field]).map(require('../../shared/CatalogSearch').root)))
-                    parseField(`${field}:${word}`, wordMap, wordArr, rec.id);
+                    parseField('word', `${field}:${word}`, wordMap, wordArr, rec.id);
             }
             //авторы
             const author = splitAuthor(rec.author);
@@ -267,71 +280,71 @@ class DbCreator {
                 const a = author[i];
 
                 //статистика
-                if (!authorMap.has(a.toLowerCase()) && (author.length == 1 || i < author.length - 1)) //без соавторов
+                if (!(scratch ? scratch.hasAuthor(a.toLowerCase()) : authorMap.has(a.toLowerCase()))
+                    && (author.length == 1 || i < author.length - 1)) //без соавторов
                     authorCount++;
                 
-                parseField(a, authorMap, authorArr, rec.id, rec);                
+                parseField('author', a, authorMap, authorArr, rec.id, rec);
             }
 
             //серии
-            parseField(rec.series, seriesMap, seriesArr, rec.id, rec, false);
+            parseField('series', rec.series, seriesMap, seriesArr, rec.id, rec, false);
 
             //названия
-            parseField(rec.title, titleMap, titleArr, rec.id, rec);
+            parseField('title', rec.title, titleMap, titleArr, rec.id, rec);
 
             //жанры
             let genre = rec.genre || emptyFieldValue;
             genre = rec.genre.split(',');
 
             for (let g of genre) {
-                parseField(g, genreMap, genreArr, rec.id);
+                parseField('genre', g, genreMap, genreArr, rec.id);
             }
 
             //языки
-            parseField(rec.lang, langMap, langArr, rec.id);
+            parseField('lang', rec.lang, langMap, langArr, rec.id);
             
             //удаленные
-            parseField(rec.del, delMap, delArr, rec.id);
+            parseField('del', rec.del, delMap, delArr, rec.id);
 
             //дата поступления
-            parseField(rec.date, dateMap, dateArr, rec.id);
+            parseField('date', rec.date, dateMap, dateArr, rec.id);
 
             //оценка
-            parseField(rec.librate, librateMap, librateArr, rec.id);
+            parseField('librate', rec.librate, librateMap, librateArr, rec.id);
 
             //тип файла
-            parseField(rec.ext, extMap, extArr, rec.id);
+            parseField('ext', rec.ext, extMap, extArr, rec.id);
         };
 
         //основная процедура парсинга
         let id = lastBookId;
+        const seen = uid => scratch ? scratch.seen(uid) : uidSet.has(uid);
         const parsedCallback = async(chunk) => {
-            let filtered = false;
-            for (const rec of chunk) {
+            const saveChunk = [];
+            const collect = () => {for (const rec of chunk) {
                 rec.sourceId = currentSource.id;
                 rec.sourceName = currentSource.name;
                 rec.sourceLibDir = currentSource.libDir;
 
                 const identity = currentSource.type === 'folder' ? '' : this.physicalIdentity(rec);
                 if (identity) rec._legacyUid = rec._uid;
-                const uidPrior = previous.get(rec._uid) || legacy.get(JSON.stringify([rec.sourceId,rec._uid]));
-                let prior = uidPrior && (!identity || uidPrior.identity === identity)
-                    ? uidPrior : identity && physical.get(identity);
-                if (prior && !uidSet.has(prior.uid)) rec._uid = prior.uid;
+                const uidPrior = scratch ? null : previous.get(rec._uid) || legacy.get(JSON.stringify([rec.sourceId,rec._uid]));
+                let prior = scratch ? scratch.prior(rec._uid, rec.sourceId, identity)
+                    : uidPrior && (!identity || uidPrior.identity === identity) ? uidPrior : identity && physical.get(identity);
+                if (prior && !seen(prior.uid)) rec._uid = prior.uid;
                 else {
                     prior = null;
-                    if (identity && !physical.has(identity) && !uidSet.has(identity)) rec._uid = identity;
+                    if (identity && !(scratch ? scratch.knowsPhysical(identity) : physical.has(identity)) && !seen(identity))
+                        rec._uid = identity;
                 }
                 //сначала фильтр
-                if (!filter(rec) || uidSet.has(rec._uid)) {
-                    rec.id = 0;
-                    filtered = true;
-                    continue;
-                }
+                if (!filter(rec) || seen(rec._uid)) continue;
 
                 rec._recordHash = require('crypto').createHash('sha256').update(JSON.stringify(rec)).digest('hex');
                 rec.id = prior ? prior.id : ++id;
-                uidSet.add(rec._uid);
+                if (scratch) {scratch.mark(rec._uid); scratch.file(rec);}
+                else uidSet.add(rec._uid);
 
                 if (!rec.del) {
                     bookCount++;
@@ -342,16 +355,11 @@ class DbCreator {
                 }
 
                 parseBookRec(rec);
-            }
-
-            let saveChunk = [];
-            if (filtered) {
-                saveChunk = chunk.filter(r => r.id);
-            } else {
-                saveChunk = chunk;
-            }
-
-            saveChunk = saveChunk.filter(rec => !incremental || !previous.has(rec._uid) || previous.get(rec._uid).hash !== rec._recordHash);
+                const existing = incremental && (scratch ? scratch.byUid.get(rec._uid) : previous.get(rec._uid));
+                if (!existing || existing.hash !== rec._recordHash) saveChunk.push(rec);
+            }};
+            if (scratch) scratch.batch(collect);
+            else collect();
             if (saveChunk.length) await db.insert({table: 'book', rows: saveChunk, replace: true});
             recordsChanged += saveChunk.length;
             callback({recordsChanged, incremental});
@@ -377,7 +385,8 @@ class DbCreator {
                 sourceName: source.name,
             });
 
-            const parser = source.type === 'folder' ? new (require('./FolderIndexer').FolderIndexer)(source, config) : new InpxParser();
+            const parser = source.type === 'folder' ? new (require('./FolderIndexer').FolderIndexer)(source, config)
+                : new InpxParser(scratch ? 2000 : 10000);
             await parser.parse(source.inpxFile || source.inpx, readFileCallback, parsedCallback);
             parserInfos.push({
                 id: source.id,
@@ -388,9 +397,24 @@ class DbCreator {
             });
         }
 
-        const removed = incremental ? [...previous.values()].filter(row => !uidSet.has(row.uid)).map(row => row.id) : [];
-        for (let offset = 0; offset < removed.length; offset += 10000)
-            await db.delete({table: 'book', where: `@@id(${db.esc(removed.slice(offset, offset + 10000))})`});
+        let recordsRemoved = 0;
+        if (incremental) {
+            const removed = scratch ? scratch.removed() : (function*() {
+                for (const row of previous.values()) if (!uidSet.has(row.uid)) yield row.id;
+            })();
+            let batch = [];
+            const remove = async() => {
+                if (!batch.length) return;
+                await db.delete({table: 'book', where: `@@id(${db.esc(batch)})`});
+                recordsRemoved += batch.length; batch = [];
+            };
+            for (const bookId of removed) {
+                batch.push(bookId);
+                if (batch.length === 10000) await remove();
+            }
+            await remove();
+        }
+        const maxBookId = id;
 
         //чистка памяти, ибо жрет как не в себя
         authorMap = null;
@@ -449,21 +473,22 @@ class DbCreator {
         }
 
         //stats
+        const counts = scratch?.counts();
         const stats = {
             filesCount: 0,//вычислим позднее
             filesCountAll: 0,//вычислим позднее
             filesDelCount: 0,//вычислим позднее
             recsLoaded,
             authorCount,
-            authorCountAll: authorArr.length,
+            authorCountAll: counts?.author ?? authorArr.length,
             bookCount,
             bookCountAll: bookCount + bookDelCount,
             bookDelCount,
             noAuthorBookCount,
-            titleCount: titleArr.length,
-            seriesCount: seriesArr.length,
-            genreCount: genreArr.length,
-            langCount: langArr.length,
+            titleCount: counts?.title ?? titleArr.length,
+            seriesCount: counts?.series ?? seriesArr.length,
+            genreCount: counts?.genre ?? genreArr.length,
+            langCount: counts?.lang ?? langArr.length,
         };
         //console.log(stats);
 
@@ -481,6 +506,22 @@ class DbCreator {
                 table,
                 index: {field: 'value', unique: true, type: indexType, depth: 1000000},
             });
+
+            if (scratch) {
+                let batch = [], weight = 0, saved = 0;
+                const write = async() => {
+                    if (!batch.length) return;
+                    await db.insert({table, rows: batch});
+                    saved += batch.length; batch = []; weight = 0;
+                    if (counts[table]) callback({progress: saved / counts[table]});
+                };
+                for (const row of scratch.rows(table)) {
+                    batch.push(row);
+                    weight += 1 + row.bookIds.length;
+                    if (batch.length >= 1000 || weight >= 30000) await write();
+                }
+                await write();
+            }
 
             //вставка в БД по кусочкам, экономим память
             for (let i = 0; i < arr.length; i += chunkSize) {
@@ -565,20 +606,20 @@ class DbCreator {
             if (p.progress)
                 p.progress = 0.3*p.progress;
             callback(p);
-        });
+        }, scratch, maxBookId);
         await this.optimizeTable('series', db, (p) => {
             if (p.progress)
                 p.progress = 0.3 + 0.2*p.progress;
             callback(p);
-        });
+        }, scratch, maxBookId);
         await this.optimizeTable('title', db, (p) => {
             if (p.progress)
                 p.progress = 0.5 + 0.5*p.progress;
             callback(p);
-        });
+        }, scratch, maxBookId);
 
         callback({job: 'stats count', jobMessage: 'Подсчет статистики', jobStep: 9, progress: 0});
-        await this.countStats(db, callback, stats);
+        await this.countStats(db, callback, stats, scratch);
 
         //чистка памяти, ибо жрет как не в себя
         await db.close({table: 'book'});
@@ -620,13 +661,13 @@ class DbCreator {
             {id: 'inpxInfo', value: inpxInfo},
             {id: 'stats', value: stats},
             {id: 'inpxHash', value: sourceHash},
-            {id: 'indexUpdate', value: {incremental, recordsChanged, recordsRemoved: removed.length, updatedAt: new Date().toISOString()}},
+            {id: 'indexUpdate', value: {incremental, recordsChanged, recordsRemoved, updatedAt: new Date().toISOString()}},
         ]});
 
         callback({job: 'done', jobMessage: ''});
     }
 
-    async optimizeTable(from, db, callback) {
+    async optimizeTable(from, db, callback, scratch, maxBookId) {
         const config = this.config;
 
         const to = `${from}_book`;
@@ -635,8 +676,16 @@ class DbCreator {
         await db.create({table: to});
 
         let bookId2RecId = new Map();
+        const compact = scratch && new Uint32Array(maxBookId + 1);
 
         const saveChunk = async(chunk) => {
+            if (compact) {
+                scratch.batch(() => {
+                    for (const rec of chunk) for (const id of rec.bookIds)
+                        scratch.rememberReverse(compact, id, rec.id);
+                });
+                return;
+            }
             const ids = [];
             for (const rec of chunk) {
                 for (const id of rec.bookIds) {
@@ -732,6 +781,12 @@ class DbCreator {
         await db.close({table: to});
         await db.close({table: from});
 
+        const mapPath = `${config.indexDbPath || `${config.dataDir}/db`}/${from}_id.map`;
+        if (compact) {
+            await scratch.saveReverse(mapPath, compact);
+            callback({progress: 1});
+            return;
+        }
         const idMap = {arr: [], map: []};
         for (const [id, value] of bookId2RecId) {
             if (value.length > 1) {
@@ -743,13 +798,19 @@ class DbCreator {
         }
 
         callback({progress: 1});
-        await fs.writeFile(`${this.config.indexDbPath || `${this.config.dataDir}/db`}/${from}_id.map`, JSON.stringify(idMap));
+        await fs.writeFile(mapPath, JSON.stringify(idMap));
 
         bookId2RecId = null;
         utils.freeMemory();
     }
 
-    async countStats(db, callback, stats) {
+    async countStats(db, callback, stats, scratch) {
+        if (scratch) {
+            const {total, deleted} = scratch.fileCounts();
+            Object.assign(stats, {filesCount: total - deleted, filesCountAll: total, filesDelCount: deleted});
+            await db.create({in: 'book', hash: {field: '_uid', type: 'string', depth: 100, unique: true}});
+            return;
+        }
         //статистика по количеству файлов
 
         //эмуляция прогресса

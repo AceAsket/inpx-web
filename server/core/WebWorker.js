@@ -804,25 +804,28 @@ class WebWorker {
             await fs.copy(`${previousPath}/book`, `${dbPath}/book`);
         }
 
-        const db = new JembaDbThread();
+        const android = config.installMode === 'android';
+        const db = android ? new (require('./DatabaseThread'))({...config, dbCacheBudgetMb:4}) : new JembaDbThread();
         await db.lock({
             dbPath,
             create: true,
             softLock: true,
 
             tableDefaults: {
-                cacheSize: config.dbCacheSize,
+                cacheSize: android ? 5 : config.dbCacheSize,
             },
         });
 
         try {
             const oldDbPath = path.join(config.dataDir, 'db');
             const identityDbPath = path.resolve(oldDbPath) !== path.resolve(dbPath)
-                && await fs.pathExists(path.join(oldDbPath, 'book')) ? oldDbPath : '';
+                && await fs.pathExists(path.join(oldDbPath, 'book'))
+                && (!android || await fs.pathExists(path.join(oldDbPath, 'config'))) ? oldDbPath : '';
             const dbCreator = new DbCreator({...config, indexDbPath: dbPath, identityDbPath});
 
+            const indexState = {};
             await dbCreator.run(db, (state) => {
-                this.setMyState(ssDbCreating, state);
+                this.setMyState(ssDbCreating, Object.assign(indexState, state));
 
                 if (state.fileName)
                     log(`  load ${state.fileName}`);
@@ -844,6 +847,13 @@ class WebWorker {
         try {
             const config = this.config;
             const dbPath = `${config.dataDir}/db`;
+            const android = config.installMode === 'android';
+            if (android && iteration === 0) {
+                // Only private directories created for an interrupted generation are disposable.
+                for (const entry of await fs.readdir(config.dataDir, {withFileTypes:true}))
+                    if (entry.isDirectory() && /^db\.building-[0-9a-f]{16}$/.test(entry.name))
+                        await fs.remove(path.join(config.dataDir, entry.name));
+            }
             if (!await fs.pathExists(dbPath) && await fs.pathExists(`${dbPath}.previous`))
                 await fs.move(`${dbPath}.previous`, dbPath);
 
@@ -872,11 +882,12 @@ class WebWorker {
             }
 
             //удалим БД если нужно
-            if (config.recreateDb || recreate) {
+            if (config.recreateDb || recreate || (android && !await fs.pathExists(dbPath))) {
                 const staging = `${dbPath}.building-${utils.randomHexString(8)}`;
                 const previous = `${dbPath}.previous`;
+                const complete = !android || await fs.pathExists(path.join(dbPath, 'config'));
                 try {
-                    await this.createDb(staging, config.recreateDb || iteration > 0 ? '' : dbPath);
+                    await this.createDb(staging, config.recreateDb || iteration > 0 || !complete ? '' : dbPath);
                     await fs.remove(previous);
                     if (await fs.pathExists(dbPath)) await fs.move(dbPath, previous);
                     try { await fs.move(staging, dbPath); }
@@ -884,7 +895,7 @@ class WebWorker {
                     await fs.remove(previous);
                 } catch (error) {
                     await fs.remove(staging);
-                    if (!await fs.pathExists(dbPath)) throw error;
+                    if (!complete || !await fs.pathExists(dbPath)) throw error;
                     log(LM_ERR, `Index update failed; keeping previous index: ${error.message}`);
                 }
             }

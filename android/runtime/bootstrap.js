@@ -4,6 +4,17 @@ const fs = require('fs');
 const path = require('path');
 const nativeDir = process.env.INPX_ANDROID_NATIVE_DIR;
 const dataDir = process.env.INPX_ANDROID_DATA_DIR;
+process.env.INPX_INSTALL_MODE = 'android';
+const memoryFile = path.join(dataDir, 'memory.json');
+function sampleMemory() {
+    try {
+        const {rss, heapUsed} = process.memoryUsage();
+        fs.writeFileSync(memoryFile + '.tmp', JSON.stringify({at:Date.now(), rss, heapUsed}));
+        fs.renameSync(memoryFile + '.tmp', memoryFile);
+    } catch { /* monitoring must not interrupt indexing */ }
+}
+sampleMemory();
+setInterval(sampleMemory, 3000).unref();
 process.on('exit', code => {
     try { fs.writeFileSync(path.join(dataDir, '../status.txt'), code === 0 ? 'Сервер остановлен' : `Ошибка: сервер завершился с кодом ${code}. Подробности в журнале.`); } catch {}
 });

@@ -113,6 +113,8 @@ public final class DashboardPresenterTest {
 
     public void saveMode(String mode) {}
 
+    public void saveMemoryLimit(int mib) {}
+
     public PowerSettings power() {
       return new PowerSettings(true, false, false, true, false, false, false);
     }

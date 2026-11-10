@@ -65,7 +65,7 @@ final class DashboardView {
   final View root;
   final Map<String, Button> controls = new LinkedHashMap<>();
   final List<Button> left = new ArrayList<>(), right = new ArrayList<>();
-  final TextView badge, headline, summary, address, sourceCount, nextStep;
+  final TextView badge, headline, summary, address, sourceCount, nextStep, memory;
   private final Button primary;
   private final QrView qr;
   private final Map<String, String> sourceLabels = new LinkedHashMap<>();
@@ -90,7 +90,7 @@ final class DashboardView {
     if (tv) header.setPadding(dp(4), dp(2), dp(4), dp(2));
     header.setGravity(Gravity.CENTER_VERTICAL);
     ImageView icon = new ImageView(context);
-    icon.setImageResource(R.drawable.ic_library);
+    icon.setImageResource(R.mipmap.ic_launcher);
     icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
     header.addView(icon, new LinearLayout.LayoutParams(dp(tv ? 44 : 40), dp(tv ? 44 : 40)));
     LinearLayout brand = column();
@@ -138,6 +138,9 @@ final class DashboardView {
             false);
     hint.setPadding(0, dp(7), 0, 0);
     hero.addView(hint);
+    memory = text("", 12, MINT, false);
+    memory.setPadding(0, dp(7), 0, 0);
+    hero.addView(memory);
     nextStep = text("", 13, MUTED, false);
     nextStep.setTag("dashboard-next-step");
     nextStep.setPadding(0, dp(12), 0, 0);
@@ -245,7 +248,7 @@ final class DashboardView {
       TextView help =
           text(
               "↑ ↓ ← →  Выбор     OK  Открыть     Назад  Вернуться                         ANDROID"
-                  + " TV · 0.7.0",
+                  + " TV · 0.7.1",
               11,
               MUTED,
               false);
@@ -277,7 +280,7 @@ final class DashboardView {
       LinearLayout.LayoutParams opt = new LinearLayout.LayoutParams(-1, -2);
       opt.topMargin = dp(10);
       content.addView(options, opt);
-      TextView footer = text("INPX SERVER  /  ANDROID 9+  /  0.7.0", 11, MUTED, false);
+      TextView footer = text("INPX SERVER  /  ANDROID 9+  /  0.7.1", 11, MUTED, false);
       footer.setTag("dashboard-footer");
       footer.setGravity(Gravity.CENTER);
       footer.setPadding(0, dp(24), 0, dp(10));
@@ -503,6 +506,10 @@ final class DashboardView {
         online
             ? state.url().isEmpty() ? "Подключите Wi-Fi или Ethernet" : state.url()
             : "Адрес появится после запуска");
+    memory.setVisibility(state.memory.activeMiB > 0 && (online || busy) ? View.VISIBLE : View.GONE);
+    memory.setText(
+        (state.memory.rssMiB > 0 ? "ОЗУ сервера: " + state.memory.rssMiB + " МиБ · " : "")
+            + "Лимит Node.js: " + state.memory.activeMiB + " МиБ");
     nextStep.setText(
         state.restartRequired
             ? "Есть изменения. Остановите и запустите сервер, чтобы применить их."
@@ -523,7 +530,9 @@ final class DashboardView {
                     ? "Останавливаем сервер…"
                     : busy
                         ? "Запускаем сервер…"
-                        : empty ? "Добавить библиотеку" : "Запустить сервер");
+                        : state.memory.suggestedMiB() > 0
+                            ? "Увеличить лимит памяти…"
+                            : empty ? "Добавить библиотеку" : "Запустить сервер");
     primary.setAlpha(busy ? .65f : 1f);
     controls.get("catalog").setAlpha(online ? 1f : .6f);
     controls
