@@ -15,10 +15,10 @@ services:
       INPX_COVER_CACHE_SIZE_MB: "512"
       # Optional custom fb2cng YAML. Mount its whole directory read-only below.
       # INPX_FB2CNG_CONFIG: /config/fb2cng/config.yaml
-      # Shared OPDS shelves require 1.8.2-rc.1+; set the image tag above before enabling.
+      # Optional shared OPDS shelves. Mount the JSON configuration below.
       # INPX_OPDS_FEEDS_FILE: /config/opds/feeds.json
-      # Optional MOBI7/KF8 conversion in 1.8.1-rc.2; use that image tag to test.
-      # INPX_MOBI_ENABLED: "true"
+      # MOBI7/KF8 conversion is enabled by default in the full image.
+      # INPX_MOBI_ENABLED: "false"
     volumes:
       - /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web
       # Left side is a host path, right side is a path inside the container.

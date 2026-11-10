@@ -8,11 +8,9 @@
 
 ### Возможности
 
-- RC20 исправляет гостевой `/ebook` для Kindle: после применения формата MOBI скачивается отдельной ссылкой с расширением файла. Команды бота проверены по личному Chat ID без одноразовой ссылки и webhook.
+**Стабильная версия 1.8.2.** Добавлены OPDS 2.0, интерфейс `/ebook` для электронных книг и синхронизация прогресса с KOReader. Читалка сохраняет место после выхода из полноэкранного режима, включая перелистывание. Поддерживаются ZIP PPMd и иллюстрации WebP/JXL. [Изменения 1.8.2](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2)
 
-**Для тестирования 1.8.2-rc.25.** Читалка сохраняет место при входе в полноэкранный режим и выходе из него. Включает исправления горизонтального листания и переноса INPX-библиотеки, ASCII-имена скачивания для Kindle и поддержку ZIP PPMd/7z с WebP/JXL. Стабильный `latest` соответствует версии 1.8.1. [Изменения RC25](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.25/docs/rc25-release-notes.md)
-
-- RC14 исправляет исчерпание памяти базы при проверке производительности: проба читает одну запись. «Свои значения» проверяют лимиты с метриками CPU и памяти; отказ базы показан явно. Клик по книге снова открывает превью, полная карточка доступна отдельно. Обновлены вкладки и «Об авторе», отзывы и оценки показывают реальный прогресс. [Изменения RC14](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/rc14-release-notes.md), [профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/resource-profiles.md). Сохраняются изоляция профилей, стабильные ссылки и бюджеты кэшей RC13; [настройки памяти](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/memory-and-loading.md). Полный образ поддерживает EPUB → FB2.
+- Превью книг и вкладки загружаются по запросу. Кэши ограничены, проверка производительности показывает CPU, память и время отклика. [Профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v1.8.2/docs/resource-profiles.md)
 - Подсказки от трёх символов работают без подготовки и опроса; обычный поиск доступен сразу. Галерея: до 18 иллюстраций, 2 МиБ на изображение, 8 МиБ суммарно, 32 МиБ FB2 XML. Диагностика: `failedByCode`, `failedByKind`. Telegram: напрямую, через окружение сервера или свой HTTP(S)/SOCKS5; пароль хранится отдельно.
 - Поиск по автору, названию, серии, жанру, языку и источнику; несколько библиотек в одном каталоге.
 - Обложки и их кэширование, поддержка WebP и JXL.
@@ -22,23 +20,21 @@
 - Отправка книг в Telegram и по электронной почте при настройке доставки.
 - Панель администратора, журнал событий, резервное копирование и восстановление, управление источниками, health checks и метрики Prometheus.
 
-**В версии 1.8.1:** совместный поиск по названию, автору, ключевым словам и форматам, ISBN-10/13 с вручную подготавливаемым индексом, независимые форматы скачивания/Email/Telegram/OPDS и отправка ZIP. Добавлены задачи, избранные авторы и серии, проверка библиотеки, таймер сна и переходы между текстом и аудио.
+Совместный поиск поддерживает название, автора, ключевые слова, форматы и ISBN. Форматы скачивания, Email, Telegram и OPDS настраиваются отдельно. Интерактивный Telegram-бот выдаёт книги по личному Chat ID.
 
-Карточки и галереи загружаются по необходимости; общий бюджет архивов, иллюстраций и конвертации ограничивает нагрузку. Доступны профили `auto`, `economy`, `balanced`, `performance` и экономия памяти через `INPX_LOW_MEMORY_MODE=true`. [Профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v1.8.1/docs/resource-profiles.md).
+Карточки и галереи загружаются по необходимости; общий бюджет архивов, иллюстраций и конвертации ограничивает нагрузку. Доступны профили `auto`, `economy`, `balanced`, `performance` и экономия памяти через `INPX_LOW_MEMORY_MODE=true`. [Профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v1.8.2/docs/resource-profiles.md).
 
-Android-клиент подключается по QR с адресом без паролей. API поддерживает восстановление сессий, события чтения, быстрый снимок главной и отмену озвучки. Для остановки синтеза обновите основной контейнер и Silero. HTTP разрешён с предупреждением; HTTPS поддерживается через reverse proxy. [Контракт клиента](https://github.com/AceAsket/inpx-web/blob/v1.8.1/docs/native-client-protocol.md).
+Android-клиент подключается по QR с адресом без паролей. API поддерживает восстановление сессий, события чтения, быстрый снимок главной и отмену озвучки. Для остановки синтеза обновите основной контейнер и Silero. HTTP разрешён с предупреждением; HTTPS поддерживается через reverse proxy. [Контракт клиента](https://github.com/AceAsket/inpx-web/blob/v1.8.2/docs/native-client-protocol.md).
 
-**MOBI в стабильной 1.8.1:** встроенный лёгкий Kindling конвертирует FB2/EPUB в MOBI7/KF8 без Calibre. Опция выключена по умолчанию: для включения добавьте `-e INPX_MOBI_ENABLED=true` перед именем образа. Совместимость с конкретным Kindle остаётся экспериментальной. [Настройка и ограничения](https://github.com/AceAsket/inpx-web/blob/v1.8.1/README.md#лёгкая-конвертация-mobi-181-rc2).
+Встроенный Kindling конвертирует FB2/EPUB в MOBI7/KF8. В полном образе MOBI включён по умолчанию. Отключение — `INPX_MOBI_ENABLED=false`. Совместимость зависит от модели Kindle. [Настройка MOBI](https://github.com/AceAsket/inpx-web/blob/v1.8.2/README.md#лёгкая-конвертация-mobi-181-rc2)
 
 ### Образы и версии
 
 | Тег | Назначение |
 | --- | --- |
-| `1.8.2-rc.25` | Сохранение места чтения при выходе из полноэкранного режима. |
-| `1.8.2-rc.25-silero` | Сервис озвучки из того же RC с поддержкой настроек и тома моделей 1.8.1. |
-| `1.8.1` | Стабильный релиз с конвертацией книг. |
-| `latest` | Стабильный основной образ; сейчас соответствует `1.8.1`. |
-| `1.8.1-silero` | Отдельный сервис озвучки для стабильной версии. |
+| `1.8.2` | Стабильный основной образ с конвертацией книг. |
+| `latest` | Текущий стабильный основной образ, версия `1.8.2`. |
+| `1.8.2-silero` | Отдельный сервис озвучки для 1.8.2. |
 | `lite`, `*-lite` | Облегчённые сборки без конвертации; их версии могут отставать от основного образа. |
 
 Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md).
@@ -56,7 +52,7 @@ docker run -d \
   -e LIBDIR=/library \
   -v /path/to/data:/usr/local/bin/.inpx-web \
   -v /path/to/library:/library:ro \
-  aceasket/inpx-web-7z:1.8.1
+  aceasket/inpx-web-7z:1.8.2
 ```
 
 Откройте `http://SERVER_IP:12380`. Пути `INPX` и `LIBDIR` указываются **внутри контейнера**. При первом запуске дождитесь индексации; её продолжительность зависит от размера библиотеки. Свой начальный пароль администратора задаётся через `INPX_ADMIN_PASSWORD`. На новой установке без этой настройки пароль генерируется и выводится в журнал запуска. При обновлении пароль существующего профиля сохраняется.
@@ -65,7 +61,7 @@ docker run -d \
 
 ### Папки и несколько библиотек
 
-В 1.8.1 можно индексировать обычную папку FB2/EPUB без INPX. Добавьте к запуску образа `1.8.1`:
+Для индексации папки FB2/EPUB без INPX добавьте переменную окружения:
 
 ```sh
 -e INPX_LIBRARY_SOURCES='[{"id":"own","name":"Мои книги","type":"folder","libDir":"/library"}]'
@@ -79,7 +75,7 @@ docker run -d \
 
 Это параметры `docker run`, их нужно вставить перед именем образа. После изменения источников выполните переиндексацию. [Настройка библиотек и Docker Compose](https://github.com/AceAsket/inpx-web/blob/develop/README.md).
 
-### Имена файлов и заголовки в 1.8.1
+### Имена файлов и заголовки
 
 Основной образ включает fbc **1.9.0**. Добавьте параметры запуска, чтобы получить имя файла и заголовок книги для Kindle вида `02 - Доктор Гарин`:
 
@@ -90,7 +86,7 @@ docker run -d \
 
 Номер берётся из каталога. Для книги без номера блок с дефисом исчезнет. Для одного названия используйте `'${TITLE}'`. Первая настройка меняет имя файла, вторая — заголовок внутри EPUB/EPUB3/KEPUB/KFX/AZW8 при конвертации FB2. Без настроек сохраняется прежнее поведение. [Все поля шаблонов и настройки fbc](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
 
-### Озвучка Silero в 1.8.1
+### Озвучка Silero
 
 Озвучка **выключена по умолчанию** и включается переменными запуска основного контейнера:
 
@@ -99,7 +95,7 @@ docker run -d \
 -e INPX_TTS_URL=http://silero:8000
 ```
 
-Silero запускается отдельным CPU-контейнером `aceasket/inpx-web-7z:1.8.1-silero`. Оба контейнера должны находиться в одной пользовательской Docker-сети. Смонтируйте постоянный том в `/models`; модели загружаются при первом синтезе. Расстановка ударений через silero-stress включена по умолчанию. Текст передаётся вашему сервису Silero.
+Silero запускается отдельным CPU-контейнером `aceasket/inpx-web-7z:1.8.2-silero`. Оба контейнера должны находиться в одной пользовательской Docker-сети. Смонтируйте постоянный том в `/models`; модели загружаются при первом синтезе. Расстановка ударений через silero-stress включена по умолчанию. Текст передаётся вашему сервису Silero.
 
 [Готовые команды и Compose для Silero](https://github.com/AceAsket/inpx-web/blob/develop/docs/silero-tts.md).
 
@@ -128,9 +124,9 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 ### Features
 
-**Version 1.8.2-rc.25 is available for testing.** The web reader keeps your reading position when you enter or exit fullscreen. It includes horizontal pagination and INPX library relocation fixes, ASCII download filenames for Kindle, and ZIP PPMd/7z support with WebP/JXL. Stable `latest` points to 1.8.1. [RC25 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.25/docs/rc25-release-notes.md)
+**Stable version 1.8.2.** Adds OPDS 2.0, the lightweight `/ebook` interface, and reading progress sync with KOReader. The web reader keeps your place when you exit fullscreen, including after turning pages. Supports PPMd ZIP archives and WebP/JXL illustrations. [1.8.2 release notes](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2)
 
-- RC14 fixes database-worker memory exhaustion during performance checks by probing one catalog row. Custom values test limits with CPU/memory metrics; database failure is reported clearly. Book previews return with a separate full-card link. Tabs and author details are updated, and reviews and ratings show measured progress. [RC14 changes](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/rc14-release-notes.md), [resource profiles](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/resource-profiles.md). Includes RC13 profile isolation, stable links and bounded caches; [memory settings](https://github.com/AceAsket/inpx-web/blob/v1.8.2-rc.20/docs/memory-and-loading.md). Full images support EPUB → FB2 reading.
+- Book previews and detail tabs load on demand. Cache budgets limit memory use, and the performance check reports CPU, memory and response time. [Resource profiles](https://github.com/AceAsket/inpx-web/blob/v1.8.2/docs/resource-profiles.md)
 - Suggestions from three characters need no preparation or polling; search is available immediately. Gallery: up to 18 illustrations, 2 MiB/image, 8 MiB total, 32 MiB FB2 XML. Diagnostics: `failedByCode`, `failedByKind`. Telegram: direct, server-environment or custom HTTP(S)/SOCKS5 proxy; passwords stored separately.
 - Search by author, title, series, genre, language and source; multiple libraries in one catalog.
 - Cover extraction and caching, including WebP and JXL support.
@@ -140,23 +136,21 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 - Send books through Telegram or email when delivery is configured.
 - Admin dashboard, event log, backup/restore, source management, health checks and Prometheus metrics.
 
-**In version 1.8.1:** combine title, author, keywords and formats; search validated ISBN-10/13 using a manually prepared index; choose independent download/Email/Telegram/OPDS formats and ZIP delivery. Includes tasks, favorite authors/series, library audit, a sleep timer and text/audio navigation.
+Combine title, author, keywords, formats and ISBN in search. Set separate formats for downloads, email, Telegram and OPDS. The interactive Telegram bot delivers books to the profile's personal chat.
 
-Cards and galleries load on demand. A shared archive/image/conversion budget bounds resource use; choose `auto`, `economy`, `balanced` or `performance`, and use `INPX_LOW_MEMORY_MODE=true` on small hosts. [Resource profiles](https://github.com/AceAsket/inpx-web/blob/v1.8.1/docs/resource-profiles.md).
+Cards and galleries load on demand. A shared archive/image/conversion budget bounds resource use; choose `auto`, `economy`, `balanced` or `performance`, and use `INPX_LOW_MEMORY_MODE=true` on small hosts. [Resource profiles](https://github.com/AceAsket/inpx-web/blob/v1.8.2/docs/resource-profiles.md).
 
-Connect Android through a QR containing the server address without credentials. The compatible API adds session resume, reading events, fast home snapshots and speech cancellation. Update both the web and Silero containers to stop synthesis. HTTP remains allowed with a warning; HTTPS works through a reverse proxy. [Client contract](https://github.com/AceAsket/inpx-web/blob/v1.8.1/docs/native-client-protocol.md).
+Connect Android through a QR containing the server address without credentials. The compatible API adds session resume, reading events, fast home snapshots and speech cancellation. Update both the web and Silero containers to stop synthesis. HTTP remains allowed with a warning; HTTPS works through a reverse proxy. [Client contract](https://github.com/AceAsket/inpx-web/blob/v1.8.2/docs/native-client-protocol.md).
 
-**MOBI in stable 1.8.1:** bundled lightweight Kindling converts FB2/EPUB to MOBI7/KF8 without Calibre. Disabled by default; add `-e INPX_MOBI_ENABLED=true` before the image name. Compatibility with a particular Kindle remains experimental. [Configuration and limitations](https://github.com/AceAsket/inpx-web/blob/v1.8.1/README.md#лёгкая-конвертация-mobi-181-rc2).
+Bundled Kindling converts FB2/EPUB to MOBI7/KF8. The full image enables MOBI by default. Set `INPX_MOBI_ENABLED=false` to disable it. Compatibility depends on the Kindle model. [MOBI configuration](https://github.com/AceAsket/inpx-web/blob/v1.8.2/README.md#лёгкая-конвертация-mobi-181-rc2)
 
 ### Images and versions
 
 | Tag | Purpose |
 | --- | --- |
-| `1.8.2-rc.25` | Preserves the reading position when exiting fullscreen. |
-| `1.8.2-rc.25-silero` | Speech service from the same RC with support for 1.8.1 settings and model volumes. |
-| `1.8.1` | Stable release with book conversion. |
-| `latest` | Stable main image; currently points to `1.8.1`. |
-| `1.8.1-silero` | Separate speech service for the stable release. |
+| `1.8.2` | Stable main image with book conversion. |
+| `latest` | Current stable main image, version `1.8.2`. |
+| `1.8.2-silero` | Separate speech service for 1.8.2. |
 | `lite`, `*-lite` | Smaller builds without conversion; their versions may lag behind the main image. |
 
 Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/develop/CHANGELOG.md) for changes.
@@ -174,7 +168,7 @@ docker run -d \
   -e LIBDIR=/library \
   -v /path/to/data:/usr/local/bin/.inpx-web \
   -v /path/to/library:/library:ro \
-  aceasket/inpx-web-7z:1.8.1
+  aceasket/inpx-web-7z:1.8.2
 ```
 
 Open `http://SERVER_IP:12380`. `INPX` and `LIBDIR` must refer to paths **inside the container**. Wait for initial indexing; the time required depends on the library size. Set `INPX_ADMIN_PASSWORD` to supply your own initial admin password. On a new installation without this setting, a password is generated and printed in the startup log. Existing profile passwords are preserved on upgrade.
@@ -183,7 +177,7 @@ Keep `/usr/local/bin/.inpx-web` in a persistent volume: it stores settings, prof
 
 ### Folders and multiple libraries
 
-1.8.1 can index a folder of FB2/EPUB files without INPX. Add this option when running `1.8.1`:
+Set this environment variable to index a folder of FB2/EPUB files without INPX:
 
 ```sh
 -e INPX_LIBRARY_SOURCES='[{"id":"own","name":"My books","type":"folder","libDir":"/library"}]'
@@ -197,7 +191,7 @@ For multiple INPX libraries, specify an array of sources:
 
 These are `docker run` options; insert them before the image name. Reindex after changing sources. [Library configuration and Docker Compose](https://github.com/AceAsket/inpx-web/blob/develop/README.md).
 
-### Filenames and book titles in 1.8.1
+### Filenames and book titles
 
 The main image includes fbc **1.9.0**. Add these launch options to get a filename and Kindle book title such as `02 - Доктор Гарин`:
 
@@ -208,7 +202,7 @@ The main image includes fbc **1.9.0**. Add these launch options to get a filenam
 
 The series number comes from the catalogue. The number and separator disappear for unnumbered books. Use `'${TITLE}'` for the title alone. The first option changes download filenames; the second changes internal EPUB/EPUB3/KEPUB/KFX/AZW8 titles when converting FB2. Existing behavior is preserved when these options are unset. [Template fields and fbc settings](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
 
-### Silero speech in 1.8.1
+### Silero speech
 
 Speech is **disabled by default**. Enable it through the main container's startup environment:
 
@@ -217,7 +211,7 @@ Speech is **disabled by default**. Enable it through the main container's startu
 -e INPX_TTS_URL=http://silero:8000
 ```
 
-Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.8.1-silero`. Place both containers on the same user-defined Docker network. Mount a persistent volume at `/models`; models are downloaded on the first synthesis request. Stress placement with silero-stress is enabled by default. Book text is sent to your own Silero service.
+Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.8.2-silero`. Place both containers on the same user-defined Docker network. Mount a persistent volume at `/models`; models are downloaded on the first synthesis request. Stress placement with silero-stress is enabled by default. Book text is sent to your own Silero service.
 
 [Silero commands and Compose instructions](https://github.com/AceAsket/inpx-web/blob/develop/docs/silero-tts.md).
 

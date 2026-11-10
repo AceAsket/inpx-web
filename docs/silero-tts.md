@@ -1,12 +1,10 @@
 # Озвучка книг через Silero
 
-В 1.8.2-rc.2 есть также [отдельный режим системных голосов браузера](browser-speech.md), который не требует Silero. Для прослушивания с выключенным экраном используйте MP3; системная речь ставится на паузу при скрытии страницы.
-
-Для тестовой **1.8.2-rc.12** доступны образы `aceasket/inpx-web-7z:1.8.2-rc.12` и `aceasket/inpx-web-7z:1.8.2-rc.12-silero`. Изменений синтеза относительно 1.8.1 нет; существующий сервис Silero, настройки и том моделей совместимы. Примеры стабильного запуска ниже сохраняют свои версии.
+Читалка поддерживает [системные голоса браузера](browser-speech.md). При скрытии страницы системная речь ставится на паузу. Для прослушивания с выключенным экраном используйте MP3 от Silero.
 
 Экспериментальная серверная озвучка русских FB2, **выключенная по умолчанию**. Включается только при запуске контейнера переменной `INPX_TTS_ENABLED=true`; настройки администратора эту опцию не меняют. Silero работает в отдельном CPU-контейнере; основное приложение не требует Python или PyTorch. Текст книги передаётся только вашему сервису Silero.
 
-Для стабильной **1.8.1** используйте основной образ `aceasket/inpx-web-7z:1.8.1` и сервис `aceasket/inpx-web-7z:1.8.1-silero`. `docker-compose.silero.yml` закрепляет обе версии. Для полной отмены синтеза обновите оба контейнера; остальные пользовательские данные и том `/models` сохраняются.
+Для стабильной **1.8.2** используйте основной образ `aceasket/inpx-web-7z:1.8.2` и сервис `aceasket/inpx-web-7z:1.8.2-silero`. `docker-compose.silero.yml` закрепляет обе версии. При обновлении обоих контейнеров подключите прежние тома данных и моделей.
 
 ## Docker Compose
 
@@ -18,7 +16,7 @@ docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts 
 docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts up -d --no-build
 ```
 
-Для стабильной версии 1.8.0 опубликованы образы `aceasket/inpx-web-7z:1.8.0` и `aceasket/inpx-web-7z:1.8.0-silero` для Linux x64. Возьмите `docker-compose.silero.yml` из тега `v1.8.0`; основной Compose-файл с вашими путями и портами сохраняется. Для сборки из исходников замените `--no-build` на `--build` и пропустите `pull`.
+Образы предназначены для Linux x64. Для сборки из исходников используйте `--build` вместо `--no-build` и пропустите `pull`.
 
 При первой озвучке сервис скачает официальную модель `v5_5_ru` в постоянный том `silero-models`. Для первого запуска нужен доступ к `models.silero.ai`; последующие запуски используют локальную модель. Контейнер по умолчанию использует до 4 CPU и 4 ГБ RAM. `/health` проверяет доступность HTTP-сервиса; модель загружается при первом запросе синтеза.
 
@@ -27,7 +25,7 @@ docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts 
 Для существующего контейнера INPX Web на Unraid загрузите сервис отдельно:
 
 ```sh
-docker pull aceasket/inpx-web-7z:1.8.0-silero
+docker pull aceasket/inpx-web-7z:1.8.2-silero
 ```
 
 Подключите оба контейнера к одной пользовательской Docker-сети, запустите Silero с именем `silero`, портом `8000` внутри сети и постоянным томом `/models`. В **новой сборке** INPX Web задайте `INPX_TTS_ENABLED=true` и `INPX_TTS_URL=http://silero:8000`. При использовании разных хостов укажите адрес и доступный порт вашего Silero. После изменения переменных пересоздайте контейнер INPX Web.
@@ -37,20 +35,20 @@ docker pull aceasket/inpx-web-7z:1.8.0-silero
 Для нового сервиса Silero создайте сеть и запустите контейнер. Порт сервиса остаётся внутри сети; модель хранится в `/mnt/user/appdata/inpx-silero`.
 
 ```sh
-docker pull aceasket/inpx-web-7z:1.8.0-silero &&
+docker pull aceasket/inpx-web-7z:1.8.2-silero &&
 (docker network inspect inpx-tts >/dev/null 2>&1 || docker network create inpx-tts) &&
 docker run -d --name silero --restart unless-stopped --network inpx-tts \
   --cpus=4 --memory=4g \
   -e SILERO_MODEL=v5_5_ru -e SILERO_THREADS=4 -e SILERO_STRESS_ENABLED=true \
   -v /mnt/user/appdata/inpx-silero:/models \
-  aceasket/inpx-web-7z:1.8.0-silero
+  aceasket/inpx-web-7z:1.8.2-silero
 ```
 
 Затем замените существующий `inpx-web`, сохранив переменные запуска, включая токен Audiobookshelf. Команда ниже использует пути стенда `/mnt/user/appdata/inpx-web` и `/mnt/user/Torrents`.
 
 ```sh
 inpx_env_file=$(mktemp) &&
-docker pull aceasket/inpx-web-7z:1.8.0 &&
+docker pull aceasket/inpx-web-7z:1.8.2 &&
 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' inpx-web > "$inpx_env_file" &&
 docker stop inpx-web && docker rm inpx-web &&
 docker run -d --name inpx-web --restart unless-stopped --network inpx-tts \
@@ -61,7 +59,7 @@ docker run -d --name inpx-web --restart unless-stopped --network inpx-tts \
   -e INPX_TTS_MODEL=v5_5_ru \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/Torrents:/library:ro \
-  aceasket/inpx-web-7z:1.8.0 &&
+  aceasket/inpx-web-7z:1.8.2 &&
 rm -f "$inpx_env_file"
 ```
 
@@ -73,18 +71,18 @@ rm -f "$inpx_env_file"
 
 ```sh
 silero_env_file=$(mktemp) &&
-docker pull aceasket/inpx-web-7z:1.8.0-silero &&
+docker pull aceasket/inpx-web-7z:1.8.2-silero &&
 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' silero > "$silero_env_file" &&
 docker stop silero && docker rm silero &&
 docker run -d --name silero --restart unless-stopped --network inpx-tts \
   --cpus=4 --memory=4g --env-file "$silero_env_file" \
   -e SILERO_MODEL=v5_5_ru -e SILERO_THREADS=4 -e SILERO_STRESS_ENABLED=true \
   -v /mnt/user/appdata/inpx-silero:/models \
-  aceasket/inpx-web-7z:1.8.0-silero &&
+  aceasket/inpx-web-7z:1.8.2-silero &&
 rm -f "$silero_env_file"
 ```
 
-При переходе с 1.7.9 или RC7–RC17 на 1.8.0 достаточно обновить основной контейнер `inpx-web`. Контейнер Silero из 1.7.9 и RC7–RC17 совместим; образ `1.8.0-silero` опубликован для одинаковых версий в Compose.
+Для обновления с предыдущих выпусков используйте образы `1.8.2` и `1.8.2-silero` вместе. Подключите прежний том `/models`, чтобы использовать уже загруженные модели.
 
 ## Использование
 
