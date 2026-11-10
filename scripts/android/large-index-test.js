@@ -130,10 +130,14 @@ async function main() {
     console.log('Fixture:', directory, 'records:', count, 'old-space MiB:', heap);
     await stageRuntime(directory);
     await fixture(library, count);
+    const orphan = path.join(directory, 'data/db.building-0123456789abcdef');
+    await fs.outputFile(path.join(orphan, 'interrupted'), '');
     const inspect = async(url, title, expected) => {
         const result = await fetch(url + '/api/index-status');
         const info = await result.json();
         assert.equal(info.stats?.bookCountAll, expected, 'All INPX records must be indexed');
+        if (process.env.INPX_TEST_NATIVE !== '1')
+            assert(!await fs.pathExists(orphan), 'Staging left by an interrupted import must be cleaned');
         return search(url, title);
     };
     const first = await run(directory, 'first', heap,

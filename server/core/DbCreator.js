@@ -105,8 +105,8 @@ class DbCreator {
             }
             for (const row of rows) {
                 previous.set(row.uid,row); lastBookId = Math.max(lastBookId,row.id);
-                if (row.legacyUid) {
-                    const key = JSON.stringify([row.sourceId,row.legacyUid]);
+                if (row.identity && row.legacyUid) {
+                    const key = `${row.identity}:${row.legacyUid}`;
                     legacy.set(key,legacy.has(key) ? null : row);
                 }
                 if (row.identity) physical.set(row.identity,physical.has(row.identity) ? null : row);
@@ -320,44 +320,59 @@ class DbCreator {
         //основная процедура парсинга
         let id = lastBookId;
         const seen = uid => scratch ? scratch.seen(uid) : uidSet.has(uid);
+        const findByUid = uid => scratch ? scratch.findByUid(uid) : previous.get(uid);
+        const knowsPhysical = identity => scratch ? scratch.knowsPhysical(identity) : physical.has(identity);
         const parsedCallback = async(chunk) => {
             const saveChunk = [];
-            const collect = () => {for (const rec of chunk) {
-                rec.sourceId = currentSource.id;
-                rec.sourceName = currentSource.name;
-                rec.sourceLibDir = currentSource.libDir;
+            const collect = () => {
+                for (const rec of chunk) {
+                    rec.sourceId = currentSource.id;
+                    rec.sourceName = currentSource.name;
+                    rec.sourceLibDir = currentSource.libDir;
 
-                const identity = currentSource.type === 'folder' ? '' : this.physicalIdentity(rec);
-                if (identity) rec._legacyUid = rec._uid;
-                const uidPrior = scratch ? null : previous.get(rec._uid) || legacy.get(JSON.stringify([rec.sourceId,rec._uid]));
-                let prior = scratch ? scratch.prior(rec._uid, rec.sourceId, identity)
-                    : uidPrior && (!identity || uidPrior.identity === identity) ? uidPrior : identity && physical.get(identity);
-                if (prior && !seen(prior.uid)) rec._uid = prior.uid;
-                else {
-                    prior = null;
-                    if (identity && !(scratch ? scratch.knowsPhysical(identity) : physical.has(identity)) && !seen(identity))
-                        rec._uid = identity;
+                    const identity = currentSource.type === 'folder' ? '' : this.physicalIdentity(rec);
+                    const parsedUid = rec._uid;
+                    if (identity) rec._legacyUid = parsedUid;
+                    const uidPrior = findByUid(parsedUid);
+                    // An identical INPX line can refer to different archives.
+                    let prior = uidPrior;
+                    if (identity && uidPrior?.identity !== identity)
+                        prior = scratch ? scratch.matchArchive(identity, parsedUid)
+                            : legacy.get(`${identity}:${parsedUid}`) || physical.get(identity);
+                    if (prior && !seen(prior.uid)) rec._uid = prior.uid;
+                    else {
+                        prior = null;
+                        if (identity && !knowsPhysical(identity) && !seen(identity) && !findByUid(identity)) {
+                            rec._uid = identity;
+                        } else if (identity && uidPrior && uidPrior.identity !== identity) {
+                            rec._uid = require('crypto').createHash('sha256').update(`inpx-record-v1:${identity}:${parsedUid}`).digest('base64');
+                            const variant = findByUid(rec._uid);
+                            if (variant && variant.identity === identity) prior = variant;
+                        }
+                    }
+                    if (!filter(rec) || seen(rec._uid)) continue;
+
+                    rec._recordHash = require('crypto').createHash('sha256').update(JSON.stringify(rec)).digest('hex');
+                    rec.id = prior ? prior.id : ++id;
+                    if (scratch) {scratch.mark(rec._uid, prior); scratch.file(rec);}
+                    else {
+                        uidSet.add(rec._uid);
+                        if (prior) prior.retained = true;
+                    }
+
+                    if (!rec.del) {
+                        bookCount++;
+                        if (!rec.author)
+                            noAuthorBookCount++;
+                    } else {
+                        bookDelCount++;
+                    }
+
+                    parseBookRec(rec);
+                    const old = incremental && findByUid(rec._uid);
+                    if (!old || old.id !== rec.id || old.hash !== rec._recordHash) saveChunk.push(rec);
                 }
-                //сначала фильтр
-                if (!filter(rec) || seen(rec._uid)) continue;
-
-                rec._recordHash = require('crypto').createHash('sha256').update(JSON.stringify(rec)).digest('hex');
-                rec.id = prior ? prior.id : ++id;
-                if (scratch) {scratch.mark(rec._uid); scratch.file(rec);}
-                else uidSet.add(rec._uid);
-
-                if (!rec.del) {
-                    bookCount++;
-                    if (!rec.author)
-                        noAuthorBookCount++;
-                } else {
-                    bookDelCount++;
-                }
-
-                parseBookRec(rec);
-                const existing = incremental && (scratch ? scratch.byUid.get(rec._uid) : previous.get(rec._uid));
-                if (!existing || existing.hash !== rec._recordHash) saveChunk.push(rec);
-            }};
+            };
             if (scratch) scratch.batch(collect);
             else collect();
             if (saveChunk.length) await db.insert({table: 'book', rows: saveChunk, replace: true});
@@ -400,7 +415,7 @@ class DbCreator {
         let recordsRemoved = 0;
         if (incremental) {
             const removed = scratch ? scratch.removed() : (function*() {
-                for (const row of previous.values()) if (!uidSet.has(row.uid)) yield row.id;
+                for (const row of previous.values()) if (!row.retained) yield row.id;
             })();
             let batch = [];
             const remove = async() => {
@@ -811,55 +826,48 @@ class DbCreator {
             await db.create({in: 'book', hash: {field: '_uid', type: 'string', depth: 100, unique: true}});
             return;
         }
-        //статистика по количеству файлов
+        let percent = 0;
+        const timer = setInterval(() => {
+            percent = Math.min(95, percent + 5);
+            callback({progress: percent / 100});
+        }, 1000);
+        try {
+            const countRes = await db.select({table: 'book', rawResult: true, where: `
+                const files = new Set();
+                const filesDel = new Set();
 
-        //эмуляция прогресса
-        let countDone = false;
-        (async() => {
-            let i = 0;
-            while (!countDone) {
-                callback({progress: i/100});
-                i = (i < 100 ? i + 5 : 100);
-                await utils.sleep(1000);
-            }
-        })();
-
-        //подчсет
-        const countRes = await db.select({table: 'book', rawResult: true, where: `
-            const files = new Set();
-            const filesDel = new Set();
-
-            for (const id of @all()) {
-                const r = @row(id);
-                const file = ${"`${r.folder}/${r.file}.${r.ext}`"};
-                if (!r.del) {
-                    files.add(file);
-                } else {
-                    filesDel.add(file);
+                for (const id of @all()) {
+                    const r = @row(id);
+                    const file = ${"`${r.folder}/${r.file}.${r.ext}`"};
+                    if (!r.del) {
+                        files.add(file);
+                    } else {
+                        filesDel.add(file);
+                    }
                 }
+
+                for (const file of filesDel)
+                    if (files.has(file))
+                        filesDel.delete(file);
+
+                return {filesCount: files.size, filesDelCount: filesDel.size};
+            `});
+
+            if (countRes.length) {
+                const res = countRes[0].rawResult;
+                stats.filesCount = res.filesCount;
+                stats.filesCountAll = res.filesCount + res.filesDelCount;
+                stats.filesDelCount = res.filesDelCount;
             }
 
-            for (const file of filesDel)
-                if (files.has(file))
-                    filesDel.delete(file);
-
-            return {filesCount: files.size, filesDelCount: filesDel.size};
-        `});
-
-        if (countRes.length) {
-            const res = countRes[0].rawResult;
-            stats.filesCount = res.filesCount;
-            stats.filesCountAll = res.filesCount + res.filesDelCount;
-            stats.filesDelCount = res.filesDelCount;
+            await db.create({
+                in: 'book',
+                hash: {field: '_uid', type: 'string', depth: 100, unique: true},
+            });
+            callback({progress: 1});
+        } finally {
+            clearInterval(timer);
         }
-
-        //заодно добавим нужный индекс
-        await db.create({
-            in: 'book',
-            hash: {field: '_uid', type: 'string', depth: 100, unique: true},
-        });
-
-        countDone = true;
     }
 }
 

@@ -228,6 +228,6 @@ final class SettingsDialogs extends DialogUi {
         .setNegativeButton("Отмена", null)
         .create();
     show(dialog);
-    if (tv) dialog.getButton(-1).requestFocus();
+    if (tv) dialog.getButton(-2).requestFocus();
   }
 }

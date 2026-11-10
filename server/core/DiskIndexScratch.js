@@ -22,9 +22,9 @@ class DiskIndexScratch {
         const db = this.db;
         try {
             db.exec("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA temp_store=FILE; PRAGMA cache_size=-4096; PRAGMA cache_spill=ON");
-            db.exec("CREATE TABLE prior(uid TEXT PRIMARY KEY, physical TEXT, legacy TEXT, source TEXT, book INTEGER, hash TEXT) WITHOUT ROWID;"
+            db.exec("CREATE TABLE prior(uid TEXT PRIMARY KEY, physical TEXT, legacy TEXT, book INTEGER, hash TEXT, retained INTEGER DEFAULT 0) WITHOUT ROWID;"
                 + "CREATE INDEX prior_physical ON prior(physical) WHERE physical != '';"
-                + "CREATE INDEX prior_legacy ON prior(source,legacy) WHERE legacy != '';"
+                + "CREATE INDEX prior_legacy ON prior(physical,legacy) WHERE physical != '' AND legacy != '';"
                 + "CREATE TABLE seen(uid TEXT PRIMARY KEY) WITHOUT ROWID;"
                 + "CREATE TABLE posts(kind TEXT, value TEXT, book INTEGER, PRIMARY KEY(kind,value,book)) WITHOUT ROWID;"
                 + "CREATE TABLE names(id INTEGER PRIMARY KEY, kind TEXT, value TEXT, name TEXT, live INTEGER, deleted INTEGER, UNIQUE(kind,value));"
@@ -32,10 +32,11 @@ class DiskIndexScratch {
                 + "CREATE TABLE files(value TEXT PRIMARY KEY, deleted INTEGER) WITHOUT ROWID;"
                 + "CREATE TABLE reverse(book INTEGER, entity INTEGER, PRIMARY KEY(book,entity)) WITHOUT ROWID;"
                 + "CREATE TABLE runs(run INTEGER, pos INTEGER, nameId INTEGER, PRIMARY KEY(run,pos)) WITHOUT ROWID");
-            this.addPrior = db.prepare('INSERT OR REPLACE INTO prior VALUES (?,?,?,?,?,?)');
+            this.addPrior = db.prepare('INSERT OR REPLACE INTO prior(uid,physical,legacy,book,hash) VALUES (?,?,?,?,?)');
             this.byUid = db.prepare('SELECT uid,physical AS identity,book AS id,hash FROM prior WHERE uid=?');
-            this.byLegacy = db.prepare("SELECT uid,physical AS identity,book AS id,hash FROM prior WHERE source=? AND legacy=? AND legacy!='' LIMIT 2");
+            this.byLegacy = db.prepare("SELECT uid,physical AS identity,book AS id,hash FROM prior WHERE physical=? AND legacy=? AND physical!='' AND legacy!='' LIMIT 2");
             this.byPhysical = db.prepare("SELECT uid,physical AS identity,book AS id,hash FROM prior WHERE physical=? AND physical!='' LIMIT 2");
+            this.retain = db.prepare('UPDATE prior SET retained=1 WHERE uid=?');
             this.hasSeen = db.prepare('SELECT 1 FROM seen WHERE uid=?');
             this.addSeen = db.prepare('INSERT INTO seen VALUES (?)');
             this.addPost = db.prepare('INSERT OR IGNORE INTO posts VALUES (?,?,?)');
@@ -56,28 +57,28 @@ class DiskIndexScratch {
     remember(rows) {
         this.batch(() => {
             for (const row of rows)
-                this.addPrior.run(row.uid, row.identity || '', row.legacyUid || '', row.sourceId || '', row.id, row.hash ?? null);
+                this.addPrior.run(row.uid, row.identity || '', row.legacyUid || '', row.id, row.hash ?? null);
         });
     }
 
-    prior(uid, source, identity) {
-        let row = this.byUid.get(uid);
-        if (!row) {
-            const rows = this.byLegacy.all(source, uid);
-            if (rows.length === 1) row = rows[0];
-        }
-        if (row && (!identity || row.identity === identity)) return row;
-        if (!identity) return null;
+    findByUid(uid) {return this.byUid.get(uid);}
+
+    matchArchive(identity, parsedUid) {
+        const legacy = this.byLegacy.all(identity, parsedUid);
+        if (legacy.length === 1) return legacy[0];
         const rows = this.byPhysical.all(identity);
         return rows.length === 1 ? rows[0] : null;
     }
 
     knowsPhysical(identity) {return this.byPhysical.get(identity) !== undefined;}
     seen(uid) {return this.hasSeen.get(uid) !== undefined;}
-    mark(uid) {this.addSeen.run(uid);}
+    mark(uid, prior) {
+        this.addSeen.run(uid);
+        if (prior) this.retain.run(prior.uid);
+    }
 
     *removed() {
-        const query = this.db.prepare('SELECT book FROM prior WHERE NOT EXISTS (SELECT 1 FROM seen WHERE seen.uid=prior.uid)');
+        const query = this.db.prepare('SELECT book FROM prior WHERE retained=0');
         for (const row of query.iterate()) yield row.book;
     }
 

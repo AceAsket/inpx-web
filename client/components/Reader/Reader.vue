@@ -864,7 +864,7 @@
 
                         <template v-else>
                             <div class="reader-pages">
-                                <div ref="pageStage" class="reader-page-stage">
+                                <div ref="pageStage" class="reader-page-stage" :class="{'reader-page-stage--waiting': isPagedLayoutTooLarge}">
                                     <article
                                         v-if="showPagedPreparingSheet"
                                         class="reader-page-sheet reader-page-sheet--placeholder"
@@ -883,6 +883,7 @@
                                             class="reader-page-sheet reader-page-sheet--live"
                                     :class="[{'reader-page-sheet--dual': isDualPagedSpread}, isDualPagedSpread ? '' : pagePaddingPreviewClass]"
                                             :data-page-index="currentPageIndex"
+                                            :aria-hidden="isPagedLayoutTooLarge || undefined"
                                         >
                                             <template v-if="isDualPagedSpread">
                                                 <div class="reader-page-spread" :style="{gap: `${dualPageGap}px`}">
@@ -1067,21 +1068,12 @@
             :class="{'reader-desktop-footer--edge': activePreferences.statusBarAlign === 'edge'}"
         >
             <div class="reader-status-bar reader-status-bar--desktop" :class="statusBarClass" :style="statusBarStyle">
-                <template v-if="showDesktopPagedBuildIndicator">
-                    <q-icon class="la la-spinner icon-rotate reader-status-bar-spinner" size="14px" />
-                    <span class="reader-status-main">{{ compactStatusBarBuildText }}</span>
-                    <span v-if="activePreferences.statusBarClock" class="reader-status-clock">{{ statusClockText }}</span>
-                    <div v-if="activePreferences.statusBarProgressBar" class="reader-status-progress">
-                        <div :style="{width: `${statusBarProgressPercent}%`}"></div>
-                    </div>
-                </template>
-                <template v-else>
-                    <span class="reader-status-main">{{ desktopStatusBarText }}</span>
-                    <span v-if="activePreferences.statusBarClock" class="reader-status-clock">{{ statusClockText }}</span>
-                    <div v-if="activePreferences.statusBarProgressBar" class="reader-status-progress">
-                        <div :style="{width: `${statusBarProgressPercent}%`}"></div>
-                    </div>
-                </template>
+                <q-icon v-if="showDesktopPagedBuildIndicator" class="la la-spinner icon-rotate reader-status-bar-spinner" size="14px" />
+                <span class="reader-status-main">{{ showDesktopPagedBuildIndicator ? compactStatusBarBuildText : desktopStatusBarText }}</span>
+                <span v-if="activePreferences.statusBarClock" class="reader-status-clock">{{ statusClockText }}</span>
+                <div v-if="activePreferences.statusBarProgressBar" class="reader-status-progress">
+                    <div :style="{width: `${statusBarProgressPercent}%`}"></div>
+                </div>
             </div>
         </div>
 
@@ -1877,6 +1869,7 @@ class Reader {
     progressPersistPendingAfterPagedBuild = false;
     pagedBuildJobId = 0;
     pagedLayoutSignature = '';
+    committedPagedContentSize = null;
     pagedLayoutCache = new Map();
     pagedLayoutCacheLimit = 2;
     restoreProgressFrame = 0;
@@ -2871,8 +2864,8 @@ class Reader {
 
     get desktopStatusBarText() {
         const parts = [this.compactStatusBarText];
-        if (this.currentSectionTitle)
-            parts.push(this.currentSectionTitle);
+        if (this.readerSectionMeta)
+            parts.push(this.readerSectionMeta);
 
         return parts.join(' · ');
     }
@@ -2942,10 +2935,14 @@ class Reader {
             !this.isCompactLayout
             && this.showDesktopStatusBar
             && this.isPagedBuildPending
+            && !this.activePagedPage
         );
     }
 
     get showPagedPreparingSheet() {
+        if (this.isPagedLayoutTooLarge)
+            return true;
+
         return !!(
             this.isPagedMode
             && !this.activePagedPage
@@ -3020,6 +3017,14 @@ class Reader {
             return null;
 
         return this.pagedPages[Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex))] || null;
+    }
+
+    get isPagedLayoutTooLarge() {
+        if (!this.activePagedPage || !this.committedPagedContentSize)
+            return false;
+
+        const {width, height} = this.pagedContentSize;
+        return width < this.committedPagedContentSize.width || height < this.committedPagedContentSize.height;
     }
 
     get isDualPagedSpread() {
@@ -3519,8 +3524,7 @@ class Reader {
 
     get availableReaderFrameWidth() {
         const scrollerWidth = (this.scrollerViewportWidth || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0));
-        const shellInlinePadding = this.isHorizontalPaged ? 0 : this.configuredReaderShellHorizontalPadding;
-        return Math.max(280, scrollerWidth - shellInlinePadding);
+        return Math.max(280, scrollerWidth - this.configuredReaderShellHorizontalPadding);
     }
 
     get readerContentFrameWidth() {
@@ -3555,6 +3559,13 @@ class Reader {
             return Math.max(120, availableHeight - this.configuredReaderShellVerticalPadding);
         }
         return Math.max(180, scrollerHeight - this.configuredReaderShellVerticalPadding - 2);
+    }
+
+    get pagedContentSize() {
+        return {
+            width: this.pageMeasureFrameWidth - this.pagePaddingLeft - this.pagePaddingRight,
+            height: this.pageMinHeight - this.pagePaddingTop - this.pagePaddingBottom,
+        };
     }
 
     get configuredReaderShellVerticalPadding() {
@@ -4908,7 +4919,7 @@ class Reader {
     }
 
     captureStableReaderStatus(force = false) {
-        if (!force && this.stableReaderStatus.ready && (this.layoutRefreshing || this.isPagedBuildPending))
+        if (this.isPagedBuildPending || (!force && this.stableReaderStatus.ready && this.layoutRefreshing))
             return;
 
         const pageMeta = this.showPagedPageCounter ? `${this.currentPage}/${this.totalPages}` : '';
@@ -6930,7 +6941,7 @@ class Reader {
     }
 
     setCurrentPagedPage(index = 0, save = false) {
-        if (!this.isPagedMode)
+        if (!this.isPagedMode || (save && this.isPagedLayoutTooLarge))
             return;
         if (save)
             this.clearPendingReaderNavigationRestore();
@@ -7411,10 +7422,16 @@ class Reader {
 
             chunks.push(chunk);
             start = best;
+            if (baseHtml.length && start < words.length) {
+                // Only the first part shares the current page. The remaining
+                // text will be measured again on the next page.
+                chunks.push(words.slice(start).join(' '));
+                start = words.length;
+            }
         }
 
         measureHtml.innerHTML = '';
-        if (chunks.length <= 1)
+        if (chunks.length <= 1 || start < words.length)
             return (allowOverflowFallback ? this.wrapSplitTextChunks(root, unit, fallbackChunks) : []);
 
         return this.wrapSplitTextChunks(root, unit, chunks);
@@ -8203,6 +8220,7 @@ class Reader {
         this.pagedPages = finalPages;
         this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
         this.pagedLayoutSignature = this.getPagedLayoutSignature();
+        this.committedPagedContentSize = this.pagedContentSize;
         this.noteCompactChromeTotalPages();
         this.rebuildSearchResults(false);
     }
@@ -8233,6 +8251,7 @@ class Reader {
         const buildCalibrationKey = this.getBottomClipCompensationGeometryKey();
         const buildLayoutSignature = this.getPagedLayoutSignature();
         const buildGeometrySignature = this.getPagedGeometrySignature();
+        const buildContentSize = this.pagedContentSize;
         const buildSourceKey = this.readerSourceKey;
         const layoutCacheKey = this.getPagedLayoutCacheKey(
             buildLayoutSignature,
@@ -8244,6 +8263,7 @@ class Reader {
             this.pagedPages = cachedLayout.pages;
             this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
             this.pagedLayoutSignature = buildLayoutSignature;
+            this.committedPagedContentSize = buildContentSize;
             this.pagedCommittedCalibrationKey = buildCalibrationKey;
             this.pagedCommittedCalibrationGeneration = buildOwnerJobId;
             this.pagedCommittedCalibrationAt = Date.now();
@@ -8266,10 +8286,8 @@ class Reader {
         let currentUnits = checkpoint ? checkpoint.currentUnits : [];
         let activeSectionId = checkpoint ? checkpoint.activeSectionId : '';
         let currentPageSectionId = checkpoint ? checkpoint.currentPageSectionId : '';
-        let currentEstimatedLines = checkpoint ? checkpoint.currentEstimatedLines : 0;
         let buildProgressPercent = Math.max(1, (checkpoint && checkpoint.buildProgressPercent) || 1);
         const startIndex = Math.max(0, Math.min(queue.length, (checkpoint && checkpoint.nextIndex) || 0));
-        const fastLineBudget = this.getFastPagedLineBudget(measureHost);
         const buildStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
         const fallbackRoots = new Map((checkpoint && checkpoint.fallbackRoots) || []);
         const stats = Object.assign({
@@ -8319,7 +8337,6 @@ class Reader {
             stats.pages = pages.length;
             currentUnits = [];
             currentPageSectionId = activeSectionId || '';
-            currentEstimatedLines = 0;
             applyUnits([]);
         };
         const maybeYield = async(index) => {
@@ -8345,7 +8362,6 @@ class Reader {
                 currentUnits,
                 activeSectionId,
                 currentPageSectionId,
-                currentEstimatedLines,
                 buildProgressPercent,
                 nextIndex: Math.max(0, Math.min(queue.length, nextIndex)),
                 fallbackRoots: Array.from(fallbackRoots.entries()),
@@ -8353,6 +8369,10 @@ class Reader {
             });
         };
 
+        // A viewport rebuild can start after the reader has advanced several
+        // pages since the last explicit layout refresh.
+        if (this.activePagedPage)
+            this.captureStableReaderStatus();
         this.pagedBuildOwnerJobId = buildOwnerJobId;
         this.pagedBuildInProgress = true;
         this.pagedBuildNeedsRefresh = false;
@@ -8382,82 +8402,15 @@ class Reader {
                     currentPageSectionId = unit.sectionId || activeSectionId || '';
                 }
 
-                // Compact pages must use one exact DOM measurement strategy on
-                // every pass. The canvas estimator can disagree with the live
-                // mobile sheet and used to make the first and later builds differ.
-                const fastInfo = this.isCompactLayout ? null : this.getFastPagedUnitInfo(unit);
-                if (fastInfo && fastLineBudget > 2 && (!currentUnits.length || currentEstimatedLines > 0)) {
-                    if (currentUnits.length && currentEstimatedLines + fastInfo.lines > fastLineBudget) {
-                        if (this.isCompactLayout) {
-                            const fitCurrentPageDomSplit = this.splitUnitToFitCurrentPage(unit, currentUnits);
-                            if (fitCurrentPageDomSplit.length) {
-                                stats.domSplits += 1;
-                                stats.generatedDomSplitUnits += fitCurrentPageDomSplit.length;
-                                queue.splice(index, 1, ...fitCurrentPageDomSplit);
-                                index -= 1;
-                                applyUnits(currentUnits);
-                                await maybeYield(index + 1);
-                                continue;
-                            }
-                        }
-
-                        const fitCurrentPageSplit = this.splitFastRootByLineBudget(
-                            fastInfo.root,
-                            unit,
-                            Math.max(1, fastLineBudget - currentEstimatedLines),
-                        );
-                        if (fitCurrentPageSplit.length) {
-                            stats.fastSplits += 1;
-                            stats.generatedFastSplitUnits += fitCurrentPageSplit.length;
-                            queue.splice(index, 1, ...fitCurrentPageSplit);
-                            index -= 1;
-                            await maybeYield(index + 1);
-                            continue;
-                        }
-
-                        if (this.isCompactLayout) {
-                            const fitCurrentPageDomSplit = this.splitUnitToFitCurrentPage(unit, currentUnits);
-                            if (fitCurrentPageDomSplit.length) {
-                                stats.domSplits += 1;
-                                stats.generatedDomSplitUnits += fitCurrentPageDomSplit.length;
-                                queue.splice(index, 1, ...fitCurrentPageDomSplit);
-                                index -= 1;
-                                applyUnits(currentUnits);
-                                await maybeYield(index + 1);
-                                continue;
-                            }
-                        }
-
-                        finalizePage();
-                        currentPageSectionId = unit.sectionId || activeSectionId || '';
-                    }
-
-                    if (fastInfo.lines > fastLineBudget) {
-                        const splitUnits = this.splitFastRootByLineBudget(fastInfo.root, unit, fastLineBudget);
-                        if (splitUnits.length) {
-                            stats.fastSplits += 1;
-                            stats.generatedFastSplitUnits += splitUnits.length;
-                            queue.splice(index, 1, ...splitUnits);
-                            index -= 1;
-                            await maybeYield(index + 1);
-                            continue;
-                        }
-                    }
-
-                    currentUnits = currentUnits.concat(unit.html);
-                    currentEstimatedLines += fastInfo.lines;
-                    stats.fastUnits += 1;
-                    if (unit.sectionId && !currentPageSectionId)
-                        currentPageSectionId = unit.sectionId;
-                    await maybeYield(index + 1);
-                    continue;
-                }
+                const candidateUnits = currentUnits.concat(unit.html);
+                applyUnits(candidateUnits);
+                // Use the rendered height for page breaks, including after the
+                // reader toolbar changes the space available to the page.
+                const candidateOverflows = this.doesPagedMeasureOverflow(measureHost, measureHtml);
 
                 stats.domUnits += 1;
                 recordFallbackRoot(unit);
-                const candidateUnits = currentUnits.concat(unit.html);
-                applyUnits(candidateUnits);
-                if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && !currentUnits.length) {
+                if (candidateOverflows && !currentUnits.length) {
                     const splitUnits = this.splitOversizedUnit(unit);
                     if (splitUnits.length) {
                         stats.domSplits += 1;
@@ -8470,7 +8423,7 @@ class Reader {
                     }
                 }
 
-                if (this.doesPagedMeasureOverflow(measureHost, measureHtml) && currentUnits.length) {
+                if (candidateOverflows && currentUnits.length) {
                     const fitCurrentPageSplit = this.splitUnitToFitCurrentPage(unit, currentUnits);
                     if (fitCurrentPageSplit.length) {
                         stats.domSplits += 1;
@@ -8501,7 +8454,6 @@ class Reader {
                     }
                 } else {
                     currentUnits = candidateUnits;
-                    currentEstimatedLines = 0;
                     if (unit.sectionId && !currentPageSectionId)
                         currentPageSectionId = unit.sectionId;
                 }
@@ -8563,6 +8515,7 @@ class Reader {
             this.pagedPages = finalPages;
             this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
             this.pagedLayoutSignature = buildLayoutSignature;
+            this.committedPagedContentSize = buildContentSize;
             this.pagedCommittedCalibrationKey = buildCalibrationKey;
             this.pagedCommittedCalibrationGeneration = buildOwnerJobId;
             this.pagedCommittedCalibrationAt = Date.now();
@@ -9035,6 +8988,7 @@ class Reader {
         this.pagedBuildJobId += 1;
         this.pagedBuildNeedsRefresh = false;
         this.pagedLayoutSignature = '';
+        this.committedPagedContentSize = null;
         this.pagedLayoutCache.clear();
         this.$refs?.browserAudio?.close();
         this.$refs?.audioPlayer?.close();
@@ -12339,6 +12293,10 @@ export default vueComponent(Reader);
     position: absolute;
     inset: 0 0 auto;
     margin: 0 auto;
+}
+
+.reader-page-stage--waiting .reader-page-sheet--live {
+    visibility: hidden;
 }
 
 .reader-page-sheet--placeholder {

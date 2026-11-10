@@ -14,7 +14,7 @@ inpx-web-7z
 
 Стабильная версия — **1.8.1**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.1`. Для разработки используется ветка `develop`.
 
-Тестовая версия — **1.8.2-rc.20**: [релиз и загрузки](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.20), Docker `aceasket/inpx-web-7z:1.8.2-rc.20`. Исправлены права исполняемых файлов в ZIP; приложение и конвертеры проверяются после распаковки. Широкая карточка «Сейчас читаю» выровнена по высоте с «Недавно читали», добавлены жанр и год. Уточнены статусы Telegram, уведомления оформлены в цветах темы. Включает возможности RC19: ZIP PPMd, WebP/JXL, обновлённые Telegram-бот, `/ebook`, рейтинги и QR приложения. [Изменения RC20](./docs/rc20-release-notes.md). Стабильный `latest` остаётся на 1.8.1.
+Тестовая версия **1.8.2-rc.24** исправляет обрезание строк при горизонтальном листании и включает исправления RC23 для переноса INPX-библиотеки. Docker `aceasket/inpx-web-7z:1.8.2-rc.24`. Стабильный `latest` соответствует версии 1.8.1. [Релиз и загрузки](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.24) · [Изменения RC24](./docs/rc24-release-notes.md)
 
 В RC20 исправлено также гостевое скачивание `/ebook` для Kindle: сначала
 «Применить формат», затем «Скачать MOBI» по ссылке с расширением файла.
@@ -121,12 +121,12 @@ inpx-web-7z
 
 ## Сервер на Android
 
-Библиотеку можно запустить прямо на планшете, телефоне или ТВ-приставке с **Android 9 и новее**, без Root и Termux. Android-приложение опубликовано отдельно: [предрелиз 0.7.0 и контрольные суммы](https://github.com/AceAsket/inpx-web/releases/tag/android-v0.7.0).
+Библиотеку можно запустить прямо на планшете, телефоне или ТВ-приставке с **Android 9 и новее**, без Root и Termux. Android-приложение опубликовано отдельно: [предрелиз 0.7.1 и контрольные суммы](https://github.com/AceAsket/inpx-web/releases/tag/android-v0.7.1).
 
 | Android на устройстве | Скачать |
 | --- | --- |
-| **ARM32** — 32-битная прошивка, ARMv7 с NEON | [APK для ARM32](https://github.com/AceAsket/inpx-web/releases/download/android-v0.7.0/inpx-server-0.7.0-arm32-debug.apk) |
-| **ARM64** — 64-битная прошивка, arm64-v8a | [APK для ARM64](https://github.com/AceAsket/inpx-web/releases/download/android-v0.7.0/inpx-server-0.7.0-arm64-debug.apk) |
+| **ARM32** — 32-битная прошивка, ARMv7 с NEON | [APK для ARM32](https://github.com/AceAsket/inpx-web/releases/download/android-v0.7.1/inpx-server-0.7.1-arm32-debug.apk) |
+| **ARM64** — 64-битная прошивка, arm64-v8a | [APK для ARM64](https://github.com/AceAsket/inpx-web/releases/download/android-v0.7.1/inpx-server-0.7.1-arm64-debug.apk) |
 
 Выбирайте APK по разрядности **Android**, а не только процессора: на 64-битной приставке с 32-битной прошивкой нужен ARM32.
 

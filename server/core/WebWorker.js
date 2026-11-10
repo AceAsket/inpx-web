@@ -764,8 +764,9 @@ class WebWorker {
     }
 
     setMyState(newState, workerState = {}) {
+        const clearJob = newState !== this.myState ? {job: '', jobMessage: '', jobStep: 0, progress: 0} : {};
         this.myState = newState;
-        this.wState.set(Object.assign({}, workerState, {
+        this.wState.set(Object.assign(clearJob, workerState, {
             state: newState,
             serverMessage: stateToText[newState]
         }));

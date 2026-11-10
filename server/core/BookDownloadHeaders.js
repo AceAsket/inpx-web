@@ -8,7 +8,7 @@ const cyrillic = Object.fromEntries([
 ][index]]));
 
 function readableStem(value) {
-    return value.replace(/[а-яёєіїґў]/gi, char => {
+    return value.replace(/ß/g, 'ss').replace(/ẞ/g, 'SS').replace(/[а-яёєіїґў]/gi, char => {
         const translated = cyrillic[char.toLowerCase()];
         return char === char.toLowerCase() ? translated : translated.charAt(0).toUpperCase() + translated.slice(1);
     }).normalize('NFKD').replace(/\p{M}/gu, '')
@@ -19,8 +19,8 @@ function readableStem(value) {
 // extension in the ASCII fallback and in the final download URL.
 function fallbackFilename(value) {
     const name = path.posix.basename(String(value || '').replace(/\\/g, '/'));
-    const ext = path.posix.extname(name).toLowerCase();
-    const suffix = /^\.[a-z0-9]{1,12}$/.test(ext) ? ext : '';
+    const ext = /\.kepub\.epub$/i.test(name) ? '.kepub.epub' : path.posix.extname(name).toLowerCase();
+    const suffix = /^\.[a-z0-9]{1,12}(?:\.[a-z0-9]{1,12})?$/.test(ext) ? ext : '';
     const stem = readableStem(suffix ? name.slice(0, -ext.length) : name);
     const hash = () => crypto.createHash('sha256').update(name).digest('hex').slice(0, 12);
     let readable = stem.replace(/^[ _-]+|[ _-]+$/g, '');
@@ -30,7 +30,10 @@ function fallbackFilename(value) {
     return readable + suffix;
 }
 
-function disposition(value) {
+function disposition(value, {asciiOnly = false} = {}) {
+    // Some e-reader browsers understand filename* but reject its Unicode
+    // value. Their download route must omit it instead of offering a fallback.
+    if (asciiOnly) return `attachment; filename="${fallbackFilename(value)}"`;
     const encoded = encodeURIComponent(String(value || '')).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase());
     return `attachment; filename="${fallbackFilename(value)}"; filename*=UTF-8''${encoded}`;
 }

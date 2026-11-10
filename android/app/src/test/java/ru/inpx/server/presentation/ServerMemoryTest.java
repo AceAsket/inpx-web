@@ -16,9 +16,10 @@ public final class ServerMemoryTest {
 
   @Test
   public void smallDeviceDoesNotOfferAnIncreaseAboveItsRamBudget() {
-    ServerMemory failed = new ServerMemory(false, 930, 1024, 0, 0, 0, 384, true);
+    ServerMemory failed = new ServerMemory(false, 780, 1024, 0, 0, 0, 384, true);
     assertEquals(384, failed.nextStartMiB());
     assertEquals(0, failed.suggestedMiB());
+    assertEquals(512, new ServerMemory(false, 930, 0, 0, 0, 0, 384, true).suggestedMiB());
   }
 
   @Test

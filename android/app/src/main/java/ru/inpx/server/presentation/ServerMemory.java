@@ -18,7 +18,7 @@ public final class ServerMemory {
     this.rssMiB = rssMiB;
     this.heapMiB = heapMiB;
     this.exhausted = exhausted;
-    int budget = Math.min(arm64 ? 1536 : 768, deviceMiB > 0 ? deviceMiB / 2 : 512);
+    int budget = Math.min(arm64 ? 1536 : 768, deviceMiB > 0 ? deviceMiB * 3 / 5 : 512);
     maximumMiB = Arrays.stream(LIMITS).filter(value -> value <= budget).max().orElse(256);
     autoMiB = Math.min(maximumMiB,
         arm64 ? (deviceMiB >= 2800 ? 1024 : deviceMiB >= 1500 ? 768 : 512)

@@ -18,15 +18,24 @@ async function database(work) {
         try {return await work(db,dir);} finally {await db.unlock();}
     });
 }
-async function inpx(file,rating) {
+function inpxLine(rating) {
+    return ['Иванов,Иван,:','sf:','Та же книга','',0,'123',1000,'123',0,'fb2','2026-11-01','ru',rating,''].join('\x04')+'\x04';
+}
+
+async function writeInpx(file, entries) {
     const zip = new (require('yazl').ZipFile)();
-    const line = ['Иванов,Иван,:','sf:','Та же книга','',0,'123',1000,'123',0,'fb2','2026-11-01','ru',rating,''].join('\x04')+'\x04';
-    zip.addBuffer(Buffer.from(line+'\n'),'library.inp');
+    for (const [name, rows] of Object.entries(entries))
+        zip.addBuffer(Buffer.from(rows.join('\n')+'\n'), name);
     const saved = new Promise((resolve,reject) => {
         const stream = fs.createWriteStream(file); zip.outputStream.pipe(stream);
         stream.on('close',resolve); stream.on('error',reject);
     });
     zip.end(); await saved;
+}
+
+async function inpx(file,rating) {
+    const line = inpxLine(rating);
+    await writeInpx(file, {'library.inp': [line]});
     return line;
 }
 
@@ -125,6 +134,54 @@ async function testRc13InpxPhysicalIdentitySeparatesSourcesAndAmbiguousFiles() {
             assert(!['legacy-one','legacy-two'].includes(row._uid),'An ambiguous file must not inherit an arbitrary book identity');
         } finally {await fresh.unlock();}
     });
+}
+
+async function testInpxLibraryMovePreservesUidsForRepeatedRecordsAcrossArchives(installMode = 'native') {
+    await temporary(async dir => {
+        const original = path.join(dir, 'library'), moved = path.join(dir, '_Lib.rus.ec - Официальная');
+        const index = path.join(dir, 'db'), staging = path.join(dir, 'staging');
+        const collection = 'collection.inpx';
+        await fs.ensureDir(original);
+        await writeInpx(path.join(original, collection), {
+            'first.inp': [inpxLine(1), inpxLine(2)],
+            'second.inp': [inpxLine(3), inpxLine(1)],
+        });
+        const config = {dataDir: dir, inpxFilterFile: path.join(dir, 'none'), dbVersion: 15, fullOptimization: false, installMode};
+        const build = async (dbPath, libDir) => {
+            const db = new JembaDb();
+            await db.lock({dbPath, create: true});
+            try {
+                await new DbCreator({...config, indexDbPath: dbPath, libDir, inpxFile: path.join(libDir, collection)}).run(db, () => {});
+                await db.open({table: 'book'});
+                return await db.select({table: 'book'});
+            } finally {await db.unlock();}
+        };
+        const before = await build(index, original);
+        assert.equal(before.length, 4);
+        await fs.rename(original, moved);
+        await fs.copy(path.join(index, 'book'), path.join(staging, 'book'));
+        const after = await build(staging, moved);
+        assert.deepEqual(after.map(row => [row.id, row._uid, row.folder, row.librate]),
+            before.map(row => [row.id, row._uid, row.folder, row.librate]));
+        assert(after.every(row => row.sourceLibDir === moved));
+        assert(!(await fs.readdir(staging)).some(name => name.startsWith('.index-work-')));
+    });
+}
+
+async function testAndroidIndexPreservesUidsWhenInpxMoves() {
+    await testInpxLibraryMovePreservesUidsForRepeatedRecordsAcrossArchives('android');
+}
+
+async function testIndexStatisticsStopsReportingProgressWhenUniqueIndexFails() {
+    const progress = [];
+    const db = {
+        select: async() => [{rawResult: {filesCount: 0, filesDelCount: 0}}],
+        create: async() => {throw new Error('unique index failed');},
+    };
+    await assert.rejects(new DbCreator({}).countStats(db, state => progress.push(state.progress), {}), /unique index failed/);
+    const countAfterFailure = progress.length;
+    await wait(1100);
+    assert.equal(progress.length, countAfterFailure, 'A failed index build must stop sending progress updates');
 }
 
 async function testRc13PriorIdentitiesStreamCompactBatchesAndReleaseCursor() {
@@ -255,6 +312,9 @@ async function testRc13IsbnIndexReleasesIdleAndOversizedStateWithoutBreakingRead
 
 module.exports = [testRc13InpxUidSurvivesMetadataAndForcedRebuildFromLegacy14,
     testRc13InpxPhysicalIdentitySeparatesSourcesAndAmbiguousFiles,
+    testInpxLibraryMovePreservesUidsForRepeatedRecordsAcrossArchives,
+    testAndroidIndexPreservesUidsWhenInpxMoves,
+    testIndexStatisticsStopsReportingProgressWhenUniqueIndexFails,
     testRc13PriorIdentitiesStreamCompactBatchesAndReleaseCursor,
     testRc13SelectiveBookSearchUsesIndexesAndPreservesRegex,
     testRc13DiskQueryCacheEnforcesCountAndBytesOnEveryWriteAndRestart,

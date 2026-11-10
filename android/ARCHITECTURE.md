@@ -26,7 +26,7 @@ flowchart LR
 | `AndroidServerRepository` | Android-реализация контракта: Vault, настройки, сервис, HTTP `/ready`, журналы, доступность источников и сеть. Хранит только application context. |
 | `DashboardView` | Сенсорная и ТВ-компоновки. Получает готовые данные, обновляет текст и сохраняет фокус при опросе. |
 | `SourceDialogs` | Добавление, редактирование, удаление источников и диагностика. |
-| `SettingsDialogs` | Формы режима интерфейса, порта и фоновой работы. |
+| `SettingsDialogs` | Формы режима интерфейса, порта, лимита памяти и фоновой работы. |
 | `ConnectionDialogs` | Адрес, QR-код, каталог, журнал и сообщество. |
 | `DialogUi` | Общие размеры, цвета, поля ввода, клавиатура и переходы фокуса. |
 | `HandlerScheduler` | Адаптер главного потока для Presenter. |
@@ -50,7 +50,7 @@ flowchart LR
 
 ```powershell
 wsl -d Ubuntu -- bash scripts/android/build-apk.sh testDebugUnitTest assembleDebugAndroidTest lintDebug
-adb install -r dist/android/inpx-server-0.7.0-arm64-debug.apk
+adb install -r dist/android/inpx-server-0.7.1-arm64-debug.apk
 adb install -r android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w -e background true ru.inpx.server.test/ru.inpx.server.UiSmokeInstrumentation
 ```

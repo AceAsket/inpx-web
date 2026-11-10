@@ -93,7 +93,7 @@ async function checkGuestFormats(browser,directory){
         }
         await page.getByLabel('Формат скачивания',{exact:true}).selectOption('raw');await page.getByRole('button',{name:'Применить формат',exact:true}).click();
         const pending=page.waitForEvent('download');await page.locator('.quick-download a').click();const file=await pending;
-        assert(file.suggestedFilename().endsWith('.fb2'));assert((await fs.readFile(await file.path(),'utf8')).includes('FictionBook'));
+        assert.match(file.suggestedFilename(),/^[A-Za-z0-9 _-]+\.fb2$/);assert((await fs.readFile(await file.path(),'utf8')).includes('FictionBook'));
         assert(!resources.some(type=>['script','stylesheet','font','websocket'].includes(type)));
         console.log('Ebook guest: native format form, typed MOBI links, real FB2 download and 320/600 px without JavaScript passed');
     }finally{if(context)await context.close();child.kill();}

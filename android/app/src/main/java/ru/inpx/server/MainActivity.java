@@ -27,6 +27,7 @@ public final class MainActivity extends Activity
   private SettingsDialogs settings;
   private String layout = "", nextFocus = "primary";
   private boolean tv;
+  private boolean memoryWarningShown;
   private final Handler handler = new Handler();
   private final ExecutorService worker = Executors.newSingleThreadExecutor();
   private final ExecutorService sourceWorker = Executors.newSingleThreadExecutor();
@@ -112,6 +113,13 @@ public final class MainActivity extends Activity
       render(target);
     } else dashboard.update(state);
     if (sources != null) sources.updateDiagnostics();
+    if (!next.memory.exhausted || next.phase == DashboardState.Phase.STARTING)
+      memoryWarningShown = false;
+    if (!memoryWarningShown && next.phase == DashboardState.Phase.ERROR
+        && next.memory.suggestedMiB() > 0 && hasWindowFocus()) {
+      memoryWarningShown = true;
+      settings.recoverMemory();
+    }
   }
 
   @Override
@@ -121,7 +129,10 @@ public final class MainActivity extends Activity
       return;
     }
     if (!state.online()) {
-      if (state.memory.suggestedMiB() > 0) settings.recoverMemory();
+      if (state.memory.suggestedMiB() > 0) {
+        memoryWarningShown = true;
+        settings.recoverMemory();
+      }
       else if (state.sources.isEmpty()) sources.add();
       else presenter.start(false);
       return;
