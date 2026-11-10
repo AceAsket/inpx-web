@@ -8996,7 +8996,11 @@ class Reader {
         this.bookmarks = [];
         this.currentPlacesTab = 'progress';
         this.currentSectionId = '';
-        this.clearPendingReaderNavigationRestore({clearNoteReturn: true});
+        this.restorePending = false;
+        this.restoreFromSavedProgress = false;
+        this.pendingReflowAnchor = null;
+        this.stableReaderReflowAnchor = null;
+        this.reflowPageStartOverride = null;
         this.controlsOpen = false;
         this.contentsDialogOpen = false;
         this.contentsPanelView = 'contents';
