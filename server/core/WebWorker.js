@@ -934,6 +934,9 @@ class WebWorker {
             } catch(e) {
                 log(LM_ERR, `Database error: ${e.message}`);
                 await db.unlock();
+                // A larger heap can reopen this complete index. Rebuilding it
+                // would repeat the same failure and discard completed work.
+                if (android && e.causeCode === 'ERR_WORKER_OUT_OF_MEMORY') throw e;
                 if (iteration < 1) {
                     log('Recreating DB');
                     await this.loadOrCreateDb(true, iteration + 1);

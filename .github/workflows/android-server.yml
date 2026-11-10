@@ -60,6 +60,8 @@ jobs:
       - run: npm run test:tts
       - run: npm run test:android-storage
       - run: node scripts/android/large-index-test.js 6000 "$RUNNER_TEMP/android-index-check" --update
+        env:
+          INPX_TEST_HEAP_MB: 256
 
   build:
     name: Build and verify ${{ matrix.arch }}

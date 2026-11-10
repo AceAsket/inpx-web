@@ -121,7 +121,7 @@ async function run(directory, name, heap, body) {
 async function main() {
     const count = Number(process.argv[2] || 650000);
     assert(Number.isSafeInteger(count) && count >= 3 && count <= 2000000);
-    const heap = Number(process.env.INPX_TEST_HEAP_MB || 256);
+    const heap = Number(process.env.INPX_TEST_HEAP_MB || 512);
     const output = path.resolve(process.argv[3] || 'output/android-large-index');
     await fs.ensureDir(output);
     const directory = await fs.mkdtemp(path.join(output, 'run-'));

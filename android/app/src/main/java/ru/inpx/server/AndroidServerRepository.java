@@ -101,7 +101,7 @@ final class AndroidServerRepository implements ServerRepository {
     else if (exhausted) {
       phase = DashboardState.Phase.ERROR;
       message = memory.suggestedMiB() > 0
-          ? "Не хватает памяти для индексации. Увеличьте лимит и запустите сервер снова."
+          ? "Не хватает памяти для запуска каталога. Увеличьте лимит и запустите сервер снова."
           : "Не хватает памяти. Лимит уже максимальный для этого устройства. Попробуйте меньший каталог.";
     } else if (control.optBoolean("blocked") || message.startsWith("Ошибка"))
       phase = DashboardState.Phase.ERROR;
