@@ -3524,8 +3524,7 @@ class Reader {
 
     get availableReaderFrameWidth() {
         const scrollerWidth = (this.scrollerViewportWidth || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0));
-        const shellInlinePadding = this.isHorizontalPaged ? 0 : this.configuredReaderShellHorizontalPadding;
-        return Math.max(280, scrollerWidth - shellInlinePadding);
+        return Math.max(280, scrollerWidth - this.configuredReaderShellHorizontalPadding);
     }
 
     get readerContentFrameWidth() {

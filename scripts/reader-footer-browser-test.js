@@ -208,6 +208,19 @@ function readRenderedPage(page) {
         assert.deepEqual(clippedPages, [], 'Every text line fits inside the visible page');
         assert.equal(textHash(displayedParagraphs.join(' ')), textHash(sourceParagraphs.join(' ')),
             'Every paragraph survives pagination in source order');
+
+        const horizontalOffset = await page.evaluate(() => window.__readerBuildPhases.length);
+        await settings.click();
+        await options.getByRole('button', {name: 'Страница', exact: true}).click();
+        await options.getByRole('button', {name: 'Горизонтально', exact: true}).click();
+        await settings.click();
+        await page.waitForFunction(offset => window.__readerBuildPhases.slice(offset).includes('done'), horizontalOffset);
+        const horizontalWidths = await page.evaluate(() => {
+            const width = selector => document.querySelector(selector).getBoundingClientRect().width;
+            return {visible: width('.reader-page-sheet--live .reader-html'), measured: width('.reader-page-sheet--measure .reader-html')};
+        });
+        assert.equal(horizontalWidths.measured, horizontalWidths.visible,
+            'Horizontal pagination measures text at the visible width after subtracting the side margins');
         assert.deepEqual(errors, []);
         console.log(`Reader: stable footer (${before.total} → ${after.total} pages) and complete visible text across all ${after.total} pages.`);
     } catch (error) {
