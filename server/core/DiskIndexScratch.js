@@ -4,6 +4,7 @@ const path = require('path');
 const counted = new Set(['author', 'series', 'title']);
 const numeric = new Set(['del', 'librate']);
 const runSize = 2048;
+const runPageSize = 32;
 const countFields = ['author', 'series', 'title', 'genre', 'lang'];
 const cacheKiB = 16 * 1024;
 
@@ -127,7 +128,9 @@ class DiskIndexScratch {
         const db = this.db, compare = (a, b) => a.value.localeCompare(b.value) || a.id - b.id;
         const page = db.prepare('SELECT id,value FROM names WHERE kind=? AND id>? ORDER BY id LIMIT ?');
         const insert = db.prepare('INSERT INTO runs VALUES (?,?,?)');
-        const next = db.prepare('SELECT n.id,n.value,n.name,n.live,n.deleted FROM runs r JOIN names n ON n.id=r.nameId WHERE r.run=? AND r.pos=?');
+        const readRun = db.prepare(`SELECT n.id,n.value,n.name,n.live,n.deleted
+            FROM runs r JOIN names n ON n.id=r.nameId
+            WHERE r.run=? AND r.pos>=? ORDER BY r.pos LIMIT ?`);
         const queue = [];
         const push = entry => {
             let i = queue.length;
@@ -152,6 +155,17 @@ class DiskIndexScratch {
             }
             return first;
         };
+        const advance = entry => {
+            if (entry.offset === entry.rows.length) {
+                entry.rows = readRun.all(entry.run, entry.nextPos, runPageSize);
+                entry.nextPos += entry.rows.length;
+                entry.offset = 0;
+            }
+            if (entry.rows.length) {
+                entry.row = entry.rows[entry.offset++];
+                push(entry);
+            }
+        };
         let after = 0, run = 0;
         try {
             for (;;) {
@@ -160,28 +174,27 @@ class DiskIndexScratch {
                 after = rows.at(-1).id;
                 rows.sort(compare);
                 this.batch(() => rows.forEach((row, i) => insert.run(run, i, row.id)));
-                push({run, pos:0, row:next.get(run, 0)});
+                advance({run, nextPos:0, rows:[], offset:0});
                 run++;
             }
             while (queue.length) {
                 const entry = pop();
                 yield entry.row;
-                const row = next.get(entry.run, ++entry.pos);
-                if (row) push({...entry, row});
+                advance(entry);
             }
         } finally {db.exec('DELETE FROM runs');}
     }
 
     *rows(kind) {
-        if (!counted.has(kind)) {
+        // A single scan avoids a query per word. For fields such as genre,
+        // fetch each key once, then read its often very long list of book IDs.
+        if (kind === 'word') {
             const postings = this.db.prepare('SELECT value,book FROM posts WHERE kind=? ORDER BY value,book');
-            const isNumeric = numeric.has(kind);
             let row, id = 0;
             for (const {value, book} of postings.iterate(kind)) {
-                const key = isNumeric ? Number(value) : value;
-                if (!row || row.value !== key) {
+                if (!row || row.value !== value) {
                     if (row) yield row;
-                    row = {id:id++, value:key, bookIds:[]};
+                    row = {id:id++, value, bookIds:[]};
                 }
                 row.bookIds.push(book);
             }
@@ -189,12 +202,16 @@ class DiskIndexScratch {
             return;
         }
 
-        const posts = this.db.prepare('SELECT book FROM posts WHERE kind=? AND value=? ORDER BY book');
-        let id = 1;
-        for (const row of this.orderedNames(kind)) {
+        const names = counted.has(kind), db = this.db;
+        const keys = names ? this.orderedNames(kind) :
+            db.prepare('SELECT DISTINCT value FROM posts WHERE kind=? ORDER BY value').iterate(kind);
+        const posts = db.prepare('SELECT book FROM posts WHERE kind=? AND value=? ORDER BY book');
+        let id = names ? 1 : 0;
+        for (const row of keys) {
             const bookIds = [];
             for (const post of posts.iterate(kind, row.value)) bookIds.push(post.book);
-            yield {id:id++, value:row.value, bookIds, name:row.name, bookCount:row.live, bookDelCount:row.deleted};
+            yield {id:id++, value:numeric.has(kind) ? Number(row.value) : row.value, bookIds,
+                ...(names ? {name:row.name, bookCount:row.live, bookDelCount:row.deleted} : {})};
         }
     }
 
