@@ -5797,6 +5797,18 @@ class Reader {
     capturePagedReflowAnchor() {
         const pageIndex = this.getPagedAnchorPageIndex();
         const page = this.pagedPages[pageIndex] || null;
+        const anchor = {
+            mode: 'paged',
+            pageIndex,
+            spreadMode: this.isDualPagedSpread ? 'dual' : 'single',
+            sectionId: String((page && page.sectionId) || this.currentSectionId || '').trim(),
+        };
+        // A layout change can place the reading position inside a larger page.
+        // Keep that position across reflows until the reader navigates again.
+        const restored = this.reflowPageStartOverride;
+        if (restored && restored.pageIndex === pageIndex)
+            return {...restored, ...anchor};
+
         const sheet = this.getActiveLivePagedSheet();
         const anchorSheet = this.getPagedAnchorSheet(sheet);
         const contentRoot = (anchorSheet && anchorSheet.querySelector('.reader-page-content, .reader-html')) || null;
@@ -5813,10 +5825,7 @@ class Reader {
             : this.getPagedTextOffsetForSnippet(focusText, pageIndex);
 
         return {
-            mode: 'paged',
-            pageIndex,
-            spreadMode: this.isDualPagedSpread ? 'dual' : 'single',
-            sectionId: String((page && page.sectionId) || this.currentSectionId || '').trim(),
+            ...anchor,
             id: focusId,
             textSnippet: focusText,
             textOffset,
@@ -6115,13 +6124,7 @@ class Reader {
             return false;
 
         if (anchor.mode === 'paged') {
-            let pageIndex = -1;
-            if (pageIndex < 0 && anchor.textSnippet)
-                pageIndex = this.findPagedPageIndexByTextSnippet(anchor.textSnippet, anchor.pageIndex);
-            if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
-                pageIndex = this.findPagedPageIndexByTextOffset(anchor.textOffset);
-            if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
-                pageIndex = this.findPagedPageIndexByPageStartOffset(anchor.textOffset);
+            let pageIndex = this.findPagedPageIndexByReaderTextAnchor(anchor.textSnippet, anchor.textOffset, anchor.pageIndex);
             if (pageIndex < 0 && anchor.id)
                 pageIndex = this.findPagedPageIndexByAnchor(anchor.id);
             if (pageIndex < 0 && anchor.sectionId)
@@ -6178,8 +6181,10 @@ class Reader {
     }
 
     setReflowPageStartOverride(pageIndex = -1, anchor = null) {
-        const textSnippet = String((anchor && anchor.textSnippet) || '').trim();
-        if (!this.isPagedMode || !textSnippet || textSnippet.startsWith('image:') || Number(pageIndex) < 0) {
+        const textSnippet = String(anchor?.textSnippet || '').trim();
+        const textOffset = Number(anchor?.textOffset ?? -1);
+        const id = String(anchor?.id || '').trim();
+        if (!this.isPagedMode || Number(pageIndex) < 0 || (!textSnippet && !(textOffset >= 0) && !id)) {
             this.reflowPageStartOverride = null;
             return;
         }
@@ -6187,6 +6192,8 @@ class Reader {
         this.reflowPageStartOverride = {
             pageIndex: Math.max(0, Math.min(this.totalPagedLogicalPages - 1, Math.round(Number(pageIndex || 0) || 0))),
             textSnippet,
+            textOffset,
+            id,
         };
     }
 
@@ -8989,9 +8996,7 @@ class Reader {
         this.bookmarks = [];
         this.currentPlacesTab = 'progress';
         this.currentSectionId = '';
-        this.restorePending = false;
-        this.restoreFromSavedProgress = false;
-        this.pendingReflowAnchor = null;
+        this.clearPendingReaderNavigationRestore({clearNoteReturn: true});
         this.controlsOpen = false;
         this.contentsDialogOpen = false;
         this.contentsPanelView = 'contents';

@@ -148,7 +148,25 @@ function readRenderedPage(page) {
             'The previous page number and footer dimensions stay stable until the new pagination commits');
         assert(after.page >= 2 && after.total > before.total, 'Viewport repagination preserves the reading position');
 
+        const waitForPage = index => page.waitForFunction(index =>
+            document.querySelector('.reader-page-sheet--live')?.dataset.pageIndex === String(index), index);
+        const readingPage = Math.floor(after.total / 2);
+        for (let index = after.page; index < readingPage; index++) {
+            await page.keyboard.press('PageDown');
+            await waitForPage(index);
+        }
         const regular = await readRenderedPage(page);
+        const regularTotal = after.total;
+        const assertReadingPosition = async label => {
+            await page.waitForFunction(total => {
+                const counter = document.querySelector('.reader-debug-panel')?.textContent.match(/page: \d+\/(\d+)/);
+                return Number(counter?.[1]) === total && !document.querySelector('.reader-page-sheet--placeholder')
+                    && document.querySelectorAll('.reader-page-sheet--live').length === 1;
+            }, regularTotal);
+            const visiblePage = Number(await page.locator('.reader-page-sheet--live').getAttribute('data-page-index')) + 1;
+            assert.equal(visiblePage, readingPage, label);
+            assert.equal(textHash((await readRenderedPage(page)).paragraphs.join(' ')), textHash(regular.paragraphs.join(' ')), label);
+        };
         const clickCenter = async() => {
             const bounds = await page.locator('.reader-scroll').boundingBox();
             await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
@@ -161,6 +179,7 @@ function readRenderedPage(page) {
         assert(immersive.freeBottom < 2 * immersive.lineHeight, 'The taller page uses the extra space for text');
         await clickCenter();
         await page.waitForFunction(total => !document.querySelector('.reader-page--immersive') && window.__readFooter()?.total === total, after.total);
+        await assertReadingPosition('Showing the reader toolbar again restores the original text');
 
         const fullscreen = page.locator('.reader-toolbar-quick-actions button:has(.la-expand-arrows-alt)');
         const viewport = await context.newCDPSession(page);
@@ -184,9 +203,8 @@ function readRenderedPage(page) {
         await viewport.send('Emulation.setDeviceMetricsOverride', {width: 1440, height: 740, deviceScaleFactor: 1, mobile: false});
         await viewport.detach();
         await page.waitForFunction(total => window.__readFooter()?.total === total, after.total);
+        await assertReadingPosition('Exiting fullscreen restores the original text');
 
-        const waitForPage = index => page.waitForFunction(index =>
-            document.querySelector('.reader-page-sheet--live')?.dataset.pageIndex === String(index), index);
         const current = await page.evaluate(() => window.__readFooter().page);
         for (let index = current - 1; index > 0; index--) {
             await page.keyboard.press('PageUp');
