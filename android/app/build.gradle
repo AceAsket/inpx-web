@@ -11,8 +11,8 @@ android {
         applicationId 'ru.inpx.server'
         minSdk 28
         targetSdk 36
-        versionCode 9
-        versionName '0.7.1-prototype'
+        versionCode 10
+        versionName '0.7.2-prototype'
         testInstrumentationRunner 'ru.inpx.server.UiSmokeInstrumentation'
         ndk { abiFilters inpxAbi }
         externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_shared' } }

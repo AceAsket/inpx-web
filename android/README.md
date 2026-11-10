@@ -5,9 +5,9 @@
 Доступны отдельные APK для ARM32 (`armeabi-v7a`, ARMv7 с NEON) и ARM64 (`arm64-v8a`).
 Root и Termux не требуются. Это прототип для установки APK вручную.
 
-Разработка Android-версии: ветка [`android`](https://github.com/AceAsket/inpx-web/tree/android). APK публикуются отдельно от версий для ПК и Docker: [Android 0.7.1](https://github.com/AceAsket/inpx-web/releases/tag/android-v0.7.1) · [скачать ARM32](https://github.com/AceAsket/inpx-web/releases/download/android-v0.7.1/inpx-server-0.7.1-arm32-debug.apk) · [скачать ARM64](https://github.com/AceAsket/inpx-web/releases/download/android-v0.7.1/inpx-server-0.7.1-arm64-debug.apk). Для приставки с 32-битной Android выбирайте ARM32, даже если её процессор поддерживает 64 бита. Это предрелиз с debug-подписью. Контрольные суммы и JSON с составом APK публикуются рядом с APK в релизе.
+Разработка Android-версии: ветка [`android`](https://github.com/AceAsket/inpx-web/tree/android). APK публикуются отдельно от версий для ПК и Docker: [Android 0.7.2](https://github.com/AceAsket/inpx-web/releases/tag/android-v0.7.2) · [скачать ARM32](https://github.com/AceAsket/inpx-web/releases/download/android-v0.7.2/inpx-server-0.7.2-arm32-debug.apk) · [скачать ARM64](https://github.com/AceAsket/inpx-web/releases/download/android-v0.7.2/inpx-server-0.7.2-arm64-debug.apk). Для приставки с 32-битной Android выбирайте ARM32, даже если её процессор поддерживает 64 бита. Это предрелиз с debug-подписью. Контрольные суммы и JSON с составом APK публикуются рядом с APK в релизе.
 
-В 0.7.1 встроен сервер **1.8.2-rc.24** на Node.js 24.22.1. Индексация больших каталогов использует временные файлы во внутреннем хранилище. Версия APK — `0.7.1-prototype`, versionCode — `9`. Установите APK поверх прежней версии: подпись и настройки сохраняются.
+В 0.7.2 встроен сервер **1.8.2-rc.24** на Node.js 24.22.1. Индексация больших каталогов использует временные файлы во внутреннем хранилище. Версия APK — `0.7.2-prototype`, versionCode — `10`. Установите APK поверх прежней версии: подпись и настройки сохраняются.
 
 ## Архитектура и удобство панели
 
@@ -15,7 +15,7 @@ Root и Termux не требуются. Это прототип для уста�
 
 На первом запуске основная кнопка предлагает **Добавить библиотеку**, затем выбор папки, SMB или демо. Панель показывает следующий шаг, отличает запуск от остановки, ожидает готовности каталога, помечает работающую демо-библиотеку и напоминает о настройках, которым нужен перезапуск. Опрос статуса сохраняет фокус пульта и положение прокрутки.
 
-Сборка из текущих исходников создаёт APK `0.7.1-prototype` с актуальным backend и прежними форматами Vault и настроек панели.
+Сборка из текущих исходников создаёт APK `0.7.2-prototype` с актуальным backend и прежними форматами Vault и настроек панели.
 
 ## Автоматическая сборка
 
@@ -46,7 +46,7 @@ Root и Termux не требуются. Это прототип для уста�
 
 ## Запуск
 
-1. Установить `inpx-server-0.7.1-arm32-debug.apk` или `inpx-server-0.7.1-arm64-debug.apk` из Android-релиза под архитектуру своей Android.
+1. Установить `inpx-server-0.7.2-arm32-debug.apk` или `inpx-server-0.7.2-arm64-debug.apk` из Android-релиза под архитектуру своей Android.
 2. Для первой проверки нажать **Запустить демо-библиотеку**. Две тестовые книги находятся в ZIP и 7z.
 3. Для собственной библиотеки добавить папку с одним INPX и архивами через **Добавить папку · SD / USB**, либо добавить SMB-источник.
 4. Нажать **Запустить сервер**. Кнопка **Открыть каталог** открывает каталог на устройстве. На другом устройстве использовать показанный адрес Wi-Fi и порт (по умолчанию 12380).
@@ -104,7 +104,7 @@ wsl -d Ubuntu -- env INPX_ANDROID_ABI=armeabi-v7a bash scripts/android/build-nat
 wsl -d Ubuntu -- env INPX_ANDROID_ABI=armeabi-v7a bash scripts/android/build-apk.sh assembleDebugAndroidTest lintDebug
 ```
 
-`INPX_ANDROID_ABI` по умолчанию равен `arm64-v8a`. `build-native.sh` собирает 7-Zip и все три конвертера выбранной архитектуры с NDK API 28. Результаты: `dist/android/inpx-server-0.7.1-arm32-debug.apk`, `dist/android/inpx-server-0.7.1-arm64-debug.apk` и переносимые файлы `.sha256`. Последовательно выполняйте сборки APK для разных ABI: Gradle использует общий каталог результата.
+`INPX_ANDROID_ABI` по умолчанию равен `arm64-v8a`. `build-native.sh` собирает 7-Zip и все три конвертера выбранной архитектуры с NDK API 28. Результаты: `dist/android/inpx-server-0.7.2-arm32-debug.apk`, `dist/android/inpx-server-0.7.2-arm64-debug.apk` и переносимые файлы `.sha256`. Последовательно выполняйте сборки APK для разных ABI: Gradle использует общий каталог результата.
 
 Инструменты устанавливаются в `~/.cache/inpx-android` внутри WSL; расположение можно изменить через `INPX_ANDROID_TOOLS`. SDK/NDK, Gradle и бинарники не входят в Git. На Linux те же bash-скрипты выполняются напрямую. Для создания демонстрационного 7z скрипт упаковки использует `C:/Program Files/7-Zip/7z.exe` на Windows, `7zz` на Linux или путь из `INPX_7Z`.
 
@@ -114,7 +114,7 @@ wsl -d Ubuntu -- env INPX_ANDROID_ABI=armeabi-v7a bash scripts/android/build-apk
 
 ```powershell
 node scripts/android/storage-fs-tests.js
-adb install -r dist/android/inpx-server-0.7.1-arm64-debug.apk
+adb install -r dist/android/inpx-server-0.7.2-arm64-debug.apk
 adb shell am start -n ru.inpx.server/.MainActivity
 adb forward tcp:22380 tcp:12380
 # Запустить демо в приложении:
@@ -133,7 +133,7 @@ node scripts/android/check-server.js http://127.0.0.1:22380 dist/android/device-
 
 ```powershell
 wsl -d Ubuntu -- bash scripts/android/build-apk.sh assembleDebugAndroidTest
-adb install -r dist/android/inpx-server-0.7.1-arm64-debug.apk
+adb install -r dist/android/inpx-server-0.7.2-arm64-debug.apk
 adb install -r android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w ru.inpx.server.test/ru.inpx.server.UiSmokeInstrumentation
 adb pull /sdcard/Android/data/ru.inpx.server/files/ui-checks dist/android/ui-checks

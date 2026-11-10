@@ -97,7 +97,9 @@ class DbCreator {
             await db.drop({in: 'book', hash: {field: '_uid'}});
         const previous = new Map(), physical = new Map(), legacy = new Map();
         let lastBookId = 0;
+        let hasPrevious = false;
         const rememberPrevious = rows => {
+            hasPrevious ||= rows.length > 0;
             if (scratch) {
                 scratch.remember(rows);
                 for (const row of rows) lastBookId = Math.max(lastBookId, row.id);
@@ -320,61 +322,59 @@ class DbCreator {
         //основная процедура парсинга
         let id = lastBookId;
         const seen = uid => scratch ? scratch.seen(uid) : uidSet.has(uid);
-        const findByUid = uid => scratch ? scratch.findByUid(uid) : previous.get(uid);
-        const knowsPhysical = identity => scratch ? scratch.knowsPhysical(identity) : physical.has(identity);
+        const findByUid = uid => scratch && hasPrevious ? scratch.findByUid(uid) : previous.get(uid);
+        const knowsPhysical = identity => scratch && hasPrevious ? scratch.knowsPhysical(identity) : physical.has(identity);
         const parsedCallback = async(chunk) => {
             const saveChunk = [];
-            const collect = () => {
-                for (const rec of chunk) {
-                    rec.sourceId = currentSource.id;
-                    rec.sourceName = currentSource.name;
-                    rec.sourceLibDir = currentSource.libDir;
+            for (const rec of chunk) {
+                rec.sourceId = currentSource.id;
+                rec.sourceName = currentSource.name;
+                rec.sourceLibDir = currentSource.libDir;
 
-                    const identity = currentSource.type === 'folder' ? '' : this.physicalIdentity(rec);
-                    const parsedUid = rec._uid;
-                    if (identity) rec._legacyUid = parsedUid;
-                    const uidPrior = findByUid(parsedUid);
-                    // An identical INPX line can refer to different archives.
-                    let prior = uidPrior;
-                    if (identity && uidPrior?.identity !== identity)
-                        prior = scratch ? scratch.matchArchive(identity, parsedUid)
-                            : legacy.get(`${identity}:${parsedUid}`) || physical.get(identity);
-                    if (prior && !seen(prior.uid)) rec._uid = prior.uid;
-                    else {
-                        prior = null;
-                        if (identity && !knowsPhysical(identity) && !seen(identity) && !findByUid(identity)) {
-                            rec._uid = identity;
-                        } else if (identity && uidPrior && uidPrior.identity !== identity) {
-                            rec._uid = require('crypto').createHash('sha256').update(`inpx-record-v1:${identity}:${parsedUid}`).digest('base64');
-                            const variant = findByUid(rec._uid);
-                            if (variant && variant.identity === identity) prior = variant;
-                        }
+                const identity = currentSource.type === 'folder' ? '' : this.physicalIdentity(rec);
+                const parsedUid = rec._uid;
+                if (identity) rec._legacyUid = parsedUid;
+                const uidPrior = findByUid(parsedUid);
+                // An identical INPX line can refer to different archives.
+                let prior = uidPrior;
+                if (hasPrevious && identity && uidPrior?.identity !== identity)
+                    prior = scratch ? scratch.matchArchive(identity, parsedUid)
+                        : legacy.get(`${identity}:${parsedUid}`) || physical.get(identity);
+                if (prior && !seen(prior.uid)) rec._uid = prior.uid;
+                else {
+                    prior = null;
+                    if (identity && !knowsPhysical(identity) && !seen(identity) && !findByUid(identity)) {
+                        rec._uid = identity;
+                    } else if (identity && uidPrior && uidPrior.identity !== identity) {
+                        rec._uid = require('crypto').createHash('sha256').update(`inpx-record-v1:${identity}:${parsedUid}`).digest('base64');
+                        const variant = findByUid(rec._uid);
+                        if (variant && variant.identity === identity) prior = variant;
                     }
-                    if (!filter(rec) || seen(rec._uid)) continue;
-
-                    rec._recordHash = require('crypto').createHash('sha256').update(JSON.stringify(rec)).digest('hex');
-                    rec.id = prior ? prior.id : ++id;
-                    if (scratch) {scratch.mark(rec._uid, prior); scratch.file(rec);}
-                    else {
-                        uidSet.add(rec._uid);
-                        if (prior) prior.retained = true;
-                    }
-
-                    if (!rec.del) {
-                        bookCount++;
-                        if (!rec.author)
-                            noAuthorBookCount++;
-                    } else {
-                        bookDelCount++;
-                    }
-
-                    parseBookRec(rec);
-                    const old = incremental && findByUid(rec._uid);
-                    if (!old || old.id !== rec.id || old.hash !== rec._recordHash) saveChunk.push(rec);
                 }
-            };
-            if (scratch) scratch.batch(collect);
-            else collect();
+                if (!filter(rec)) continue;
+                if (scratch) {
+                    if (!scratch.mark(rec._uid, prior)) continue;
+                    scratch.file(rec);
+                } else {
+                    if (uidSet.has(rec._uid)) continue;
+                    uidSet.add(rec._uid);
+                    if (prior) prior.retained = true;
+                }
+                rec._recordHash = require('crypto').createHash('sha256').update(JSON.stringify(rec)).digest('hex');
+                rec.id = prior ? prior.id : ++id;
+
+                if (!rec.del) {
+                    bookCount++;
+                    if (!rec.author)
+                        noAuthorBookCount++;
+                } else {
+                    bookDelCount++;
+                }
+
+                parseBookRec(rec);
+                const old = incremental && findByUid(rec._uid);
+                if (!old || old.id !== rec.id || old.hash !== rec._recordHash) saveChunk.push(rec);
+            }
             if (saveChunk.length) await db.insert({table: 'book', rows: saveChunk, replace: true});
             recordsChanged += saveChunk.length;
             callback({recordsChanged, incremental});
@@ -388,29 +388,33 @@ class DbCreator {
 
         //парсинг
         const parserInfos = [];
-        for (const source of librarySources) {
-            currentSource = source;
-            totalFiles = 0;
-            callback({
-                job: 'load inpx',
-                jobMessage: `Loading INPX: ${source.name}`,
-                jobStep: 1,
-                progress: 0,
-                sourceId: source.id,
-                sourceName: source.name,
-            });
+        const loadSources = async() => {
+            for (const source of librarySources) {
+                currentSource = source;
+                totalFiles = 0;
+                callback({
+                    job: 'load inpx',
+                    jobMessage: `Loading INPX: ${source.name}`,
+                    jobStep: 1,
+                    progress: 0,
+                    sourceId: source.id,
+                    sourceName: source.name,
+                });
 
-            const parser = source.type === 'folder' ? new (require('./FolderIndexer').FolderIndexer)(source, config)
-                : new InpxParser(scratch ? 2000 : 10000);
-            await parser.parse(source.inpxFile || source.inpx, readFileCallback, parsedCallback);
-            parserInfos.push({
-                id: source.id,
-                name: source.name,
-                inpx: source.inpxFile || source.inpx,
-                libDir: source.libDir,
-                info: parser.info,
-            });
-        }
+                const parser = source.type === 'folder' ? new (require('./FolderIndexer').FolderIndexer)(source, config)
+                    : new InpxParser(scratch ? 2000 : 10000);
+                await parser.parse(source.inpxFile || source.inpx, readFileCallback, parsedCallback);
+                parserInfos.push({
+                    id: source.id,
+                    name: source.name,
+                    inpx: source.inpxFile || source.inpx,
+                    libDir: source.libDir,
+                    info: parser.info,
+                });
+            }
+        };
+        if (scratch) await scratch.load(loadSources);
+        else await loadSources();
 
         let recordsRemoved = 0;
         if (incremental) {

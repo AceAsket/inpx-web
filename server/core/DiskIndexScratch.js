@@ -5,6 +5,7 @@ const counted = new Set(['author', 'series', 'title']);
 const numeric = new Set(['del', 'librate']);
 const runSize = 2048;
 const countFields = ['author', 'series', 'title', 'genre', 'lang'];
+const cacheKiB = 16 * 1024;
 
 // Scratch data lives in the private staging directory, never in the selected library.
 // SQLite bounds its cache and can sort to disk; the final Jemba format is unchanged.
@@ -21,7 +22,8 @@ class DiskIndexScratch {
         this.db = new DatabaseSync(path.join(root, 'index.sqlite'));
         const db = this.db;
         try {
-            db.exec("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA temp_store=FILE; PRAGMA cache_size=-4096; PRAGMA cache_spill=ON");
+            db.exec(`PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA temp_store=FILE;
+                PRAGMA cache_size=-${cacheKiB}; PRAGMA cache_spill=ON`);
             db.exec("CREATE TABLE prior(uid TEXT PRIMARY KEY, physical TEXT, legacy TEXT, book INTEGER, hash TEXT, retained INTEGER DEFAULT 0) WITHOUT ROWID;"
                 + "CREATE INDEX prior_physical ON prior(physical) WHERE physical != '';"
                 + "CREATE INDEX prior_legacy ON prior(physical,legacy) WHERE physical != '' AND legacy != '';"
@@ -38,7 +40,7 @@ class DiskIndexScratch {
             this.byPhysical = db.prepare("SELECT uid,physical AS identity,book AS id,hash FROM prior WHERE physical=? AND physical!='' LIMIT 2");
             this.retain = db.prepare('UPDATE prior SET retained=1 WHERE uid=?');
             this.hasSeen = db.prepare('SELECT 1 FROM seen WHERE uid=?');
-            this.addSeen = db.prepare('INSERT INTO seen VALUES (?)');
+            this.addSeen = db.prepare('INSERT OR IGNORE INTO seen VALUES (?)');
             this.addPost = db.prepare('INSERT OR IGNORE INTO posts VALUES (?,?,?)');
             this.addName = db.prepare('INSERT INTO names(kind,value,name,live,deleted) VALUES (?,?,?,?,?) '
                 + 'ON CONFLICT(kind,value) DO UPDATE SET live=live+excluded.live, deleted=deleted+excluded.deleted');
@@ -52,6 +54,14 @@ class DiskIndexScratch {
         this.db.exec('BEGIN');
         try {work(); this.db.exec('COMMIT');}
         catch (error) {this.db.exec('ROLLBACK'); throw error;}
+    }
+
+    async load(work) {
+        // The database is disposable. Keep hot pages dirty across parser chunks;
+        // SQLite still spills them to disk as the bounded page cache fills.
+        this.db.exec('BEGIN');
+        await work();
+        this.db.exec('COMMIT');
     }
 
     remember(rows) {
@@ -73,8 +83,9 @@ class DiskIndexScratch {
     knowsPhysical(identity) {return this.byPhysical.get(identity) !== undefined;}
     seen(uid) {return this.hasSeen.get(uid) !== undefined;}
     mark(uid, prior) {
-        this.addSeen.run(uid);
+        if (!this.addSeen.run(uid).changes) return false;
         if (prior) this.retain.run(prior.uid);
+        return true;
     }
 
     *removed() {
@@ -162,16 +173,28 @@ class DiskIndexScratch {
     }
 
     *rows(kind) {
-        const names = counted.has(kind), db = this.db;
-        const keys = names ? this.orderedNames(kind) :
-            db.prepare('SELECT DISTINCT value FROM posts WHERE kind=? ORDER BY value').iterate(kind);
-        const posts = db.prepare('SELECT book FROM posts WHERE kind=? AND value=? ORDER BY book');
-        let id = names ? 1 : 0;
-        for (const row of keys) {
+        if (!counted.has(kind)) {
+            const postings = this.db.prepare('SELECT value,book FROM posts WHERE kind=? ORDER BY value,book');
+            const isNumeric = numeric.has(kind);
+            let row, id = 0;
+            for (const {value, book} of postings.iterate(kind)) {
+                const key = isNumeric ? Number(value) : value;
+                if (!row || row.value !== key) {
+                    if (row) yield row;
+                    row = {id:id++, value:key, bookIds:[]};
+                }
+                row.bookIds.push(book);
+            }
+            if (row) yield row;
+            return;
+        }
+
+        const posts = this.db.prepare('SELECT book FROM posts WHERE kind=? AND value=? ORDER BY book');
+        let id = 1;
+        for (const row of this.orderedNames(kind)) {
             const bookIds = [];
             for (const post of posts.iterate(kind, row.value)) bookIds.push(post.book);
-            yield {id:id++, value:numeric.has(kind) ? Number(row.value) : row.value, bookIds,
-                ...(names ? {name:row.name, bookCount:row.live, bookDelCount:row.deleted} : {})};
+            yield {id:id++, value:row.value, bookIds, name:row.name, bookCount:row.live, bookDelCount:row.deleted};
         }
     }
 
