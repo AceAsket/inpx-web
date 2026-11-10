@@ -1016,7 +1016,7 @@ class DbSearcher {
                     const project = row => ({id:row.id, author:row.author, series:row.series,
                         serno:row.serno, title:row.title, score:rowScore(row)});
             `;
-            if (this.config.installMode === 'android' && (!candidateIds || candidateIds.length > 20000)) {
+            if (this.config?.installMode === 'android' && (!candidateIds || candidateIds.length > 20000)) {
                 bookIds = await this.scanAndroidBookIds(bookKey, candidateIds, projection, onProgress);
             } else {
                 const iterator = candidateIds ? db.esc(Array.from(candidateIds)) : '@all()';
