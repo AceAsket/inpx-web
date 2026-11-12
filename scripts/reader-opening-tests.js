@@ -239,6 +239,7 @@ async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
     let parsed = 0;
     Object.assign(reader, {isStandaloneMode: false, $route: {path: '/reader'}, readerLoadJobId: 0, pagedBuildJobId: 0, $refs: {},
         pagedLayoutCache: new Map([['old-document', {type: 'partial'}]]), bottomClipCompensationByGeometry: new Map(), bottomClipCalibrationAttemptsByGeometry: new Map(),
+        readerPageFootnotes: new Map([['old-note', 'Note from the previous book']]),
         resetBottomClipCalibrationSample() {}, cancelCompactChromeBuildPendingClear() {}, clearCompactChromeStatusHold() {},
         afterLayoutRefreshPaint: async() => {}, applyStoredReaderPreferences: async() => {}, uiText: {}, applyReaderDocumentSource: async() => {parsed++;},
         $root: {api: {getReaderBook: async uid => {assert.strictEqual(uid, 'same-uid'); started(); return gate;}, getReaderState: async() => ({})}},
@@ -246,6 +247,7 @@ async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
     const pending = reader.loadReader();
     await requested;
     assert.strictEqual(reader.pagedLayoutCache.size, 0, 'A new document clears pagination checkpoints before fetching its text');
+    assert.strictEqual(reader.readerPageFootnotes.size, 0, 'A new document clears footnotes from the previous book');
     reader.readerActive = false; reader.cancelReaderLoad();
     finish({bookInfo: {book: {}, fb2: 'obsolete large document'}});
     await pending;
