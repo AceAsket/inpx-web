@@ -356,6 +356,8 @@
                                         <q-btn flat dense no-caps :class="{'is-active': activePreferences.pagedSpreadMode === 'dual'}" @click="setPagedSpreadMode('dual')">{{ uiText.spreadDual }}</q-btn>
                                     </div>
                                 </div>
+
+                                <q-toggle :model-value="showPageFootnotes" :label="uiText.pageFootnotes" @update:model-value="setPageFootnotes" />
                             </template>
                         </section>
 
@@ -1684,6 +1686,7 @@ class Reader {
     useBrowserSpeech = false;
     readerAnnotationHtml = '';
     readerNotesAnchorId = '';
+    readerPageFootnotes = new Map();
     readerSearchText = '';
     pagedPages = [];
     currentPageIndex = 0;
@@ -1747,6 +1750,7 @@ class Reader {
         readMode: 'scroll',
         pagedNavigation: 'tap',
         pagedDirection: 'vertical',
+        showPageFootnotes: true,
         pageAnimation: 'soft',
         pageAnimationSpeed: 'normal',
         showStatusBar: true,
@@ -2362,6 +2366,7 @@ class Reader {
         return [
             prefs.readMode || 'scroll',
             prefs.pagedDirection || 'vertical',
+            prefs.showPageFootnotes !== false,
             prefs.fontFamily || 'serif',
             prefs.fontSize || 18,
             prefs.contentWidth || 1040,
@@ -2732,6 +2737,7 @@ class Reader {
             controlsReadMode: '\u0424\u043e\u0440\u043c\u0430\u0442',
             controlsPageFlow: '\u041b\u0438\u0441\u0442\u0430\u043d\u0438\u0435',
             controlsSpread: '\u0420\u0430\u0437\u0432\u043e\u0440\u043e\u0442',
+            pageFootnotes: 'Сноски внизу страницы',
             controlsSpacing: '\u041e\u0442\u0441\u0442\u0443\u043f\u044b',
             controlsAnimation: '\u0410\u043d\u0438\u043c\u0430\u0446\u0438\u044f',
             controlsAnimationType: '\u042d\u0444\u0444\u0435\u043a\u0442',
@@ -3222,14 +3228,12 @@ class Reader {
         if (!page)
             return '';
 
-        if (!this.searchQuery.trim() || !this.hasSearchResults)
-            return page.html || '';
+        let html = page.html || '';
+        const activeResult = this.searchResults[this.currentSearchResultIndex];
+        if (this.searchQuery.trim() && activeResult?.pageIndex === pageIndex)
+            html = this.highlightHtmlMatches(html, this.searchQuery);
 
-        const activeResult = this.searchResults[this.currentSearchResultIndex] || null;
-        if (!activeResult || activeResult.pageIndex !== pageIndex)
-            return page.html || '';
-
-        return this.highlightHtmlMatches(page.html || '', this.searchQuery);
+        return this.wrapPagedFootnotes(html, page.footnotesHtml);
     }
 
     renderReflowPageStartOverride(page = null, pageIndex = 0) {
@@ -3312,6 +3316,10 @@ class Reader {
 
     get isPagedMode() {
         return this.activePreferences.readMode === 'paged';
+    }
+
+    get showPageFootnotes() {
+        return this.preferences.showPageFootnotes !== false;
     }
 
     get isHorizontalPaged() {
@@ -3882,6 +3890,7 @@ class Reader {
         this.readerHtml = '';
         this.readerAnnotationHtml = '';
         this.readerNotesAnchorId = '';
+        this.readerPageFootnotes.clear();
         this.readerSearchText = '';
         this.contents = [];
         this.bookmarks = [];
@@ -4137,6 +4146,16 @@ class Reader {
         this.updateActivePreferences({
             pagedDirection: nextDirection,
         });
+        this.savePreferencesDebounced();
+        this.requestReaderSettingsReflow();
+    }
+
+    setPageFootnotes(visible) {
+        if (this.showPageFootnotes === visible)
+            return;
+
+        this.capturePendingReflowAnchor(!this.pendingReflowAnchor);
+        this.preferences = {...this.preferences, showPageFootnotes: visible};
         this.savePreferencesDebounced();
         this.requestReaderSettingsReflow();
     }
@@ -5584,9 +5603,7 @@ class Reader {
             link.addEventListener('click', (event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                this.jumpToReaderAnchor(this.getReaderLinkTarget(link), {
-                    returnPoint: this.captureReaderNoteReturnPoint(),
-                });
+                this.followReaderLink(link);
             });
         }
     }
@@ -5799,7 +5816,8 @@ class Reader {
         const page = this.pagedPages[pageIndex] || null;
         const sheet = this.getActiveLivePagedSheet();
         const anchorSheet = this.getPagedAnchorSheet(sheet);
-        const contentRoot = (anchorSheet && anchorSheet.querySelector('.reader-page-content, .reader-html')) || null;
+        const contentRoot = anchorSheet?.querySelector('.reader-page-layout > .reader-page-content')
+            || anchorSheet?.querySelector('.reader-page-content, .reader-html') || null;
         const caretAnchor = this.captureTopLeftReaderTextAnchor(contentRoot);
         const focusNode = this.findTopLeftReaderContentNode(contentRoot);
         const focusId = caretAnchor.id || this.getReaderNodeAnchorId(focusNode);
@@ -6869,7 +6887,7 @@ class Reader {
         return Math.max(0, Math.ceil(maxBottom - rootRect.top));
     }
 
-    doesPagedMeasureOverflow(measureHost, measureHtml = null) {
+    doesPagedMeasureOverflow(measureHost, measureHtml = null, fitFootnotes = false) {
         if (!measureHost)
             return false;
 
@@ -6878,24 +6896,55 @@ class Reader {
             return false;
 
         const htmlNode = (measureHtml || measureHost.querySelector('.reader-html') || null);
-        const contentNode = (
-            (htmlNode && htmlNode.querySelector('.reader-page-content'))
+        const pageLayout = htmlNode?.querySelector('.reader-page-layout');
+        const footnotes = pageLayout?.lastElementChild;
+        let contentNode = (
+            pageLayout
+            || (htmlNode && htmlNode.querySelector('.reader-page-content'))
             || htmlNode
             || measureHost
         );
-        const measuredHeight = Math.max(
+        const limit = Math.max(0, availableHeight - 12);
+        const measure = () => Math.max(
             contentNode.scrollHeight || 0,
             contentNode.offsetHeight || 0,
             contentNode.clientHeight || 0,
             this.measureContentInnerHeight(contentNode),
         );
+        let measuredHeight = measure();
+        if (footnotes && measuredHeight > limit) {
+            const lineHeight = parseFloat(window.getComputedStyle(htmlNode).lineHeight) || 0;
+            const gap = parseFloat(window.getComputedStyle(pageLayout).rowGap) || 0;
+            const inset = footnotes.offsetHeight - footnotes.clientHeight;
+            const padding = parseFloat(window.getComputedStyle(footnotes).paddingTop) || 0;
+            const noteLimit = limit - lineHeight - gap - inset - padding;
+            const oversized = Array.from(footnotes.children).filter(note => note.offsetHeight > noteLimit);
+            for (const note of oversized)
+                note.remove();
+            if (oversized.length)
+                measuredHeight = measure();
+
+            // A single unsplittable unit can still reference more notes than fit.
+            // Its remaining links lead to the full notes at the end of the book.
+            if (fitFootnotes) {
+                while (footnotes.lastElementChild && measuredHeight > limit) {
+                    footnotes.lastElementChild.remove();
+                    measuredHeight = measure();
+                }
+            }
+            if (!footnotes.firstElementChild) {
+                contentNode = pageLayout.firstElementChild;
+                pageLayout.replaceWith(contentNode);
+                measuredHeight = measure();
+            }
+        }
 
         this.readerDebug = Object.assign({}, this.readerDebug, {
             measureContentHeight: Math.round(measuredHeight),
             measureOverflowPx: Math.round(measuredHeight - availableHeight),
         });
 
-        return measuredHeight > Math.max(0, availableHeight - 12);
+        return measuredHeight > limit;
     }
 
     getPageOffsetByIndex(index = 0) {
@@ -7097,13 +7146,72 @@ class Reader {
         return value.replace(/([ #;?%&,.+*~\\':"!^$[\]()=>|/@])/g, '\\$1');
     }
 
-    wrapPagedMeasureHtml(parts = []) {
+    wrapPagedContentHtml(parts) {
         return `
             <div class="reader-page-content">
                 ${parts.join('')}
                 <div class="reader-page-spacer" aria-hidden="true"></div>
             </div>
         `;
+    }
+
+    indexReaderPageFootnotes(root) {
+        const references = new Map();
+        for (const link of root.querySelectorAll('a[data-reader-target]')) {
+            const id = link.dataset.readerTarget;
+            references.set(id, references.get(id) || link.hasAttribute('data-reader-note'));
+        }
+
+        const notes = new Map();
+        for (const target of root.querySelectorAll('[id]')) {
+            const id = target.id;
+            if (notes.has(id) || !references.has(id))
+                continue;
+            if (!references.get(id) && !target.closest('.reader-notes, [data-reader-comments]'))
+                continue;
+
+            const note = target.cloneNode(true);
+            note.removeAttribute('id');
+            for (const child of note.querySelectorAll('[id]'))
+                child.removeAttribute('id');
+            notes.set(id, `<div class="reader-page-footnote" data-reader-footnote="${this.escapeHtml(id)}" tabindex="-1">${note.outerHTML}</div>`);
+        }
+        this.readerPageFootnotes = notes;
+    }
+
+    buildPagedFootnotesHtml(parts) {
+        if (!this.showPageFootnotes || !this.readerPageFootnotes.size)
+            return '';
+
+        const notes = new Set();
+        for (const part of parts) {
+            for (const match of part.matchAll(/<a\b[^>]*\sdata-reader-target="([^"]+)"/g)) {
+                const id = match[1].includes('&') ? he.decode(match[1], {isAttributeValue: true}) : match[1];
+                const note = this.readerPageFootnotes.get(id);
+                if (note)
+                    notes.add(note);
+            }
+        }
+        return notes.size ? `<aside class="reader-page-footnotes" aria-label="${this.uiText.pageFootnotes}">${Array.from(notes).join('')}</aside>` : '';
+    }
+
+    wrapPagedFootnotes(html, footnotesHtml) {
+        return footnotesHtml ? `<div class="reader-page-layout">${html}${footnotesHtml}</div>` : html;
+    }
+
+    wrapPagedMeasureHtml(parts = []) {
+        return this.wrapPagedFootnotes(this.wrapPagedContentHtml(parts), this.buildPagedFootnotesHtml(parts));
+    }
+
+    createPagedPage(parts, sectionId, measureHost, measureHtml) {
+        const html = this.wrapPagedContentHtml(parts);
+        let footnotesHtml = this.buildPagedFootnotesHtml(parts);
+        if (footnotesHtml) {
+            measureHtml.innerHTML = this.wrapPagedFootnotes(html, footnotesHtml);
+            this.doesPagedMeasureOverflow(measureHost, measureHtml, true);
+            footnotesHtml = measureHtml.querySelector('.reader-page-footnotes')?.outerHTML || '';
+        }
+        return {html, footnotesHtml, sectionId, anchorIds: this.collectPagedAnchorIdsFromUnits(parts, sectionId)};
     }
 
     extractPagedContentUnits(html = '') {
@@ -7155,14 +7263,11 @@ class Reader {
             }
         }
 
-        measureHtml.innerHTML = '';
-        return compacted
+        const result = compacted
             .filter((page) => page.units && page.units.length && !this.isBlankPagedPageUnits(page.units))
-            .map((page) => ({
-                html: this.wrapPagedMeasureHtml(page.units),
-                sectionId: page.sectionId || '',
-                anchorIds: this.collectPagedAnchorIdsFromUnits(page.units, page.sectionId || ''),
-            }));
+            .map((page) => this.createPagedPage(page.units, page.sectionId || '', measureHost, measureHtml));
+        measureHtml.innerHTML = '';
+        return result;
     }
 
     async compactMobilePagedPagesChunked(pages = [], measureHost = null, measureHtml = null, jobId = 0) {
@@ -7177,14 +7282,11 @@ class Reader {
         let compactSliceStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
         const finalizeCompactedPages = () => {
-            measureHtml.innerHTML = '';
-            return compacted
+            const result = compacted
                 .filter((page) => page.units && page.units.length && !this.isBlankPagedPageUnits(page.units))
-                .map((page) => ({
-                    html: this.wrapPagedMeasureHtml(page.units),
-                    sectionId: page.sectionId || '',
-                    anchorIds: this.collectPagedAnchorIdsFromUnits(page.units, page.sectionId || ''),
-                }));
+                .map((page) => this.createPagedPage(page.units, page.sectionId || '', measureHost, measureHtml));
+            measureHtml.innerHTML = '';
+            return result;
         };
 
         const maybeYield = async(index = 0, force = false) => {
@@ -7912,6 +8014,9 @@ class Reader {
             return [];
 
         const root = host.firstChild;
+        if (this.isPagedFootnoteParagraph(root))
+            return this.splitPagedFootnoteParagraph(root, unit, []);
+
         const childNodes = Array.from(root.childNodes || []).filter((child) => (
             child.nodeType !== Node.TEXT_NODE || String(child.textContent || '').trim()
         ));
@@ -7956,6 +8061,9 @@ class Reader {
             return [];
 
         const root = host.firstChild;
+        if (this.isPagedFootnoteParagraph(root))
+            return this.splitPagedFootnoteParagraph(root, unit, currentUnits);
+
         const childNodes = Array.from(root.childNodes || []).filter((child) => (
             child.nodeType !== Node.TEXT_NODE || String(child.textContent || '').trim()
         ));
@@ -7992,6 +8100,80 @@ class Reader {
         return childSplit;
     }
 
+    isPagedFootnoteParagraph(root) {
+        return this.readerPageFootnotes.size > 0 && root.matches('p, blockquote')
+            && (root.hasAttribute('data-reader-note-anchor')
+                || Array.from(root.querySelectorAll('a[data-reader-target]')).some(link => this.readerPageFootnotes.has(link.dataset.readerTarget)));
+    }
+
+    splitPagedFootnoteParagraph(root, unit, currentUnits) {
+        const measureHost = this.$refs.pageMeasure;
+        const measureHtml = measureHost?.querySelector('.reader-html');
+        if (!measureHtml)
+            return [];
+
+        // Keep links atomic and preserve the exact inline markup on each side.
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, node => {
+            if (node.nodeType === Node.TEXT_NODE || node.nodeName === 'BR')
+                return NodeFilter.FILTER_ACCEPT;
+            return node.matches('a[data-reader-target]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+        });
+        const boundaries = [];
+        while (walker.nextNode()) {
+            const node = walker.currentNode;
+            if (node.nodeName === 'BR') {
+                boundaries.push([node.parentNode, Array.from(node.parentNode.childNodes).indexOf(node) + 1]);
+            } else {
+                for (const match of node.data.matchAll(/[ \t\r\n]+(?=\S)/g))
+                    boundaries.push([node, match.index + match[0].length]);
+            }
+        }
+
+        const range = document.createRange();
+        const clone = () => {
+            const fragment = root.cloneNode(false);
+            fragment.append(range.cloneContents());
+            return fragment;
+        };
+        range.selectNodeContents(root);
+        let low = 0;
+        let high = boundaries.length - 1;
+        let best = -1;
+        while (low <= high) {
+            const middle = Math.floor((low + high) / 2);
+            range.setEnd(...boundaries[middle]);
+            measureHtml.innerHTML = this.wrapPagedMeasureHtml(currentUnits.concat(clone().outerHTML));
+            if (this.doesPagedMeasureOverflow(measureHost, measureHtml)) {
+                high = middle - 1;
+            } else {
+                best = middle;
+                low = middle + 1;
+            }
+        }
+        if (best < 0)
+            return [];
+
+        range.setEnd(...boundaries[best]);
+        const first = clone();
+        range.selectNodeContents(root);
+        range.setStart(...boundaries[best]);
+        const rest = clone();
+        if (!first.textContent.trim() || !rest.textContent.trim())
+            return [];
+
+        rest.removeAttribute('id');
+        rest.removeAttribute('data-reader-note-anchor');
+        const firstIds = new Set(Array.from(first.querySelectorAll('[id]'), node => node.id));
+        for (const node of rest.querySelectorAll('[id]')) {
+            if (firstIds.has(node.id))
+                node.removeAttribute('id');
+        }
+        return [
+            {html: first.outerHTML, breakBefore: !!unit.breakBefore, sectionId: unit.sectionId || first.id},
+            {html: rest.outerHTML, breakBefore: false, sectionId: ''},
+        ];
+    }
+
     buildPagedUnits() {
         const units = [];
         const pushUnit = (html = '', opts = {}) => {
@@ -8022,15 +8204,17 @@ class Reader {
 
         const root = document.createElement('div');
         root.innerHTML = this.readerHtml || '';
+        this.indexReaderPageFootnotes(root);
 
-        const flattenNode = (node, sectionBreak = false) => {
+        const flattenNode = (node, sectionBreak = false, noteAnchor = '') => {
             if (!node)
                 return;
 
             if (node.nodeType === Node.TEXT_NODE) {
                 const text = String(node.textContent || '').trim();
+                const anchorAttribute = noteAnchor ? ` data-reader-note-anchor="${noteAnchor}"` : '';
                 if (text)
-                    pushUnit(`<p class="reader-paragraph">${this.escapeHtml(text)}</p>`, {breakBefore: sectionBreak});
+                    pushUnit(`<p class="reader-paragraph"${anchorAttribute}>${this.escapeHtml(text)}</p>`, {breakBefore: sectionBreak});
                 return;
             }
 
@@ -8038,6 +8222,7 @@ class Reader {
                 return;
 
             const element = node;
+            const targetAnchor = noteAnchor || (this.readerPageFootnotes.has(element.id) ? encodeURIComponent(element.id) : '');
             if (
                 element.classList.contains('reader-section')
                 || element.classList.contains('reader-section-block')
@@ -8048,6 +8233,8 @@ class Reader {
                     child.nodeType !== Node.TEXT_NODE || String(child.textContent || '').trim()
                 ));
                 if (!children.length) {
+                    if (targetAnchor)
+                        element.dataset.readerNoteAnchor = targetAnchor;
                     pushUnit(element.outerHTML, {
                         breakBefore: sectionBreak,
                         sectionId: containerSectionId || (element.querySelector('[id]') || {}).id || '',
@@ -8061,7 +8248,7 @@ class Reader {
                         ? (child.id || ((child.querySelector && child.querySelector('[id]')) || {}).id || (first ? containerSectionId : '') || '')
                         : '');
                     const firstGeneratedUnitIndex = units.length;
-                    flattenNode(child, (sectionBreak && first));
+                    flattenNode(child, (sectionBreak && first), first ? targetAnchor : '');
                     if (sectionId && units.length > firstGeneratedUnitIndex) {
                         units[firstGeneratedUnitIndex].sectionId = sectionId;
                         units[firstGeneratedUnitIndex].breakBefore = units[firstGeneratedUnitIndex].breakBefore || (sectionBreak && first);
@@ -8073,6 +8260,8 @@ class Reader {
 
             const sectionId = element.id || ((element.querySelector && element.querySelector('[id]')) || {}).id || '';
             const breakBefore = sectionBreak;
+            if (targetAnchor)
+                element.dataset.readerNoteAnchor = targetAnchor;
             pushUnit(element.outerHTML, {breakBefore, sectionId});
         };
 
@@ -8145,11 +8334,7 @@ class Reader {
             if (!currentUnits.length)
                 return;
             if (!this.isBlankPagedPageUnits(currentUnits)) {
-                pages.push({
-                    html: this.wrapPagedMeasureHtml(currentUnits),
-                    sectionId: currentPageSectionId || activeSectionId || '',
-                    anchorIds: this.collectPagedAnchorIdsFromUnits(currentUnits, currentPageSectionId || activeSectionId || ''),
-                });
+                pages.push(this.createPagedPage(currentUnits, currentPageSectionId || activeSectionId || '', measureHost, measureHtml));
             }
             stats.pages = pages.length;
             currentUnits = [];
@@ -8328,11 +8513,7 @@ class Reader {
             if (!currentUnits.length)
                 return;
             if (!this.isBlankPagedPageUnits(currentUnits)) {
-                pages.push({
-                    html: this.wrapPagedMeasureHtml(currentUnits),
-                    sectionId: currentPageSectionId || activeSectionId || '',
-                    anchorIds: this.collectPagedAnchorIdsFromUnits(currentUnits, currentPageSectionId || activeSectionId || ''),
-                });
+                pages.push(this.createPagedPage(currentUnits, currentPageSectionId || activeSectionId || '', measureHost, measureHtml));
             }
             stats.pages = pages.length;
             currentUnits = [];
@@ -8675,7 +8856,8 @@ class Reader {
                 const idAttr = this.readerNodeIdAttribute(attrs);
                 if (targetId) {
                     const safeTarget = this.escapeHtml(targetId);
-                    parts.push(`<a${idAttr} class="reader-inline-link reader-note-link" href="#${safeTarget}" data-reader-target="${safeTarget}">${html}</a>`);
+                    const noteAttr = String(attrs.type || '').trim().toLowerCase() === 'note' ? ' data-reader-note' : '';
+                    parts.push(`<a${idAttr} class="reader-inline-link reader-note-link" href="#${safeTarget}" data-reader-target="${safeTarget}"${noteAttr}>${html}</a>`);
                 } else {
                     parts.push(`<span${idAttr} class="reader-inline-link">${html}</span>`);
                 }
@@ -8859,7 +9041,8 @@ class Reader {
                 parts.push(`<section class="reader-notes"><h2${anchorAttribute}>Примечания</h2>${html}</section>`);
                 notesAnchorAdded = true;
             } else {
-                parts.push(`<section class="reader-section">${html}</section>`);
+                const commentsAttr = bodyName === 'comments' ? ' data-reader-comments' : '';
+                parts.push(`<section class="reader-section"${commentsAttr}>${html}</section>`);
             }
         }
 
@@ -9040,6 +9223,7 @@ class Reader {
         this.readerHtml = '';
         this.readerAnnotationHtml = '';
         this.readerNotesAnchorId = '';
+        this.readerPageFootnotes.clear();
         this.readerSearchText = '';
         this.contents = [];
         this.bookmarks = [];
@@ -9419,14 +9603,9 @@ class Reader {
         const target = event.target;
         const noteLink = this.getReaderInternalLink(target);
         if (noteLink) {
-            const noteTarget = this.getReaderLinkTarget(noteLink);
-            if (noteTarget) {
-                event.preventDefault();
-                event.stopPropagation();
-                this.jumpToReaderAnchor(noteTarget, {
-                    returnPoint: this.captureReaderNoteReturnPoint(),
-                });
-            }
+            event.preventDefault();
+            event.stopPropagation();
+            this.followReaderLink(noteLink);
             return;
         }
 
@@ -9757,6 +9936,19 @@ class Reader {
         }
     }
 
+    followReaderLink(link) {
+        const target = this.getReaderLinkTarget(link);
+        const footnotes = link.closest('.reader-page-content')?.nextElementSibling;
+        if (footnotes?.matches('.reader-page-footnotes')) {
+            const note = Array.from(footnotes.children).find(item => item.dataset.readerFootnote === target);
+            if (note) {
+                note.focus({preventScroll: true});
+                return;
+            }
+        }
+        this.jumpToReaderAnchor(target, {returnPoint: this.captureReaderNoteReturnPoint()});
+    }
+
     getReaderInternalLink(target = null) {
         if (!target || !target.closest)
             return null;
@@ -9867,6 +10059,14 @@ class Reader {
         const safeId = String(id || '').trim();
         if (!safeId || !this.pagedPages.length)
             return -1;
+
+        if (this.readerPageFootnotes.has(safeId)) {
+            // Mobile compaction can move a note's opening onto the previous page.
+            const marker = `data-reader-note-anchor="${encodeURIComponent(safeId)}"`;
+            const noteIndex = this.pagedPages.findIndex(page => page.html?.includes(marker));
+            if (noteIndex >= 0)
+                return noteIndex;
+        }
 
         const directIndex = this.pagedPages.findIndex((page) => String((page && page.sectionId) || '').trim() === safeId);
         if (directIndex >= 0)
@@ -12214,6 +12414,57 @@ export default vueComponent(Reader);
     min-height: 0;
     padding-bottom: 0;
     box-sizing: border-box;
+}
+
+.reader-page-sheet :deep(.reader-page-layout) {
+    display: grid;
+    align-content: space-between;
+    gap: 0.75em;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.reader-page-sheet--live :deep(.reader-page-layout) {
+    min-height: calc(100% - 2px);
+}
+
+.reader-page-sheet :deep(.reader-page-footnotes) {
+    display: grid;
+    gap: 0.4em;
+    border-top: 1px solid var(--reader-border);
+    padding-top: 0.55em;
+    font-size: 0.82em;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.reader-page-sheet :deep(.reader-page-footnote) {
+    display: flow-root;
+}
+
+.reader-page-sheet :deep(.reader-page-footnote :is(.reader-section-block, .reader-section-heading, .reader-paragraph)) {
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    font-size: inherit;
+    line-height: inherit;
+}
+
+.reader-page-sheet :deep(.reader-page-footnote .reader-paragraph + .reader-paragraph) {
+    margin-top: 0.3em;
+}
+
+.reader-page-sheet :deep(.reader-page-footnote .reader-section-heading:first-child),
+.reader-page-sheet :deep(.reader-page-footnote .reader-section-heading:first-child + .reader-paragraph) {
+    display: inline;
+}
+
+.reader-page-sheet :deep(.reader-page-footnote .reader-section-heading:first-child) {
+    margin-inline-end: 0.4em;
+}
+
+.reader-page-sheet :deep(.reader-page-footnote:focus) {
+    outline: 1px solid var(--reader-accent);
+    outline-offset: -1px;
 }
 
 .reader-page-sheet .reader-html :deep(.reader-page-spacer),

@@ -47,4 +47,22 @@ async function testReaderMeasuresCanonicalPageAcrossFullscreenTransitions() {
     assert.strictEqual(reader.getPagedMeasureAvailableHeight(host), 538, 'Mobile bottom clipping compensation remains in effect');
 }
 
-module.exports = [testReaderMeasuresCanonicalPageAcrossFullscreenTransitions];
+async function testPagedFootnoteOpensAtItsStartAfterCompaction() {
+    const source = await fs.readFile(path.resolve(__dirname, '../client/components/Reader/Reader.vue'), 'utf8');
+    const start = source.indexOf('    findPagedPageIndexByAnchor(');
+    const end = source.indexOf('    findPagedPageIndexByTextSnippet(', start);
+    assert.ok(start >= 0 && end > start);
+    const Reader = new Function(`return class {${source.slice(start, end)}}`)();
+    const reader = new Reader();
+    const noteId = 'note&216';
+    reader.readerPageFootnotes = new Map([[noteId, 'Footnote']]);
+    reader.pagedPages = [
+        {sectionId: 'previous', html: '<h3 data-reader-note-anchor="note%26216">216</h3><p>Opening</p>'},
+        {sectionId: noteId, anchorIds: [noteId], html: '<p>Continuation</p>'},
+    ];
+
+    assert.strictEqual(reader.findPagedPageIndexByAnchor(noteId), 0);
+    assert.strictEqual(reader.findPagedPageIndexByAnchor('previous'), 0);
+}
+
+module.exports = [testReaderMeasuresCanonicalPageAcrossFullscreenTransitions, testPagedFootnoteOpensAtItsStartAfterCompaction];
