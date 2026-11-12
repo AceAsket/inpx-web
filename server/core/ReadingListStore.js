@@ -338,6 +338,7 @@ class ReadingListStore {
             readerPreferencesVersion,
             theme: this.normalizeReaderTheme(preferences.theme),
             ...this.normalizeReaderRuntimeSettings(preferences, defaults),
+            showPageFootnotes: preferences.showPageFootnotes !== false,
             regularProfile: this.normalizeReaderDeviceSettings(preferences.regularProfile || {}, defaults),
             compactProfile: this.normalizeReaderDeviceSettings(preferences.compactProfile || {}, defaults),
             einkProfile,
