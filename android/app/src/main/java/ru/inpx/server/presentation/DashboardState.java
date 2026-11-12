@@ -23,6 +23,7 @@ public final class DashboardState {
   public final boolean demo, restartRequired, checkingSources;
   public final long freeBytes;
   public final ServerMemory memory;
+  public final int startupPercent;
 
   public DashboardState(
       Phase phase,
@@ -55,6 +56,14 @@ public final class DashboardState {
       boolean checkingSources,
       long freeBytes,
       ServerMemory memory) {
+    this(phase, sources, addresses, detail, journal, uiMode, preferredPort, activePort, demo,
+        restartRequired, checkingSources, freeBytes, memory, -1);
+  }
+
+  public DashboardState(
+      Phase phase, List<SourceInfo> sources, List<String> addresses, String detail, String journal,
+      String uiMode, int preferredPort, int activePort, boolean demo, boolean restartRequired,
+      boolean checkingSources, long freeBytes, ServerMemory memory, int startupPercent) {
     this.phase = phase;
     this.sources = Collections.unmodifiableList(new ArrayList<>(sources));
     this.addresses = Collections.unmodifiableList(new ArrayList<>(addresses));
@@ -68,6 +77,7 @@ public final class DashboardState {
     this.checkingSources = checkingSources;
     this.freeBytes = freeBytes;
     this.memory = memory;
+    this.startupPercent = startupPercent;
   }
 
   public static DashboardState initial() {
@@ -112,7 +122,8 @@ public final class DashboardState {
         restartRequired,
         checkingSources,
         freeBytes,
-        memory);
+        memory,
+        next == phase ? startupPercent : -1);
   }
 
   public DashboardState withSourceCheck(boolean checking) {
@@ -129,7 +140,8 @@ public final class DashboardState {
         restartRequired,
         checking,
         freeBytes,
-        memory);
+        memory,
+        startupPercent);
   }
 
   /** Only structural changes rebuild views, so status polling preserves TV focus and scroll. */

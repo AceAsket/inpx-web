@@ -84,9 +84,8 @@ class DbCreator {
     async build(db, callback, scratch) {
         const config = this.config;
         const inpxHashCreator = new InpxHashCreator(config);
+        callback({jobStepCount: 10, job: 'hash inpx', jobMessage: 'Проверка версии INPX', jobStep: 1, progress: null});
         const sourceHash = await inpxHashCreator.getHash();
-
-        callback({jobStepCount: 5});
         callback({job: 'load inpx', jobMessage: 'Загрузка INPX', jobStep: 1, progress: 0});
 
         //временная таблица
@@ -220,16 +219,12 @@ class DbCreator {
         let currentSource = librarySources[0];
         let totalFiles = 0;
         const readFileCallback = async(readState) => {
+            if (readState.totalFiles) totalFiles = readState.totalFiles;
             callback(Object.assign({
                 sourceId: currentSource.id,
                 sourceName: currentSource.name,
+                progress: totalFiles ? Math.max(0, (readState.current || 0) - 1) / totalFiles : 0,
             }, readState));
-
-            if (readState.totalFiles)
-                totalFiles = readState.totalFiles;
-
-            if (totalFiles)
-                callback({progress: (readState.current || 0)/totalFiles});
         };
 
         const parseField = (kind, fieldValue, fieldMap, fieldArr, bookId, rec, fillBookIds = true) => {
@@ -394,16 +389,18 @@ class DbCreator {
                 totalFiles = 0;
                 callback({
                     job: 'load inpx',
-                    jobMessage: `Loading INPX: ${source.name}`,
+                    jobMessage: 'Чтение INPX',
                     jobStep: 1,
                     progress: 0,
                     sourceId: source.id,
                     sourceName: source.name,
+                    fileName: '',
                 });
 
                 const parser = source.type === 'folder' ? new (require('./FolderIndexer').FolderIndexer)(source, config)
                     : new InpxParser(scratch ? 2000 : 10000);
                 await parser.parse(source.inpxFile || source.inpx, readFileCallback, parsedCallback);
+                callback({progress: 1});
                 parserInfos.push({
                     id: source.id,
                     name: source.name,
@@ -412,6 +409,8 @@ class DbCreator {
                     info: parser.info,
                 });
             }
+            if (scratch)
+                callback({job: 'commit inpx', jobMessage: 'Запись прочитанных книг', jobStep: 2, progress: null});
         };
         if (scratch) await scratch.load(loadSources);
         else await loadSources();
@@ -450,6 +449,7 @@ class DbCreator {
 
         uidSet = null;
 
+        if (scratch) callback({jobMessage: 'Закрытие таблицы книг'});
         await db.close({table: 'book'});
         await db.freeMemory();
         utils.freeMemory();
@@ -492,6 +492,7 @@ class DbCreator {
         }
 
         //stats
+        if (scratch) callback({jobMessage: 'Подсчёт записей индекса', progress: null});
         const counts = scratch?.counts();
         const stats = {
             filesCount: 0,//вычислим позднее
@@ -513,8 +514,17 @@ class DbCreator {
 
         //сохраним поисковые таблицы
         const chunkSize = 10000;
+        const otherTableLabels = {
+            lang: 'языков', del: 'статуса записей', date: 'дат', librate: 'оценок',
+            ext: 'форматов', source: 'источников', word: 'поисковых слов',
+        };
 
         const saveTable = async(table, arr, nullArr, indexType = 'string', delEmpty = false) => {
+            if (scratch) {
+                const label = otherTableLabels[table];
+                callback({tableRows: 0, progress: counts[table] ? 0 : null,
+                    ...(label ? {jobMessage: `Сохранение индекса ${label}`} : {})});
+            }
             
             if (indexType == 'string')
                 arr.sort((a, b) => a.value.localeCompare(b.value));
@@ -532,7 +542,7 @@ class DbCreator {
                     if (!batch.length) return;
                     await db.insert({table, rows: batch});
                     saved += batch.length; batch = []; weight = 0;
-                    if (counts[table]) callback({progress: saved / counts[table]});
+                    callback({tableRows: saved, ...(counts[table] ? {progress: saved / counts[table]} : {})});
                 };
                 for (const row of scratch.rows(table)) {
                     batch.push(row);
@@ -637,7 +647,7 @@ class DbCreator {
             callback(p);
         }, scratch, maxBookId);
 
-        callback({job: 'stats count', jobMessage: 'Подсчет статистики', jobStep: 9, progress: 0});
+        callback({job: 'stats count', jobMessage: 'Подсчёт статистики', jobStep: 9, progress: null});
         await this.countStats(db, callback, stats, scratch);
 
         //чистка памяти, ибо жрет как не в себя
@@ -646,6 +656,7 @@ class DbCreator {
         utils.freeMemory();
 
         //config сохраняем в самом конце, нет конфига - с базой что-то не так
+        callback({job: 'finalizing', jobMessage: 'Проверка и сохранение индекса', jobStep: 10, progress: null});
         if (sourceHash !== await inpxHashCreator.getHash())
             throw new Error('Источники изменились во время индексации. Повторите обновление.');
 
@@ -683,7 +694,7 @@ class DbCreator {
             {id: 'indexUpdate', value: {incremental, recordsChanged, recordsRemoved, updatedAt: new Date().toISOString()}},
         ]});
 
-        callback({job: 'done', jobMessage: ''});
+        callback({job: 'done', jobMessage: 'Индекс сохранён', progress: 1});
     }
 
     async optimizeTable(from, db, callback, scratch, maxBookId) {

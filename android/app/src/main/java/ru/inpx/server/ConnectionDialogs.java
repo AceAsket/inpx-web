@@ -9,6 +9,7 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -18,6 +19,7 @@ import ru.inpx.server.presentation.*;
 /** Connection sharing, catalog, logs and community. All content comes from screen state. */
 final class ConnectionDialogs extends DialogUi {
   private static final String COMMUNITY_URL = "https://t.me/inpxweb";
+  private Runnable refreshJournal;
 
   ConnectionDialogs(DialogUi base) {
     super(base);
@@ -146,12 +148,9 @@ final class ConnectionDialogs extends DialogUi {
   }
 
   public void journal() {
-    String journal = current.get().journal;
-    TextView output =
-        text(
-            journal.isEmpty() ? "Журнал появится после первого запуска сервера." : journal,
-            12,
-            DashboardView.MUTED);
+    TextView status = text("", 14, DashboardView.TEXT);
+    status.setPadding(dp(20), dp(6), dp(20), dp(6));
+    TextView output = text("", 12, DashboardView.MUTED);
     output.setTypeface(Typeface.MONOSPACE);
     output.setPadding(dp(20), dp(8), dp(20), dp(12));
     output.setTextIsSelectable(!tv);
@@ -159,13 +158,32 @@ final class ConnectionDialogs extends DialogUi {
     scroll.addView(output);
     scroll.setFocusable(true);
     scroll.setContentDescription("Журнал сервера");
+    LinearLayout content = new LinearLayout(activity);
+    content.setOrientation(LinearLayout.VERTICAL);
+    content.addView(status);
+    content.addView(scroll, new LinearLayout.LayoutParams(-1, -2, 1));
     AlertDialog d =
         new AlertDialog.Builder(activity)
             .setTitle("Журнал сервера")
-            .setView(scroll)
+            .setView(content)
             .setNegativeButton("Назад", null)
+            .setNeutralButton("Отменить запуск", null)
             .create();
     show(d);
+    Button cancel = d.getButton(AlertDialog.BUTTON_NEUTRAL);
+    cancel.setOnClickListener(v -> presenter.stop());
+    refreshJournal = () -> {
+      DashboardState state = current.get();
+      cancel.setVisibility(state.phase == DashboardState.Phase.STARTING ? View.VISIBLE : View.GONE);
+      status.setText(state.online() ? "Сервер в сети" : state.detail);
+      String journal = state.journal.isEmpty() ? "Журнал появится после первого запуска сервера." : state.journal;
+      if (journal.contentEquals(output.getText())) return;
+      boolean follow = !scroll.canScrollVertically(1);
+      output.setText(journal);
+      if (follow) scroll.post(() -> scroll.scrollTo(0, output.getHeight()));
+    };
+    d.setOnDismissListener(dialog -> refreshJournal = null);
+    updateJournal();
     if (tv) {
       scroll.requestFocus();
       scroll.setOnKeyListener(
@@ -178,5 +196,9 @@ final class ConnectionDialogs extends DialogUi {
             return false;
           });
     }
+  }
+
+  void updateJournal() {
+    if (refreshJournal != null) refreshJournal.run();
   }
 }

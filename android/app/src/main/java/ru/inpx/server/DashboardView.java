@@ -11,6 +11,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import java.util.ArrayList;
@@ -66,6 +67,7 @@ final class DashboardView {
   final Map<String, Button> controls = new LinkedHashMap<>();
   final List<Button> left = new ArrayList<>(), right = new ArrayList<>();
   final TextView badge, headline, summary, address, sourceCount, nextStep, memory;
+  private final ProgressBar startupProgress;
   private final Button primary;
   private final QrView qr;
   private final Map<String, String> sourceLabels = new LinkedHashMap<>();
@@ -118,6 +120,11 @@ final class DashboardView {
     summary = text("Подключите книги и читайте с любого устройства дома.", 13, MUTED, false);
     summary.setPadding(0, dp(8), 0, dp(12));
     words.addView(summary);
+    startupProgress = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal);
+    startupProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(MINT));
+    startupProgress.setMax(100);
+    startupProgress.setVisibility(View.GONE);
+    words.addView(startupProgress, new LinearLayout.LayoutParams(-1, dp(8)));
     heroRow.addView(words, new LinearLayout.LayoutParams(0, -2, 1));
     qr = new QrView(context);
     qr.setVisibility(View.GONE);
@@ -248,7 +255,7 @@ final class DashboardView {
       TextView help =
           text(
               "↑ ↓ ← →  Выбор     OK  Открыть     Назад  Вернуться                         ANDROID"
-                  + " TV · 0.7.2",
+                  + " TV · 0.7.3",
               11,
               MUTED,
               false);
@@ -280,7 +287,7 @@ final class DashboardView {
       LinearLayout.LayoutParams opt = new LinearLayout.LayoutParams(-1, -2);
       opt.topMargin = dp(10);
       content.addView(options, opt);
-      TextView footer = text("INPX SERVER  /  ANDROID 9+  /  0.7.2", 11, MUTED, false);
+      TextView footer = text("INPX SERVER  /  ANDROID 9+  /  0.7.3", 11, MUTED, false);
       footer.setTag("dashboard-footer");
       footer.setGravity(Gravity.CENTER);
       footer.setPadding(0, dp(24), 0, dp(10));
@@ -502,6 +509,9 @@ final class DashboardView {
                 : empty
                     ? "Подключите папку с INPX и архивами или библиотеку на NAS."
                     : "Настройки сохранены. Запустите сервер и откройте каталог.");
+    boolean starting = state.phase == DashboardState.Phase.STARTING;
+    startupProgress.setVisibility(starting && state.startupPercent >= 0 ? View.VISIBLE : View.GONE);
+    if (state.startupPercent >= 0) startupProgress.setProgress(state.startupPercent);
     address.setText(
         online
             ? state.url().isEmpty() ? "Подключите Wi-Fi или Ethernet" : state.url()
@@ -515,11 +525,10 @@ final class DashboardView {
             ? "Есть изменения. Остановите и запустите сервер, чтобы применить их."
             : online
                 ? "3 / 3  ·  Откройте каталог здесь или сканируйте QR-код телефоном."
-                : busy
-                    ? "Экран можно выключить. Состояние обновится автоматически."
-                    : empty
+                : empty
                         ? "Добавить библиотеку → Запустить сервер → Открыть каталог"
                         : "Следующий шаг — нажмите «Запустить сервер».");
+    nextStep.setVisibility(busy ? View.GONE : View.VISIBLE);
     nextStep.setTextColor(state.restartRequired ? AMBER : MUTED);
     primary.setText(
         online
@@ -528,12 +537,12 @@ final class DashboardView {
                 ? "Читаем настройки…"
                 : state.phase == DashboardState.Phase.STOPPING
                     ? "Останавливаем сервер…"
-                    : busy
-                        ? "Запускаем сервер…"
+                    : starting
+                        ? "Отменить запуск"
                         : state.memory.suggestedMiB() > 0
                             ? "Увеличить лимит памяти…"
                             : empty ? "Добавить библиотеку" : "Запустить сервер");
-    primary.setAlpha(busy ? .65f : 1f);
+    primary.setAlpha(busy && !starting ? .65f : 1f);
     controls.get("catalog").setAlpha(online ? 1f : .6f);
     controls
         .get("demo")

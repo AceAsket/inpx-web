@@ -13,12 +13,15 @@ import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.security.MessageDigest;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -31,7 +34,12 @@ import org.json.JSONObject;
 
 public final class ServerService extends Service {
   static final String STOP = "ru.inpx.server.STOP";
+  private static final long STOP_TIMEOUT_MS = 18000;
+  private final Handler lifecycle = new Handler(Looper.getMainLooper());
   private boolean launched;
+  private volatile boolean stopping, nativeStarted;
+  private Thread serverThread;
+  private String notificationText = "";
   private PowerManager.WakeLock wakeLock;
   private volatile StorageBridge storage;
   private JSONArray sources;
@@ -59,7 +67,7 @@ public final class ServerService extends Service {
           try {
             if (ServerControl.read(context).optBoolean("stopOnBattery")) {
               ServerControl.stop(context);
-              state("Сервер остановлен: отключено питание");
+              beginStop();
             }
           } catch (Exception e) {
             Log.w("INPX", "Cannot apply power policy", e);
@@ -105,18 +113,46 @@ public final class ServerService extends Service {
         .build();
   }
 
+  private void beginStop() {
+    if (!launched) {
+      stopSelf();
+      return;
+    }
+    if (stopping) return;
+    stopping = true;
+    lifecycle.postDelayed(this::forceStop, STOP_TIMEOUT_MS);
+    if (!nativeStarted && serverThread != null) serverThread.interrupt();
+    getSystemService(NotificationManager.class).notify(1, notification("Остановка сервера…"));
+  }
+
+  private void forceStop() {
+    // The server service has a separate process. Node may be stuck inside native I/O.
+    android.os.Process.killProcess(android.os.Process.myPid());
+  }
+
+  private void progress(String stage, String detail, int percent) {
+    if (!stopping) ServerStartupProgress.write(this, stage, detail, percent);
+  }
+
+  private void checkStopping() throws InterruptedIOException {
+    if (stopping || Thread.currentThread().isInterrupted())
+      throw new InterruptedIOException("Запуск отменён");
+  }
+
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
     try {
       if (intent != null && STOP.equals(intent.getAction())) {
         ServerControl.stop(this);
-        state("Остановка сервера…");
-        if (!launched) stopSelf();
+        beginStop();
         return START_NOT_STICKY;
       }
       JSONObject request = ServerControl.read(this);
-      if (!request.optBoolean("requested")
-          || request.optBoolean("blocked")
+      if (!request.optBoolean("requested")) {
+        beginStop();
+        return START_NOT_STICKY;
+      }
+      if (request.optBoolean("blocked")
           || ServerControl.userStopped(this)) {
         stopSelf();
         return START_NOT_STICKY;
@@ -137,7 +173,7 @@ public final class ServerService extends Service {
             notification("Подготовка библиотеки…"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
       else startForeground(1, notification("Подготовка библиотеки…"));
-      if (launched) return START_STICKY;
+      if (launched) return stopping ? START_NOT_STICKY : START_STICKY;
       if (ServerDiagnostics.exhausted(this, request, ServerDiagnostics.journal(this))) {
         ServerControl.blockForMemory(this);
         state("Ошибка: не хватает памяти для сервера.");
@@ -163,7 +199,8 @@ public final class ServerService extends Service {
       else registerReceiver(powerReceiver, powerFilter);
       receiverRegistered = true;
       scheduler.scheduleWithFixedDelay(this::applyPolicy, 1, 2, TimeUnit.SECONDS);
-      new Thread(() -> run(request), "inpx-node").start();
+      serverThread = new Thread(() -> run(request), "inpx-node");
+      serverThread.start();
       return START_STICKY;
     } catch (Exception e) {
       state("Ошибка запуска: " + e.getMessage());
@@ -177,9 +214,16 @@ public final class ServerService extends Service {
     try {
       JSONObject request = ServerControl.read(this);
       if (!request.optBoolean("requested")) {
-        data().mkdirs();
-        Io.write(new File(data(), "stop"), "stop");
+        lifecycle.post(this::beginStop);
         return;
+      }
+      JSONObject progress = ServerStartupProgress.read(this, android.os.Process.myPid());
+      String text = ServerStartupProgress.title(progress, "Подготовка библиотеки…");
+      if (!text.equals(notificationText)) {
+        notificationText = text;
+        lifecycle.post(() -> {
+          if (!stopping) getSystemService(NotificationManager.class).notify(1, notification(text));
+        });
       }
       boolean awake = request.optBoolean("keepAwake", true);
       if (awake && !wakeLock.isHeld()) wakeLock.acquire();
@@ -233,13 +277,12 @@ public final class ServerService extends Service {
 
   private void run(JSONObject request) {
     try {
-      state("Подготовка файлов приложения…");
-      File runtime = prepareRuntime();
       data().mkdirs();
-      if (!ServerControl.read(this).optBoolean("requested")) {
-        stopSelf();
-        return;
-      }
+      state("Подготовка файлов приложения…");
+      progress("Подготовка файлов приложения", "", -1);
+      File runtime = prepareRuntime();
+      checkStopping();
+      if (!ServerControl.read(this).optBoolean("requested")) return;
       sources =
           request.optBoolean("demo")
               ? new JSONArray()
@@ -252,19 +295,19 @@ public final class ServerService extends Service {
               : new JSONArray(Vault.read(this));
       if (sources.length() == 0)
         throw new Exception("Сначала добавьте папку библиотеки или SMB-источник");
+      progress("Подключение к источникам", "", -1);
       storage = new StorageBridge(this, sources);
-      JSONArray libraries = IndexCache.refresh(this, storage, sources);
+      JSONArray libraries = IndexCache.refresh(this, storage, sources, this::progress);
+      checkStopping();
       for (int i = 0; i < libraries.length(); i++)
         activeSources.add(libraries.getJSONObject(i).getString("id"));
       for (int i = 0; i < sources.length(); i++)
         SourceHealth.restartRequired(this, sources.getJSONObject(i).getString("id"), false);
       lastSourceCheck = android.os.SystemClock.elapsedRealtime();
       refreshSources.set(false);
-      if (!ServerControl.read(this).optBoolean("requested")) {
-        stopSelf();
-        return;
-      }
+      if (!ServerControl.read(this).optBoolean("requested")) return;
       int port = request.optInt("port", 12380);
+      progress("Подготовка настроек сервера", "", -1);
       File configFile = new File(data(), "config.json");
       JSONObject config =
           configFile.exists() ? new JSONObject(Io.read(configFile)) : new JSONObject();
@@ -326,11 +369,12 @@ public final class ServerService extends Service {
           60,
           TimeUnit.SECONDS);
       state("Сервер запускается на порту " + port);
-      getSystemService(NotificationManager.class)
-          .notify(1, notification("Библиотека в домашней сети · порт " + port));
+      progress("Запуск сервера", "Порт " + port, -1);
       int heapMiB = ServerDiagnostics.memory(this, request, false, false).nextStartMiB();
       new File(data(), "memory.json").delete();
       ServerControl.launchMemory(this, heapMiB);
+      nativeStarted = true;
+      checkStopping();
       NativeRuntime.start(
           new String[] {
             "node",
@@ -342,12 +386,19 @@ public final class ServerService extends Service {
           getApplicationInfo().nativeLibraryDir,
           data().getAbsolutePath());
     } catch (Throwable e) {
-      state("Ошибка: " + e.getMessage());
-      Log.e("INPX", "Server failed", e);
+      if (!stopping) {
+        state("Ошибка: " + e.getMessage());
+        Log.e("INPX", "Server failed", e);
+      }
     } finally {
+      // Interrupting preparation must not prevent closing storage or reading durable intent.
+      Thread.interrupted();
       if (storage != null) storage.close();
       try {
-        if (!ServerControl.read(this).optBoolean("requested")) stopSelf();
+        if (!ServerControl.read(this).optBoolean("requested")) {
+          state("Сервер остановлен");
+          stopSelf();
+        }
       } catch (Exception ignored) {
         stopSelf();
       }
@@ -357,6 +408,7 @@ public final class ServerService extends Service {
 
   @Override
   public void onDestroy() {
+    lifecycle.removeCallbacksAndMessages(null);
     scheduler.shutdownNow();
     if (receiverRegistered) unregisterReceiver(powerReceiver);
     if (mediaReceiverRegistered) unregisterReceiver(mediaReceiver);
@@ -375,19 +427,26 @@ public final class ServerService extends Service {
     File root = new File(getFilesDir(), "runtime/" + hash);
     if (new File(root, ".ready").exists()) return root;
     root.mkdirs();
+    progress("Проверка файлов приложения", "", -1);
     MessageDigest digest = MessageDigest.getInstance("SHA-256");
     try (InputStream input = getAssets().open("runtime.zip")) {
       byte[] buffer = new byte[65536];
       int n;
-      while ((n = input.read(buffer)) != -1) digest.update(buffer, 0, n);
+      while ((n = input.read(buffer)) != -1) {
+        checkStopping();
+        digest.update(buffer, 0, n);
+      }
     }
     StringBuilder actual = new StringBuilder();
     for (byte b : digest.digest()) actual.append(String.format("%02x", b & 255));
     if (!actual.toString().equals(hash)) throw new Exception("Runtime checksum mismatch");
+    progress("Распаковка файлов приложения", "", -1);
     try (ZipInputStream zip = new ZipInputStream(getAssets().open("runtime.zip"))) {
       ZipEntry entry;
       byte[] buffer = new byte[65536];
+      int extracted = 0;
       while ((entry = zip.getNextEntry()) != null) {
+        checkStopping();
         File file = new File(root, entry.getName()).getCanonicalFile();
         if (!file.getPath().startsWith(root.getCanonicalPath() + "/"))
           throw new Exception("Invalid asset path");
@@ -398,8 +457,13 @@ public final class ServerService extends Service {
         file.getParentFile().mkdirs();
         try (FileOutputStream out = new FileOutputStream(file)) {
           int n;
-          while ((n = zip.read(buffer)) != -1) out.write(buffer, 0, n);
+          while ((n = zip.read(buffer)) != -1) {
+            checkStopping();
+            out.write(buffer, 0, n);
+          }
         }
+        if (++extracted % 32 == 0)
+          progress("Распаковка файлов приложения", "Файлов: " + extracted, -1);
       }
     }
     Io.write(new File(root, ".ready"), "ready");

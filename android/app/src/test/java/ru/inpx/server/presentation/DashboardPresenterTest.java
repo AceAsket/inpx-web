@@ -153,6 +153,37 @@ public final class DashboardPresenterTest {
   }
 
   @Test
+  public void cancelWhileStartIsPendingStopsWithoutShowingStartingAgain() {
+    Fixture f = new Fixture();
+    f.load();
+    f.presenter.start(true);
+    f.presenter.stop();
+    f.presenter.stop();
+    assertEquals(DashboardState.Phase.STOPPING, f.presenter.state().phase);
+    int cancelledAt = f.ui.rendered.size();
+    f.worker.next();
+    f.ui.drain();
+    f.worker.next();
+    f.ui.drain();
+    assertEquals(1, f.repository.starts);
+    assertEquals(1, f.repository.stops);
+    for (DashboardState result : f.ui.rendered.subList(cancelledAt, f.ui.rendered.size()))
+      assertEquals(DashboardState.Phase.STOPPING, result.phase);
+  }
+
+  @Test
+  public void resumedScreenCanCancelAStartupFoundInProgress() {
+    Fixture f = new Fixture();
+    f.repository.snapshot = state(DashboardState.Phase.STARTING);
+    f.load();
+    f.presenter.stop();
+    f.worker.next();
+    f.ui.drain();
+    assertEquals(1, f.repository.stops);
+    assertEquals(DashboardState.Phase.STOPPING, f.presenter.state().phase);
+  }
+
+  @Test
   public void pauseDiscardsReadAndResumeLoadsFreshState() {
     Fixture f = new Fixture();
     f.presenter.resume();

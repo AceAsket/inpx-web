@@ -25,6 +25,7 @@ public final class UiSmokeInstrumentation extends Instrumentation {
   private boolean background;
   private boolean storage;
   private boolean storageOnly;
+  private boolean startupOnly;
 
   @Override
   public void onCreate(Bundle args) {
@@ -32,6 +33,7 @@ public final class UiSmokeInstrumentation extends Instrumentation {
     background = "true".equals(args.getString("background"));
     storage = "true".equals(args.getString("storage"));
     storageOnly = "true".equals(args.getString("storageOnly"));
+    startupOnly = "true".equals(args.getString("startupOnly"));
     start();
   }
 
@@ -46,6 +48,13 @@ public final class UiSmokeInstrumentation extends Instrumentation {
         JSONObject report = StorageChecks.run(getTargetContext());
         result.putString("stream", report.toString(2));
         finish(report.optBoolean("passed") ? Activity.RESULT_OK : Activity.RESULT_CANCELED, result);
+        return;
+      }
+      if (startupOnly) {
+        open(preferences, "tv");
+        BackgroundChecks.restartAfterCancellation(getTargetContext(), 22373);
+        result.putString("stream", "Startup progress, cancellation after suspension and restart passed");
+        finish(Activity.RESULT_OK, result);
         return;
       }
       JSONObject repositoryReport = RepositoryChecks.run(getTargetContext());

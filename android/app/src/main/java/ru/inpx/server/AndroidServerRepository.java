@@ -16,7 +16,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -67,7 +66,8 @@ final class AndroidServerRepository implements ServerRepository {
     }
     int preferred = DashboardState.port(preferences.getString("port", "12380"));
     int port = preferred;
-    boolean running = serviceRunning();
+    int pid = serverPid();
+    boolean running = pid > 0;
     JSONObject control = ServerControl.read(context);
     if (running) {
       try {
@@ -86,7 +86,10 @@ final class AndroidServerRepository implements ServerRepository {
         message = "Подготавливаем библиотеку. Дождитесь готовности каталога.";
     } catch (Exception ignored) {
     }
-    JSONObject readiness = running ? readiness(port) : new JSONObject();
+    boolean requested = control.optBoolean("requested");
+    JSONObject progress = ServerStartupProgress.read(context, pid);
+    if (progress.optLong("changedAt") < control.optLong("explicitStart")) progress = new JSONObject();
+    JSONObject readiness = running && requested ? readiness(port) : new JSONObject();
     boolean ready = readiness.optBoolean("ready");
     String journal = ServerDiagnostics.journal(context);
     boolean exhausted = control.optBoolean("requested") && !ready
@@ -94,7 +97,7 @@ final class AndroidServerRepository implements ServerRepository {
             || (!running && ServerDiagnostics.exhausted(context, control, journal)));
     ServerMemory memory = ServerDiagnostics.memory(context, control, running, exhausted);
     DashboardState.Phase phase;
-    if (running && !control.optBoolean("requested")) {
+    if (running && !requested) {
       phase = DashboardState.Phase.STOPPING;
       message = "Завершаем работу сервера…";
     } else if (ready) phase = DashboardState.Phase.RUNNING;
@@ -110,13 +113,11 @@ final class AndroidServerRepository implements ServerRepository {
             && System.currentTimeMillis() - control.optLong("explicitStart") < 30000))
       phase = DashboardState.Phase.STARTING;
     else phase = DashboardState.Phase.STOPPED;
+    int percent = -1;
     if (phase == DashboardState.Phase.STARTING) {
-      long records = readiness.optLong("recsLoaded");
-      if (records > 0) {
-        String step = readiness.optString("jobMessage");
-        message = String.format(new Locale("ru"), "Индексация · %,d записей", records);
-        if (!step.isEmpty() && !step.startsWith("Loading INPX")) message += "\n" + step;
-      }
+      message = ServerStartupProgress.summary(
+          progress, message, control.optLong("explicitStart"), readiness.length() > 0);
+      percent = ServerStartupProgress.percent(progress);
     }
     boolean demo = control.optBoolean("demo");
     boolean changed =
@@ -140,7 +141,8 @@ final class AndroidServerRepository implements ServerRepository {
         changed,
         false,
         context.getFilesDir().getUsableSpace(),
-        memory);
+        memory,
+        percent);
   }
 
   private JSONObject readiness(int port) {
@@ -170,12 +172,12 @@ final class AndroidServerRepository implements ServerRepository {
     }
   }
 
-  private boolean serviceRunning() {
+  private int serverPid() {
     ActivityManager manager = context.getSystemService(ActivityManager.class);
     if (manager != null)
       for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(16))
-        if (ServerService.class.getName().equals(service.service.getClassName())) return true;
-    return false;
+        if (ServerService.class.getName().equals(service.service.getClassName())) return service.pid;
+    return 0;
   }
 
   private List<String> addresses() {
@@ -215,7 +217,7 @@ final class AndroidServerRepository implements ServerRepository {
 
   @Override
   public void checkSources() throws Exception {
-    if (serviceRunning()) ServerControl.checkSources(context);
+    if (serverPid() > 0) ServerControl.checkSources(context);
     else {
       JSONArray sources = new JSONArray(Vault.read(context));
       try (StorageBridge bridge = new StorageBridge(context, sources)) {

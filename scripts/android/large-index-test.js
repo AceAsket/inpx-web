@@ -104,6 +104,7 @@ async function run(directory, name, heap, body) {
         authExemptHealth:true, loggingEnabled:false});
     const env = {...process.env, NODE_PATH:path.join(root, 'node_modules'), INPX_LIBRARY_SOURCES:'', LIBRARY_SOURCES:'',
         INPX_INSTALL_MODE:process.env.INPX_TEST_NATIVE === '1' ? 'native' : 'android',
+        INPX_ANDROID_DATA_DIR:process.env.INPX_TEST_NATIVE === '1' ? '' : dataDir,
         INPX_REQUIRE_AUTH:'false', INPX_AUTH_MODE:'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true',
         INPX_ENABLE_CONVERSION:'false', INPX_ADMIN_PASSWORD:'local-index-fixture'};
     const output = fs.createWriteStream(path.join(directory, name + '.log'));
@@ -136,6 +137,12 @@ async function run(directory, name, heap, body) {
             await sleep(500);
         }
         assert.ok(index?.ready, name + ' did not become ready: ' + JSON.stringify(exit) + '\n' + tail);
+        if (env.INPX_ANDROID_DATA_DIR) {
+            const progress = await fs.readJson(path.join(dataDir, 'startup-progress.json'));
+            assert.equal(progress.pid, child.pid);
+            assert.equal(progress.ready, true);
+            assert(progress.changedAt > 0);
+        }
         const result = await body(url, dataDir);
         console.log(name, 'passed in', ((Date.now() - started) / 1000).toFixed(1), 's');
         return result;

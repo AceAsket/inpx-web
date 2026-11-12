@@ -766,10 +766,13 @@ class WebWorker {
     setMyState(newState, workerState = {}) {
         const clearJob = newState !== this.myState ? {job: '', jobMessage: '', jobStep: 0, progress: 0} : {};
         this.myState = newState;
-        this.wState.set(Object.assign(clearJob, workerState, {
+        const status = Object.assign(clearJob, workerState, {
             state: newState,
             serverMessage: stateToText[newState]
-        }));
+        });
+        this.wState.set(status);
+        if (this.config?.installMode === 'android' && process.env.INPX_ANDROID_DATA_DIR)
+            require('./AndroidStartupProgress').publish(status);
     }
 
     async closeDb() {
@@ -845,7 +848,7 @@ class WebWorker {
     }
 
     async loadOrCreateDb(recreate = false, iteration = 0) {
-        this.setMyState(ssDbLoading);
+        this.setMyState(ssDbLoading, {jobMessage: 'Проверка сохранённого индекса'});
 
         try {
             const config = this.config;
@@ -860,6 +863,7 @@ class WebWorker {
             if (!await fs.pathExists(dbPath) && await fs.pathExists(`${dbPath}.previous`))
                 await fs.move(`${dbPath}.previous`, dbPath);
 
+            this.setMyState(ssDbLoading, {jobMessage: 'Проверка версии INPX'});
             this.inpxFileHash = await this.inpxHashCreator.getInpxFileHash();
 
             //проверим полный InxpHash (включая фильтр и версию БД)
@@ -925,8 +929,10 @@ class WebWorker {
 
             try {
                 //открываем таблицы
+                this.setMyState(ssDbLoading, {jobMessage: 'Открытие поисковых таблиц'});
                 await db.openAll({exclude: ['author_id', 'series_id', 'title_id', 'book', 'catalog_lookup']});
 
+                this.setMyState(ssDbLoading, {jobMessage: 'Открытие таблицы книг'});
                 await db.open({
                     table: 'book',
                     cacheSize: config.dbCacheSize
@@ -946,6 +952,7 @@ class WebWorker {
             }
 
             //поисковый движок
+            this.setMyState(ssDbLoading, {jobMessage: 'Подготовка поиска'});
             this.dbSearcher = new DbSearcher(config, db);
             await this.dbSearcher.init();
 

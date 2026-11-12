@@ -13,6 +13,10 @@ import org.json.JSONObject;
 
 /** Cache INPX only. Archives remain on SAF/SMB; an absent source never erases a usable index. */
 final class IndexCache {
+  interface Progress {
+    void update(String stage, String detail, int percent);
+  }
+
   private static Object call(StorageBridge bridge, String op, String path) throws Exception {
     JSONObject result = new JSONObject(bridge.call(op, path));
     if (result.has("error"))
@@ -20,24 +24,34 @@ final class IndexCache {
     return result.get("value");
   }
 
-  static synchronized JSONArray refresh(Context context, StorageBridge bridge, JSONArray sources)
+  static JSONArray refresh(Context context, StorageBridge bridge, JSONArray sources)
+      throws Exception {
+    return refresh(context, bridge, sources, (stage, detail, percent) -> {});
+  }
+
+  static synchronized JSONArray refresh(
+      Context context, StorageBridge bridge, JSONArray sources, Progress progress)
       throws Exception {
     try (java.io.RandomAccessFile guard =
             new java.io.RandomAccessFile(
                 new File(context.getFilesDir(), "source-indexes.lock"), "rw");
         java.nio.channels.FileLock lock = guard.getChannel().lock()) {
-      return refreshLocked(context, bridge, sources);
+      return refreshLocked(context, bridge, sources, progress);
     }
   }
 
-  private static JSONArray refreshLocked(Context context, StorageBridge bridge, JSONArray sources)
+  private static JSONArray refreshLocked(
+      Context context, StorageBridge bridge, JSONArray sources, Progress progress)
       throws Exception {
     File cache = new File(context.getFilesDir(), "source-indexes");
     cache.mkdirs();
     JSONArray libraries = new JSONArray();
     for (int i = 0; i < sources.length(); i++) {
+      checkInterrupted();
       JSONObject source = sources.getJSONObject(i);
       String id = source.getString("id"), root = StorageBridge.PREFIX + id;
+      String label = source.optString("name", "Библиотека");
+      progress.update("Проверка источника", label, -1);
       if (!id.matches("[a-zA-Z0-9_-]+")) throw new java.io.IOException("Invalid source id");
       File index = new File(cache, id + ".inpx"),
           metaFile = new File(cache, id + ".json"),
@@ -74,6 +88,9 @@ final class IndexCache {
                 || stat.optLong("size") != meta.optLong("size")
                 || stat.optLong("modified") != meta.optLong("modified");
         if (changed) {
+          long total = stat.optLong("size", -1);
+          long nextUpdate = android.os.SystemClock.elapsedRealtime() + 1000;
+          progress.update("Копирование INPX", label, total > 0 ? 0 : -1);
           int fd = ((Number) call(bridge, "open", root + "/" + name)).intValue();
           try (InputStream input =
                   new ParcelFileDescriptor.AutoCloseInputStream(ParcelFileDescriptor.adoptFd(fd));
@@ -82,13 +99,21 @@ final class IndexCache {
             int n;
             long bytes = 0;
             while ((n = input.read(buffer)) != -1) {
+              checkInterrupted();
               bytes += n;
               if (bytes > 1024L * 1024 * 1024)
                 throw new StorageBridge.Failure("EINDEX", "INPX превышает 1 ГиБ");
               output.write(buffer, 0, n);
+              long now = android.os.SystemClock.elapsedRealtime();
+              if (now >= nextUpdate) {
+                int percent = total > 0 ? (int) Math.min(100, 100 * bytes / total) : -1;
+                progress.update("Копирование INPX", label + " · " + bytes / 1048576 + " МиБ", percent);
+                nextUpdate = now + 1000;
+              }
             }
             output.getFD().sync();
           }
+          progress.update("Проверка содержимого INPX", label, -1);
           try (ZipFile zip = new ZipFile(temp)) {
             boolean hasIndex = false;
             long expanded = 0;
@@ -103,13 +128,18 @@ final class IndexCache {
               try (InputStream input = zip.getInputStream(entry)) {
                 int n;
                 while ((n = input.read(buffer)) != -1) {
-                  if (Thread.currentThread().isInterrupted())
-                    throw new java.io.InterruptedIOException();
+                  checkInterrupted();
                   expanded += n;
                   size += n;
                   if (expanded > 8L * 1024 * 1024 * 1024)
                     throw new StorageBridge.Failure("EINDEX", "Распакованный INPX превышает 8 ГиБ");
                   crc.update(buffer, 0, n);
+                  long now = android.os.SystemClock.elapsedRealtime();
+                  if (now >= nextUpdate) {
+                    progress.update("Проверка содержимого INPX",
+                        label + " · " + expanded / 1048576 + " МиБ", -1);
+                    nextUpdate = now + 1000;
+                  }
                 }
               }
               if (size != entry.getSize() || crc.getValue() != entry.getCrc())
@@ -130,6 +160,7 @@ final class IndexCache {
         }
         SourceHealth.record(context, source, "online", "", "");
       } catch (Exception e) {
+        checkInterrupted();
         StorageBridge.Failure failure = StorageBridge.failure(source, e);
         SourceHealth.record(context, source, "unavailable", failure.code, failure.getMessage());
       } finally {
@@ -147,5 +178,9 @@ final class IndexCache {
       throw new java.io.IOException(
           "Нет доступного или сохранённого INPX. Откройте диагностику источников.");
     return libraries;
+  }
+
+  private static void checkInterrupted() throws java.io.InterruptedIOException {
+    if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException();
   }
 }

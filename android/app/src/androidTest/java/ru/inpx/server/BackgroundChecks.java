@@ -4,10 +4,12 @@ import android.app.ActivityManager;
 import android.content.Context;
 import android.os.SystemClock;
 import java.io.File;
+import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import ru.inpx.server.presentation.DashboardState;
 
 /** Fault injection stays in the test APK; the production APK has no crash command. */
 final class BackgroundChecks {
@@ -47,6 +49,47 @@ final class BackgroundChecks {
     }
   }
 
+  static void cancelStartup(Context context, int port) throws Exception {
+    // The lock stalls startup before Node can listen. Suspend its process while
+    // the activity reads progress and records the user's cancellation.
+    try (RandomAccessFile guard = new RandomAccessFile(
+            new File(context.getFilesDir(), "source-indexes.lock"), "rw");
+        java.nio.channels.FileLock lock = guard.getChannel().lock()) {
+      ServerControl.start(context, true, port);
+      ServerControl.requestService(context);
+      await(() -> ServerStartupProgress.read(context, pid(context))
+              .optString("stage").equals("Подключение к источникам"),
+          30000, "Startup status must be available before HTTP starts");
+      int startingPid = pid(context);
+      android.system.Os.kill(startingPid, android.system.OsConstants.SIGSTOP);
+      try {
+        AndroidServerRepository repository = new AndroidServerRepository(context);
+        DashboardState dashboard = repository.load();
+        if (dashboard.phase != DashboardState.Phase.STARTING
+            || !dashboard.detail.contains("Подключение к источникам"))
+          throw new AssertionError("Dashboard lost progress while the server was suspended");
+        repository.stop();
+      } finally {
+        android.system.Os.kill(startingPid, android.system.OsConstants.SIGCONT);
+      }
+      await(() -> pid(context) == 0, 25000, "A blocked startup must be cancellable after resuming");
+      if (ServerControl.read(context).optBoolean("requested"))
+        throw new AssertionError("Cancelled startup will restart");
+    }
+  }
+
+  static void restartAfterCancellation(Context context, int port) throws Exception {
+    try {
+      cancelStartup(context, port);
+      ServerControl.start(context, true, port);
+      ServerControl.requestService(context);
+      await(() -> ready(port), 60000, "Server must become ready after cancellation");
+    } finally {
+      ServerControl.stop(context);
+      await(() -> pid(context) == 0, 25000, "Restarted server must stop");
+    }
+  }
+
   static JSONObject run(Context context) throws Exception {
     JSONObject before = ServerControl.read(context), report = new JSONObject();
     JSONArray checks = new JSONArray();
@@ -57,6 +100,8 @@ final class BackgroundChecks {
       await(() -> pid(context) == 0, 15000, "Previous server must stop");
       File data = new File(context.getFilesDir(), "data");
       data.mkdirs();
+      cancelStartup(context, port);
+      checks.put("Startup can be cancelled while source preparation is blocked");
       File converted = new File(data, "converter-checks.json");
       converted.delete();
       Io.write(new File(data, "converter-checks.request"), "test");

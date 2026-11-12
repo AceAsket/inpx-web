@@ -24,6 +24,7 @@ public final class MainActivity extends Activity
   private DialogUi ui;
   private SourceDialogs sources;
   private ConnectionDialogs connections;
+  private ConnectionDialogs journalDialogs;
   private SettingsDialogs settings;
   private String layout = "", nextFocus = "primary";
   private boolean tv;
@@ -112,6 +113,7 @@ public final class MainActivity extends Activity
       nextFocus = null;
       render(target);
     } else dashboard.update(state);
+    if (journalDialogs != null) journalDialogs.updateJournal();
     if (sources != null) sources.updateDiagnostics();
     if (!next.memory.exhausted || next.phase == DashboardState.Phase.STARTING)
       memoryWarningShown = false;
@@ -124,6 +126,10 @@ public final class MainActivity extends Activity
 
   @Override
   public void toggle() {
+    if (state.phase == DashboardState.Phase.STARTING) {
+      presenter.stop();
+      return;
+    }
     if (state.busy()) {
       ui.toast(state.detail);
       return;
@@ -232,6 +238,7 @@ public final class MainActivity extends Activity
 
   @Override
   public void journal() {
+    journalDialogs = connections;
     connections.journal();
   }
 

@@ -35,6 +35,7 @@ public final class DashboardPresenter {
   private final Runnable poll = this::refresh;
   private DashboardState state = DashboardState.initial();
   private boolean active, closed, reading, commandPending, checkingSources;
+  private boolean stopQueued;
   private long revision;
   private String lastReadError = "";
 
@@ -145,6 +146,11 @@ public final class DashboardPresenter {
               () -> {
                 commandPending = false;
                 if (closed) return;
+                if (stopQueued) {
+                  stopQueued = false;
+                  stopServer();
+                  return;
+                }
                 if (error == null) {
                   if (success != null) success.run();
                   publish(result);
@@ -175,7 +181,16 @@ public final class DashboardPresenter {
   }
 
   public void stop() {
-    if (!state.online()) return;
+    if (!state.online() && state.phase != DashboardState.Phase.STARTING) return;
+    if (commandPending) {
+      stopQueued = true;
+      publish(state.withPhase(DashboardState.Phase.STOPPING, "Завершаем работу сервера…"));
+      return;
+    }
+    stopServer();
+  }
+
+  private void stopServer() {
     command(
         () -> {
           repository.stop();
