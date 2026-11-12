@@ -5814,6 +5814,18 @@ class Reader {
     capturePagedReflowAnchor() {
         const pageIndex = this.getPagedAnchorPageIndex();
         const page = this.pagedPages[pageIndex] || null;
+        const anchor = {
+            mode: 'paged',
+            pageIndex,
+            spreadMode: this.isDualPagedSpread ? 'dual' : 'single',
+            sectionId: String((page && page.sectionId) || this.currentSectionId || '').trim(),
+        };
+        // A layout change can place the reading position inside a larger page.
+        // Keep that position across reflows until the reader navigates again.
+        const restored = this.reflowPageStartOverride;
+        if (restored && restored.pageIndex === pageIndex)
+            return {...restored, ...anchor};
+
         const sheet = this.getActiveLivePagedSheet();
         const anchorSheet = this.getPagedAnchorSheet(sheet);
         const contentRoot = anchorSheet?.querySelector('.reader-page-layout > .reader-page-content')
@@ -5831,10 +5843,7 @@ class Reader {
             : this.getPagedTextOffsetForSnippet(focusText, pageIndex);
 
         return {
-            mode: 'paged',
-            pageIndex,
-            spreadMode: this.isDualPagedSpread ? 'dual' : 'single',
-            sectionId: String((page && page.sectionId) || this.currentSectionId || '').trim(),
+            ...anchor,
             id: focusId,
             textSnippet: focusText,
             textOffset,
@@ -6186,13 +6195,7 @@ class Reader {
             return false;
 
         if (anchor.mode === 'paged') {
-            let pageIndex = -1;
-            if (pageIndex < 0 && anchor.textSnippet)
-                pageIndex = this.findPagedPageIndexByTextSnippet(anchor.textSnippet, anchor.pageIndex);
-            if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
-                pageIndex = this.findPagedPageIndexByTextOffset(anchor.textOffset);
-            if (pageIndex < 0 && Number(anchor.textOffset) >= 0)
-                pageIndex = this.findPagedPageIndexByPageStartOffset(anchor.textOffset);
+            let pageIndex = this.findPagedPageIndexByReaderTextAnchor(anchor.textSnippet, anchor.textOffset, anchor.pageIndex);
             if (pageIndex < 0 && anchor.id)
                 pageIndex = this.findPagedPageIndexByAnchor(anchor.id);
             if (pageIndex < 0 && anchor.sectionId)
@@ -6252,8 +6255,10 @@ class Reader {
     }
 
     setReflowPageStartOverride(pageIndex = -1, anchor = null) {
-        const textSnippet = String((anchor && anchor.textSnippet) || '').trim();
-        if (!this.isPagedMode || !textSnippet || textSnippet.startsWith('image:') || Number(pageIndex) < 0) {
+        const textSnippet = String(anchor?.textSnippet || '').trim();
+        const textOffset = Number(anchor?.textOffset ?? -1);
+        const id = String(anchor?.id || '').trim();
+        if (!this.isPagedMode || Number(pageIndex) < 0 || (!textSnippet && !(textOffset >= 0) && !id)) {
             this.reflowPageStartOverride = null;
             return;
         }
@@ -6261,6 +6266,8 @@ class Reader {
         this.reflowPageStartOverride = {
             pageIndex: Math.max(0, Math.min(this.totalPagedLogicalPages - 1, Math.round(Number(pageIndex || 0) || 0))),
             textSnippet,
+            textOffset,
+            id,
         };
     }
 
@@ -9232,6 +9239,8 @@ class Reader {
         this.restorePending = false;
         this.restoreFromSavedProgress = false;
         this.pendingReflowAnchor = null;
+        this.stableReaderReflowAnchor = null;
+        this.reflowPageStartOverride = null;
         this.controlsOpen = false;
         this.contentsDialogOpen = false;
         this.contentsPanelView = 'contents';
@@ -10112,20 +10121,25 @@ class Reader {
             return -1;
 
         let bestIndex = -1;
+        let bestMatchLength = 0;
         let bestDistance = Infinity;
         for (let index = 0; index < this.pagedPages.length; index += 1) {
             const page = this.pagedPages[index] || {};
             const pageText = this.getHtmlReaderSearchText(page.html || '');
             if (!pageText)
                 continue;
-            if (!needles.some((needle) => pageText.includes(needle)))
+            const matchLength = needles.find(needle => pageText.includes(needle))?.length || 0;
+            if (!matchLength)
                 continue;
 
             const distance = (preferredIndex >= 0 ? Math.abs(index - preferredIndex) : 0);
-            if (bestIndex < 0 || distance < bestDistance) {
+            // Page numbers can shift after resizing. A nearer page with only
+            // a short prefix must not win over a more specific match.
+            if (matchLength > bestMatchLength || (matchLength === bestMatchLength && distance < bestDistance)) {
                 bestIndex = index;
+                bestMatchLength = matchLength;
                 bestDistance = distance;
-                if (!distance)
+                if (!distance && matchLength === needles[0].length)
                     break;
             }
         }

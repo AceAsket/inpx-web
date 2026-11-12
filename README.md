@@ -12,11 +12,11 @@ inpx-web-7z
 
 > **Читать и слушать на Android:** [скачайте INPX Reader](https://github.com/AceAsket/inpx-reader-releases/releases/latest) — наше клиентское приложение для подключения к вашей библиотеке INPX Web.
 
-Стабильная версия — **1.8.1**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.1`. Для разработки используется ветка `develop`.
+Стабильная версия **1.8.2** доступна в Docker и в виде готовых сборок для Linux, Windows и macOS. Для сборки из исходников используйте тег `v1.8.2`. Разработка идёт в ветке `develop`. [Скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) · [История изменений](./CHANGELOG.md)
 
-Тестовая версия **1.8.2-rc.24** исправляет обрезание строк при горизонтальном листании и включает исправления RC23 для переноса INPX-библиотеки. Docker `aceasket/inpx-web-7z:1.8.2-rc.24`. Стабильный `latest` соответствует версии 1.8.1. [Релиз и загрузки](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2-rc.24) · [Изменения RC24](./docs/rc24-release-notes.md)
+В 1.8.2 добавлены OPDS 2.0, лёгкий интерфейс `/ebook` и синхронизация прогресса с KOReader. Читалка сохраняет место при выходе из полноэкранного режима, в том числе после перелистывания. [Подключение KOReader](./docs/koreader-sync.md)
 
-В RC20 исправлено также гостевое скачивание `/ebook` для Kindle: сначала
+В гостевом режиме `/ebook` для Kindle сначала выберите
 «Применить формат», затем «Скачать MOBI» по ссылке с расширением файла.
 Команды Telegram проверены без одноразовой привязки, по личному Chat ID.
 
@@ -27,7 +27,7 @@ inpx-web-7z
 <a id="ключевые-отличия" />
 
 Перед обновлением и особенно откатом прочитайте [порядок резервного копирования и восстановления](./docs/upgrade-rollback.md).
-Версия 1.8.1 сохраняет снимок данных перед миграцией. Для отката на 1.8.0 или ранние RC восстановите совместимый снимок, чтобы не потерять новые фильтры полок и пользовательские файлы читалки.
+Перед миграцией 1.8.2 сохраняет снимок данных. Для отката на предыдущую версию восстановите совместимый снимок, чтобы вернуть настройки и пользовательские файлы читалки.
 
 ## Что это за форк
 
@@ -145,7 +145,7 @@ inpx-web-7z
 
 ## Сборка Docker-контейнера
 
-Для этого форка основной способ запуска рассчитан на Docker. Готовый образ публикуется в [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z). Тег `aceasket/inpx-web-7z:1.8.1` фиксирует текущий стабильный релиз; `latest` обновляется при выпуске следующей стабильной версии. Опубликованный образ 1.8.1 рассчитан на `linux/amd64`; для Linux ARM64 есть отдельный standalone-архив в GitHub Releases.
+Основной способ запуска рассчитан на Docker. Тег `aceasket/inpx-web-7z:1.8.2` фиксирует эту версию, а `latest` указывает на текущий стабильный выпуск. Образ рассчитан на `linux/amd64`. Для Linux ARM64 есть отдельный standalone-архив в GitHub Releases. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
 
 Готовые YAML-примеры:
 
@@ -158,7 +158,7 @@ inpx-web-7z
 Для самостоятельной сборки сначала получите исходники релиза:
 
 ```sh
-git clone --branch v1.8.1 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.8.2 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 ```
 
@@ -239,7 +239,7 @@ docker run -d \
   -v /path/on/host/fb2cng:/config/fb2cng:ro \
   -v /path/on/host/library:/library:ro \
   -v /path/on/host/data:/usr/local/bin/.inpx-web \
-  aceasket/inpx-web-7z:1.8.1
+  aceasket/inpx-web-7z:1.8.2
 ```
 
 При первом обращении к конвертации приложение проверяет, что файл существует, читается и принимается командой `fbc --config PATH dumpconfig`. Ошибочный путь или YAML возвращает явную ошибку вместо незаметного запуска с настройками по умолчанию. Кэш учитывает логический формат (`epub` и `epub3` раздельно), содержимое и расположение YAML, версию встроенного fb2cng и настроенные пути конвертеров.
@@ -303,7 +303,7 @@ docker run -d \
 Для обновления сначала скачайте новый образ, затем пересоздайте контейнер. Повторите свою исходную команду `docker run`, заменив только тег образа: сохраните все переменные окружения, порты и тома, включая `INPX_LIBRARY_SOURCES`, настройки авторизации и отправки книг. Ниже пример для одной библиотеки; замените пути на свои. Команды соединены через `&&`, чтобы не удалять работающий контейнер при ошибке скачивания образа.
 
 ```sh
-docker pull aceasket/inpx-web-7z:1.8.1 &&
+docker pull aceasket/inpx-web-7z:1.8.2 &&
 docker rm -f inpx-web &&
 docker run -d \
   --name=inpx-web \
@@ -316,7 +316,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:1.8.1
+  aceasket/inpx-web-7z:1.8.2
 ```
 
 При локальной сборке используйте имя своего образа. Если сервис запущен через Compose, сохраните настройки в YAML, укажите нужный тег в `image` и выполните `docker compose pull && docker compose up -d`.
@@ -337,7 +337,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:1.8.1
+  aceasket/inpx-web-7z:1.8.2
 ```
 
 Важно:
@@ -672,7 +672,7 @@ docker run -d \
   -e EMAIL_FROM=user@example.com \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:1.8.1
+  aceasket/inpx-web-7z:1.8.2
 ```
 
 Переменные для Telegram:
@@ -856,7 +856,7 @@ http://<ваш_хост>:12380/opds/v2?user=<profileId>
 
 Начиная с **1.7.9-rc.1**, сервер поддерживает нативный [Custom metadata provider Audiobookshelf](https://audiobookshelf.org/docs/documentation/community/community-providers/). Он позволяет подбирать метаданные для аудиокниги по электронным книгам в INPX-библиотеке, включая самостоятельно озвученные книги.
 
-Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:1.8.1` и добавьте к своей команде запуска:
+Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:1.8.2` и добавьте к своей команде запуска:
 
 ```sh
 -e INPX_ABS_ENABLED=true \
@@ -1033,13 +1033,13 @@ http://127.0.0.1:12380/#/reader-lab?sample=night-watch.fb2&debugReader=1&debugRe
 Сборка на машине с архитектурой целевой платформы предпочтительна; CI использует отдельный ARM64 runner. Для кросс-сборки linux-arm64 на x64 потребуется [QEMU](https://wiki.debian.org/QemuUserEmulation). Linux-бинарники используют glibc; для Alpine используйте Docker-образ на Debian.
 
 ```sh
-git clone --branch v1.8.1 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.8.2 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 npm ci
 npm run release:linux
 ```
 
-Это пример сборки Linux x64. Для упаковки стабильной 1.8.1 нужна утилита `zip`; начиная с RC20 используется общий потоковый ZIP-упаковщик Node.js без внешнего `zip`. Для Linux ARM64 используйте `npm run build:linux-arm64 && node build/release.js linux-arm64`, для Windows — `npm run release:win`, для macOS Intel — `npm run release:macos`. Команда `npm run release` собирает все четыре платформы. Результат сборки будет доступен в каталоге `dist/release`.
+Это пример сборки Linux x64. Архивы упаковывает Node.js. Для Linux ARM64 используйте `npm run release:arm64`, для Windows — `npm run release:win`, для macOS Intel — `npm run release:macos`. Команда `npm run release` собирает все четыре платформы. Архивы появятся в каталоге `dist/release`.
 
 Начиная с RC20 Unix-программа и конвертеры записываются в ZIP с
 правами `755`. Actions проверяет права внутри ZIP, распаковывает его системной
@@ -1108,7 +1108,7 @@ sudo apt install -y nodejs
 node --version
 
 # подготовка
-git clone --branch v1.8.1 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.8.2 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 npm ci
 npm run build:client
@@ -1148,13 +1148,19 @@ Options:
 ### Конфигурация
 
 По умолчанию, при первом запуске в рабочей директории будет создан конфигурационный файл `config.json`.
-При необходимости, можно настроить нужный параметр в этом файле вручную. Параметры командной
-строки имеют больший приоритет, чем настройки из `config.json`.
+Если `--config` пропущен, `--data-dir` (или `--app-dir`) задаёт каталог для `config.json`.
+Заполненный `dataDir` в загруженном конфиге задаёт каталог рабочих данных. Относительные
+пути `dataDir`, `tempDir` и `logDir` отсчитываются от каталога, из которого запущена программа.
+Значение `"dataDir": "."` при обновлении заменяется стандартным каталогом данных. Если прежние
+рабочие файлы есть в каталоге запуска, сервер копирует их в отдельную подпапку стандартного
+каталога. Например, при запуске без `--data-dir` это `.inpx-web/migrated-data-…`. После копирования
+сервер записывает новый путь в `config.json`. Прежние файлы остаются на месте для отката.
+Фактические пути `configFile`, `dataDir`, `tempDir` и `logDir` видны в логе при запуске.
 
 ```js
 {
     // рабочая директория приложения, аналог параметра командной строки --data-dir (или --app-dir)
-    // пустая строка: использовать значение по умолчанию - <execDir>/.inpx-web
+    // пустая строка: использовать --data-dir (или --app-dir), по умолчанию <execDir>/.inpx-web
     // где execDir - директория файла приложения
     "dataDir": "",
 
@@ -1165,7 +1171,7 @@ Options:
     "tempDir": "",
 
     // директория для хранения логов
-    // пустая строка: использовать значение по умолчанию - <dataDir>/logs
+    // пустая строка: использовать значение по умолчанию - <dataDir>/log
     "logDir": "",
 
     // директория библиотеки (с zip- или 7z-архивами), аналог параметра командной строки --lib-dir

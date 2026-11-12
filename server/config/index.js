@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs-extra');
 const os = require('os');
 const SecretStore = require('../core/SecretStore');
+const {migrateWorkingDirectory} = require('../core/DataDirectoryMigration');
 const {withFileTransaction, writeFileAtomic} = require('../core/FilePersistence');
 
 const branchFilename = __dirname + '/application_env';
@@ -229,21 +230,24 @@ class ConfigManager {
             if (!this.inited)
                 throw new Error('not inited');
 
-            let recoveryDir = this._config.dataDir;
-            if (await fs.pathExists(this._config.configFile))
-                recoveryDir = (await fs.readJson(this._config.configFile)).dataDir || recoveryDir;
+            const {configFile, dataDir: defaultDataDir} = this._config;
+            let recoveryDir = defaultDataDir;
+            if (await fs.pathExists(configFile))
+                recoveryDir = (await fs.readJson(configFile)).dataDir || recoveryDir;
             await require('../core/BackupTransaction').recover({...this._config, dataDir: recoveryDir});
-            await require('../core/UpgradeSnapshot').prepare({...this._config, dataDir: recoveryDir});
 
-            if (await fs.pathExists(this._config.configFile)) {
-                const data = JSON.parse(await fs.readFile(this._config.configFile, 'utf8'));
-                const rawConfig = _.pick(data, propsToSave);
+            const rawConfig = await fs.pathExists(configFile) ? _.pick(await fs.readJson(configFile), propsToSave) : null;
+            const migrated = rawConfig && await migrateWorkingDirectory(this._config, rawConfig);
+            const dataDir = rawConfig?.dataDir || defaultDataDir;
+            await require('../core/UpgradeSnapshot').prepare({...this._config, dataDir});
+
+            if (rawConfig) {
                 // Resolve the same data directory for decrypting and saving secrets.
-                rawConfig.dataDir = rawConfig.dataDir || this._config.dataDir;
+                rawConfig.dataDir = dataDir;
                 const secretStore = new SecretStore(rawConfig);
                 const secretResult = await secretStore.unprotectConfig(rawConfig);
                 const config = secretResult.config;
-                let needsSave = false;
+                let needsSave = migrated;
 
                 if (!config.latestReleaseLink || config.latestReleaseLink === 'https://github.com/bookpauk/inpx-web/releases/latest') {
                     config.latestReleaseLink = 'https://github.com/AceAsket/inpx-web/releases/latest';

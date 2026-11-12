@@ -239,6 +239,7 @@ async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
     let parsed = 0;
     Object.assign(reader, {isStandaloneMode: false, $route: {path: '/reader'}, readerLoadJobId: 0, pagedBuildJobId: 0, $refs: {},
         pagedLayoutCache: new Map([['old-document', {type: 'partial'}]]), bottomClipCompensationByGeometry: new Map(), bottomClipCalibrationAttemptsByGeometry: new Map(),
+        readerPageFootnotes: new Map([['old-note', 'Note from the previous book']]),
         resetBottomClipCalibrationSample() {}, cancelCompactChromeBuildPendingClear() {}, clearCompactChromeStatusHold() {},
         afterLayoutRefreshPaint: async() => {}, applyStoredReaderPreferences: async() => {}, uiText: {}, applyReaderDocumentSource: async() => {parsed++;},
         $root: {api: {getReaderBook: async uid => {assert.strictEqual(uid, 'same-uid'); started(); return gate;}, getReaderState: async() => ({})}},
@@ -246,6 +247,7 @@ async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
     const pending = reader.loadReader();
     await requested;
     assert.strictEqual(reader.pagedLayoutCache.size, 0, 'A new document clears pagination checkpoints before fetching its text');
+    assert.strictEqual(reader.readerPageFootnotes.size, 0, 'A new document clears footnotes from the previous book');
     reader.readerActive = false; reader.cancelReaderLoad();
     finish({bookInfo: {book: {}, fb2: 'obsolete large document'}});
     await pending;
@@ -253,6 +255,23 @@ async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
     assert.strictEqual(reader.loading, false);
 }
 
+async function testReaderReflowPrefersTheMostSpecificTextMatch() {
+    const source = await fs.readFile(path.join(__dirname, '../client/components/Reader/Reader.vue'), 'utf8');
+    const method = source.slice(source.indexOf('    findPagedPageIndexByTextSnippet('), source.indexOf('    findPagedPageIndexByReaderTextAnchor('));
+    const Reader = new Function(`return class {${method}}`)();
+    const reader = new Reader();
+    const position = 'После длинной паузы собеседник повторил свой вопрос и развернул старую карту.';
+    reader.pagedPages = [
+        {html: 'После длинной паузы собеседник встал и вышел из комнаты.'},
+        {html: 'Он посмотрел в окно.'},
+        {html: position},
+    ];
+    reader.normalizeReaderSearchText = value => value.trim();
+    reader.getHtmlReaderSearchText = value => value.toLowerCase();
+    assert.strictEqual(reader.findPagedPageIndexByTextSnippet(position, 0), 2, 'A short repeated phrase must not send the reader to an earlier scene');
+}
+
 module.exports = [testReaderColdDocumentDoesNotWaitForReviewIndex, testCatalogOpensReaderBeforeColdFilePreparation,
     testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments,
-    testBookCardSkipsIllustrationsAndPreparesBookInBackground, testBackgroundLibraryWorkWaitsForUser, testBookGalleryReturnsFirstImagesWithoutCover];
+    testBookCardSkipsIllustrationsAndPreparesBookInBackground, testBackgroundLibraryWorkWaitsForUser,
+    testBookGalleryReturnsFirstImagesWithoutCover, testReaderReflowPrefersTheMostSpecificTextMatch];

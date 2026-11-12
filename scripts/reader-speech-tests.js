@@ -224,13 +224,13 @@ async function testRealService(url) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-silero-real-'));
     const speech = new ReaderSpeech({dataDir: directory, ttsEnabled: true, ttsUrl: url, ttsTimeoutMs: 600000});
     const start = Date.now();
-    const text = 'Здравствуйте! Это проверка озвучки книги. Silero читает текст на русском языке. Можно слушать и продолжать с сохранённого места.';
+    const text = '— Здравствуйте! Это проверка озвучки книги. Silero читает текст на русском языке — можно *слушать*^ и продолжать с «сохранённого места».';
     const job = await speech.prepare('test', 'real-silero', {fb2: fb2(text)});
     const ready = await settled(speech, 'test', job.id, 600000);
     assert.equal(ready.state, 'ready', ready.error);
     const file = path.join(speech.directory, `${job.id}.mp3`);
     assert.ok((await fs.stat(file)).size > 10000, 'Real synthesized audio must be nonempty');
-    const sampleText = 'Гермиона открыла книгу. Сегодня хорошая погода.\n\nСледующая глава.';
+    const sampleText = '— Гермиона открыла книгу. На обложке было *написано* «Bonjour, 你好»^.\n\nСледующая глава. На горе стоял за́мок\u001b.';
     const samples = [];
     for (const options of [
         {sentencePauseMs: 0, paragraphPauseMs: 0, chapterPauseMs: 0},

@@ -11,7 +11,7 @@ import tempfile
 from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 import server
-from server import normalize_numbers, split_text
+from server import normalize_numbers, normalize_text, split_text
 from speech_options import normalize_options, dictionary_replacer, tuned_chunks, validate_segments, trailing_pause
 from accentuation import StressProcessor, context_blocks
 
@@ -72,6 +72,8 @@ class TextPreparationTests(unittest.TestCase):
         original = (server.MODEL, server.STRESS, server.SPEED, server.SPEED_MEASURED)
         calls = []
         class Tts:
+            symbols = "-\u2013"
+
             def apply_tts(self, **kwargs):
                 calls.append(kwargs)
                 return server.torch.zeros(10)
@@ -79,7 +81,7 @@ class TextPreparationTests(unittest.TestCase):
             def to(self, **kwargs):
                 pass
             def __call__(self, text, **kwargs):
-                return text.replace("замок", "з+амок")
+                return text.replace("замок", "з+амок").replace(" - ", " \u2014 ")
         try:
             server.MODEL = Tts()
             server.STRESS = StressProcessor(True, lambda: Accentor())
@@ -87,10 +89,13 @@ class TextPreparationTests(unittest.TestCase):
                 encoder.return_value.wait.return_value = 0
                 encoder.return_value.poll.return_value = 0
                 options = normalize_options(dict(dictionary="Гермиона = Герми+она", chapterPauseMs=1000))
-                server.synthesize("Гермиона увидела замок.", "xenia", directory, options=options,
-                                  segments=[dict(text="Гермиона увидела замок.", chapterEnd=True)])
+                text = "Гермиона увидела *замок* - и улыбнулась^."
+                server.synthesize(text, "xenia", directory, options=options,
+                                  segments=[dict(text=text, chapterEnd=True)])
                 self.assertIn("Герми+она", calls[0]["ssml_text"])
-                self.assertIn("з+амок", calls[0]["ssml_text"])
+                self.assertIn("з+амок \u2013 и улыбнулась", calls[0]["ssml_text"])
+                self.assertNotIn("^", calls[0]["ssml_text"])
+                self.assertNotIn("*", calls[0]["ssml_text"])
                 for key in ("put_accent", "put_yo", "put_stress_homo", "put_yo_homo", "stress_single_vowel"):
                     self.assertIs(calls[0][key], False)
                 encoder.return_value.stdin.write.assert_any_call(bytes(server.SAMPLE_RATE * 2))
@@ -143,6 +148,17 @@ class TextPreparationTests(unittest.TestCase):
     def test_unsupported_foreign_paragraphs(self):
         self.assertEqual(list(split_text("Hello\n\nРусский текст.")), ["Русский текст."])
         self.assertEqual(list(split_text("Ёё")), ["Ёё"])
+
+    def test_book_symbols_and_mixed_alphabets_in_ssml(self):
+        text = "Е\u0308лка\u200bи за\u0301мок\x1b. Bonjour, hello \u6f22."
+        self.assertEqual(list(split_text(text)), ["Ёлка и з+амок. Bonjour, hello \u6f22."])
+        options = normalize_options(dict(dictionary="Bonjour = бонж+ур", pitch="low"))
+        ssml, _ = next(tuned_chunks([dict(text=text)], options, normalize_text))
+        spoken = "".join(ET.fromstring(ssml).itertext())
+        self.assertIn("Ёлка и з+амок.", spoken)
+        self.assertIn("бонж+ур", spoken)
+        self.assertNotIn("hello", spoken)
+        self.assertNotIn("\u6f22", spoken)
 
     def test_long_paragraphs_preserve_text_and_bound_calls(self):
         text = "Первое предложение. Второе предложение! " * 50

@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,6 +34,8 @@ JOBS = {}
 CANCELLATIONS = {}
 SPEED = max(1.0, float(os.environ.get("SILERO_ESTIMATED_CHARS_PER_SECOND", "15")))
 SPEED_MEASURED = False
+INVALID_XML_CHARACTERS = re.compile(r"[\x00-\x08\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+COMBINING_STRESS = re.compile(r"\+?([аеёиоуыэюя])\u0301+", re.I)
 
 
 def update_job(request_id, **values):
@@ -79,10 +82,16 @@ def normalize_numbers(text):
     return re.sub(r"\s+", " ", re.sub(r"\d+", words, text)).strip()
 
 
+def normalize_text(text):
+    text = INVALID_XML_CHARACTERS.sub("", text)
+    text = unicodedata.normalize("NFC", text).replace("\u200b", " ")
+    return normalize_numbers(COMBINING_STRESS.sub(r"+\1", text))
+
+
 def split_text(text, limit=700, accentuate=None):
     """Bound synthesis calls, preserving paragraph/sentence boundaries where possible."""
     for paragraph in re.split(r"\n\s*\n", text):
-        paragraph = normalize_numbers(re.sub(r"\s+", " ", paragraph).strip())
+        paragraph = normalize_text(paragraph)
         if accentuate is not None:
             paragraph = accentuate(paragraph)
         while paragraph:
@@ -133,10 +142,14 @@ def synthesize(text, speaker, directory, request_id="", options=None, segments=N
     update_job(request_id, state="loading", progress=0, remainingSeconds=None)
     model = load_model()
     check_cancelled(request_id)
+    # Keep the model's pause for a long dash when its alphabet supports it.
+    long_dash = "\u2013" if "\u2013" in getattr(model, "symbols", ()) else "-"
+    # Asterisks activate Silero's focus pass, which bypasses its symbol filtering.
+    symbol_translation = str.maketrans("\u2010\u2011\u2012\u2013\u2014\u2015", "--" + long_dash * 4, "^*")
     custom = options is not None
     started = time.monotonic()
     accentuate = STRESS if STRESS.enabled else None
-    source = tuned_chunks(segments, options, normalize_numbers, accentuate=accentuate) if custom else (
+    source = tuned_chunks(segments, options, normalize_text, accentuate=accentuate) if custom else (
         (chunk, len(chunk)) for chunk in split_text(text, accentuate=accentuate))
     chunks, total = [], 0
     preparation_share = 0.1 if STRESS.enabled else 0
@@ -170,6 +183,7 @@ def synthesize(text, speaker, directory, request_id="", options=None, segments=N
                 if generated_characters > MAX_TEXT:
                     raise ValueError("Normalized text exceeds synthesis limit")
                 chunk, silence_ms = trailing_pause(chunk) if custom else (chunk, 0)
+                chunk = chunk.translate(symbol_translation)
                 audio = model.apply_tts(**({"ssml_text": chunk} if custom else {"text": chunk}),
                                         speaker=speaker, sample_rate=SAMPLE_RATE, put_accent=not STRESS.enabled, put_yo=not STRESS.enabled,
                                         **({"put_stress_homo": False, "put_yo_homo": False, "stress_single_vowel": False} if STRESS.enabled else {}))
