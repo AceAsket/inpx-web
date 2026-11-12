@@ -3,6 +3,10 @@ import re
 from xml.sax.saxutils import escape
 
 
+# The Russian model skips other alphabets in plain text but rejects them in SSML.
+FOREIGN_LETTERS = re.compile(r"(?![А-Яа-яЁё])[^\W\d_]")
+
+
 def normalize_options(value=None):
     if value is None:
         value = {}
@@ -74,15 +78,16 @@ def validate_segments(segments, text):
     return segments
 
 
-def tuned_chunks(segments, options, normalize_numbers, limit=700, accentuate=None):
+def tuned_chunks(segments, options, normalize_text, limit=700, accentuate=None):
     replace = dictionary_replacer(options["dictionary"])
     processed = 0
     for segment in segments:
         paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n", segment["text"]) if paragraph.strip()]
         for index, original in enumerate(paragraphs):
-            paragraph = normalize_numbers(replace(original))
+            paragraph = normalize_text(replace(original))
             if accentuate is not None:
                 paragraph = accentuate(paragraph)
+            paragraph = FOREIGN_LETTERS.sub("", paragraph)
             if not re.search(r"[А-Яа-яЁё]", paragraph):
                 continue
             last = index == len(paragraphs) - 1
