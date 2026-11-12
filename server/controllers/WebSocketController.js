@@ -519,6 +519,7 @@ class WebSocketController {
         config.clientApi = clientProtocol.info;
         config.libraryProtocol = require('../core/LibraryExchange').protocol;
         config.ttsEnabled = Boolean(this.config.ttsEnabled && this.config.ttsUrl);
+        config.ebookReaderEnabled = !this.webWorker.remoteLib;
         config.profileLoginRequired = this.config.allowAnonymousAccess === false;
         config.profileBoundId = req.profileBoundId || '';
         config.librarySources = (Array.isArray(this.config.librarySources) ? this.config.librarySources : []).map(source => ({

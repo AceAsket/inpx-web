@@ -51,6 +51,7 @@
                 <dl v-if="genreLabels.length" class="book-actions-details book-actions-genres"><div><dt>Жанр</dt><dd>{{ genreLabels.join(', ') }}</dd></div></dl>
                 <a v-if="bookAvailable" :href="getDirectBookDownloadHref(book, downloadFormat)" class="book-actions-download" :aria-label="'Скачать ' + downloadLabel"><span>Скачать книгу</span><span>{{ downloadLabel }}</span></a>
                 <button v-if="!embedded && bookAvailable" type="button" class="book-actions-full-description" @click="$emit('details', book); dialogVisible = false">Полное описание</button>
+                <a v-if="lightReaderUrl" :href="lightReaderUrl" class="book-actions-reader">Лёгкая читалка</a>
                 <RouterLink v-if="book.series" class="book-actions-series" :to="seriesTarget" @click="dialogVisible = false">Серия: {{ book.series }}<span v-if="book.serno"> · Том {{ book.serno }}</span></RouterLink>
                 <dl v-if="keywordLabels.length" class="book-actions-details book-actions-keywords"><div><dt>Ключевые слова</dt><dd>{{ keywordLabels.join(', ') }}</dd></div></dl>
                 <p v-if="sizeLabel || dateLabel" class="book-actions-file"><span v-if="sizeLabel">Файл · {{ sizeLabel }}</span><span v-if="dateLabel">Добавлена {{ dateLabel }}</span></p>
@@ -81,7 +82,7 @@ import LoadingMessage from '../Search/LoadingMessage/LoadingMessage.vue';
 import DialogSurface from '../share/DialogSurface.vue';
 import LoadingState from '../share/LoadingState.vue';
 import {QMenu, QList, QItem, QItemSection} from 'quasar';
-import {readable, progress} from './libraryModel';
+import {readable, ebookReaderUrl, progress} from './libraryModel';
 import {catalogTarget, effectiveCatalogScope} from './catalogSearchModel';
 const bookFormats = require('../../../shared/BookFormats');
 const previewMetadata = require('../../../shared/BookPreview');
@@ -188,6 +189,7 @@ class BookActionsDialog extends BaseList {
     get percent() {return progress(this.book);}
     get markedRead() {return this.readOverride ?? (this.book.state === 'read' || this.book._readingListRead === true || this.book.read === true || this.percent >= .999);}
     get canRead() {return readable(this.book, this.config) || (!this.book.unavailable && !!String(this.config.bookReadLink || '').trim());}
+    get lightReaderUrl() {return ebookReaderUrl(this.book, this.config);}
     get readLabel() {return readable(this.book, this.config) ? 'Читать' : 'Открыть в читалке';}
     get downloadFormats() {
         return [{label: `${this.sourceFormat} · Оригинал`, value: 'raw'}, ...bookFormats.available(this.book.ext, this.config)
@@ -299,6 +301,7 @@ h1.book-actions-title {margin-bottom: 20px;}
 .book-actions-download {width: 100%; justify-content: center; min-height: 46px; padding: 11px 16px; background: var(--app-primary, var(--q-primary, #00796f)); color: var(--library-on-primary, #fff); border: 0; border-radius: 13px; font-size: 15px; font-weight: 550;}
 .book-actions-download span:last-child {font-size: 12px; font-weight: 500; opacity: .85;}
 .book-actions-full-description {width: 100%; min-height: 44px; margin-top: 14px; padding: 10px 16px; border: 1px solid var(--app-muted); border-radius: 13px; color: var(--app-link); background: transparent; font: inherit; font-size: 14px; cursor: pointer;}
+.book-actions-reader {display: inline-block; padding: 8px 0; color: var(--app-link); font-size: 14px;}
 .book-actions-series {font-size: 14px; margin-top: 26px; margin-bottom: 24px; text-decoration: none;}
 .book-actions-series:hover {text-decoration: underline;}
 .book-actions-keywords dt {display: block; color: var(--app-muted); font-size: 12px; margin-bottom: 5px;}

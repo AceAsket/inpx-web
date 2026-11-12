@@ -24,6 +24,7 @@
             <div v-if="book.series" class="q-mt-xs info-series-link" @click.stop.prevent="emitNavigate('series', book.series)">
                 {{ seriesLabel }}: {{ book.series }}<span v-if="book.serno"> #{{ book.serno }}</span>
             </div>
+            <a v-if="lightReaderUrl" class="q-mt-xs info-link" :href="lightReaderUrl">Лёгкая читалка</a>
                 </div>
             </div>
 
@@ -298,6 +299,7 @@ import vueComponent from '../../vueComponent.js';
 
 import DialogSurface from '../../share/DialogSurface.vue';
 import BookCover from '../../Library/BookCover.vue';
+import {ebookReaderUrl} from '../../Library/libraryModel';
 import LoadingState from '../../share/LoadingState.vue';
 import Fb2Parser from '../../../../server/core/fb2/Fb2Parser';
 const {escapeHtml, safeHtml} = require('../../../../shared/safeHtml');
@@ -508,6 +510,8 @@ class BookInfoDialog {
     get config() {
         return this.$store.state.config;
     }
+
+    get lightReaderUrl() {return ebookReaderUrl(this.book, this.config);}
 
     get bookAuthor() {
         if (this.book.author) {

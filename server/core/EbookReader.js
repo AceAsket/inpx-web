@@ -10,22 +10,26 @@ const {coverCacheKey} = require('./BookAssets');
 const formats = require('../../shared/BookFormats');
 
 const limits = Object.freeze({fileBytes:32*1024**2, characters:2*1024**2, pageChars:3000, cacheBytes:16*1024**2});
+const pageSizes = Object.freeze([1000, 1600, limits.pageChars]);
 const tooLarge = () => Object.assign(new Error('Для текстового режима книга слишком велика. Скачайте файл для чтения на устройстве.'), {status:413});
 
-function pages(text, maximum = limits.pageChars) {
-    if(!Number.isInteger(maximum)||maximum<2)throw new Error('Invalid page size');
-    const result = [];
-    for (let start=0; start<text.length;) {
-        let end=Math.min(text.length,start+maximum);
-        if (end<text.length) {
-            const paragraph=text.lastIndexOf('\n',end), space=text.lastIndexOf(' ',end);
-            const boundary=paragraph>start+maximum/2 ? paragraph : space;
-            if(boundary>start+maximum/2)end=boundary+1;
-            if(/[\ud800-\udbff]/.test(text[end-1]))end--;
+function pageOffsets(text, maximum = limits.pageChars) {
+    if (!Number.isInteger(maximum) || maximum < 2) throw new Error('Invalid page size');
+    const offsets = [0];
+    for (let start = 0; start < text.length;) {
+        let end = Math.min(text.length, start + maximum);
+        if (end < text.length) {
+            const middle = start + Math.floor(maximum / 2) + 1;
+            const tail = text.slice(middle, end + 1);
+            const paragraph = tail.lastIndexOf('\n');
+            const boundary = paragraph >= 0 ? paragraph : tail.lastIndexOf(' ');
+            if (boundary >= 0) end = middle + boundary + 1;
+            if (/[\ud800-\udbff]/.test(text[end - 1])) end--;
         }
-        result.push(text.slice(start,end));start=end;
+        offsets.push(end);
+        start = end;
     }
-    return result;
+    return offsets;
 }
 
 async function readText(file, signal) {
@@ -79,7 +83,7 @@ class EbookReader {
         if(!book)throw Object.assign(new Error('Книга не найдена'),{status:404});
         if(!formats.canRead(book.ext,worker.config)||worker.remoteLib)throw Object.assign(new Error('Скачайте книгу для чтения на устройстве.'),{status:415});
         const key=JSON.stringify([generation,coverCacheKey(book)]);
-        const cached=this.cache.get(key);if(cached)return {book,pages:cached};
+        const cached=this.cache.get(key);if(cached)return {book,...cached};
         const controller=new AbortController();this.controllers.add(controller);
         const timer=setTimeout(()=>controller.abort(),30000);timer.unref?.();
         const task=this.budget.run('ebook',key,async()=>{
@@ -93,14 +97,17 @@ class EbookReader {
                 if((await fs.stat(file)).size>limits.fileBytes)throw tooLarge();
                 const text=await readText(file,controller.signal);guard();
                 if(!text)throw Object.assign(new Error('Текст книги не найден. Скачайте оригинал.'),{status:415});
-                const result=pages(text);this.cache.set(key,result);return result;
+                const offsets = Object.fromEntries(pageSizes.map(size => [size, pageOffsets(text, size)]));
+                const result = {text, offsets};
+                this.cache.set(key, result);
+                return result;
             }catch(error){
                 if(error.code==='INPX_RESOURCE_OUTPUT_LIMIT')throw tooLarge();
                 if(controller.signal.aborted)throw Object.assign(new Error('Подготовка текста прервана. Скачайте оригинал для чтения на устройстве.'),{status:503});
                 throw error;
             }finally {if(temporary&&file)await fs.remove(file);}
         },()=>!controller.signal.aborted).finally(()=>{clearTimeout(timer);this.controllers.delete(controller);this.pending.delete(task);});
-        this.pending.add(task);const result=await task;guard();return {book,pages:result};
+        this.pending.add(task);const result=await task;guard();return {book,...result};
     }
 }
-module.exports={EbookReader,readText,pages,limits};
+module.exports={EbookReader,readText,pageOffsets,pageSizes,limits};

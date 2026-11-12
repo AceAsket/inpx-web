@@ -80,6 +80,8 @@ async function fixture(directory) {
         const scoped=()=>{const p=new URLSearchParams(page.url().split('?')[1]);assert.equal(p.get('lang'),'ru');assert.equal(p.get('sourceId'),'main');return p;};
         await open('Книга превью');
         await annotation.getByText(/Первая строка аннотации/).waitFor();assert((await annotation.innerText()).includes('Вторая строка и детали.'));
+        const lightReader = new URL(await modal.getByRole('link',{name:'Лёгкая читалка',exact:true}).getAttribute('href'),base);
+        assert.equal(lightReader.pathname,'/ebook/read');assert(lightReader.searchParams.get('uid'));
         assert.equal(await modal.locator('.book-actions-secondary, .book-actions-card-link').count(),0,'No extra actions below the annotation');
         for(const [name,icon] of [['Отправить книгу','send'],['Полки и статус','shelf'],['Поделиться книгой','share']]) {
             const svg=modal.getByRole('button',{name,exact:true}).locator('svg[data-book-action-icon="'+icon+'"]');

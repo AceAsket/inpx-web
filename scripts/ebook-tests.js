@@ -5,7 +5,7 @@ const path=require('path');
 const express=require('express');
 const {EbookController,parameters}=require('../server/controllers/EbookController');
 const Security=require('../server/core/Security');
-const {EbookReader,readText,pages,limits}=require('../server/core/EbookReader');
+const {EbookReader,readText,pageOffsets,pageSizes,limits}=require('../server/core/EbookReader');
 const shelfData=require('../server/core/EbookShelves');
 
 async function fixture(options,work) {
@@ -66,6 +66,71 @@ async function testEbookBookCardDefersMetadataAndReusesDownloadAndReadPaths(){
         assert.equal((await request('/library/ebook/book?uid=missing')).response.status,404);
     });
 }
+
+async function testEbookShortPagesSaveProgressOnPageTurns(){
+    await fixture({}, async({request, csrf, worker, book, user, sessions}) => {
+        const text = Array.from({length: 70}, (_, i) => `Абзац ${i}. ${'Текст книги с безопасным <тегом>. '.repeat(5)}`).join('\n\n');
+        const offsets = Object.fromEntries(pageSizes.map(size => [size, pageOffsets(text, size)]));
+        worker.ebookReader = {read: async() => ({book, text, offsets})};
+        let writes = 0;
+        worker.updateReaderProgress = async(id, uid, patch) => {
+            assert.equal(id, user.id);
+            assert.equal(uid, book._uid);
+            if (patch.baseRevision !== (user.readerProgress[uid]?.revision || 0)) return {progress: {conflict: true}};
+            writes++;
+            const progress = {...patch, revision: patch.baseRevision + 1, updatedAt: '2026-11-13T12:00:00Z'};
+            user.readerProgress[uid] = progress;
+            return {progress};
+        };
+
+        const start = '/library/ebook/read?uid=known';
+        const guest = await request(start);
+        assert.equal(guest.response.status, 200);
+        assert.match(guest.text, new RegExp(`length=1000&amp;at=${offsets[1000][1]}`));
+        assert.match(guest.text, /&lt;тегом&gt;/);
+        assert.doesNotMatch(guest.text, /Запомнить место|<script/);
+        assert.equal((await request(start+'&at=1', {generation:0, revision:0})).response.status, 401);
+        const old = await request(start+'&page=2&font=22');
+        assert.equal(old.response.status, 200);
+        assert.match(old.text, new RegExp(`length=3000&amp;at=${offsets[3000][2]}`));
+
+        const login = await request('/library/ebook/login');
+        await request('/library/ebook/login', {csrf:csrf(login.text), login:'reader', password:' pass '});
+        assert.match((await request('/library/ebook/book?uid=known')).text, /Продолжить чтение/, 'Older progress can lack a timestamp');
+        const at = offsets[1000][1];
+        const next = start+`&length=1000&at=${at}`;
+        const first = await request(start+'&at=0');
+        assert.match(first.text, new RegExp(`<form method="post" action="[^\"]+length=1000&amp;at=${at}"[^>]*>`));
+        assert.match(first.text, /<button type="submit">Следующая<\/button>/);
+        const position = await request(next);
+        assert.doesNotMatch(position.text, /Запомнить место/);
+        assert.match(position.text, new RegExp(`length=1600&amp;at=${at}`));
+        assert.equal(writes, 0, 'Following a reading link must not write progress');
+        assert.equal((await request(next, {generation:0, revision:0})).response.status, 403);
+        const body = {csrf:csrf(first.text), generation:0, revision:0};
+        const turn = await request(next, body);
+        assert.equal(turn.response.status, 303);
+        const turned = await request(turn.response.headers.get('location'));
+        assert.match(turned.text, /Страница 2 из/);
+        assert.equal(writes, 1);
+        assert.equal(user.readerProgress.known.percent, at / text.length);
+        assert(user.readerProgress.known.textSnippet);
+        const stale = await request(start+'&at=0', body);
+        assert.equal(stale.response.status, 303);
+        assert.match((await request(stale.response.headers.get('location'))).text, /Открыть сохранённое место/);
+        assert.equal(user.readerProgress.known.percent, at / text.length);
+        const card = await request('/library/ebook/book?uid=known');
+        assert.match(card.text, /Продолжить чтение/);
+        assert.match(card.text, /at=0[^>]*>С начала/);
+        const resumed = await request(start+'&length=1600');
+        assert(resumed.text.includes(user.readerProgress.known.textSnippet.replace(/</g,'&lt;').replace(/>/g,'&gt;')));
+        assert.equal(writes, 1);
+        assert.equal((await request(start+'&at=0', {...body, revision:1})).response.status, 303);
+        assert.equal(user.readerProgress.known.percent, 0);
+        sessions.clear();
+        assert.equal((await request(next, body)).response.status, 401);
+    });
+}
 async function testEbookProfileLoginCsrfPasswordAndRevokedSessionStayProtected(){
     await fixture({allowAnonymousAccess:false},async({request,csrf,calls,sessions})=>{
         const first=await request('/library/ebook/book?uid=known');assert.equal(first.response.status,401);const token=csrf(first.text);assert.equal(calls.length,0);
@@ -106,7 +171,9 @@ async function testEbookPlainReaderStreamsBodyAndKeepsUnicodePages(){
         const file=path.join(dir,'book.fb2'),body='<FictionBook><description><title-info><annotation><p>Not body</p></annotation></title-info></description><body><section><title><p>Глава</p></title><p>Текст &amp; книга 🤔</p><p>Вторая строка.</p></section></body><binary>'+'A'.repeat(500000)+'</binary></FictionBook>';
         await fs.writeFile(file,body);const text=await readText(file,new AbortController().signal);
         assert.match(text,/Глава/);assert.match(text,/Текст & книга 🤔/);assert(!text.includes('Not body'));assert(!text.includes('AAAA'));
-        const original='Первая строка 🤔\n\nВторая строка. '.repeat(20),split=pages(original,19);assert.equal(split.join(''),original);assert(split.every(page=>!/[\ud800-\udbff]$/.test(page)));assert.throws(()=>pages('abc',1));
+        const original='Первая строка 🤔\n\nВторая строка. '.repeat(20),offsets=pageOffsets(original,19);
+        const split=offsets.slice(0,-1).map((offset,i)=>original.slice(offset,offsets[i+1]));
+        assert.equal(split.join(''),original);assert(split.every(page=>!/[\ud800-\udbff]$/.test(page)));assert.throws(()=>pageOffsets('abc',1));
         const encoded=require('iconv-lite').encode('<?xml version="1.0" encoding="windows-1251"?><FictionBook><body><p>Русский текст</p></body></FictionBook>','windows-1251');
         await fs.writeFile(file,encoded);assert.match(await readText(file,new AbortController().signal),/Русский текст/);
         await fs.writeFile(file,'<?xml version="1.0" encoding="windows-1251"?><FictionBook><!--'+'ASCII '.repeat(500)+'--><body><p>На самом деле UTF-8</p></body></FictionBook>');
@@ -122,7 +189,7 @@ async function testEbookReaderCacheGenerationAndTemporaryFilesAreBounded(){
         const book={_uid:'known',ext:'fb2',folder:'folder',file:'1',_recordHash:'v1'},files=[];let calls=0;
         const worker={config:{onlineReaderEnabled:true},db:{},libraryAssetGeneration:1,checkLibraryAssetState(generation,db){if(generation!==this.libraryAssetGeneration||db!==this.db)throw Object.assign(new Error('Changed'),{code:'INPX_LIBRARY_CHANGED'});},
             getBookRecordByUid:async()=>book,extractBook:async(folder,file,source,options)=>{assert.equal(options.maxOutputBytes,limits.fileBytes);const result=path.join(dir,String(++calls));files.push(result);await fs.writeFile(result,'<FictionBook><body><p>Reader text.</p></body></FictionBook>');return result;}};
-        reader=new EbookReader(worker);const [one,two]=await Promise.all([reader.read('known'),reader.read('known')]);assert.deepEqual(one.pages,two.pages);assert.equal(calls,1);
+        reader=new EbookReader(worker);const [one,two]=await Promise.all([reader.read('known'),reader.read('known')]);assert.deepEqual(one,two);assert.equal(calls,1);
         await reader.read('known');assert.equal(calls,1);assert(reader.cache.bytes<=limits.cacheBytes);assert(files.every(file=>!fs.existsSync(file)));
         worker.libraryAssetGeneration++;await reader.read('known');assert.equal(calls,2);
         worker.config.onlineReaderEnabled=false;await assert.rejects(reader.read('known'),{status:415});
@@ -266,7 +333,7 @@ async function testEbookGuestFormatAppliesBeforeTypedDownloadWithoutChangingProf
 }
 
 module.exports=[testEbookHtmlWorksWithoutSpaAndSearchIsBoundedExplicitAndEscaped,testEbookInputAndPaginationRejectAmbiguousAndOversizedRequests,
-    testEbookBookCardDefersMetadataAndReusesDownloadAndReadPaths,testEbookProfileLoginCsrfPasswordAndRevokedSessionStayProtected,
+    testEbookBookCardDefersMetadataAndReusesDownloadAndReadPaths,testEbookShortPagesSaveProgressOnPageTurns,testEbookProfileLoginCsrfPasswordAndRevokedSessionStayProtected,
     testEbookLibraryPasswordLogoutAndSafeReturnPaths,testEbookLatePrivateResponseIsRejectedAfterProfileLogout,
     testEbookPlainReaderStreamsBodyAndKeepsUnicodePages,testEbookReaderCacheGenerationAndTemporaryFilesAreBounded,
     testEbookQuickSearchCombinesTitleAndAuthorAndAllowsAuthorOnly,testEbookShelvesRequireIdentityAndNeverAcceptForeignProfileScope,

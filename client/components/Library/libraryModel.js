@@ -39,6 +39,12 @@ function readable(book, config) {
     return !!(require('../../../shared/BookFormats').canRead(book.ext, config) && bookUid(book) && !book.unavailable && !book.discoveryMissingLocal);
 }
 
+function ebookReaderUrl(book, config) {
+    if (config.ebookReaderEnabled === false || !readable(book, config)) return '';
+    const root = String(config.rootPathStatic || '').replace(/\/$/, '');
+    return `${root}/ebook/read?uid=${encodeURIComponent(bookUid(book))}`;
+}
+
 function recentBooks(items = []) {
     const seen = new Set();
     return items.filter(book => {
@@ -98,4 +104,4 @@ function profileLoginError(error) {
 }
 
 module.exports = {appearance, appearanceRedirect, libraryRoutes, catalogRoutes, bookUid, progress, coverUrl, coverCacheVersion,
-    readable, recentBooks, homeBooks, personalAccess, identity, discoveryOptions, normalizeShelves, genreMapFromTree, profileLoginError};
+    readable, ebookReaderUrl, recentBooks, homeBooks, personalAccess, identity, discoveryOptions, normalizeShelves, genreMapFromTree, profileLoginError};

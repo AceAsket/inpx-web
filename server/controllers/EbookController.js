@@ -5,14 +5,14 @@ const Budget=require('../core/ClientRequestBudget');
 const {getEnabledLibrarySources}=require('../core/LibrarySources');
 const formats=require('../../shared/BookFormats');
 const converter=require('../core/BookConverter');
-const {EbookReader}=require('../core/EbookReader');
+const {EbookReader, limits, pageSizes}=require('../core/EbookReader');
 const shelves=require('../core/EbookShelves');
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 function bad(message,status=400){return Object.assign(new Error(message),{status});}
 function scalar(input,key,maximum=160,trim=true){const value=input?.[key];if(value===undefined)return '';if(typeof value!=='string'||value.length>maximum)throw bad('Некорректные параметры запроса.');return trim?value.trim():value;}
 const short=(value,maximum=180)=>{const text=String(value||'');return text.length>maximum?text.slice(0,maximum).replace(/[\ud800-\udbff]$/,'')+'…':text;};
-function number(input,key,fallback,maximum){const raw=scalar(input,key,8);if(!raw)return fallback;if(!/^\d+$/.test(raw)||Number(raw)<1||Number(raw)>maximum)throw bad('Некорректный номер страницы.');return Number(raw);}
+function number(input,key,fallback,maximum,minimum=1){const raw=scalar(input,key,8);if(!raw)return fallback;if(!/^\d+$/.test(raw)||Number(raw)<minimum||Number(raw)>maximum)throw bad('Некорректный номер страницы.');return Number(raw);}
 function parameters(query,config) {
     const field=scalar(query,'field',12)||'title',mode=scalar(query,'mode',12)||'words';
     if(!['title','author','series'].includes(field)||!['words','contains','exact'].includes(mode))throw bad('Неизвестный вид поиска.');
@@ -22,6 +22,23 @@ function parameters(query,config) {
     return {q:scalar(query,'q'),author:field==='author'?'':scalar(query,'author'),field,mode,lang,ext,sourceId:scalar(query,'sourceId',64),covers:scalar(query,'covers',1)==='1'?'1':'0',page:number(query,'page',1,100000),size:number(query,'size',10,20),back:scalar(query,'back',2048)};
 }
 const option=(value,label,selected)=>`<option value="${escape(value)}"${String(value)===String(selected)?' selected':''}>${escape(label)}</option>`;
+
+function savedProgress(user, uid) {
+    const progress = user?.readerProgress;
+    const value = progress && Object.hasOwn(progress, uid) ? progress[uid] : null;
+    return value && !value.relinkedTo ? value : null;
+}
+
+function resumeOffset(text, progress) {
+    if (!progress) return 0;
+    const approximate = Math.min(text.length - 1, Math.max(0, Math.round((Number(progress.percent) || 0) * text.length)));
+    const snippet = String(progress.textSnippet || '').trim();
+    if (!snippet) return approximate;
+    const before = text.lastIndexOf(snippet, approximate);
+    const after = text.indexOf(snippet, approximate);
+    if (before < 0 && after < 0) return approximate;
+    return before >= 0 && (after < 0 || approximate - before <= after - approximate) ? before : after;
+}
 
 class EbookController {
     constructor(config,worker,security,webAccess) {
@@ -174,7 +191,12 @@ class EbookController {
                 '<p class="hint">После выбора нажмите «Применить формат», затем кнопку скачивания ниже.</p><button type="submit">Применить формат</button></form>'+
                 this.downloadButton({...book,_uid:uid},wanted,true);
         }
-        if(formats.canRead(book.ext,this.config)&&!this.worker.remoteLib)body+=this.link('/read',{...p,uid,page:1,font:30,bookPage:p.page},'Читать текст','button');
+        if (formats.canRead(book.ext, this.config) && !this.worker.remoteLib) {
+            const query = {...p, uid, page: undefined, bookPage: p.page};
+            const progress = savedProgress(identity?.user, uid);
+            body += this.link('/read', query, progress ? 'Продолжить чтение' : 'Читать текст', 'button');
+            if (progress) body += this.link('/read', {...query, at: 0}, 'С начала', 'button');
+        }
         if(scalar(req.query,'annotation',1)!=='1')body+=this.link('/book',{...p,uid,annotation:1,...(!identity?{format:this.guestFormat(req)}:{})},'Показать аннотацию','button');
         else {
             let preview;
@@ -186,23 +208,82 @@ class EbookController {
         }
         return {title:book.title||'Книга',body};
     }
-    async reading(req) {
-        const uid=scalar(req.query,'uid',1024),page=number(req.query,'page',1,2048),font=number(req.query,'font',30,36);
-        if(!uid||![18,22,24,26,30,36].includes(font))throw bad('Некорректные параметры чтения.');
-        if(!this.worker.ebookReader)this.worker.ebookReader=new EbookReader(this.worker);
-        const value=await this.worker.ebookReader.read(uid),total=value.pages.length;
-        if(page>total)throw bad('Страница не найдена.',404);
-        const scope=parameters(req.query,this.config),bookPage=number(req.query,'bookPage',1,100000),p={...scope,uid,font,bookPage};
-        let body=this.link('/book',{...scope,uid,page:bookPage},'О книге');
-        body+='<nav aria-label="Размер текста">'+[24,30,36].map(size=>this.link('/read',{...p,page,font:size},size===24?'Меньше':size===30?'Обычный':'Крупнее')).join(' ')+'</nav>';
-        body+=this.navigation(p,page,total,'/read')+`<div class="reading" style="font-size:${font}px">${escape(value.pages[page-1])}</div>`+this.navigation(p,page,total,'/read');
-        body+='<p class="hint">Текстовое чтение. Иллюстрации доступны в скачанном файле. Ссылка на эту страницу сохраняет место; прогресс полной читалки не изменяется.</p>';
-        return {title:value.book.title||'Чтение',body,reading:true};
+    async readingPage(req, identity) {
+        const uid = scalar(req.query, 'uid', 1024);
+        const font = number(req.query, 'font', 30, 36);
+        const legacyPage = number(req.query, 'page', null, 2048);
+        const length = number(req.query, 'length', legacyPage ? limits.pageChars : pageSizes[0], limits.pageChars);
+        const requested = number(req.query, 'at', null, limits.characters - 1, 0);
+        if (!uid || ![18, 22, 24, 26, 30, 36].includes(font) || !pageSizes.includes(length))
+            throw bad('Некорректные параметры чтения.');
+
+        const scope = parameters(req.query, this.config);
+        const bookPage = number(req.query, 'bookPage', 1, 100000);
+        if (!this.worker.ebookReader) this.worker.ebookReader = new EbookReader(this.worker);
+        const {book, text, offsets} = await this.worker.ebookReader.read(uid);
+        const boundaries = offsets[length];
+        const total = boundaries.length - 1;
+        if (requested === null && legacyPage > total) throw bad('Страница не найдена.', 404);
+        let at = requested ?? (legacyPage ? boundaries[legacyPage - 1] : resumeOffset(text, savedProgress(identity?.user, uid)));
+        if (at >= text.length) throw bad('Страница не найдена.', 404);
+        if (at > 0 && /[\udc00-\udfff]/.test(text[at]) && /[\ud800-\udbff]/.test(text[at - 1])) at--;
+        const page = boundaries.findIndex(offset => offset > at);
+        const query = {...scope, uid, page: undefined, bookPage, font, length};
+        const bookQuery = {...scope, uid, page: bookPage};
+        return {book, text, at, page, total, boundaries, query, bookQuery};
+    }
+
+    async reading(req, identity) {
+        const {book, text, at, page, total, boundaries, query, bookQuery} = await this.readingPage(req, identity);
+        const current = {...query, at};
+        const previous = at > boundaries[page - 1] ? boundaries[page - 1] : boundaries[page - 2];
+        const progress = savedProgress(identity?.user, query.uid);
+        const turn = (offset, label) => {
+            const target = {...query, at: offset};
+            if (!identity) return this.link('/read', target, label);
+            return `<form method="post" action="${escape(this.url('/read', target))}">`+
+                this.hidden('csrf', this.security.getCsrfToken(req))+
+                this.hidden('generation', identity.user.readerProgressGeneration || 0)+
+                this.hidden('revision', progress?.revision || 0)+`<button type="submit">${escape(label)}</button></form>`;
+        };
+        const navigation = `<nav class="pagination reader-pages" aria-label="Страницы">`+
+            (previous !== undefined ? turn(previous, 'Предыдущая') : '')+
+            `<span>Страница ${page} из ${total}</span>`+
+            (page < total ? turn(boundaries[page], 'Следующая') : '')+'</nav>';
+        let body = this.link('/book', bookQuery, 'О книге');
+        body += '<nav class="reader-options" aria-label="Размер шрифта">Шрифт '+[24, 30, 36].map(size =>
+            size === query.font ? `<strong>${size}</strong>` : this.link('/read', {...current, font: size}, String(size))).join(' ')+'</nav>';
+        body += '<nav class="reader-options" aria-label="Длина страницы">Страницы '+['Короткие', 'Средние', 'Длинные'].map((label, i) =>
+            pageSizes[i] === query.length ? `<strong>${label}</strong>` : this.link('/read', {...current, length: pageSizes[i]}, label)).join(' ')+'</nav>';
+        if (identity && req.query.progress === 'changed')
+            body += '<p class="meta" role="status">Место в профиле изменилось. '+this.link('/read', query, 'Открыть сохранённое место')+'</p>';
+        const paragraphs = text.slice(at, boundaries[page]).split(/\n+/).filter(part => part.trim());
+        body += navigation+`<div class="reading" style="font-size:${query.font}px">${paragraphs.map(part => `<p>${escape(part)}</p>`).join('')}</div>`+navigation;
+        return {title: book.title || 'Чтение', body, reading: true};
+    }
+
+    async saveReading(req, identity) {
+        const generation = number(req.body, 'generation', null, 99999999, 0);
+        const baseRevision = number(req.body, 'revision', null, 99999999, 0);
+        if (generation === null || baseRevision === null) throw bad('Обновите страницу и повторите действие.');
+        const {text, at, query} = await this.readingPage(req, identity);
+        const textSnippet = text.slice(at, at + 160).trim().split('\n', 1)[0].trim().replace(/[\ud800-\udbff]$/, '');
+        this.checkIdentity(req, identity);
+        const {progress} = await this.worker.updateReaderProgress(identity.user.id, query.uid, {
+            percent: at / text.length, sectionId: '', pageIndex: 0, textOffset: -1, textSnippet, hidden: false, generation, baseRevision,
+        });
+        const changed = progress.conflict || progress.generationMismatch || progress.reset;
+        return this.url('/read', {...query, at, progress: changed ? 'changed' : undefined});
     }
     async recent(req,identity) {
         if(!identity)return {title:'Сейчас читаю',body:'<p>Войдите в свой профиль, чтобы увидеть книги из истории.</p>'+this.link('/login',{},'Войти')};
         const summary=await this.worker.buildUserReadingSummary(identity.user,10),p=parameters({},this.config);
-        return {title:'Сейчас читаю',body:summary.items.length?summary.items.map(book=>this.bookRow(book,p,formats.preference(identity.user))+`<p class="meta">Прочитано ${Math.round(book.percent*100)}%</p>`).join(''):'<p>В истории пока нет книг в процессе чтения.</p>'};
+        return {title:'Сейчас читаю',body:summary.items.length?summary.items.map(book=>{
+            const uid = book._uid || book.bookUid;
+            const resume = uid && !book.unavailable && formats.canRead(book.ext, this.config) && !this.worker.remoteLib
+                ? this.link('/read', {uid}, 'Продолжить чтение', 'button') : '';
+            return this.bookRow(book,p,formats.preference(identity.user))+`<p class="meta">Прочитано ${Math.round(book.percent*100)}%</p>`+resume;
+        }).join(''):'<p>В истории пока нет книг в процессе чтения.</p>'};
     }
     async shelfIndex(req,identity){
         const items=await shelves.lists(this.worker,identity.user.id),page=number(req.query,'page',1,100000),size=20,total=Math.max(1,Math.ceil(items.length/size));
@@ -237,12 +318,18 @@ class EbookController {
                 if(!['GET','HEAD','POST'].includes(req.method)){res.set('Allow','GET, HEAD, POST');throw bad('Метод не поддерживается.',405);}
                 const path=req.path.replace(/\/$/,'')||'/';
                 if(req.method==='POST') {
-                    if(!['/login','/access','/logout','/format'].includes(path))throw bad('Страница не найдена.',404);
-                    if(path==='/format'){
+                    if(!['/login','/access','/logout','/format','/read'].includes(path))throw bad('Страница не найдена.',404);
+                    if(path==='/format'||path==='/read'){
                         if(!await this.libraryAllowed(req))return res.status(401).type('html').send(this.form(req,'access'));
                         identity=await this.identity(req);
                         if(!identity)throw bad('Войдите в профиль.',401);
                         if(!this.security.hasValidCsrf(req,scalar(req.body,'csrf',128)))throw bad('Обновите страницу и повторите действие.',403);
+                        if (path === '/read') {
+                            const next = await this.budget.run('profile:'+identity.user.id, 'read:'+require('crypto').randomUUID(),
+                                () => this.saveReading(req, identity), () => !res.destroyed);
+                            this.checkIdentity(req, identity);
+                            return res.redirect(303, next);
+                        }
                         const format=scalar(req.body,'format',12);
                         if(format!=='original'&&!formats.formats.includes(format))throw bad('Неизвестный формат скачивания.');
                         await this.budget.run('profile:'+identity.user.id,'format:'+require('crypto').randomUUID(),async()=>{
@@ -264,7 +351,7 @@ class EbookController {
                 if(this.access.loginRequired&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
                 const isDownload=path==='/download'||/^\/download\/book\.[a-z0-9]{1,12}(?:\.[a-z0-9]{1,12})?$/.test(path);
                 if((['/shelves','/shelf'].includes(path)||isDownload&&req.query.format===undefined)&&!identity)return res.status(401).type('html').send(this.form(req,'profile'));
-                const handler=path==='/'?()=>this.search(req,identity):path==='/book'?()=>this.book(req,identity):path==='/read'?()=>this.reading(req):path==='/recent'?()=>this.recent(req,identity):path==='/shelves'?()=>this.shelfIndex(req,identity):path==='/shelf'?()=>this.shelf(req,identity):isDownload?()=>this.download(req,identity):null;
+                const handler=path==='/'?()=>this.search(req,identity):path==='/book'?()=>this.book(req,identity):path==='/read'?()=>this.reading(req,identity):path==='/recent'?()=>this.recent(req,identity):path==='/shelves'?()=>this.shelfIndex(req,identity):path==='/shelf'?()=>this.shelf(req,identity):isDownload?()=>this.download(req,identity):null;
                 if(!handler)throw bad('Страница не найдена.',404);
                 const db=this.worker.db,generation=this.worker.libraryAssetGeneration;
                 const key=JSON.stringify([req.securitySession.id,path,req.query]);
