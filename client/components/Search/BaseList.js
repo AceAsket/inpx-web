@@ -6,6 +6,7 @@ import authorBooksStorage from './authorBooksStorage';
 
 import BookView from './BookView/BookView.vue';
 import LoadingMessage from './LoadingMessage/LoadingMessage.vue';
+import LoadingState from '../share/LoadingState.vue';
 import * as utils from '../../share/utils';
 const {match: catalogMatch} = require('../../../shared/CatalogSearch');
 const bookFormats = require('../../../shared/BookFormats');
@@ -20,6 +21,7 @@ const componentOptions = {
     components: {
         BookView,
         LoadingMessage,
+        LoadingState,
     },
     watch: {
         settings() {

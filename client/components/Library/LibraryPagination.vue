@@ -9,7 +9,7 @@
             <button type="button" :disabled="disable || current === total" aria-label="Следующая страница" @click="go(current + 1)"><q-icon name="la la-angle-right" size="20px" /></button>
         </div>
         <form class="library-pagination__jump" @submit.prevent="submit">
-            <label>Страница <input v-model="draft" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="12" aria-label="Номер страницы" :disabled="disable" @blur="restoreInvalid" /></label>
+            <label><span class="library-pagination__label">Страница</span><input v-model="draft" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="12" aria-label="Номер страницы" :disabled="disable" @blur="restoreInvalid" /></label>
             <span>из {{ total.toLocaleString('ru-RU') }}</span>
             <button type="submit" :disabled="disable || parsePage(draft, total) === null" aria-label="Перейти на страницу"><q-icon name="la la-arrow-right" size="18px" /></button>
         </form>
@@ -49,5 +49,17 @@ button:focus-visible, input:focus-visible {outline: 2px solid var(--app-primary)
 label {display: flex; align-items: center; gap: 9px;}
 input {width: 64px; height: 36px; text-align: center; border: 1px solid var(--app-border); border-radius: 10px; background: var(--app-surface); color: var(--app-text); font: inherit;}
 .library-pagination__jump > button {min-width: 32px; padding: 0 6px; color: var(--app-primary);}
-@media (max-width: 599px) {.library-pagination {gap: 8px; justify-content: space-between;} .library-pagination__number, .library-pagination__gap {display: none;} .library-pagination__pages {gap: 4px;} .library-pagination__pages > button {background: var(--app-surface); min-width: 36px; height: 36px;} .library-pagination__jump {font-size: 12px; gap: 6px;} label {gap: 6px;} input {width: 52px;}}
+@media (max-width: 599px) {
+    .library-pagination {flex-wrap: nowrap; gap: 8px;}
+    .library-pagination__number, .library-pagination__gap {display: none;}
+    .library-pagination__pages {gap: 4px;}
+    .library-pagination__pages > button {background: var(--app-surface); width: 36px; min-width: 36px; height: 36px; padding: 0;}
+    .library-pagination__jump {font-size: 12px; gap: 6px; white-space: nowrap;}
+    label {gap: 6px;}
+    input {width: 52px; padding-inline: 4px;}
+}
+
+@media (max-width: 359px) {
+    .library-pagination__label {display: none;}
+}
 </style>

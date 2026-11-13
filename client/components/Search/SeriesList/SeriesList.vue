@@ -39,7 +39,8 @@
                 </div>
             </div>
 
-            <div v-if="item.bookLoading" class="book-row row items-center">
+            <LoadingState v-if="item.bookLoading && shelvesAppearance" class="book-row q-mb-md" label="Загружаем книги серии" />
+            <div v-else-if="item.bookLoading" class="book-row row items-center">
                 <q-icon class="la la-spinner icon-rotate text-blue-8" size="28px" />
                 <div class="q-ml-xs">
                     Обработка...

@@ -207,6 +207,11 @@ body, html, #app {
     letter-spacing: 0;
 }
 
+/* Keep Quasar's inherited border-box sizing inside native disclosures. */
+details::details-content {
+    box-sizing: inherit;
+}
+
 body {
     --app-bg: #f5f8fb;
     --app-surface: #ffffff;

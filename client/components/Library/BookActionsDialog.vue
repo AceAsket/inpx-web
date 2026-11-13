@@ -324,6 +324,9 @@ h1.book-actions-title {margin-bottom: 20px;}
     .book-actions-primary .q-btn {width: 44px; min-height: 44px;}
     .book-actions-formats {width: 96px;}
     .book-actions-formats :deep(.q-field__control) {padding: 0 8px;}
+    .book-actions-series {margin: 10px 0 12px;}
+    .book-actions-annotation {margin-top: 12px;}
+    .book-actions-annotation h3 {margin-bottom: 8px;}
 }
 @media (max-width: 379px) {
     .book-actions-formats {flex-basis: 100%; width: 100%; max-width: none;}

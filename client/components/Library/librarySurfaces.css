@@ -1,4 +1,6 @@
 /* Shared surfaces for existing catalog screens. The reader and classic layout keep their own styles. */
+body[data-catalog-appearance="shelves"] summary {display: list-item; list-style-position: inside;}
+body[data-catalog-appearance="shelves"] summary:focus-visible {outline: 2px solid var(--app-primary); outline-offset: -2px;}
 body[data-catalog-appearance="shelves"] .library-dialog-card .settings-dialog-body {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 14px;
     min-width: 0 !important; width: 100%; font-size: 14px !important; margin: 0;
@@ -81,6 +83,7 @@ body[data-catalog-appearance="shelves"] .search--shelves .catalog-footer {font-s
     body[data-catalog-appearance="shelves"] .search--shelves .author-group,
     body[data-catalog-appearance="shelves"] .search--shelves .series-group {margin: 10px 16px; padding: 10px;}
     body[data-catalog-appearance="shelves"] .search--shelves .book-row {margin-left: 0;}
-    body[data-catalog-appearance="shelves"] .search--shelves .result-bar,
+    body[data-catalog-appearance="shelves"] .search--shelves .result-bar {margin-top: 0 !important; padding: 8px 16px; row-gap: 6px;}
+    body[data-catalog-appearance="shelves"] .search--shelves .bulk-read-toolbar {margin-top: 4px; margin-bottom: 4px; padding: 0;}
     body[data-catalog-appearance="shelves"] .search--shelves .bottom-scroller-bar {padding: 12px 16px;}
 }

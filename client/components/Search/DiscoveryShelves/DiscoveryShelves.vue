@@ -207,7 +207,8 @@
             </div>
         </section>
 
-        <div v-if="loading" class="discovery-loading-line">
+        <LoadingState v-if="loading && shelvesAppearance" label="Загружаем подборки" />
+        <div v-else-if="loading" class="discovery-loading-line">
             <q-icon class="la la-spinner icon-rotate" size="20px" />
             <span>Собираю витрину...</span>
         </div>

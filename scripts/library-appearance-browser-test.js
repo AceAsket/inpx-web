@@ -352,6 +352,23 @@ if (require.main === module) (async() => {
                 await screenshot('profile-create-dark-390');
                 await panel.locator('.profile-create-extra summary').click();
                 await panel.getByRole('textbox', {name: 'Email для отправки', exact: true}).waitFor();
+                const opdsSwitch = panel.getByRole('switch', {name: 'Показывать профиль в OPDS', exact: true});
+                for (const enabled of [true, false]) {
+                    assert.equal(await opdsSwitch.getAttribute('aria-checked'), String(enabled));
+                    const geometry = await opdsSwitch.evaluate(async (node, enabled) => {
+                        const thumb = node.querySelector('.q-toggle__thumb');
+                        await Promise.all(thumb.getAnimations().map(animation => animation.finished));
+                        const track = node.querySelector('.q-toggle__track').getBoundingClientRect();
+                        const label = node.querySelector('.q-toggle__label').getBoundingClientRect();
+                        const handle = thumb.getBoundingClientRect();
+                        return {width: track.width, end: enabled ? track.right - handle.right : handle.left - track.left,
+                            alignment: Math.abs(track.top + track.height / 2 - label.top - label.height / 2)};
+                    }, enabled);
+                    assert(geometry.width <= 36 && Math.abs(geometry.end) <= 3 && geometry.alignment < 1,
+                        'The OPDS switch fits its track and aligns with the label: ' + JSON.stringify(geometry));
+                    await opdsSwitch.focus();
+                    await page.keyboard.press('Space');
+                }
                 await screenshot('profile-create-expanded-dark-390');
                 await panel.getByRole('button', {name: 'Отмена', exact: true}).click();
                 await panel.getByRole('button', {name: 'Новый профиль', exact: true}).click();
@@ -463,14 +480,18 @@ if (require.main === module) (async() => {
                 const bar = document.querySelector('.result-bar'), rect = bar.getBoundingClientRect();
                 const controls = Array.from(bar.querySelectorAll('.library-pagination, .text-bold')).map(node => node.getBoundingClientRect());
                 const bulk = document.querySelector('.bulk-read-toolbar').getBoundingClientRect();
+                const paginator = bar.querySelector('.library-pagination');
+                const [arrows, jump] = Array.from(paginator.children, node => node.getBoundingClientRect());
                 const mode = document.querySelector('.catalog-text-field__mode');
                 const text = mode.querySelector('.q-field__native').getBoundingClientRect(), arrow = mode.querySelector('.q-select__dropdown-icon').getBoundingClientRect();
                 return {bottom: rect.bottom, controlsBottom: Math.max(...controls.map(node => node.bottom)), bulkTop: bulk.top,
-                    modeCenter: text.y + text.height / 2, arrowCenter: arrow.y + arrow.height / 2, width: innerWidth, scroll: document.documentElement.scrollWidth};
+                    modeCenter: text.y + text.height / 2, arrowCenter: arrow.y + arrow.height / 2, width: innerWidth, scroll: document.documentElement.scrollWidth,
+                    paginationSingleRow: Math.abs((arrows.top + arrows.bottom) - (jump.top + jump.bottom)) <= 2 && jump.right <= rect.right};
             });
             assert(bounds.controlsBottom <= bounds.bottom + 1 && bounds.bulkTop >= bounds.bottom - 1, 'Catalog bars overlap: ' + JSON.stringify(bounds));
             assert(Math.abs(bounds.modeCenter - bounds.arrowCenter) < 2, 'Matching mode and arrow must align: ' + JSON.stringify(bounds));
             assert(bounds.scroll <= width + 1, 'Catalog must fit the viewport');
+            if (width <= 599) assert(bounds.paginationSingleRow, `Pagination fits on one row at ${width}px`);
             await screenshot(`pagination-${width}`);
         }
         await page.setViewportSize({width: 390, height: 844});
@@ -504,6 +525,12 @@ if (require.main === module) (async() => {
         await page.waitForURL(url => !url.hash.includes('ratingCount'));
         await page.locator('.library-result-card').first().waitFor();
         assert((await page.locator('.library-result-card').first().boundingBox()).height < 320, 'Mobile result is a compact book row');
+        for (const width of [320, 390]) {
+            await page.setViewportSize({width, height: 844});
+            const label = page.locator('.catalog-text-field__input .q-field__label').first();
+            assert(await label.evaluate(node => node.scrollWidth <= node.clientWidth + 1), `The filled title label fits at ${width}px`);
+            await page.getByRole('button', {name: 'Сохранить поиск', exact: true}).waitFor();
+        }
         await screenshot('catalog-dark-390');
         await page.getByRole('link', {name: 'Обзор', exact: true}).click();
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();

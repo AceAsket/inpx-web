@@ -29,7 +29,8 @@
                 </div>
             </div>
 
-            <div v-if="item.bookLoading" class="book-row row items-center">
+            <LoadingState v-if="item.bookLoading && shelvesAppearance" class="book-row q-mb-md" label="Загружаем книги автора" />
+            <div v-else-if="item.bookLoading" class="book-row row items-center">
                 <q-icon class="la la-spinner icon-rotate text-blue-8" size="28px" />
                 <div class="q-ml-xs">
                     Обработка...
@@ -37,7 +38,8 @@
             </div>
 
             <div v-if="isExpandedAuthor(item) && item.books">
-                <div v-if="item.authorInfoLoading" class="book-row row items-center q-mb-md author-info-loading">
+                <LoadingState v-if="item.authorInfoLoading && shelvesAppearance" class="book-row q-mb-md" label="Загружаем сведения об авторе" />
+                <div v-else-if="item.authorInfoLoading" class="book-row row items-center q-mb-md author-info-loading">
                     <q-icon class="la la-spinner icon-rotate text-green-8" size="24px" />
                     <div class="q-ml-xs">
                         Загрузка информации об авторе...

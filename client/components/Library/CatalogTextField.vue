@@ -27,12 +27,15 @@ const modes = [{label: 'Содержит', value: 'contains'}, {label: 'Начи
 .catalog-text-field:focus-within {border-color: var(--app-primary); box-shadow: 0 0 0 1px var(--app-primary);}
 .catalog-text-field__input {flex: 1; min-width: 0;}
 .catalog-text-field__input :deep(.q-field__control) {height: 56px; min-height: 56px; padding: 0 12px; box-shadow: none !important;}
-.catalog-text-field__input :deep(.q-field__label) {max-width: 100%;}
 .catalog-text-field__mode {width: 120px; flex: 0 0 120px; border-left: 1px solid var(--app-border); padding: 0 10px; font-size: 12px;}
 .catalog-text-field__mode :deep(.q-field__control), .catalog-text-field__mode :deep(.q-field__marginal) {height: 36px; min-height: 36px; padding: 0; box-shadow: none !important;}
 .catalog-text-field__mode :deep(.q-field__native) {min-height: 36px; padding: 0; align-items: center; flex-wrap: nowrap; white-space: nowrap; line-height: 1.4;}
 .catalog-text-field__mode :deep(.q-field__append) {padding-left: 6px;}
 .catalog-text-field__mode :deep(.q-select__dropdown-icon) {font-size: 16px;}
 @media (max-width: 599px) {.catalog-text-field__mode {width: 108px; flex-basis: 108px; font-size: 11px; padding: 0 8px;} .catalog-text-field__input :deep(.q-field__label) {font-size: 13px;}}
-@media (max-width: 359px) {.catalog-text-field__input :deep(.q-field__prepend) {display: none;} .catalog-text-field__input :deep(.q-field__label) {font-size: 12px;}}
+@media (max-width: 440px) {
+    .catalog-text-field__input :deep(.q-field__prepend) {display: none;}
+    .catalog-text-field__input :deep(.q-field__control) {padding-inline: 8px;}
+}
+@media (max-width: 359px) {.catalog-text-field__input :deep(.q-field__label) {font-size: 12px;}}
 </style>

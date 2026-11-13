@@ -6,7 +6,9 @@
         <form v-if="!discovery && !extended" role="search" @submit.prevent="flush">
             <div class="catalog-search-panel__main">
                 <CatalogTextField :key="primaryField" v-model:text="draft[primaryField].text" v-model:mode="draft[primaryField].mode" :label="textFieldLabels[primaryField]" :mode-label="primaryModeLabel" search-icon suggestions :kind="primaryField" :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @search="flush" @update:text="schedule" @update:mode="schedule" />
-                <q-btn unelevated no-caps color="primary" label="Найти" icon="la la-arrow-right" type="submit" />
+                <q-btn unelevated no-caps color="primary" icon="la la-arrow-right" aria-label="Найти" type="submit">
+                    <span class="catalog-search-panel__submit-label">Найти</span>
+                </q-btn>
             </div>
             <div v-if="moreFields" class="catalog-search-panel__extra">
                 <CatalogTextField v-for="field in extraFields" :key="field.id" v-model:text="draft[field.id].text" v-model:mode="draft[field.id].mode" :label="field.label" suggestions :kind="field.id" :filters="suggestionFilters" :context="suggestionContext" @choose="chooseSuggestion" @search="flush" @update:text="schedule" @update:mode="schedule" />
@@ -22,7 +24,7 @@
             <button type="button" :class="{'has-filters': chips.length}" @click="flush(); filtersVisible = true">
                 <q-icon name="la la-sliders-h" size="19px" /> Фильтры <span v-if="chips.length" class="catalog-search-panel__count">{{ chips.length }}</span>
             </button>
-            <button v-if="authorized" type="button" class="catalog-search-panel__save" @click="flush(); $emit('save-shelf')">
+            <button v-if="authorized" type="button" class="catalog-search-panel__save" aria-label="Сохранить поиск" @click="flush(); $emit('save-shelf')">
                 <q-icon name="la la-bookmark" size="18px" /> <span>Сохранить поиск</span>
             </button>
         </div>
@@ -137,5 +139,10 @@ h1 {font-size: 26px; font-weight: 550; line-height: 1.3; letter-spacing: -.03em;
 button:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 2px;}
 .catalog-index-links {display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px;}
 .catalog-index-links a {color: var(--app-primary); font-size: 12px; text-decoration: none; padding: 5px 0;}
-@media (max-width: 599px) {.catalog-search-panel {padding: 12px 16px 16px;} .catalog-search-panel__heading {margin-bottom: 18px;} h1 {font-size: 23px;} .catalog-search-panel__main {gap: 8px;} .catalog-search-panel__main > .q-btn {padding: 0 14px; font-size: 12px;} .catalog-search-panel__main > .q-btn :deep(.q-icon) {display: none;} .catalog-search-panel__extra {grid-template-columns: minmax(0, 1fr);} .catalog-search-panel__tools > button {font-size: 12px; padding: 8px 6px;} .catalog-search-panel__save > span {display: none;}}
+@media (max-width: 599px) {.catalog-search-panel {padding: 12px 16px 8px;} .catalog-search-panel__heading {margin-bottom: 18px;} h1 {font-size: 23px;} .catalog-search-panel__main {gap: 8px;} .catalog-search-panel__main > .q-btn {padding: 0 14px; font-size: 12px;} .catalog-search-panel__main > .q-btn :deep(.q-icon) {display: none;} .catalog-search-panel__extra {grid-template-columns: minmax(0, 1fr);} .catalog-search-panel__tools > button {font-size: 12px; padding: 8px 6px;} .catalog-search-panel__save > span {display: none;}}
+@media (max-width: 359px) {
+    .catalog-search-panel__main > .q-btn {min-width: 42px; padding: 0;}
+    .catalog-search-panel__main > .q-btn :deep(.q-icon) {display: inline-flex; margin: 0;}
+    .catalog-search-panel__submit-label {display: none;}
+}
 </style>
