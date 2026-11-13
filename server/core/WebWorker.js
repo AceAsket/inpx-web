@@ -3707,6 +3707,7 @@ class WebWorker {
             createdAt: Date.now(),
             updatedAt: Date.now(),
         });
+        this.serverActivity?.record(userId, 'logins');
         return token;
     }
 
@@ -4199,6 +4200,7 @@ class WebWorker {
             },
             runtime: runtimeMetrics.getSnapshot(),
             discovery: await this.readingListStore.getDiscoveryMetrics(),
+            activity: this.serverActivity?.snapshot(),
             index,
             stats: (dbConfig && dbConfig.stats) || (index && index.stats) || {},
             paths: {

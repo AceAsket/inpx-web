@@ -95,6 +95,9 @@ async function buildMetrics(config, webWorker, security = null, webSocketControl
     addMetric(lines, 'inpx_web_users_online', 'Distinct authorized user profiles with active WebSocket sessions.', 'gauge', [{value: onlineMetrics.users}]);
     addMetric(lines, 'inpx_web_ws_anonymous_clients', 'Active WebSocket clients without an authorized user profile.', 'gauge', [{value: onlineMetrics.anonymousClients}]);
     addMetric(lines, 'inpx_web_login_attempts_total', 'Login and access attempts by kind and result.', 'counter', loginMetrics ? loginMetrics.attempts : []);
+    const activity = webWorker.serverActivity;
+    addMetric(lines, 'inpx_web_profile_logins_total', 'Successful profile sessions by pseudonymous profile.', 'counter', activity?.samples('logins'));
+    addMetric(lines, 'inpx_web_book_downloads_total', 'Books delivered in complete HTTP downloads by pseudonymous profile.', 'counter', activity?.samples('downloads'));
     addMetric(lines, 'inpx_web_login_rate_limit_enabled', 'Whether internal login rate limiting is enabled.', 'gauge', [{value: !loginMetrics || loginMetrics.enabled ? 1 : 0}]);
     addMetric(lines, 'inpx_web_login_failed_attempts_active', 'Failed login/access attempts currently kept in the rate-limit window.', 'gauge', [{value: loginMetrics ? loginMetrics.activeFailedAttempts : 0}]);
     addMetric(lines, 'inpx_web_login_rate_limited_ips', 'Client IP buckets currently blocked by login rate limiting.', 'gauge', [{value: loginMetrics ? loginMetrics.rateLimitedIps : 0}]);

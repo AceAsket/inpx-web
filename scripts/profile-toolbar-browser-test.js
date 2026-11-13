@@ -23,7 +23,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         child = spawn(process.execPath, [path.resolve('server'), `--data-dir=${dataDir}`, `--config=${library}/config.json`,
             `--lib-dir=${library}`, `--port=${port}`, '--host=127.0.0.1'], {windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
             env: {...process.env, INPX_TTS_ENABLED: 'false', INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
-                INPX_ADMIN_PASSWORD: 'profile-toolbar-test', INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local'}});
+                INPX_ADMIN_PASSWORD: 'profile-toolbar-test', INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_METRICS_ENABLED: 'false'}});
         for (const stream of [child.stdout, child.stderr]) stream.on('data', data => {output = (output + data).slice(-8000);});
         let ready = false;
         for (let i = 0; i < 120; i++) {
@@ -118,6 +118,25 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await toolbar.getByRole('button', {name: 'Настройки', exact: true}).click();
         await page.getByRole('checkbox', {name: 'Ночная тема', exact: true}).click();
         await page.getByRole('button', {name: /Администрирование/}).click();
+        const activity = page.getByRole('region', {name: 'Активность пользователей', exact: true});
+        await activity.getByText('С последнего запуска сервера', {exact: true}).waitFor();
+        const downloads = activity.locator('.admin-stat').filter({hasText: 'Скачано книг'}).locator('.admin-stat-value');
+        assert.equal(await downloads.innerText(), '0');
+        await activity.getByText('По профилям', {exact: true}).click();
+        const profile = activity.getByRole('row', {name: /^[a-f0-9]{12} 1 0$/});
+        await profile.waitFor();
+        const catalog = await fetch(base + '/ebook?q=Packaged');
+        const encodedUid = (await catalog.text()).match(/[?&](?:amp;)?uid=([^"&]+)/)?.[1];
+        assert(encodedUid, 'The fixture catalog has a downloadable book');
+        const downloadUrl = base + '/book/by-uid?' + new URLSearchParams({uid: decodeURIComponent(encodedUid), format: 'raw'});
+        const profileDownload = await page.request.get(downloadUrl);
+        const guestDownload = await fetch(downloadUrl);
+        assert.match(await profileDownload.text(), /<FictionBook/);
+        assert.match(await guestDownload.text(), /<FictionBook/);
+        await activity.getByRole('row', {name: /^[a-f0-9]{12} 1 1$/}).waitFor();
+        await activity.getByRole('row', {name: 'Гости 0 1', exact: true}).waitFor();
+        assert.equal(await downloads.innerText(), '2', 'The panel refreshes live with metrics export and file logging disabled');
+        await activity.getByText('По профилям', {exact: true}).click();
         await page.getByRole('button', {name: 'Задачи и состояние библиотеки', exact: true}).click();
         await page.getByText('Проверка библиотеки', {exact: true}).waitFor();
         await pause(350);
@@ -242,7 +261,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await page.locator('.profile-controls').waitFor();
         assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0);
         assert.deepEqual(errors, []);
-        console.log(`Profile UI: logout, token revocation, guest restrictions, responsive toolbar, custom performance form/validation/transport/cancel with synthetic metrics, shelf/favorites actions and tasks passed; screenshots: ${directory}`);
+        console.log(`Profile UI: logout, token revocation, guest restrictions, responsive toolbar, live server activity, custom performance form/validation/transport/cancel with synthetic metrics, shelf/favorites actions and tasks passed; screenshots: ${directory}`);
     } catch (error) {
         const page = browser?.contexts().flatMap(context => context.pages())[0];
         if (page) {

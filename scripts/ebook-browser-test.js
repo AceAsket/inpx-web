@@ -108,7 +108,8 @@ async function checkGuestFormats(browser,directory){
         const port=await unusedPort(),base=`http://127.0.0.1:${port}`;
         child=spawn(process.execPath,[path.resolve('server'),`--data-dir=${data}`,`--config=${lib}/config.json`,`--lib-dir=${lib}`,`--port=${port}`,'--host=127.0.0.1'],
             {windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,INPX_TTS_ENABLED:'false',INPX_LIBRARY_SOURCES:'',LIBRARY_SOURCES:'',
-                INPX_AUTH_MODE:'local',INPX_REQUIRE_AUTH:'false',INPX_ALLOW_ANONYMOUS_ACCESS:'false',INPX_ENABLE_CONVERSION:'false',INPX_ADMIN_PASSWORD:'ebook-browser-fixture'}});
+                INPX_AUTH_MODE:'local',INPX_REQUIRE_AUTH:'false',INPX_ALLOW_ANONYMOUS_ACCESS:'false',INPX_ENABLE_CONVERSION:'false',INPX_ADMIN_PASSWORD:'ebook-browser-fixture',
+                INPX_METRICS_ENABLED:'true',INPX_METRICS_PATH:'/metrics',INPX_METRICS_TOKEN:'ebook-metrics-fixture'}});
         for(const stream of[child.stdout,child.stderr])stream.on('data',data=>{output=(output+data).slice(-10000);});
         let ready=false;
         for(let i=0;i<120;i++){try{const response=await fetch(base+'/ready');ready=response.ok&&(await response.json()).ready;}catch{}if(ready||child.exitCode!==null)break;await pause(500);}
@@ -172,6 +173,14 @@ async function checkGuestFormats(browser,directory){
         await page.getByRole('link',{name:'О книге',exact:true}).click();
         const pendingDownload=page.waitForEvent('download');await page.locator('.quick-download a').click();
         const downloaded=await pendingDownload;const saved=await downloaded.path();assert((await fs.readFile(saved,'utf8')).includes('FictionBook'));
+        assert.equal((await fetch(base+'/metrics')).status,401);
+        const scrape=await fetch(base+'/metrics',{headers:{authorization:'Bearer ebook-metrics-fixture'}});
+        assert.equal(scrape.status,200);
+        const metrics=await scrape.text();
+        const profile=metrics.match(/^inpx_web_profile_logins_total\{profile="([a-f0-9]{12})"\} 1$/m)?.[1];
+        assert(profile, 'A successful profile login exposes a pseudonymous counter');
+        assert(metrics.includes(`inpx_web_book_downloads_total{profile="${profile}"} 1\n`));
+        assert(!metrics.includes(uid) && !metrics.includes(title) && !metrics.includes('profile="admin"'));
         const shelves=await checkOpds(base,context,uid,title);
         await page.goto(base+'/library/ebook/shelves');await page.getByRole('heading',{name:'Мои полки',exact:true}).waitFor();
         await page.screenshot({path:path.join(directory,'ebook-shelves-320.png'),fullPage:true});

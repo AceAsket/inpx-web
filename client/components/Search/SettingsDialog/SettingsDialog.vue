@@ -219,6 +219,42 @@
                             </div>
                         </section>
 
+                        <section v-if="adminActivity" class="admin-dashboard-section" aria-labelledby="admin-activity-title">
+                            <h3 id="admin-activity-title" class="admin-dashboard-section-title admin-activity-title">Активность пользователей</h3>
+                            <div class="admin-mail-subtitle">С последнего запуска сервера</div>
+                            <div class="admin-dashboard-grid admin-dashboard-grid--activity">
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">Входы в профиль</div>
+                                    <div class="admin-stat-value">{{ adminActivity.totals.logins.toLocaleString('ru-RU') }}</div>
+                                </div>
+                                <div class="admin-stat">
+                                    <div class="admin-stat-label">Скачано книг</div>
+                                    <div class="admin-stat-value">{{ adminActivity.totals.downloads.toLocaleString('ru-RU') }}</div>
+                                </div>
+                            </div>
+                            <details v-if="adminActivity.profiles.length" class="admin-activity-details">
+                                <summary>По профилям</summary>
+                                <div class="admin-activity-scroll" role="region" aria-label="Активность по профилям" tabindex="0">
+                                    <table class="admin-activity-table">
+                                        <thead>
+                                            <tr><th scope="col">Код профиля</th><th scope="col">Входы</th><th scope="col">Книги</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="row in adminActivity.profiles" :key="row.profile">
+                                                <th scope="row">
+                                                    <span v-if="row.profile === 'guest'">Гости</span>
+                                                    <span v-else-if="row.profile === 'other'">Остальные профили</span>
+                                                    <code v-else>{{ row.profile }}</code>
+                                                </th>
+                                                <td>{{ row.logins.toLocaleString('ru-RU') }}</td>
+                                                <td>{{ row.downloads.toLocaleString('ru-RU') }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </details>
+                        </section>
+
                         <section class="admin-dashboard-section admin-dashboard-section--wide">
                             <div class="admin-dashboard-section-title">{{ adminUi.requests }}</div>
                             <div class="admin-dashboard-grid admin-dashboard-grid--runtime">
@@ -1447,6 +1483,10 @@ class SettingsDialog {
         return (this.adminDashboard && this.adminDashboard.runtime) || {};
     }
 
+    get adminActivity() {
+        return this.adminDashboard.activity;
+    }
+
     get adminDiscovery() {
         return (this.adminDashboard && this.adminDashboard.discovery) || {};
     }
@@ -2312,6 +2352,60 @@ export default vueComponent(SettingsDialog);
 
 .admin-dashboard-grid--runtime {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.admin-dashboard-grid--activity {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-activity-title {
+    margin: 0;
+    line-height: inherit;
+}
+
+.admin-activity-details {
+    min-width: 0;
+    border: 1px solid var(--app-border);
+    border-radius: 10px;
+    background: var(--app-surface);
+    font-size: 12px;
+}
+
+.admin-activity-details summary {
+    padding: 8px 10px;
+    color: var(--app-primary);
+    cursor: pointer;
+}
+
+.admin-activity-scroll {
+    max-height: 220px;
+    overflow: auto;
+}
+
+.admin-activity-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+}
+
+.admin-activity-table th,
+.admin-activity-table td {
+    padding: 6px 10px;
+    border-top: 1px solid var(--app-border);
+    text-align: right;
+}
+
+.admin-activity-table th:first-child {
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+
+.admin-activity-table thead {
+    color: var(--app-muted);
+}
+
+.admin-activity-table tbody th {
+    font-weight: normal;
 }
 
 .admin-stat {

@@ -125,12 +125,12 @@ async function create(worker, userId, selection) {
             }));
             await Promise.all(closing);
         }
-        tickets.set(token, {file: output, userId, bytes:outputBytes, readers:0, expires: Date.now() + lifetime});
+        tickets.set(token, {file: output, userId, count: uids.length, bytes:outputBytes, readers:0, expires: Date.now() + lifetime});
         return {url: `${worker.config.bookPathStatic}/batch/${token}`, count: uids.length};
     } catch (error) { if (output) await fs.remove(output); throw error; }
     finally { running = false; }
 }
-function register(app, config) {
+function register(app, config, trackDownload) {
     app.get(`${config.bookPathStatic}/batch/:token`, (req, res) => {
         const ticket = tickets.get(req.params.token);
         if (!ticket || ticket.expires <= Date.now()) {cleanup().catch(() => {}); return res.sendStatus(404);}
@@ -141,6 +141,7 @@ function register(app, config) {
         let finished = false;
         const finish = () => {if (finished) return; finished = true; ticket.readers--; cleanup().catch(() => {});};
         res.once('finish', finish); res.once('close', finish);
+        trackDownload?.(req, res, ticket.count);
         res.download(ticket.file, 'books.zip', error => {finish(); if (error && !res.headersSent) res.sendStatus(500);});
     });
 }

@@ -10,6 +10,7 @@ const imageUtils = require('./core/ImageUtils');
 const bookConverter = require('./core/BookConverter');
 const bookNaming = require('./core/BookNaming');
 const bookDownloadHeaders = require('./core/BookDownloadHeaders');
+const {countDownload} = require('./core/ServerActivity');
 const crypto = require('crypto');
 const webAppDir = require('../build/appdir');
 const externalTools = require('./core/ExternalTools');
@@ -470,6 +471,13 @@ module.exports = (app, config, webWorker = null, security = null) => {
         const guard = new (require('./core/ProfileAccess'))(config, webWorker, security).httpGuard();
         app.use([config.bookPathStatic, `${webAppRoutePrefix}/cover`, `${webAppRoutePrefix}/reader-lab-source`, `${webAppRoutePrefix}/admin-backups`], guard);
     }
+    const trackDownload = (req, res, count = 1) => {
+        const activity = webWorker?.serverActivity;
+        if (!activity || req.method !== 'GET') return;
+        const userId = req.profileAccessIdentity?.user?.id
+            || webWorker.getProfileSessionUser(security?.getSession(req)?.profileAccessToken);
+        countDownload(res, () => activity.record(userId, 'downloads', count));
+    };
     app.get(`${webAppRoutePrefix}/app-reset`, (req, res) => {
         res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.set('Pragma', 'no-cache');
@@ -684,7 +692,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
         }
     });
 
-    require('./core/BatchDownload').register(app, config);
+    require('./core/BatchDownload').register(app, config, trackDownload);
     app.get([`${config.bookPathStatic}/by-uid`, `${config.bookPathStatic}/by-uid/:downloadName`], async(req, res) => {
         if (!webWorker) {
             res.sendStatus(404);
@@ -803,6 +811,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
                             await webWorker.koSync.linkDownload(syncFile, desc.bookUid, path.extname(downFileName).slice(1).toLowerCase());
                         } catch (error) { log(LM_WARN, `KOSync: не удалось связать скачанный файл: ${error.message}`); }
                     }
+                    trackDownload(req, res);
                     res.sendFile(bookFile);
                     return;
                 } else {
