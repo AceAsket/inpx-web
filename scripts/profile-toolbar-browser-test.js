@@ -82,17 +82,34 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         });
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(base + '/#/books?title=Packaged&lang=en');
-        const login = async() => {
+        const login = async({autofill = false} = {}) => {
             await page.locator('.profile-login-action,.profile-status-chip').first().click();
-            await page.getByRole('dialog').evaluate(async node => {
-                await Promise.allSettled(node.getAnimations({subtree:true}).filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished));
-            });
-            await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
-            await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('profile-toolbar-test');
-            await page.getByRole('button', {name: 'OK', exact: true}).click();
+            const dialog = page.getByRole('dialog');
+            const username = dialog.getByRole('textbox', {name: 'Логин', exact: true});
+            const password = dialog.getByRole('textbox', {name: 'Пароль', exact: true});
+            const submit = dialog.getByRole('button', {name: 'OK', exact: true});
+            await dialog.locator('input:focus').waitFor();
+            if (autofill) {
+                assert.deepEqual(await dialog.locator('input').evaluateAll(inputs => inputs.map(input => [input.name, input.autocomplete, Boolean(input.form)])), [
+                    ['username', 'section-profile username', true],
+                    ['password', 'section-profile current-password', true],
+                ]);
+                await username.fill('admin');
+                assert.equal(await dialog.getByText('Пароль не должен быть пустым').isVisible(), false);
+                await submit.click();
+                await dialog.getByText('Пароль не должен быть пустым', {exact: true}).waitFor();
+                await password.focus();
+                await password.evaluate(input => {input.value = 'profile-toolbar-test';});
+                await password.press('Enter');
+            } else {
+                await username.fill('admin');
+                await password.focus();
+                await password.evaluate(input => {input.value = 'profile-toolbar-test';});
+                await submit.click();
+            }
             await page.locator('.profile-controls .profile-logout').waitFor({state: 'visible'});
         };
-        await login();
+        await login({autofill: true});
         const toolbar = page.getByRole('toolbar', {name: 'Действия библиотеки'});
         for (const width of [1280, 760, 514, 390, 320]) {
             await page.setViewportSize({width, height: 900}); await pause(350);

@@ -13,13 +13,14 @@
                 <p class="profile-form-intro">У каждого профиля свои книги, прогресс и настройки. Логин и пароль нужны для входа с другого устройства.</p>
                 <form class="profile-grid create-grid" @submit.prevent="createProfile">
                     <q-input v-model="newProfile.name" autofocus outlined dense clearable :label="uiText.profileName" class="profile-name-field" />
-                    <q-input v-model="newProfile.login" outlined dense clearable :label="uiText.login" />
+                    <q-input v-model="newProfile.login" autocomplete="section-new-profile username" autocapitalize="none" spellcheck="false" outlined dense clearable :label="uiText.login" />
                     <q-input
                         v-model="newProfile.password"
                         outlined
                         dense
                         clearable
                         :type="newProfilePasswordVisible ? 'text' : 'password'"
+                        autocomplete="section-new-profile new-password"
                         :label="uiText.password"
                     >
                         <template #append>
@@ -312,13 +313,14 @@
 
                         <div v-else-if="currentProfileTab === 'settings'" class="profile-grid profile-edit-grid">
                             <q-input v-model="editableProfile.name" outlined dense :label="uiText.name" />
-                            <q-input v-model="editableProfile.login" :disable="!!config.profileBoundId" outlined dense clearable :label="uiText.login" />
+                            <q-input v-model="editableProfile.login" :disable="!!config.profileBoundId" autocomplete="section-edit-profile username" autocapitalize="none" spellcheck="false" outlined dense clearable :label="uiText.login" />
                             <q-input
                                 v-model="editableProfile.password"
                                 outlined
                                 dense
                                 clearable
                                 :type="editableProfilePasswordVisible ? 'text' : 'password'"
+                                autocomplete="section-edit-profile new-password"
                                 :label="uiText.newPassword"
                             >
                                 <template #append>

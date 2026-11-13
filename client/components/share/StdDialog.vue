@@ -65,7 +65,7 @@
         </div>
 
         <!--------------------------------------------------->
-        <div v-show="type == 'prompt'" :class="dialogContentClass" :style="dialogContentStyle">
+        <div v-if="type == 'prompt'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
@@ -97,7 +97,7 @@
         </div>
 
         <!--------------------------------------------------->
-        <div v-show="type == 'password'" :class="dialogContentClass" :style="dialogContentStyle">
+        <div v-if="type == 'password'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
@@ -110,47 +110,50 @@
                 </div>
             </div>
 
-            <div class="q-mx-md">
-                <div v-html="message"></div>
-                <input type="text" name="username" autocomplete="username" :value="userName" hidden />
-                <q-input
-                    ref="input"
-                    v-model="inputValue"
-                    :type="passwordVisible ? 'text' : 'password'"
-                    autocomplete="current-password"
-                    class="q-mt-xs"
-                    outlined
-                    dense
-                >
-                    <template #append>
-                        <q-btn
-                            flat
-                            round
-                            dense
-                            :icon="passwordVisible ? 'la la-eye-slash' : 'la la-eye'"
-                            :aria-label="passwordVisible ? 'Скрыть пароль' : 'Показать пароль'"
-                            class="password-visibility-toggle"
-                            @click="passwordVisible = !passwordVisible"
-                        />
-                    </template>
-                </q-input>
-                <div class="error" role="status" aria-live="polite">
-                    <span v-show="error != ''">{{ error }}</span>
+            <form @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
+                <div class="q-mx-md">
+                    <div v-html="message"></div>
+                    <input v-if="userName" type="text" name="username" autocomplete="section-library username" :value="userName" hidden />
+                    <q-input
+                        ref="input"
+                        v-model="inputValue"
+                        :type="passwordVisible ? 'text' : 'password'"
+                        name="password"
+                        :autocomplete="userName ? 'section-library current-password' : 'new-password'"
+                        class="q-mt-xs"
+                        outlined
+                        dense
+                    >
+                        <template #append>
+                            <q-btn
+                                flat
+                                round
+                                dense
+                                :icon="passwordVisible ? 'la la-eye-slash' : 'la la-eye'"
+                                :aria-label="passwordVisible ? 'Скрыть пароль' : 'Показать пароль'"
+                                class="password-visibility-toggle"
+                                @click="passwordVisible = !passwordVisible"
+                            />
+                        </template>
+                    </q-input>
+                    <div class="error" role="status" aria-live="polite">
+                        <span v-show="error != ''">{{ error }}</span>
+                    </div>
                 </div>
-            </div>
 
-            <div class="buttons row justify-end q-pa-md">
-                <q-btn v-if="!noCancel" v-close-popup class="q-px-md q-ml-sm" dense no-caps>
-                    Отмена
-                </q-btn>
-                <q-btn class="q-px-md q-ml-sm" color="primary" dense no-caps @click="okClick">
-                    OK
-                </q-btn>
-            </div>
+                <div class="buttons row justify-end q-pa-md">
+                    <q-btn v-if="!noCancel" v-close-popup class="q-px-md q-ml-sm" dense no-caps>
+                        Отмена
+                    </q-btn>
+                    <q-btn class="q-px-md q-ml-sm" color="primary" type="submit" dense no-caps>
+                        OK
+                    </q-btn>
+                </div>
+            </form>
         </div>
 
         <!--------------------------------------------------->
-        <div v-show="type == 'profileLogin'" :class="dialogContentClass" :style="dialogContentStyle">
+        <div v-if="type == 'profileLogin'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
@@ -163,52 +166,58 @@
                 </div>
             </div>
 
-            <div class="q-mx-md">
-                <div v-html="message"></div>
-                <q-input
-                    ref="profileLoginInput"
-                    v-model="inputValue"
-                    label="Логин"
-                    autocomplete="username"
-                    class="q-mt-sm"
-                    outlined
-                    dense
-                />
-                <q-input
-                    ref="profilePasswordInput"
-                    v-model="profilePasswordValue"
-                    :type="passwordVisible ? 'text' : 'password'"
-                    label="Пароль"
-                    autocomplete="current-password"
-                    class="q-mt-sm"
-                    outlined
-                    dense
-                >
-                    <template #append>
-                        <q-btn
-                            flat
-                            round
-                            dense
-                            :icon="passwordVisible ? 'la la-eye-slash' : 'la la-eye'"
-                            :aria-label="passwordVisible ? 'Скрыть пароль' : 'Показать пароль'"
-                            class="password-visibility-toggle"
-                            @click="passwordVisible = !passwordVisible"
-                        />
-                    </template>
-                </q-input>
-                <div class="error" role="status" aria-live="polite">
-                    <span v-show="error != ''">{{ error }}</span>
+            <form @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
+                <div class="q-mx-md">
+                    <div v-html="message"></div>
+                    <q-input
+                        ref="profileLoginInput"
+                        v-model="inputValue"
+                        label="Логин"
+                        name="username"
+                        autocomplete="section-profile username"
+                        autocapitalize="none"
+                        spellcheck="false"
+                        class="q-mt-sm"
+                        outlined
+                        dense
+                    />
+                    <q-input
+                        ref="profilePasswordInput"
+                        v-model="profilePasswordValue"
+                        :type="passwordVisible ? 'text' : 'password'"
+                        label="Пароль"
+                        name="password"
+                        autocomplete="section-profile current-password"
+                        class="q-mt-sm"
+                        outlined
+                        dense
+                    >
+                        <template #append>
+                            <q-btn
+                                flat
+                                round
+                                dense
+                                :icon="passwordVisible ? 'la la-eye-slash' : 'la la-eye'"
+                                :aria-label="passwordVisible ? 'Скрыть пароль' : 'Показать пароль'"
+                                class="password-visibility-toggle"
+                                @click="passwordVisible = !passwordVisible"
+                            />
+                        </template>
+                    </q-input>
+                    <div class="error" role="status" aria-live="polite">
+                        <span v-show="error != ''">{{ error }}</span>
+                    </div>
                 </div>
-            </div>
 
-            <div class="buttons row justify-end q-pa-md">
-                <q-btn v-if="!noCancel" v-close-popup class="q-px-md q-ml-sm" dense no-caps>
-                    Отмена
-                </q-btn>
-                <q-btn :disable="!profileLoginReady" class="q-px-md q-ml-sm" color="primary" dense no-caps @click="okClick">
-                    OK
-                </q-btn>
-            </div>
+                <div class="buttons row justify-end q-pa-md">
+                    <q-btn v-if="!noCancel" v-close-popup class="q-px-md q-ml-sm" dense no-caps>
+                        Отмена
+                    </q-btn>
+                    <q-btn class="q-px-md q-ml-sm" color="primary" type="submit" dense no-caps>
+                        OK
+                    </q-btn>
+                </div>
+            </form>
         </div>
 
         <!--------------------------------------------------->
@@ -255,13 +264,15 @@ import * as utils from '../../share/utils';
 const componentOptions = {
     watch: {
         inputValue: function(newValue) {
-            if (this.type == 'profileLogin')
-                this.validateProfileLogin();
-            else
+            if (this.type == 'profileLogin') {
+                if (this.error)
+                    this.validateProfileLogin();
+            } else {
                 this.validate(newValue);
+            }
         },
         profilePasswordValue: function() {
-            if (this.type == 'profileLogin')
+            if (this.type == 'profileLogin' && this.error)
                 this.validateProfileLogin();
         },
     }
@@ -293,10 +304,6 @@ class StdDialog {
 
     get dialogContentStyle() {
         return this.dialogStyle || null;
-    }
-
-    get profileLoginReady() {
-        return !!(String(this.inputValue || '').trim() && String(this.profilePasswordValue || ''));
     }
 
     get isCompactLayout() {
@@ -356,6 +363,12 @@ class StdDialog {
             this.hideTrigger();
             this.hideTrigger = null;
         }
+        if (this.type == 'password' || this.type == 'profileLogin') {
+            this.enableValidator = false;
+            this.inputValue = '';
+            this.profilePasswordValue = '';
+            this.passwordVisible = false;
+        }
         this.showed = false;
     }
 
@@ -408,6 +421,23 @@ class StdDialog {
 
         this.error = '';
         return true;
+    }
+
+    syncCredentials(form) {
+        // Capture autofill values before QInput can restore its model on blur.
+        const values = new FormData(form);
+        const password = String(values.get('password') || '');
+        if (this.type == 'profileLogin') {
+            this.inputValue = String(values.get('username') || '');
+            this.profilePasswordValue = password;
+        } else {
+            this.inputValue = password;
+        }
+    }
+
+    submitCredentials(event) {
+        this.syncCredentials(event.currentTarget);
+        this.okClick();
     }
 
     okClick() {
@@ -563,7 +593,7 @@ class StdDialog {
                     handled = true;
                 }
             } else {
-                if (event.key == 'Enter') {
+                if (event.key == 'Enter' && this.type != 'password' && this.type != 'profileLogin') {
                     this.okClick();
                     handled = true;
                 }
