@@ -110,7 +110,7 @@
                 </div>
             </div>
 
-            <form @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
+            <form class="credentials-form" @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
                 <div class="q-mx-md">
                     <div v-html="message"></div>
                     <input v-if="userName" type="text" name="username" autocomplete="section-library username" :value="userName" hidden />
@@ -166,7 +166,7 @@
                 </div>
             </div>
 
-            <form @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
+            <form class="credentials-form" @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
                 <div class="q-mx-md">
                     <div v-html="message"></div>
                     <q-input
@@ -621,6 +621,26 @@ export default vueComponent(StdDialog);
 <style scoped>
 .password-visibility-toggle {
     cursor: pointer;
+}
+
+.credentials-form {
+    --credentials-field-bg: var(--app-field-bg, var(--app-surface));
+    --credentials-field-text: var(--app-text);
+}
+
+.credentials-form :deep(input:is(:autofill, :-webkit-autofill)) {
+    box-shadow: inset 0 0 0 100px var(--credentials-field-bg);
+    -webkit-text-fill-color: var(--credentials-field-text);
+    caret-color: var(--credentials-field-text);
+}
+
+.credentials-form :deep(.q-field__label) {
+    z-index: 1;
+}
+
+.std-dialog-card--reader .credentials-form {
+    --credentials-field-bg: var(--reader-surface-2);
+    --credentials-field-text: var(--reader-text);
 }
 
 .std-dialog-card--reader {

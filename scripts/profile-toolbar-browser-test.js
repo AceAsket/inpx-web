@@ -82,6 +82,34 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         });
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(base + '/#/books?title=Packaged&lang=en');
+        const checkAutofillColors = async() => {
+            const session = await page.context().newCDPSession(page);
+            try {
+                await session.send('DOM.enable');
+                await session.send('CSS.enable');
+                const {root} = await session.send('DOM.getDocument');
+                for (const name of ['username', 'password']) {
+                    const selector = `.credentials-form input[name="${name}"]`;
+                    const {nodeId} = await session.send('DOM.querySelector', {nodeId: root.nodeId, selector});
+                    assert(nodeId, `Missing ${name} field in the login form`);
+                    const field = page.locator(selector);
+                    const normal = await field.evaluate(input => ({
+                        background: getComputedStyle(input.closest('.q-field__control')).backgroundColor,
+                        text: getComputedStyle(input).color,
+                    }));
+                    await session.send('CSS.forcePseudoState', {nodeId, forcedPseudoClasses: ['autofill']});
+                    const colors = await field.evaluate(input => {
+                        const style = getComputedStyle(input);
+                        return {shadow: style.boxShadow, text: style.webkitTextFillColor, caret: style.caretColor};
+                    });
+                    assert(colors.shadow.includes(normal.background) && colors.shadow.includes('inset'),
+                        `Autofill background must match the ${name} field surface`);
+                    assert.equal(colors.text, normal.text);
+                    assert.equal(colors.caret, normal.text);
+                    await session.send('CSS.forcePseudoState', {nodeId, forcedPseudoClasses: []});
+                }
+            } finally {await session.detach();}
+        };
         const login = async({autofill = false} = {}) => {
             await page.locator('.profile-login-action,.profile-status-chip').first().click();
             const dialog = page.getByRole('dialog');
@@ -89,6 +117,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
             const password = dialog.getByRole('textbox', {name: 'Пароль', exact: true});
             const submit = dialog.getByRole('button', {name: 'OK', exact: true});
             await dialog.locator('input:focus').waitFor();
+            await checkAutofillColors();
             if (autofill) {
                 assert.deepEqual(await dialog.locator('input').evaluateAll(inputs => inputs.map(input => [input.name, input.autocomplete, Boolean(input.form)])), [
                     ['username', 'section-profile username', true],

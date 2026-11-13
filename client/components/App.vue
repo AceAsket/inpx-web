@@ -367,6 +367,7 @@ body.body--dark {
     --q-accent: #f4728b;
     --app-bg: #151719;
     --app-surface: #202326;
+    --app-field-bg: #171a1c;
     --app-surface-2: #182725;
     --app-surface-3: #1b1e21;
     --app-text: #eef3f4;
@@ -511,7 +512,7 @@ body.body--dark .q-field__label {
 }
 
 body.body--dark .q-field--outlined .q-field__control {
-    background: #171a1c;
+    background: var(--app-field-bg);
 }
 
 body.body--dark .q-field--outlined .q-field__control::before {
