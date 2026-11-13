@@ -37,5 +37,11 @@ const modes = [{label: 'Содержит', value: 'contains'}, {label: 'Начи
     .catalog-text-field__input :deep(.q-field__prepend) {display: none;}
     .catalog-text-field__input :deep(.q-field__control) {padding-inline: 8px;}
 }
-@media (max-width: 359px) {.catalog-text-field__input :deep(.q-field__label) {font-size: 12px;}}
+@media (max-width: 359px) {
+    .catalog-text-field__input :deep(.q-field__control) {padding-inline: 6px;}
+    .catalog-text-field__input :deep(.q-field__append) {padding-left: 4px;}
+    .catalog-text-field__input :deep(.q-field__label) {font-size: 12px;}
+    .catalog-text-field__mode {width: 100px; flex-basis: 100px; padding-inline: 6px;}
+    .catalog-text-field__mode :deep(.q-field__append) {padding-left: 2px;}
+}
 </style>
