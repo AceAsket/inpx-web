@@ -575,8 +575,11 @@ body.body--dark pre {
 }
 
 .q-dialog__inner--minimized > div {
-    max-height: 100% !important;
     max-width: 800px !important;
+}
+
+.q-dialog__inner--minimized > div:not(.library-dialog-card) {
+    max-height: 100% !important;
 }
 
 @keyframes rotating { 
