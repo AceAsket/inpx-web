@@ -54,18 +54,27 @@
 
                 <LibraryNotice v-if="state.shelvesLoginRequired && !state.readingLoginRequired" title="Подборки доступны после входа" message="Войдите в профиль, чтобы увидеть свои рекомендации." action-label="Войти в профиль" @action="library.login" />
                 <LibraryNotice v-if="state.shelvesError" error title="Не удалось обновить подборки" message="Проверьте подключение и попробуйте ещё раз." action-label="Повторить" :busy="state.shelvesLoading" @action="repository.loadShelves(true)" />
-                <div v-if="state.shelvesLoading && !state.shelvesLoaded" class="overview-loading" role="status" aria-label="Загружаем подборки">
+                <div v-if="(state.shelvesLoading && !state.shelvesLoaded) || pendingFirstPins" class="overview-loading" role="status" aria-label="Загружаем подборки">
                     <span>Собираем полки вашей библиотеки</span>
                     <div class="overview-loading__covers"><div v-for="i in 6" :key="i" class="overview-skeleton" /></div>
                 </div>
                 <div class="overview-shelves">
-                    <BookShelf v-if="state.recommendations.length" title="Рекомендуем вам" :books="recommendations" heading-id="recommended-books-heading">
+                    <BookShelf v-for="shelf in pinnedShelves" :key="`pinned-${shelf.id}`" :title="shelf.title" :books="shelf.books" :heading-id="`shelf-pinned-${shelf.id}`">
+                        <template #action>
+                            <RouterLink :to="{path: '/my-books', query: {list: shelf.id}}" class="overview-text-link" :aria-label="`Открыть полку «${shelf.title}»`">Все книги</RouterLink>
+                        </template>
+                    </BookShelf>
+                    <BookShelf v-for="shelf in pendingFirstPins ? [] : shelves" :key="shelf.id" :title="shelf.title" :books="shelf.books" :heading-id="`shelf-${shelf.id}`" />
+                    <BookShelf v-if="!pendingFirstPins && state.recommendations.length" title="Рекомендуем вам" :books="recommendations" heading-id="recommended-books-heading">
                         <template #action><RouterLink to="/for-you" class="overview-text-link">Все</RouterLink></template>
                     </BookShelf>
-                    <BookShelf v-for="shelf in shelves" :key="shelf.id" :title="shelf.title" :books="shelf.books" :heading-id="`shelf-${shelf.id}`" />
                 </div>
+                <LibraryNotice v-if="state.pinnedShelvesError && config.profileAuthorized && !state.readingLoginRequired" error title="Не удалось загрузить закреплённые полки"
+                    action-label="Повторить" :busy="state.pinnedShelvesLoading" @action="repository.loadPinnedShelves(true)" />
                 <div class="overview-footer">
                     <RouterLink to="/books">Весь каталог <q-icon name="la la-arrow-right" /></RouterLink>
+                    <q-btn v-if="config.profileAuthorized && config.clientApi?.features?.includes('overviewPinnedShelves')" flat dense no-caps
+                        icon="la la-bookmark" label="Управление полками" @click="library.openLists()" />
                     <q-btn flat dense no-caps icon="la la-sync" label="Обновить" :loading="state.readingLoading || state.shelvesLoading" @click="refresh" />
                 </div>
             </template>
@@ -85,7 +94,9 @@ import {useLibraryPage} from './useLibraryPage';
 import {catalogTarget, effectiveCatalogScope} from './catalogSearchModel';
 import previewMetadata from '../../../shared/BookPreview';
 
-const {library, active} = useLibraryPage('Обзор', value => value.repository.loadHome({freshReading: true}));
+const {library, active} = useLibraryPage('Обзор', value => {
+    if (value.config.value.version) value.repository.loadHome({freshReading: true});
+});
 const {state, repository, config, settings} = library;
 const router = useRouter(), query = ref('');
 const completion = ref(null), searchFocused = ref(false), suggestionsExpanded = ref(false), activeSuggestionId = ref();
@@ -121,16 +132,22 @@ const recommendations = computed(() => {
         return item ? {...book,percent:item.percent} : book;
     });
 });
+const pinnedShelves = computed(() => config.value.profileAuthorized && !state.readingLoginRequired
+    && config.value.clientApi?.features?.includes('overviewPinnedShelves') ? state.pinnedShelves : []);
+const pendingFirstPins = computed(() => state.pinnedShelvesLoading && !state.pinnedShelvesLoaded);
 const shelves = computed(() => {
     const reading = new Map((state.reading?.items || []).map(book => [bookUid(book), book]));
     const flags = {'newest': 'showDiscoveryNewest', 'popular': 'showDiscoveryPopular', 'from-your-lists': 'showDiscoveryFromLists',
         'unfinished-series': 'showDiscoveryUnfinishedSeries', 'external': 'showDiscoveryExternal', 'similar': 'showDiscoverySimilar'};
-    return [...state.shelves, ...state.externalShelves].filter(shelf => shelf.id !== 'continue-reading' && shelf.books?.length
-        && settings.value[flags[shelf.mode] || flags[shelf.id] || flags[shelf.source]] !== false)
-        .map((shelf, index) => ({...shelf, id: shelf.id || `discovery-${index}`, books: shelf.books.map(book => {
+    return [...state.shelves, ...state.externalShelves].filter(shelf => {
+        if (shelf.id === 'continue-reading' || shelf.id === 'hidden-books' || !shelf.books?.length) return false;
+        const kind = shelf.id.startsWith('newest-') ? 'newest' : shelf.id;
+        return settings.value[flags[shelf.mode] || flags[kind] || flags[shelf.source]] !== false;
+    })
+        .map(shelf => ({...shelf, books: shelf.books.map(book => {
             const item = reading.get(bookUid(book));
             return item ? {...book, percent: item.percent} : book;
-        })})).slice(0, 4);
+        })}));
 });
 function search() {
     searchFocused.value = false;

@@ -221,6 +221,28 @@
         </div>
 
         <!--------------------------------------------------->
+        <div v-if="type === 'profileOtp'" :class="dialogContentClass" :style="dialogContentStyle">
+            <div class="header row">
+                <div class="caption col row items-center q-ml-md">{{ caption }}</div>
+                <div v-if="!noCancel" class="close-icon column justify-center items-center">
+                    <q-btn v-close-popup flat round dense aria-label="Закрыть"><q-icon name="la la-times" size="18px" /></q-btn>
+                </div>
+            </div>
+            <form class="credentials-form" @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
+                <div class="q-mx-md q-mt-sm">
+                    <p>{{ message }}</p>
+                    <q-input ref="input" v-model="inputValue" label="Код из приложения или резервный код"
+                        name="otp" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="64" outlined dense />
+                    <div class="error" role="status" aria-live="polite">{{ error }}</div>
+                </div>
+                <div class="buttons row justify-end q-pa-md">
+                    <q-btn v-if="!noCancel" v-close-popup class="q-px-md q-ml-sm" dense no-caps>Отмена</q-btn>
+                    <q-btn class="q-px-md q-ml-sm" color="primary" type="submit" dense no-caps>OK</q-btn>
+                </div>
+            </form>
+        </div>
+
+        <!--------------------------------------------------->
         <div v-show="type == 'hotKey'" :class="dialogContentClass" :style="dialogContentStyle">
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
@@ -311,7 +333,7 @@ class StdDialog {
     }
 
     get dialogPosition() {
-        return (this.isCompactLayout && (this.type == 'prompt' || this.type == 'password' || this.type == 'profileLogin'))
+        return (this.isCompactLayout && ['prompt', 'password', 'profileLogin', 'profileOtp'].includes(this.type))
             ? 'top'
             : 'standard';
     }
@@ -363,7 +385,7 @@ class StdDialog {
             this.hideTrigger();
             this.hideTrigger = null;
         }
-        if (this.type == 'password' || this.type == 'profileLogin') {
+        if (['password', 'profileLogin', 'profileOtp'].includes(this.type)) {
             this.enableValidator = false;
             this.inputValue = '';
             this.profilePasswordValue = '';
@@ -373,7 +395,7 @@ class StdDialog {
     }
 
     onShow() {
-        if (this.type == 'prompt' || this.type == 'password') {
+        if (['prompt', 'password', 'profileOtp'].includes(this.type)) {
             this.enableValidator = true;
             if (this.inputValue)
                 this.validate(this.inputValue);
@@ -430,6 +452,8 @@ class StdDialog {
         if (this.type == 'profileLogin') {
             this.inputValue = String(values.get('username') || '');
             this.profilePasswordValue = password;
+        } else if (this.type === 'profileOtp') {
+            this.inputValue = String(values.get('otp') || '');
         } else {
             this.inputValue = password;
         }
@@ -441,7 +465,7 @@ class StdDialog {
     }
 
     okClick() {
-        if ((this.type == 'prompt' || this.type == 'password') && !this.validate(this.inputValue)) {
+        if (['prompt', 'password', 'profileOtp'].includes(this.type) && !this.validate(this.inputValue)) {
             this.$refs.dialog.shake();
             return;
         }
@@ -563,6 +587,17 @@ class StdDialog {
                 this.inputValue = opts.login || '';
                 this.profilePasswordValue = opts.password || '';
             }
+            this.active = true;
+        });
+    }
+
+    profileOtp(message, opts) {
+        return new Promise(resolve => {
+            this.enableValidator = false;
+            this.init(message, 'Двухфакторный вход', opts);
+            this.type = 'profileOtp';
+            this.inputValidator = value => String(value || '').trim() ? true : 'Введите код';
+            this.hideTrigger = () => resolve(this.ok ? String(this.inputValue).trim() : '');
             this.active = true;
         });
     }

@@ -30,6 +30,11 @@ function scopeGuard(getWorker) {
                     res.set('Cache-Control', 'no-store');
                     return res.status(404).send('Profile not found');
                 }
+                if (user.profileTotp && identity?.user?.id !== user.id) {
+                    res.set('Cache-Control', 'no-store');
+                    res.set('WWW-Authenticate', 'Basic realm="inpx-web OPDS", charset="UTF-8"');
+                    return res.status(401).send('Authentication required');
+                }
                 // Every page and generated link must refer to the profile checked above.
                 req.query.user = user.id;
                 req.opdsUser = user;

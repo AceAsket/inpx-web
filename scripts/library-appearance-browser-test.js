@@ -9,6 +9,27 @@ const {unusedPort} = require('./binary-smoke-test');
 const {chromium} = require(process.env.INPX_PLAYWRIGHT_MODULE || 'playwright');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function assertPosition(locator, before) {
+    const after = await locator.boundingBox();
+    assert(after && before && Math.abs(before.x - after.x) <= 1 && Math.abs(before.y - after.y) <= 1,
+        `Expected stable position, got ${JSON.stringify({before,after})}`);
+}
+
+function holdReply() {
+    let resolve;
+    const intercepted = new Promise(done => {resolve = done;});
+    return {resolve, async wait() {
+        let timeout;
+        try {
+            return await Promise.race([intercepted, new Promise((_, reject) => {
+                timeout = setTimeout(() => reject(new Error('Expected library reply to be intercepted')), 10000);
+            })]);
+        } finally {
+            clearTimeout(timeout);
+        }
+    }};
+}
+
 async function archive(file, entries) {
     const zip = new yazl.ZipFile();
     const output = fs.createWriteStream(file);
@@ -61,9 +82,10 @@ if (require.main === module) (async() => {
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [], actions = [];
         let readingFailure = '', recommendationMode = 'full', recommendationBook = null, heldRecommendation = null;
-        const overviewPreviews = [];
+        let favoritesFixture = null, readingReplies = null;
+        const overviewPreviews = [], pinWrites = [];
         await page.routeWebSocket('**/ws', socket => {
-            const server = socket.connectToServer(), bookRequests = new Set(), authorRequests = new Set();
+            const server = socket.connectToServer(), bookRequests = new Set(), authorRequests = new Set(), pinRequests = new Set(), heldReplies = new Map();
             socket.onMessage(message => {
                 try {
                     const request = JSON.parse(String(message));
@@ -81,14 +103,45 @@ if (require.main === module) (async() => {
                         socket.send(JSON.stringify({requestId: request.requestId, error: readingFailure}));
                         return;
                     }
+                    if (favoritesFixture && ['get-library-follows', 'change-library-follow'].includes(request.action)) {
+                        socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));
+                        const fixture = favoritesFixture;
+                        if (request.action === 'change-library-follow' && request.operation === 'seen-books') {
+                            const seen = request.payload?.bookUids || [];
+                            fixture.writes.push(seen);
+                            fixture.books = fixture.books.filter(book => !seen.includes(book._uid));
+                        }
+                        const {offset = 0, limit = 0, autoRefresh} = request.options || request.payload || {};
+                        if (request.action === 'get-library-follows') fixture.reads.push({offset,limit,autoRefresh});
+                        const reply = JSON.stringify({requestId:request.requestId,
+                            follows:fixture.follows.map(follow => ({...follow,unread:fixture.books.length})),
+                            books:fixture.books.slice(offset, offset + limit), unseenCount:fixture.books.length, truncated:offset + limit < fixture.books.length});
+                        const hold = limit > 0 && request.action === 'get-library-follows' ? fixture.hold : null;
+                        if (hold) {
+                            fixture.hold = null;
+                            hold.resolve(() => socket.send(reply));
+                        } else socket.send(reply);
+                        return;
+                    }
+                    if (readingReplies?.[request.action]) {
+                        heldReplies.set(request.requestId, readingReplies[request.action]);
+                        delete readingReplies[request.action];
+                    }
                     if (request.action === 'bookSearch') bookRequests.add(request.requestId);
                     if (request.action === 'get-author-info') authorRequests.add(request.requestId);
+                    if (request.action === 'set-overview-pinned-shelves') pinRequests.add(request.requestId);
                 } catch { /* Forward protocol keepalive frames unchanged. */ }
                 server.send(message);
             });
             server.onMessage(message => {
                 try {
                     const response = JSON.parse(String(message));
+                    if (!response._rok && heldReplies.has(response.requestId)) {
+                        heldReplies.get(response.requestId).resolve(() => socket.send(message));
+                        heldReplies.delete(response.requestId);
+                        return;
+                    }
+                    if (!response._rok && pinRequests.delete(response.requestId)) pinWrites.push(response);
                     if (bookRequests.has(response.requestId) && !response._rok) {
                         bookRequests.delete(response.requestId);
                         if (!response.error) {response.totalFound = 661301; socket.send(JSON.stringify(response)); return;}
@@ -127,6 +180,7 @@ if (require.main === module) (async() => {
             try {
                 csrfToken = (await request({action: 'get-config'})).csrfToken;
                 return await new Function('root', `return (async()=>{${source}})()`)({api: {
+                    request,
                     search: (from, query) => request({action: 'search', from, query}),
                     updateReaderProgress: (bookUid, progress) => request({action: 'update-reader-progress', bookUid, progress}),
                 }});
@@ -145,10 +199,10 @@ if (require.main === module) (async() => {
         await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('appearance-local-test');
         await page.getByRole('button', {name: 'OK', exact: true}).click();
         await page.locator('.profile-controls .profile-logout').waitFor();
-        const uids = await api(`const response = await root.api.search('title', {lang:'ru',limit:40}); const books = response.found.flatMap(item=>item.books||[]); return books.map(book=>book._uid);`);
-        assert(uids.length >= 8, 'Fixture must contain real indexed books');
-        recommendationBook = await api(`const response = await root.api.search('title', {lang:'ru',limit:40}); return response.found.flatMap(item=>item.books||[])[8];`);
-        recommendationBook = {...recommendationBook, libraryRating:{value:4.63,count:128}};
+        const indexedBooks = await api(`const response = await root.api.search('title', {lang:'ru',limit:40}); return response.found.flatMap(item=>item.books||[]);`);
+        const uids = indexedBooks.map(book => book._uid);
+        assert(uids.length >= 9, 'Fixture must contain real indexed books');
+        recommendationBook = {...indexedBooks[8], libraryRating:{value:4.63,count:128}};
         await api(`const uids=${JSON.stringify(uids)}; for(let i=0;i<4;i++) await root.api.updateReaderProgress(uids[i], {percent:[.34,.14,.01,1][i],sectionId:'chapter'}); return true;`);
 
         await page.getByRole('button', {name: 'Настройки', exact: true}).click();
@@ -222,9 +276,12 @@ if (require.main === module) (async() => {
         recommendationMode = 'hold';await page.getByRole('button', {name:'Обновить',exact:true}).click();
         for(let i=0;i<100&&!heldRecommendation;i++)await pause(30);assert(heldRecommendation);
         assert.equal(await recommendations.count(),0);assert(await page.locator('.current-book').isVisible());
-        assert(await page.getByRole('heading',{name:/Новинки/}).count(), 'Pending recommendations do not block global shelves');
+        const localNewest = page.getByRole('heading',{name:/Новинки/}).first();
+        await localNewest.waitFor();
+        const newestBox = await localNewest.boundingBox();
         recommendationBook = {...recommendationBook,librate:0,libraryRating:null};
         recommendationMode = 'full';heldRecommendation();heldRecommendation = null;await recommendations.waitFor();
+        await assertPosition(localNewest, newestBox);
         assert.equal(await rating.count(),0,'An unrated book never receives a fabricated score');
         assert(await page.locator('.book-shelf').count() >= 2, 'Home must render server discovery shelves in addition to recent books');
         assert(await page.getByRole('heading', {name: /Новинки/}).count() >= 1, 'Server shelf titles must reach the UI');
@@ -328,8 +385,31 @@ if (require.main === module) (async() => {
         await dialog.waitFor();
         await dialog.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
         assert.equal(await page.locator('body').getAttribute('data-catalog-appearance'), 'shelves');
+        const initialBooks = holdReply();
+        readingReplies = {'get-user-reading-library':initialBooks};
         await page.getByRole('link', {name: 'Мои книги', exact: true}).click();
-        await page.locator('.books-grid .book-tile').first().waitFor();
+        const booksResults = page.locator('.books-results');
+        const firstBook = booksResults.locator('.book-tile').first();
+        await booksResults.getByRole('status', {name: 'Загружаем книги', exact: true}).waitFor();
+        assert.equal(await booksResults.getByRole('heading', {name: 'Здесь пока нет книг', exact: true}).count(), 0);
+        const initialBox = await booksResults.boundingBox();
+        (await initialBooks.wait())();
+        await firstBook.waitFor();
+        await assertPosition(firstBook, initialBox);
+
+        const search = page.getByRole('textbox', {name: 'Найти среди моих книг', exact: true});
+        const searchedBooks = holdReply(), retainedBook = await firstBook.boundingBox();
+        readingReplies = {'get-user-reading-library':searchedBooks};
+        await search.fill(indexedBooks[2].title);
+        const finishSearch = await searchedBooks.wait();
+        await assertPosition(firstBook, retainedBook);
+        finishSearch();
+        await booksResults.locator('[role="status"]').waitFor({state:'hidden'});
+        await page.waitForFunction(() => document.querySelector('.books-results')?.getAttribute('aria-busy') === 'false');
+        await assertPosition(firstBook, retainedBook);
+        readingReplies = null;
+        await search.fill('');
+        await page.waitForFunction(() => document.querySelectorAll('.books-results .book-tile').length > 1);
         await page.locator('.books-grid .book-tile__open').first().click();
         await page.locator('.library-book-actions').waitFor();
         assert(page.url().includes('#/my-books'), 'The book preview keeps the selected shelf open');
@@ -405,6 +485,125 @@ if (require.main === module) (async() => {
             await panel.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
             await panel.waitFor({state: 'hidden'});
         }
+
+        const {ordinary, smart} = await api(`
+            const request = root.api.request;
+            const {list:ordinary} = await request({action:'create-reading-list', name:'Моя первая полка', visibility:'private'});
+            await request({action:'update-reading-list-book', listId:ordinary.id, bookUid:${JSON.stringify(uids[0])}, enabled:true});
+            const {list:created} = await request({action:'create-reading-list', name:'Мои EPUB', visibility:'opds', filters:{ext:'epub'}});
+            const {list:smart} = await request({action:'set-reading-list-visibility', listId:created.id, visibility:'opds', opds:{pinned:true,grouping:'books'}});
+            return {ordinary,smart};
+        `);
+        const pinnedOrder = () => api(`return (await root.api.request({action:'get-overview-pinned-shelves'})).shelfIds;`);
+        const publicationSettings = () => api(`
+            const {lists} = await root.api.request({action:'get-reading-lists'});
+            return Object.fromEntries(lists.filter(list => ${JSON.stringify([ordinary.id, smart.id])}.includes(list.id))
+                .map(({id,visibility,opds}) => [id,{visibility,opds}]));
+        `);
+        const originalPublication = await publicationSettings();
+        assert.equal(originalPublication[ordinary.id].visibility, 'private');
+        assert.equal(originalPublication[smart.id].visibility, 'opds');
+        assert.equal(originalPublication[smart.id].opds.pinned, true);
+        assert.deepEqual(await pinnedOrder(), [], 'Public OPDS shelves do not start pinned in Overview');
+        const myBooks = page.getByRole('link', {name: 'Мои книги', exact: true});
+        const overview = page.getByRole('link', {name: 'Обзор', exact: true});
+        const panel = page.locator('.library-dialog-card[data-dialog-kind="reading-lists"]');
+        const manage = page.locator('.books-heading').getByRole('button', {name: 'Управление полками', exact: true});
+        const closePanel = async() => {
+            await panel.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+            await panel.waitFor({state: 'hidden'});
+        };
+        const pinShelf = item => panel.getByRole('checkbox', {name: `Закрепить в Обзоре: ${item.name}`, exact: true});
+        const changePins = async(action, expected) => {
+            const writes = pinWrites.length;
+            await action();
+            for (let i = 0; i < 100 && writes === pinWrites.length; i++) await pause(30);
+            assert.equal(pinWrites.length, writes + 1, 'A single pin action must reach the server');
+            assert.equal(pinWrites.at(-1).error, undefined, 'The pin change must be accepted');
+            assert.deepEqual(await pinnedOrder(), expected.map(shelf => shelf.id));
+        };
+        await page.setViewportSize({width: 1440, height: 1000});
+        await myBooks.click();
+        await manage.click();
+        await pinShelf(ordinary).waitFor();
+        const firstOrder = [];
+        for (const shelf of [ordinary, smart]) {
+            assert.equal(await pinShelf(shelf).getAttribute('aria-checked'), 'false');
+            firstOrder.push(shelf);
+            await changePins(() => pinShelf(shelf).click(), firstOrder);
+        }
+        await panel.getByText('Порядок полок в Обзоре', {exact: true}).waitFor();
+        await changePins(() => panel.getByRole('button', {name: `Выше: ${smart.name}`, exact: true}).click(), [smart, ordinary]);
+        await closePanel();
+        await overview.click();
+        const shelves = page.locator('section[aria-labelledby^="shelf-pinned-"]');
+        const assertPinnedShelves = async expected => {
+            for (const shelf of expected) await page.getByRole('heading', {name: shelf.name, exact: true}).waitFor();
+            await page.waitForFunction(ids => JSON.stringify(Array.from(document.querySelectorAll('section[aria-labelledby^="shelf-pinned-"]'),
+                section => section.getAttribute('aria-labelledby'))) === JSON.stringify(ids), expected.map(shelf => `shelf-pinned-${shelf.id}`));
+            assert.deepEqual(await shelves.locator('h2').allTextContents(), expected.map(shelf => shelf.name));
+            assert.deepEqual(await pinnedOrder(), expected.map(shelf => shelf.id));
+        };
+        await assertPinnedShelves([smart, ordinary]);
+        await shelves.filter({has:page.getByRole('heading', {name: ordinary.name, exact: true})})
+            .getByRole('button', {name: `Открыть карточку: ${indexedBooks[0].title}`, exact: true}).waitFor();
+        await shelves.filter({has:page.getByRole('heading', {name: smart.name, exact: true})})
+            .getByRole('button', {name: 'Открыть карточку: Я. Книга EPUB', exact: true}).waitFor();
+        await page.reload();
+        await assertPinnedShelves([smart, ordinary]);
+        await screenshot('overview-pinned-shelves-dark-1440');
+        const smartShelfLink = page.getByRole('link', {name: `Открыть полку «${smart.name}»`, exact: true});
+        assert.equal(await smartShelfLink.getAttribute('href'), `#/my-books?list=${smart.id}`);
+        await smartShelfLink.click();
+        await page.getByRole('heading', {name: smart.name, exact: true}).waitFor();
+        await page.locator('.books-grid').getByRole('button', {name: 'Открыть карточку: Я. Книга EPUB', exact: true}).waitFor();
+        assert.equal(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('list'), smart.id);
+        await manage.click();
+        assert.equal(await pinShelf(smart).getAttribute('aria-checked'), 'true');
+        await changePins(() => pinShelf(smart).click(), [ordinary]);
+        await closePanel();
+        await overview.click();
+        await assertPinnedShelves([ordinary]);
+        assert.deepEqual(await publicationSettings(), originalPublication, 'Overview pinning never changes OPDS visibility or its root pin');
+
+        const favoriteBooks = indexedBooks.slice(4,6);
+        assert.equal(favoriteBooks.length, 2);
+        const favoritesLoad = holdReply();
+        favoritesFixture = {books:favoriteBooks, reads:[], writes:[], hold:favoritesLoad, follows:[
+            {id:'favorite-author',kind:'author',value:favoriteBooks[0].author,unread:2},
+        ]};
+        await myBooks.click();
+        const favoritesTab = page.locator('a[href*="view=favorites"]');
+        const favoritesBadge = favoritesTab.getByTestId('favorite-books-count');
+        await favoritesBadge.waitFor();
+        assert.equal((await favoritesBadge.innerText()).trim(), '2');
+        assert(favoritesFixture.reads.some(({offset,limit,autoRefresh}) => offset === 0 && limit === 0 && autoRefresh),
+            'The Favorites tab fetches the badge without requesting books');
+        await page.setViewportSize({width:390,height:844});
+        await favoritesTab.click();
+        const favoriteNew = page.getByRole('region', {name: 'Новое у любимых', exact: true});
+        await favoriteNew.waitFor();
+        const favoriteResults = favoriteNew.locator('.favorite-books__results');
+        const markSeen = favoriteNew.getByRole('button', {name:'Отметить показанные просмотренными',exact:true});
+        await favoriteResults.getByRole('status', {name:'Загружаем книги',exact:true}).waitFor();
+        assert(await markSeen.isDisabled());
+        const favoriteBox = await favoriteResults.boundingBox(), markBox = await markSeen.boundingBox();
+        (await favoritesLoad.wait())();
+        for (const book of favoriteBooks)
+            await favoriteNew.getByRole('button', {name: `Открыть карточку: ${book.title}`, exact: true}).waitFor();
+        await assertPosition(favoriteResults.locator('.book-tile').first(), favoriteBox);
+        await assertPosition(markSeen, markBox);
+        assert(favoritesFixture.reads.some(({offset,limit,autoRefresh}) => offset === 0 && limit === 40 && autoRefresh),
+            'Favorites request a bounded page of books');
+        await screenshot('favorites-new-dark-390');
+        await markSeen.click();
+        await favoritesBadge.waitFor({state:'hidden'});
+        await favoriteNew.getByRole('heading', {name: 'Новых книг пока нет', exact: true}).waitFor();
+        await assertPosition(markSeen, markBox);
+        assert.deepEqual(favoritesFixture.writes, [favoriteBooks.map(book => book._uid)]);
+        favoritesFixture = null;
+        await page.setViewportSize({width: 390, height: 844});
+
         await page.getByRole('link', {name: 'Обзор', exact: true}).click();
         await page.locator('.current-book').waitFor();
         await page.waitForFunction(() => !document.querySelector('.overview-loading'));
@@ -601,6 +800,7 @@ if (require.main === module) (async() => {
         await page.locator('.overview-welcome').waitFor();
         assert.equal(await page.locator('.current-book').count(), 0, 'Logout clears private reading history');
         assert.equal(await recommendations.count(), 0, 'Logout clears private recommendations');
+        assert.equal(await shelves.count(), 0, 'Logout clears pinned private shelves');
         await page.reload(); await page.locator('.overview-welcome').waitFor();
         assert.equal(await page.locator('.library-shell--active').count(), 1, 'Shelves selection persists');
         const fresh = await browser.newPage({viewport: {width: 390, height: 844}});
@@ -612,7 +812,7 @@ if (require.main === module) (async() => {
         await fresh.close();
         assert.deepEqual(errors, []);
         await fs.writeJson(path.join(directory, 'result.json'), {base, artifacts, errors, actions}, {spaces: 2});
-        console.log(`Library appearance: classic/shelves, persistence, mobile/tablet/desktop, light/dark, reading progress, catalog query, cached shelves and logout passed. Artifacts: ${directory}`);
+        console.log(`Library appearance: classic/shelves, persistence, mobile/tablet/desktop, light/dark, reading progress, catalog query, pinned shelves, favorites and logout passed. Artifacts: ${directory}`);
     } catch (error) {
         if (browser) {const pages = browser.contexts().flatMap(context => context.pages()); if (pages[0]) {await pages[0].screenshot({path: path.join(directory, 'failure.png')}).catch(() => {}); await fs.writeFile(path.join(directory, 'failure.html'), await pages[0].content());}}
         console.error(output); throw error;

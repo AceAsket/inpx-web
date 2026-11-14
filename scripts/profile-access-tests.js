@@ -325,5 +325,100 @@ async function testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices() {
     });
 }
 
-module.exports = [testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
+async function testOpdsAppPasswordIsProfileScopedRevocableAndCannotCreateWebSession() {
+    for (const allowAnonymousAccess of [false, true]) {
+        await fixture({allowAnonymousAccess}, async ({config,worker,alice,bob,request}) => {
+            const store = worker.readingListStore;
+            const auth = (login,password) => ({authorization:'Basic ' + Buffer.from(`${login}:${password}`).toString('base64')});
+            const route = `/opds?user=${encodeURIComponent(alice.id)}`;
+            assert.equal((await request(route,auth('alice','alice-fixture'))).status,200);
+            const created = await store.manageOpdsAppPassword(alice.id,'create-opds-password');
+            assert.equal(created.opdsAppPasswordSet,true);
+            assert.equal(await store.verifyUserPassword(alice.id,created.opdsAppPassword),false);
+            const state = await store.load();
+            const target = state.users.find(user => user.id === alice.id);
+            target.profileTotp = (await require('../server/core/ProfileTotp').enable(new (require('../server/core/SecretStore'))(config),
+                alice.id,'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',-1)).state;
+            await store.save(state);
+            assert(!JSON.stringify(await store.exportData(alice.id)).includes('opdsAppPassword'));
+            assert(!JSON.stringify(await store.load()).includes(created.opdsAppPassword));
+
+            assert.equal((await request(route,auth('alice','alice-fixture'))).status,401);
+            assert.equal((await request(route,auth('alice',created.opdsAppPassword))).status,200);
+            const expectedDenied = allowAnonymousAccess ? 200 : 401;
+            assert.equal((await request('/book/fixture.txt',auth('alice','alice-fixture'))).status,expectedDenied);
+            assert.equal((await request('/book/fixture.txt',auth('alice',created.opdsAppPassword))).status,200);
+            await store.updateUser(alice.id,{opdsAuthEnabled:false});
+            assert.equal((await request(route)).status,401,'An enrolled profile remains private with the former Basic toggle off');
+            assert.equal((await request(route,auth('alice',created.opdsAppPassword))).status,401,'Changing OPDS authentication revokes the previous app password');
+            const privatePassword = await store.manageOpdsAppPassword(alice.id,'create-opds-password');
+            config.opds.user = 'catalog';
+            config.opds.password = 'global-fixture';
+            assert.equal((await request('/opds',auth('catalog','global-fixture'))).status,200);
+            assert.equal((await (await request('/opds',auth('alice',privatePassword.opdsAppPassword))).json()).user,alice.id);
+            assert.equal((await request(route,auth('catalog','global-fixture'))).status,401);
+            assert.equal((await request(route,auth('alice',privatePassword.opdsAppPassword))).status,200);
+            assert.equal((await request(`/opds?user=${encodeURIComponent(bob.id)}`,auth('catalog','global-fixture'))).status,200);
+            assert.equal(worker.profileSessions.size,0);
+
+            const rotated = await store.manageOpdsAppPassword(alice.id,'create-opds-password');
+            assert.notEqual(rotated.opdsAppPassword,privatePassword.opdsAppPassword);
+            assert.equal((await request(route,auth('alice',privatePassword.opdsAppPassword))).status,401);
+            assert.equal((await request(route,auth('alice',rotated.opdsAppPassword))).status,200);
+            assert.deepEqual(await store.manageOpdsAppPassword(alice.id,'revoke-opds-password'),{opdsAppPasswordSet:false});
+            assert.equal((await request(route,auth('alice',rotated.opdsAppPassword))).status,401);
+        });
+    }
+}
+
+async function testAndroidProtocolKeepsLegacyLoginAndRequiresOtpForEnrolledProfile() {
+    await fixture({allowAnonymousAccess:false}, async({worker,alice,request,session,connect}) => {
+        const client = {type:'android', version:'0.17.4', protocol:1};
+        const first = session();
+        const legacy = await connect({cookie:first.cookie});
+        const config = await legacy({action:'get-config',client});
+        assert(config.clientApi.features.includes('profileTotp'));
+        const auth = await legacy({action:'login-user-profile',client,login:'alice',password:'alice-fixture',csrfToken:config.csrfToken});
+        assert.equal(auth.userId,alice.id);
+        assert(auth.profileAccessToken);
+        const resumed = await legacy({action:'resume-user-profile',client,userId:alice.id,profileAccessToken:auth.profileAccessToken,csrfToken:config.csrfToken});
+        assert.equal(resumed.userId,alice.id);
+        const enrollment = await legacy({action:'profile-totp',operation:'start',userId:alice.id,profileAccessToken:auth.profileAccessToken,
+            csrfToken:config.csrfToken,payload:{password:'alice-fixture'},client});
+        const table = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+        const bits = [...enrollment.secret].map(letter=>table.indexOf(letter).toString(2).padStart(5,'0')).join('');
+        const key = Buffer.from(bits.match(/.{8}/g).map(byte=>parseInt(byte,2)));
+        const totp = require('../server/core/ProfileTotp');
+        const code = totp.hotp(key,Math.floor(Date.now()/30000));
+        const enabled = await legacy({action:'profile-totp',operation:'enable',userId:alice.id,profileAccessToken:auth.profileAccessToken,
+            csrfToken:config.csrfToken,payload:{password:'alice-fixture',code},client});
+        assert.equal(enabled.otpEnabled,true);
+        const second = session();
+        const call = await connect({cookie:second.cookie});
+        const fresh = await call({action:'get-config',client});
+        const login = {action:'login-user-profile',client,login:'alice',password:'alice-fixture',csrfToken:fresh.csrfToken};
+        const noCode = await call(login);
+        assert.equal(noCode.errorCode,'need_profile_otp');
+        assert.equal(noCode.profileAccessToken,undefined);
+        assert.equal((await request('/book/fixture.txt',{cookie:second.cookie})).status,401);
+        const entered = await call({...login,otp:enabled.recoveryCodes[0]});
+        assert.equal(entered.userId,alice.id);
+        assert.equal((await request('/book/fixture.txt',{cookie:second.cookie})).status,200);
+
+        const settings = {action:'profile-totp',userId:alice.id,profileAccessToken:entered.profileAccessToken,csrfToken:fresh.csrfToken};
+        const create = { ...settings, operation:'create-opds-password', payload:{password:'alice-fixture',code:enabled.recoveryCodes[1]} };
+        const blocked = await call({...create,csrfToken:''});
+        assert.equal(blocked.error,'bad_csrf_token');
+        const app = await call(create);
+        assert.equal(app.opdsAppPasswordSet,true);
+        const basic = {authorization:'Basic '+Buffer.from('alice:'+app.opdsAppPassword).toString('base64')};
+        assert.equal((await request('/opds?user='+alice.id,basic)).status,200);
+        assert.equal((await request('/book/fixture.txt',basic)).status,200);
+        const revoked = await call({...settings,operation:'revoke-opds-password',payload:{password:'alice-fixture',code:enabled.recoveryCodes[2]}});
+        assert.equal(revoked.opdsAppPasswordSet,false);
+        assert.equal((await request('/opds?user='+alice.id,basic)).status,401);
+    });
+}
+
+module.exports = [testAndroidProtocolKeepsLegacyLoginAndRequiresOtpForEnrolledProfile,testOpdsAppPasswordIsProfileScopedRevocableAndCannotCreateWebSession,testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
     testProxyProfileBindingAndIdentityChange, testWebSocketCatalogAuthorizationUsesProfileIdentity, testLegacyAccessAndGlobalOpdsCredentials];

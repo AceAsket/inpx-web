@@ -403,7 +403,85 @@ async function testImportWriteBudget() {
     await assert.rejects(failed, /test: save failed/);
 }
 
-module.exports = [testReadingAndAudioRevisionConflicts, testTitleWordMatchesSurviveListFilters, testReaderBookReplacement, testFolderIncrementalSearchAndSmartShelves, testBatchDownloadScopeAndArchive, testFolderBootAndFailedRefreshKeepsIndex, testFolderEpubAndConcurrentChanges, testImportWriteBudget];
+async function testOverviewPinnedShelvesAreOrderedBoundedAndPrivate() {
+    await temporary(async dir => {
+        const store = new ReadingListStore({dataDir:dir, adminPassword:'local-overview-fixture-password'});
+        const owner = await store.createUser({name:'Читатель', login:'reader', passwordHash:'fixture-password-hash'});
+        const other = await store.createUser({name:'Второй читатель'});
+        const smart = await store.createList(owner.id, 'Умная', 'private', {genre:'sf', unreadOnly:true});
+        const ordinary = await store.createList(owner.id, 'Обычная', 'opds');
+        await store.setListVisibility(owner.id, ordinary.id, 'opds', {pinned:true, grouping:'authors'});
+        const empty = await store.createList(owner.id, 'Пустая');
+        const foreign = await store.createList(other.id, 'Чужая', 'opds');
+        for (const uid of ['missing','deleted',...Array.from({length:12},(_,i)=>String(i))])
+            await store.setBookMembership(owner.id, ordinary.id, uid, true);
+        await store.updateReaderProgress(owner.id, '0', {percent:1});
+
+        const worker = Object.assign(Object.create(require('../server/core/WebWorker').prototype), {
+            readingListStore:store, profileSessions:new Map(), myState:'normal', libraryAssetGeneration:1,
+        });
+        const token = worker.createProfileSession(owner.id);
+        await assert.rejects(worker.getOverviewPinnedShelves(owner.id,''), /need_profile_login/);
+        await assert.rejects(worker.getOverviewPinnedShelves('missing-profile',token), /need_profile_login/);
+        await assert.rejects(worker.setOverviewPinnedShelves(owner.id,token,[foreign.id]), /в вашем профиле/);
+        await assert.rejects(worker.setOverviewPinnedShelves(owner.id,token,[ordinary.id,ordinary.id]), /не повторяться/);
+        await assert.rejects(worker.setOverviewPinnedShelves(owner.id,token,Array(9).fill(ordinary.id)), /до 8/);
+
+        const order = [smart.id, empty.id, ordinary.id];
+        assert.deepStrictEqual(await worker.setOverviewPinnedShelves(owner.id, token, order), {shelfIds:order,maxShelves:8});
+        const rows = Array.from({length:12},(_,i)=>({_uid:String(i),title:'Книга '+i,del:0}));
+        let ordinaryReads = 0, smartReads = 0;
+        worker.db = {esc:JSON.stringify, select:async options => {
+            assert.strictEqual(options.table,'book');
+            assert.match(options.where,/missing/);
+            ordinaryReads++;
+            return [{_uid:'deleted',del:1}, ...rows.slice().reverse()];
+        }};
+        worker.dbSearcher = {bookSearch:async query => {
+            assert.strictEqual(query.genre,'sf');
+            assert.strictEqual(query.del,'0');
+            assert.strictEqual(query.limit,256);
+            smartReads++;
+            return {found:rows};
+        }};
+        const result = await worker.getOverviewPinnedShelves(owner.id, token);
+        assert.strictEqual(ordinaryReads,1);
+        assert.strictEqual(smartReads,1);
+        assert.deepStrictEqual(result.shelfIds,order);
+        assert.deepStrictEqual(result.shelves.map(item=>[item.title,item.smart,item.books.map(book=>book._uid)]), [
+            ['Умная',true,['1','2','3','4','5','6','7','8']],
+            ['Пустая',false,[]],
+            ['Обычная',false,['0','1','2','3','4','5','6','7']],
+        ]);
+        assert.strictEqual(result.shelves[2].books[0]._readerProgress.percent,1);
+
+        const snapshot = await store.exportData(owner.id);
+        assert.deepStrictEqual(snapshot.user.overviewShelfNames,['Умная','Пустая','Обычная']);
+        await store.importData(other.id,snapshot);
+        const restored = await store.getOverviewShelfState(other.id,true);
+        assert.deepStrictEqual(restored.pinned.map(item=>item.name),snapshot.user.overviewShelfNames);
+        assert(restored.shelfIds.every(id=>!order.includes(id)));
+        assert.deepStrictEqual((await store.getList(owner.id,ordinary.id)).opds,{pinned:true,grouping:'authors'});
+
+        worker.dbSearcher.bookSearch = async() => {worker.libraryAssetGeneration++; return {found:rows};};
+        await assert.rejects(worker.getOverviewPinnedShelves(owner.id,token), {code:'INPX_LIBRARY_CHANGED'});
+        worker.dbSearcher.bookSearch = async() => {
+            await store.deleteList(owner.id, empty.id);
+            return {found:rows};
+        };
+        await assert.rejects(worker.getOverviewPinnedShelves(owner.id,token), {code:'INPX_LIBRARY_CHANGED'});
+        assert.deepStrictEqual((await store.getOverviewShelfState(owner.id)).shelfIds,[smart.id,ordinary.id]);
+        worker.dbSearcher.bookSearch = async() => {
+            worker.closeProfileSession(token);
+            return {found:rows};
+        };
+        await assert.rejects(worker.getOverviewPinnedShelves(owner.id,token), /need_profile_login/);
+        const controller = require('../server/controllers/WebSocketController').prototype;
+        assert.strictEqual(controller.isCsrfProtectedAction('set-overview-pinned-shelves'),true);
+    });
+}
+
+module.exports = [testReadingAndAudioRevisionConflicts, testTitleWordMatchesSurviveListFilters, testReaderBookReplacement, testFolderIncrementalSearchAndSmartShelves, testBatchDownloadScopeAndArchive, testFolderBootAndFailedRefreshKeepsIndex, testFolderEpubAndConcurrentChanges, testImportWriteBudget, testOverviewPinnedShelvesAreOrderedBoundedAndPrivate];
 if (require.main === module) {
     require('../server/core/Logger');
     (async() => {

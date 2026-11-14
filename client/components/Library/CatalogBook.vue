@@ -1,5 +1,5 @@
 <template>
-    <main class="library-page catalog-page">
+    <main class="library-page catalog-page" :aria-busy="loading">
         <nav class="catalog-breadcrumbs" aria-label="Путь в каталоге">
             <RouterLink :to="catalogTarget('/books', {}, route.query)">
                 Каталог
@@ -9,7 +9,7 @@
                 </RouterLink>
             </template>
         </nav>
-        <div v-if="loading" class="catalog-page__loading" role="status">
+        <div v-if="loading && !details" class="catalog-page__loading" role="status">
             <q-spinner size="26px" /> Загружаем книгу…
         </div>
         <LibraryNotice v-if="error" error title="Не удалось открыть книгу" :message="error" action-label="Повторить" @action="load" />
@@ -31,38 +31,53 @@ import {computed, ref, watch, onBeforeUnmount, onDeactivated} from 'vue';
 import {useRoute, useRouter} from 'vue-router';
 import {useLibraryPage} from './useLibraryPage';
 import {catalogScope, catalogTarget} from './catalogSearchModel';
-import {genreMapFromTree} from './libraryModel';
 import BookActionsDialog from './BookActionsDialog.vue';
 import BookInfoDialog from '../Search/BookInfoDialog/BookInfoDialog.vue';
 import BookTile from './BookTile.vue';
 import LibraryNotice from './LibraryNotice.vue';
 import './catalogPages.css';
 const route = useRoute(), router = useRouter(), uid = computed(() => String(route.query.bookUid || ''));
-const details = ref(null), genres = ref(new Map()), related = ref([]), loading = ref(false), error = ref('');
+const details = ref(null), related = ref([]), loading = ref(false), error = ref('');
 const {library, active} = useLibraryPage('Книга', load);
-let request = 0;
+const genres = library.genreMap;
+let request = 0, dataKey = '', relatedKey = '';
 async function load() {
     if (route.path !== '/book') return;
-    const id = ++request; details.value = null; related.value = []; error.value = ''; loading.value = true;
-    const bookUid = uid.value;
+    const id = ++request, revision = library.state.revision, bookUid = uid.value, filters = catalogScope(route.query);
+    const path = route.fullPath;
+    const current = () => id === request && revision === library.state.revision && route.fullPath === path;
+    const key = JSON.stringify([revision,bookUid]), relatedScope = JSON.stringify([key,filters]);
+    if (key !== dataKey) details.value = null;
+    if (relatedScope !== relatedKey) related.value = [];
+    dataKey = key;
+    relatedKey = relatedScope;
+    error.value = '';
+    loading.value = true;
     if (!bookUid) {error.value = 'В ссылке не указан идентификатор книги.'; loading.value = false; return;}
+    library.ensureGenres().catch(() => {});
     try {
         const result = await library.api.getBookCard(bookUid);
-        if (id !== request || route.path !== '/book' || uid.value !== bookUid) return;
-        details.value = result.bookInfo; document.title = `${details.value.book.title} · INPX Web`;
-        const book = details.value.book;
+        if (!current()) return;
+        const previous = details.value?.book, book = result.bookInfo.book;
+        if (previous?.series !== book.series) related.value = [];
+        details.value = library.config.value.profileAuthorized && previous?._readerProgress
+            ? {...result.bookInfo,book:{...book,_readerProgress:previous._readerProgress}} : result.bookInfo;
+        document.title = `${book.title} · INPX Web`;
         loading.value = false;
         await Promise.allSettled([
-            library.api.getGenreTree().then(tree => {if (id === request) genres.value = genreMapFromTree(tree.genreTree || []);}),
             ...(library.config.value.profileAuthorized ? [library.api.getReaderState(bookUid, {suppressProfileLogin: true}).then(state => {
-                if (id === request && state.progress?.updatedAt) details.value = {...details.value, book: {...book, _readerProgress: state.progress}};
+                if (!current()) return;
+                const updated = {...book};
+                if (state.progress?.updatedAt) updated._readerProgress = state.progress;
+                else delete updated._readerProgress;
+                details.value = {...details.value, book:updated};
             })] : []),
-            ...(book.series ? [library.api.catalogEntity({kind: 'series', name: book.series, limit: 12, filters:catalogScope(route.query)}).then(series => {
-                if (id === request) related.value = series.books.filter(book => book._uid !== bookUid);
+            ...(book.series ? [library.api.catalogEntity({kind:'series',name:book.series,limit:12,filters}).then(series => {
+                if (current()) related.value = series.books.filter(book => book._uid !== bookUid);
             })] : []),
         ]);
-    } catch (e) {if (id === request) error.value = e.message;}
-    finally {if (id === request) loading.value = false;}
+    } catch (e) {if (current()) error.value = e.message;}
+    finally {if (current()) loading.value = false;}
 }
 function navigate({type, value}) {
     if (type === 'author' || type === 'series') router.push(catalogTarget(type === 'author' ? '/author-details' : '/series-details', {name:value}, route.query));

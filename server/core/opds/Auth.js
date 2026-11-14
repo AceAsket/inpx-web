@@ -29,9 +29,15 @@ module.exports = function opdsAuth(config, verifyPassword, security) {
                     return verifyPassword(scopedUser, credentials?.user || '', credentials?.password || '');
                 if (!config.opds.user)
                     throw new Error('User must not be empty if password set');
+                // A shared password grants catalogue access, not the identity
+                // of an enrolled profile when a personal scope is requested.
+                if (scopedUser || credentials?.user) {
+                    const profile = await verifyPassword(scopedUser, credentials?.user || '', credentials?.password || '', {totpOnly:true});
+                    if (profile.user?.profileTotp) return profile;
+                }
                 return {authorized:!!credentials && equal(credentials.user, config.opds.user) && equal(credentials.password, config.opds.password)};
             };
-            const authenticationRequired = auth => Boolean(config.opds.password || auth.user?.opdsAuthEnabled === true);
+            const authenticationRequired = auth => Boolean(config.opds.password || auth.requiresAuthentication || auth.user?.opdsAuthEnabled === true);
             const auth = attempted ? await security.withLoginAttempt(req, 'opds', verify,
                 result => authenticationRequired(result) ? result.authorized : undefined) : await verify();
             if (auth.user) req.query.user = auth.user.id;
@@ -42,6 +48,8 @@ module.exports = function opdsAuth(config, verifyPassword, security) {
                 return res.status(401).send('Authentication required');
             }
             req.opdsAuthorized = true;
+            if (auth.user?.profileTotp)
+                req.profileAccessIdentity = {user:auth.user, opds:true, bound:true};
             next();
         } catch (error) {
             if (error.code === 'INPX_LOGIN_RATE_LIMIT') {

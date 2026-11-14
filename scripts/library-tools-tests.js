@@ -89,6 +89,55 @@ async function testLibraryFollowsDetectOnlyNewBooksAndSurviveBackup() {
     });
 }
 
+async function testLibraryFavoriteNewsCountsUniqueAvailableBooksAndMarksOnlyShown() {
+    await fixture(async worker => {
+        const store = worker.readingListStore, owner = await store.createUser({name:'Owner',login:'owner',
+            passwordHash:require('../server/core/ProfilePassword').legacy('owner','fixture')});
+        const token = worker.createProfileSession(owner.id);
+        let scans = 0;
+        worker.dbSearcher = {selectBookIds:async query => {
+            scans++;
+            const field = query.author ? 'author' : 'series';
+            return (await worker.db.select({table:'book'})).filter(row => row[field] === query[field].slice(1)).map(row => row.id);
+        }};
+        const check = payload => worker.libraryFollowAction(owner.id,token,'list',payload);
+        const book = (id, attrs = {}) => ({id,_uid:`book-${id}`,title:`Book ${id}`,author:'Author',series:'Saga',ext:'epub',...attrs});
+        await worker.db.insert({table:'book',rows:[book(1)]});
+        await worker.libraryFollowAction(owner.id,token,'add',{kind:'author',value:'Author'});
+        await worker.libraryFollowAction(owner.id,token,'add',{kind:'series',value:'Saga'});
+        assert.equal((await check({})).unseenCount,0);
+        const priorScans = scans;
+        await worker.db.insert({table:'book',rows:[book(2,{date:'2026-10-01'}),book(3,{date:'2026-11-02'}),
+            book(4,{date:'2026-11-03',del:1}),book(5,{date:'2026-11-04',author:'Other',series:'Other'})]});
+        worker.libraryAssetGeneration++;
+        const [badge, first] = await Promise.all([check({autoRefresh:true,limit:0}),check({autoRefresh:true,limit:1})]);
+        assert.deepStrictEqual(badge.books,[]);
+        assert.equal(badge.unseenCount,2);
+        assert.equal(first.unseenCount,2);
+        assert.deepStrictEqual(first.books.map(row => row._uid),['book-3']);
+        assert.equal(first.truncated,true);
+        const second = await check({autoRefresh:true,offset:1,limit:1});
+        assert.deepStrictEqual(second.books.map(row => row._uid),['book-2']);
+        assert.equal(second.truncated,false);
+        assert.equal(scans,priorScans + 2);
+        await store.updateReaderProgress(owner.id,'book-3',{percent:.2});
+        const seen = await worker.libraryFollowAction(owner.id,token,'seen-books',{bookUids:['book-3'],limit:1});
+        assert.deepStrictEqual(seen.books.map(row => row._uid),['book-2']);
+        assert.deepStrictEqual(seen.follows.map(row => row.unread),[1,1]);
+        assert.equal(seen.unseenCount,1);
+        assert.equal((await store.getUser(owner.id)).readerProgress['book-3'].percent,.2);
+        assert.equal((await check({autoRefresh:true})).unseenCount,1);
+        assert.equal(scans,priorScans + 2,'Marking seen does not rescan the subscriptions');
+        await worker.db.delete({table:'book',where:'@@id(2)'});
+        worker.libraryAssetGeneration++;
+        assert.equal((await check({autoRefresh:true})).unseenCount,0);
+        worker.closeProfileSession(token);
+        await assert.rejects(check({autoRefresh:true}),/need_profile_login/);
+        await assert.rejects(worker.libraryFollowAction('default','','list',{autoRefresh:true}),/need_profile_login/);
+        await assert.rejects(worker.libraryFollowAction(owner.id,token,'seen-books',{bookUids:['book-3']}),/need_profile_login/);
+    });
+}
+
 async function testLibraryToolsRequireProfileAndAdminForAudit() {
     await fixture(async worker => {
         const passwordHash = await require('../server/core/ProfilePassword').hash('fixture');
@@ -228,5 +277,6 @@ async function testVoteSearchWaitsForReadinessWithShortSharedRequests() {
 
 module.exports = [testVisibleSpeechAnchorIgnoresOffscreenTextAndFindsRepeatedParagraphs,
     testVoteSearchWaitsForReadinessWithShortSharedRequests,testBackgroundTaskVisibilityAndIndexReadiness,testLibraryFollowsDetectOnlyNewBooksAndSurviveBackup,
+    testLibraryFavoriteNewsCountsUniqueAvailableBooksAndMarksOnlyShown,
     testLibraryToolsRequireProfileAndAdminForAudit,testLibraryAuditFindsMissingAndBrokenBooksWithoutChangingSources,
     testLibraryAuditCancellationAndSourceChangesAreNotCorruption,testSpeechAnchorsLocateFragmentsWithoutMixingNotes];

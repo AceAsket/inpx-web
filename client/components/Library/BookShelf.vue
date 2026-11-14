@@ -8,14 +8,15 @@
                 <button type="button" :aria-label="`Следующие книги: ${title}`" :disabled="!canForward" @click="scroll(1)"><q-icon name="la la-angle-right" size="20px" /></button>
             </div>
         </div>
-        <div ref="strip" class="book-shelf__strip" tabindex="0" :aria-label="title" @scroll.passive="measure" @keydown.left.prevent="scroll(-1)" @keydown.right.prevent="scroll(1)">
+        <div v-if="books.length" ref="strip" class="book-shelf__strip" tabindex="0" :aria-label="title" @scroll.passive="measure" @keydown.left.prevent="scroll(-1)" @keydown.right.prevent="scroll(1)">
             <BookTile v-for="book in books" :key="bookUid(book) || book.discoveryUrl || book.title" :book="book" />
         </div>
+        <p v-else class="book-shelf__empty">На полке пока нет книг</p>
     </section>
 </template>
 
 <script setup>
-import {ref, onMounted, onBeforeUnmount, watch, nextTick} from 'vue';
+import {ref, onBeforeUnmount, watch} from 'vue';
 import BookTile from './BookTile.vue';
 import {bookUid} from './libraryModel';
 
@@ -24,7 +25,7 @@ const strip = ref(null), canBack = ref(false), canForward = ref(false);
 let observer;
 function measure() {
     const node = strip.value;
-    if (!node) return;
+    if (!node) {canBack.value = false; canForward.value = false; return;}
     canBack.value = node.scrollLeft > 2;
     canForward.value = node.scrollLeft + node.clientWidth < node.scrollWidth - 2;
 }
@@ -32,16 +33,21 @@ function scroll(direction) {
     strip.value?.scrollBy({left: direction * Math.max(150, strip.value.clientWidth * .8),
         behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
 }
-watch(() => props.books, async() => {await nextTick(); measure();});
-onMounted(() => {observer = new ResizeObserver(measure); observer.observe(strip.value); measure();});
+watch(strip, node => {
+    observer?.disconnect();
+    if (node) {observer = new ResizeObserver(measure); observer.observe(node);}
+    measure();
+}, {flush: 'post'});
+watch(() => props.books, measure, {flush: 'post'});
 onBeforeUnmount(() => observer?.disconnect());
 </script>
 
 <style scoped>
 .book-shelf {min-width: 0; margin: 26px 0 0;}
-.book-shelf__heading {display: flex; align-items: center; gap: 12px; margin-bottom: 14px;}
+.book-shelf__heading {display: flex; align-items: center; gap: 12px; margin-bottom: 14px; min-height: 30px;}
 h2 {font-size: 19px; line-height: 1.4; letter-spacing: -.02em; font-weight: 550; margin: 0;}
 .book-shelf__link {flex-shrink: 0;}
+.book-shelf__empty {margin: 0; color: var(--app-muted); font-size: 14px;}
 .book-shelf__actions {display: flex; align-items: center; gap: 5px; flex-shrink: 0; margin-left: auto;}
 button {background: transparent; color: var(--app-muted); border: 1px solid var(--app-border); width: 30px; height: 30px; border-radius: 50%; cursor: pointer;}
 button:disabled {opacity: .3; cursor: default;}

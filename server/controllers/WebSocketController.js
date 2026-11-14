@@ -146,8 +146,13 @@ class WebSocketController {
                         : {state:'error',error:'Библиотека ещё не готова'},req,ws); break;
                 case 'get-background-tasks':
                     this.send(await this.webWorker.getBackgroundTasks(req.userId,req.profileAccessToken),req,ws); break;
-                case 'get-library-follows':
-                    this.send(await this.webWorker.libraryFollowAction(req.userId,req.profileAccessToken,'list',req.options),req,ws); break;
+                case 'get-library-follows': {
+                    const user = await this.webWorker.personalLibraryUser(req.userId,req.profileAccessToken);
+                    const result = await this.readWithBudget({...req,userId:user.id},ws,
+                        () => this.webWorker.libraryFollowAction(user.id,req.profileAccessToken,'list',req.options), {backgroundLane:'discovery'});
+                    await this.webWorker.personalLibraryUser(user.id,req.profileAccessToken);
+                    this.send(result,req,ws); break;
+                }
                 case 'change-library-follow':
                     this.send(await this.webWorker.libraryFollowAction(req.userId,req.profileAccessToken,req.operation,req.payload),req,ws); break;
                 case 'start-library-audit':
@@ -321,10 +326,28 @@ class WebSocketController {
                     await this.deleteReaderBookmark(req, ws); break;
                 case 'get-reading-lists':
                     await this.getReadingLists(req, ws); break;
+                case 'get-overview-pinned-shelves': {
+                    const user = await this.webWorker.overviewShelvesUser(req.userId, req.profileAccessToken);
+                    const result = await this.readWithBudget({...req, userId:user.id}, ws,
+                        () => this.webWorker.getOverviewPinnedShelves(user.id, req.profileAccessToken),
+                        {backgroundLane:'overview-pinned-shelves'});
+                    await this.webWorker.overviewShelvesUser(user.id, req.profileAccessToken);
+                    this.send(result, req, ws); break;
+                }
+                case 'set-overview-pinned-shelves':
+                    this.send(await this.webWorker.setOverviewPinnedShelves(req.userId, req.profileAccessToken, req.shelfIds), req, ws); break;
                 case 'get-user-profiles':
                     await this.getUserProfiles(req, ws); break;
                 case 'login-user-profile':
                     await this.loginUserProfile(req, ws); break;
+                case 'profile-totp': {
+                    if (req.profileBoundId && req.operation !== 'status')
+                        throw new Error('Настройте второй фактор у провайдера SSO');
+                    const update = () => this.webWorker.profileTotpAction(req.userId, req.profileAccessToken, req.operation, req.payload);
+                    const result = this.security && req.operation !== 'status'
+                        ? await this.security.withLoginAttempt(ws.req, 'profile', update) : await update();
+                    this.send(result, req, ws); break;
+                }
                 case 'logout-user-profile':
                     await this.logoutUserProfile(req, ws); break;
                 case 'create-user-profile':
@@ -412,6 +435,7 @@ class WebSocketController {
             'cancel-isbn-index',
             'cancel-library-audit',
             'login-user-profile',
+            'profile-totp',
             'resume-user-profile',
             'subscribe-client-events',
             'logout-user-profile',
@@ -454,6 +478,7 @@ class WebSocketController {
             'create-reading-list',
             'rename-reading-list',
             'set-reading-list-visibility',
+            'set-overview-pinned-shelves',
             'delete-reading-list',
             'import-reading-lists',
             'update-reading-list-book',
@@ -925,7 +950,7 @@ class WebSocketController {
     }
 
     async loginUserProfile(req, ws) {
-        const verify = () => this.webWorker.loginUserProfile(req.login, req.password);
+        const verify = () => this.webWorker.loginUserProfile(req.login, req.password, req.otp);
         const result = this.security ? await this.security.withLoginAttempt(ws.req, 'profile', verify) : await verify();
         if (this.security && ws.req && ws.req.securitySession)
             ws.req.securitySession.profileAccessToken = result.profileAccessToken;

@@ -2,12 +2,25 @@ const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
 const profilePassword = require('./ProfilePassword');
+const profileTotp = require('./ProfileTotp');
 const bookFormats = require('../../shared/BookFormats');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const progressJournal = require('./ReaderProgressJournal');
 
 const readerPreferencesVersion = 2;
 const readerProgressFieldLimits = {bookUid: 512, sectionId: 4096, updatedAt: 128};
+const maxOverviewShelves = 8;
+const overviewShelfCandidateLimit = 256;
+
+function overviewShelfIds(value, allowed) {
+    if (!Array.isArray(value)) return [];
+    const ids = new Set();
+    for (const id of value) {
+        if (typeof id === 'string' && allowed.has(id)) ids.add(id);
+        if (ids.size === maxOverviewShelves) break;
+    }
+    return [...ids];
+}
 
 function boundedProgressField(value, field) {
     const text = String(value ?? '').trim();
@@ -667,6 +680,7 @@ class ReadingListStore {
         normalized.name = this.validateUserName(normalized.name || fallback.name || 'Пользователь');
         normalized.login = this.validateLogin(normalized.login || '');
         normalized.passwordHash = String(normalized.passwordHash || '').trim();
+        if (normalized.profileTotp != null) normalized.profileTotp = profileTotp.normalize(normalized.profileTotp);
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
         normalized.telegramBotId = /^\d{1,20}$/.test(String(normalized.telegramBotId || '')) ? String(normalized.telegramBotId) : '';
@@ -687,6 +701,10 @@ class ReadingListStore {
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
         normalized.personalRecommendationsEnabled = normalized.personalRecommendationsEnabled !== false;
         normalized.opdsAuthEnabled = (normalized.opdsAuthEnabled === true);
+        const appPasswordHash = String(normalized.opdsAppPasswordHash || '');
+        if (normalized.opdsEnabled && (normalized.opdsAuthEnabled || normalized.profileTotp) && normalized.login && normalized.passwordHash
+            && /^[a-f0-9]{64}$/.test(appPasswordHash)) normalized.opdsAppPasswordHash = appPasswordHash;
+        else delete normalized.opdsAppPasswordHash;
         normalized.readerPreferences = this.normalizeReaderPreferences(normalized.readerPreferences);
         normalized.readerProgress = this.normalizeReaderProgress(normalized.readerProgress);
         normalized.audioProgress = this.normalizeAudioProgress(normalized.audioProgress);
@@ -756,6 +774,11 @@ class ReadingListStore {
             }
         }
 
+        for (const user of users) {
+            if (user.overviewShelfIds === undefined) continue;
+            const ownedIds = new Set(lists.filter(item => item.userId === user.id).map(item => item.id));
+            user.overviewShelfIds = overviewShelfIds(user.overviewShelfIds, ownedIds);
+        }
         return {
             version: 5,
             users,
@@ -795,6 +818,10 @@ class ReadingListStore {
             if (!admin.passwordHash || this.config.resetAdminPassword) {
                 admin.login = adminTemplate.login;
                 admin.passwordHash = await profilePassword.hash(this.adminPassword());
+                if (this.config.resetAdminPassword) {
+                    delete admin.profileTotp;
+                    delete admin.opdsAppPasswordHash;
+                }
                 admin.updatedAt = this.nowIso();
                 changed = true;
             }
@@ -1136,9 +1163,37 @@ class ReadingListStore {
         const user = field ? users.find(item => item[field] === value) : this.findUser(users, value);
         if (!user) return null;
         const {id, login, passwordHash} = user;
-        return {id, login, passwordHash};
+        return {id, login, passwordHash, otpEnabled:!!user.profileTotp};
     }
 
+    async getExactProfileIdentity(userId) {
+        const {users} = await this.loadSnapshot();
+        const profile = users.find(item => item.id === userId);
+        if (!profile) return null;
+        const {id, name, login, passwordHash} = profile;
+        return {id, name, login, passwordHash, otpEnabled:!!profile.profileTotp};
+    }
+
+    async getProfileCredentials(value, byLogin = false) {
+        const {users} = await this.loadSnapshot();
+        const user = byLogin ? users.find(item => item.login === value) : users.find(item => item.id === value);
+        if (!user) return null;
+        const {id, login, passwordHash} = user;
+        return {id, login, passwordHash, profileTotp:structuredClone(user.profileTotp),
+            opdsAppPasswordSet:!!user.opdsAppPasswordHash};
+    }
+
+    async updateProfileCredentials(userId, patch, authorize = () => {}) {
+        const data = await this.load();
+        const user = this.findProgressUser(data.users, userId);
+        if (Object.hasOwn(patch, 'profileTotp')) {
+            if (patch.profileTotp) user.profileTotp = patch.profileTotp;
+            else delete user.profileTotp;
+        }
+        if (patch.passwordHash) user.passwordHash = patch.passwordHash;
+        authorize();
+        await this.save(data);
+    }
     async findTelegramUser(botId, chatId) {
         botId=String(botId);chatId=String(chatId);
         if(!/^[1-9]\d{0,19}$/.test(botId)||!/^[1-9]\d{0,19}$/.test(chatId)||!Number.isSafeInteger(Number(chatId)))return null;
@@ -1238,29 +1293,66 @@ class ReadingListStore {
         if (!normalized)
             return null;
 
-        const data = await this.load();
+        const data = await this.loadSnapshot();
         // Match resolveUser: an exact ID must win over another profile's login.
         const user = data.users.find((item) => item.id === normalized)
             || data.users.find((item) => item.login === normalized);
         if (!user || user.opdsEnabled === false)
             return null;
 
-        return user;
+        return structuredClone(user);
     }
 
-    async verifyOpdsPassword(publicId = '', login = '', password = '') {
-        const user = await this.getOpdsUser(publicId);
-        if (!user || user.opdsAuthEnabled !== true)
+    async verifyOpdsPassword(publicId = '', login = '', password = '', {totpOnly = false} = {}) {
+        const user = publicId || !totpOnly ? await this.getOpdsUser(publicId) : await this.findOpdsIdentity(login,password,{totpOnly:true});
+        if (!publicId && totpOnly) return {user, authorized:!!user};
+        if (totpOnly && !user?.profileTotp) return {user:null, authorized:false};
+        if (!user || (user.opdsAuthEnabled !== true && !user.profileTotp))
             return {user, authorized: true};
+        return {user, requiresAuthentication:true, authorized:await this.verifyOpdsCredential(user,login,password)};
+    }
 
-        if (!user.login || !user.passwordHash)
-            return {user, authorized: false};
+    async findOpdsIdentity(login = '', password = '', {totpOnly = false} = {}) {
+        const normalized = this.normalizeLogin(login);
+        if (!normalized) return null;
+        const user = (await this.loadSnapshot()).users.find(item => item.login === normalized);
+        if (!user || user.opdsEnabled === false || (totpOnly ? !user.profileTotp : !(user.opdsAuthEnabled || user.profileTotp))) return null;
+        return await this.verifyOpdsCredential(user,login,password) ? structuredClone(user) : null;
+    }
 
-        const normalizedLogin = this.normalizeLogin(login);
-        return {
-            user,
-            authorized: normalizedLogin === user.login && await this.verifyUserPassword(user.id, password),
-        };
+    async verifyOpdsCredential(user, login, password) {
+        if (!user.login || !user.passwordHash || this.normalizeLogin(login) !== user.login) return false;
+        // App passwords contain 192 bits of randomness, so a SHA-256 digest
+        // supports constant-time validation without a KDF on every book request.
+        if (typeof password === 'string' && /^inpx_[A-Za-z0-9_-]{32}$/.test(password) && /^[a-f0-9]{64}$/.test(user.opdsAppPasswordHash || '')) {
+            const digest = crypto.createHash('sha256').update(password).digest();
+            if (crypto.timingSafeEqual(digest, Buffer.from(user.opdsAppPasswordHash,'hex'))) return true;
+        }
+        return user.profileTotp ? false : this.verifyUserPassword(user.id,password);
+    }
+
+    async manageOpdsAppPassword(userId, operation, {profileTotp, authorize} = {}) {
+        const data = await this.load();
+        const user = data.users.find(item => item.id === userId);
+        if (!user) throw new Error('need_profile_login');
+        if (operation === 'revoke-opds-password') {
+            if (authorize) await authorize();
+            if (user.opdsAppPasswordHash || profileTotp) {
+                delete user.opdsAppPasswordHash;
+                if (profileTotp) user.profileTotp = profileTotp;
+                await this.save(data);
+            }
+            return {opdsAppPasswordSet:false};
+        }
+        if (operation !== 'create-opds-password') throw new Error('Неизвестное действие с паролем OPDS');
+        if (user.opdsEnabled === false || (!user.opdsAuthEnabled && !user.profileTotp) || !user.login || !user.passwordHash)
+            throw new Error('Включите авторизацию OPDS в настройках профиля');
+        const opdsAppPassword = 'inpx_' + crypto.randomBytes(24).toString('base64url');
+        if (authorize) await authorize();
+        if (profileTotp) user.profileTotp = profileTotp;
+        user.opdsAppPasswordHash = crypto.createHash('sha256').update(opdsAppPassword).digest('hex');
+        await this.save(data);
+        return {opdsAppPasswordSet:true, opdsAppPassword};
     }
 
     async verifyUserPassword(userId, password) {
@@ -1316,6 +1408,8 @@ class ReadingListStore {
 
         const nextName = this.validateUserName(utilsHasProp(patch, 'name') ? patch.name : target.name);
         const nextLogin = this.validateLogin(utilsHasProp(patch, 'login') ? patch.login : target.login);
+        if (nextLogin !== target.login || (utilsHasProp(patch, 'passwordHash') && String(patch.passwordHash || '').trim() !== target.passwordHash))
+            delete target.opdsAppPasswordHash;
         if (nextLogin !== target.login && profilePassword.isLegacy(target.passwordHash)
             && (!String(patch.passwordHash || '').trim() || patch.passwordHash === target.passwordHash))
             throw new Error('Для смены логина укажите пароль заново');
@@ -1349,10 +1443,14 @@ class ReadingListStore {
             target.personalRecommendationsEnabled = patch.personalRecommendationsEnabled !== false;
         if (utilsHasProp(patch, 'opdsAuthEnabled'))
             target.opdsAuthEnabled = (patch.opdsAuthEnabled === true);
+        if (!target.opdsEnabled || (utilsHasProp(patch, 'opdsAuthEnabled') && !target.opdsAuthEnabled))
+            delete target.opdsAppPasswordHash;
         if (utilsHasProp(patch, 'readerPreferences'))
             target.readerPreferences = this.normalizeReaderPreferences(patch.readerPreferences);
         if (target.opdsAuthEnabled && (!target.login || !target.passwordHash))
             throw new Error('Для OPDS-авторизации у профиля должен быть логин и пароль');
+        if (target.profileTotp && (!target.login || !target.passwordHash))
+            throw new Error('Сначала отключите двухфакторную защиту профиля');
         target.updatedAt = this.nowIso();
 
         await this.save(data);
@@ -1380,6 +1478,21 @@ class ReadingListStore {
         };
     }
 
+    async getLibraryFollows(userId) {
+        const user = (await this.loadSnapshot()).users.find(row => row.id === userId);
+        if (!user) throw new Error('need_profile_login');
+        const follows = user.libraryFollows || [];
+        // A restored backup can reuse subscription IDs and revisions. Work out
+        // the content key once for the immutable subscriptions in this snapshot.
+        if (!this.libraryFollowKeys) this.libraryFollowKeys = new WeakMap();
+        let cacheKey = this.libraryFollowKeys.get(follows);
+        if (!cacheKey) {
+            cacheKey = crypto.createHash('sha256').update(JSON.stringify(follows)).digest('hex');
+            this.libraryFollowKeys.set(follows,cacheKey);
+        }
+        return {follows, cacheKey};
+    }
+
     async changeLibraryFollow(userId, operation, patch = {}) {
         const {data, user} = await this.resolveUser(userId, {strict: true});
         const target = data.users.find(row => row.id === user.id);
@@ -1391,6 +1504,17 @@ class ReadingListStore {
             if (follows.some(row => row.kind === patch.kind && row.value.toLowerCase() === patch.value.trim().toLowerCase())) return follows;
             if (follows.length >= 20) throw new Error('Можно добавить до 20 авторов и серий');
             follows.push({...patch,id:this.makeId(),createdAt:this.nowIso(),revision:1,newUids:[]});
+        } else if (operation === 'seen-books') {
+            const seen = new Set(patch.bookUids);
+            let changed = false;
+            for (const follow of follows) {
+                const unread = follow.newUids.filter(uid => !seen.has(uid));
+                if (unread.length === follow.newUids.length) continue;
+                follow.newUids = unread;
+                follow.revision++;
+                changed = true;
+            }
+            if (!changed) return follows;
         } else {
             const index = follows.findIndex(row => row.id === patch.id);
             if (index < 0) return follows;
@@ -1899,6 +2023,53 @@ class ReadingListStore {
             .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     }
 
+    async getOverviewShelfState(userId, preview = false) {
+        const data = await this.loadSnapshot();
+        const user = preview ? this.findProgressUser(data.users, userId) : this.findUser(data.users, userId, {strict:true});
+        if (!user.overviewShelfIds?.length)
+            return {shelfIds:[], maxShelves:maxOverviewShelves, ...(preview ? {pinned:[]} : {})};
+        const lists = data.lists.filter(item => item.userId === user.id);
+        const byId = new Map(lists.map(item => [item.id, item]));
+        const shelfIds = overviewShelfIds(user.overviewShelfIds, byId);
+        const result = {shelfIds, maxShelves:maxOverviewShelves};
+        if (!preview) return result;
+
+        const pinned = shelfIds.map(id => byId.get(id));
+        const read = new Set();
+        if (pinned.some(item => item.filters?.unreadOnly)) {
+            for (const [uid, progress] of Object.entries(user.readerProgress))
+                if (progress.percent >= 0.999) read.add(uid);
+            for (const list of lists)
+                for (const entry of list.books)
+                    if (entry.read) read.add(entry.bookUid);
+        }
+        const compact = pinned.map(item => ({id:item.id, name:item.name, filters:item.filters,
+            bookUids:item.filters ? [] : item.books.slice(0, overviewShelfCandidateLimit).map(item => item.bookUid)}));
+        // Capture only fields used by the preview. The old snapshot remains immutable when the store updates.
+        const progressFor = uid => {
+            const row = Object.hasOwn(user.readerProgress, uid) ? user.readerProgress[uid] : null;
+            return row ? {percent:row.percent, started:!!row.updatedAt} : null;
+        };
+        const overrideFor = uid => Object.hasOwn(data.metadataOverrides, uid) ? {...data.metadataOverrides[uid]} : null;
+        return {...result, pinned:structuredClone(compact), read, candidateLimit:overviewShelfCandidateLimit, progressFor, overrideFor};
+    }
+
+    async setOverviewShelfIds(userId, ids) {
+        if (!Array.isArray(ids) || ids.length > maxOverviewShelves)
+            throw new Error(`Можно закрепить до ${maxOverviewShelves} полок в Обзоре`);
+        const data = await this.load();
+        const user = this.findProgressUser(data.users, userId);
+        const allowed = new Set(data.lists.filter(item => item.userId === user.id).map(item => item.id));
+        const shelfIds = overviewShelfIds(ids, allowed);
+        if (shelfIds.length !== ids.length)
+            throw new Error('Полки для Обзора должны существовать в вашем профиле и не повторяться');
+        if (JSON.stringify(user.overviewShelfIds || []) !== JSON.stringify(shelfIds)) {
+            user.overviewShelfIds = shelfIds;
+            await this.save(data);
+        }
+        return {shelfIds, maxShelves:maxOverviewShelves};
+    }
+
     async getList(userId = '', listId = '', options = {}) {
         const allowForeign = !!(options && options.allowForeign);
         const visibility = (options && options.visibility ? this.normalizeVisibility(options.visibility) : '');
@@ -1987,6 +2158,7 @@ class ReadingListStore {
             throw new Error('Список не найден');
 
         data.lists.splice(index, 1);
+        if (user.overviewShelfIds) user.overviewShelfIds = user.overviewShelfIds.filter(id => id !== listId);
         await this.save(data);
         return {success: true};
     }
@@ -2152,6 +2324,7 @@ class ReadingListStore {
     async exportData(userId = '') {
         const {user} = await this.resolveUser(userId);
         const lists = await this.getLists(user.id);
+        const listNames = new Map(lists.map(item => [item.id, item.name]));
 
         return {
             version: 4,
@@ -2176,6 +2349,7 @@ class ReadingListStore {
                 readerBookmarks: this.normalizeReaderBookmarks(user.readerBookmarks),
                 discoveryPreferences: this.normalizeDiscoveryPreferences(user.discoveryPreferences),
                 libraryFollows: require('../../shared/LibraryFollows').normalize(user.libraryFollows),
+                overviewShelfNames: overviewShelfIds(user.overviewShelfIds, listNames).map(id => listNames.get(id)),
             },
             lists: lists.map((item) => ({
                 name: item.name,
@@ -2227,6 +2401,8 @@ class ReadingListStore {
                 target.personalRecommendationsEnabled = incomingUser.personalRecommendationsEnabled !== false;
             if (utilsHasProp(incomingUser, 'opdsAuthEnabled'))
                 target.opdsAuthEnabled = (incomingUser.opdsAuthEnabled === true);
+            if (!target.opdsEnabled || (utilsHasProp(incomingUser, 'opdsAuthEnabled') && !target.opdsAuthEnabled))
+                delete target.opdsAppPasswordHash;
             if (utilsHasProp(incomingUser, 'readerPreferences'))
                 target.readerPreferences = this.normalizeReaderPreferences(incomingUser.readerPreferences);
             if (utilsHasProp(incomingUser, 'discoveryPreferences'))
@@ -2319,6 +2495,14 @@ class ReadingListStore {
             item.updatedAt = this.nowIso();
         }
 
+        if (target && Array.isArray(incomingUser.overviewShelfNames)) {
+            const names = new Map(data.lists.filter(item => item.userId === user.id).map(item => [item.name.toLowerCase(), item.id]));
+            const importedNames = new Set(payload.lists.map(item => this.validateName(item.name).toLowerCase()));
+            const incomingIds = incomingUser.overviewShelfNames.slice(0, maxOverviewShelves)
+                .map(name => typeof name === 'string' && name.trim().toLowerCase())
+                .filter(name => importedNames.has(name)).map(name => names.get(name));
+            target.overviewShelfIds = overviewShelfIds([...incomingIds, ...(target.overviewShelfIds || [])], new Set(names.values()));
+        }
         await this.save(data);
         return {importedLists, importedBooks, importedProgress, importedBookmarks};
     }

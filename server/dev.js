@@ -21,7 +21,8 @@ function logQueries(app) {
     const {readerBackgroundLogUrl} = require('./core/ReaderAssets');
     app.use(function(req, res, next) {
         const start = Date.now();
-        log(`${req.method} ${readerBackgroundLogUrl(req.originalUrl)} ${JSON.stringify(req.body ? req.body : '').substr(0, 4000)}`);
+        const body = require('./core/SensitiveLog').redact(req.body);
+        log(`${req.method} ${readerBackgroundLogUrl(req.originalUrl)} ${JSON.stringify(body ?? '').slice(0, 4000)}`);
         //log(`${JSON.stringify(req.headers, null, 2)}`)
         res.once('finish', () => {
             log(`${Date.now() - start}ms`);

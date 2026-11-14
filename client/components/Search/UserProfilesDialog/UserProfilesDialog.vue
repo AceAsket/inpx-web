@@ -334,6 +334,7 @@
                             <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
                             <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" hint="Этот личный чат получает книги и доступ к Telegram-боту профиля." />
                             <TelegramAccountPanel />
+                            <ProfileTotpPanel v-if="config.profileAuthorized && config.clientApi?.features?.includes('profileTotp')" />
                             <div>
                                 <q-toggle class="profile-toggle" v-model="editableProfile.personalRecommendationsEnabled" label="Персональные рекомендации" />
                                 <div class="profile-format-hint">Подбирать книги по вашей истории чтения и полкам. При отключении подборка не рассчитывается на сервере.</div>
@@ -420,6 +421,7 @@
 </template>
 
 <script>
+import {defineAsyncComponent} from 'vue';
 import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
 import TelegramAccountPanel from '../../Library/TelegramAccountPanel.vue';
@@ -431,6 +433,7 @@ const bookFormats = require('../../../../shared/BookFormats');
 const componentOptions = {
     components: {
         TelegramAccountPanel,
+        ProfileTotpPanel: defineAsyncComponent(() => import('../../Library/ProfileTotpPanel.vue')),
         Dialog,
         ReadingListsDialog,
         KoSyncSettings,

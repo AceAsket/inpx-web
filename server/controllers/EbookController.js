@@ -67,13 +67,15 @@ class EbookController {
         if(typeof value!=='string'||value.length>2048||/[\u0000-\u0020\\]/.test(value))return this.base;
         try{const url=new URL(value,'http://ebook.local');return url.origin==='http://ebook.local'&&(url.pathname===this.base||url.pathname.startsWith(this.base+'/'))?url.pathname+url.search:this.base;}catch{return this.base;}
     }
-    form(req,kind,message='') {
+    form(req,kind,message='',otpRequired=false) {
         const profile=kind==='profile',csrf=this.security.getCsrfToken(req);
         const next=this.destination(req.body?.next||((req.path==='/login'||req.path==='/access')?req.query.next:req.originalUrl));
         const body=(message?`<p class="error" role="alert">${escape(message)}</p>`:'')+
             `<form class="auth" method="post" action="${escape(this.url(profile?'/login':'/access'))}">${this.hidden('csrf',csrf)}${this.hidden('next',next)}`+
             (profile?`<label for="login">Логин</label><input id="login" name="login" value="${escape(typeof req.body?.login==='string'?short(req.body.login,100):'')}" autocomplete="username" maxlength="100" required>`:'')+
-            `<label for="password">${profile?'Пароль':'Пароль библиотеки'}</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required><button type="submit">Войти</button></form>`;
+            `<label for="password">${profile?'Пароль':'Пароль библиотеки'}</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required>`+
+            (profile&&otpRequired?'<label for="otp">Одноразовый или резервный код</label><input id="otp" name="otp" type="text" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="32" required>':'')+
+            '<button type="submit">Войти</button></form>';
         return this.document(req,profile?'Вход в профиль':'Доступ к библиотеке',body);
     }
     async libraryAllowed(req){return !this.webAccess||this.webAccess.freeAccess||await this.webAccess.hasAccess(req.securitySession?.ebookAccessToken);}
@@ -85,10 +87,15 @@ class EbookController {
         const password=scalar(req.body,'password',1024,false);
         if(profile){
             if(this.access.bindingEnabled)throw bad('Профиль задаётся входом через proxy.',403);
-            const login=scalar(req.body,'login',100);
+            const login=scalar(req.body,'login',100),otp=scalar(req.body,'otp',32,false);
             let result;
-            try{result=await this.security.withLoginAttempt(req,'profile',()=>this.worker.loginUserProfile(login,password));}
-            catch(error){if(error.message==='Неверный логин или пароль')throw bad(error.message,401);throw error;}
+            try{result=await this.security.withLoginAttempt(req,'profile',()=>this.worker.loginUserProfile(login,password,otp));}
+            catch(error){
+                if(error.code==='need_profile_otp')throw Object.assign(bad('Введите пароль ещё раз и добавьте код из приложения-аутентификатора или резервный код.',401),{otpRequired:true});
+                if(error.code==='INPX_INVALID_PROFILE_CREDENTIALS'||error.message==='Неверный логин или пароль')
+                    throw Object.assign(bad(otp?'Неверный логин, пароль или код':'Неверный логин или пароль',401),{otpRequired:!!otp});
+                throw error;
+            }
             const session=req.securitySession,previous=session.profileAccessToken;
             if(previous)await this.worker.closeProfileSession(previous);
             session.profileAccessToken=result.profileAccessToken;
@@ -369,7 +376,9 @@ class EbookController {
                 if(status===401)identity=null;
                 if(status===429)res.set('Retry-After',String(error.retryAfter||60));
                 const message=error.status?error.message:status===429?'Слишком много попыток. Повторите позже.':status===503?'Сервер занят или библиотека пока недоступна. Повторите запрос позже.':'Не удалось выполнить запрос. Попробуйте ещё раз.';
-                if(req.method==='POST'&&status===401&&['/login','/access'].includes(req.path))return res.status(status).type('html').send(this.form(req,req.path==='/login'?'profile':'access',message));
+                const loginPath=req.path.replace(/\/$/,'');
+                if(req.method==='POST'&&status===401&&['/login','/access'].includes(loginPath))
+                    return res.status(status).type('html').send(this.form(req,loginPath==='/login'?'profile':'access',message,error.otpRequired));
                 const bookLink=typeof req.query.uid==='string'&&req.query.uid.length<=1024?this.link('/book',{uid:req.query.uid},'О книге'):'';
                 res.status(status).type('html').send(this.document(req,'Не удалось открыть страницу',`<p class="error" role="alert">${escape(message)}</p>${bookLink} ${this.link('',{},'К поиску')} ${this.link('/login',{},'Войти')}`,identity));
             }

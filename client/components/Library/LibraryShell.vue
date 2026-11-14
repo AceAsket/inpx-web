@@ -35,7 +35,7 @@
         <template v-if="enabled">
             <SettingsDialog v-if="settingsVisible" v-model="settingsVisible" @open-library-tasks="libraryTools.openTasks()" />
             <UserProfilesDialog v-if="profilesVisible" v-model="profilesVisible" />
-            <ReadingListsDialog v-if="listsVisible" v-model="listsVisible" :book="listsBook" />
+            <ReadingListsDialog v-if="listsVisible" v-model="listsVisible" :book="listsBook" @shelves-changed="shelvesChanged" />
             <BookInfoDialog v-if="detailsVisible" :model-value="detailsVisible" :back-to-book="returnToActions" :book-info="details" :genre-map="genreMap" @update:model-value="detailsVisibilityChanged" @navigate="navigateFromBook" />
             <BookActionsDialog v-if="actionsVisible || returnToActions" v-model="actionsVisible" :book="actionsBook" :genre-map="genreMap" @navigate="navigateFromBook" @details="book => openDetails(book, true)" @list-event="bookActionEvent" @updated="repository.loadReading(true)" />
             <LibraryTools ref="libraryTools" />
@@ -51,7 +51,7 @@ import './librarySurfaces.css';
 import {libraryContextKey} from './libraryContext';
 import {LibraryRepository, emptyState} from './libraryRepository';
 import {catalogTarget} from './catalogSearchModel';
-import {identity, bookUid, readable, progress, catalogRoutes, discoveryOptions, genreMapFromTree} from './libraryModel';
+import {bookUid, readable, progress, catalogRoutes, genreMapFromTree} from './libraryModel';
 import AppConnection from '../Search/AppConnection.vue';
 
 const SettingsDialog = defineAsyncComponent(() => import('../Search/SettingsDialog/SettingsDialog.vue'));
@@ -92,13 +92,13 @@ watch(() => route.fullPath, () => {
     actionsVisible.value = false;
     returnToActions.value = false;
 }, {immediate: true});
-watch(() => [identity(config.value, settings.value), JSON.stringify(discoveryOptions(settings.value)), config.value.discovery?.enabled,
-    config.value.currentUserProfile?.personalRecommendationsEnabled], () => {
+watch([config, settings], () => {
     const previous = repository.epoch;
     const previousDiscoveryKey = repository.discoveryKey;
     repository.setContext(config.value, settings.value);
-    if (previousDiscoveryKey && previousDiscoveryKey !== repository.discoveryKey && props.enabled && route.path === '/overview')
-        repository.loadRecommendations();
+    if (previous === repository.epoch && previousDiscoveryKey !== repository.discoveryKey && config.value.version
+        && props.enabled && route.path === '/overview')
+        repository.loadHome();
     if (previous !== repository.epoch) {
         detailsVisible.value = false;
         listsVisible.value = false;
@@ -111,7 +111,9 @@ watch(() => [identity(config.value, settings.value), JSON.stringify(discoveryOpt
         detailRequest++;
     }
 }, {immediate: true});
-watch(listsVisible, (visible, previous) => {if (!visible && previous && props.enabled) repository.loadReading(true);});
+watch(listsVisible, (visible, previous) => {
+    if (!visible && previous && props.enabled) repository.loadReading(true);
+});
 watch(() => props.enabled, enabled => {
     if (!enabled) {settingsVisible.value = false; profilesVisible.value = false; detailsVisible.value = false; listsVisible.value = false; actionsVisible.value = false; returnToActions.value = false;}
 });
@@ -192,6 +194,10 @@ async function navigateFromBook({type, value}) {
 }
 function bookActionEvent(event) {
     if (event.action === 'manageReadingLists') {listsBook.value = event.book; listsVisible.value = true;}
+}
+function shelvesChanged() {
+    repository.invalidatePinnedShelves();
+    if (route.path === '/overview') repository.loadPinnedShelves();
 }
 async function login() {
     try {await root.api.showProfileLoginDialog('', {required: false}); await root.api.updateConfig();}

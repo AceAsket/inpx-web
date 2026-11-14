@@ -169,6 +169,34 @@ async function testLibraryHomeDisabledDiscoveryAndProtectedProfileAvoidRequests(
     assert.equal(repository.state.locked, true);
 }
 
+async function testLibraryHomePinsIgnoreOutdatedRepliesAndClearOnProfileChange() {
+    const {repository, api, config, settings} = fixture();
+    const pinConfig = {...config, clientApi: {features: ['mobileHome', 'overviewPinnedShelves']}};
+    repository.setContext(pinConfig, settings);
+    const old = deferred();
+    api.getOverviewPinnedShelves = () => old.promise;
+    const first = repository.loadPinnedShelves();
+    repository.invalidatePinnedShelves();
+    let calls = 0;
+    api.getOverviewPinnedShelves = async() => {
+        calls++;
+        return {shelves: [{id: 'smart', title: 'Smart', books: []}, {id: 'ordinary', title: 'Ordinary', books: [{_uid: 'book'}]}]};
+    };
+    await repository.loadPinnedShelves();
+    old.resolve({shelves: [{id: 'old'}]});
+    await first;
+    await repository.loadPinnedShelves();
+    assert.equal(calls, 1);
+    assert.deepEqual(repository.state.pinnedShelves.map(shelf => shelf.id), ['smart', 'ordinary']);
+    const late = deferred();
+    api.getOverviewPinnedShelves = () => late.promise;
+    const pending = repository.loadPinnedShelves(true);
+    repository.setContext({...pinConfig, profileAuthorized: false}, {...settings, profileAccessToken: ''});
+    late.resolve({shelves: [{id: 'private'}]});
+    await pending;
+    assert.deepEqual(repository.state.pinnedShelves, []);
+}
+
 async function testLibraryAppearancePreservesCatalogLinksAndReaderRoutes() {
     for (const path of ['/reader', '/reader-lab', '/books', '/title', '/extended'])
         assert.equal(model.appearanceRedirect({path, query: {title: 'test'}}, 'shelves'), '');
@@ -332,6 +360,7 @@ module.exports = [testLibraryHomeCachesExpensiveShelvesAndRefreshesReadingIndepe
     testLibraryHomeFallbackDoesNotOpenLoginAndKeepsHistoryWhenListsFail, testLibraryHomeRetainsCachedShelvesOnFailureAndAllowsRetry,
     testLibraryHomeShowsSignInForExpiredHistoryAndRecoversWithNewSession, testLibraryHomeRejectsLateLoginFailureAndClearsProtectedShelves,
     testLibraryHomeRejectsLateShelvesAfterOptionsChange, testLibraryHomeDisabledDiscoveryAndProtectedProfileAvoidRequests,
+    testLibraryHomePinsIgnoreOutdatedRepliesAndClearOnProfileChange,
     testLibraryAppearancePreservesCatalogLinksAndReaderRoutes, testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability,
     testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards, testOverviewSearchUsesEffectiveCatalogLanguageScope,
     testInitialUiDefaultsWaitForConfigAndPreserveManualSettings, testLibraryDialogsSupportLazyInitialOpening,

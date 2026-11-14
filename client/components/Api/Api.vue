@@ -194,8 +194,17 @@ class Api {
         if (this.profileSigningOut) return;
         try {
             this.loadSettings();
-            const config = await this.getConfig();
+            let config = await this.getConfig();
             if (this.profileSigningOut) return;
+            const selectedUserId = String(this.settings.currentUserId || this.currentUserId || '').trim();
+            if (!selectedUserId && !config.profileAuthorized && !config.profileLoginRequired && Array.isArray(config.userProfiles)) {
+                const preferredProfile = config.userProfiles.find(profile => profile && !profile.anonymousProfile && !profile.isAdmin)
+                    || config.userProfiles.find(profile => profile && !profile.anonymousProfile);
+                if (preferredProfile && preferredProfile.id !== config.currentUserId) {
+                    config = await this.getConfig(preferredProfile.id);
+                    if (this.profileSigningOut || this.settings.currentUserId || this.currentUserId) return;
+                }
+            }
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
             if (config.profileLoginRequired && !config.profileAuthorized) {
@@ -213,18 +222,10 @@ class Api {
                 }
                 return;
             }
-            const selectedUserId = String(this.settings.currentUserId || this.currentUserId || '').trim();
-            const preferredProfile = Array.isArray(config.userProfiles)
-                ? (
-                    config.userProfiles.find((profile) => profile && !profile.anonymousProfile && !profile.isAdmin)
-                    || config.userProfiles.find((profile) => profile && !profile.anonymousProfile)
-                    || null
-                )
-                : null;
             if (config.profileAuthorized && config.currentUserId && this.settings.currentUserId !== config.currentUserId)
                 this.commit('setSettings', {currentUserId: config.currentUserId});
             else if (!selectedUserId)
-                this.commit('setSettings', {currentUserId: (preferredProfile && preferredProfile.id) || config.currentUserId || ''});
+                this.commit('setSettings', {currentUserId: config.currentUserId || ''});
             if (config.profileAuthorized && this.$store.state.settings.currentUserId)
                 this.writeStoredProfileSession(this.$store.state.settings.currentUserId, this.$store.state.settings.profileAccessToken || this.profileAccessToken);
             else if (!config.profileAuthorized) {
@@ -341,7 +342,7 @@ class Api {
             try {
                 const settings = this.settings;
                 const accessToken = settings.accessToken || this.accessToken;
-                const currentUserId = settings.currentUserId || this.currentUserId;
+                const currentUserId = options.userId ?? (settings.currentUserId || this.currentUserId);
                 const csrfToken = this.$store.state.config.csrfToken;
 
                 if (accessToken)
@@ -383,7 +384,7 @@ class Api {
                 } else {
                     this.accessGranted = true;
                     if (response.error) {
-                        throw new Error(response.error);
+                        throw Object.assign(new Error(response.error), {code: response.errorCode});
                     }
 
                     return response;
@@ -410,12 +411,12 @@ class Api {
         return this.request({action: 'telegram-bot-account', operation, options}, 30);
     }
 
-    async getLibraryFollows(options = {}) {
-        return this.request({action: 'get-library-follows', options}, 60);
+    async getLibraryFollows(options = {}, requestOptions = {}) {
+        return this.request({action: 'get-library-follows', options}, 60, requestOptions);
     }
 
-    async changeLibraryFollow(operation, payload) {
-        return this.request({action: 'change-library-follow', operation, payload}, 60);
+    async changeLibraryFollow(operation, payload, requestOptions = {}) {
+        return this.request({action: 'change-library-follow', operation, payload}, 60, requestOptions);
     }
 
     async catalogBrowse(options) {
@@ -729,12 +730,24 @@ class Api {
         return await this.request({action: 'get-reading-lists', bookUid}, 120, requestOptions);
     }
 
+    async getOverviewPinnedShelves() {
+        return this.request({action: 'get-overview-pinned-shelves'}, 120, {suppressProfileLogin: true});
+    }
+
+    async setOverviewPinnedShelves(shelfIds) {
+        return this.request({action: 'set-overview-pinned-shelves', shelfIds}, 30, {suppressProfileLogin: true});
+    }
+
     async getUserProfiles() {
         return await this.request({action: 'get-user-profiles'}, 120);
     }
 
-    async loginUserProfile(login, password) {
-        return await this.request({action: 'login-user-profile', login, password}, 120);
+    async loginUserProfile(login, password, otp) {
+        return this.request({action: 'login-user-profile', login, password, otp}, 120);
+    }
+
+    async profileTotp(operation, payload) {
+        return this.request({action: 'profile-totp', operation, payload}, 30, {suppressProfileLogin: true});
     }
 
     async logoutUserProfile() {
@@ -848,8 +861,8 @@ class Api {
         return await this.request({action: 'get-reader-audio-status', jobId}, 30);
     }
 
-    async getConfig() {
-        return await this.request({action: 'get-config'});
+    async getConfig(userId) {
+        return await this.request({action: 'get-config'}, 10, {userId});
     }
 
     async logout() {
@@ -898,7 +911,15 @@ class Api {
                 throw new Error('Вход в профиль отменён');
             login = String(loginPrompt.login || '').trim();
             try {
-                result = await this.loginUserProfile(login, String(loginPrompt.password || ''));
+                const password = String(loginPrompt.password || '');
+                result = await this.loginUserProfile(login, password).catch(async error => {
+                    if (error.code !== 'need_profile_otp' && error.message !== 'need_profile_otp') throw error;
+                    const code = await this.$root.stdDialog.profileOtp('Введите текущий код из приложения-аутентификатора или резервный код.', {
+                        ...dialogOpts, noEscDismiss: true, noBackdropDismiss: true,
+                    });
+                    return code ? this.loginUserProfile(login, password, code) : null;
+                });
+                if (!result && !opts.required) throw new Error('Вход в профиль отменён');
             } catch (error) {
                 if (!opts.required)
                     throw error;

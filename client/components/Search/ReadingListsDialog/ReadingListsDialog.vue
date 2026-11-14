@@ -73,6 +73,19 @@
             </div>
 
             <div v-else class="lists-box">
+                <section v-if="pinnedLists.length" class="overview-pin-order" aria-labelledby="overview-pin-order-heading">
+                    <h2 id="overview-pin-order-heading">Порядок полок в Обзоре</h2>
+                    <p v-if="overviewShelfIds.length >= overviewPinLimit" class="list-subtitle">Достигнут лимит закреплённых полок. Чтобы добавить полку, открепите одну из текущих.</p>
+                    <ol>
+                        <li v-for="(item, index) in pinnedLists" :key="item.id">
+                            <span>{{ item.name }}</span>
+                            <q-btn flat dense round icon="la la-arrow-up" :aria-label="`Выше: ${item.name}`"
+                                :disable="savingPins || index === 0" @click="movePin(item.id, -1)" />
+                            <q-btn flat dense round icon="la la-arrow-down" :aria-label="`Ниже: ${item.name}`"
+                                :disable="savingPins || index === pinnedLists.length - 1" @click="movePin(item.id, 1)" />
+                        </li>
+                    </ol>
+                </section>
                 <div v-for="item in lists" :key="item.id" class="list-row">
                     <div class="list-main">
                         <q-checkbox
@@ -129,6 +142,12 @@
                         <q-btn flat dense round icon="la la-trash" color="negative" @click="deleteList(item)" />
                     </div>
 
+                    <div v-if="overviewPinLimit" class="list-overview-options">
+                        <q-checkbox :model-value="overviewShelfIds.includes(item.id)" dense label="Закрепить в Обзоре"
+                            :aria-label="`Закрепить в Обзоре: ${item.name}`"
+                            :disable="savingPins || (!overviewShelfIds.includes(item.id) && overviewShelfIds.length >= overviewPinLimit)"
+                            @update:model-value="togglePin(item.id, $event)" />
+                    </div>
                     <div v-if="item.visibility === 'opds' && item.opds" class="list-opds-options">
                         <q-checkbox v-model="item.opds.pinned" dense label="В корне OPDS" @update:model-value="changeVisibility(item, item.visibility)" />
                         <q-select
@@ -198,6 +217,7 @@ import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
 
 const componentOptions = {
+    emits: ['update:modelValue', 'shelves-changed'],
     components: {
         Dialog,
     },
@@ -231,6 +251,9 @@ class ReadingListsDialog {
     newListName = '';
     newListVisibility = 'private';
     expandedLists = {};
+    overviewShelfIds = [];
+    overviewPinLimit = 0;
+    savingPins = false;
 
     created() {
         this.api = this.$root.api;
@@ -249,6 +272,11 @@ class ReadingListsDialog {
 
     get config() {
         return this.$store.state.config;
+    }
+
+    get pinnedLists() {
+        const lists = new Map(this.lists.map(item => [item.id, item]));
+        return this.overviewShelfIds.map(id => lists.get(id)).filter(Boolean);
     }
 
     get currentUserName() {
@@ -314,6 +342,9 @@ class ReadingListsDialog {
         this.loading = true;
         try {
             const response = await this.api.getReadingLists(this.book ? this.book._uid : '');
+            this.overviewPinLimit = this.config.profileAuthorized && this.config.clientApi?.features?.includes('overviewPinnedShelves')
+                ? Number(response.maxShelves) || 0 : 0;
+            this.overviewShelfIds = this.overviewPinLimit ? response.overviewShelfIds || [] : [];
             const previousLists = new Map((this.lists || []).map((item) => [String(item.id), item]));
             const nextLists = (response.lists || []).map((item) => {
                 const key = String(item.id);
@@ -334,6 +365,36 @@ class ReadingListsDialog {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         } finally {
             this.loading = false;
+        }
+    }
+
+    togglePin(id, enabled) {
+        const ids = this.overviewShelfIds.filter(shelfId => shelfId !== id);
+        if (enabled) ids.push(id);
+        return this.savePins(ids);
+    }
+
+    movePin(id, step) {
+        const ids = [...this.overviewShelfIds];
+        const index = ids.indexOf(id), target = index + step;
+        if (index < 0 || target < 0 || target >= ids.length) return;
+        [ids[index], ids[target]] = [ids[target], ids[index]];
+        return this.savePins(ids);
+    }
+
+    async savePins(ids) {
+        if (this.savingPins) return;
+        const profileId = this.config.currentUserId;
+        this.savingPins = true;
+        try {
+            const result = await this.api.setOverviewPinnedShelves(ids);
+            if (this.config.currentUserId !== profileId || !this.config.profileAuthorized) return;
+            this.overviewShelfIds = result.shelfIds;
+            this.$emit('shelves-changed');
+        } catch (error) {
+            this.$root.stdDialog.alert(error.message, this.errorTitle);
+        } finally {
+            this.savingPins = false;
         }
     }
 
@@ -396,6 +457,7 @@ class ReadingListsDialog {
             item.bookCount += (enabled ? 1 : -1);
             if (item.bookCount < 0)
                 item.bookCount = 0;
+            this.$emit('shelves-changed');
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
             await this.loadLists();
@@ -408,6 +470,7 @@ class ReadingListsDialog {
 
         try {
             await this.api.setReadingListBookRead(item.id, this.book._uid, read);
+            this.$emit('shelves-changed');
             if (!!item.readBook !== !!read)
                 item.readCount = Math.max(0, (item.readCount || 0) + (read ? 1 : -1));
             item.readBook = !!read;
@@ -433,6 +496,7 @@ class ReadingListsDialog {
 
         try {
             await this.api.renameReadingList(item.id, response.value);
+            this.$emit('shelves-changed');
             await this.loadLists();
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
@@ -449,6 +513,7 @@ class ReadingListsDialog {
 
         try {
             await this.api.deleteReadingList(item.id);
+            this.$emit('shelves-changed');
             await this.loadLists();
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
@@ -524,6 +589,7 @@ class ReadingListsDialog {
 
         try {
             await this.api.updateReadingListBook(listId, bookUid, false);
+            this.$emit('shelves-changed');
             if (bookItem.read)
                 list.readCount = Math.max(0, (Number(list.readCount || 0) || 0) - 1);
             list.books = (list.books || []).filter((item) => String(item.bookUid || '').trim() !== bookUid);
@@ -546,6 +612,7 @@ class ReadingListsDialog {
 
         try {
             await this.api.setReadingListBookRead(listId, bookUid, read);
+            this.$emit('shelves-changed');
             if (!!bookItem.read !== !!read)
                 list.readCount = Math.max(0, (Number(list.readCount || 0) || 0) + (read ? 1 : -1));
             bookItem.read = !!read;
@@ -602,6 +669,7 @@ class ReadingListsDialog {
             const text = await file.text();
             const data = JSON.parse(text);
             const result = await this.api.importReadingLists(data);
+            this.$emit('shelves-changed');
             await this.loadLists();
             this.$root.notify.success(`Импортировано списков: ${result.importedLists}, книг: ${result.importedBooks}`);
         } catch (e) {
@@ -638,6 +706,7 @@ class ReadingListsDialog {
 
         try {
             const result = await this.api.addSeriesToReadingList(item.id, this.book.series);
+            this.$emit('shelves-changed');
             await this.loadLists();
             this.$root.notify.success(`В список добавлено книг серии: ${result.addedBooks}`);
         } catch (e) {
@@ -704,6 +773,42 @@ export default vueComponent(ReadingListsDialog);
     display: flex;
     flex-direction: column;
     gap: 8px;
+}
+
+.overview-pin-order {
+    padding: 8px 12px;
+    border: 1px solid var(--app-border);
+    border-radius: 14px;
+}
+
+.overview-pin-order h2 {
+    font-size: 15px;
+    line-height: 1.4;
+    font-weight: 600;
+    margin: 4px 0 8px;
+}
+
+.overview-pin-order ol {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+
+.overview-pin-order li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-block: 2px;
+}
+
+.overview-pin-order li span:first-child {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.list-overview-options {
+    grid-column: 1 / -1;
 }
 
 .list-row {

@@ -98,6 +98,7 @@ class WebSocketConnection {
                 } else {
                     this.ws = new this.WebSocket(this.url, this.webSocketOptions);
                 }
+                const socket = this.ws;
 
                 const onopen = () => {
                     this.connecting = false;
@@ -117,26 +118,24 @@ class WebSocketConnection {
                     }
                 };
 
-                const onerror = (e) => {
-                    this.emit(e.message, true);
-                    reject(new Error(e.message));
-                };
-
-                const onclose = (e) => {
-                    this.emit(e.message, true);
-                    reject(new Error(e.message));
+                const onDisconnect = (event) => {
+                    if (this.ws && this.ws !== socket) return;
+                    this.connecting = false;
+                    const message = event?.message || 'Соединение с библиотекой по WebSocket не установлено или прервалось.';
+                    this.emit(message, true);
+                    reject(new Error(message));
                 };
 
                 if (isBrowser) {
                     this.ws.onopen = onopen;
                     this.ws.onmessage = onmessage;
-                    this.ws.onerror = onerror;
-                    this.ws.onclose = onclose;
+                    this.ws.onerror = onDisconnect;
+                    this.ws.onclose = onDisconnect;
                 } else {
                     this.ws.on('open', onopen);
                     this.ws.on('message', onmessage);
-                    this.ws.on('error', onerror);
-                    this.ws.on('close', onclose);
+                    this.ws.on('error', onDisconnect);
+                    this.ws.on('close', onDisconnect);
                 }
 
                 await utils.sleep(this.openTimeout);

@@ -15,8 +15,14 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
     try {
         const library=path.join(directory,'library'); await fixture(library);
         const configFile=path.join(library,'config.json'),config=await fs.readJson(configFile);
-        config.uiDefaults={...config.uiDefaults,catalogAppearance:'shelves',langDefault:'ru'}; await fs.writeJson(configFile,config);
+        config.uiDefaults={...config.uiDefaults,catalogAppearance:'shelves',langDefault:'ru'};
+        await fs.writeJson(configFile,config);
         const dataDir=path.join(directory,'data'); await fs.copy(path.resolve('dist/tmp/public'),path.join(dataDir,'public'));
+        const ReadingListStore=require('../server/core/ReadingListStore');
+        const passwordHash=await require('../server/core/ProfilePassword').hash('overview-fixture-profile');
+        const profiles=new ReadingListStore({...config,dataDir,adminPassword:'overview-local-fixture'});
+        const profile=await profiles.createUser({name:'Тестовый профиль',login:'overview-fixture',passwordHash});
+        await profiles.updateSharedDiscoveryConfig({externalSource:'web-page',externalUrl:'https://books.example/'});
         assert(await fs.pathExists(path.join(dataDir,'public/index.html')),'Build the production UI before browser fixtures');
         const port=await unusedPort(),base=`http://127.0.0.1:${port}`;
         child=spawn(process.execPath,[path.resolve('server'),`--data-dir=${dataDir}`,`--config=${configFile}`,`--lib-dir=${library}`,`--port=${port}`,'--host=127.0.0.1'],
@@ -56,7 +62,9 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
             new MutationObserver(attach).observe(document,{childList:true,subtree:true});
             document.addEventListener('DOMContentLoaded',attach);
         });
-        page=await context.newPage(); const errors=[],requests=[],searches=[],serverDefaults=[];
+        page=await context.newPage(); const errors=[],requests=[],searches=[],serverDefaults=[],shelfRequests=[];
+        const newestWindows=[7,30,90,180,365];
+        let replyToExternalShelf;
         page.on('pageerror',error=>errors.push(error.message));
         page.on('console',message=>{if(message.text().includes('Failed to resolve component'))errors.push(message.text());});
         await page.routeWebSocket('**/ws',socket=>{
@@ -64,6 +72,15 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
             socket.onMessage(message=>{
                 const request=JSON.parse(String(message));
                 if(request.action==='bookSearch')searches.push(request.query);
+                if(request.action==='get-discovery-shelves') {
+                    shelfRequests.push(request);
+                    socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));
+                    const reply=shelves=>socket.send(JSON.stringify({requestId:request.requestId,shelves}));
+                    if(request.externalOnly) replyToExternalShelf=()=>reply([{id:'external-source',title:'Внешняя витрина',source:'external',items:[book]}]);
+                    else reply([...newestWindows.map(days=>({id:'newest-'+days+'d',title:'Новинки за '+days+' дней',source:'local',items:[book]})),
+                        {id:'popular',title:'Популярное в библиотеке',source:'local',items:[book]}]);
+                    return;
+                }
                 if(request.action==='get-book-preview') {
                     socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));
                     socket.send(JSON.stringify({requestId:request.requestId,bookPreview:{bookUid:request.bookUid,annotation:'Аннотация fixture',annotationStatus:'ready',annotationLimited:false}}));
@@ -83,6 +100,25 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
         await page.goto(base+'/#/overview');
         await page.getByRole('navigation',{name:'Разделы библиотеки'}).waitFor();
         await page.waitForFunction(()=>!!document.querySelector('#app')?.__vue_app__?.config.globalProperties.$store.state.config.dbVersion);
+        await page.locator('#shelf-popular').waitFor({timeout:10000});
+        for(const days of newestWindows) assert(await page.locator('#shelf-newest-'+days+'d').isVisible());
+        assert(await page.getByRole('heading',{name:'Войдите в свой профиль',exact:true}).isVisible());
+        assert.equal(await page.locator('.current-book').count(),0,'Signing in is still required to see personal reading history');
+        assert.deepEqual(shelfRequests.filter(request=>!request.externalOnly).map(request=>[request.userId,request.includeExternal]),
+            [[profile.id,false]],'First visit waits for matching profile and discovery settings');
+        for(let i=0;i<100 && !replyToExternalShelf;i++) await pause(25);
+        assert(replyToExternalShelf,'External shelf loads separately');
+        assert.equal(await page.locator('#shelf-external-source').count(),0);
+        replyToExternalShelf();
+        await page.locator('#shelf-external-source').waitFor();
+        await mutateSettings({showDiscoveryExternal:false});
+        await page.locator('#shelf-external-source').waitFor({state:'hidden'});
+        assert(await page.locator('#shelf-popular').isVisible());
+        await mutateSettings({showDiscoveryNewest:false});
+        await page.locator('#shelf-newest-7d').waitFor({state:'hidden'});
+        assert(await page.locator('#shelf-popular').isVisible());
+        await mutateSettings({showDiscoveryNewest:true});
+        await page.locator('#shelf-newest-7d').waitFor();
         await page.locator('.overview-loading').waitFor({state:'hidden'});
         const input=page.locator('.overview-search input'),listId=await input.getAttribute('aria-controls');
         assert(listId,'Overview input owns its listbox');
@@ -159,8 +195,8 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
         assert.equal(await page.getByRole('option',{name:/Obsolete profile result/}).count(),0,'Profile/library revision clears pending overview suggestions');
         assert.deepEqual(errors,[]);
         await fs.writeJson(path.join(directory,'result.json'),{requests:requests.map(request=>request.options),min3:true,enterBeforeReply:true,
-            clickPreview:true,keyboardPreview:true,correction:true,effectiveLanguage:true,lateLanguageIgnored:true,contextReset:true,geometry,errors},{spaces:2});
-        console.log('Overview suggestions browser: MIN3/title scope, search-before-reply, preview click/keyboard, default language and stale-context guards passed. Artifacts: '+directory);
+            clickPreview:true,keyboardPreview:true,correction:true,effectiveLanguage:true,lateLanguageIgnored:true,contextReset:true,firstVisitShelves:true,geometry,errors},{spaces:2});
+        console.log('Overview browser: first-visit shelves, search suggestions, preview click/keyboard, default language and stale-context guards passed. Artifacts: '+directory);
     } catch(error) {
         if(page){await page.screenshot({path:path.join(directory,'failure.png')}).catch(()=>{});await fs.writeFile(path.join(directory,'failure.html'),await page.content()).catch(()=>{});}
         console.error(output);throw error;

@@ -1,5 +1,5 @@
 <template>
-    <main class="library-page catalog-page">
+    <main class="library-page catalog-page" :aria-busy="loading">
         <nav class="catalog-breadcrumbs" aria-label="Путь в каталоге">
             <RouterLink :to="catalogTarget('/books', {}, route.query)">
                 Каталог
@@ -16,11 +16,11 @@
                 </p>
                 <q-linear-progress v-if="kind === 'series' && data.read !== null && data.total" :value="data.read / data.total" rounded color="primary" class="q-mb-md" />
                 <div class="catalog-page__actions">
-                    <q-btn v-if="data.next && canRead(data.next)" no-caps unelevated color="primary" icon="la la-book-open" :label="data.read ? (kind === 'series' ? 'Продолжить серию' : 'Продолжить чтение') : 'Начать читать'" @click="library.openBook(data.next)" /><q-btn v-if="library.config.value.profileAuthorized" outline no-caps icon="la la-star" :label="following ? 'В избранном' : 'Следить за новинками'" :loading="followBusy" @click="toggleFollow" /><q-btn v-if="kind === 'series' && data.total && library.config.value.profileAuthorized" outline no-caps icon="la la-check-circle" label="Отметить серию прочитанной" :loading="marking" @click="markAll" />
+                    <q-btn v-if="data.next && canRead(data.next)" no-caps unelevated color="primary" icon="la la-book-open" :label="data.read ? (kind === 'series' ? 'Продолжить серию' : 'Продолжить чтение') : 'Начать читать'" @click="library.openBook(data.next)" /><q-btn v-if="library.config.value.profileAuthorized" outline no-caps icon="la la-star" :label="following ? 'В избранном' : 'Следить за новинками'" :disable="!followingReady" :loading="followBusy" @click="toggleFollow" /><q-btn v-if="kind === 'series' && data.total && library.config.value.profileAuthorized" outline no-caps icon="la la-check-circle" label="Отметить серию прочитанной" :loading="marking" @click="markAll" />
                 </div>
             </template>
         </section>
-        <div v-if="loading" class="catalog-page__loading" role="status">
+        <div v-if="loading && !data" class="catalog-page__loading" role="status">
             <q-spinner size="26px" /> Загружаем книги…
         </div>
         <template v-if="data">
@@ -56,27 +56,54 @@ import BookTile from './BookTile.vue';
 import LibraryNotice from './LibraryNotice.vue';
 import './catalogPages.css';
 const route = useRoute(), router = useRouter(), root = getCurrentInstance().proxy.$root;
-const data = ref(null), loading = ref(false), error = ref(''), following = ref(null), followBusy = ref(false), marking = ref(false);
+const data = ref(null), loading = ref(false), error = ref(''), following = ref(null), followingReady = ref(false), followBusy = ref(false), marking = ref(false);
 const kind = computed(() => route.path === '/author-details' ? 'author' : 'series'), name = computed(() => String(route.query.name || ''));
 const {library, active} = useLibraryPage('Каталог', load);
-let request = 0;
+let request = 0, followRevision = 0, dataKey = '';
 const canRead = book => readable(book, library.config.value);
 async function load() {
-    const id = ++request; loading.value = true; error.value = ''; data.value = null; following.value = null;
-    document.title = `${name.value} · INPX Web`;
+    const id = ++request, revision = library.state.revision, entity = {kind:kind.value,name:name.value}, filters = catalogScope(route.query);
+    const key = JSON.stringify([revision,entity,filters]);
+    const path = route.fullPath;
+    const current = () => id === request && revision === library.state.revision && route.fullPath === path;
+    if (key !== dataKey) {
+        dataKey = key;
+        data.value = null;
+        following.value = null;
+        followingReady.value = false;
+    }
+    loading.value = true;
+    error.value = '';
+    document.title = `${entity.name} · INPX Web`;
+    if (library.config.value.profileAuthorized) {
+        const currentFollow = followRevision;
+        library.api.getLibraryFollows({refresh:false,limit:0}, {suppressProfileLogin:true}).then(result => {
+            if (current() && currentFollow === followRevision) setFollowing(result,entity);
+        }).catch(() => {});
+    }
     try {
-        const result = await library.api.catalogEntity({kind: kind.value, name: name.value, page: Number(route.query.page) || 1, filters: catalogScope(route.query)});
-        if (id !== request) return; data.value = result;
-        if (library.config.value.profileAuthorized) {
-            const follows = await library.api.getLibraryFollows({refresh: false});
-            if (id === request) following.value = follows.follows.find(row => row.kind === kind.value && row.value.toLowerCase() === name.value.toLowerCase()) || null;
-        }
-    } catch (e) {if (id === request) error.value = e.message;}
-    finally {if (id === request) loading.value = false;}
+        const result = await library.api.catalogEntity({...entity,page:Number(route.query.page) || 1,filters});
+        if (current()) data.value = result;
+    } catch (e) {if (current()) error.value = e.message;}
+    finally {if (current()) loading.value = false;}
+}
+function setFollowing(result, entity) {
+    following.value = result.follows.find(row => row.kind === entity.kind && row.value.toLowerCase() === entity.name.toLowerCase()) || null;
+    followingReady.value = true;
 }
 async function toggleFollow() {
-    if (followBusy.value) return; followBusy.value = true;
-    try {await library.api.changeLibraryFollow(following.value ? 'remove' : 'add', following.value ? {id: following.value.id} : {kind: kind.value, value: name.value}); await load();}
+    if (followBusy.value || !followingReady.value) return;
+    followBusy.value = true;
+    followRevision++;
+    const revision = library.state.revision, entity = {kind:kind.value,name:name.value};
+    try {
+        const result = await library.api.changeLibraryFollow(following.value ? 'remove' : 'add', following.value ? {id:following.value.id} : {kind:entity.kind,value:entity.name});
+        if (active.value && library.config.value.profileAuthorized && revision === library.state.revision
+            && entity.kind === kind.value && entity.name === name.value) {
+            followRevision++;
+            setFollowing(result,entity);
+        }
+    }
     catch (e) {root.stdDialog.alert(e.message, 'Избранное');} finally {followBusy.value = false;}
 }
 async function markAll() {

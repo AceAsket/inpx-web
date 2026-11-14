@@ -371,8 +371,10 @@ docker run -d \
 -e INPX_AUTH_MODE=proxy \
 -e INPX_TRUST_PROXY=true \
 -e INPX_PROXY_AUTH_HEADER=Remote-User \
--e INPX_TRUSTED_PROXY_CIDRS=172.18.0.0/16
+-e INPX_TRUSTED_PROXY_CIDRS=172.18.0.2/32
 ```
+
+Замените `172.18.0.2/32` на адрес proxy, который видит приложение.
 
 В этом режиме приложение отдаёт UI, API, WebSocket, OPDS, книги и обложки только если запрос пришёл от доверенного proxy и proxy передал заголовок авторизованного пользователя. Прямой заход из LAN на случайно открытый порт получит `403 Direct access is forbidden`. `/health`, `/ready` и `/api/index-status` по умолчанию остаются открытыми для Docker/Unraid health-check; если нужно закрыть и их, задайте `INPX_AUTH_EXEMPT_HEALTH=false`.
 
@@ -1553,8 +1555,8 @@ server {
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Host $http_host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

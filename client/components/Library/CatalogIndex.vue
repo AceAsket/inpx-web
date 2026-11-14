@@ -1,5 +1,5 @@
 <template>
-    <main class="library-page catalog-page">
+    <main class="library-page catalog-page" :aria-busy="loading">
         <div class="catalog-page__heading">
             <div>
                 <RouterLink :to="catalogTarget('/books', {}, route.query)">
@@ -18,20 +18,20 @@
             <q-select v-model="language" :options="languages" emit-value map-options outlined dense label="Язык книг" /><q-select v-model="source" :options="sources" emit-value map-options outlined dense label="Библиотека" />
         </div>
         <LibraryNotice v-if="error" error title="Не удалось загрузить каталог" :message="error" action-label="Повторить" @action="load" />
-        <div v-if="loading" class="catalog-page__loading" role="status">
+        <div v-if="loading && !data" class="catalog-page__loading" role="status">
             <q-spinner size="26px" /> Загружаем указатель…
         </div>
-        <template v-else-if="data">
+        <template v-if="data">
             <p class="catalog-page__muted">
                 {{ kind === 'author' ? 'Авторов' : 'Серий' }}: {{ data.total.toLocaleString('ru') }}
             </p>
             <div v-if="data.groups.length" class="catalog-alphabet">
-                <button v-for="group in data.groups" :key="group.prefix" type="button" @click="group.name ? openEntity(group.name) : go(group.prefix)">
+                <button v-for="group in data.groups" :key="group.prefix" type="button" :disabled="loading" @click="group.name ? openEntity(group.name) : go(group.prefix)">
                     <strong>{{ group.prefix.toUpperCase() }}</strong><small>{{ group.count.toLocaleString('ru') }}</small>
                 </button>
             </div>
             <div v-else-if="data.items.length" class="catalog-entities">
-                <RouterLink v-for="item in data.items" :key="item.name" :to="catalogTarget(kind === 'author' ? '/author-details' : '/series-details', {name:item.name}, route.query)">
+                <RouterLink v-for="item in data.items" :key="item.name" :to="catalogTarget(kind === 'author' ? '/author-details' : '/series-details', {name:item.name}, resultScope)">
                     <span>{{ item.name }}</span><small>{{ item.count.toLocaleString('ru') }}</small><q-icon name="la la-angle-right" />
                 </RouterLink>
             </div>
@@ -59,20 +59,40 @@ const source = computed({get: () => String(route.query.sourceId || ''), set: sou
 const languages = ref([{label: 'Все языки', value: ''}]);
 const {library, active} = useLibraryPage('Каталог', load);
 const sources = computed(() => [{label: 'Все библиотеки', value: ''}, ...(library.config.value.librarySources || []).map(item => ({label: item.name, value: item.id}))]);
-let request = 0;
+const resultScope = ref({});
+let request = 0, currentKind = '', currentRevision, languageRevision, languagesPending;
+function loadLanguages(revision) {
+    if (languageRevision === revision || languagesPending === revision) return;
+    languagesPending = revision;
+    library.api.getGenreTree().then(result => {
+        if (revision !== library.state.revision) return;
+        languages.value = [{label:'Все языки', value:''}, ...(result.langList || []).map(value => ({label:value.toUpperCase(), value}))];
+        languageRevision = revision;
+    }).catch(() => {}).finally(() => {
+        if (languagesPending === revision) languagesPending = undefined;
+    });
+}
 async function load() {
-    const id = ++request; loading.value = true; error.value = ''; data.value = null;
+    const id = ++request, revision = library.state.revision, group = kind.value, scope = catalogScope(route.query);
+    const path = route.fullPath;
+    const current = () => id === request && revision === library.state.revision && route.fullPath === path;
+    if (currentRevision !== revision || currentKind !== group) data.value = null;
+    currentRevision = revision;
+    currentKind = group;
+    loading.value = true;
+    error.value = '';
+    loadLanguages(revision);
     try {
-        const result = await library.api.catalogBrowse({kind: kind.value, prefix: prefix.value, filters: catalogScope(route.query)});
-        if (id !== request) return;
-        data.value = result; document.title = `${kind.value === 'author' ? 'Авторы' : 'Серии'} · INPX Web`;
-        const genres = await library.api.getGenreTree();
-        if (id === request) languages.value = [{label: 'Все языки', value: ''}, ...(genres.langList || []).map(value => ({label: value.toUpperCase(), value}))];
-    } catch (e) {if (id === request) error.value = e.message;}
-    finally {if (id === request) loading.value = false;}
+        const result = await library.api.catalogBrowse({kind:group, prefix:prefix.value, filters:scope});
+        if (!current()) return;
+        resultScope.value = scope;
+        data.value = result;
+        document.title = `${group === 'author' ? 'Авторы' : 'Серии'} · INPX Web`;
+    } catch (e) {if (current()) error.value = e.message;}
+    finally {if (current()) loading.value = false;}
 }
 function go(value) {router.push({path: route.path, query: {...route.query, prefix: value || undefined}});}
-function openEntity(name) {router.push(catalogTarget(kind.value === 'author' ? '/author-details' : '/series-details', {name}, route.query));}
+function openEntity(name) {router.push(catalogTarget(kind.value === 'author' ? '/author-details' : '/series-details', {name}, resultScope.value));}
 watch(() => route.fullPath, () => {if (active.value && ['/authors', '/series-index'].includes(route.path)) load();});
 onDeactivated(() => {request++;}); onBeforeUnmount(() => {request++;});
 </script>

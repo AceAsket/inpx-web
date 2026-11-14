@@ -220,7 +220,8 @@ function logQueries(app) {
     const {readerBackgroundLogUrl} = require('./core/ReaderAssets');
     app.use(function(req, res, next) {
         const start = Date.now();
-        log(`${req.method} ${readerBackgroundLogUrl(req.originalUrl)} ${utils.cutString(req.body)}`);
+        const body = require('./core/SensitiveLog').redact(req.body);
+        log(`${req.method} ${readerBackgroundLogUrl(req.originalUrl)} ${utils.cutString(body)}`);
         //log(`${JSON.stringify(req.headers, null, 2)}`)
         res.once('finish', () => {
             log(`${Date.now() - start}ms`);

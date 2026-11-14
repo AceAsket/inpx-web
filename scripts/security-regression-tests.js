@@ -16,9 +16,31 @@ async function testWebSocketOriginUsesTrustedProxyPairs() {
     const request = {headers:{host:'backend.example.test','x-forwarded-host':'library.example.test',
         'x-forwarded-proto':'https',origin:'https://library.example.test'},socket:{remoteAddress:'192.0.2.7'}};
     assert.equal(security.isSameOrigin(request), true);
+    assert.match(security.cookieOptions(request), /\bSecure\b/);
+    const customPort = {...request, headers:{...request.headers, 'x-forwarded-host':'library.example.test:8443', origin:'https://library.example.test:8443'}};
+    assert.equal(security.isSameOrigin(customPort), true);
+    assert.equal(security.isSameOrigin({...customPort,headers:{...customPort.headers,'x-forwarded-host':'library.example.test'}}), false);
     assert.equal(security.isSameOrigin({...request,headers:{...request.headers,origin:'https://backend.example.test'}}), false);
     assert.equal(security.isSameOrigin({...request,socket:{remoteAddress:'192.0.2.8'}}), false);
     assert.equal(security.isSameOrigin({...request,headers:{host:'backend.example.test',origin:'http://backend.example.test'}}), true);
+}
+
+async function testWebSocketConnectionReportsFailuresWithoutNativeMessage() {
+    const {EventEmitter} = require('events');
+    const WebSocketConnection = require('../server/core/WebSocketConnection');
+    class Socket extends EventEmitter {
+        constructor() {
+            super();
+            queueMicrotask(() => this.emit('error', {}));
+        }
+
+        terminate() {}
+    }
+    const connection = Object.assign(Object.create(WebSocketConnection.prototype), {
+        WebSocket: Socket, openTimeout: 50, listeners: [], ws: null,
+    });
+    await assert.rejects(connection.send({action:'get-config'}), /по WebSocket/);
+    assert.equal(connection.connecting, false);
 }
 
 async function testLoginRateReservesAttemptsDuringCredentialVerification() {
@@ -412,4 +434,5 @@ module.exports = [testNoIndexHeadersCoverStaticErrorsAndProtectedResponses, test
     testConcurrentSecretKeyCreation, testConcurrentStoreMutations, testAtomicConfigSave,
     testSessionLifetimeAndMalformedCookies, testProfileCredentialChangesRevokeSessions,
     testDownloaderClosesFailedTransfers, testDownloaderVerifiesTlsCertificates, testWebSocketOriginUsesTrustedProxyPairs,
+    testWebSocketConnectionReportsFailuresWithoutNativeMessage,
     testLoginRateReservesAttemptsDuringCredentialVerification, testLibraryAccessChallengesExpireAndPromoteOnlyOnUse];

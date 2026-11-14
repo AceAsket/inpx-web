@@ -8,6 +8,7 @@ function emptyState() {
         readingError: '', listsError: '', shelvesError: '', readingLoginRequired: false, shelvesLoginRequired: false,
         externalShelvesLoading: false, externalShelvesLoaded: false, externalShelvesError: '', externalShelvesLoginRequired: false,
         recommendationsLoading: false, recommendationsLoaded: false, recommendationsError: '', recommendationsLoginRequired: false,
+        pinnedShelves: [], pinnedShelvesLoading: false, pinnedShelvesLoaded: false, pinnedShelvesError: '', pinnedShelvesLoginRequired: false,
         readingLoaded: false, shelvesLoaded: false, locked: false};
 }
 
@@ -21,6 +22,7 @@ class LibraryRepository {
         this.contextKey = '';
         this.epoch = 0;
         this.discoveryRevision = 0;
+        this.pinnedShelvesRevision = 0;
         this.pending = {};
         this.loadedAt = {};
     }
@@ -42,7 +44,7 @@ class LibraryRepository {
             this.discoveryKey = '';
             this.patch({...emptyState(), revision: this.epoch, locked: !personalAccess(config, settings)});
         }
-        const discoveryKey = JSON.stringify([discoveryOptions(settings), config.discovery, settings.showDiscoveryExternal !== false,
+        const discoveryKey = JSON.stringify([!!config.version, discoveryOptions(settings), config.discovery, settings.showDiscoveryExternal !== false,
             config.clientApi?.features?.includes('separateExternalDiscovery'), settings.showDiscoverySimilar !== false,
             config.currentUserProfile?.personalRecommendationsEnabled !== false]);
         if (discoveryKey !== this.discoveryKey) {
@@ -66,7 +68,9 @@ class LibraryRepository {
         if (!force && this.loadedAt[kind] !== undefined && this.now() - this.loadedAt[kind] < ttl) return;
         const epoch = this.epoch;
         const discoveryRevision = this.discoveryRevision;
-        const current = () => epoch === this.epoch && (kind === 'reading' || discoveryRevision === this.discoveryRevision);
+        const pinnedShelvesRevision = this.pinnedShelvesRevision;
+        const current = () => epoch === this.epoch && (kind === 'pinnedShelves' ? pinnedShelvesRevision === this.pinnedShelvesRevision
+            : kind === 'reading' || discoveryRevision === this.discoveryRevision);
         this.patch({[`${kind}Loading`]: true, [`${kind}Error`]: ''});
         const pending = (async() => {
             try {
@@ -92,8 +96,9 @@ class LibraryRepository {
 
     requireLogin(kind) {
         delete this.loadedAt[kind];
+        if (kind === 'reading') this.invalidatePinnedShelves();
         this.patch({[`${kind}LoginRequired`]: true, [`${kind}Error`]: '', [`${kind}Loaded`]: false,
-            ...(kind === 'reading' ? {reading: null, lists: [], listsError: ''} : {[kind]: []})});
+            ...(kind === 'reading' ? {reading: null, lists: [], listsError: '', pinnedShelves: [], pinnedShelvesError: ''} : {[kind]: []})});
     }
 
     loadReading(force = false) {
@@ -151,11 +156,27 @@ class LibraryRepository {
         });
     }
 
+    invalidatePinnedShelves() {
+        this.pinnedShelvesRevision++;
+        delete this.pending.pinnedShelves;
+        delete this.loadedAt.pinnedShelves;
+        this.patch({pinnedShelvesLoading: false, pinnedShelvesError: ''});
+    }
+
+    loadPinnedShelves(force = false) {
+        if (!this.config.profileAuthorized || this.state.readingLoginRequired
+            || !this.config.clientApi?.features?.includes('overviewPinnedShelves')) return;
+        return this.run('pinnedShelves', force, READING_TTL, async() => {
+            const result = await this.api.getOverviewPinnedShelves();
+            return {pinnedShelves: normalizeShelves(result.shelves || [])};
+        });
+    }
+
     loadHome({freshReading = false, freshShelves = false} = {}) {
         const reading = this.loadReading(freshReading);
         const shelves = this.loadShelves(freshShelves);
         const discoveryRevision = this.discoveryRevision;
-        return Promise.all([reading, shelves, this.loadRecommendations(freshShelves),
+        return Promise.all([reading, shelves, this.loadRecommendations(freshShelves), this.loadPinnedShelves(freshShelves),
             shelves.then(() => {
                 if (discoveryRevision === this.discoveryRevision) return this.loadExternalShelves(freshShelves);
             })]);

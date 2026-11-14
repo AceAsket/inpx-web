@@ -109,15 +109,18 @@ class ProfileAccess {
         if (!credentials || !this.config.opds || !this.config.opds.enabled)
             return null;
         return this.security.withLoginAttempt(req, 'opds', async () => {
-            if (this.config.opds.password)
-                return this.config.opds.user && equal(credentials.user, this.config.opds.user)
-                    && equal(credentials.password, this.config.opds.password) ? {opds:true} : null;
-            const data = await this.worker.readingListStore.load();
-            const login = this.worker.readingListStore.normalizeLogin(credentials.user);
-            const user = data.users.find(item => item.login === login && item.opdsEnabled !== false && item.opdsAuthEnabled === true);
-            if (user && await this.worker.readingListStore.verifyUserPassword(user.id, credentials.password))
-                return {user, opds:true, bound:true};
-            return null;
+            const scope = String(req.query?.user || '').trim();
+            if (this.config.opds.password) {
+                if (scope) {
+                    const scoped = await this.worker.readingListStore.verifyOpdsPassword(scope,credentials.user,credentials.password,{totpOnly:true});
+                    if (scoped.user) return scoped.authorized ? {user:scoped.user,opds:true,bound:true} : null;
+                }
+                if (this.config.opds.user && equal(credentials.user, this.config.opds.user)
+                    && equal(credentials.password, this.config.opds.password)) return {opds:true};
+            }
+            const user = await this.worker.readingListStore.findOpdsIdentity(credentials.user,credentials.password,
+                {totpOnly:!!this.config.opds.password});
+            return user ? {user, opds:true, bound:true} : null;
         });
     }
 

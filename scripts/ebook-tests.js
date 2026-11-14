@@ -142,6 +142,56 @@ async function testEbookProfileLoginCsrfPasswordAndRevokedSessionStayProtected()
         sessions.clear();assert.equal((await request('/library/ebook/recent?user=reader')).response.status,401);
     });
 }
+async function testEbookRequiresOtpBeforeCreatingProfileSession(){
+    await fixture({allowAnonymousAccess:false},async({request,csrf,worker,sessions,security})=>{
+        const login='/library/ebook/login', destination='/library/ebook/recent';
+        const initial=await request(login);
+        assert.equal(initial.response.status,200);
+        assert.doesNotMatch(initial.text,/name="otp"/);
+        const password='fixture-profile-password', code='012345', recovery='ABCDE-FGHJK-LMNPQ-RSTUV';
+        const loginUserProfile=worker.loginUserProfile;
+        const invalid=()=>Object.assign(new Error('Неверные данные входа'),{code:'INPX_INVALID_PROFILE_CREDENTIALS'});
+        let attempts=0;
+        worker.loginUserProfile=async(user,submitted,otp)=>{
+            attempts++;
+            if(user!=='reader'||submitted!==password)throw invalid();
+            if(!otp)throw Object.assign(new Error('Требуется одноразовый код'),{code:'need_profile_otp'});
+            if(otp!==code&&otp!==recovery)throw invalid();
+            return loginUserProfile(user,' pass ');
+        };
+        const base={login:'reader',password,next:destination};
+        const challenge=await request(login,{...base,csrf:csrf(initial.text)});
+        assert.equal(challenge.response.status,401);
+        assert.match(challenge.text,/name="otp"[^>]*autocomplete="one-time-code"/);
+        assert.match(challenge.text,/name="next" value="\/library\/ebook\/recent"/);
+        assert(!challenge.text.includes(password));
+        assert.equal(challenge.response.headers.get('cache-control'),'private, no-store');
+        assert.equal(sessions.size,0);
+        assert.equal(security.getLoginMetrics().activeFailedAttempts,0);
+        assert.equal((await request(destination)).response.status,401);
+
+        const token=csrf(challenge.text);
+        const csrfFailure=await request(login,{...base,otp:code,csrf:'wrong-csrf'});
+        assert.equal(csrfFailure.response.status,403);
+        assert.equal(attempts,1);
+        const wrong=await request(login+'/',{...base,otp:'999998',csrf:token});
+        assert.equal(wrong.response.status,401);
+        assert.match(wrong.text,/name="otp"/);
+        assert(!wrong.text.includes('999998')&&!wrong.text.includes(password));
+        assert.equal(sessions.size,0);
+        assert.equal(security.getLoginMetrics().activeFailedAttempts,1);
+
+        for(const otp of [code,recovery]){
+            const signed=await request(login,{...base,otp,csrf:token});
+            assert.equal(signed.response.status,303);
+            assert.equal(signed.response.headers.get('location'),destination);
+            assert(!signed.text.includes(password)&&!signed.text.includes(otp));
+            assert.equal((await request(destination)).response.status,200);
+            await request('/library/ebook/logout',{csrf:token});
+            assert.equal(sessions.size,0);
+        }
+    });
+}
 async function testEbookLibraryPasswordLogoutAndSafeReturnPaths(){
     await fixture({accessPassword:'library password'},async({request,csrf,access,sessions,controller})=>{
         const first=await request();assert.equal(first.response.status,401);assert.match(first.text,/Пароль библиотеки/);const token=csrf(first.text);
@@ -333,7 +383,7 @@ async function testEbookGuestFormatAppliesBeforeTypedDownloadWithoutChangingProf
 }
 
 module.exports=[testEbookHtmlWorksWithoutSpaAndSearchIsBoundedExplicitAndEscaped,testEbookInputAndPaginationRejectAmbiguousAndOversizedRequests,
-    testEbookBookCardDefersMetadataAndReusesDownloadAndReadPaths,testEbookShortPagesSaveProgressOnPageTurns,testEbookProfileLoginCsrfPasswordAndRevokedSessionStayProtected,
+    testEbookBookCardDefersMetadataAndReusesDownloadAndReadPaths,testEbookShortPagesSaveProgressOnPageTurns,testEbookProfileLoginCsrfPasswordAndRevokedSessionStayProtected,testEbookRequiresOtpBeforeCreatingProfileSession,
     testEbookLibraryPasswordLogoutAndSafeReturnPaths,testEbookLatePrivateResponseIsRejectedAfterProfileLogout,
     testEbookPlainReaderStreamsBodyAndKeepsUnicodePages,testEbookReaderCacheGenerationAndTemporaryFilesAreBounded,
     testEbookQuickSearchCombinesTitleAndAuthorAndAllowsAuthorOnly,testEbookShelvesRequireIdentityAndNeverAcceptForeignProfileScope,
