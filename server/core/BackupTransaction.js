@@ -1,6 +1,8 @@
 const fs = require('fs-extra');
 const path = require('path');
-const {writeFileAtomic, withFileTransactions} = require('./FilePersistence');
+const {writeFileAtomic, syncParentDirectory, withFileTransactions} = require('./FilePersistence');
+const progressJournal = require('./ReaderProgressJournal');
+const durable = {syncDirectory: true};
 
 function targets(config) {
     return {
@@ -10,6 +12,17 @@ function targets(config) {
         'discovery-cache.json': path.join(config.dataDir, 'discovery-cache.json'),
         'backup-vault.json': path.join(config.dataDir, 'backup-vault.json'),
     };
+}
+
+async function clearRestoredProgressJournal(readingLists) {
+    const file = path.join(path.dirname(readingLists), progressJournal.fileName);
+    const stamp = await progressJournal.stamp(file);
+    if (!stamp) return;
+    // A previous attempt may have committed the restore and then failed to
+    // remove its recovery directory. Preserve any new journal since created.
+    const data = await fs.readJson(readingLists);
+    const journal = await progressJournal.replay(file, data[progressJournal.checkpointField], data, stamp);
+    if (!journal.offset) await progressJournal.clear(file);
 }
 
 async function recover(config) {
@@ -29,11 +42,11 @@ async function recover(config) {
     if (manifest.state !== 'committed') {
         for (const name of manifest.files) {
             if (manifest.existed[name])
-                await writeFileAtomic(allowed[name], await fs.readFile(path.join(folder, name)));
+                await writeFileAtomic(allowed[name], await fs.readFile(path.join(folder, name)), durable);
             else
                 await fs.remove(allowed[name]);
         }
-    }
+    } else if (manifest.files.includes('reading-lists.json')) await clearRestoredProgressJournal(allowed['reading-lists.json']);
     await fs.remove(folder);
 }
 
@@ -51,12 +64,13 @@ async function commit(config, content) {
             if (manifest.existed[name])
                 await writeFileAtomic(path.join(folder, name), await fs.readFile(allowed[name]));
         }
-        await writeFileAtomic(manifestFile, JSON.stringify(manifest));
+        await writeFileAtomic(manifestFile, JSON.stringify(manifest), durable);
+        await syncParentDirectory(folder);
         try {
             for (const name of manifest.files)
-                await writeFileAtomic(allowed[name], content[name]);
+                await writeFileAtomic(allowed[name], content[name], durable);
             manifest.state = 'committed';
-            await writeFileAtomic(manifestFile, JSON.stringify(manifest));
+            await writeFileAtomic(manifestFile, JSON.stringify(manifest), durable);
         } catch (error) {
             try {
                 await recover(config);
@@ -67,7 +81,11 @@ async function commit(config, content) {
             throw error;
         }
         // A committed journal is also safely cleaned up at the next start.
-        await fs.remove(folder).catch(() => {});
+        await recover(config).catch(error => {
+            // Keep the committed recovery marker until the obsolete journal
+            // is removed. A failed cleanup does not undo a completed restore.
+            console.warn(`Backup restore cleanup: ${error.message}`);
+        });
     });
 }
 

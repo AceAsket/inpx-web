@@ -416,6 +416,101 @@ async function testZipPreviewLimitAndFolderExtractionLimitDoNotChangeFullReads()
     });
 }
 
+async function testBookExtractionStaysInsideItsLibrarySource() {
+    await temporary(async dir => {
+        const library = path.join(dir, 'library');
+        const tempDir = path.join(dir, 'tmp');
+        const worker = makeWorker();
+        worker.config = {libDir:library, tempDir};
+        await fs.ensureDir(tempDir);
+        await fs.outputFile(path.join(library, 'nested', 'BOOK.fb2'), 'book fixture');
+        const copy = await worker.extractBook('nested', 'book.fb2');
+        assert.strictEqual(await fs.readFile(copy, 'utf8'), 'book fixture');
+        await fs.remove(copy);
+
+        const outside = path.join(dir, 'outside');
+        await fs.ensureDir(outside);
+        await fs.symlink(outside, path.join(library, 'external'), process.platform === 'win32' ? 'junction' : 'dir');
+        await assert.rejects(worker.extractBook('external', 'book.fb2'), {code:'INPX_LIBRARY_PATH'});
+        await assert.rejects(worker.resolveLibraryArchivePath(outside, library), {code:'INPX_LIBRARY_PATH'});
+        await assert.rejects(worker.extractBook('nested', path.join(outside, 'book.fb2')), {code:'INPX_LIBRARY_PATH'});
+
+        const archive = path.join(library, 'archives', 'SAMPLE.ZIP');
+        await fs.ensureDir(path.dirname(archive));
+        const zip = new (require('yazl').ZipFile)();
+        const complete = pipeline(zip.outputStream, fs.createWriteStream(archive));
+        zip.addBuffer(Buffer.from('archive fixture'), 'book.fb2');
+        zip.end();
+        await complete;
+        const extracted = await worker.extractBook('sample.7z', 'book.fb2');
+        assert.strictEqual(await fs.readFile(extracted, 'utf8'), 'archive fixture');
+        await fs.remove(extracted);
+
+        const linkedRoot = path.join(dir, 'mounted-library');
+        await fs.symlink(library, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
+        const mounted = await worker.extractBook('nested', 'BOOK.fb2', linkedRoot);
+        assert.strictEqual(await fs.readFile(mounted, 'utf8'), 'book fixture');
+        await fs.remove(mounted);
+        assert.deepStrictEqual(await fs.readdir(tempDir), []);
+    });
+}
+
+async function testImageDecodersIgnoreLibraryExecutableDirectories() {
+    const tools = require('../server/core/ExternalTools');
+    const dirs = [path.resolve('library/bin'), path.resolve('bin')];
+    for (const [name, candidates] of [['djxl', tools.djxlCommandCandidates], ['dwebp', tools.dwebpCommandCandidates]]) {
+        const executable = path.resolve('trusted-tools', name);
+        const config = {[name]:executable};
+        assert.deepStrictEqual(candidates(dirs, config), candidates([], config));
+        assert.strictEqual(candidates(dirs, config)[0], executable);
+        assert(candidates(dirs, {}).includes(name));
+    }
+}
+
+async function testLegacyPreparedAssetsAreNotServedAfterUpgrade() {
+    await temporary(async dir => {
+        const {cacheDirectories, coverCacheKey} = require('../server/core/BookAssets');
+        const publicFilesDir = path.join(dir, 'public-files');
+        const config = {publicFilesDir, publicDir:path.join(dir, 'public'), rootPathStatic:'',
+            libDir:path.join(dir, 'library'), bookPathStatic:'/book', ...cacheDirectories(publicFilesDir)};
+        const worker = makeWorker();
+        worker.config = config;
+        const book = {_uid:'sample', sourceId:'main', folder:'.', file:'sample', ext:'fb2'};
+        worker.getBookRecordByUid = async() => book;
+        worker.getBookCover = async() => null;
+        worker.runBackground = async work => work();
+        const oldBook = path.join(publicFilesDir, 'book', 'abc123');
+        const oldCover = path.join(publicFilesDir, 'cover', coverCacheKey(book) + '.png');
+        await fs.outputFile(oldBook, 'old book');
+        await fs.outputFile(oldBook + '.raw', 'old raw book');
+        await fs.outputJson(oldBook + '.d.json', {downFileName:'old.fb2', assetVersion:'fb2-images-v7'});
+        await fs.outputFile(oldCover, 'old cover');
+        await fs.outputFile(path.join(config.bookDir, 'abc456.raw'), 'current book asset');
+        await fs.outputFile(path.join(config.libDir, 'sample.fb2'), 'current library fixture');
+
+        const app = require('express')();
+        require('../server/static')(app, config, worker);
+        const server = require('http').createServer(app);
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        const endpoint = 'http://127.0.0.1:' + server.address().port;
+        try {
+            for (const url of ['/book/abc123', '/book/abc123.raw', '/book/abc123.d.json', '/cover/by-uid?uid=sample']) {
+                const response = await fetch(endpoint + url);
+                assert.strictEqual(response.status, 404, url);
+                await response.text();
+            }
+            const current = await fetch(endpoint + '/book/abc456.raw');
+            assert.strictEqual(current.status, 200);
+            assert.strictEqual(await current.text(), 'current book asset');
+            const fixture = await fetch(endpoint + '/reader-lab-source/sample.fb2');
+            assert.strictEqual(fixture.status, 200);
+            assert.strictEqual(await fixture.text(), 'current library fixture');
+            assert.strictEqual(await fs.readFile(oldBook, 'utf8'), 'old book');
+            assert.strictEqual(await fs.readFile(oldCover, 'utf8'), 'old cover');
+        } finally {await new Promise(resolve => server.close(resolve));}
+    });
+}
+
 module.exports = [testBookInfoCacheWithRootReusesParsedCover, testMetadataCacheBytesExpiryAndGeneration,
     testRepackedEpubMetadataLimitsByNameAndActualBytes, testSpeechPartsReuseVersionAndKeepUsersOptionsSeparate,
     testDiscoveryCachesBoundBytesCoalesceAndInvalidate, testBatchExpiryCleanupAndTicketCountBudget,
@@ -423,4 +518,6 @@ module.exports = [testBookInfoCacheWithRootReusesParsedCover, testMetadataCacheB
     testStaticCoversRejectChangedDatabaseGenerationAndManualReset,
     testLazyGalleryBoundsSidecarsCoalescesAndReusesRevisionCache,testLazyGallerySkipsWholeOversizeImagesAndBoundsAggregateBytes,
     testLazyGalleryRejectsRawExpansionAndStalePublication,testLazyGallerySaxIgnoresCommentAndBodyMarkupAndReadsBinaryCdata,
-    testLazyGalleryLargeCdataAndTextStayChunkedInsideSax,testZipPreviewLimitAndFolderExtractionLimitDoNotChangeFullReads];
+    testLazyGalleryLargeCdataAndTextStayChunkedInsideSax,testZipPreviewLimitAndFolderExtractionLimitDoNotChangeFullReads,
+    testBookExtractionStaysInsideItsLibrarySource,testImageDecodersIgnoreLibraryExecutableDirectories,
+    testLegacyPreparedAssetsAreNotServedAfterUpgrade];

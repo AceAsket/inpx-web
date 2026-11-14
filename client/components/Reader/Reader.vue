@@ -2031,6 +2031,7 @@ class Reader {
 
     activated() {
         this.readerActive = true;
+        this.cacheReaderBackground();
     }
 
     deactivated() {
@@ -2498,7 +2499,7 @@ class Reader {
             return {};
 
         if (this.localReaderBackground?.source === image) image = this.localReaderBackground.data;
-        else image = this.readerBackgroundRequestUrl(image);
+        else if (this.isReaderBackgroundPath(image)) return {};
 
         const theme = String(this.preferences.theme || 'dark');
         const overlay = (theme === 'dark')
@@ -10845,22 +10846,22 @@ class Reader {
         this.cacheReaderBackground();
     }
 
-    readerBackgroundRequestUrl(image = '') {
-        if (image.startsWith('/') && image.includes('/reader-background/') && this.settings.profileAccessToken) {
-            // Tokens are used for this request only, never stored in preferences.
-            return `${image}${image.includes('?') ? '&' : '?'}access=${encodeURIComponent(this.settings.profileAccessToken)}`;
-        }
-        return image;
+    isReaderBackgroundPath(image) {
+        return /^\/(?!\/)(?:[^\\?#\x00-\x20]*\/)?reader-background\/[^/\\?#\x00-\x20]+\/[a-f0-9]{64}\.(?:png|jpg|gif|webp)$/.test(image);
     }
 
     async cacheReaderBackground() {
         const image = String(this.preferences.backgroundImage || '');
-        if (!image.startsWith('/') || !image.includes('/reader-background/') || this.readerBackgroundLoadSource === image
+        if (!this.isReaderBackgroundPath(image) || this.readerBackgroundLoadSource === image
             || this.localReaderBackground?.source === image || typeof fetch !== 'function' || typeof FileReader === 'undefined') return;
         this.readerBackgroundLoadSource = image;
         const userId = this.currentUserId;
         try {
-            const response = await fetch(this.readerBackgroundRequestUrl(image), {credentials: 'same-origin', cache: 'no-store'});
+            const token = this.settings.profileAccessToken || this.$root?.api?.profileAccessToken;
+            const response = await fetch(image, {
+                credentials: 'same-origin', mode: 'same-origin', redirect: 'error', cache: 'no-store',
+                headers: token ? {'X-Inpx-Profile-Token': token} : {},
+            });
             if (!response.ok) return;
             const blob = await response.blob();
             if (blob.size > this.readerBackgroundMaxBytes || !blob.type.startsWith('image/')) return;

@@ -128,7 +128,34 @@ async function testExternalOnlyDiscoveryReusesResolvedSourceAndSkipsLocalWork() 
     assert.deepEqual(result.shelves.map(shelf => shelf.id), ['external-source']);
 }
 
+async function testExternalDiscoveryUsesConfiguredOriginAndBoundsResponses() {
+    const Worker = require('../server/core/WebWorker');
+    const worker = Object.create(Worker.prototype);
+    worker.config = {discovery:{externalUrl:'https://books.example.test'}};
+    const getConfig = externalBrowseUrl => worker.getDiscoveryConfig({externalBrowseUrl});
+    assert.equal(getConfig('/genre').externalBrowseUrl, 'https://books.example.test/genre');
+    assert.equal(getConfig('https://books.example.test:8443/genre').externalBrowseUrl, '');
+    assert.equal(getConfig('http://books.example.test/genre').externalBrowseUrl, '');
+    assert.equal(getConfig('https://name:password@books.example.test/genre').externalBrowseUrl, '');
+
+    const axios = require('axios'), original = axios.get;
+    axios.get = async (url, options) => {
+        assert.equal(url, 'https://books.example.test/');
+        assert(options.maxContentLength > 0 && options.maxContentLength <= 10 * 1024 * 1024);
+        assert(options.maxRedirects > 0 && options.maxRedirects <= 4);
+        assert.doesNotThrow(() => options.beforeRedirect({href:'https://books.example.test/catalog'}));
+        assert.throws(() => options.beforeRedirect({href:'https://other.example.test/catalog'}), /Переадресация/);
+        return {data:'<html></html>'};
+    };
+    worker.parseExternalFeedItemsFromNextData = () => [{title:'Fixture', url:'https://books.example.test/book'}];
+    try {
+        await assert.rejects(worker.fetchExternalFeedItems(1, 'ftp://books.example.test/'), /Недопустимый URL/);
+        assert.equal((await worker.fetchExternalFeedItems(1, 'https://books.example.test/')).items.length, 1);
+    } finally {axios.get = original;}
+}
+
 module.exports=[testPersonalRecommendationPreferencePersistsPerProfileAndBackup,testDisabledPersonalRecommendationsSkipServerWorkAndKeepOtherShelves,testPersonalRecommendationToggleClearsCachedAndLateResults,
     testOverviewRecommendationsAreBoundedCachedAndSeparateFromNewest,testOverviewSlowRecommendationsDoNotDelayOtherShelvesAndRejectOldProfile,
     testOverviewRecommendationsHandleEmptyDisabledOldServerAndExpiredSession,testOverviewRecommendationEndpointDoesNotBuildGlobalShelves,
-    testOverviewPublishesLocalShelvesBeforeExternalFeed,testExternalOnlyDiscoveryReusesResolvedSourceAndSkipsLocalWork];
+    testOverviewPublishesLocalShelvesBeforeExternalFeed,testExternalOnlyDiscoveryReusesResolvedSourceAndSkipsLocalWork,
+    testExternalDiscoveryUsesConfiguredOriginAndBoundsResponses];

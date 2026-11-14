@@ -46,6 +46,7 @@ const Fb2Helper = require('./fb2/Fb2Helper');
 const Fb2Parser = require('./fb2/Fb2Parser');
 const ConfigManager = require('../config');
 const {getEnabledLibrarySources} = require('./LibrarySources');
+const {relativeName, relativeToRoot, realPathWithin} = require('./LibraryPaths');
 
 //server states
 const ssNormal = 'normal';
@@ -397,6 +398,13 @@ function getExternalItemKind(sourceUrl = '', itemUrl = '') {
     }
 }
 
+function parseExternalHttpUrl(value, base) {
+    const url = new URL(value, base);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+        throw new Error('Недопустимый URL внешней витрины');
+    return url;
+}
+
 function sanitizeExternalBrowseUrl(baseUrl = '', browseUrl = '') {
     const rawBaseUrl = String(baseUrl || '').trim();
     const rawBrowseUrl = String(browseUrl || '').trim();
@@ -404,9 +412,9 @@ function sanitizeExternalBrowseUrl(baseUrl = '', browseUrl = '') {
         return '';
 
     try {
-        const base = new URL(rawBaseUrl);
-        const target = new URL(rawBrowseUrl, base);
-        if (String(base.hostname || '').toLowerCase() !== String(target.hostname || '').toLowerCase())
+        const base = parseExternalHttpUrl(rawBaseUrl);
+        const target = parseExternalHttpUrl(rawBrowseUrl, base);
+        if (base.origin !== target.origin)
             return '';
 
         target.hash = '';
@@ -2065,11 +2073,18 @@ class WebWorker {
         const sourceUrl = String(url || '').trim();
         if (!sourceUrl)
             throw new Error('Не задан URL внешней витрины');
+        const source = parseExternalHttpUrl(sourceUrl);
 
         const requestPageHtml = async(pageUrl = '') => {
             const response = await axios.get(pageUrl, {
                 responseType: 'text',
                 timeout: 20000,
+                maxContentLength: 10 * 1024 * 1024,
+                maxRedirects: 4,
+                beforeRedirect: ({href}) => {
+                    if (parseExternalHttpUrl(href).origin !== source.origin)
+                        throw new Error('Переадресация внешней витрины на другой сайт запрещена');
+                },
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
                     'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.7',
@@ -2081,13 +2096,7 @@ class WebWorker {
 
         const requestedItems = Math.max(1, parseInt(limit, 10) || 8);
         const parserLimit = Math.max(requestedItems + 24, requestedItems);
-        const host = (() => {
-            try {
-                return new URL(sourceUrl).hostname.toLowerCase();
-            } catch (e) {
-                return '';
-            }
-        })();
+        const host = source.hostname;
 
         const parseItemsFromHtml = (html = '', pageUrl = sourceUrl) => {
             const parserChain = [
@@ -3865,10 +3874,12 @@ class WebWorker {
         return requestedUser;
     }
 
-    async requireAuthorizedUser(userId = '', profileAccessToken = '', {identityOnly = false} = {}) {
-        const requestedUser = identityOnly ? await this.readingListStore.getUserIdentity(userId)
+    async requireAuthorizedUser(userId = '', profileAccessToken = '', {identityOnly = false, exactId = false} = {}) {
+        const requestedUser = exactId && userId ? await this.readingListStore.getUserIdentity(userId, 'id')
+            : identityOnly ? await this.readingListStore.getUserIdentity(userId)
             : await this.readingListStore.getUser(userId);
-        if (!requestedUser.passwordHash)
+        if (!requestedUser) throw new Error('need_profile_login');
+        if (!requestedUser.passwordHash && (!exactId || !profileAccessToken))
             return requestedUser;
 
         const sessionUserId = this.getProfileSessionUser(profileAccessToken);
@@ -3970,10 +3981,8 @@ class WebWorker {
         this.checkMyState();
         return withFileTransaction(this.readingListStore.file, async() => {
             const user = await this.readingListStore.findUserByLogin(login);
-            if (!user || !user.passwordHash)
-                throw new Error('Неверный логин или пароль');
-            if (!await this.readingListStore.verifyUserPassword(user.id, password))
-                throw new Error('Неверный логин или пароль');
+            if (!user?.passwordHash || !await this.readingListStore.verifyUserPassword(user.id, password))
+                throw Object.assign(new Error('Неверный логин или пароль'), {code:'INPX_INVALID_PROFILE_CREDENTIALS'});
             return {
                 userId: user.id,
                 profileAccessToken: this.createProfileSession(user.id),
@@ -5545,35 +5554,27 @@ class WebWorker {
             } catch (error) {await fs.remove(outFile); throw error;}
         };
 
-        libFolder = libFolder.replace(/\\/g, '/').replace(/\/\//g, '/');
-        const libDir = sourceLibDir || this.config.libDir;
-
-        const file = libFile;
-        const resolveFolder = async() => {
-            const folder = `${libDir}/${libFolder}`;
-
-            return await this.resolveLibraryArchivePath(folder, libDir);
-        };
-
-        const folder = await resolveFolder();
-        
-        const fullPath = `${folder}/${file}`;
-        const folderStat = file ? await fs.stat(folder).catch(() => null) : null;
-        if (folderStat && folderStat.isDirectory()) {
-            const resolved = await this.resolveExistingPath(fullPath);
+        const name = relativeName(libFile);
+        const folderName = relativeName(libFolder);
+        const libDir = path.resolve(sourceLibDir || this.config.libDir);
+        const root = await fs.realpath(libDir);
+        const candidate = await this.resolveLibraryArchivePath(path.join(libDir, folderName), libDir, root);
+        const folder = await realPathWithin(root, candidate);
+        const folderStat = await fs.stat(folder);
+        if (folderStat.isDirectory()) {
+            const fullPath = path.join(folder, name);
+            const resolved = name && await this.resolveExistingPath(fullPath, root);
             if (!resolved) throw new Error(`file not found: ${fullPath}`);
+            if (!(await fs.stat(resolved)).isFile()) throw new Error('Недопустимый тип файла книги');
             await copy(resolved);
             return outFile;
         }
 
-        if (!file || await fs.pathExists(fullPath)) {// файл есть на диске
-            
-            await copy(fullPath);
+        if (!folderStat.isFile()) throw new Error('Недопустимый тип архива книги');
+        if (!name) {
+            await copy(folder);
             return outFile;
         } else {// файл в zip-архиве
-            if (!await fs.pathExists(folder))
-                throw new Error(`archive not found: ${folder}`);
-
             const zipReader = new ZipReader({resourceMaxOutputBytes:maxOutputBytes || (prefixBytes ? 32*1024**2:0),
                 ...(prefixBytes || signal || timeoutMs ? {resourceSignal:signal,converterPaths:this.config.converterPaths,resourceTimeoutMs:timeoutMs}:{})});
             await zipReader.open(folder, false);
@@ -5591,14 +5592,14 @@ class WebWorker {
                     }
                 };
 
-                await extract(file);
+                await extract(libFile);
 
                 if (!await fs.pathExists(outFile)) {//не удалось найти в архиве, попробуем имя файла в кодировке cp866
-                    await extract(iconv.encode(file, 'cp866').toString());
+                    await extract(iconv.encode(libFile, 'cp866').toString());
                 }
 
                 if (!await fs.pathExists(outFile))
-                    throw new Error(`file not found in archive: ${file}`);
+                    throw new Error(`file not found in archive: ${libFile}`);
 
                 return outFile;
             } finally {
@@ -5607,7 +5608,10 @@ class WebWorker {
         }
     }
 
-    async resolveLibraryArchivePath(folder = '', libDir = '') {
+    async resolveLibraryArchivePath(folder = '', libDir = '', root = null) {
+        libDir = path.resolve(libDir);
+        const relativeFolder = relativeToRoot(libDir, path.resolve(folder));
+        root = root || await fs.realpath(libDir);
         const candidates = [folder];
         const ext = path.extname(folder).toLowerCase();
         if (ext === '.zip')
@@ -5616,15 +5620,12 @@ class WebWorker {
             candidates.push(`${folder.substring(0, folder.length - 3)}.zip`);
 
         for (const candidate of candidates) {
-            const resolved = await this.resolveExistingPath(candidate);
+            const resolved = await this.resolveExistingPath(candidate, root);
             if (resolved)
                 return resolved;
         }
 
         const baseName = path.basename(folder);
-        const relativeFolder = String(folder || '').startsWith(`${libDir}/`)
-            ? String(folder || '').substring(String(libDir || '').length + 1)
-            : baseName;
         const directRoots = [
             libDir,
             `${libDir}/fb2`,
@@ -5632,9 +5633,9 @@ class WebWorker {
             `${libDir}/archives`,
         ].filter(Boolean);
 
-        for (const root of directRoots) {
+        for (const directory of directRoots) {
             for (const name of Array.from(new Set([relativeFolder, baseName]))) {
-                const resolved = await this.resolveArchiveNameInDir(root, name);
+                const resolved = await this.resolveArchiveNameInDir(directory, name, root);
                 if (resolved)
                     return resolved;
             }
@@ -5654,19 +5655,22 @@ class WebWorker {
                         continue;
 
                     scanned.add(key);
-                    const resolved = await this.resolveArchiveNameInDir(dir, baseName);
+                    const resolved = await this.resolveArchiveNameInDir(dir, baseName, root);
                     if (resolved)
                         return resolved;
                 }
             }
         } catch(e) {
+            if (e.code === 'INPX_LIBRARY_PATH') throw e;
             // keep the original missing archive error
         }
 
-        return folder;
+        // Keep the unresolved path for sidecar lookup even if the book
+        // archive is missing. Callers that open it check that it exists.
+        return path.join(root, relativeFolder);
     }
 
-    async resolveArchiveNameInDir(dir = '', name = '') {
+    async resolveArchiveNameInDir(dir = '', name = '', root) {
         const candidate = path.join(dir, name);
         const candidates = [candidate];
         const ext = path.extname(candidate).toLowerCase();
@@ -5676,7 +5680,7 @@ class WebWorker {
             candidates.push(`${candidate.substring(0, candidate.length - 3)}.zip`);
 
         for (const item of candidates) {
-            const resolved = await this.resolveExistingPath(item);
+            const resolved = await this.resolveExistingPath(item, root);
             if (resolved)
                 return resolved;
         }
@@ -5684,11 +5688,11 @@ class WebWorker {
         return '';
     }
 
-    async resolveExistingPath(filePath = '') {
+    async resolveExistingPath(filePath = '', root) {
         if (!filePath)
             return '';
         if (await fs.pathExists(filePath))
-            return filePath;
+            return root ? realPathWithin(root, filePath) : filePath;
 
         const dir = path.dirname(filePath);
         const baseName = path.basename(filePath).toLowerCase();
@@ -5696,10 +5700,14 @@ class WebWorker {
             return '';
 
         try {
-            const entries = await this.readLibraryDirCached(dir);
+            const realDir = root ? await realPathWithin(root, dir) : dir;
+            const entries = await this.readLibraryDirCached(realDir);
             const match = entries.find(item => item.toLowerCase() === baseName);
-            return match ? path.join(dir, match) : '';
+            if (!match) return '';
+            const found = path.join(realDir, match);
+            return root ? await realPathWithin(root, found) : found;
         } catch(e) {
+            if (e.code === 'INPX_LIBRARY_PATH') throw e;
             return '';
         }
     }
@@ -5941,7 +5949,7 @@ class WebWorker {
 
     async getBookAssetArchives(subDir, libFolder, sourceLibDir = '') {
         const libDir = sourceLibDir || this.config.libDir;
-        const bookArchive = await this.resolveLibraryArchivePath(`${libDir}/${libFolder}`, libDir);
+        const bookArchive = await this.resolveLibraryArchivePath(path.join(libDir, relativeName(libFolder)), libDir);
         const baseName = path.basename(bookArchive, path.extname(bookArchive));
         const dirs = Array.from(new Set([
             path.join(path.dirname(bookArchive), subDir),

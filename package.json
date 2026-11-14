@@ -48,7 +48,7 @@
     "eslint": "^8.57.0",
     "eslint-plugin-vue": "^9.23.0",
     "html-webpack-plugin": "^5.6.0",
-    "markdown-it": "^15.0.2",
+    "markdown-it": "^15.0.3",
     "mini-css-extract-plugin": "^2.8.1",
     "terser-webpack-plugin": "^5.3.10",
     "vue-eslint-parser": "^9.4.2",
@@ -56,7 +56,7 @@
     "vue-style-loader": "^4.1.3",
     "webpack": "^5.91.0",
     "webpack-cli": "^5.1.4",
-    "webpack-dev-middleware": "^6.1.2",
+    "webpack-dev-middleware": "^8.6.1",
     "webpack-hot-middleware": "^2.26.1",
     "webpack-merge": "^5.10.0"
   },
@@ -90,9 +90,15 @@
     "vue": "^3.2.37",
     "vue-router": "^4.3.0",
     "vuex": "^4.1.0",
-    "vuex-persist": "^3.1.3",
     "ws": "^8.21.3",
     "yazl": "^2.5.1"
+  },
+  "overrides": {
+    "brace-expansion@1": "^1.1.21",
+    "fast-uri@3": "^3.1.9",
+    "postcss-selector-parser@6": "^6.1.5",
+    "serialize-javascript@7": "^7.1.3",
+    "undici@7": "^7.30.1"
   },
   "optionalDependencies": {
     "@napi-rs/image": "1.16.0"

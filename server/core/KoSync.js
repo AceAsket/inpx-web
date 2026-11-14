@@ -236,9 +236,7 @@ function register(app, config, worker, security) {
     router.post('/users/create', (req, res) => res.status(403).json({message: 'Создайте ключ в настройках профиля INPX Web'}));
     router.use(async(req, res, next) => {
         try {
-            security.checkLoginRate(req, 'opds');
-            const user = await service.authenticate(req);
-            security.checkLoginRate(req, 'opds'); security.recordLoginAttempt(req, !!user, 'opds');
+            const user = await security.withLoginAttempt(req, 'opds', () => service.authenticate(req));
             if (!user) return res.status(401).json({message: 'Unauthorized'});
             req.kosyncUser = user; next();
         } catch (error) {

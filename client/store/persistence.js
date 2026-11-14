@@ -1,20 +1,26 @@
-// Server config includes private profile data and potentially large reader
-// backgrounds. Restore and persist only browser settings, including old stores.
-export const persistenceOptions = {
-    reducer: state => ({settings: state.settings}),
-    filter: mutation => mutation.type === 'setSettings',
-    restoreState(key, storage) {
-        try {
-            const previous = JSON.parse(storage.getItem(key) || '{}');
-            const restored = {settings: previous.settings || {}};
-            if (previous.config) {
-                try {storage.setItem(key, JSON.stringify(restored));} catch { /* Restore usable settings anyway. */ }
+export function persistSettings(store, storage) {
+    const key = 'vuex';
+    function save() {
+        try {storage?.setItem(key, JSON.stringify({settings:store.state.settings}));}
+        catch { /* Settings still work for this session. */ }
+    }
+
+    try {
+        storage ??= globalThis.localStorage;
+        const previous = JSON.parse(storage?.getItem(key) || '{}');
+        const saved = previous?.settings;
+        if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+            // Browser storage is untrusted. Keep only settings the store knows.
+            const settings = {...store.state.settings};
+            for (const name of Object.keys(settings)) {
+                if (Object.hasOwn(saved, name)) settings[name] = saved[name];
             }
-            return restored;
+            store.replaceState({...store.state, settings});
         }
-        catch {return {};}
-    },
-    saveState(key, state, storage) {
-        try {storage.setItem(key, JSON.stringify(state));} catch { /* Settings still work for this session. */ }
-    },
-};
+        if (Object.hasOwn(previous || {}, 'config')) save();
+    } catch { /* Start with the defaults when storage is unavailable. */ }
+
+    store.subscribe(mutation => {
+        if (mutation.type === 'setSettings') save();
+    });
+}

@@ -11,6 +11,59 @@ const Security = require('../server/core/Security');
 const FileDownloader = require('../server/core/FileDownloader');
 const lifetime = require('../server/core/SessionLifetime');
 
+async function testWebSocketOriginUsesTrustedProxyPairs() {
+    const security = new Security({trustProxy:true, trustedProxyCidrs:['192.0.2.7/32']});
+    const request = {headers:{host:'backend.example.test','x-forwarded-host':'library.example.test',
+        'x-forwarded-proto':'https',origin:'https://library.example.test'},socket:{remoteAddress:'192.0.2.7'}};
+    assert.equal(security.isSameOrigin(request), true);
+    assert.equal(security.isSameOrigin({...request,headers:{...request.headers,origin:'https://backend.example.test'}}), false);
+    assert.equal(security.isSameOrigin({...request,socket:{remoteAddress:'192.0.2.8'}}), false);
+    assert.equal(security.isSameOrigin({...request,headers:{host:'backend.example.test',origin:'http://backend.example.test'}}), true);
+}
+
+async function testLoginRateReservesAttemptsDuringCredentialVerification() {
+    const security = new Security({loginRateLimitMaxAttempts:1});
+    const request = {headers:{},socket:{remoteAddress:'192.0.2.7'}};
+    const gate = Promise.withResolvers();
+    const pending = security.withLoginAttempt(request,'profile',() => gate.promise);
+    try {
+        await assert.rejects(security.withLoginAttempt(request,'profile',() => true), {code:'INPX_LOGIN_RATE_LIMIT', retryAfter:1});
+        assert.equal(await security.withLoginAttempt(request,'opds',() => true), true);
+    } finally {
+        gate.resolve(true);
+        await pending;
+    }
+    await assert.rejects(security.withLoginAttempt(request,'profile',() => {throw new Error('Store temporarily unavailable');}), /unavailable/);
+    assert.equal(await security.withLoginAttempt(request,'profile',() => true), true);
+    const invalid = Object.assign(new Error('Invalid credentials'), {code:'INPX_INVALID_PROFILE_CREDENTIALS'});
+    await assert.rejects(security.withLoginAttempt(request,'profile',() => {throw invalid;}), invalid);
+    await assert.rejects(security.withLoginAttempt(request,'profile',() => true), {code:'INPX_LOGIN_RATE_LIMIT'});
+}
+
+async function testLibraryAccessChallengesExpireAndPromoteOnlyOnUse() {
+    const WebAccess = require('../server/core/WebAccess');
+    const access = Object.assign(Object.create(WebAccess.prototype), {
+        config:{accessPassword:'library-fixture'}, accessTimeout:0, freeAccess:false,
+        accessMap:new Map(), pendingChallenges:new Map(), challengeCounts:new Map(),
+        db:{insert:async () => {}, delete:async () => {}, esc:JSON.stringify},
+    });
+    const client = '192.0.2.7';
+    const salts = Array.from({length:16}, () => access.newToken(client));
+    assert.throws(() => access.newToken(client), {code:'INPX_LOGIN_RATE_LIMIT'});
+    assert.equal(access.accessMap.size, 0);
+    const token = salt => require('../server/core/utils').getBufHash(access.config.accessPassword + salt,'sha256','hex');
+    assert.equal(await access.hasAccess(token(salts[0])), true);
+    assert.equal(access.accessMap.size, 1);
+    assert.equal(access.pendingChallenges.size, 15);
+    assert.doesNotThrow(() => access.newToken(client));
+    for (const challenge of access.pendingChallenges.values()) challenge.expiresAt = 0;
+    assert.equal(await access.hasAccess(token(salts[1])), false);
+    assert.doesNotThrow(() => access.newToken(client));
+    assert.equal(access.pendingChallenges.size, 1);
+    assert.equal(access.challengeCounts.get(client), 1);
+    assert.equal(await access.hasAccess(token(salts[0])), true);
+}
+
 async function temporary(fn) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-security-test-'));
     try {
@@ -358,4 +411,5 @@ module.exports = [testNoIndexHeadersCoverStaticErrorsAndProtectedResponses, test
     testStoreLoadCacheStaysCurrent, testStoreReadErrorKeepsData, testAdminGetsRandomPasswordByDefault,
     testConcurrentSecretKeyCreation, testConcurrentStoreMutations, testAtomicConfigSave,
     testSessionLifetimeAndMalformedCookies, testProfileCredentialChangesRevokeSessions,
-    testDownloaderClosesFailedTransfers, testDownloaderVerifiesTlsCertificates];
+    testDownloaderClosesFailedTransfers, testDownloaderVerifiesTlsCertificates, testWebSocketOriginUsesTrustedProxyPairs,
+    testLoginRateReservesAttemptsDuringCredentialVerification, testLibraryAccessChallengesExpireAndPromoteOnlyOnUse];

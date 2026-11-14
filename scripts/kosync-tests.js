@@ -130,7 +130,7 @@ async function testKoSyncSeparateProfilesAndOneWayFormats() {
 async function testKoSyncHttpProtocolAndIsolation() {
     await fixture(async({service, worker, config, user}) => {
         const settings = await service.settings(user, 'enable');
-        const app = express(); const security = {checkLoginRate() {}, recordLoginAttempt() {}};
+        const app = express(); const security = {withLoginAttempt(_req, _kind, verify) {return verify();}};
         register(app, config, worker, security);
         const server = http.createServer(app); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
         try {

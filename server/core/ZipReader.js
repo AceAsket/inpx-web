@@ -1,6 +1,8 @@
 const path = require('path');
 const fs = require('fs-extra');
 const {crc32} = require('zlib');
+const {Transform} = require('node:stream');
+const {pipeline} = require('node:stream/promises');
 const {runProcess} = require('./ConversionRuntime');
 const StreamUnzip = require('node-stream-zip');
 const externalTools = require('./ExternalTools');
@@ -13,6 +15,7 @@ class ZipReader {
         this.zipNeeds7z = false;
         this.converterPaths = config.converterPaths || null;
         this.maxOutputBytes = config.resourceMaxOutputBytes || 0;
+        this.maxListingBytes = config.resourceMaxListingBytes || 0;
         this.signal = config.resourceSignal;
         this.timeoutMs = config.resourceTimeoutMs;
     }
@@ -197,8 +200,7 @@ class ZipReader {
             this.archiveFile = zipFile;
             this.archiveType = '7z';
             if (zipEntries) {
-                const listing = await this.run7zStdout(['l', '-slt', '-sccUTF-8', zipFile]);
-                this.zipEntries = this.parse7zEntries(listing.toString());
+                this.zipEntries = await this.listWith7z();
             }
             return;
         }
@@ -217,6 +219,12 @@ class ZipReader {
             await this.close().catch(() => {});
             throw error;
         }
+    }
+
+    async listWith7z() {
+        const listing = await this.run7zCommand(['l', '-slt', '-sccUTF-8', '--', this.archiveFile],
+            {captureStdout:true, maxOutputBytes:this.maxListingBytes});
+        return this.parse7zEntries(listing.toString());
     }
 
     get entries() {
@@ -277,16 +285,16 @@ class ZipReader {
         return Buffer.concat(chunks,bytes);
     }
 
-    async extractToFile(entryFilePath, outputFile) {
+    async extractToFile(entryFilePath, outputFile, maximum = this.maxOutputBytes) {
         this.checkState();
         this.signal?.throwIfAborted();
 
         const entry = this.archiveType === 'zip' ? await this.zipEntry(entryFilePath) : null;
-        if (this.maxOutputBytes > 0 && Number(entry?.size) > this.maxOutputBytes)
+        if (maximum > 0 && Number(entry?.size) > maximum)
             throw Object.assign(new Error('Превышен размер извлечённого файла'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'});
         if (this.archiveType === '7z' || this.externalEntry(entry)) {
             try {
-                await this.run7zCommand(this.extractArgs(entryFilePath), {outputFile, maxOutputBytes:this.maxOutputBytes});
+                await this.run7zCommand(this.extractArgs(entryFilePath), {outputFile, maxOutputBytes:maximum});
             } catch (error) {
                 await fs.remove(outputFile);
                 throw error;
@@ -294,7 +302,35 @@ class ZipReader {
             return;
         }
 
-        await this.zip.extract(entryFilePath, outputFile);
+        if (!maximum) {
+            await this.zip.extract(entryFilePath, outputFile);
+            return;
+        }
+
+        let size = 0, checksum = 0;
+        try {
+            await pipeline(await this.zip.stream(entryFilePath), new Transform({transform(chunk, encoding, callback) {
+                size += chunk.length;
+                if (size > maximum) {
+                    callback(Object.assign(new Error('Превышен размер извлечённого файла'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'}));
+                    return;
+                }
+                checksum = crc32(chunk, checksum);
+                callback(null, chunk);
+            }}), fs.createWriteStream(outputFile), {signal:this.signal});
+            if (size !== entry.size || checksum !== entry.crc) throw new Error('Неверный размер или CRC файла в ZIP');
+        } catch (error) {
+            await fs.remove(outputFile);
+            throw error;
+        }
+    }
+
+    async extractArchiveStream(outputFile, maximum) {
+        this.checkState();
+        if (!this.uses7z || !Number.isSafeInteger(maximum) || maximum < 1)
+            throw new Error('Ожидается ограниченный поток распаковки 7-Zip');
+        await this.run7zCommand(['x', '-y', '-bd', '-so', '-mmt=1', '--', this.archiveFile],
+            {outputFile, maxOutputBytes:maximum});
     }
 
     async extractAllToDir(outputDir) {

@@ -1,3 +1,9 @@
+const nativeJxl = require('./core/NativeJxl');
+if (process.argv[2] === nativeJxl.workerFlag) {
+    void nativeJxl.runWorker(process.argv.slice(3));
+    return;
+}
+
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
@@ -134,8 +140,7 @@ async function init() {
     config.publicFilesDir = `${config.dataDir}/public-files`;
     config.rootPathStatic = config.server.root || '';
     config.bookPathStatic = `${config.rootPathStatic}/book`;
-    config.bookDir = `${config.publicFilesDir}/book`;
-    config.coverDir = `${config.publicFilesDir}/cover`;
+    Object.assign(config, require('./core/BookAssets').cacheDirectories(config.publicFilesDir));
 
     configManager.config = config;
 
@@ -212,9 +217,10 @@ async function init() {
 }
 
 function logQueries(app) {
+    const {readerBackgroundLogUrl} = require('./core/ReaderAssets');
     app.use(function(req, res, next) {
         const start = Date.now();
-        log(`${req.method} ${req.originalUrl} ${utils.cutString(req.body)}`);
+        log(`${req.method} ${readerBackgroundLogUrl(req.originalUrl)} ${utils.cutString(req.body)}`);
         //log(`${JSON.stringify(req.headers, null, 2)}`)
         res.once('finish', () => {
             log(`${Date.now() - start}ms`);

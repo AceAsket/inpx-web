@@ -6,6 +6,7 @@ const {getEnabledLibrarySources}=require('../core/LibrarySources');
 const formats=require('../../shared/BookFormats');
 const converter=require('../core/BookConverter');
 const {EbookReader, limits, pageSizes}=require('../core/EbookReader');
+const {withFileTransaction}=require('../core/FilePersistence');
 const shelves=require('../core/EbookShelves');
 
 const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -80,23 +81,24 @@ class EbookController {
     checkIdentity(req,identity){if(identity&&(!this.worker.getProfileSessionUser(identity.token)||req.securitySession?.profileAccessToken!==identity.token))throw bad('Сеанс завершён. Войдите снова.',401);}
     async authenticate(req,kind) {
         if(!this.security.hasValidCsrf(req,scalar(req.body,'csrf',128)))throw bad('Обновите страницу и повторите вход.',403);
-        const profile=kind==='profile';this.security.checkLoginRate(req,profile?'profile':'access');
-        const password=scalar(req.body,'password',1024,false);let valid=false;
-        try {
-            if(profile){
-                if(this.access.bindingEnabled)throw bad('Профиль задаётся входом через proxy.',403);
-                let result;
-                try{result=await this.worker.loginUserProfile(scalar(req.body,'login',100),password);}
-                catch(error){if(error.message==='Неверный логин или пароль')throw bad(error.message,401);throw error;}
-                const session=req.securitySession,previous=session.profileAccessToken;
-                if(previous)await this.worker.closeProfileSession(previous);
-                session.profileAccessToken=result.profileAccessToken;
-            }else{
-                if(!equal(password,this.config.accessPassword))throw bad('Неверный пароль.',401);
-                const salt=this.webAccess.newToken();req.securitySession.ebookAccessToken=require('../core/utils').getBufHash(password+salt,'sha256','hex');
-            }
-            valid=true;
-        }finally{this.security.recordLoginAttempt(req,valid,profile?'profile':'access');}
+        const profile=kind==='profile';
+        const password=scalar(req.body,'password',1024,false);
+        if(profile){
+            if(this.access.bindingEnabled)throw bad('Профиль задаётся входом через proxy.',403);
+            const login=scalar(req.body,'login',100);
+            let result;
+            try{result=await this.security.withLoginAttempt(req,'profile',()=>this.worker.loginUserProfile(login,password));}
+            catch(error){if(error.message==='Неверный логин или пароль')throw bad(error.message,401);throw error;}
+            const session=req.securitySession,previous=session.profileAccessToken;
+            if(previous)await this.worker.closeProfileSession(previous);
+            session.profileAccessToken=result.profileAccessToken;
+        }else{
+            const valid=await this.security.withLoginAttempt(req,'access',()=>equal(password,this.config.accessPassword));
+            if(!valid)throw bad('Неверный пароль.',401);
+            const salt=this.webAccess.newToken(this.security.clientIp(req));
+            req.securitySession.ebookAccessToken=require('../core/utils').getBufHash(password+salt,'sha256','hex');
+            await this.webAccess.hasAccess(req.securitySession.ebookAccessToken);
+        }
     }
     searchForm(p,advanced=false) {
         const sources=getEnabledLibrarySources(this.config).filter(item=>item.enabled!==false);
@@ -268,9 +270,11 @@ class EbookController {
         if (generation === null || baseRevision === null) throw bad('Обновите страницу и повторите действие.');
         const {text, at, query} = await this.readingPage(req, identity);
         const textSnippet = text.slice(at, at + 160).trim().split('\n', 1)[0].trim().replace(/[\ud800-\udbff]$/, '');
-        this.checkIdentity(req, identity);
-        const {progress} = await this.worker.updateReaderProgress(identity.user.id, query.uid, {
-            percent: at / text.length, sectionId: '', pageIndex: 0, textOffset: -1, textSnippet, hidden: false, generation, baseRevision,
+        const {progress} = await withFileTransaction(this.worker.readingListStore.file, async() => {
+            this.checkIdentity(req, identity);
+            return await this.worker.updateReaderProgress(identity.user.id, query.uid, {
+                percent: at / text.length, sectionId: '', pageIndex: 0, textOffset: -1, textSnippet, hidden: false, generation, baseRevision,
+            });
         });
         const changed = progress.conflict || progress.generationMismatch || progress.reset;
         return this.url('/read', {...query, at, progress: changed ? 'changed' : undefined});

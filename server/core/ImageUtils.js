@@ -1,14 +1,13 @@
 const fs = require('fs-extra');
 const path = require('path');
-const {runProcess, deadline: conversionDeadline} = require('./ConversionRuntime');
+const {runProcess} = require('./ConversionRuntime');
 const imageRuntime = require('./ImageRuntime');
-const resourceRuntime = require('./ResourceRuntime');
+const nativeJxl = require('./NativeJxl');
 const {isResourceError} = require('./ResourcePolicy');
 
 const utils = require('./utils');
 const externalTools = require('./ExternalTools');
 const jxlContainer = Buffer.from('0000000c4a584c200d0a870a', 'hex');
-let nativeImage;
 
 function contentType(buf) {
     if ((buf.length >= 2 && buf[0] == 0xff && buf[1] == 0x0a)
@@ -65,24 +64,11 @@ async function jxlToImage(buf, tempDir, toolDirs = [], converterPaths = null, ex
     return await imageRuntime.run(async() => {
         // The preview path checks the output size on disk before allocating a Buffer.
         if (process.env.INPX_JXL_DECODER === 'native' && !maxOutputBytes) {
-            const data = await tryNativeJxl(buf, extension);
+            const data = await tryNativeJxl(buf, extension, tempDir);
             if (data) return data;
         }
         return decodeJxlWithDjxl(buf, tempDir, toolDirs, converterPaths, extension, maxOutputBytes);
     });
-}
-
-function loadNativeImage() {
-    if (nativeImage === undefined) {
-        try {
-            nativeImage = process.pkg
-                ? module.require(path.join(path.dirname(process.execPath), 'bin', 'inpx-jxl.node'))
-                : module.require('@napi-rs/image');
-        } catch (_) {
-            nativeImage = null;
-        }
-    }
-    return nativeImage;
 }
 
 // Preserve byte-for-byte JPEG recovery when the source contains jbrd. Walk
@@ -105,36 +91,27 @@ function canEncodeJpegNatively(buf) {
     return true;
 }
 
-async function tryNativeJxl(buf, extension) {
+async function tryNativeJxl(buf, extension, tempDir) {
     const png = extension === 'png';
     if (!png && !canEncodeJpegNatively(buf)) return null;
-    const image = loadNativeImage();
-    if (!image) return null;
-
-    const signal = resourceRuntime.signal();
-    const deadline = Math.min(conversionDeadline?.() ?? Infinity, Date.now() + resourceRuntime.settings.taskTimeoutMs);
-    const checkDeadline = () => {
-        if (signal?.aborted)
-            throw Object.assign(new Error('Проверка отменена'), {code:'ABORT_ERR'});
-        if (Date.now() >= deadline)
-            throw Object.assign(new Error('Превышено время декодирования JXL'), {code:'INPX_CONVERSION_TIMEOUT'});
-    };
+    if (buf.length > nativeJxl.maxInputBytes) throw nativeJxl.sizeError();
+    if (!process.pkg) {
+        try {require.resolve('@napi-rs/image');}
+        catch (_) {return null;}
+    }
+    const input = path.join(tempDir, utils.randomHexString(30) + '.jxl');
     try {
-        return await resourceRuntime.run(async() => {
-            checkDeadline();
-            const transformer = new image.Transformer(buf);
-            // Keep the slot until native work actually finishes, including when
-            // the caller cancels after the decoder has started.
-            const data = png
-                ? await transformer.png({compressionType:image.CompressionType.Fast, filterType:image.FilterType.Adaptive})
-                : await transformer.jpeg(95);
-            checkDeadline();
-            return contentType(data) === (png ? 'image/png' : 'image/jpeg') ? data : null;
-        }, {kind:'images', signal, deadline});
+        await fs.writeFile(input, buf);
+        const args = [process.pkg ? nativeJxl.workerFlag : require.resolve('./NativeJxl'), input, extension];
+        const data = await runProcess(process.execPath, args,
+            {resourceKind:'images', captureStdout:true, maxOutputBytes:nativeJxl.maxOutputBytes});
+        return contentType(data) === (png ? 'image/png' : 'image/jpeg') ? data : null;
     } catch (error) {
-        checkDeadline();
+        if (error.exitCode === nativeJxl.sizeExit) throw nativeJxl.sizeError();
         if (isResourceError(error)) throw error;
         return null;
+    } finally {
+        await fs.remove(input);
     }
 }
 
@@ -160,7 +137,7 @@ async function decodeJxlWithDjxl(buf, tempDir, toolDirs, converterPaths, extensi
                     continue;
 
                 await run(command, [inputFile, outputFile, '--num_threads=1'], 'INPX_MISSING_DJXL', externalTools.missingDjxlMessage());
-                return await readDecodedImage(outputFile, maxOutputBytes);
+                return await readDecodedImage(outputFile, maxOutputBytes || nativeJxl.maxOutputBytes);
             } catch (err) {
                 lastError = err;
                 if (shouldSkipToolError(err, command))
@@ -214,7 +191,7 @@ async function decodeWebp(buf, tempDir, toolDirs, converterPaths, maxOutputBytes
                     continue;
 
                 await run(command, [inputFile, '-o', outputFile], 'INPX_MISSING_DWEBP', externalTools.missingDwebpMessage());
-                return await readDecodedImage(outputFile, maxOutputBytes);
+                return await readDecodedImage(outputFile, maxOutputBytes || nativeJxl.maxOutputBytes);
             } catch (err) {
                 lastError = err;
                 if (shouldSkipToolError(err, command))

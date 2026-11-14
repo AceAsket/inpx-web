@@ -159,7 +159,30 @@ async function testRc13ReaderAcceptsCanonicalBackgroundWithoutPersistingAccessTo
     assert.equal(writes.length, 2); assert.equal(writes[1].backgroundImage, url);
     assert(!JSON.stringify(writes).includes('private-token'));
     reader.localReaderBackground = null;
-    assert(reader.readerBackgroundStyle['--reader-background-image'].includes('?access=private-token'));
+    assert.deepEqual(reader.readerBackgroundStyle, {}, 'A protected background is fetched before it is applied as CSS');
+    const originalFetch = global.fetch, originalReader = global.FileReader;
+    try {
+        global.fetch = async(requestUrl, options) => {
+            assert.equal(requestUrl, url);
+            assert.equal(options.headers['X-Inpx-Profile-Token'], 'private-token');
+            assert.equal(options.mode, 'same-origin');
+            assert.equal(options.redirect, 'error');
+            return {ok: true, blob: async() => ({type: 'image/png', size: 1})};
+        };
+        global.FileReader = class {
+            readAsDataURL() {this.result = image; this.onload();}
+        };
+        await reader.cacheReaderBackground();
+        assert(reader.readerBackgroundStyle['--reader-background-image'].includes(image));
+        assert(!JSON.stringify(writes).includes('private-token'));
+        global.fetch = async() => assert.fail('A scheme-relative URL must not receive the profile token');
+        reader.preferences.backgroundImage = `//outside.example${url}`;
+        await reader.cacheReaderBackground();
+    } finally {
+        global.fetch = originalFetch;
+        if (originalReader === undefined) delete global.FileReader; else global.FileReader = originalReader;
+        reader.preferences.backgroundImage = url;
+    }
     assert.equal(reader.preferences.backgroundImage, url);
     let alerts = 0; reader.$root.stdDialog = {alert: () => alerts++};
     reader.handleReaderBackgroundUpload({target: {files: [{type: 'image/svg+xml', size: 10}], value: 'chosen'}});
@@ -167,13 +190,12 @@ async function testRc13ReaderAcceptsCanonicalBackgroundWithoutPersistingAccessTo
 }
 
 async function testRc13VuexPersistencePurgesConfigAndIgnoresConfigMutations() {
-    const {persistenceOptions} = loadClient(path.join(clientRoot, 'store/persistence.js'));
-    const VuexPersistence = require('vuex-persist').default, {createStore} = require('vuex');
+    const {persistSettings} = loadClient(path.join(clientRoot, 'store/persistence.js'));
+    const {createStore} = require('vuex');
     const storage = syncStorage([['vuex', JSON.stringify({settings: {darkTheme: true}, config: {readerPreferences: {backgroundImage: 'large-private-image'}}})]]);
-    const plugin = new VuexPersistence({...persistenceOptions, storage});
     const store = createStore({state: {settings: {darkTheme: false}, config: {}}, mutations: {
         setConfig: (state, value) => {state.config = value;}, setSettings: (state, value) => Object.assign(state.settings, value),
-    }, plugins: [plugin.plugin]});
+    }, plugins: [store => persistSettings(store, storage)]});
     assert.equal(store.state.settings.darkTheme, true); assert.deepEqual(store.state.config, {});
     assert(!storage.getItem('vuex').includes('large-private-image'));
     store.commit('setConfig', {backgroundImage: 'x'.repeat(1024 * 1024)});

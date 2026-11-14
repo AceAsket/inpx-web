@@ -16,7 +16,7 @@ async function fixture(options,work) {
     const book={_uid:'known',title:'Книга <script>alert(1)</script>',author:'Первый Автор,Второй Автор',series:'Тестовый цикл',size:100,ext:'fb2',lang:'ru'};
     const user={id:'reader',name:'Читатель',login:'reader',readerProgress:{known:{percent:.5}}};
     const worker={config,db:{},libraryAssetGeneration:1,checkMyState(){},checkLibraryAssetState(generation,db){if(db!==this.db||generation!==this.libraryAssetGeneration)throw new Error('Library changed');},
-        getProfileSessionUser:token=>sessions.get(token)||'',closeProfileSession:token=>sessions.delete(token),readingListStore:{load:async()=>({users:[user]})},
+        getProfileSessionUser:token=>sessions.get(token)||'',closeProfileSession:token=>sessions.delete(token),readingListStore:{file:path.join(os.tmpdir(),'inpx-ebook-profiles.json'),load:async()=>({users:[user]})},
         loginUserProfile:async(login,password)=>{if(login!=='reader'||password!==' pass ')throw new Error('Неверный логин или пароль');sessions.set('profile-token','reader');return {userId:'reader',profileAccessToken:'profile-token'};},
         updateUserProfile:async(id,patch)=>{assert.equal(id,'reader');Object.assign(user,patch);return {user};},
         bookSearch:async query=>{calls.push(query);return {totalFound:23,found:[book]};},getBookRecordByUid:async uid=>uid==='known'?book:null,

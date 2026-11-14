@@ -5,6 +5,8 @@ const asyncExit = new (require('./AsyncExit'))();
 
 const cleanPeriod = 1*60*1000;//1 минута
 const cleanUnusedTokenTimeout = 5*60*1000;//5 минут
+const maxPendingChallenges = 4096;
+const maxPendingChallengesPerClient = 16;
 
 class WebAccess {
     constructor(config) {
@@ -13,6 +15,8 @@ class WebAccess {
         this.freeAccess = (config.accessPassword === '');
         this.accessTimeout = config.accessTimeout*60*1000;
         this.accessMap = new Map();
+        this.pendingChallenges = new Map();
+        this.challengeCounts = new Map();
 
         asyncExit.add(this.closeDb.bind(this));
 
@@ -84,6 +88,7 @@ class WebAccess {
 
                 //почистим accessMap
                 if (!this.freeAccess) {
+                    this.pruneChallenges(now);
                     for (const [accessToken, accessRec] of this.accessMap) {
                         if (   !(accessRec.used > 0 || now - accessRec.time < cleanUnusedTokenTimeout)
                             || !(this.accessTimeout === 0 || now - accessRec.time < this.accessTimeout)
@@ -107,7 +112,17 @@ class WebAccess {
         if (this.freeAccess)
             return true;
 
-        const accessRec = this.accessMap.get(accessToken);
+        let accessRec = this.accessMap.get(accessToken);
+        if (!accessRec) {
+            const challenge = this.pendingChallenges.get(accessToken);
+            if (challenge) {
+                this.deleteChallenge(accessToken, challenge);
+                if (challenge.expiresAt > Date.now()) {
+                    accessRec = {time:Date.now(), used:0};
+                    this.accessMap.set(accessToken, accessRec);
+                }
+            }
+        }
         if (accessRec) {
             const now = Date.now();
 
@@ -125,6 +140,8 @@ class WebAccess {
     }
 
     async deleteAccess(accessToken) {
+        const challenge = this.pendingChallenges.get(accessToken);
+        if (challenge) this.deleteChallenge(accessToken, challenge);
         await this.db.delete({table: 'access', where: `@@id(${this.db.esc(accessToken)})`});
         this.accessMap.delete(accessToken);
     }
@@ -142,10 +159,35 @@ class WebAccess {
         });
     }
 
-    newToken() {
+    deleteChallenge(token, challenge) {
+        this.pendingChallenges.delete(token);
+        const remaining = this.challengeCounts.get(challenge.client) - 1;
+        if (remaining) this.challengeCounts.set(challenge.client, remaining);
+        else this.challengeCounts.delete(challenge.client);
+    }
+
+    pruneChallenges(now) {
+        // Insertion order is also expiry order; every challenge has the same TTL.
+        for (const [token, challenge] of this.pendingChallenges) {
+            if (challenge.expiresAt > now) break;
+            this.deleteChallenge(token, challenge);
+        }
+    }
+
+    newToken(client = '') {
+        const now = Date.now();
+        this.pruneChallenges(now);
+        const count = this.challengeCounts.get(client) || 0;
+        if (this.pendingChallenges.size >= maxPendingChallenges || count >= maxPendingChallengesPerClient) {
+            throw Object.assign(new Error('Too many pending access challenges. Try again later.'), {
+                code:'INPX_LOGIN_RATE_LIMIT', retryAfter:Math.ceil(cleanUnusedTokenTimeout / 1000),
+            });
+        }
         const salt = utils.randomHexString(32);
         const accessToken = utils.getBufHash(this.config.accessPassword + salt, 'sha256', 'hex');
-        this.accessMap.set(accessToken, {time: Date.now(), used: 0});
+        const lifetime = this.accessTimeout > 0 ? Math.min(this.accessTimeout, cleanUnusedTokenTimeout) : cleanUnusedTokenTimeout;
+        this.pendingChallenges.set(accessToken, {client, expiresAt:now + lifetime});
+        this.challengeCounts.set(client, count + 1);
 
         return salt;
     }

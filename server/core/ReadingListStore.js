@@ -7,6 +7,14 @@ const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const progressJournal = require('./ReaderProgressJournal');
 
 const readerPreferencesVersion = 2;
+const readerProgressFieldLimits = {bookUid: 512, sectionId: 4096, updatedAt: 128};
+
+function boundedProgressField(value, field) {
+    const text = String(value ?? '').trim();
+    if (text.length > readerProgressFieldLimits[field])
+        throw new Error(`Слишком длинное поле прогресса чтения: ${field}`);
+    return text;
+}
 
 function logWarning(message) {
     try {
@@ -858,6 +866,7 @@ class ReadingListStore {
 
         const checkpoint = raw?.[progressJournal.checkpointField];
         const journal = await progressJournal.replay(this.progressFile, checkpoint, raw, journalStamp);
+        if (journalStamp && !journal.offset) journal.stamp = await this.clearObsoleteProgressJournal();
         const assetsChanged = await this.assets.externalize(raw);
         const {data, changed} = await this.applyAdminBootstrap(raw);
         if (changed || assetsChanged)
@@ -865,7 +874,7 @@ class ReadingListStore {
         this.config.resetAdminPassword = false;
         // After a write the stamp read above is stale: the next load reads the file again.
         if (!changed && !assetsChanged && !reset)
-            this.loaded = {stamp, data, checkpoint, journal, bootstrapped:true};
+            this.loaded = {stamp, data, checkpoint, journal, bootstrapped: !!journal.offset || journal.stamp === null};
         return this.loaded?.data || data;
     }
 
@@ -998,15 +1007,26 @@ class ReadingListStore {
 
     async writeDataNow(data) {
         const checkpoint = crypto.randomBytes(16).toString('hex');
-        await writeFileAtomic(this.file, JSON.stringify({...data, [progressJournal.checkpointField]: checkpoint}, null, 2));
+        await writeFileAtomic(this.file, JSON.stringify({...data, [progressJournal.checkpointField]: checkpoint}, null, 2), {syncDirectory: true});
+        const journalStamp = await this.clearObsoleteProgressJournal();
         const stat = await fs.stat(this.file);
         const admin = data.users?.find(user => user.isAdmin || user.id === 'admin');
         const bootstrapped = !!(admin?.isAdmin && admin.login && admin.passwordHash
             && admin.opdsEnabled === false && admin.opdsAuthEnabled === false && data.users[0] === admin);
         this.loaded = {stamp:`${stat.ino}:${stat.size}:${stat.mtimeMs}`, data:structuredClone(data), checkpoint,
-            journal: {stamp: await progressJournal.stamp(this.progressFile), offset: 0}, bootstrapped};
+            journal: {stamp: journalStamp, offset: 0}, bootstrapped: bootstrapped && journalStamp === null};
         // Only scan assets when the reference set changes, never on each page turn.
         await this.assets.prune(data).catch(error => logWarning(`Reader background cleanup: ${error.message}`));
+    }
+
+    async clearObsoleteProgressJournal() {
+        try {
+            await progressJournal.clear(this.progressFile);
+            return null;
+        } catch (error) {
+            logWarning(`Reader progress journal cleanup: ${error.message}`);
+            return await progressJournal.stamp(this.progressFile);
+        }
     }
 
     async currentPersistedData() {
@@ -1073,6 +1093,14 @@ class ReadingListStore {
             || (!normalizedUserId || !strict ? users[0] : null);
         if (!user)
             throw new Error('Пользователь не найден');
+        return user;
+    }
+
+    findProgressUser(users, userId) {
+        // An authenticated caller passes a canonical profile ID. If the
+        // profile disappeared, resolving its login or a default is unsafe.
+        const user = userId ? users.find(item => item.id === userId) : this.findUser(users, '');
+        if (!user) throw new Error('Пользователь не найден');
         return user;
     }
 
@@ -1338,7 +1366,7 @@ class ReadingListStore {
     }
 
     async getReaderState(userId = '', bookUid = '') {
-        const user = await this.getUser(userId);
+        const user = structuredClone(this.findProgressUser((await this.loadSnapshot()).users, userId));
         const normalizedBookUid = this.normalizeBookUid(bookUid);
         if (!normalizedBookUid)
             throw new Error('bookUid is empty');
@@ -1603,9 +1631,9 @@ class ReadingListStore {
 
     async updateReaderProgressNow(userId = '', bookUid = '', patch = {}) {
         const data = await this.loadSnapshot();
-        const target = this.findUser(data.users, userId);
+        const target = this.findProgressUser(data.users, userId);
 
-        const normalizedBookUid = this.normalizeBookUid(bookUid);
+        const normalizedBookUid = boundedProgressField(bookUid, 'bookUid');
         if (!normalizedBookUid)
             throw new Error('bookUid is empty');
 
@@ -1614,12 +1642,12 @@ class ReadingListStore {
         if (current.relinkedTo)
             return {...current, conflict: true};
         const percent = Number(utilsHasProp(patch, 'percent') ? patch.percent : current.percent);
-        const sectionId = String(utilsHasProp(patch, 'sectionId') ? patch.sectionId : current.sectionId || '').trim();
+        const sectionId = utilsHasProp(patch, 'sectionId') ? boundedProgressField(patch.sectionId, 'sectionId') : current.sectionId || '';
         const pageIndex = Number(utilsHasProp(patch, 'pageIndex') ? patch.pageIndex : current.pageIndex);
         const textOffset = Number(utilsHasProp(patch, 'textOffset') ? patch.textOffset : current.textOffset);
         const textSnippet = String(utilsHasProp(patch, 'textSnippet') ? patch.textSnippet : current.textSnippet || '').trim().slice(0, 240);
         const hidden = (utilsHasProp(patch, 'hidden') ? patch.hidden === true : current.hidden === true);
-        const patchUpdatedAt = String(utilsHasProp(patch, 'updatedAt') ? patch.updatedAt : '').trim();
+        const patchUpdatedAt = boundedProgressField(utilsHasProp(patch, 'updatedAt') ? patch.updatedAt : '', 'updatedAt');
         const currentUpdatedAt = String(current.updatedAt || '').trim();
         const patchTime = Date.parse(patchUpdatedAt);
         const currentTime = Date.parse(currentUpdatedAt);
@@ -1676,7 +1704,7 @@ class ReadingListStore {
         const existingBytes = snapshot?.journal.offset || Buffer.byteLength(snapshot?.checkpoint || '') + 1;
         if (!snapshot?.checkpoint || existingBytes + line.length > progressJournal.maxBytes) {
             const next = structuredClone(data);
-            progressJournal.applyProgress(this.findUser(next.users, target.id), normalizedBookUid, progress, updatedAt);
+            progressJournal.applyProgress(this.findProgressUser(next.users, target.id), normalizedBookUid, progress, updatedAt);
             await this.save(next);
         } else {
             snapshot.journal = await progressJournal.append(this.progressFile, snapshot.checkpoint, snapshot.journal, line);
@@ -1687,7 +1715,8 @@ class ReadingListStore {
 
     async relinkReaderBook(userId, bookUid, replacementBookUid, baseRevision) {
         return await this.withProgressMutation(async() => {
-            const {data, user} = await this.resolveUser(userId);
+            const data = await this.load();
+            const user = this.findProgressUser(data.users, userId);
             const sourceUid = this.normalizeBookUid(bookUid);
             const targetUid = this.normalizeBookUid(replacementBookUid);
             if (!sourceUid || !targetUid || sourceUid === targetUid)
@@ -1720,10 +1749,8 @@ class ReadingListStore {
     }
 
     async deleteReaderProgressNow(userId = '', bookUid = '') {
-        const {data, user} = await this.resolveUser(userId);
-        const target = data.users.find((item) => item.id === user.id);
-        if (!target)
-            throw new Error('Пользователь не найден');
+        const data = await this.load();
+        const target = this.findProgressUser(data.users, userId);
 
         const normalizedBookUid = this.normalizeBookUid(bookUid);
         if (!normalizedBookUid)
@@ -1744,10 +1771,8 @@ class ReadingListStore {
     }
 
     async clearReaderProgressNow(userId = '') {
-        const {data, user} = await this.resolveUser(userId);
-        const target = data.users.find((item) => item.id === user.id);
-        if (!target)
-            throw new Error('Пользователь не найден');
+        const data = await this.load();
+        const target = this.findProgressUser(data.users, userId);
 
         const current = (target.readerProgress && typeof(target.readerProgress) === 'object')
             ? target.readerProgress

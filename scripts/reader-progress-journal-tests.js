@@ -2,7 +2,7 @@ const assert = require('assert/strict');
 const fs = require('fs-extra');
 const os = require('os');
 const path = require('path');
-const {writeFileAtomic} = require('../server/core/FilePersistence');
+const {withFileTransaction, writeFileAtomic} = require('../server/core/FilePersistence');
 const ReadingListStore = require('../server/core/ReadingListStore');
 const {maxBytes, checkpointField} = require('../server/core/ReaderProgressJournal');
 const ProfileAccess = require('../server/core/ProfileAccess');
@@ -65,6 +65,7 @@ async function testProgressJournalFoldsIntoBackupAndDoesNotReplayAfterRestoreOrR
 
         const restored = await store.rebaseReaderProgressGeneration(backup);
         await require('../server/core/BackupTransaction').commit(config, {'reading-lists.json': JSON.stringify(restored)});
+        assert.equal(await fs.pathExists(store.progressFile), false, 'The replaced profile journal is removed from disk');
         const open = new ReadingListStore(config);
         assert.equal((await store.getUser('admin')).readerProgress.book.percent, 0.1);
         assert.equal((await open.getUser('admin')).readerProgress.book.generation, 1);
@@ -73,6 +74,7 @@ async function testProgressJournalFoldsIntoBackupAndDoesNotReplayAfterRestoreOrR
         await store.updateReaderProgress('admin', 'book', {percent: 0.9, generation: 1});
         assert.equal((await open.getUser('admin')).readerProgress.book.percent, 0.9);
         await store.clearReaderProgress('admin');
+        assert.equal(await fs.pathExists(store.progressFile), false, 'Cleared progress leaves no active or obsolete journal');
         assert.deepEqual((await open.getUser('admin')).readerProgress, {});
         assert.equal((await open.updateReaderProgress('admin', 'book', {percent: 0.4, generation: 1})).reset, true);
     });
@@ -81,14 +83,87 @@ async function testProgressJournalFoldsIntoBackupAndDoesNotReplayAfterRestoreOrR
 async function testProgressJournalCompactsAtBoundedSizeWithoutLosingBooks() {
     await fixture(async(config, store) => {
         await store.updateReaderProgress('admin', 'first', {percent: 0.1});
-        for (let i = 0; i < 12; i++)
-            await store.updateReaderProgress('admin', 'large-' + i, {sectionId: 'x'.repeat(maxBytes / 9 | 0)});
+        for (let i = 0; i < 360; i++)
+            await store.updateReaderProgress('admin', 'large-' + i, {sectionId: 'x'.repeat(3072)});
         assert((await fs.stat(store.progressFile)).size < maxBytes);
         const persisted = await fs.readJson(store.file);
         assert(Object.keys(persisted.users[0].readerProgress).length > 1, 'Pending entries were checkpointed');
         const user = await new ReadingListStore(config).getUser('admin');
-        assert.equal(Object.keys(user.readerProgress).length, 13);
+        assert.equal(Object.keys(user.readerProgress).length, 361);
         assert.equal(user.readerProgress.first.percent, 0.1);
+    });
+}
+
+async function testProgressJournalRecoversAnInterruptedBackupRestore() {
+    await fixture(async(config, store) => {
+        const transaction = require('../server/core/BackupTransaction');
+        const folder = path.join(config.dataDir, '.restore-transaction');
+        const manifest = path.join(folder, 'manifest.json');
+        const checkpointed = await store.exportSnapshot();
+        await store.updateReaderProgress('admin', 'late-position', {percent:.5});
+        await fs.copy(store.file, path.join(folder, 'reading-lists.json'));
+        const files = ['reading-lists.json'], existed = {'reading-lists.json': true};
+        await writeFileAtomic(manifest, JSON.stringify({state:'prepared', files, existed}));
+        await writeFileAtomic(store.file, JSON.stringify(checkpointed));
+
+        await transaction.recover(config);
+        assert.equal((await store.getReaderState('admin', 'late-position')).progress.percent, .5);
+        assert.equal(await fs.pathExists(store.progressFile), true, 'An uncommitted restore must leave the rollback journal intact');
+
+        await writeFileAtomic(store.file, JSON.stringify(checkpointed));
+        await writeFileAtomic(manifest, JSON.stringify({state:'committed', files, existed}));
+        await transaction.recover(config);
+        assert.equal(await fs.pathExists(store.progressFile), false, 'Startup recovery removes an obsolete journal after commit');
+        assert.equal((await store.getReaderState('admin', 'late-position')).progress.percent, 0);
+
+        await store.updateReaderProgress('admin', 'new-position', {percent:.2});
+        await writeFileAtomic(manifest, JSON.stringify({state:'committed', files, existed}));
+        await transaction.recover(config);
+        assert.equal((await store.getReaderState('admin', 'new-position')).progress.percent, .2, 'A lingering restore marker must not delete a new journal');
+    });
+}
+
+async function testProgressRejectsOversizedFieldsAndMissingProfiles() {
+    await fixture(async(config, store) => {
+        const options = {sectionId: 'г'.repeat(1024), updatedAt: '2026-01-02T03:04:05Z'};
+        const uid = 'a/b:fb2+book=';
+        const initial = await store.updateReaderProgress('admin', uid, options);
+        for (const [book, fields] of [
+            ['a'.repeat(513), {}],
+            [uid, {sectionId: 'a'.repeat(4097)}],
+            [uid, {updatedAt: 'a'.repeat(129)}],
+        ]) await assert.rejects(store.updateReaderProgress('admin', book, fields), /Слишком длинное поле/);
+        const user = await store.createUser({name:'Removed Reader', login:'removed-reader'});
+        await store.updateReaderProgress(user.id, 'removed-book', {textSnippet:'obsolete position'});
+        assert.equal(await fs.pathExists(store.progressFile), true);
+        await store.deleteUser(user.id);
+        assert.equal(await fs.pathExists(store.progressFile), false);
+        await assert.rejects(store.updateReaderProgress(user.id, uid, {percent:0.5}), /Пользователь не найден/);
+        assert.deepEqual((await store.getReaderState('admin', uid)).progress, initial);
+    });
+}
+
+async function testProgressReauthorizesAfterAQueuedProfileChange() {
+    await fixture(async(config, store) => {
+        const worker = Object.create(require('../server/core/WebWorker').prototype);
+        worker.readingListStore = store;
+        worker.checkMyState = () => {};
+        worker.profileSessions = new Map();
+        const user = await store.createUser({name:'Reader', login:'reader', passwordHash:'initial'});
+        const controller = Object.create(require('../server/controllers/WebSocketController').prototype);
+        controller.webWorker = worker;
+        controller.send = () => assert.fail('A revoked or removed profile must not receive a successful response');
+        for (const change of [
+            () => worker.updateUserProfile(user.id, {passwordHash:'replacement'}),
+            () => worker.deleteUserProfile(user.id),
+        ]) {
+            const token = worker.createProfileSession(user.id);
+            const queued = withFileTransaction(store.file, change);
+            const update = controller.updateReaderProgress({userId:user.id, profileAccessToken:token, bookUid:'book', progress:{percent:.5}});
+            await assert.rejects(update, /need_profile_login/);
+            await queued;
+        }
+        assert.deepEqual((await store.getUser('admin')).readerProgress, {});
     });
 }
 
@@ -123,5 +198,8 @@ module.exports = [
     testProgressJournalPreservesLegacyAndReplaysCompleteUpdates,
     testProgressJournalFoldsIntoBackupAndDoesNotReplayAfterRestoreOrReset,
     testProgressJournalCompactsAtBoundedSizeWithoutLosingBooks,
+    testProgressJournalRecoversAnInterruptedBackupRestore,
+    testProgressRejectsOversizedFieldsAndMissingProfiles,
+    testProgressReauthorizesAfterAQueuedProfileChange,
     testProgressWebSocketAuthorizesWithoutCloningProfileHistories,
 ];

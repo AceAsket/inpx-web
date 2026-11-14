@@ -120,7 +120,9 @@ function register(app, config, worker, security) {
     const root = String(config.rootPathStatic || '').replace(/\/$/, '');
     app.get(`${root}/reader-background/:userId/:name`, async(req, res, next) => {
         try {
-            const access = typeof req.query.access === 'string' ? req.query.access : '';
+            res.set('Cache-Control', 'private, no-store');
+            const token = req.headers?.['x-inpx-profile-token'];
+            const access = typeof token === 'string' ? token : '';
             const identity = await new (require('./ProfileAccess'))(config, worker, security).resolve(req, access);
             let user = identity?.user;
             if (!user && config.allowAnonymousAccess !== false && req.params.userId === 'default') {
@@ -132,7 +134,7 @@ function register(app, config, worker, security) {
             if (!settings(user.readerPreferences).some(value => assets.reference(value.backgroundImage, user.id) === req.params.name))
                 return res.sendStatus(404);
             const file = await assets.destination(user.id, req.params.name);
-            res.set({'Cache-Control':'private, no-store', 'X-Content-Type-Options':'nosniff'});
+            res.set('X-Content-Type-Options', 'nosniff');
             res.type(types[path.extname(req.params.name).slice(1)]).sendFile(file);
         } catch (error) {
             if (error.code === 'ENOENT') return res.sendStatus(404);
@@ -141,4 +143,9 @@ function register(app, config, worker, security) {
     });
 }
 
-module.exports = {ReaderAssets, register, maximumImageBytes};
+function readerBackgroundLogUrl(url) {
+    const pathname = String(url).split('?', 1)[0];
+    return /\/reader-background\//i.test(pathname) ? pathname : url;
+}
+
+module.exports = {ReaderAssets, register, maximumImageBytes, readerBackgroundLogUrl};

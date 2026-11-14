@@ -1,11 +1,23 @@
 const path = require('path');
 const fs = require('fs-extra');
+const {Transform} = require('node:stream');
 const {pipeline} = require('stream/promises');
+const {crc32} = require('node:zlib');
 const yazl = require('yazl');
 const ZipReader = require('./ZipReader');
 
 const imageIndexName = 'FLibraryImageIndex.json';
 const mimetype = 'application/epub+zip';
+const MiB = 1024 ** 2;
+const archiveLimit = 512 * MiB;
+const entryLimit = 128 * MiB;
+const imageLimit = 64 * MiB;
+const metadataLimit = 4 * MiB;
+const entryCountLimit = 20000;
+
+function sizeError() {
+    return Object.assign(new Error('Превышен лимит распаковки EPUB'), {code:'INPX_RESOURCE_OUTPUT_LIMIT'});
+}
 
 function safeEntryName(value) {
     const name = String(value || '').replace(/\\/g, '/').replace(/^(\.\/)+/, '');
@@ -22,16 +34,48 @@ function safeArchiveEntry(entry) {
     if (entry.isLink)
         throw new Error(`Ссылка внутри EPUB: ${entry.name}`);
     const rawName = entry.isDirectory ? entry.name.replace(/[\\/]+$/, '') : entry.name;
-    return {sourceName: entry.name, name: safeEntryName(rawName), isDirectory: entry.isDirectory};
+    return {...entry, sourceName: entry.name, name: safeEntryName(rawName)};
+}
+
+// 7-Zip emits solid archives in listing order. Write the bounded concatenated
+// stream to a private file, split by size, and verify CRCs before publication.
+async function unpackSolid(reader, entries, directory, bytes) {
+    const streamFile = path.join(directory, 'stream');
+    const files = new Map();
+    await reader.extractArchiveStream(streamFile, Math.max(1, bytes));
+    if ((await fs.stat(streamFile)).size !== bytes) throw new Error('Неверный размер распакованного EPUB');
+    let offset = 0;
+    for (const entry of entries) {
+        const file = path.join(directory, `solid-${files.size}`);
+        if (entry.size) {
+            let checksum = 0;
+            await pipeline(fs.createReadStream(streamFile, {start:offset, end:offset + entry.size - 1}),
+                new Transform({transform(chunk, encoding, callback) {
+                    checksum = crc32(chunk, checksum);
+                    callback(null, chunk);
+                }}), fs.createWriteStream(file));
+            if (!/^[\da-f]{8}$/i.test(entry.crc || '') || checksum !== parseInt(entry.crc, 16))
+                throw new Error('Неверный CRC файла EPUB');
+        } else {
+            await fs.writeFile(file, '');
+        }
+        offset += entry.size;
+        files.set(entry.sourceName, file);
+    }
+    await fs.remove(streamFile);
+    return files;
 }
 
 async function restore(bookFile, config = {}, loadImage = async() => null, prepareImages = null) {
-    const reader = new ZipReader(config);
+    const reader = new ZipReader({...config, resourceMaxListingBytes:16 * MiB, resourceMaxOutputBytes:entryLimit});
     let stagingDir = '';
     try {
         await reader.open(bookFile);
-        const validated = Object.values(reader.entries).map(safeArchiveEntry);
+        const listed = Object.values(reader.uses7z && reader.archiveType === 'zip' ? await reader.listWith7z() : reader.entries);
+        if (listed.length > entryCountLimit) throw sizeError();
+        const validated = listed.map(safeArchiveEntry);
         const entries = validated.filter(entry => !entry.isDirectory);
+        const entriesBySource = new Map(entries.map(entry => [entry.sourceName, entry]));
         const containers = entries.filter(entry => entry.name === 'META-INF/container.xml'
             || entry.name.endsWith('/META-INF/container.xml'));
         if (containers.length !== 1)
@@ -56,13 +100,15 @@ async function restore(bookFile, config = {}, loadImage = async() => null, prepa
         if (indexes.length > 1)
             throw new Error('Несколько индексов изображений EPUB');
 
+        let bytes = 0;
+        for (const entry of entries) {
+            const limit = indexSources.has(entry.sourceName) || entry.name === containers[0].name || entry.name === prefix + 'mimetype'
+                ? metadataLimit : entryLimit;
+            if (!Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > limit || (bytes += entry.size) > archiveLimit) throw sizeError();
+        }
         stagingDir = await fs.mkdtemp(path.join(config.tempDir || path.dirname(bookFile), 'epub-'));
-        let extractedDir = '';
+        let extracted = null;
         if (reader.uses7z) {
-            // A solid PPMd container must be decompressed once. Extracting each
-            // chapter separately replays the solid block for every file.
-            extractedDir = path.join(stagingDir, 'source');
-            await fs.ensureDir(extractedDir);
             const seen = new Set();
             for (const entry of validated) {
                 const key = entry.name.toLowerCase();
@@ -70,15 +116,15 @@ async function restore(bookFile, config = {}, loadImage = async() => null, prepa
                     throw new Error(`Повторяющийся путь в EPUB: ${entry.name}`);
                 seen.add(key);
             }
-            await reader.extractAllToDir(extractedDir);
-            for (const entry of entries) {
-                const stat = await fs.lstat(path.join(extractedDir, entry.name));
-                if (!stat.isFile())
-                    throw new Error(`Некорректный файл EPUB: ${entry.name}`);
-            }
+            extracted = await unpackSolid(reader, entries, stagingDir, bytes);
         }
-        const readEntry = async(name) => extractedDir
-            ? await fs.readFile(path.join(extractedDir, safeEntryName(name))) : await reader.extractToBuf(name);
+        const readEntry = async(name) => {
+            if (extracted) return await fs.readFile(extracted.get(name));
+            // Use counted file extraction and a small bound for parseable metadata.
+            const file = path.join(stagingDir, 'metadata');
+            try {await reader.extractToFile(name, file, metadataLimit); return await fs.readFile(file);}
+            finally {await fs.remove(file);}
+        };
         if (!files.has('mimetype') || (await readEntry(files.get('mimetype'))).toString().trim() !== mimetype)
             throw new Error('Некорректный mimetype EPUB');
 
@@ -91,6 +137,7 @@ async function restore(bookFile, config = {}, loadImage = async() => null, prepa
             }
             if (!Array.isArray(imageIndex))
                 throw new Error('Индекс изображений EPUB должен быть массивом');
+            if (imageIndex.length + entries.length > entryCountLimit) throw sizeError();
         }
         const imageNames = new Set();
         const images = imageIndex.map(item => {
@@ -109,10 +156,9 @@ async function restore(bookFile, config = {}, loadImage = async() => null, prepa
         for (const [name, sourceName] of files) {
             if (name === 'mimetype' || indexSources.has(sourceName))
                 continue;
-            const file = extractedDir ? path.join(extractedDir, safeEntryName(sourceName))
-                : path.join(stagingDir, `entry-${staged.size}`);
-            if (!extractedDir)
-                await reader.extractToFile(sourceName, file);
+            const file = extracted ? extracted.get(sourceName) : path.join(stagingDir, `entry-${staged.size}`);
+            if (!extracted)
+                await reader.extractToFile(sourceName, file, entriesBySource.get(sourceName).size || 1);
             staged.set(name, file);
         }
         const missingImages = [];
@@ -127,6 +173,7 @@ async function restore(bookFile, config = {}, loadImage = async() => null, prepa
             const data = await loadImage(image.num, image.name);
             if (!data || !data.length)
                 throw new Error(`Не найдено изображение EPUB: ${image.name} (номер ${image.num})`);
+            if (data.length > imageLimit || (bytes += data.length) > archiveLimit) throw sizeError();
             const file = staged.get(image.name) || path.join(stagingDir, `entry-${staged.size}`);
             await fs.writeFile(file, data);
             staged.set(image.name, file);

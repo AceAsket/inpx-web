@@ -57,6 +57,21 @@ async function testDiscoveryBudgetReservesCapacityForSearch() {
     assert.equal(budget.active, 0);
 }
 
+async function testDiscoveryBudgetReservesQueueSpaceForSearch() {
+    const budget = new Budget({parallel:2, background:1, queued:2, backgroundQueued:1});
+    const hold = deferred();
+    const lane = {backgroundLane:'local'};
+    const running = budget.run('reader', 'overview', () => hold.promise, undefined, lane);
+    const queued = budget.run('reader', 'another overview', () => 'overview', undefined, lane);
+    try {
+        await assert.rejects(budget.run('another reader', 'overview', () => null, undefined, lane), {code:'server_busy'});
+        assert.equal(await budget.run('reader', 'search', () => 'book'), 'book');
+    } finally {
+        hold.resolve();
+        await Promise.all([running, queued]);
+    }
+}
+
 function fullSort(rows,compare,limit){
     const selected=[],authors=new Map(),series=new Map();
     for(const row of [...rows.values()].sort(compare)){
@@ -164,7 +179,7 @@ async function testConnectionQrPreservesHttpHttpsAndRootWithoutCredentials(){
 }
 
 module.exports=[testNativeBudgetSharesOnlySameProfileAndBoundsParallelWork,testNativeBudgetDropsDisconnectedQueueAndAllowsLiveCoalescedWaiter,
-    testNativeBudgetReturnsCompatibleRetryInformationAndRecovers,testDiscoveryBudgetReservesCapacityForSearch,testDiscoveryBoundedRankingMatchesFullSortIncludingDiversity,
+    testNativeBudgetReturnsCompatibleRetryInformationAndRecovers,testDiscoveryBudgetReservesCapacityForSearch,testDiscoveryBudgetReservesQueueSpaceForSearch,testDiscoveryBoundedRankingMatchesFullSortIncludingDiversity,
     testTopRankedKeepsExactSortedPrefixAndInputOrderForTies,
     testNativeResumeBindsOnlyValidatedOwnSessionWithoutPassword,testReaderEventsAreOptInProfileScopedAndExcludeTheWriter,
     testMobileHomeOmitsSecretsAndNeverBuildsDiscovery,testDiscoveryConcurrentLoadsShareWorkAndReturnIndependentValues,

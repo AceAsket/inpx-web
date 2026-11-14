@@ -176,7 +176,7 @@ async function executeProcess(command, args, options, scope, signal) {
             else if (timedOut) reject(timeoutError());
             else if (outputError) reject(outputError);
             else if (code === 0 || prefixComplete) resolve(options.captureStdout ? Buffer.concat(chunks, outputBytes) : undefined);
-            else reject(new Error(`${command} failed with exit code ${code}: ${stderr.toString('utf8').trim()}`));
+            else reject(Object.assign(new Error(`${command} failed with exit code ${code}: ${stderr.toString('utf8').trim()}`), {exitCode:code}));
         });
     });
 }

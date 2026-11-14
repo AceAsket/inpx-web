@@ -1,7 +1,7 @@
 // Bound work across sockets. Disconnecting a client does not stop a running database query.
 class ClientRequestBudget {
-    constructor({parallel=4,perUser=1,background=0,queued=32,waitMs=30000}={}) {
-        Object.assign(this,{parallel,perUser,backgroundLimit:Math.min(background,parallel-1),maximumQueued:queued,waitMs});
+    constructor({parallel=4,perUser=1,background=0,queued=32,backgroundQueued=8,waitMs=30000}={}) {
+        Object.assign(this,{parallel,perUser,backgroundLimit:Math.min(background,parallel-1),maximumQueued:queued,backgroundQueued,waitMs});
         this.active=0; this.users=new Map(); this.queue=[]; this.shared=new Map();
         this.backgroundActive=new Set();
     }
@@ -10,10 +10,14 @@ class ClientRequestBudget {
         const signature=JSON.stringify([identity,key]);
         const shared=this.shared.get(signature);
         if (shared) {shared.alive.push(alive);return shared.promise;}
-        if (this.queue.length >= this.maximumQueued) return Promise.reject(this.busy());
+        const lane = this.backgroundLimit > 0 ? backgroundLane : '';
+        if (this.queue.length >= this.maximumQueued)
+            return Promise.reject(this.busy());
+        if (lane && this.queue.filter(job => job.backgroundLane).length >= Math.min(this.backgroundQueued, this.maximumQueued - 1))
+            return Promise.reject(this.busy());
         const subscribers=[alive];
         const promise=new Promise((resolve,reject)=>{
-            const job={identity,work,resolve,reject,backgroundLane:this.backgroundLimit > 0 ? backgroundLane : '',
+            const job={identity,work,resolve,reject,backgroundLane:lane,
                 alive:()=>subscribers.some(check=>check())};
             job.timer=setTimeout(()=>{
                 const index=this.queue.indexOf(job);
@@ -40,8 +44,9 @@ class ClientRequestBudget {
                 this.active--;
                 if (job.backgroundLane) this.backgroundActive.delete(job.backgroundLane);
                 else {
-                    this.users.set(job.identity,this.users.get(job.identity)-1);
-                    if(!this.users.get(job.identity))this.users.delete(job.identity);
+                    const remaining = this.users.get(job.identity)-1;
+                    if (remaining) this.users.set(job.identity,remaining);
+                    else this.users.delete(job.identity);
                 }
                 this.drain();
             });

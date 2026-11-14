@@ -90,12 +90,17 @@ async function testRc13BackgroundHttpProfileIsolation() {
         const url = `http://127.0.0.1:${server.address().port}${preferences.backgroundImage}`;
         try {
             assert.equal((await fetch(url)).status,401);
-            assert.equal((await fetch(url+'?access=expired-token')).status,401);
-            assert.equal((await fetch(url+'?access=bob-token')).status,403);
+            assert.equal((await fetch(url+'?access=alice-token')).status,401);
+            assert.equal((await fetch(url,{headers:{'X-Inpx-Profile-Token':'expired-token'}})).status,401);
+            assert.equal((await fetch(url,{headers:{'X-Inpx-Profile-Token':'bob-token'}})).status,403);
             assert.equal((await fetch(url,{headers:{cookie:'session=alice'}})).status,200);
-            const response = await fetch(url+'?access=alice-token');
+            const response = await fetch(url,{headers:{'X-Inpx-Profile-Token':'alice-token'}});
             assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'private, no-store');
             assert.deepEqual(Buffer.from(await response.arrayBuffer()),Buffer.from(image.split(',')[1],'base64'));
+            const {readerBackgroundLogUrl} = require('../server/core/ReaderAssets');
+            const pathname = new URL(url).pathname;
+            assert.equal(readerBackgroundLogUrl(pathname+'?access=alice-token'),pathname);
+            assert.equal(readerBackgroundLogUrl('/other?query=one'),'/other?query=one');
         } finally {await new Promise(resolve=>server.close(resolve));}
     });
 }

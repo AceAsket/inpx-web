@@ -108,21 +108,17 @@ class ProfileAccess {
         const credentials = parseBasicAuth(req.headers.authorization);
         if (!credentials || !this.config.opds || !this.config.opds.enabled)
             return null;
-        this.security.checkLoginRate(req, 'opds');
-        let identity = null;
-        if (this.config.opds.password) {
-            if (this.config.opds.user && equal(credentials.user, this.config.opds.user) && equal(credentials.password, this.config.opds.password))
-                identity = {opds: true};
-        } else {
+        return this.security.withLoginAttempt(req, 'opds', async () => {
+            if (this.config.opds.password)
+                return this.config.opds.user && equal(credentials.user, this.config.opds.user)
+                    && equal(credentials.password, this.config.opds.password) ? {opds:true} : null;
             const data = await this.worker.readingListStore.load();
             const login = this.worker.readingListStore.normalizeLogin(credentials.user);
             const user = data.users.find(item => item.login === login && item.opdsEnabled !== false && item.opdsAuthEnabled === true);
             if (user && await this.worker.readingListStore.verifyUserPassword(user.id, credentials.password))
-                identity = {user, opds: true, bound: true};
-        }
-        this.security.checkLoginRate(req, 'opds');
-        this.security.recordLoginAttempt(req, !!identity, 'opds');
-        return identity;
+                return {user, opds:true, bound:true};
+            return null;
+        });
     }
 
     httpGuard(opds = false) {

@@ -493,8 +493,9 @@ module.exports = (app, config, webWorker = null, security = null) => {
                 return;
             }
 
-            const sourceFile = path.join(config.libDir, safeFileName);
-            if (!await fs.pathExists(sourceFile)) {
+            const root = await fs.realpath(config.libDir);
+            const sourceFile = await require('./core/LibraryPaths').realPathWithin(root, path.join(root, safeFileName));
+            if (!(await fs.stat(sourceFile)).isFile()) {
                 res.sendStatus(404);
                 return;
             }

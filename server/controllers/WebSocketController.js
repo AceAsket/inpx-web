@@ -7,6 +7,7 @@ const log = new (require('../core/AppLogger'))().log;//singleton
 const utils = require('../core/utils');
 const runtimeMetrics = require('../core/RuntimeMetrics');
 const {getReaderSpeech} = require('../core/ReaderSpeech');
+const {withFileTransaction} = require('../core/FilePersistence');
 const clientProtocol = require('../core/ClientProtocol');
 
 const cleanPeriod = 1*60*1000;//1 минута
@@ -105,7 +106,7 @@ class WebSocketController {
                     this.security.recordLoginAttempt(ws.req, false);
                 }
                 await utils.sleep(500);
-                const salt = this.webAccess.newToken();
+                const salt = this.webAccess.newToken(this.security?.clientIp(ws.req) || ws.req?.socket?.remoteAddress);
                 this.send({error: 'need_access_token', salt}, req, ws);
                 return;
             } else if (this.security && req.accessToken) {
@@ -291,8 +292,8 @@ class WebSocketController {
                 case 'update-reader-progress':
                     await this.updateReaderProgress(req, ws); break;
                 case 'relink-reader-book': {
-                    const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-                    this.send(await this.webWorker.relinkReaderBook(user.id, req.bookUid, req.replacementBookUid, req.baseRevision), req, ws);
+                    await this.withAuthorizedReaderProgress(req, ws, id =>
+                        this.webWorker.relinkReaderBook(id, req.bookUid, req.replacementBookUid, req.baseRevision));
                     break;
                 }
                 case 'get-audio-position':
@@ -371,7 +372,7 @@ class WebSocketController {
             this.publishClientChanges(req,ws);
         } catch (e) {
             this.send({error: e.message, errorCode:e.code || e.message,
-                ...(e.retryAfterMs ? {retryAfterMs:e.retryAfterMs} : {})}, req || {}, ws);
+                ...((e.retryAfterMs || e.retryAfter) ? {retryAfterMs:e.retryAfterMs || e.retryAfter * 1000} : {})}, req || {}, ws);
         } finally {
             ws.activeRequests--;
             this.activeRequests--;
@@ -825,9 +826,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error('bookUid is empty');
 
-        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-        const result = await this.webWorker.getReaderState(user.id, req.bookUid);
-        this.send(result, req, ws);
+        await this.withAuthorizedReaderProgress(req, ws, id => this.webWorker.getReaderState(id, req.bookUid));
     }
 
     async prepareReaderAudio(req, ws) {
@@ -869,23 +868,26 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error('bookUid is empty');
 
-        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken, {identityOnly: true});
-        const result = await this.webWorker.updateReaderProgress(user.id, req.bookUid, req.progress || {});
-        this.send(result, req, ws);
+        await this.withAuthorizedReaderProgress(req, ws, id => this.webWorker.updateReaderProgress(id, req.bookUid, req.progress || {}));
     }
 
     async deleteReaderProgress(req, ws) {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error('bookUid is empty');
 
-        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-        const result = await this.webWorker.deleteReaderProgress(user.id, req.bookUid);
-        this.send(result, req, ws);
+        await this.withAuthorizedReaderProgress(req, ws, id => this.webWorker.deleteReaderProgress(id, req.bookUid));
     }
 
     async clearReaderProgress(req, ws) {
-        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-        const result = await this.webWorker.clearReaderProgress(user.id);
+        await this.withAuthorizedReaderProgress(req, ws, id => this.webWorker.clearReaderProgress(id));
+    }
+
+    async withAuthorizedReaderProgress(req, ws, work) {
+        const result = await withFileTransaction(this.webWorker.readingListStore.file, async() => {
+            // Recheck after an earlier credential change, removal, or restore.
+            const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken, {identityOnly: true, exactId: true});
+            return await work(user.id);
+        });
         this.send(result, req, ws);
     }
 
@@ -923,23 +925,13 @@ class WebSocketController {
     }
 
     async loginUserProfile(req, ws) {
-        if (this.security)
-            this.security.checkLoginRate(ws.req, 'profile');
-
-        try {
-            const result = await this.webWorker.loginUserProfile(req.login, req.password);
-            if (this.security && ws.req && ws.req.securitySession)
-                ws.req.securitySession.profileAccessToken = result.profileAccessToken;
-            ws.userId = String(result.userId || '').trim();
-            ws.userLastActivity = Date.now();
-            if (this.security)
-                this.security.recordLoginAttempt(ws.req, true, 'profile');
-            this.send(result, req, ws);
-        } catch (e) {
-            if (this.security)
-                this.security.recordLoginAttempt(ws.req, false, 'profile');
-            throw e;
-        }
+        const verify = () => this.webWorker.loginUserProfile(req.login, req.password);
+        const result = this.security ? await this.security.withLoginAttempt(ws.req, 'profile', verify) : await verify();
+        if (this.security && ws.req && ws.req.securitySession)
+            ws.req.securitySession.profileAccessToken = result.profileAccessToken;
+        ws.userId = String(result.userId || '').trim();
+        ws.userLastActivity = Date.now();
+        this.send(result, req, ws);
     }
 
     async resumeUserProfile(req,ws) {
@@ -991,7 +983,7 @@ class WebSocketController {
     readWithBudget(req,ws,work,options) {
         if(!this.clientRequests)this.clientRequests=new (require('../core/ClientRequestBudget'))({background:2});
         const user=this.webWorker.getProfileSessionUser?.(req.profileAccessToken);
-        const identity=user?`profile:${user}`:`guest:${ws.req?.socket?.remoteAddress||'local'}`;
+        const identity=user?`profile:${user}`:`guest:${this.security?.clientIp(ws.req)||ws.req?.socket?.remoteAddress||'local'}`;
         const payload=_.omit(req,['requestId','accessToken','csrfToken','profileAccessToken','client','__startTime']);
         const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'
             ?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;

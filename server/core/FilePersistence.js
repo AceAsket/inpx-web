@@ -39,7 +39,14 @@ function withFileTransaction(file, task) {
     return operation;
 }
 
-async function writeFileAtomic(file, data) {
+async function syncParentDirectory(file) {
+    // Node cannot open a directory handle for fsync on Windows.
+    if (process.platform === 'win32') return;
+    const directory = await require('fs').promises.open(path.dirname(file), 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+}
+
+async function writeFileAtomic(file, data, {syncDirectory = false} = {}) {
     await fs.ensureDir(path.dirname(file));
     const temporary = `${file}.tmp-${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
     try {
@@ -51,6 +58,7 @@ async function writeFileAtomic(file, data) {
             await handle.close();
         }
         await fs.rename(temporary, file);
+        if (syncDirectory) await syncParentDirectory(file);
     } finally {
         await fs.remove(temporary);
     }
@@ -67,4 +75,4 @@ function blockFileTransactions(files) {
         blocked.add(path.resolve(file));
 }
 
-module.exports = {withFileTransaction, withFileTransactions, writeFileAtomic, blockFileTransactions};
+module.exports = {withFileTransaction, withFileTransactions, writeFileAtomic, syncParentDirectory, blockFileTransactions};

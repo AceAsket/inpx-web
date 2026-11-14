@@ -434,7 +434,7 @@ async function testSolidEpubExtractsAllChaptersOnce() {
         await archive(file, resources, 'PPMd');
         let extractions = 0;
         const originals = {};
-        for (const method of ['run7z', 'run7zStdout']) {
+        for (const method of ['run7zCommand']) {
             originals[method] = ZipReader.prototype[method];
             ZipReader.prototype[method] = function(args, ...rest) {
                 if (args[0] === 'x') extractions++;
@@ -453,6 +453,31 @@ async function testSolidEpubExtractsAllChaptersOnce() {
             for (const [name, data] of Object.entries(chapters))
                 assert.strictEqual((await reader.extractToBuf(name.slice('504942/'.length))).toString(), data);
         } finally { await reader.close(); }
+    });
+}
+
+async function testEpubLimitsExpandedMetadataAndActualSolidOutput() {
+    await temporary(async dir => {
+        const file = path.join(dir, 'metadata.epub');
+        await archive(file, {...contents, 'FLibraryImageIndex.json':' '.repeat(4 * 1024 * 1024 + 1)});
+        await assert.rejects(epubRestorer.restore(file, {tempDir:dir}), {code:'INPX_RESOURCE_OUTPUT_LIMIT'});
+        assert.deepStrictEqual(await fs.readdir(dir), ['metadata.epub']);
+
+        const solid = path.join(dir, 'solid.epub');
+        await archive(solid, contents, 'PPMd');
+        const unchanged = await fs.readFile(solid);
+        const extract = ZipReader.prototype.extractArchiveStream;
+        ZipReader.prototype.extractArchiveStream = async function(output, maxBytes) {
+            assert(maxBytes > 0 && maxBytes < 1024 * 1024);
+            return fs.writeFile(output, Buffer.alloc(maxBytes + 1));
+        };
+        try {
+            await assert.rejects(epubRestorer.restore(solid, {tempDir:dir}), /Неверный размер/);
+        } finally {
+            ZipReader.prototype.extractArchiveStream = extract;
+        }
+        assert((await fs.readFile(solid)).equals(unchanged));
+        assert.deepStrictEqual((await fs.readdir(dir)).sort(), ['metadata.epub', 'solid.epub']);
     });
 }
 
@@ -673,6 +698,6 @@ async function testFb2ImagesDecodeInParallelAndKeepOrder() {
 
 module.exports = [testAtomicBookCacheFilesAndRecovery, testJxlCodestreamAndContainerImagesAreRecognized, testCompressedEpubDownloadsRestoreImagesAndInvalidateCache,
     testEpubContainersPreserveResourcesAndOrdinaryEpubBytes, testInvalidCompressedEpubDoesNotPublishPartialResults,
-    testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads, testSolidEpubExtractsAllChaptersOnce,
+    testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads, testSolidEpubExtractsAllChaptersOnce, testEpubLimitsExpandedMetadataAndActualSolidOutput,
     testEpubReusesImageArchiveReadersAndClosesOnFailure, testEpubBatchesExactNumericImagesInSolidAndPpmdSidecars,
     testEpubBatchFallsBackOnlyOnUnusableBatch, testColdEpubPublishesRawFileBeforeDescription, testFb2ImagesDecodeInParallelAndKeepOrder];

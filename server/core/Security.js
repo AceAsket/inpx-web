@@ -66,6 +66,7 @@ class Security {
         this.config = config;
         this.sessions = new Map();
         this.loginAttempts = new Map();
+        this.activeLoginAttempts = new Map();
         this.lastLoginAttemptSweep = 0;
         this.loginAttemptTotals = new Map();
         this.secret = '';
@@ -407,21 +408,12 @@ class Security {
         if (!normalizedOrigin)
             return {ok: false, origin, expectedOrigins: []};
 
-        const hosts = [
-            this.forwardedHost(req),
-            this.headerFirstValue(req, 'x-forwarded-host'),
-            this.requestHost(req),
-        ].filter(Boolean);
-        const protos = [
-            this.forwardedProto(req),
-            this.headerFirstValue(req, 'x-forwarded-proto'),
-            this.requestProto(req),
-        ].filter(Boolean);
-
-        const expectedOrigins = Array.from(new Set(
-            hosts.flatMap(host => protos.map(proto => this.normalizeOrigin(`${proto}://${host}`)))
-                .filter(Boolean)
-        ));
+        const host = this.requestHost(req), proto = this.requestProto(req);
+        const direct = this.normalizeOrigin(`${proto}://${host}`);
+        const forwardedProto = this.forwardedProto(req) || proto;
+        const forwarded = this.isTrustedProxy(req) && /^https?$/i.test(forwardedProto)
+            ? this.normalizeOrigin(`${forwardedProto}://${this.forwardedHost(req) || host}`) : '';
+        const expectedOrigins = [...new Set([direct, forwarded].filter(Boolean))];
 
         return {
             ok: expectedOrigins.includes(normalizedOrigin),
@@ -514,11 +506,35 @@ class Security {
             rec.resetAt = now + windowMs;
         }
 
-        if (rec.count >= maxAttempts || (!this.loginAttempts.has(ip) && this.loginAttempts.size >= 10000)) {
+        const exhausted = rec.count >= maxAttempts || (!this.loginAttempts.has(ip) && this.loginAttempts.size >= 10000);
+        if (exhausted || rec.count + (this.activeLoginAttempts.get(ip) || 0) >= maxAttempts
+            || (!this.activeLoginAttempts.has(ip) && this.activeLoginAttempts.size >= 10000)) {
             this.incrementLoginMetric(kind, 'blocked');
             throw Object.assign(new Error('Too many login attempts. Try again later.'), {
-                code: 'INPX_LOGIN_RATE_LIMIT', retryAfter: Math.max(1, Math.ceil((rec.resetAt - now)/1000)),
+                code: 'INPX_LOGIN_RATE_LIMIT', retryAfter: exhausted ? Math.max(1, Math.ceil((rec.resetAt - now)/1000)) : 1,
             });
+        }
+    }
+
+    async withLoginAttempt(req, kind, verify, isSuccess = Boolean) {
+        const key = this.loginAttemptKey(req, kind);
+        this.checkLoginRate(req, kind);
+        const limited = this.config.loginRateLimitEnabled !== false;
+        if (limited) this.activeLoginAttempts.set(key, (this.activeLoginAttempts.get(key) || 0) + 1);
+        try {
+            const result = await verify();
+            const success = isSuccess(result);
+            if (success !== undefined) this.recordLoginAttempt(req, success, kind);
+            return result;
+        } catch (error) {
+            if (error.code === 'INPX_INVALID_PROFILE_CREDENTIALS') this.recordLoginAttempt(req, false, kind);
+            throw error;
+        } finally {
+            if (limited) {
+                const active = this.activeLoginAttempts.get(key) - 1;
+                if (active) this.activeLoginAttempts.set(key, active);
+                else this.activeLoginAttempts.delete(key);
+            }
         }
     }
 

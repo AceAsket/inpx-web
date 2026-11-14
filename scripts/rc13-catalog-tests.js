@@ -65,9 +65,8 @@ async function testRc13InpxUidSurvivesMetadataAndForcedRebuildFromLegacy14() {
                 assert.equal(rows[0].librate,5);
                 assert.equal(await db.tableExists({table:'source'}),true);
                 const Store = require('../server/core/ReadingListStore'), store = new Store(config);
-                const user = {readerPreferences:{},readerProgress:{[legacyUid]:{percent:.5}},readerBookmarks:{[legacyUid]:[{id:'note'}]}};
-                store.resolveUser = async() => ({user});
-                store.getUser = async() => user;
+                const user = {id:'reader', readerPreferences:{},readerProgress:{[legacyUid]:{percent:.5}},readerBookmarks:{[legacyUid]:[{id:'note'}]}};
+                store.loadSnapshot = async() => ({users:[user]});
                 const state = await store.getReaderState('reader',rows[0]._uid);
                 assert.equal(state.progress.percent,.5); assert.equal(state.bookmarks.length,1);
             } finally {await db.unlock();}

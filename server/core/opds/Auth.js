@@ -24,28 +24,19 @@ module.exports = function opdsAuth(config, verifyPassword, security) {
             const scopedUser = String((req.query && req.query.user) || '').trim();
             if (!config.opds.password && !scopedUser)
                 return next();
-            if (attempted)
-                security.checkLoginRate(req, 'opds');
-            let authorized;
-            if (config.opds.password) {
+            const verify = async () => {
+                if (!config.opds.password)
+                    return verifyPassword(scopedUser, credentials?.user || '', credentials?.password || '');
                 if (!config.opds.user)
                     throw new Error('User must not be empty if password set');
-                authorized = !!credentials && equal(credentials.user, config.opds.user) && equal(credentials.password, config.opds.password);
-            } else {
-                const auth = await verifyPassword(scopedUser, credentials ? credentials.user : '', credentials ? credentials.password : '');
-                // Other requests can consume the failure budget while the profile
-                // store is being read. Do not reveal more guesses from that batch.
-                if (attempted)
-                    security.checkLoginRate(req, 'opds');
-                if (auth.user)
-                    req.query.user = auth.user.id;
-                if (!auth.user || auth.user.opdsAuthEnabled !== true)
-                    return next();
-                authorized = auth.authorized;
-            }
-            if (attempted)
-                security.recordLoginAttempt(req, authorized, 'opds');
-            if (!authorized) {
+                return {authorized:!!credentials && equal(credentials.user, config.opds.user) && equal(credentials.password, config.opds.password)};
+            };
+            const authenticationRequired = auth => Boolean(config.opds.password || auth.user?.opdsAuthEnabled === true);
+            const auth = attempted ? await security.withLoginAttempt(req, 'opds', verify,
+                result => authenticationRequired(result) ? result.authorized : undefined) : await verify();
+            if (auth.user) req.query.user = auth.user.id;
+            if (!authenticationRequired(auth)) return next();
+            if (!auth.authorized) {
                 res.set('WWW-Authenticate', 'Basic realm="inpx-web OPDS", charset="UTF-8"');
                 res.set('Cache-Control', 'no-store');
                 return res.status(401).send('Authentication required');

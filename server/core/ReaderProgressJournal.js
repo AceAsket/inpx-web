@@ -1,7 +1,7 @@
 const fs = require('fs-extra');
 const path = require('path');
-const {open} = require('fs').promises;
-const {writeFileAtomic} = require('./FilePersistence');
+const {open, unlink} = require('fs').promises;
+const {writeFileAtomic, syncParentDirectory} = require('./FilePersistence');
 
 const fileName = 'reader-progress.log';
 const checkpointField = 'readerProgressCheckpoint';
@@ -17,6 +17,12 @@ async function stamp(file) {
         if (error.code !== 'ENOENT') throw error;
         return null;
     }
+}
+
+async function clear(file) {
+    try { await unlink(file); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    await syncParentDirectory(file);
 }
 
 function applyProgress(user, bookUid, progress, updatedAt) {
@@ -79,7 +85,7 @@ async function replay(file, checkpoint, data, currentStamp) {
 async function append(file, checkpoint, journal, line) {
     if (!journal.offset) {
         const data = Buffer.concat([Buffer.from(checkpoint + '\n'), line]);
-        await writeFileAtomic(file, data);
+        await writeFileAtomic(file, data, {syncDirectory: true});
         return {stamp: await stamp(file), offset: data.length};
     }
 
@@ -120,4 +126,4 @@ async function foldSnapshot(source, snapshot) {
     }
 }
 
-module.exports = {fileName, checkpointField, maxBytes, stamp, replay, append, applyProgress, foldSnapshot};
+module.exports = {fileName, checkpointField, maxBytes, stamp, replay, append, applyProgress, clear, foldSnapshot};
