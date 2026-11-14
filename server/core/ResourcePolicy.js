@@ -144,6 +144,7 @@ function fingerprint(config, policy, machine, source = {}) {
         memory:machine.memoryLimit, platform:machine.platform, arch:machine.architecture, version:config.version,
         tools:config.converterPaths || {}, fb2cng:config.fb2cngVersion, conversionEnabled:config.conversionEnabled,
         node:process.versions.node, memoryScope:machine.memoryScope, cgroupVersion:machine.cgroupVersion,
+        ...(process.env.INPX_JXL_DECODER === 'native' ? {jxlDecoder:'native'} : {}),
         hardMax:policy.hardMax, overrides:policy.overrides,
         taskTimeoutMs:policy.taskTimeoutMs,
         source:[source.id, source.libDir]})).digest('hex');

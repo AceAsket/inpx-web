@@ -1426,29 +1426,80 @@ async function testConfiguredConverterPathsHavePriority() {
 }
 
 async function testDiscoveryNewestAvoidsUnboundedFallback() {
-    const WebWorker = require('../server/core/WebWorker');
-    const worker = Object.create(WebWorker.prototype);
-    worker.discoveryCache = new Map();
-    worker.checkMyState = () => {};
+    const worker = makeWorker();
     worker.getDiscoveryConfigForRequest = async() => ({
         enabled: true,
         shelfLimit: 8,
         externalSource: 'none',
     });
     worker.dbConfig = async() => ({inpxHash: 'test-hash'});
-    worker.buildDiscoveryPopularityMap = async() => ({});
+    worker.buildDiscoveryPopularityMap = async() => ({
+        'reader-choice': {score:12, progressCount:1},
+        'deleted': {score:999},
+    });
     worker.getPersonalDiscoveryShelvesV2 = async() => [];
-    const newestWindows = [];
-    worker.buildLocalDiscoveryShelfV2 = async(kind, limit, options = {}) => {
-        if (kind === 'newest')
-            newestWindows.push(parseInt(options.daysWindow, 10) || 0);
-        return null;
-    };
+    await withTempDir(async dir => {
+        const db = new (require('jembadb').JembaDb)();
+        await db.lock({dbPath: dir});
+        try {
+            await db.create({table: 'book'});
+            const scans = [];
+            worker.db = {
+                esc: db.esc.bind(db),
+                select: query => {
+                    scans.push(query.table);
+                    return db.select(query);
+                },
+            };
+            const date = days => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+            const book = (_uid, age, ext = 'fb2', libid = _uid, props = {}) =>
+                ({_uid, title: _uid, date: date(age), ext, libid, librate:0, ...props});
+            const add = books => db.insert({table:'book', rows:books});
+            await add([
+                book('old', 366),
+                book('future', -1),
+                book('invalid', 0, 'fb2', 'invalid', {date: 'invalid'}),
+            ]);
+            const empty = await worker.getDiscoveryShelvesV2();
+            assert.deepStrictEqual(empty.shelves.map(shelf => shelf.id), ['newest-0d']);
+            assert.deepStrictEqual(empty.shelves[0].items, []);
+            assert.deepStrictEqual(scans, ['book']);
 
-    const result = await worker.getDiscoveryShelvesV2({newestLimit: 8, popularLimit: 8});
-    assert.deepStrictEqual(newestWindows, [7, 30, 90, 180, 365]);
-    assert.deepStrictEqual(result.shelves.map(shelf => shelf.id), ['newest-0d']);
-    assert.deepStrictEqual(result.shelves[0].items, []);
+            await add([
+                book('best-copy', 7, 'fb2', 'same'),
+                book('other-copy', 2, 'epub', 'same'),
+                book('different-source', 90, 'fb2', 'same', {sourceId: 'other'}),
+                book('half-year', 180),
+                book('year', 365),
+                book('reader-choice', 500),
+                book('rated', 500, 'fb2', 'rated', {librate:5}),
+                book('negative-rating', 500, 'fb2', 'negative-rating', {librate:-1}),
+                book('deleted', 1, 'fb2', 'deleted', {del:1, librate:5}),
+            ]);
+            worker.discoveryMemoryCache().clear();
+            const options = {newestLimit: 1, popularLimit: 3};
+            const [first, second] = await Promise.all([
+                worker.getDiscoveryShelvesV2(options),
+                worker.getDiscoveryShelvesV2(options),
+            ]);
+            assert.deepStrictEqual(first.shelves.map(shelf => [shelf.id, shelf.items.map(item => item._uid)]), [
+                ['newest-7d', ['best-copy']],
+                ['newest-30d', ['other-copy']],
+                ['newest-90d', ['different-source']],
+                ['newest-180d', ['half-year']],
+                ['newest-365d', ['year']],
+                ['popular', ['reader-choice', 'rated']],
+            ]);
+            assert.deepStrictEqual(first, second);
+            assert.deepStrictEqual(first, await worker.getDiscoveryShelvesV2(options));
+            assert.deepStrictEqual(scans, ['book', 'book'], 'Each cold Overview selects newest and popular in one database call');
+            await add([book('legacy-date', 360, 'fb2', 'legacy-date', {date:new Date(date(360)).toUTCString()})]);
+            assert((await worker.selectDiscoveryBookWindows('newest', 8, [365]))[0].some(item => item._uid === 'legacy-date'));
+        } finally {
+            await db.unlock();
+            worker.discoveryCache?.close();
+        }
+    });
 }
 
 async function testDiscoveryFeedbackAndEventsPersist() {
@@ -1788,6 +1839,7 @@ const tests = [
     ...require('./opds-progress-tests'),
     ...require('./opds2-tests'),
     ...require('./overview-recommendations-tests'),
+    ...require('./reader-progress-journal-tests'),
     ...require('./review-progress-tests'),
     ...require('./catalog-suggest-fast-tests'),
     ...require('./telegram-proxy-client-tests'),

@@ -2,11 +2,12 @@ const crypto = require('crypto');
 const fs = require('fs-extra');
 const path = require('path');
 const {targets} = require('./BackupTransaction');
+const {fileName: progressJournal} = require('./ReaderProgressJournal');
 
 const databaseDirectories = ['db', 'db.previous', 'web-access'];
 const databaseLocks = new Set(['__lock', '__softlock', '__softlockcheck']);
 const stateEntries = [
-    'session-secret', 'reader-backgrounds', 'public', 'backups',
+    'session-secret', 'reader-backgrounds', progressJournal, 'public', 'backups',
     'kosync.json', 'kosync', 'telegram-bot-state.json', 'resource-benchmark.json',
     // Keep the previous index so a rebuild can retain legacy book identifiers.
     ...databaseDirectories,

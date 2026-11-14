@@ -1,4 +1,4 @@
-﻿const os = require('os');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs-extra');
@@ -14,8 +14,7 @@ const yazl = require('yazl');
 const ZipReader = require('./ZipReader');
 const LockQueue = require('./LockQueue');
 const WorkerState = require('./WorkerState');//singleton
-const { JembaDb, JembaDbThread } = require('jembadb');
-const DbCreator = require('./DbCreator');
+const { JembaDb } = require('jembadb');
 const DbSearcher = require('./DbSearcher');
 const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
@@ -62,6 +61,7 @@ const stateToText = {
 const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const discoveryCacheTtl = 15*60*1000;//15 minutes
 const discoveryCacheBytes = 8 * 1024 ** 2;
+const discoveryNewestWindows = [7, 30, 90, 180, 365];
 const discoveryStaleGrace = 24 * 60 * 60 * 1000;
 const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
@@ -692,9 +692,19 @@ class WebWorker {
                 this.addAdminEvent(eventLevel, 'system', message);
             });
 
-            asyncExit.add(this.closeDb.bind(this));
+            asyncExit.add(async() => {
+                this.indexBootController?.abort();
+                this.indexRefreshController?.abort();
+                await this.indexBoot;
+                await this.indexRefresh;
+                await this.closeDb();
+            });
 
-            this.loadOrCreateDb();//no await
+            this.indexBootController = new AbortController();
+            this.indexBoot = this.loadOrCreateDb(false, 0, this.indexBootController.signal).finally(() => {
+                this.indexBootController = null;
+                this.indexBoot = null;
+            });
             this.periodicLogServerStats();//no await
 
             this.periodicCleanDir();//no await
@@ -722,6 +732,7 @@ class WebWorker {
         const ready = this.myState === ssNormal && databaseAvailable && !!this.dbSearcher;
         const result = {
             ready,
+            updating: workerState.updating === true,
             state: this.myState || workerState.state || '',
             serverMessage: workerState.serverMessage || '',
             job: workerState.job || '',
@@ -773,76 +784,50 @@ class WebWorker {
     }
 
     async closeDb() {
-        await this.ebookReader?.close?.(); this.ebookReader=null;
-        await this.bookPreview?.close?.(); this.bookPreview=null;
-        await this.libraryIsbnIndex?.close?.();
-        this.libraryIsbnIndex = null;
-        if (this.catalogDiscovery) {await this.catalogDiscovery.close(); this.catalogDiscovery = null;}
-        if (this.dbSearcher) {await this.dbSearcher.close(); this.dbSearcher = null;}
-        this.authorInfoCache?.close?.();
-        this.discoveryCache?.close?.();
-        this.discoveryCache = null;
-        clearTimeout(this.authorArchiveLease?.timer);
-        for (const state of this.reviewArchiveStates?.values() || []) clearTimeout(state.idleTimer);
-        this.reviewArchiveStates?.clear();
-        if (this.db) {
-            await this.db.unlock();
+        try {
+            await this.ebookReader?.close?.(); this.ebookReader = null;
+            await this.bookPreview?.close?.(); this.bookPreview = null;
+            await this.libraryIsbnIndex?.close?.(); this.libraryIsbnIndex = null;
+            if (this.catalogDiscovery) {await this.catalogDiscovery.close(); this.catalogDiscovery = null;}
+            if (this.dbSearcher) {await this.dbSearcher.close(); this.dbSearcher = null;}
+        } finally {
+            this.authorInfoCache?.close?.();
+            this.discoveryCache?.close?.();
+            this.discoveryCache = null;
+            clearTimeout(this.authorArchiveLease?.timer);
+            for (const state of this.reviewArchiveStates?.values() || []) clearTimeout(state.idleTimer);
+            this.reviewArchiveStates?.clear();
+            const db = this.db;
             this.db = null;
+            await db?.unlock();
         }
     }
 
-    async createDb(dbPath, previousPath = '') {
+    async createDb(dbPath, previousPath = '', signal) {
         this.setMyState(ssDbCreating);
         log('Searcher DB create start');
 
-        const config = this.config;
+        const oldDbPath = path.join(this.config.dataDir, 'db');
+        const identityDbPath = path.resolve(oldDbPath) !== path.resolve(dbPath)
+            && await fs.pathExists(path.join(oldDbPath, 'book')) ? oldDbPath : '';
+        await require('./IndexBuilder').buildIndexInWorker({...this.indexBuildConfig(), identityDbPath}, dbPath, previousPath, state => {
+            this.setMyState(ssDbCreating, state);
+            if (state.fileName)
+                log(`  load ${state.fileName}`);
+            if (state.recsLoaded)
+                log(`  processed ${state.recsLoaded} records`);
+            if (state.job)
+                log(`  ${state.job}`);
+        }, signal);
 
-        if (await fs.pathExists(dbPath))
-            throw new Error(`createDb.pathExists: ${dbPath}`);
-
-        if (previousPath && await fs.pathExists(`${previousPath}/book`)) {
-            await fs.ensureDir(dbPath);
-            await fs.copy(`${previousPath}/book`, `${dbPath}/book`);
-        }
-
-        const db = new JembaDbThread();
-        await db.lock({
-            dbPath,
-            create: true,
-            softLock: true,
-
-            tableDefaults: {
-                cacheSize: config.dbCacheSize,
-            },
-        });
-
-        try {
-            const oldDbPath = path.join(config.dataDir, 'db');
-            const identityDbPath = path.resolve(oldDbPath) !== path.resolve(dbPath)
-                && await fs.pathExists(path.join(oldDbPath, 'book')) ? oldDbPath : '';
-            const dbCreator = new DbCreator({...config, indexDbPath: dbPath, identityDbPath});
-
-            await dbCreator.run(db, (state) => {
-                this.setMyState(ssDbCreating, state);
-
-                if (state.fileName)
-                    log(`  load ${state.fileName}`);
-                if (state.recsLoaded)
-                    log(`  processed ${state.recsLoaded} records`);
-                if (state.job)
-                    log(`  ${state.job}`);
-            });
-
-            log('Searcher DB successfully created');
-        } finally {
-            await db.unlock();
-        }
+        log('Searcher DB successfully created');
     }
 
-    async loadOrCreateDb(recreate = false, iteration = 0) {
+    async loadOrCreateDb(recreate = false, iteration = 0, refreshSignal) {
         this.setMyState(ssDbLoading);
 
         try {
+            refreshSignal?.throwIfAborted();
             const config = this.config;
             const dbPath = `${config.dataDir}/db`;
             if (!await fs.pathExists(dbPath) && await fs.pathExists(`${dbPath}.previous`))
@@ -850,34 +835,23 @@ class WebWorker {
 
             this.inpxFileHash = await this.inpxHashCreator.getInpxFileHash();
 
-            //проверим полный InxpHash (включая фильтр и версию БД)
-            //для этого заглянем в конфиг внутри БД, если он есть
-            if (!(config.recreateDb || recreate) && await fs.pathExists(dbPath)) {
-                const newInpxHash = await this.inpxHashCreator.getHash();
-
-                const tmpDb = new JembaDb();
-                await tmpDb.lock({dbPath, softLock: true});
-
-                try {
-                    await tmpDb.open({table: 'config'});
-                    const rows = await tmpDb.select({table: 'config', where: `@@id('inpxHash')`});
-
-                    if (!rows.length || newInpxHash !== rows[0].value)
-                        throw new Error('inpx file: changes found on start, recreating DB');
-                } catch (e) {
-                    log(LM_WARN, e.message);
-                    recreate = true;
-                } finally {
-                    await tmpDb.unlock();
-                }
-            }
+            const hasDb = await fs.pathExists(dbPath);
+            if (!hasDb) recreate = true;
 
             //удалим БД если нужно
             if (config.recreateDb || recreate) {
+                if (hasDb && iteration === 0) {
+                    // A second server sharing the data directory must not move
+                    // another process's active catalogue during --recreate.
+                    const guard = new JembaDb();
+                    await guard.lock({dbPath, softLock:true});
+                    await guard.unlock();
+                }
                 const staging = `${dbPath}.building-${utils.randomHexString(8)}`;
                 const previous = `${dbPath}.previous`;
                 try {
-                    await this.createDb(staging, config.recreateDb || iteration > 0 ? '' : dbPath);
+                    await this.createDb(staging, config.recreateDb || iteration > 0 || !hasDb ? '' : dbPath, refreshSignal);
+                    refreshSignal?.throwIfAborted();
                     await fs.remove(previous);
                     if (await fs.pathExists(dbPath)) await fs.move(dbPath, previous);
                     try { await fs.move(staging, dbPath); }
@@ -885,84 +859,182 @@ class WebWorker {
                     await fs.remove(previous);
                 } catch (error) {
                     await fs.remove(staging);
+                    if (refreshSignal?.aborted) return;
                     if (!await fs.pathExists(dbPath)) throw error;
                     log(LM_ERR, `Index update failed; keeping previous index: ${error.message}`);
                 }
             }
 
-            //пересоздаем БД из INPX если нужно
-            if (!await fs.pathExists(dbPath)) {
-                await this.createDb(dbPath);
-                utils.freeMemory();
-            }
-
-            //загружаем БД
+            refreshSignal?.throwIfAborted();
             this.setMyState(ssDbLoading);
             log('Searcher DB loading');
-
-            const db = new (require('./DatabaseThread'))(config);//bounded caches in a separate thread
-            await db.lock({
-                dbPath,
-                softLock: true,
-
-                tableDefaults: {
-                    cacheSize: config.dbCacheSize,
-                },
-            });
-
+            let catalogue;
             try {
-                //открываем таблицы
-                await db.openAll({exclude: ['author_id', 'series_id', 'title_id', 'book', 'catalog_lookup']});
-
-                await db.open({
-                    table: 'book',
-                    cacheSize: config.dbCacheSize
-                });
-            } catch(e) {
+                catalogue = await this.openCatalogue(dbPath);
+            } catch (e) {
                 log(LM_ERR, `Database error: ${e.message}`);
-                await db.unlock();
-                if (iteration < 1) {
+                if (iteration < 1 && !/^Database locked:/.test(e.message)
+                    && e.causeCode !== 'ERR_WORKER_OUT_OF_MEMORY') {
                     log('Recreating DB');
-                    await this.loadOrCreateDb(true, iteration + 1);
-                } else
-                    throw e;
-                return;
+                    return await this.loadOrCreateDb(true, iteration + 1, refreshSignal);
+                }
+                throw e;
             }
 
-            //поисковый движок
-            this.dbSearcher = new DbSearcher(config, db);
-            await this.dbSearcher.init();
+            if (hasDb && !recreate && !config.recreateDb) {
+                const indexVersion = catalogue.searcher.dbConfig.dbVersion;
+                // Schema 15 introduced the source table and preceded the version marker.
+                const compatible = String(indexVersion) === String(config.dbVersion)
+                    || (indexVersion == null && String(config.dbVersion) === '15'
+                        && await catalogue.db.tableExists({table:'source'}));
+                if (!compatible) {
+                    try {await catalogue.searcher.close();}
+                    finally {await catalogue.db.unlock();}
+                    return await this.loadOrCreateDb(true, iteration + 1, refreshSignal);
+                }
+            }
 
-            //stuff
-            db.wwCache = {};            
-            this.db = db;
-
-            this.dbSearcher.ratingIndex = new (require('./LibraryRatingIndex'))(this);
-            this.dbSearcher.isbnIndex = this.getIsbnIndex();
-
-            this.resetLibraryAssetCaches();
-            this.setMyState(ssNormal);
-
-            log('Searcher DB ready');
-            this.warmReviewIndexes();
-            this.logServerStats();
+            if (refreshSignal?.aborted) {
+                try {await catalogue.searcher.close();}
+                finally {await catalogue.db.unlock();}
+                return;
+            }
+            this.useCatalogue(catalogue);
+            if (hasDb && !(config.recreateDb || recreate)) {
+                const check = this.checkIndexOnStart();
+                this.indexStartupCheck = check;
+                check.finally(() => {if (this.indexStartupCheck === check) this.indexStartupCheck = null;});
+            } else {
+                this.indexStartupCheck = null;
+            }
         } catch (e) {
-            log(LM_FATAL, e.message);            
+            if (refreshSignal?.aborted) return;
+            log(LM_FATAL, e.message);
             asyncExit.exit(1);
         }
     }
 
-    async recreateDb() {
-        this.setMyState(ssDbCreating);
-
-        if (this.dbSearcher) {
-            await this.dbSearcher.close();
-            this.dbSearcher = null;
+    async checkIndexOnStart() {
+        const db = this.db;
+        try {
+            if (await this.inpxHashCreator.getHash() !== db.wwCache.config.inpxHash && db === this.db && !asyncExit.exiting) {
+                log('inpx file: changes found on start, recreating DB');
+                await this.recreateDb();
+            }
+        } catch (error) {
+            log(LM_WARN, `Cannot check the library index: ${error.message}`);
         }
+    }
 
-        await this.closeDb();
+    async openCatalogue(dbPath) {
+        const config = this.config;
+        const db = new (require('./DatabaseThread'))(config);
+        let searcher;
+        try {
+            await db.lock({dbPath, softLock:true, tableDefaults:{cacheSize:config.dbCacheSize}});
+            await db.openAll({exclude:['author_id', 'series_id', 'title_id', 'book', 'catalog_lookup']});
+            await db.open({table:'book', cacheSize:config.dbCacheSize});
+            searcher = new DbSearcher(config, db, dbPath);
+            await searcher.init();
+            db.wwCache = {config:searcher.dbConfig};
+            return {db, searcher};
+        } catch (error) {
+            try {await searcher?.close();}
+            finally {await db.unlock();}
+            throw error;
+        }
+    }
 
-        await this.loadOrCreateDb(true);
+    useCatalogue({db, searcher}) {
+        this.db = db;
+        this.dbSearcher = searcher;
+        searcher.ratingIndex = new (require('./LibraryRatingIndex'))(this);
+        searcher.isbnIndex = this.getIsbnIndex();
+        this.resetLibraryAssetCaches();
+        this.setMyState(ssNormal);
+        log('Searcher DB ready');
+        this.warmReviewIndexes();
+        this.logServerStats();
+    }
+
+    recreateDb() {
+        if (this.indexBoot && this.myState !== ssNormal) return this.indexBoot;
+        if (this.indexRefresh) return this.indexRefresh;
+
+        const controller = new AbortController();
+        this.indexRefreshController = controller;
+        this.wState?.set({updating:true, job:'', jobMessage:'Подготовка нового индекса', jobStep:0, jobStepCount:0, progress:0, recsLoaded:0});
+        this.indexRefresh = (async() => {
+            if (this.db && this.db.available !== false && this.dbSearcher) {
+                await this.rebuildCatalogue(controller.signal);
+            } else {
+                this.setMyState(ssDbLoading);
+                await this.closeDb();
+                if (!controller.signal.aborted) await this.loadOrCreateDb(true, 0, controller.signal);
+            }
+        })().catch(error => {
+            if (!controller.signal.aborted) {
+                log(LM_ERR, `Index update failed: ${error.message}`);
+                if (!this.db) asyncExit.exit(1);
+            }
+        }).finally(() => {
+            this.indexRefreshController = null;
+            this.indexRefresh = null;
+            this.wState?.set({updating:false, job:'', jobMessage:'', jobStep:0, jobStepCount:0, progress:0, recsLoaded:0});
+        });
+        return this.indexRefresh;
+    }
+
+    indexBuildConfig() {
+        return {
+            dataDir:this.config.dataDir, dbVersion:this.config.dbVersion, dbCacheSize:this.config.dbCacheSize,
+            fullOptimization:this.config.fullOptimization, lowMemoryMode:this.config.lowMemoryMode,
+            inpxFilterFile:this.config.inpxFilterFile, allowUnsafeFilter:this.config.allowUnsafeFilter,
+            librarySources:getEnabledLibrarySources(this.config), converterPaths:this.config.converterPaths,
+        };
+    }
+
+    async rebuildCatalogue(signal) {
+        const dbPath = path.resolve(this.config.dataDir, 'db');
+        const staging = `${dbPath}.building-${utils.randomHexString(8)}`;
+        const previous = `${dbPath}.previous`;
+        try {
+            await require('./IndexBuilder').buildIndexInWorker(this.indexBuildConfig(), staging, dbPath, state => {
+                this.wState?.set(state);
+                if (state.job) log(`  ${state.job}`);
+            }, signal);
+            this.wState?.set({jobMessage:'Проверка нового индекса'});
+            const next = await this.openCatalogue(staging);
+            const nextHash = next.searcher.dbConfig.inpxHash;
+            try {await next.searcher.close();}
+            finally {await next.db.unlock();}
+
+            const inpxFileHash = await this.inpxHashCreator.getInpxFileHash();
+            if (nextHash !== await this.inpxHashCreator.getHash())
+                throw new Error('Источники изменились во время индексации. Повторите обновление.');
+            await fs.remove(previous);
+            signal.throwIfAborted();
+
+            this.setMyState(ssDbLoading, {jobMessage:'Переключение поискового индекса'});
+            let movedPrevious = false, movedNext = false;
+            try {
+                await this.closeDb();
+                await fs.rename(dbPath, previous);
+                movedPrevious = true;
+                await fs.rename(staging, dbPath);
+                movedNext = true;
+                this.useCatalogue(await this.openCatalogue(dbPath));
+                this.inpxFileHash = inpxFileHash;
+            } catch (error) {
+                if (movedNext) await fs.rename(dbPath, staging);
+                if (movedPrevious) await fs.rename(previous, dbPath);
+                this.useCatalogue(await this.openCatalogue(dbPath));
+                throw new Error(`${error.message}; restored previous catalogue`, {cause:error});
+            }
+            await fs.remove(previous).catch(error => log(LM_WARN, `Previous index cleanup failed: ${error.message}`));
+        } finally {
+            await fs.remove(staging).catch(error => log(LM_WARN, `Staging index cleanup failed: ${error.message}`));
+        }
     }
 
     resetLibraryAssetCaches() {
@@ -1218,7 +1290,7 @@ class WebWorker {
 
     async getDiscoveryConfigForRequest(options = {}) {
         await this.getSharedDiscoveryConfig();
-        const requestOptions = Object.assign({}, options || {});
+        const requestOptions = Object.fromEntries(Object.entries(options || {}).filter(([, value]) => value !== undefined));
         const hasAdminExternalOverrides = (
             Object.prototype.hasOwnProperty.call(requestOptions, 'externalSource')
             || Object.prototype.hasOwnProperty.call(requestOptions, 'externalName')
@@ -1504,20 +1576,20 @@ class WebWorker {
         return result;
     }
 
-    async selectDiscoveryBooks(mode = 'newest', limit = 8, options = {}) {
+    async selectDiscoveryBookWindows(mode, limit, daysWindows = [], popularityMap = {}, popularLimit = 0) {
         const db = this.db;
-        const daysWindow = Math.max(0, parseInt(options.daysWindow, 10) || 0);
-        const excludedBookUids = Array.isArray(options.excludedBookUids) ? options.excludedBookUids.filter(Boolean) : [];
-        const popularityMap = (options.popularityMap && typeof(options.popularityMap) === 'object' ? options.popularityMap : {});
+        const generation = this.libraryAssetGeneration;
+        const now = Date.now();
+        const scores = Object.fromEntries(Object.entries(popularityMap).map(([uid, activity]) => [uid, activity.score]));
         const rows = await db.select({
             table: 'book',
             rawResult: true,
             where: `
                 const mode = ${db.esc(mode)};
                 const limit = ${db.esc(limit)};
-                const daysWindow = ${db.esc(daysWindow)};
-                const excludedBookUids = new Set(${db.esc(excludedBookUids)});
-                const popularityMap = ${db.esc(popularityMap)};
+                const daysWindows = ${db.esc(daysWindows)};
+                const scores = ${db.esc(scores)};
+                const selectBest = ${require('./DiscoverySelection').selectDiverseBestSource};
                 const dedupeKey = (row) => {
                     const sourceKey = row.sourceId || '';
                     if (row.libid)
@@ -1563,38 +1635,67 @@ class WebWorker {
                     return score;
                 };
                 const pickBetterRow = (current, next) => {
-                    const currentScore = rowQuality(current);
-                    const nextScore = rowQuality(next);
-                    if (nextScore !== currentScore)
-                        return (nextScore > currentScore ? next : current);
+                    if (next.quality !== current.quality)
+                        return (next.quality > current.quality ? next : current);
                     return (next.id < current.id ? next : current);
+                };
+                const rankingFields = (row) => ({
+                    key:dedupeKey(row), id:row.id, _uid:row._uid, author:row.author, title:row.title, series:row.series,
+                    date:row.date, librate:row.librate, quality:rowQuality(row),
+                });
+                const loadSelected = async (selected) => {
+                    const books = [];
+                    for (const row of selected) books.push(@unsafeRow(row.id));
+                    return books;
                 };
 
                 const deduped = new Map();
+                const buckets = daysWindows.map(() => []);
+                const now = ${db.esc(now)};
+                const dateBuckets = new Map();
+                const bucketFor = (date) => {
+                    let bucket = dateBuckets.get(date);
+                    if (bucket === undefined) {
+                        const age = Math.floor((now - Date.parse(date)) / 86400000);
+                        bucket = daysWindows.findIndex(days => age >= 0 && age <= days);
+                        if (dateBuckets.size < 4096) dateBuckets.set(date, bucket);
+                    }
+                    return bucket;
+                };
+                const remember = (groups, row) => {
+                    const existing = groups.get(row.key);
+                    groups.set(row.key, existing ? pickBetterRow(existing, row) : row);
+                };
+                const popularLimit = ${db.esc(popularLimit)};
+                const popular = popularLimit ? new Map() : null;
+                let visited = 0;
                 for (const id of @all()) {
+                    if (++visited % 1024 === 0)
+                        await new Promise(resolve => setImmediate(resolve));
                     const row = @unsafeRow(id);
                     if (!row || row.del || !row.title)
                         continue;
-                    if (excludedBookUids.has(row._uid))
+                    const isPopular = row.librate > 0 || scores[row._uid] > 0;
+                    if (mode === 'popular' && !isPopular)
                         continue;
-                    if (mode === 'popular' && !((row.librate > 0) || (((popularityMap[row._uid] || {}).score) > 0)))
+                    const bucket = buckets.length ? bucketFor(row.date) : -1;
+                    const isNewest = row.date && (!daysWindows.length || bucket !== -1);
+                    if (mode === 'newest' && !isNewest && !(popular && isPopular))
                         continue;
-                    if (mode === 'newest' && !row.date)
-                        continue;
-                    if (mode === 'newest' && daysWindow > 0) {
-                        const age = Math.floor((Date.now() - Date.parse(row.date)) / 86400000);
-                        if (!(age >= 0 && age <= daysWindow))
-                            continue;
-                    }
 
-                    const key = dedupeKey(row);
-                    const existing = deduped.get(key);
-                    deduped.set(key, existing ? pickBetterRow(existing, row) : row);
+                    const ranked = rankingFields(row);
+                    if (popular && isPopular)
+                        remember(popular, ranked);
+                    if (buckets.length) {
+                        if (isNewest) buckets[bucket].push(ranked);
+                    } else {
+                        remember(deduped, ranked);
+                    }
                 }
 
-                const compare = (a, b) => {
-                    if (mode === 'popular') {
-                        const popularityCmp = (((popularityMap[b._uid] || {}).score) || 0) - (((popularityMap[a._uid] || {}).score) || 0);
+                const compare = (ranking, a, b) => {
+                    if (ranking === 'popular') {
+                        const popularityCmp = (scores[b._uid] || 0) - (scores[a._uid] || 0);
                         if (popularityCmp)
                             return popularityCmp;
                         const rateCmp = (b.librate || 0) - (a.librate || 0);
@@ -1619,11 +1720,36 @@ class WebWorker {
                         cmp = a.id - b.id;
                     return cmp;
                 };
-                return (${require('./DiscoverySelection').selectDiverseBest.toString()})(deduped,compare,limit);
+                if (!buckets.length)
+                    return [await loadSelected(selectBest(deduped, compare.bind(null, mode), limit))];
+
+                const seen = new Set(), windows = [];
+                for (let index = 0; index < buckets.length; index++) {
+                    await new Promise(resolve => setImmediate(resolve));
+                    deduped.clear();
+                    // Windows are cumulative. Exclude earlier picks before choosing
+                    // the best copy, so another copy can still win a wider window.
+                    for (let bucket = 0; bucket <= index; bucket++) {
+                        for (const row of buckets[bucket]) {
+                            if (++visited % 4096 === 0)
+                                await new Promise(resolve => setImmediate(resolve));
+                            if (!seen.has(row._uid))
+                                remember(deduped, row);
+                        }
+                    }
+                    const selected = selectBest(deduped, compare.bind(null, mode), limit);
+                    for (const row of selected)
+                        seen.add(row._uid);
+                    windows.push(await loadSelected(selected));
+                }
+                if (popular)
+                    windows.push(await loadSelected(selectBest(popular, compare.bind(null, 'popular'), popularLimit)));
+                return windows;
             `
         });
 
-        return ((rows[0] && rows[0].rawResult) ? rows[0].rawResult : []);
+        this.checkLibraryAssetState(generation, db);
+        return rows[0].rawResult;
     }
 
     async buildLocalDiscoveryShelf(kind = 'newest', limit = 8, options = {}) {
@@ -1645,7 +1771,7 @@ class WebWorker {
         if (!shelfConfig)
             return null;
 
-        const items = await this.selectDiscoveryBooks(shelfConfig.mode, limit);
+        const [items] = await this.selectDiscoveryBookWindows(shelfConfig.mode, limit);
         if (!items.length)
             return null;
 
@@ -2214,10 +2340,9 @@ class WebWorker {
         return {shelves};
     }
 
-    async buildLocalDiscoveryShelfV2(kind = 'newest', limit = 8, options = {}) {
+    buildLocalDiscoveryShelfV2(kind, books, {daysWindow = 0, popularityMap = {}} = {}) {
         let shelfConfig = null;
         if (kind === 'newest') {
-            const daysWindow = Math.max(0, parseInt(options.daysWindow, 10) || 0);
             shelfConfig = {
                 id: `newest-${daysWindow}d`,
                 title: (daysWindow > 0 ? `Новинки за ${daysWindow} дней` : 'Последние поступления'),
@@ -2236,11 +2361,10 @@ class WebWorker {
         if (!shelfConfig)
             return null;
 
-        const items = (await this.selectDiscoveryBooks(shelfConfig.mode, limit, options))
-            .map((book) => this.decorateDiscoveryBook(book, {
-                mode: shelfConfig.mode,
-                popularityInfo: ((options.popularityMap || {})[book._uid] || null),
-            }));
+        const items = books.map((book) => this.decorateDiscoveryBook(book, {
+            mode: shelfConfig.mode,
+            popularityInfo: popularityMap[book._uid] || null,
+        }));
         if (!items.length)
             return null;
 
@@ -2409,8 +2533,7 @@ class WebWorker {
         }
     }
 
-    async buildExternalDiscoveryShelfV2(limit = 8, options = {}) {
-        const discovery = this.getDiscoveryConfig(options);
+    async buildExternalDiscoveryShelfV2(limit, discovery) {
         if (discovery.externalSource === 'none')
             return null;
 
@@ -2453,45 +2576,46 @@ class WebWorker {
         const discovery = await this.getDiscoveryConfigForRequest(options);
         if (!discovery.enabled)
             return {shelves: []};
+        const db = this.db, generation = this.libraryAssetGeneration;
 
         if (options.recommendationsOnly === true) {
             const user = await this.requireAuthorizedUser(options.userId, options.profileAccessToken);
             if (user.personalRecommendationsEnabled === false) return {shelves:[]};
             const limit = Math.max(1, Math.min(parseInt(options.personalLimit,10) || 12,24));
             const shelf = await this.buildSimilarBooksShelfV2(user,limit);
+            this.checkLibraryAssetState(generation, db);
             return {shelves:shelf?.items?.length ? [shelf] : []};
         }
 
         const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
         const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
-        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 120));
         const personalShelfLimit = Math.max(1, Math.min(parseInt(options.personalLimit, 10) || discovery.shelfLimit, 24));
         const personalSimilarLimit = Math.max(personalShelfLimit, Math.min(parseInt(options.personalSimilarLimit, 10) || Math.max(personalShelfLimit, 16), 96));
 
         const dbConfig = await this.dbConfig();
         const inpxHash = String(dbConfig.inpxHash || '').trim();
-        const shelves = [];
-        const popularityMap = await this.buildDiscoveryPopularityMap();
-        const newestSeen = new Set();
-
-        for (const daysWindow of [7, 30, 90, 180, 365]) {
-            const newestShelf = await this.rememberDiscovery(
-                `discovery:${inpxHash}:newest:${daysWindow}:${newestLimit}`,
-                () => this.buildLocalDiscoveryShelfV2('newest', newestLimit, {
-                    daysWindow,
-                    excludedBookUids: Array.from(newestSeen),
-                }),
-            );
-            if (newestShelf) {
-                shelves.push(newestShelf);
-                for (const book of (Array.isArray(newestShelf.items) ? newestShelf.items : [])) {
-                    if (book && book._uid)
-                        newestSeen.add(book._uid);
-                }
-            }
+        if (options.externalOnly === true) {
+            const shelf = await this.getExternalDiscoveryShelf(inpxHash, discovery, options);
+            this.checkLibraryAssetState(generation, db);
+            return {shelves: shelf ? [shelf] : []};
         }
 
-        if (!shelves.some(shelf => shelf && /^newest-\d+d$/.test(String(shelf.id || '')))) {
+        const {newestShelves:shelves, popularShelf} = await this.rememberDiscovery(
+            `discovery:${inpxHash}:local:v2:${newestLimit}:${popularLimit}`,
+            async() => {
+                const popularityMap = await this.buildDiscoveryPopularityMap();
+                const windows = await this.selectDiscoveryBookWindows(
+                    'newest', newestLimit, discoveryNewestWindows, popularityMap, popularLimit,
+                );
+                const popular = windows.pop();
+                const newestShelves = windows.map((books, index) => this.buildLocalDiscoveryShelfV2(
+                    'newest', books, {daysWindow: discoveryNewestWindows[index]},
+                )).filter(Boolean);
+                return {newestShelves, popularShelf:this.buildLocalDiscoveryShelfV2('popular', popular, {popularityMap})};
+            },
+        );
+
+        if (!shelves.length) {
             shelves.push({
                 id: 'newest-0d',
                 title: 'Новинки не найдены',
@@ -2505,10 +2629,6 @@ class WebWorker {
             });
         }
 
-        const popularShelf = await this.rememberDiscovery(
-            `discovery:${inpxHash}:popular:v2:${popularLimit}`,
-            () => this.buildLocalDiscoveryShelfV2('popular', popularLimit, {popularityMap}),
-        );
         if (popularShelf)
             shelves.push(popularShelf);
 
@@ -2517,31 +2637,38 @@ class WebWorker {
                 shelves.push(shelf);
         }
 
-        if (discovery.externalSource !== 'none') {
-            try {
-                const externalShelf = await this.rememberPersistedDiscovery(
-                    `discovery:${inpxHash}:external:${externalDiscoveryCacheVersion}:${discovery.externalSource}:${discovery.externalName}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}:${discovery.externalBrowseUrl}:${discovery.externalBrowseName}:${discovery.externalTtlMinutes}`,
-                    () => this.buildExternalDiscoveryShelfV2(externalShelfLimit, options),
-                    discovery.externalTtlMinutes * 60 * 1000,
-                    {forceRefresh: options.forceRefresh === true},
-                );
-                if (externalShelf)
-                    shelves.push(externalShelf);
-            } catch (e) {
-                shelves.push({
-                    id: 'external-error',
-                    title: (discovery.externalName || 'Внешний источник'),
-                    subtitle: 'Внешний источник временно недоступен',
-                    source: 'external',
-                    sourceName: (discovery.externalName || 'Внешний источник'),
-                    sourceUrl: (discovery.externalUrl || ''),
-                    items: [],
-                    emptyMessage: e.message,
-                });
-            }
+        if (options.includeExternal !== false) {
+            const shelf = await this.getExternalDiscoveryShelf(inpxHash, discovery, options);
+            if (shelf) shelves.push(shelf);
         }
 
+        this.checkLibraryAssetState(generation, db);
         return {shelves};
+    }
+
+    async getExternalDiscoveryShelf(inpxHash, discovery, options) {
+        if (discovery.externalSource === 'none') return null;
+        const limit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 120));
+        const {externalSource, externalName, externalLimit, externalUrl, externalBrowseUrl, externalBrowseName, externalTtlMinutes} = discovery;
+        try {
+            return await this.rememberPersistedDiscovery(
+                `discovery:${inpxHash}:external:${externalDiscoveryCacheVersion}:${externalSource}:${externalName}:${externalLimit}:${limit}:${externalUrl}:${externalBrowseUrl}:${externalBrowseName}:${externalTtlMinutes}`,
+                () => this.buildExternalDiscoveryShelfV2(limit, discovery),
+                externalTtlMinutes * 60 * 1000,
+                {forceRefresh: options.forceRefresh === true},
+            );
+        } catch (e) {
+            return {
+                id: 'external-error',
+                title: externalName || 'Внешний источник',
+                subtitle: 'Внешний источник временно недоступен',
+                source: 'external',
+                sourceName: externalName || 'Внешний источник',
+                sourceUrl: externalUrl || '',
+                items: [],
+                emptyMessage: e.message,
+            };
+        }
     }
 
     formatPersonalDiscoveryDate(value = '') {
@@ -3245,9 +3372,18 @@ class WebWorker {
                 const limit = ${this.db.esc(Math.max(probeLimit * 16 + 64, 192))};
                 const rotationSeed = ${this.db.esc(rotationSeed)};
 
-                const result = [];
-                const explorationResult = [];
+                const createTopRanked = ${require('./DiscoverySelection').createTopRanked.toString()};
+                const compare = (a, b) => (b.score || 0) - (a.score || 0)
+                    || String(a.row.title || '').localeCompare(String(b.row.title || ''), 'ru')
+                    || a.order - b.order;
+                const affinity = createTopRanked(limit, compare);
+                const exploration = createTopRanked(limit, compare);
+                let order = 0;
+                let readCount = 0;
+                const now = Date.now();
                 for (const id of @all()) {
+                    if (++readCount % 1024 === 0)
+                        await new Promise(resolve => setImmediate(resolve));
                     const row = @unsafeRow(id);
                     if (!row || row.del || !row.title || !row._uid || knownBookUids.has(row._uid))
                         continue;
@@ -3298,34 +3434,24 @@ class WebWorker {
                     if (row.date) {
                         const bookTime = Date.parse(row.date);
                         if (Number.isFinite(bookTime)) {
-                            const ageDays = Math.max(0, Math.floor((Date.now() - bookTime) / 86400000));
+                            const ageDays = Math.max(0, Math.floor((now - bookTime) / 86400000));
                             score += Math.max(0, 12 - (Math.min(ageDays, 365) * 12 / 365));
                         }
                     }
 
-                    const stableHash = String(row._uid || row.id || '')
-                        .split('')
-                        .reduce((sum, char) => ((sum * 33) + char.charCodeAt(0) + rotationSeed) % 9973, rotationSeed);
+                    const uid = String(row._uid);
+                    let stableHash = rotationSeed;
+                    for (let i = 0; i < uid.length; i++)
+                        stableHash = (stableHash * 33 + uid.charCodeAt(i) + rotationSeed) % 9973;
                     score += (stableHash / 9973) * 8;
 
-                    const target = (discoveryExplore ? explorationResult : result);
-                    target.push(Object.assign({}, row, {_similarityScore: score, _discoveryExplore: discoveryExplore}));
+                    const target = discoveryExplore ? exploration : affinity;
+                    target.add({row, score, order: order++});
                 }
 
-                result.sort((a, b) => {
-                    const scoreCmp = Number(b._similarityScore || 0) - Number(a._similarityScore || 0);
-                    if (scoreCmp)
-                        return scoreCmp;
-                    return String(a.title || '').localeCompare(String(b.title || ''), 'ru');
-                });
-                explorationResult.sort((a, b) => {
-                    const scoreCmp = Number(b._similarityScore || 0) - Number(a._similarityScore || 0);
-                    if (scoreCmp)
-                        return scoreCmp;
-                    return String(a.title || '').localeCompare(String(b.title || ''), 'ru');
-                });
-
-                return result.slice(0, limit).concat(explorationResult.slice(0, limit));
+                const ranked = (top, explore) => top.ranked().map(({row, score}) =>
+                    ({...row, _similarityScore: score, _discoveryExplore: explore}));
+                return ranked(affinity, false).concat(ranked(exploration, true));
             `
         });
 
@@ -3739,8 +3865,9 @@ class WebWorker {
         return requestedUser;
     }
 
-    async requireAuthorizedUser(userId = '', profileAccessToken = '') {
-        const requestedUser = await this.readingListStore.getUser(userId);
+    async requireAuthorizedUser(userId = '', profileAccessToken = '', {identityOnly = false} = {}) {
+        const requestedUser = identityOnly ? await this.readingListStore.getUserIdentity(userId)
+            : await this.readingListStore.getUser(userId);
         if (!requestedUser.passwordHash)
             return requestedUser;
 
@@ -4669,6 +4796,7 @@ class WebWorker {
 
     async startAdminReindex(userId = '', profileAccessToken = '') {
         await this.requireAdmin(userId, profileAccessToken);
+        if (this.indexRefresh) return {started:true};
         this.checkMyState();
 
         this.addAdminEvent('warn', 'index', 'Запущено переиндексирование библиотеки');
@@ -5863,7 +5991,10 @@ class WebWorker {
                     if (readerCache)
                         readerCache.set(archive.file, reader);
                 }
-                data = await reader.extractToBuf(num === -1 ? String(libid) : `${libid}/${num}`);
+                const entry = num === -1 ? String(libid) : `${libid}/${num}`;
+                data = archive.batch?.get(entry);
+                if (!data)
+                    data = await reader.extractToBuf(entry);
             } catch (error) {
                 if (isResourceError(error)) throw error;
                 if (externalTools.isMissingToolError(error))
@@ -5878,6 +6009,26 @@ class WebWorker {
                     this.libraryToolDirs(sourceLibDir), this.config.converterPaths);
         }
         return null;
+    }
+
+    async prepareEpubImageBatch(libid, images, libFolder, sourceLibDir, archiveCache, readerCache) {
+        const names = new Set(images.filter(({num}) => num !== -1).map(({num}) => `${libid}/${num}`));
+        if (names.size < 3 || names.size > 128 || !/^\d{1,32}$/.test(libid)) return;
+
+        const archives = await this.getBookAssetArchives('images', libFolder, sourceLibDir);
+        archiveCache.set('images', archives);
+        if (archives.length !== 1) return; // Preserve precedence between multiple archives.
+        const [archive] = archives;
+        const reader = new ZipReader(this.config);
+        try {
+            await reader.open(archive.file, false);
+            readerCache.set(archive.file, reader);
+            archive.batch = await reader.tryExtractNumericBatch(names, 8 * 1024 * 1024);
+        } catch (error) {
+            if (!readerCache.has(archive.file)) await reader.close();
+            if (isResourceError(error) || externalTools.isMissingToolError(error))
+                throw error;
+        }
     }
 
     async ensureAuthorInfoArchives() {
@@ -6174,6 +6325,7 @@ class WebWorker {
 
     async restoreBook(bookUid, libFolder, libFile, downFileName, sourceLibDir = '') {
         const db = this.db;
+        const epub = path.extname(libFile).toLowerCase() === '.epub';
 
         let extractedFile = '';
         let hash = '';
@@ -6194,13 +6346,14 @@ class WebWorker {
                     await fs.remove(extractedFile);
                     throw error;
                 }
-            } else if (path.extname(libFile).toLowerCase() === '.epub') {
+            } else if (epub) {
                 const libid = path.basename(libFile, path.extname(libFile));
                 const archiveCache = new Map();
                 const readerCache = new Map();
                 try {
                     await epubRestorer.restore(extractedFile, this.config,
-                        (num, name) => this.getEpubImage(libid, num, name, libFolder, sourceLibDir, archiveCache, readerCache));
+                        (num, name) => this.getEpubImage(libid, num, name, libFolder, sourceLibDir, archiveCache, readerCache),
+                        images => this.prepareEpubImageBatch(libid, images, libFolder, sourceLibDir, archiveCache, readerCache));
                 } catch (error) {
                     await fs.remove(extractedFile);
                     throw error;
@@ -6218,25 +6371,32 @@ class WebWorker {
         const bookFileDesc = `${bookFile}.d.json`;
         const size = extractedFile ? (await fs.stat(extractedFile)).size : 0;
 
-        if (!await fs.pathExists(bookFile) || !await fs.pathExists(bookFileDesc)) {
-            if (!await fs.pathExists(bookFile) && extractedFile) {
-                const tmpFile = `${this.config.tempDir}/${utils.randomHexString(30)}`;
-                await utils.gzipFile(extractedFile, tmpFile, 4);
-                await fs.remove(extractedFile);
-                await fs.move(tmpFile, bookFile, {overwrite: true});
+        try {
+            if (!await fs.pathExists(bookFile) || !await fs.pathExists(bookFileDesc)) {
+                if (!await fs.pathExists(bookFile) && extractedFile) {
+                    const tmpFile = `${this.config.tempDir}/${utils.randomHexString(30)}`;
+                    try {
+                        await utils.gzipFile(extractedFile, tmpFile, 4);
+                        await fs.move(tmpFile, bookFile, {overwrite: true});
+                    } finally { await fs.remove(tmpFile); }
+                } else {
+                    await utils.touchFile(bookFile);
+                }
             } else {
                 await utils.touchFile(bookFile);
+                await utils.touchFile(bookFileDesc);
             }
-        } else {
-            if (extractedFile)
-                await fs.remove(extractedFile);
-
-            await utils.touchFile(bookFile);
-            await utils.touchFile(bookFileDesc);
+            // Converters and uncompressed downloads need the local EPUB that
+            // we just prepared. Publish the existing bytes before exposing the
+            // descriptor, so they need not immediately read and inflate gzip.
+            if (epub && extractedFile && size)
+                await utils.prepareCachedFile(`${bookFile}.raw`, temporary => fs.move(extractedFile, temporary), size);
+        } finally {
+            if (extractedFile) await fs.remove(extractedFile);
         }
 
         const assetVersion = assetVersionFor(path.extname(libFile).slice(1));
-        await fs.writeFile(bookFileDesc, JSON.stringify({bookUid, libFolder, libFile, sourceLibDir, downFileName, size, assetVersion}));
+        await writeFileAtomic(bookFileDesc, JSON.stringify({bookUid, libFolder, libFile, sourceLibDir, downFileName, size, assetVersion}));
         this.scheduleCacheClean('после подготовки книги');
 
         await db.insert({
@@ -6368,7 +6528,14 @@ class WebWorker {
     }
 
     async getPreparedBookFile(bookUid, format = '', preference = 'original') {
-        const {link, downFileName, size} = await this.getBookLink(bookUid);
+        const bookLink = await this.getBookLink(bookUid);
+        const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
+        if (!rows.length)
+            throw new Error('404 Файл не найден');
+        return await this.prepareBookFile(bookLink, rows[0], format, preference);
+    }
+
+    async prepareBookFile({link, downFileName, size}, book, format = '', preference = 'original') {
         const hash = path.basename(link);
         const gzipFile = `${this.config.bookDir}/${hash}`;
         const rawFile = `${gzipFile}.raw`;
@@ -6378,13 +6545,9 @@ class WebWorker {
         await utils.touchFile(gzipFile);
         await utils.touchFile(rawFile);
 
-        let rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
-        if (!rows.length)
-            throw new Error('404 Файл не найден');
-
         let preparedFile = rawFile;
         let preparedFileName = downFileName;
-        const sourceFormat = String(rows[0].ext || '').toLowerCase();
+        const sourceFormat = String(book.ext || '').toLowerCase();
         const selected = bookFormats.resolve(sourceFormat, this.config, preference, format);
         const targetFormat = selected === 'raw' ? '' : selected;
 
@@ -6395,7 +6558,7 @@ class WebWorker {
                 format: targetFormat,
                 sourceFileName: downFileName,
                 downFileName,
-                book: rows[0],
+                book,
                 config: this.config,
                 unsupportedMessage: `Неподдерживаемый формат отправки: ${targetFormat}`,
                 disabledMessage: 'Конвертация книг отключена в текущем образе.',
@@ -6411,7 +6574,7 @@ class WebWorker {
             this.scheduleCacheClean('после обновления книжного кэша');
 
         return {
-            book: rows[0],
+            book,
             rawFile: preparedFile,
             downFileName: preparedFileName,
         };
@@ -6982,7 +7145,7 @@ class WebWorker {
                 if (!bookFormats.canRead(book.ext, this.config))
                     throw new Error('Для чтения EPUB включите конвертацию в FB2 в настройках сервера.');
                 const generation = this.libraryAssetGeneration;
-                const prepared = await this.getPreparedBookFile(bookUid, 'fb2');
+                const prepared = await this.prepareBookFile(bookInfo, rows[0], 'fb2');
                 const infoFile = `${prepared.rawFile}.reader-info.json`;
                 let info = await fs.readJson(infoFile).catch(() => null);
                 if (!info || info.version !== 'epub-reader-v2' || info.coverFile && !await fs.pathExists(path.join(this.config.bookDir, info.coverFile))) {
@@ -7449,21 +7612,19 @@ class WebWorker {
             try {
                 while (this.myState != ssNormal)
                     await utils.sleep(1000);
-
-                if (this.remoteLib) {
-                    await this.remoteLib.downloadInpxFile();
-                }
-
-                const newInpxHash = await this.inpxHashCreator.getHash();
-
-                const dbConfig = await this.dbConfig();
-                const currentInpxHash = (dbConfig.inpxHash ? dbConfig.inpxHash : '');
-
-                if (newInpxHash !== currentInpxHash) {
-                    log('inpx file: changes found, recreating DB');
-                    await this.recreateDb();
+                const refresh = this.indexStartupCheck || this.indexRefresh;
+                if (refresh) {
+                    await refresh;
                 } else {
-                    //log('inpx file: no changes');
+                    if (this.remoteLib)
+                        await this.remoteLib.downloadInpxFile();
+
+                    const newInpxHash = await this.inpxHashCreator.getHash();
+                    const dbConfig = await this.dbConfig();
+                    if (newInpxHash !== dbConfig.inpxHash) {
+                        log('inpx file: changes found, recreating DB');
+                        await this.recreateDb();
+                    }
                 }
             } catch(e) {
                 log(LM_ERR, `periodicCheckInpx: ${e.message}`);

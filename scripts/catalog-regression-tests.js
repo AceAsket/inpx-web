@@ -23,8 +23,7 @@ async function database(task) {
 }
 
 function searcher(db) {
-    const value = Object.create(DbSearcher.prototype);
-    Object.assign(value, {db, closed: false, searchFlag: 0});
+    const value = new DbSearcher({queryCacheEnabled:false}, db);
     value.recStruct = ['author', 'title', 'folder', 'file', 'ext', 'lang', 'libid'].map(field => ({field, type: 'S'}));
     value.recStruct.push({field: 'del', type: 'N'});
     const cache = new Map();

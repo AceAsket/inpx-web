@@ -12,10 +12,14 @@ const enruArr = (ruAlphabet + enAlphabet).split('');
 const titleSearchLeadingChars = ['«', '"', "'", '„', '“', '”', '‘', '’', '`', '(', '[', '{'];
 const copyDedupeVersion = 'copy-dedupe-v5-catalog-words';
 const ratingSelection = Symbol('ratingSelection');
+const orderedScanThreshold = 8192;
+const reorderedIndexFields = ['author', 'series', 'title', 'genre', 'date', 'librate'];
+const earlyPageSize = 256;
 
 class DbSearcher {
-    constructor(config, db) {
+    constructor(config, db, dbPath = `${config.dataDir}/db`) {
         this.config = config;
+        this.dbPath = dbPath;
         this.queryCacheMemSize = this.config.queryCacheMemSize;
         this.queryCacheDiskSize = this.config.queryCacheDiskSize;
         const diskMb = Number(config.queryCacheDiskMb ?? 64);
@@ -27,6 +31,7 @@ class DbSearcher {
         this.db = db;
 
         this.searchFlag = 0;
+        this.bookSearches = new Map();
         this.timer = null;
         this.closed = false;
 
@@ -498,7 +503,7 @@ class DbSearcher {
     }
 
     async fillBookIdMap(from) {
-        const data = await fs.readFile(`${this.config.dataDir}/db/${from}_id.map`, 'utf-8');
+        const data = await fs.readFile(`${this.dbPath}/${from}_id.map`, 'utf-8');
 
         const idMap = JSON.parse(data);
         idMap.arr = new Uint32Array(idMap.arr);
@@ -793,264 +798,385 @@ class DbSearcher {
     }
 
     async bookSearchIds(query) {
+        if (this.closed)
+            throw new Error('DbSearcher closed');
+
+        this.searchFlag++;
+        try {
+            return (await this.findBookSearch(query)).ids;
+        } finally {
+            this.searchFlag--;
+        }
+    }
+
+    async findBookSearch(query, earlyPages = false) {
         query = await this.prepareRatingQuery(query);
-        const queryKey = this.queryKey(query);
-        const bookKey = `book-search-ids-v2-formats-${queryKey}`;
-        let bookIds = await this.getCached(bookKey);
+        const bookKey = this.bookSearchKey(query);
+        const pageKey = `${bookKey}:first-${earlyPageSize}`;
+        // An early-page cache hit must not check the full disk cache first.
+        const warmPages = earlyPages && this.queryCacheEnabled && this.memCache.get(pageKey);
+        if (warmPages) return warmPages;
 
-        if (bookIds === null) {
-            const db = this.db;
-            const filterBySearch = (bookField, searchValue) => {
-                if (searchValue[0] !== '~') searchValue = searchValue.toLowerCase();
-                //особая обработка префиксов
-                if (searchValue == emptyFieldValue) {
-                    return `(row.${bookField} === '' || row.${bookField}.indexOf(${db.esc(emptyFieldValue)}) === 0)`;
-                } else if (searchValue[0] == '=') {
-
-                    searchValue = searchValue.substring(1);
-                    return `(row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)}) === 0)`;
-                } else if (searchValue[0] == '*') {
-
-                    searchValue = searchValue.substring(1);
-                    return `(row.${bookField} && row.${bookField}.toLowerCase().indexOf(${db.esc(searchValue)}) >= 0)`;
-                } else if (searchValue[0] == '#') {
-
-                    searchValue = searchValue.substring(1);
-                    return `(row.${bookField} === '' || (!enru.has(row.${bookField}.toLowerCase()[0]) && row.${bookField}.toLowerCase().indexOf(${db.esc(searchValue)}) >= 0))`;
-                } else if (searchValue[0] == '~') {//RegExp
-                    searchValue = searchValue.substring(1);
-                    utils.checkSearchRegExp(searchValue);
-
-                    return `
-                        (() => {
-                            const re = new RegExp(${db.esc(searchValue)}, 'i');
-                            return re.test(row.${bookField});
-                        })()
-                    `;
-                } else if (['title', 'author', 'series', 'keywords'].includes(bookField)) {
-                    return require('../../shared/CatalogSearch').expression(`row.${bookField}`, searchValue);
-                } else {
-                    return `(row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)}) >= 0 ` +
-                        `&& row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)} + ${db.esc(maxUtf8Char)}) <= 0)`;
-                }
-            };
-
-            const checks = ['true'];
-            if (query.sourceId) {
-                const sourceId = String(query.sourceId || '').trim();
-                checks.push(`(row.sourceId || '') === ${db.esc(sourceId)}`);
-            }
-            for (const f of this.recStruct) {
-                if (query[f.field]) {
-                    let searchValue = query[f.field];
-                    if (f.field === 'date' && !/^[=*#~]/.test(searchValue)) {
-                        const [from, to] = searchValue.split(',');
-                        if (from) checks.push(`row.date >= ${db.esc(from)}`);
-                        if (to) checks.push(`row.date <= ${db.esc(to)}`);
-                        continue;
-                    }
-                    if (f.field === 'genre' && !/^[=*#~]/.test(searchValue)) {
-                        const genres = searchValue.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
-                        checks.push(`String(row.genre || '').toLowerCase().split(',').some(value => ${db.esc(genres)}.includes(value.trim()) || (value === '' && ${genres.includes(emptyFieldValue)}))`);
-                        continue;
-                    }
-                    if (f.field === 'librate' && searchValue.includes(',')) {
-                        const rates = searchValue.split(',').map(Number);
-                        if (rates.some(value => !Number.isFinite(value))) throw new Error('Некорректный фильтр оценки');
-                        checks.push(`${db.esc(rates)}.includes(row.librate)`);
-                        continue;
-                    }
-                    if (f.type === 'S') {
-                        if (['lang', 'ext'].includes(f.field) && (searchValue.includes(',') || f.field === 'ext' && searchValue.includes('|')) && !/^[=*#~]/.test(searchValue)) {
-                            const values = searchValue.split(f.field === 'ext' ? /[,|]/ : ',').map(value => value.trim().toLowerCase()).filter(Boolean);
-                            checks.push(`(${db.esc(values)}.includes(String(row.${f.field} || '').toLowerCase())
-                                || (${values.includes(emptyFieldValue)} && !row.${f.field}))`);
-                        } else {
-                            checks.push(filterBySearch(f.field, searchValue));
-                        }
-                    } if (f.type === 'N') {
-                        const v = searchValue.split('..');
-
-                        if (v.length == 1) {
-                            searchValue = parseInt(searchValue, 10);
-                            if (isNaN(searchValue))
-                                throw new Error(`Wrong query param, ${f.field}=${searchValue}`);
-
-                            checks.push(`row.${f.field} === ${searchValue}`);
-                        } else {
-                            const from = parseInt(v[0] || '0', 10);
-                            const to = parseInt(v[1] || '0', 10);
-                            if (isNaN(from) || isNaN(to))
-                                throw new Error(`Wrong query param, ${f.field}=${searchValue}`);
-
-                            checks.push(`row.${f.field} >= ${from} && row.${f.field} <= ${to}`);
-                        }
-                    }
-                }
-            }
-
-            const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
-            const hasNarrowingFilter = !!String(query.sourceId || '').trim()
-                || this.recStruct.some(f => f.field !== 'del' && !!query[f.field]);
-            // The indexed catalogue uses | for formats; direct book predicates also accept commas.
-            // Explicit expressions stay in checkBook rather than becoming literal index keys.
-            const indexedQuery = {};
-            const fields = new Set(this.recStruct.map(field => field.field));
-            const hasTable = async table => {
-                if (!this.candidateTables) this.candidateTables = new Map();
-                if (!this.candidateTables.has(table)) this.candidateTables.set(table,await db.tableExists({table}));
-                return this.candidateTables.get(table);
-            };
-            for (const field of ['title','author','series']) {
-                if (fields.has(field) && query[field] && await hasTable(field)
-                    && (/^[=*#~?]/.test(query[field]) || await hasTable('word')))
-                    indexedQuery[field] = query[field];
-            }
-            for (const field of ['genre','lang','ext','date','del','librate']) {
-                const value = String(query[field] || '');
-                if (!fields.has(field) || !value || !await hasTable(field)) continue;
-                if (field === 'del' || field === 'librate') {
-                    if (!/^\d+(?:,\d+)*$/.test(value) || field === 'del' && value.includes(',')) continue;
-                } else if (/^[=*#~]/.test(value)) {
-                    if (['lang','ext'].includes(field) && value.startsWith('=') && !/[,|]/.test(value)) {
-                        indexedQuery[field] = value.slice(1).toLowerCase();
-                    }
-                    continue;
-                }
-                indexedQuery[field] = ['genre','lang','ext'].includes(field)
-                    ? value.toLowerCase().split(field === 'ext' ? /[,|]/ : ',').map(part => part.trim()).join(field === 'ext' ? '|' : ',') : value;
-            }
-            if (query.sourceId && await hasTable('source')) indexedQuery.sourceId = query.sourceId;
-            let candidateIds = hideCopies && hasNarrowingFilter
-                ? await this.bookSearchIds(Object.assign({}, query, {hideCopies: false}))
-                : Object.keys(indexedQuery).length ? await this.selectBookIds(indexedQuery,{bookPredicates:true}) : null;
-            if (query[ratingSelection]) {
-                const selected = new Set(query[ratingSelection].ids);
-                candidateIds = candidateIds ? candidateIds.filter(id => selected.has(id)) : query[ratingSelection].ids;
-            }
-            const iterator = candidateIds ? db.esc(Array.from(candidateIds)) : '@all()';
-            const rows = await db.select({
-                table: 'book',
-                rawResult: true,
-                where: `
-                    const enru = new Set(${db.esc(enruArr)});
-                    const hideCopies = ${hideCopies ? 'true' : 'false'};
-
-                    const checkBook = (row) => {
-                        return ${checks.join(' && ')};
-                    };
-
-                    const normalizeKeyPart = (value) => String(value || '').trim().toLowerCase().replace(/\\s+/g, ' ');
-
-                    const authorKey = (value) => normalizeKeyPart(value)
-                        .split(/[;,\\n]/)
-                        .map(author => author.trim().split(/\\s+/).slice(0, 2).join(' '))
-                        .filter(Boolean)
-                        .join('|');
-
-                    const dedupeKey = (row) => {
-                        const sourceKey = hideCopies ? '' : (row.sourceId || '');
-
-                        if (hideCopies) {
-                            const titleKey = normalizeKeyPart(row.title);
-                            const mainAuthorKey = authorKey(row.author);
-
-                            if (titleKey && mainAuthorKey)
-                                return 'copy:' + mainAuthorKey + '|' + titleKey;
-                            if (titleKey)
-                                return 'copy-title:' + titleKey;
-                        }
-
-                        if (row.libid && !row.folder && !row.file)
-                            return ['libid', sourceKey, row.sourcelib || '', row.libid, row.ext || ''].join(':');
-
-                        const parts = [
-                            sourceKey,
-                            row.folder || '',
-                            row.file || '',
-                            row.ext || '',
-                            String(row.insno || 0),
-                        ].map(normalizeKeyPart);
-
-                        if (parts.some(Boolean))
-                            return 'file:' + parts.join('|');
-
-                        return [
-                            'meta',
-                            sourceKey,
-                            row.author || '',
-                            row.series || '',
-                            String(row.serno || 0),
-                            row.title || '',
-                            String(row.size || 0),
-                            row.ext || '',
-                        ].map(normalizeKeyPart).join('|');
-                    };
-
-                    const rowScore = (row) => {
-                        let score = 0;
-                        if (!row.del)
-                            score += 1000;
-                        if (row.librate)
-                            score += row.librate * 100;
-                        if (row.ext === 'fb2')
-                            score += 20;
-                        if (row.size)
-                            score += Math.min(row.size, 100000000) / 1000000;
-
-                        return score;
-                    };
-
-                    const pickBetterRow = (current, next) => {
-                        const currentScore = current.score;
-                        const nextScore = next.score;
-
-                        if (nextScore !== currentScore)
-                            return (nextScore > currentScore ? next : current);
-
-                        return (next.id < current.id ? next : current);
-                    };
-
-                    const deduped = new Map();
-                    for (const id of ${iterator}) {
-                        const row = @unsafeRow(id);
-                        if (!checkBook(row))
-                            continue;
-
-                        const key = dedupeKey(row);
-                        const existing = deduped.get(key);
-                        // Keep only the sort keys, ID and preference score. Holding
-                        // full rows here would pin decoded blocks through a scan.
-                        const candidate = {id:row.id, author:row.author, series:row.series,
-                            serno:row.serno, title:row.title, score:rowScore(row)};
-                        deduped.set(key, existing ? pickBetterRow(existing, candidate) : candidate);
-                    }
-
-                    const result = Array.from(deduped.values());
-
-                    result.sort((a, b) => {
-                        let cmp = a.author.localeCompare(b.author);
-                        if (cmp === 0 && (a.series || b.series)) {
-                            cmp = (a.series && b.series ? a.series.localeCompare(b.series) : (a.series ? -1 : 1));
-                        }
-                        if (cmp === 0)
-                            cmp = a.serno - b.serno;
-                        if (cmp === 0)
-                            cmp = a.title.localeCompare(b.title);
-
-                        return cmp;
-                    });
-
-                    return new Uint32Array(result.map(row => row.id));
-                `
-            });
-
-            bookIds = rows[0].rawResult;
-    
-            await this.putCached(bookKey, bookIds);
+        const prefixSearch = this.bookSearches.get(pageKey);
+        if (earlyPages && prefixSearch) return prefixSearch.result;
+        const fullSearch = this.bookSearches.get(bookKey);
+        if (fullSearch) return fullSearch.result;
+        // A full ranking also serves first pages. Upgrade an in-flight prefix
+        // only until it starts the scan, so early pages can finish independently.
+        if (prefixSearch && (prefixSearch.full || !prefixSearch.scanning)) {
+            prefixSearch.full = true;
+            return prefixSearch.result;
         }
 
-        return bookIds;
+        const key = earlyPages ? pageKey : bookKey;
+        const search = {full:!earlyPages, scanning:false};
+        search.result = this.loadBookSearch(query, bookKey, pageKey, search);
+        this.bookSearches.set(key, search);
+        try {
+            return await search.result;
+        } finally {
+            this.bookSearches.delete(key);
+        }
+    }
+
+    bookSearchKey(query) {
+        // An explicit whitespace-only source filters for records without a source.
+        const explicitEmptySource = query.sourceId && !String(query.sourceId).trim();
+        return `book-search-ids-v2-formats-${this.queryKey(query)}${explicitEmptySource ? ':no-source' : ''}`;
+    }
+
+    async loadBookSearch(query, bookKey, pageKey, search) {
+        const bookIds = await this.getCached(bookKey);
+        if (bookIds !== null) return {ids:bookIds, totalFound:bookIds.length};
+        if (!search.full) {
+            const saved = await this.getCached(pageKey);
+            if (!search.full && saved !== null) return saved;
+        }
+
+        search.scanning = true;
+        const result = await this.scanBookSearch(query, search.full ? 0 : earlyPageSize);
+        if (result.ids.length === result.totalFound)
+            await this.putCached(bookKey, result.ids);
+        else
+            await this.putCached(pageKey, result);
+        return result;
+    }
+
+    async scanBookSearch(query, prefixLimit) {
+        const db = this.db;
+        const predicates = [];
+        const filterBySearch = (bookField, searchValue) => {
+            if (searchValue[0] !== '~') searchValue = searchValue.toLowerCase();
+            //особая обработка префиксов
+            if (searchValue == emptyFieldValue) {
+                return `(row.${bookField} === '' || row.${bookField}.indexOf(${db.esc(emptyFieldValue)}) === 0)`;
+            } else if (searchValue[0] == '=') {
+
+                searchValue = searchValue.substring(1);
+                return `(row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)}) === 0)`;
+            } else if (searchValue[0] == '*') {
+
+                searchValue = searchValue.substring(1);
+                return `(row.${bookField} && row.${bookField}.toLowerCase().indexOf(${db.esc(searchValue)}) >= 0)`;
+            } else if (searchValue[0] == '#') {
+
+                searchValue = searchValue.substring(1);
+                return `(row.${bookField} === '' || (!enru.has(row.${bookField}.toLowerCase()[0]) && row.${bookField}.toLowerCase().indexOf(${db.esc(searchValue)}) >= 0))`;
+            } else if (searchValue[0] == '~') {//RegExp
+                searchValue = searchValue.substring(1);
+                utils.checkSearchRegExp(searchValue);
+
+                const name = `predicate${predicates.length}`;
+                predicates.push(`const ${name} = new RegExp(${db.esc(searchValue)}, 'i');`);
+                return `${name}.test(row.${bookField})`;
+            } else if (['title', 'author', 'series', 'keywords'].includes(bookField)) {
+                const name = `predicate${predicates.length}`;
+                predicates.push(`const ${name} = ${require('../../shared/CatalogSearch').matcherSource(db.esc(searchValue))};`);
+                return `${name}(row.${bookField})`;
+            } else {
+                return `(row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)}) >= 0 ` +
+                    `&& row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)} + ${db.esc(maxUtf8Char)}) <= 0)`;
+            }
+        };
+
+        const checks = ['true'];
+        if (query.sourceId) {
+            const sourceId = String(query.sourceId || '').trim();
+            checks.push(`(row.sourceId || '') === ${db.esc(sourceId)}`);
+        }
+        for (const f of this.recStruct) {
+            if (query[f.field]) {
+                let searchValue = query[f.field];
+                if (f.field === 'date' && !/^[=*#~]/.test(searchValue)) {
+                    const [from, to] = searchValue.split(',');
+                    if (from) checks.push(`row.date >= ${db.esc(from)}`);
+                    if (to) checks.push(`row.date <= ${db.esc(to)}`);
+                    continue;
+                }
+                if (f.field === 'genre' && !/^[=*#~]/.test(searchValue)) {
+                    const genres = searchValue.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+                    const name = `predicate${predicates.length}`;
+                    predicates.push(`const ${name} = new Set(${db.esc(genres)});`);
+                    checks.push(`String(row.genre || '').toLowerCase().split(',').some(value => ${name}.has(value.trim()) || (value === '' && ${genres.includes(emptyFieldValue)}))`);
+                    continue;
+                }
+                if (f.field === 'librate' && searchValue.includes(',')) {
+                    const rates = searchValue.split(',').map(Number);
+                    if (rates.some(value => !Number.isFinite(value))) throw new Error('Некорректный фильтр оценки');
+                    checks.push(`${db.esc(rates)}.includes(row.librate)`);
+                    continue;
+                }
+                if (f.type === 'S') {
+                    if (['lang', 'ext'].includes(f.field) && (searchValue.includes(',') || f.field === 'ext' && searchValue.includes('|')) && !/^[=*#~]/.test(searchValue)) {
+                        const values = searchValue.split(f.field === 'ext' ? /[,|]/ : ',').map(value => value.trim().toLowerCase()).filter(Boolean);
+                        checks.push(`(${db.esc(values)}.includes(String(row.${f.field} || '').toLowerCase())
+                            || (${values.includes(emptyFieldValue)} && !row.${f.field}))`);
+                    } else {
+                        checks.push(filterBySearch(f.field, searchValue));
+                    }
+                } if (f.type === 'N') {
+                    const v = searchValue.split('..');
+
+                    if (v.length == 1) {
+                        searchValue = parseInt(searchValue, 10);
+                        if (isNaN(searchValue))
+                            throw new Error(`Wrong query param, ${f.field}=${searchValue}`);
+
+                        checks.push(`row.${f.field} === ${searchValue}`);
+                    } else {
+                        const from = parseInt(v[0] || '0', 10);
+                        const to = parseInt(v[1] || '0', 10);
+                        if (isNaN(from) || isNaN(to))
+                            throw new Error(`Wrong query param, ${f.field}=${searchValue}`);
+
+                        checks.push(`row.${f.field} >= ${from} && row.${f.field} <= ${to}`);
+                    }
+                }
+            }
+        }
+
+        const hideCopies = query.hideCopies === true || query.hideCopies === 'true' || query.hideCopies === '1';
+        const hasNarrowingFilter = !!String(query.sourceId || '').trim()
+            || this.recStruct.some(f => f.field !== 'del' && !!query[f.field]);
+        // The indexed catalogue uses | for formats; direct book predicates also accept commas.
+        // Explicit expressions stay in checkBook rather than becoming literal index keys.
+        const indexedQuery = {};
+        const fields = new Set(this.recStruct.map(field => field.field));
+        const hasTable = async table => {
+            if (!this.candidateTables) this.candidateTables = new Map();
+            if (!this.candidateTables.has(table)) this.candidateTables.set(table,await db.tableExists({table}));
+            return this.candidateTables.get(table);
+        };
+        for (const field of ['title','author','series']) {
+            if (fields.has(field) && query[field] && await hasTable(field)
+                && (/^[=*#~?]/.test(query[field]) || await hasTable('word')))
+                indexedQuery[field] = query[field];
+        }
+        for (const field of ['genre','lang','ext','date','del','librate']) {
+            const value = String(query[field] || '');
+            if (!fields.has(field) || !value || !await hasTable(field)) continue;
+            if (field === 'del' || field === 'librate') {
+                if (!/^\d+(?:,\d+)*$/.test(value) || field === 'del' && value.includes(',')) continue;
+            } else if (/^[=*#~]/.test(value)) {
+                if (['lang','ext'].includes(field) && value.startsWith('=') && !/[,|]/.test(value)) {
+                    indexedQuery[field] = value.slice(1).toLowerCase();
+                }
+                continue;
+            }
+            indexedQuery[field] = ['genre','lang','ext'].includes(field)
+                ? value.toLowerCase().split(field === 'ext' ? /[,|]/ : ',').map(part => part.trim()).join(field === 'ext' ? '|' : ',') : value;
+        }
+        if (query.sourceId && await hasTable('source')) indexedQuery.sourceId = query.sourceId;
+        const rankPhysicalCopiesFirst = hideCopies && hasNarrowingFilter;
+        const cachedPhysicalIds = rankPhysicalCopiesFirst
+            ? await this.getCached(this.bookSearchKey({...query, hideCopies:false}))
+            : null;
+        let candidateIds = cachedPhysicalIds
+            ?? (Object.keys(indexedQuery).length ? await this.selectBookIds(indexedQuery,{bookPredicates:true}) : null);
+        if (query[ratingSelection] && !cachedPhysicalIds) {
+            const selected = new Set(query[ratingSelection].ids);
+            candidateIds = candidateIds ? candidateIds.filter(id => selected.has(id)) : query[ratingSelection].ids;
+        }
+        const scanInTableOrder = candidateIds && candidateIds.length >= orderedScanThreshold
+            && (cachedPhysicalIds || query[ratingSelection] || reorderedIndexFields.some(field => indexedQuery[field]));
+        const idsExpression = candidateIds ? db.esc(Array.from(candidateIds)) : '';
+        const iterator = scanInTableOrder || !candidateIds ? '@all()' : idsExpression;
+        const rows = await db.select({
+            table: 'book',
+            rawResult: true,
+            where: `
+                const enru = new Set(${db.esc(enruArr)});
+                const hideCopies = ${hideCopies ? 'true' : 'false'};
+                const rankPhysicalCopiesFirst = ${rankPhysicalCopiesFirst && !cachedPhysicalIds};
+                ${predicates.join('\n')}
+                ${scanInTableOrder ? `
+                    // Wide indexed results may be in title or author order;
+                    // following them can repeatedly reload the same book blocks.
+                    const candidates = ${idsExpression};
+                    const candidateOrder = new Map();
+                    for (let index = candidates.length - 1; index >= 0; index--)
+                        candidateOrder.set(candidates[index], index);
+                ` : ''}
+
+                const checkBook = (row) => {
+                    return ${checks.join(' && ')};
+                };
+
+                const normalizeKeyPart = (value) => String(value || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+
+                const authorKey = (value) => normalizeKeyPart(value)
+                    .split(/[;,\\n]/)
+                    .map(author => author.trim().split(/\\s+/).slice(0, 2).join(' '))
+                    .filter(Boolean)
+                    .join('|');
+
+                const dedupeKey = (row, mergeSources) => {
+                    const sourceKey = mergeSources ? '' : (row.sourceId || '');
+
+                    if (mergeSources) {
+                        const titleKey = normalizeKeyPart(row.title);
+                        const mainAuthorKey = authorKey(row.author);
+
+                        if (titleKey && mainAuthorKey)
+                            return 'copy:' + mainAuthorKey + '|' + titleKey;
+                        if (titleKey)
+                            return 'copy-title:' + titleKey;
+                    }
+
+                    if (row.libid && !row.folder && !row.file)
+                        return ['libid', sourceKey, row.sourcelib || '', row.libid, row.ext || ''].join(':');
+
+                    const parts = [
+                        sourceKey,
+                        row.folder || '',
+                        row.file || '',
+                        row.ext || '',
+                        String(row.insno || 0),
+                    ].map(normalizeKeyPart);
+
+                    if (parts.some(Boolean))
+                        return 'file:' + parts.join('|');
+
+                    return [
+                        'meta',
+                        sourceKey,
+                        row.author || '',
+                        row.series || '',
+                        String(row.serno || 0),
+                        row.title || '',
+                        String(row.size || 0),
+                        row.ext || '',
+                    ].map(normalizeKeyPart).join('|');
+                };
+
+                const rowScore = (row) => {
+                    let score = 0;
+                    if (!row.del)
+                        score += 1000;
+                    if (row.librate)
+                        score += row.librate * 100;
+                    if (row.ext === 'fb2')
+                        score += 20;
+                    if (row.size)
+                        score += Math.min(row.size, 100000000) / 1000000;
+
+                    return score;
+                };
+
+                const pickBetterRow = (current, next) => {
+                    const currentScore = current.score;
+                    const nextScore = next.score;
+
+                    if (nextScore !== currentScore)
+                        return (nextScore > currentScore ? next : current);
+
+                    return (next.id < current.id ? next : current);
+                };
+
+                const compareBookFields = (a, b) => {
+                    let cmp = a.author.localeCompare(b.author);
+                    if (cmp === 0 && (a.series || b.series)) {
+                        cmp = (a.series && b.series ? a.series.localeCompare(b.series) : (a.series ? -1 : 1));
+                    }
+                    if (cmp === 0)
+                        cmp = a.serno - b.serno;
+                    if (cmp === 0)
+                        cmp = a.title.localeCompare(b.title);
+
+                    return cmp;
+                };
+                const compareBooks = (a, b) => compareBookFields(a, b) || a.order - b.order;
+
+                let deduped = new Map();
+                let position = 0;
+                for (const id of ${iterator}) {
+                    if (++position % 1024 === 0)
+                        await new Promise(resolve => setImmediate(resolve));
+                    const order = ${scanInTableOrder ? 'candidateOrder.get(id)' : 'position'};
+                    if (order === undefined) continue;
+                    const row = @unsafeRow(id);
+                    if (!checkBook(row))
+                        continue;
+
+                    const key = dedupeKey(row, hideCopies && !rankPhysicalCopiesFirst);
+                    const existing = deduped.get(key);
+                    const score = rowScore(row);
+                    if (existing && !(score > existing.score || score === existing.score && row.id < existing.id)) {
+                        existing.order = Math.min(existing.order, order);
+                        continue;
+                    }
+                    // Keep only the sort keys, ID and preference score. Holding
+                    // full rows here would pin decoded blocks through a scan.
+                    const candidate = {id:row.id, author:row.author, series:row.series,
+                        serno:row.serno, title:row.title, score, order:existing ? Math.min(existing.order, order) : order};
+                    if (rankPhysicalCopiesFirst && !String(row.title || '').trim())
+                        candidate.copyKey = dedupeKey(row, true);
+                    // Stable sort used the first matching occurrence of each
+                    // key, even when a later record won deduplication.
+                    deduped.set(key, candidate);
+                }
+
+                let compare = compareBooks;
+                if (rankPhysicalCopiesFirst) {
+                    // The original two-pass search collapsed physical copies,
+                    // sorted their winners, then merged copies across sources.
+                    // Keep the first rank of each merged group for stable ties.
+                    const merged = new Map();
+                    for (const [key, row] of deduped) {
+                        deduped.delete(key);
+                        // A titled result already has all fields needed for its
+                        // copy key. Keep a separate rank only when it differs.
+                        const copyKey = row.copyKey ?? dedupeKey(row, true);
+                        const existing = merged.get(copyKey);
+                        if (!existing) {
+                            merged.set(copyKey, row);
+                            continue;
+                        }
+                        const previousFirst = existing.firstCopy || existing;
+                        const first = compareBooks(previousFirst, row) < 0 ? previousFirst : row;
+                        const winner = pickBetterRow(existing, row);
+                        winner.firstCopy = first === winner ? null : first;
+                        merged.set(copyKey, winner);
+                    }
+                    deduped = merged;
+                    compare = (a, b) => compareBookFields(a, b) || compareBooks(a.firstCopy || a, b.firstCopy || b);
+                }
+
+                const prefixLimit = ${db.esc(prefixLimit)};
+                let ranked;
+                if (prefixLimit && deduped.size > prefixLimit) {
+                    const createTopRanked = ${require('./DiscoverySelection').createTopRanked.toString()};
+                    const top = createTopRanked(prefixLimit, compare);
+                    for (const row of deduped.values()) top.add(row);
+                    ranked = top.ranked();
+                } else {
+                    ranked = Array.from(deduped.values()).sort(compare);
+                }
+                const ids = Uint32Array.from(ranked, row => row.id);
+                return {ids, totalFound:deduped.size};
+            `
+        });
+        return rows[0].rawResult;
     }
 
     //неоптимизированный поиск по всем книгам, по всем полям
@@ -1063,12 +1189,12 @@ class DbSearcher {
         try {
             const db = this.db;
 
-            const ids = await this.bookSearchIds(query);
-
-            const totalFound = ids.length;            
             let limit = (query.limit ? query.limit : 100);
             limit = (limit > maxLimit ? maxLimit : limit);
             const offset = (query.offset ? query.offset : 0);
+            const earlyPages = Number.isSafeInteger(limit) && limit > 0
+                && Number.isSafeInteger(offset) && offset >= 0 && offset + limit <= earlyPageSize;
+            const {ids, totalFound} = await this.findBookSearch(query, earlyPages);
 
             const slice = ids.slice(offset, offset + limit);
 
@@ -1418,6 +1544,7 @@ class DbSearcher {
     }
 
     async close() {
+        this.closed = true;
         while (this.searchFlag > 0) {
             await utils.sleep(50);
         }
@@ -1429,7 +1556,6 @@ class DbSearcher {
             this.timer = null;
         }
 
-        this.closed = true;
         await this.ratingIndex?.close?.();
         await this.diskCacheQueue?.catch(() => {});
         this.diskCacheItems?.clear();

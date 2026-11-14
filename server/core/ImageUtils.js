@@ -1,14 +1,18 @@
 const fs = require('fs-extra');
 const path = require('path');
-const {runProcess} = require('./ConversionRuntime');
+const {runProcess, deadline: conversionDeadline} = require('./ConversionRuntime');
 const imageRuntime = require('./ImageRuntime');
+const resourceRuntime = require('./ResourceRuntime');
+const {isResourceError} = require('./ResourcePolicy');
 
 const utils = require('./utils');
 const externalTools = require('./ExternalTools');
+const jxlContainer = Buffer.from('0000000c4a584c200d0a870a', 'hex');
+let nativeImage;
 
 function contentType(buf) {
     if ((buf.length >= 2 && buf[0] == 0xff && buf[1] == 0x0a)
-        || (buf.length >= 12 && buf.subarray(0, 12).equals(Buffer.from('0000000c4a584c200d0a870a', 'hex'))))
+        || buf.subarray(0, jxlContainer.length).equals(jxlContainer))
         return 'image/jxl';
 
     if (buf.length >= 8 && buf[0] == 0x89 && buf[1] == 0x50 && buf[2] == 0x4e && buf[3] == 0x47)
@@ -58,7 +62,80 @@ function shouldSkipToolError(err, command) {
 }
 
 async function jxlToImage(buf, tempDir, toolDirs = [], converterPaths = null, extension = 'png', maxOutputBytes = 0) {
-    return await imageRuntime.run(() => decodeJxl(buf, tempDir, toolDirs, converterPaths, extension, maxOutputBytes));
+    return await imageRuntime.run(async() => {
+        // The preview path checks the output size on disk before allocating a Buffer.
+        if (process.env.INPX_JXL_DECODER === 'native' && !maxOutputBytes) {
+            const data = await tryNativeJxl(buf, extension);
+            if (data) return data;
+        }
+        return decodeJxlWithDjxl(buf, tempDir, toolDirs, converterPaths, extension, maxOutputBytes);
+    });
+}
+
+function loadNativeImage() {
+    if (nativeImage === undefined) {
+        try {
+            nativeImage = process.pkg
+                ? module.require(path.join(path.dirname(process.execPath), 'bin', 'inpx-jxl.node'))
+                : module.require('@napi-rs/image');
+        } catch (_) {
+            nativeImage = null;
+        }
+    }
+    return nativeImage;
+}
+
+// Preserve byte-for-byte JPEG recovery when the source contains jbrd. Walk
+// top-level boxes rather than matching bytes inside the compressed codestream.
+function canEncodeJpegNatively(buf) {
+    if (!buf.subarray(0, jxlContainer.length).equals(jxlContainer)) return true;
+    for (let offset = jxlContainer.length; offset < buf.length;) {
+        if (buf.length - offset < 8) return false;
+        if (buf.toString('ascii', offset + 4, offset + 8) === 'jbrd') return false;
+        let size = buf.readUInt32BE(offset);
+        if (size === 0) break;
+        if (size === 1) {
+            if (buf.length - offset < 16 || buf.readUInt32BE(offset + 8) !== 0) return false;
+            size = buf.readUInt32BE(offset + 12);
+            if (size < 16) return false;
+        }
+        if (size < 8 || size > buf.length - offset) return false;
+        offset += size;
+    }
+    return true;
+}
+
+async function tryNativeJxl(buf, extension) {
+    const png = extension === 'png';
+    if (!png && !canEncodeJpegNatively(buf)) return null;
+    const image = loadNativeImage();
+    if (!image) return null;
+
+    const signal = resourceRuntime.signal();
+    const deadline = Math.min(conversionDeadline?.() ?? Infinity, Date.now() + resourceRuntime.settings.taskTimeoutMs);
+    const checkDeadline = () => {
+        if (signal?.aborted)
+            throw Object.assign(new Error('Проверка отменена'), {code:'ABORT_ERR'});
+        if (Date.now() >= deadline)
+            throw Object.assign(new Error('Превышено время декодирования JXL'), {code:'INPX_CONVERSION_TIMEOUT'});
+    };
+    try {
+        return await resourceRuntime.run(async() => {
+            checkDeadline();
+            const transformer = new image.Transformer(buf);
+            // Keep the slot until native work actually finishes, including when
+            // the caller cancels after the decoder has started.
+            const data = png
+                ? await transformer.png({compressionType:image.CompressionType.Fast, filterType:image.FilterType.Adaptive})
+                : await transformer.jpeg(95);
+            checkDeadline();
+            return contentType(data) === (png ? 'image/png' : 'image/jpeg') ? data : null;
+        }, {kind:'images', signal, deadline});
+    } catch (error) {
+        checkDeadline();
+        if (isResourceError(error)) throw error;
+        return null;
+    }
 }
 
 async function readDecodedImage(file, maximum) {
@@ -67,7 +144,7 @@ async function readDecodedImage(file, maximum) {
     return await fs.readFile(file);
 }
 
-async function decodeJxl(buf, tempDir, toolDirs, converterPaths, extension, maxOutputBytes) {
+async function decodeJxlWithDjxl(buf, tempDir, toolDirs, converterPaths, extension, maxOutputBytes) {
     const id = utils.randomHexString(30);
     const inputFile = `${tempDir}/${id}.jxl`;
     const outputFile = `${tempDir}/${id}.${extension}`;

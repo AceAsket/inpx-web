@@ -218,6 +218,30 @@ async function testProxyProfileBindingAndIdentityChange() {
         });
 }
 
+async function testWebSocketCatalogAuthorizationUsesProfileIdentity() {
+    for (const sso of [false, true]) {
+        const options = sso ? {authMode:'proxy', proxyBindProfile:true, trustProxy:true, trustedProxyCidrs:['127.0.0.1/32']}
+            : {allowAnonymousAccess:false};
+        await fixture({...options, extendedSearch:true}, async({worker, alice, bob, session, connect}) => {
+            const browser = session();
+            const headers = {cookie:browser.cookie};
+            if (sso) headers['Remote-User'] = alice.login;
+            else browser.value.profileAccessToken = worker.createProfileSession(alice.id);
+
+            worker.bookSearch = async() => ({totalFound:1, found:[]});
+            worker.getCatalogDiscovery = () => ({suggest:async() => ({groups:[]})});
+            worker.readingListStore.load = async() => assert.fail('Catalog authorization cloned all profiles');
+            const call = await connect(headers);
+            const search = await call({action:'bookSearch', userId:alice.id, query:{title:'book'}});
+            assert.strictEqual(search.totalFound, 1, search.error);
+            const suggest = await call({action:'catalog-suggest', userId:alice.login, options:{query:'book'}});
+            assert.deepStrictEqual(suggest.groups, [], suggest.error);
+            assert.match((await call({action:'bookSearch', userId:bob.id, query:{title:'book'}})).error,
+                sso ? /закреплён/ : /need_profile_login/);
+        });
+    }
+}
+
 async function testLegacyAccessAndGlobalOpdsCredentials() {
     await fixture({}, async({request, connect, bob}) => {
         assert.strictEqual((await request('/book/fixture.txt')).status, 200);
@@ -302,4 +326,4 @@ async function testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices() {
 }
 
 module.exports = [testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
-    testProxyProfileBindingAndIdentityChange, testLegacyAccessAndGlobalOpdsCredentials];
+    testProxyProfileBindingAndIdentityChange, testWebSocketCatalogAuthorizationUsesProfileIdentity, testLegacyAccessAndGlobalOpdsCredentials];

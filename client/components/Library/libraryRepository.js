@@ -4,8 +4,9 @@ const READING_TTL = 30000;
 const DISCOVERY_TTL = 15 * 60 * 1000;
 
 function emptyState() {
-    return {revision: 0, reading: null, lists: [], shelves: [], recommendations: [], readingLoading: false, shelvesLoading: false,
+    return {revision: 0, reading: null, lists: [], shelves: [], externalShelves: [], recommendations: [], readingLoading: false, shelvesLoading: false,
         readingError: '', listsError: '', shelvesError: '', readingLoginRequired: false, shelvesLoginRequired: false,
+        externalShelvesLoading: false, externalShelvesLoaded: false, externalShelvesError: '', externalShelvesLoginRequired: false,
         recommendationsLoading: false, recommendationsLoaded: false, recommendationsError: '', recommendationsLoginRequired: false,
         readingLoaded: false, shelvesLoaded: false, locked: false};
 }
@@ -19,6 +20,7 @@ class LibraryRepository {
         this.state = emptyState();
         this.contextKey = '';
         this.epoch = 0;
+        this.discoveryRevision = 0;
         this.pending = {};
         this.loadedAt = {};
     }
@@ -40,15 +42,20 @@ class LibraryRepository {
             this.discoveryKey = '';
             this.patch({...emptyState(), revision: this.epoch, locked: !personalAccess(config, settings)});
         }
-        const discoveryKey = JSON.stringify([discoveryOptions(settings), config.discovery?.enabled, settings.showDiscoverySimilar !== false,
+        const discoveryKey = JSON.stringify([discoveryOptions(settings), config.discovery, settings.showDiscoveryExternal !== false,
+            config.clientApi?.features?.includes('separateExternalDiscovery'), settings.showDiscoverySimilar !== false,
             config.currentUserProfile?.personalRecommendationsEnabled !== false]);
         if (discoveryKey !== this.discoveryKey) {
             this.discoveryKey = discoveryKey;
+            this.discoveryRevision++;
             delete this.loadedAt.shelves;
             delete this.pending.shelves;
             delete this.loadedAt.recommendations;
             delete this.pending.recommendations;
-            this.patch({shelvesLoading: false, recommendationsLoading: false,
+            delete this.loadedAt.externalShelves;
+            delete this.pending.externalShelves;
+            this.patch({shelvesLoading: false, externalShelves: [], externalShelvesLoading: false, externalShelvesLoaded: false,
+                externalShelvesError: '', externalShelvesLoginRequired: false, recommendationsLoading: false,
                 ...(settings.showDiscoverySimilar === false || config.currentUserProfile?.personalRecommendationsEnabled === false ? {recommendations: []} : {})});
         }
     }
@@ -58,8 +65,8 @@ class LibraryRepository {
         if (this.pending[kind]) return this.pending[kind];
         if (!force && this.loadedAt[kind] !== undefined && this.now() - this.loadedAt[kind] < ttl) return;
         const epoch = this.epoch;
-        const discoveryKey = this.discoveryKey;
-        const current = () => epoch === this.epoch && (!['shelves','recommendations'].includes(kind) || discoveryKey === this.discoveryKey);
+        const discoveryRevision = this.discoveryRevision;
+        const current = () => epoch === this.epoch && (kind === 'reading' || discoveryRevision === this.discoveryRevision);
         this.patch({[`${kind}Loading`]: true, [`${kind}Error`]: ''});
         const pending = (async() => {
             try {
@@ -86,7 +93,7 @@ class LibraryRepository {
     requireLogin(kind) {
         delete this.loadedAt[kind];
         this.patch({[`${kind}LoginRequired`]: true, [`${kind}Error`]: '', [`${kind}Loaded`]: false,
-            ...(kind === 'reading' ? {reading: null, lists: [], listsError: ''} : kind === 'recommendations' ? {recommendations: []} : {shelves: []})});
+            ...(kind === 'reading' ? {reading: null, lists: [], listsError: ''} : {[kind]: []})});
     }
 
     loadReading(force = false) {
@@ -112,8 +119,21 @@ class LibraryRepository {
             return Promise.resolve();
         }
         return this.run('shelves', force, DISCOVERY_TTL, async() => {
-            const result = await this.api.getDiscoveryShelves(discoveryOptions(this.settings), {suppressProfileLogin: true});
+            const options = discoveryOptions(this.settings);
+            if (this.config.clientApi?.features?.includes('separateExternalDiscovery')) options.includeExternal = false;
+            const result = await this.api.getDiscoveryShelves(options, {suppressProfileLogin: true});
             return {shelves: normalizeShelves(Array.isArray(result.shelves) ? result.shelves : [])};
+        });
+    }
+
+    loadExternalShelves(force = false) {
+        if (!this.config.clientApi?.features?.includes('separateExternalDiscovery') || this.config.discovery?.enabled === false
+            || !this.config.discovery?.externalSource || this.config.discovery.externalSource === 'none'
+            || this.settings.showDiscoveryExternal === false)
+            return Promise.resolve();
+        return this.run('externalShelves', force, DISCOVERY_TTL, async() => {
+            const result = await this.api.getDiscoveryShelves({externalOnly:true, externalLimit:8, forceRefresh:force}, {suppressProfileLogin:true});
+            return {externalShelves: normalizeShelves(Array.isArray(result.shelves) ? result.shelves : [])};
         });
     }
 
@@ -132,7 +152,13 @@ class LibraryRepository {
     }
 
     loadHome({freshReading = false, freshShelves = false} = {}) {
-        return Promise.all([this.loadReading(freshReading), this.loadShelves(freshShelves), this.loadRecommendations(freshShelves)]);
+        const reading = this.loadReading(freshReading);
+        const shelves = this.loadShelves(freshShelves);
+        const discoveryRevision = this.discoveryRevision;
+        return Promise.all([reading, shelves, this.loadRecommendations(freshShelves),
+            shelves.then(() => {
+                if (discoveryRevision === this.discoveryRevision) return this.loadExternalShelves(freshShelves);
+            })]);
     }
 }
 

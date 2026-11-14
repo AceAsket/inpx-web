@@ -7,6 +7,7 @@ const ReadingListStore = require('../server/core/ReadingListStore');
 const {FolderIndexer, fingerprint} = require('../server/core/FolderIndexer');
 const DbCreator = require('../server/core/DbCreator');
 const DbSearcher = require('../server/core/DbSearcher');
+const ImportWriteBudget = require('../server/core/ImportWriteBudget');
 
 async function temporary(fn) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-library-improvements-'));
@@ -100,7 +101,7 @@ async function testFolderIncrementalSearchAndSmartShelves() {
     await temporary(async dir => {
         const library = path.join(dir, 'library');
         await fs.ensureDir(library);
-        await fs.writeFile(path.join(library, 'a.fb2'), fb2('Начало пути'));
+        await fs.writeFile(path.join(library, 'a.fb2'), fb2('Начало пути').replace('<genre>sf</genre>', '<genre>sf</genre><genre>sf</genre>'));
         await fs.writeFile(path.join(library, 'b.fb2'), fb2('Приключения волшебника', 2));
         const config = {dataDir: path.join(dir, 'first'), inpxFilterFile: path.join(dir, 'no-filter.json'),
             libDir: library, dbVersion: 1, dbCacheSize: 10, fullOptimization: false,
@@ -113,6 +114,8 @@ async function testFolderIncrementalSearchAndSmartShelves() {
             await new DbCreator(config).run(db, () => {});
             await db.openAll();
             const rows = await db.select({table: 'book'});
+            const [genre] = await db.select({table:'genre'});
+            assert.deepStrictEqual(genre.bookIds, rows.map(book => book.id), 'Repeated fields add one posting per book');
             uid = rows.find(book => book.title.includes('волшебника'))._uid;
             bookId = rows.find(book => book._uid === uid).id;
             const searcher = new DbSearcher(config, db);
@@ -218,29 +221,85 @@ async function testFolderBootAndFailedRefreshKeepsIndex() {
         await fs.writeFile(path.join(config.libDir, 'one.fb2'), fb2('Первая книга'));
         await require('../server/core/LibrarySources').resolveLibrarySources(config);
         const worker = Object.create(require('../server/core/WebWorker').prototype);
-        worker.config = config; worker.setMyState = state => { worker.myState = state; }; worker.logServerStats = () => {};
+        let state = {};
+        worker.config = config;
+        worker.wState = {set:patch => {state = {...state, ...patch};}, get:() => state};
+        worker.logServerStats = () => {};
         worker.inpxHashCreator = new (require('../server/core/InpxHashCreator'))(config);
         try {
+            const boot = new AbortController();
+            const setState = worker.wState.set;
+            worker.wState.set = patch => {
+                setState(patch);
+                if (patch.job === 'load inpx') boot.abort();
+            };
+            await worker.loadOrCreateDb(false, 0, boot.signal);
+            assert.strictEqual(boot.signal.aborted, true);
+            assert.strictEqual(worker.db, undefined);
+            assert.deepStrictEqual(await fs.readdir(config.dataDir), [], 'Aborting startup cleans the unpublished index');
+            worker.wState.set = setState;
+
             await worker.loadOrCreateDb();
             assert.strictEqual(worker.myState, 'normal');
-            assert.strictEqual((await worker.db.select({table: 'book'})).length, 1);
+            const [first] = await worker.db.select({table:'book'});
+            const original = worker.db;
+
+            await fs.writeFile(path.join(config.libDir, 'one.fb2'), fb2('Первое новое название'));
             await fs.writeFile(path.join(config.libDir, 'two.fb2'), fb2('Вторая книга'));
-            await worker.recreateDb();
-            assert.strictEqual((await worker.db.select({table: 'book'})).length, 2);
-            assert.strictEqual((await worker.dbConfig()).indexUpdate.recordsChanged, 1);
+            const refresh = worker.recreateDb();
+            assert.strictEqual(worker.recreateDb(), refresh, 'Concurrent rebuild requests join one job');
+            assert.strictEqual(worker.db, original);
+            assert.deepStrictEqual(await worker.getIndexStatus().then(({ready, updating}) => ({ready, updating})), {ready:true, updating:true});
+            assert.strictEqual((await worker.db.select({table:'book'})).length, 1);
+            await refresh;
+            const books = await worker.db.select({table:'book'});
+            assert.strictEqual(books.length, 2);
+            const updated = books.find(book => book.file === first.file);
+            assert.strictEqual(updated._uid, first._uid);
+            assert.strictEqual(updated.id, first.id);
+            assert.strictEqual(updated.title, 'Первое новое название');
+            assert.strictEqual((await worker.dbConfig()).indexUpdate.recordsChanged, 2);
+
+            const activeDb = worker.db, generation = worker.libraryAssetGeneration;
             await fs.writeFile(path.join(config.libDir, 'broken.fb2'), 'broken XML');
             await worker.recreateDb();
             assert.strictEqual(worker.myState, 'normal');
+            assert.strictEqual(worker.db, activeDb);
+            assert.strictEqual(worker.libraryAssetGeneration, generation);
             assert.strictEqual((await worker.db.select({table: 'book'})).length, 2, 'A failed refresh keeps the old working catalog');
+            assert.strictEqual((await worker.getIndexStatus()).updating, false);
+            assert.deepStrictEqual((await fs.readdir(config.dataDir)).filter(name => name.startsWith('db.')), []);
             await fs.remove(path.join(config.libDir, 'broken.fb2'));
+
+            const dbPath = path.join(config.dataDir, 'db');
+            const open = worker.openCatalogue.bind(worker);
+            let failPublication = true;
+            worker.openCatalogue = async file => {
+                if (file === dbPath && failPublication) {
+                    failPublication = false;
+                    throw new Error('test: failed to reopen staged index');
+                }
+                return open(file);
+            };
+            await fs.writeFile(path.join(config.libDir, 'three.fb2'), fb2('Третья книга'));
+            await worker.recreateDb();
+            assert.strictEqual(failPublication, false);
+            assert.strictEqual((await worker.getIndexStatus()).ready, true);
+            assert.strictEqual((await worker.db.select({table:'book'})).length, 2, 'Reopen failure rolls back the directory swap');
+            delete worker.openCatalogue;
+
             await worker.dbSearcher.close(); worker.dbSearcher = null; await worker.closeDb();
-            await fs.move(path.join(config.dataDir, 'db'), path.join(config.dataDir, 'db.previous'));
+            await fs.move(dbPath, path.join(config.dataDir, 'db.previous'));
             await worker.loadOrCreateDb();
-            assert.strictEqual((await worker.db.select({table: 'book'})).length, 2, 'Startup recovers an interrupted index swap');
+            assert.strictEqual((await worker.db.select({table: 'book'})).length, 2, 'Startup recovers the previous index and serves it immediately');
+            await worker.indexStartupCheck;
+            assert.strictEqual((await worker.db.select({table:'book'})).length, 3, 'Startup schedules a rebuild when the source changed');
             await worker.dbSearcher.close(); worker.dbSearcher = null; await worker.closeDb();
             await fs.writeFile(path.join(config.dataDir, 'db', 'title', 'state'), '0');
             await worker.loadOrCreateDb();
-            assert.strictEqual((await worker.db.select({table: 'book'})).length, 2, 'A damaged auxiliary table triggers a full rebuild');
+            const restored = await worker.db.select({table:'book'});
+            assert.strictEqual(restored.length, 3, 'A damaged auxiliary table triggers a full rebuild');
+            assert.strictEqual(restored.find(book => book.file === first.file)._uid, first._uid, 'Recovery retains previous book identity');
             assert.strictEqual((await worker.dbConfig()).indexUpdate.incremental, false);
         } finally {
             if (worker.dbSearcher) await worker.dbSearcher.close();
@@ -317,7 +376,34 @@ async function testTitleWordMatchesSurviveListFilters() {
         } finally { await db.unlock(); }
     });
 }
-module.exports = [testReadingAndAudioRevisionConflicts, testTitleWordMatchesSurviveListFilters, testReaderBookReplacement, testFolderIncrementalSearchAndSmartShelves, testBatchDownloadScopeAndArchive, testFolderBootAndFailedRefreshKeepsIndex, testFolderEpubAndConcurrentChanges];
+
+async function testImportWriteBudget() {
+    const deltas = new Map();
+    const table = {tableRowsFile:{deltas}, fileError:''};
+    const budget = new ImportWriteBudget({table:new Map([['book',table]])}, 'book', true);
+    budget.limit = 64;
+    const delta = {blockRows:[[1,'книга']], blockIndex:[[1,1]], blockList:[]};
+    deltas.set(1,delta);
+    assert.strictEqual(budget.pendingBytes(),42);
+    await budget.wait();
+
+    delta.blockRows.push([1,'Ю'.repeat(16)]);
+    assert.strictEqual(budget.pendingBytes(),74, 'An existing delta can grow during defragmentation');
+    let resumed = false;
+    const waiting = budget.wait().then(() => {resumed = true;});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(resumed,false);
+    deltas.delete(1);
+    await waiting;
+    assert.strictEqual(budget.pendingBytes(),0);
+
+    deltas.set(2,{blockRows:[], blockIndex:[[1,0],[2,0]], blockList:[[1,1],[2,1]]});
+    const failed = budget.wait();
+    table.fileError = 'test: save failed';
+    await assert.rejects(failed, /test: save failed/);
+}
+
+module.exports = [testReadingAndAudioRevisionConflicts, testTitleWordMatchesSurviveListFilters, testReaderBookReplacement, testFolderIncrementalSearchAndSmartShelves, testBatchDownloadScopeAndArchive, testFolderBootAndFailedRefreshKeepsIndex, testFolderEpubAndConcurrentChanges, testImportWriteBudget];
 if (require.main === module) {
     require('../server/core/Logger');
     (async() => {

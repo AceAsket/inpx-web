@@ -25,7 +25,7 @@ function safeArchiveEntry(entry) {
     return {sourceName: entry.name, name: safeEntryName(rawName), isDirectory: entry.isDirectory};
 }
 
-async function restore(bookFile, config = {}, loadImage = async() => null) {
+async function restore(bookFile, config = {}, loadImage = async() => null, prepareImages = null) {
     const reader = new ZipReader(config);
     let stagingDir = '';
     try {
@@ -115,14 +115,19 @@ async function restore(bookFile, config = {}, loadImage = async() => null) {
                 await reader.extractToFile(sourceName, file);
             staged.set(name, file);
         }
+        const missingImages = [];
         for (const image of images) {
             const existing = staged.get(image.name);
-            if (existing && (await fs.stat(existing)).size)
-                continue;
+            if (!existing || !(await fs.stat(existing)).size)
+                missingImages.push(image);
+        }
+        if (prepareImages && missingImages.length >= 3)
+            await prepareImages(missingImages);
+        for (const image of missingImages) {
             const data = await loadImage(image.num, image.name);
             if (!data || !data.length)
                 throw new Error(`Не найдено изображение EPUB: ${image.name} (номер ${image.num})`);
-            const file = existing || path.join(stagingDir, `entry-${staged.size}`);
+            const file = staged.get(image.name) || path.join(stagingDir, `entry-${staged.size}`);
             await fs.writeFile(file, data);
             staged.set(image.name, file);
         }

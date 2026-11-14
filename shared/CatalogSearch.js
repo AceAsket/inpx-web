@@ -12,12 +12,32 @@ function root(word) {
     const result = word.replace(/(?:иями|ями|ами|ого|ому|ыми|ими|ах|ях|ов|ев|ая|ое|ую|ые|ых|ой|ей|ий|ый|ам|ям|ом|ем|а|я|ы|и|у|ю|е|о|ь)$/u, '');
     return result.length >= 4 ? result : word;
 }
-function match(value, query) {
-    const wanted = words(query), available = words(value);
-    return wanted.length > 0 && wanted.every(word => available.some(candidate => candidate.startsWith(word) || root(candidate).startsWith(root(word))));
+function createMatcher(query) {
+    const wanted = words(query).map(word => ({word, stem: root(word)}));
+    if (!wanted.length) return () => false;
+    return value => {
+        const available = words(value);
+        return wanted.every(({word, stem}) =>
+            available.some(candidate => candidate.startsWith(word) || root(candidate).startsWith(stem)));
+    };
 }
+
+function match(value, query) {
+    return createMatcher(query)(value);
+}
+
 // Jemba runs query expressions in a separate worker; only these pure functions travel there.
 function expression(value, query) {
-    return `(() => {const normalize = ${normalize.toString()}; const words = ${words.toString()}; const root = ${root.toString()}; const match = ${match.toString()}; return match(${value}, ${JSON.stringify(query)});})()`;
+    const escapedQuery = JSON.stringify(query ?? '').replace(/@/g, '\\x40');
+    return `${matcherSource(escapedQuery)}(${value})`;
 }
-module.exports = {normalize, words, root, match, expression};
+function matcherSource(escapedQuery) {
+    return `(() => {
+        const normalize = ${normalize.toString()};
+        const words = ${words.toString()};
+        const root = ${root.toString()};
+        const createMatcher = ${createMatcher.toString()};
+        return createMatcher(${escapedQuery});
+    })()`;
+}
+module.exports = {normalize, words, root, match, expression, matcherSource};

@@ -44,6 +44,31 @@ async function zipDirectoryToFile(sourceDir, targetFile) {
     });
 }
 
+async function bundleJxlDecoder() {
+    const binDir = path.join(outDir, 'bin');
+    await fs.ensureDir(binDir);
+    const targets = {
+        win: 'win32-x64-msvc',
+        linux: 'linux-x64-gnu',
+        'linux-arm64': 'linux-arm64-gnu',
+        macos: 'darwin-x64',
+    };
+    const target = targets[platform];
+    if (!target) return;
+
+    let binding;
+    try {
+        binding = require.resolve(`@napi-rs/image-${target}`);
+    } catch (error) {
+        if (error.code !== 'MODULE_NOT_FOUND') throw error;
+        console.warn(`Optional JXL addon for ${target} is unavailable, using djxl`);
+        return;
+    }
+    await fs.copy(binding, path.join(binDir, 'inpx-jxl.node'));
+    await fs.copy(path.join(path.dirname(require.resolve('@napi-rs/image')), 'LICENSE'),
+        path.join(binDir, 'LICENSE.inpx-jxl'));
+}
+
 async function build() {
     if (!platform)
         throw new Error(`Please set platform`);
@@ -51,6 +76,7 @@ async function build() {
     require('./patch-pkg')();
 
     await fs.emptyDir(outDir);
+    await bundleJxlDecoder();
 
     // Добавляем README в релиз.
     let readme = await fs.readFile(path.resolve(__dirname, '../README.md'), 'utf-8');

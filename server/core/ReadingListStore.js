@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const profilePassword = require('./ProfilePassword');
 const bookFormats = require('../../shared/BookFormats');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
+const progressJournal = require('./ReaderProgressJournal');
 
 const readerPreferencesVersion = 2;
 
@@ -19,6 +20,7 @@ class ReadingListStore {
     constructor(config) {
         this.config = config;
         this.file = path.join(config.dataDir, 'reading-lists.json');
+        this.progressFile = path.join(config.dataDir, progressJournal.fileName);
         this.assets = new (require('./ReaderAssets').ReaderAssets)(config);
     }
 
@@ -832,7 +834,9 @@ class ReadingListStore {
         await this.ensureData();
         const stat = await fs.stat(this.file);
         const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-        if (this.loaded?.bootstrapped && this.loaded.stamp === stamp && !this.config.resetAdminPassword)
+        const journalStamp = await progressJournal.stamp(this.progressFile);
+        if (this.loaded?.bootstrapped && this.loaded.stamp === stamp
+            && this.loaded.journal.stamp === journalStamp && !this.config.resetAdminPassword)
             return this.loaded.data;
         this.loaded = null;
         let raw = null;
@@ -852,6 +856,8 @@ class ReadingListStore {
             reset = true;
         }
 
+        const checkpoint = raw?.[progressJournal.checkpointField];
+        const journal = await progressJournal.replay(this.progressFile, checkpoint, raw, journalStamp);
         const assetsChanged = await this.assets.externalize(raw);
         const {data, changed} = await this.applyAdminBootstrap(raw);
         if (changed || assetsChanged)
@@ -859,7 +865,7 @@ class ReadingListStore {
         this.config.resetAdminPassword = false;
         // After a write the stamp read above is stale: the next load reads the file again.
         if (!changed && !assetsChanged && !reset)
-            this.loaded = {stamp, data, bootstrapped:true};
+            this.loaded = {stamp, data, checkpoint, journal, bootstrapped:true};
         return this.loaded?.data || data;
     }
 
@@ -991,20 +997,26 @@ class ReadingListStore {
     }
 
     async writeDataNow(data) {
-        await writeFileAtomic(this.file, JSON.stringify(data, null, 2));
+        const checkpoint = crypto.randomBytes(16).toString('hex');
+        await writeFileAtomic(this.file, JSON.stringify({...data, [progressJournal.checkpointField]: checkpoint}, null, 2));
         const stat = await fs.stat(this.file);
         const admin = data.users?.find(user => user.isAdmin || user.id === 'admin');
         const bootstrapped = !!(admin?.isAdmin && admin.login && admin.passwordHash
             && admin.opdsEnabled === false && admin.opdsAuthEnabled === false && data.users[0] === admin);
-        this.loaded = {stamp:`${stat.ino}:${stat.size}:${stat.mtimeMs}`, data:structuredClone(data), bootstrapped};
+        this.loaded = {stamp:`${stat.ino}:${stat.size}:${stat.mtimeMs}`, data:structuredClone(data), checkpoint,
+            journal: {stamp: await progressJournal.stamp(this.progressFile), offset: 0}, bootstrapped};
         // Only scan assets when the reference set changes, never on each page turn.
         await this.assets.prune(data).catch(error => logWarning(`Reader background cleanup: ${error.message}`));
     }
 
     async currentPersistedData() {
         const stat = await fs.stat(this.file);
-        if (this.loaded?.stamp === `${stat.ino}:${stat.size}:${stat.mtimeMs}`) return this.loaded.data;
-        return JSON.parse(await fs.readFile(this.file, 'utf8'));
+        const journalStamp = await progressJournal.stamp(this.progressFile);
+        if (this.loaded?.stamp === `${stat.ino}:${stat.size}:${stat.mtimeMs}` && this.loaded.journal.stamp === journalStamp)
+            return this.loaded.data;
+        const data = JSON.parse(await fs.readFile(this.file, 'utf8'));
+        await progressJournal.replay(this.progressFile, data?.[progressJournal.checkpointField], data, journalStamp);
+        return data;
     }
 
     async exportSnapshot() {
@@ -1051,17 +1063,17 @@ class ReadingListStore {
 
     async resolveUser(userId = '', options = {}) {
         const data = await this.load();
+        return {data, user: this.findUser(data.users, userId, options)};
+    }
+
+    findUser(users, userId, {strict = false} = {}) {
         const normalizedUserId = String(userId || '').trim();
-        const user = data.users.find((item) => item.id === normalizedUserId)
-            || data.users.find((item) => item.login === normalizedUserId)
-            || (!normalizedUserId || !options.strict ? data.users[0] : null);
+        const user = users.find((item) => item.id === normalizedUserId)
+            || users.find((item) => item.login === normalizedUserId)
+            || (!normalizedUserId || !strict ? users[0] : null);
         if (!user)
             throw new Error('Пользователь не найден');
-
-        return {
-            data,
-            user,
-        };
+        return user;
     }
 
     ensureUniqueUserName(users, name, excludeId = '') {
@@ -1088,11 +1100,15 @@ class ReadingListStore {
     }
 
     async getUser(userId = '') {
-        const data = await this.loadSnapshot();
-        const id = String(userId || '').trim();
-        const user = data.users.find(item => item.id === id) || data.users.find(item => item.login === id) || data.users[0];
-        if (!user) throw new Error('Пользователь не найден');
-        return structuredClone(user);
+        return structuredClone(this.findUser((await this.loadSnapshot()).users, userId));
+    }
+
+    async getUserIdentity(value = '', field = '') {
+        const {users} = await this.loadSnapshot();
+        const user = field ? users.find(item => item[field] === value) : this.findUser(users, value);
+        if (!user) return null;
+        const {id, login, passwordHash} = user;
+        return {id, login, passwordHash};
     }
 
     async findTelegramUser(botId, chatId) {
@@ -1586,19 +1602,15 @@ class ReadingListStore {
     }
 
     async updateReaderProgressNow(userId = '', bookUid = '', patch = {}) {
-        const {data, user} = await this.resolveUser(userId);
-        const target = data.users.find((item) => item.id === user.id);
-        if (!target)
-            throw new Error('Пользователь не найден');
+        const data = await this.loadSnapshot();
+        const target = this.findUser(data.users, userId);
 
         const normalizedBookUid = this.normalizeBookUid(bookUid);
         if (!normalizedBookUid)
             throw new Error('bookUid is empty');
 
-        if (!target.readerProgress || typeof(target.readerProgress) !== 'object')
-            target.readerProgress = {};
-
-        const current = target.readerProgress[normalizedBookUid] || {};
+        const current = Object.hasOwn(target.readerProgress || {}, normalizedBookUid)
+            ? target.readerProgress[normalizedBookUid] : {};
         if (current.relinkedTo)
             return {...current, conflict: true};
         const percent = Number(utilsHasProp(patch, 'percent') ? patch.percent : current.percent);
@@ -1646,8 +1658,8 @@ class ReadingListStore {
             && Number.isFinite(currentTime)
             && patchTime < currentTime
         )
-            return current;
-        target.readerProgress[normalizedBookUid] = {
+            return {...current};
+        const progress = {
             percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
             sectionId,
             pageIndex: Number.isFinite(pageIndex) ? Math.max(0, Math.round(pageIndex)) : 0,
@@ -1658,10 +1670,19 @@ class ReadingListStore {
             generation,
             revision: (Number(current.revision) || 0) + 1,
         };
-        target.updatedAt = this.nowIso();
-
-        await this.save(data);
-        return target.readerProgress[normalizedBookUid];
+        const updatedAt = this.nowIso();
+        const line = Buffer.from(JSON.stringify([target.id, normalizedBookUid, progress, updatedAt]) + '\n');
+        const snapshot = this.loaded;
+        const existingBytes = snapshot?.journal.offset || Buffer.byteLength(snapshot?.checkpoint || '') + 1;
+        if (!snapshot?.checkpoint || existingBytes + line.length > progressJournal.maxBytes) {
+            const next = structuredClone(data);
+            progressJournal.applyProgress(this.findUser(next.users, target.id), normalizedBookUid, progress, updatedAt);
+            await this.save(next);
+        } else {
+            snapshot.journal = await progressJournal.append(this.progressFile, snapshot.checkpoint, snapshot.journal, line);
+            progressJournal.applyProgress(target, normalizedBookUid, progress, updatedAt);
+        }
+        return {...progress};
     }
 
     async relinkReaderBook(userId, bookUid, replacementBookUid, baseRevision) {

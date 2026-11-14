@@ -868,6 +868,7 @@ class Search {
     discoveryShelvesLoading = false;
     discoveryShelvesError = '';
     discoveryShelvesCacheKey = '';
+    discoveryShelvesPendingKey = '';
     discoveryShelvesRequestSeq = 0;
     discoverySimilarExhausted = false;
 
@@ -1501,6 +1502,7 @@ class Search {
         const dbHash = (config.dbConfig && config.dbConfig.inpxHash ? config.dbConfig.inpxHash : this.list.inpxHash || '');
 
         return JSON.stringify({
+            section: this.selectedList,
             dbHash,
             enabled: (discovery.enabled !== false),
             currentUserId: this.currentUserId || '',
@@ -2498,14 +2500,13 @@ class Search {
     async refreshDiscoveryShelves(force = false) {
         if (!this.isSearchRoute(this.$route) || !this.showDiscoveryShelves)
             return;
-        if (this.discoveryShelvesLoading && !force)
-            return;
-
         const cacheKey = this.discoveryShelvesRequestKey;
-        if (!force && this.discoveryShelvesCacheKey === cacheKey)
+        if (!force && (this.discoveryShelvesCacheKey === cacheKey
+            || (this.discoveryShelvesLoading && this.discoveryShelvesPendingKey === cacheKey)))
             return;
 
         const requestSeq = ++this.discoveryShelvesRequestSeq;
+        this.discoveryShelvesPendingKey = cacheKey;
         this.discoveryShelvesLoading = true;
         this.discoveryShelvesError = '';
         try {
@@ -2516,6 +2517,8 @@ class Search {
                 personalSimilarEnabled: this.showDiscoverySimilar,
                 newestLimit: this.discoveryNewestLimit,
                 popularLimit: this.discoveryPopularLimit,
+                ...(this.config.clientApi?.features?.includes('separateExternalDiscovery')
+                    ? {externalOnly: this.selectedList === 'bestsellers', includeExternal: false} : {}),
                 externalLimit: this.externalDiscoveryEffectiveFetchLimit,
                 externalSource: this.activeDiscoveryExternalSource,
                 externalName: this.activeDiscoveryExternalName,
@@ -2524,7 +2527,7 @@ class Search {
                 externalBrowseUrl: this.discoveryExternalGenreUrl,
                 externalBrowseName: this.discoveryExternalGenreName,
             });
-            if (requestSeq === this.discoveryShelvesRequestSeq && this.showDiscoveryShelves) {
+            if (requestSeq === this.discoveryShelvesRequestSeq && this.showDiscoveryShelves && cacheKey === this.discoveryShelvesRequestKey) {
                 this.discoveryShelves = (response && Array.isArray(response.shelves) ? response.shelves : []);
                 this.discoveryShelvesCacheKey = cacheKey;
                 this.recordDiscoveryImpressions(this.discoveryShelves);

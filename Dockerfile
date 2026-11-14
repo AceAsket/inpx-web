@@ -79,6 +79,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 COPY --from=webp-tools /webp-runtime/bin/dwebp /usr/local/bin/dwebp
 COPY --from=webp-tools /webp-runtime/lib/ /usr/local/lib/
 COPY --from=build /app/dist/linux/inpx-web /usr/local/bin/inpx-web
+COPY --from=build /app/dist/linux/bin/ /usr/local/bin/bin/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \

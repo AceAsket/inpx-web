@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs-extra');
+const {crc32} = require('zlib');
 const {runProcess} = require('./ConversionRuntime');
 const StreamUnzip = require('node-stream-zip');
 const externalTools = require('./ExternalTools');
@@ -64,11 +65,11 @@ class ZipReader {
         throw externalTools.createMissingToolError('INPX_MISSING_7Z', externalTools.missingSevenZipMessage());
     }
 
-    parse7zEntries(listing) {
+    parse7zEntries(listing, entriesOnly = false) {
         const result = {};
         let entry = null;
         let index = 0;
-        let inEntries = false;
+        let inEntries = entriesOnly;
 
         const commit = () => {
             if (!entry || !entry.name)
@@ -79,6 +80,7 @@ class ZipReader {
                 isDirectory: !!entry.isDirectory,
                 isLink: !!entry.isLink,
                 size: entry.size,
+                crc: entry.crc,
             };
         };
 
@@ -109,6 +111,8 @@ class ZipReader {
                 entry.name = value;
             else if (key === 'Size')
                 entry.size = Number(value);
+            else if (key === 'CRC')
+                entry.crc = value;
             else if (key === 'Folder')
                 entry.isDirectory = value === '+';
             else if (key === 'Attributes' && /^D/.test(value))
@@ -119,6 +123,61 @@ class ZipReader {
 
         commit();
         return result;
+    }
+
+    // The CLI concatenates selected entries on stdout in archive order. Check
+    // each boundary with the listed size and CRC before handing out any byte.
+    // Returning null lets callers use the existing single-entry path if an
+    // archive or tool cannot provide an unambiguous batch.
+    async tryExtractNumericBatch(names, maxBytes) {
+        this.checkState();
+        const requested = new Set(names);
+        if (!this.uses7z || requested.size < 3 || requested.size > 128
+            || !Number.isSafeInteger(maxBytes) || maxBytes < 1
+            || [...requested].some(name => !/^\d{1,32}\/\d{1,16}$/.test(name)))
+            return null;
+        this.signal?.throwIfAborted();
+
+        let entries;
+        if (this.archiveType === '7z') {
+            const listing = await this.run7zCommand(['l', '-ba', '-slt', '-sccUTF-8', '-spd', '--', this.archiveFile, ...requested],
+                {captureStdout:true, maxOutputBytes:256 * 1024});
+            entries = Object.values(this.parse7zEntries(listing.toString('utf8'), true));
+        } else {
+            const zipEntries = await this.zip.entries();
+            entries = Object.values(zipEntries).filter(entry => requested.has(entry.name)).map(entry => ({
+                ...entry, crc: entry.crc?.toString(16).padStart(8, '0'),
+            }));
+            // The regular ZIP path can already read stored/deflated entries
+            // without spawning 7-Zip.
+            if (entries.some(entry => !this.externalEntry(entry))) return null;
+        }
+
+        const namesSeen = new Set();
+        let totalBytes = 0;
+        for (const entry of entries) {
+            if (!requested.has(entry.name) || namesSeen.has(entry.name) || entry.isDirectory || entry.isLink
+                || !Number.isSafeInteger(entry.size) || entry.size < 0
+                || (entry.size > 0 && !/^[\da-f]{8}$/i.test(entry.crc || '')))
+                return null;
+            totalBytes += entry.size;
+            if (totalBytes > maxBytes || this.maxOutputBytes > 0 && entry.size > this.maxOutputBytes) return null;
+            namesSeen.add(entry.name);
+        }
+        if (entries.length < 3 || !totalBytes) return null;
+        const combined = await this.run7zCommand(['x', '-y', '-bd', '-spd', '-so', '-mmt=1', '--', this.archiveFile, ...namesSeen],
+            {captureStdout:true, maxOutputBytes:totalBytes});
+        if (combined.length !== totalBytes) return null;
+
+        const images = new Map();
+        let offset = 0;
+        for (const entry of entries) {
+            const data = combined.subarray(offset, offset + entry.size);
+            if (entry.size && crc32(data) !== parseInt(entry.crc, 16)) return null;
+            images.set(entry.name, data);
+            offset += entry.size;
+        }
+        return images;
     }
 
     async open(zipFile, zipEntries = true) {

@@ -1,6 +1,6 @@
 const assert=require('assert');
 const Budget=require('../server/core/ClientRequestBudget');
-const {selectDiverseBest}=require('../server/core/DiscoverySelection');
+const {createTopRanked,selectDiverseBest,selectDiverseBestSource}=require('../server/core/DiscoverySelection');
 const WebSocket=require('ws');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
@@ -38,6 +38,25 @@ async function testNativeBudgetReturnsCompatibleRetryInformationAndRecovers(){
     gate.resolve(1);await first;await tick();assert.strictEqual(await budget.run('a','two',()=>2),2);
 }
 
+async function testDiscoveryBudgetReservesCapacityForSearch() {
+    const budget = new Budget({parallel:3, background:2});
+    const hold = deferred();
+    const external = deferred();
+    const remote = budget.run('a', 'external', () => external.promise, undefined, {backgroundLane:'external'});
+    const first = budget.run('a', 'overview', () => hold.promise, undefined, {backgroundLane:'local'});
+    let nextStarted = false;
+    const second = budget.run('b', 'overview', () => {nextStarted = true;}, undefined, {backgroundLane:'local'});
+    assert.equal(await budget.run('a', 'search', () => 'book'), 'book');
+    assert.equal(nextStarted, false);
+    hold.resolve();
+    await Promise.all([first, second]);
+    external.resolve();
+    await remote;
+    await tick();
+    assert.equal(nextStarted, true);
+    assert.equal(budget.active, 0);
+}
+
 function fullSort(rows,compare,limit){
     const selected=[],authors=new Map(),series=new Map();
     for(const row of [...rows.values()].sort(compare)){
@@ -55,11 +74,27 @@ async function testDiscoveryBoundedRankingMatchesFullSortIncludingDiversity(){
             author:kind==='one-author'?'Author':`Author ${random()%45}`,series:`Series ${random()%20}`} ]));
         for(const limit of [1,8,24])assert.deepStrictEqual(selectDiverseBest(rows,compare,limit),fullSort(rows,compare,limit),`${count}/${kind}/${limit}`);
     }
-    const workerFunction=new Function('return ('+selectDiverseBest.toString()+')')();
+    const workerFunction=new Function('return '+selectDiverseBestSource)();
     const rows=new Map(Array.from({length:100000},(_,id)=>[id,{id,rank:random(),author:`Author ${id}`,series:''}]));
     let comparisons=0;
     const result=workerFunction(rows,(a,b)=>{comparisons++;return compare(a,b);},8);
     assert.deepStrictEqual(result,fullSort(rows,compare,8));assert(comparisons<300000,'Ranking a small shelf must not sort the full catalog');
+}
+
+async function testTopRankedKeepsExactSortedPrefixAndInputOrderForTies() {
+    const compare = (a, b) => b.score - a.score
+        || a.title.localeCompare(b.title, 'ru')
+        || a.order - b.order;
+    const titles = ['Книга', 'Вторая книга', 'Книга', 'Третья книга'];
+    const rows = Array.from({length: 15000}, (_, order) => ({
+        order, score: (order * 31) % 9, title: titles[order % titles.length],
+    }));
+    const full = [...rows].sort(compare);
+    for (const limit of [0, 1, 192, 1616, rows.length + 1]) {
+        const top = createTopRanked(limit, compare);
+        for (const row of rows) top.add(row);
+        assert.deepStrictEqual(top.ranked(), full.slice(0, limit));
+    }
 }
 
 function controller(){return Object.create(require('../server/controllers/WebSocketController').prototype);}
@@ -129,7 +164,8 @@ async function testConnectionQrPreservesHttpHttpsAndRootWithoutCredentials(){
 }
 
 module.exports=[testNativeBudgetSharesOnlySameProfileAndBoundsParallelWork,testNativeBudgetDropsDisconnectedQueueAndAllowsLiveCoalescedWaiter,
-    testNativeBudgetReturnsCompatibleRetryInformationAndRecovers,testDiscoveryBoundedRankingMatchesFullSortIncludingDiversity,
+    testNativeBudgetReturnsCompatibleRetryInformationAndRecovers,testDiscoveryBudgetReservesCapacityForSearch,testDiscoveryBoundedRankingMatchesFullSortIncludingDiversity,
+    testTopRankedKeepsExactSortedPrefixAndInputOrderForTies,
     testNativeResumeBindsOnlyValidatedOwnSessionWithoutPassword,testReaderEventsAreOptInProfileScopedAndExcludeTheWriter,
     testMobileHomeOmitsSecretsAndNeverBuildsDiscovery,testDiscoveryConcurrentLoadsShareWorkAndReturnIndependentValues,
     testConnectionQrPreservesHttpHttpsAndRootWithoutCredentials,...require('./reader-audio-cancel-tests')];

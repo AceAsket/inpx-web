@@ -1,6 +1,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const {writeFileAtomic} = require('./FilePersistence');
+const {foldSnapshot} = require('./ReaderProgressJournal');
 
 // Run before configuration migration and before any worker starts writing user data.
 async function prepare(config) {
@@ -27,6 +28,8 @@ async function prepare(config) {
                         throw new Error('Символическая ссылка в данных резервной копии обновления');
                     return true;
                 }});
+                if (name === 'reading-lists.json')
+                    await foldSnapshot(target, path.join(stage, name));
             }
             await writeFileAtomic(path.join(stage, 'manifest.json'), JSON.stringify({
                 createdAt:new Date().toISOString(), targetVersion:config.version,

@@ -12,13 +12,13 @@ const png = Buffer.from('89504e470d0a1a0a', 'hex');
 const jxl = id => Buffer.concat([Buffer.from('ff0a', 'hex'), Buffer.from(String(id))]);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-function isolatedImages(runner, runtime = imageRuntime) {
+function isolatedImages(runner, runtime = imageRuntime, nativeImage = null) {
     const filename = require.resolve('../server/core/ImageUtils');
     const nativeRequire = Module.createRequire(filename);
     const loaded = new Module(filename, module);
     loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
     loaded.require = name => name === './ConversionRuntime' ? {runProcess:runner}
-        : name === './ImageRuntime' ? runtime : nativeRequire(name);
+        : name === './ImageRuntime' ? runtime : name === '@napi-rs/image' ? nativeImage : nativeRequire(name);
     loaded._compile(fs.readFileSync(filename, 'utf8'), filename);
     return loaded.exports;
 }
@@ -177,6 +177,51 @@ async function testPreviewDecoderChecksOutputSizeBeforeBufferingAndKeepsFullRead
     });
 }
 
+async function testNativeJxlUsesSharedBudgetAndFallsBackToDjxl() {
+    const previous = process.env.INPX_JXL_DECODER;
+    process.env.INPX_JXL_DECODER = 'native';
+    try {
+        await temporary(async dir => {
+            const jpeg = Buffer.from('ffd8ff', 'hex'), nativeOutputs = [], fallbackOutputs = [];
+            class Transformer {
+                constructor(input) {this.input = input;}
+                png() {
+                    assert.strictEqual(imageRuntime.active, 1);
+                    assert.strictEqual(require('../server/core/ResourceRuntime').snapshot().kinds.images, 1);
+                    nativeOutputs.push('png');
+                    if (this.input.equals(jxl('error'))) throw new Error('Decoder rejected input');
+                    return png;
+                }
+                jpeg(quality) {
+                    nativeOutputs.push('jpeg');
+                    assert.strictEqual(quality, 95);
+                    return jpeg;
+                }
+            }
+            const native = {Transformer, CompressionType:{Fast:1}, FilterType:{Adaptive:5}};
+            const runner = async(command, [input, output]) => {
+                fallbackOutputs.push(path.extname(output));
+                await fs.writeFile(output, path.extname(output) === '.jpg' ? jpeg : png);
+            };
+            const images = isolatedImages(runner, imageRuntime, native);
+            assert.deepStrictEqual(await images.jxlToPng(jxl('cover'), dir), png);
+            assert.deepStrictEqual(await images.normalizeForEpub(jxl('image'), 'image.jpg', dir), jpeg);
+            assert.deepStrictEqual(await images.jxlToPng(jxl('error'), dir), png);
+            const reconstructible = Buffer.from('0000000c4a584c200d0a870a000000086a627264', 'hex');
+            assert.deepStrictEqual(await images.normalizeForEpub(reconstructible, 'image.jpg', dir), jpeg);
+            assert.deepStrictEqual((await images.normalizeForFb2(jxl('preview'), dir, [], null, png.length)).data, png);
+            assert.deepStrictEqual(await isolatedImages(runner).jxlToPng(jxl('missing-addon'), dir), png);
+            assert.deepStrictEqual(nativeOutputs, ['png', 'jpeg', 'png']);
+            assert.deepStrictEqual(fallbackOutputs, ['.png', '.jpg', '.png', '.png']);
+            assert.deepStrictEqual(await fs.readdir(dir), []);
+        });
+    } finally {
+        if (previous === undefined) delete process.env.INPX_JXL_DECODER;
+        else process.env.INPX_JXL_DECODER = previous;
+    }
+}
+
 module.exports = [testImagesShareBudgetAcrossBooksCoversAndEpub, testImageRuntimeOneSlotDoesNotDeadlockNestedDecoder,
     testImageMapWaitsForWorkersOnFailureAndRecovers, testImageDecoderTimeoutCleansFilesAndReleasesSlot,
-    testQueuedImageJobsKeepTheirOwnRequestContext,testPreviewDecoderChecksOutputSizeBeforeBufferingAndKeepsFullReads];
+    testQueuedImageJobsKeepTheirOwnRequestContext,testPreviewDecoderChecksOutputSizeBeforeBufferingAndKeepsFullReads,
+    testNativeJxlUsesSharedBudgetAndFallsBackToDjxl];

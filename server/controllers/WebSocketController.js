@@ -638,12 +638,15 @@ class WebSocketController {
     }
 
     async getDiscoveryShelves(req, ws) {
+        const externalOnly = req.externalOnly === true && req.recommendationsOnly !== true;
         const result = await this.readWithBudget(req,ws,()=>this.webWorker.getDiscoveryShelvesV2({
             userId: req.userId,
             profileAccessToken: req.profileAccessToken,
             forceRefresh: req.forceRefresh === true,
             personalSimilarEnabled: req.personalSimilarEnabled,
             recommendationsOnly: req.recommendationsOnly === true,
+            externalOnly,
+            includeExternal: req.includeExternal !== false,
             personalLimit: req.personalLimit,
             newestLimit: req.newestLimit,
             popularLimit: req.popularLimit,
@@ -654,7 +657,7 @@ class WebSocketController {
             externalTtlMinutes: req.externalTtlMinutes,
             externalBrowseUrl: req.externalBrowseUrl,
             externalBrowseName: req.externalBrowseName,
-        }));
+        }), {backgroundLane:externalOnly ? 'external-discovery' : 'discovery'});
 
         this.send(result, req, ws);
     }
@@ -866,7 +869,7 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error('bookUid is empty');
 
-        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken, {identityOnly: true});
         const result = await this.webWorker.updateReaderProgress(user.id, req.bookUid, req.progress || {});
         this.send(result, req, ws);
     }
@@ -985,14 +988,14 @@ class WebSocketController {
             indexGeneration:this.webWorker.libraryAssetGeneration||0},req,ws);
     }
 
-    readWithBudget(req,ws,work) {
-        if(!this.clientRequests)this.clientRequests=new (require('../core/ClientRequestBudget'))();
+    readWithBudget(req,ws,work,options) {
+        if(!this.clientRequests)this.clientRequests=new (require('../core/ClientRequestBudget'))({background:2});
         const user=this.webWorker.getProfileSessionUser?.(req.profileAccessToken);
         const identity=user?`profile:${user}`:`guest:${ws.req?.socket?.remoteAddress||'local'}`;
         const payload=_.omit(req,['requestId','accessToken','csrfToken','profileAccessToken','client','__startTime']);
         const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'
             ?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
-        return this.clientRequests.run(identity,JSON.stringify(canonical(payload)),work,()=>ws.readyState===WebSocket.OPEN);
+        return this.clientRequests.run(identity,JSON.stringify(canonical(payload)),work,()=>ws.readyState===WebSocket.OPEN,options);
     }
 
     async logoutUserProfile(req, ws) {

@@ -81,9 +81,11 @@ async function archive(file, entries, sevenZip = false) {
                 await fs.outputFile(path.join(input, name), value);
             for (const command of new ZipReader().sevenZipCommands) {
                 try {
-                    const compression = sevenZip === 'PPMd' ? ['-m0=PPMd', '-ms=on'] : [];
-                    await execFile(command, ['a', '-t7z', '-y', '-bd', ...compression, `${file}.7z`, '.'], {cwd: input, windowsHide: true});
-                    await fs.move(`${file}.7z`, file, {overwrite: true});
+                    const zip = sevenZip === 'ZIP PPMd';
+                    const compression = zip ? ['-mm=PPMd'] : sevenZip === 'PPMd' ? ['-m0=PPMd', '-ms=on'] : [];
+                    const target = `${file}.${zip ? 'zip' : '7z'}`;
+                    await execFile(command, ['a', zip ? '-tzip' : '-t7z', '-y', '-bd', ...compression, target, '.'], {cwd: input, windowsHide: true});
+                    await fs.move(target, file, {overwrite: true});
                     return;
                 } catch (error) { if (error.code !== 'ENOENT') throw error; }
             }
@@ -499,6 +501,142 @@ async function testEpubReusesImageArchiveReadersAndClosesOnFailure() {
     });
 }
 
+async function testEpubBatchesExactNumericImagesInSolidAndPpmdSidecars() {
+    await temporary(async dir => {
+        for (const mode of ['PPMd', 'ZIP PPMd']) {
+            const source = path.join(dir, mode);
+            const config = {libDir: source, tempDir: path.join(source, 'tmp'), bookDir: path.join(source, 'book'), bookPathStatic: '/book'};
+            await Promise.all([config.tempDir, config.bookDir].map(file => fs.ensureDir(file)));
+            const folder = 'collection.zip';
+            const inner = path.join(source, 'inner.epub');
+            const index = [5, 1, 3, 2, 4, 0].map(num => ({id: `OEBPS/${num}.png`, num}));
+            const images = index.map(({num}) => [`12345/${num}`, Buffer.concat([png, Buffer.alloc(150 + num, num)])]);
+            await archive(inner, {...contents, 'FLibraryImageIndex.json': JSON.stringify(index)});
+            await archive(path.join(source, folder), {'12345.epub': await fs.readFile(inner)});
+            const sidecar = path.join(source, 'images', folder);
+            await archive(sidecar, Object.fromEntries([...images, ['12345/60', 'not requested'], ['56789/1', 'another book']]), mode);
+
+            const worker = Object.create(require('../server/core/WebWorker').prototype);
+            worker.config = config; worker.checkMyState = () => {}; worker.scheduleCacheClean = () => {};
+            const record = {_uid: 'book', author: 'Fixture Author', title: 'Images', file: '12345', ext: 'epub', folder};
+            let fileHash;
+            worker.db = {esc: JSON.stringify, select: async({table}) => table === 'book' ? [record] : fileHash ? [fileHash] : [],
+                insert: async({rows}) => { fileHash = rows[0]; }};
+            const runs = [];
+            const original = ZipReader.prototype.run7zCommand;
+            ZipReader.prototype.run7zCommand = function(args, options) {
+                if (this.archiveFile === sidecar && args[0] === 'x') runs.push(args);
+                return original.call(this, args, options);
+            };
+            let result;
+            try {
+                const [first, second] = await Promise.all([
+                    worker.getPreparedBookFile('book', 'epub'),
+                    worker.getPreparedBookFile('book', 'epub'),
+                ]);
+                result = first;
+                assert.strictEqual(first.rawFile, second.rawFile);
+            } finally {
+                ZipReader.prototype.run7zCommand = original;
+            }
+            assert.strictEqual(runs.length, 1, `One image extraction pass with ${mode}`);
+            assert.deepStrictEqual(new Set(runs[0].slice(runs[0].indexOf('--') + 2)), new Set(images.map(([name]) => name)));
+            const reader = new ZipReader();
+            try {
+                await reader.open(result.rawFile);
+                for (const {id, num} of index)
+                    assert.deepStrictEqual(await reader.extractToBuf(id), images.find(([name]) => name === `12345/${num}`)[1]);
+            } finally { await reader.close(); }
+            assert.deepStrictEqual(await fs.readdir(config.tempDir), []);
+        }
+    });
+}
+
+async function testEpubBatchFallsBackOnlyOnUnusableBatch() {
+    await temporary(async dir => {
+        const source = path.join(dir, 'source');
+        const inner = path.join(dir, 'inner.epub');
+        const folder = 'collection.zip';
+        const sidecar = path.join(source, 'images', folder);
+        const imageIndex = [0, 1, 2].map(num => ({id: `OEBPS/${num}.png`, num}));
+        const images = Object.fromEntries(imageIndex.map(({num}) => [`12345/${num}`, png]));
+        await archive(inner, {...contents, 'FLibraryImageIndex.json': JSON.stringify(imageIndex)});
+        await archive(path.join(source, folder), {'12345.epub': await fs.readFile(inner)});
+        await archive(sidecar, images, 'PPMd');
+
+        for (const issue of ['listing', 'crc', 'INPX_RESOURCE_OUTPUT_LIMIT', 'INPX_CONVERSION_TIMEOUT', 'ABORT_ERR']) {
+            const config = {libDir:source, tempDir:path.join(dir, issue, 'tmp'), bookDir:path.join(dir, issue, 'cache'), bookPathStatic:'/book'};
+            await Promise.all([config.tempDir, config.bookDir].map(file => fs.ensureDir(file)));
+            const worker = Object.create(require('../server/core/WebWorker').prototype);
+            worker.config = config; worker.checkMyState = () => {}; worker.scheduleCacheClean = () => {};
+            const book = {_uid:'book', author:'Fixture Author', title:'Images', file:'12345', ext:'epub', folder};
+            worker.db = {esc:JSON.stringify, select:async({table}) => table === 'book' ? [book] : [], insert:async() => {}};
+
+            const original = ZipReader.prototype.run7zCommand;
+            const attempts = [];
+            ZipReader.prototype.run7zCommand = async function(args, options) {
+                const call = () => original.call(this, args, options);
+                if (this.archiveFile !== sidecar) return await call();
+                const kind = args[0] === 'l' ? 'listing' : args.includes('-mmt=1') ? 'batch' : 'single';
+                attempts.push(kind);
+                if (kind === 'listing' && issue === 'listing') return Buffer.from('Unrecognised 7-Zip output');
+                if (kind === 'batch' && issue === 'crc') {
+                    const bytes = await call();
+                    bytes[0] ^= 1;
+                    return bytes;
+                }
+                if (kind === 'batch') throw Object.assign(new Error('7-Zip resource test'), {code:issue});
+                return await call();
+            };
+            try {
+                if (issue === 'listing' || issue === 'crc') {
+                    const result = await worker.getPreparedBookFile('book', 'epub');
+                    const restored = new ZipReader();
+                    try {
+                        await restored.open(result.rawFile);
+                        for (const {id} of imageIndex) assert.deepStrictEqual(await restored.extractToBuf(id), png);
+                    } finally { await restored.close(); }
+                    assert.deepStrictEqual(attempts, issue === 'listing' ? ['listing', 'single', 'single', 'single']
+                        : ['listing', 'batch', 'single', 'single', 'single']);
+                } else {
+                    await assert.rejects(worker.getPreparedBookFile('book', 'epub'), {code:issue});
+                    assert.deepStrictEqual(attempts, ['listing', 'batch']);
+                }
+            } finally {
+                ZipReader.prototype.run7zCommand = original;
+            }
+            assert.deepStrictEqual(await fs.readdir(config.tempDir), []);
+        }
+    });
+}
+
+async function testColdEpubPublishesRawFileBeforeDescription() {
+    await temporary(async dir => {
+        const file = path.join(dir, 'book.epub');
+        await archive(file, contents);
+        const original = await fs.readFile(file);
+        const worker = Object.create(require('../server/core/WebWorker').prototype);
+        worker.config = {libDir:dir, tempDir:path.join(dir, 'tmp'), bookDir:path.join(dir, 'cache'), bookPathStatic:'/book'};
+        await Promise.all([worker.config.tempDir, worker.config.bookDir].map(value => fs.ensureDir(value)));
+        worker.checkMyState = () => {}; worker.scheduleCacheClean = () => {};
+        const record = {_uid:'book', author:'Author', title:'Fixture', file:'book', ext:'epub', folder:''};
+        let hash;
+        worker.db = {esc: JSON.stringify, select:async({table}) => table === 'book' ? [record] : hash ? [hash] : [],
+            insert:async({rows}) => {
+                const prepared = path.join(worker.config.bookDir, rows[0].hash + '.raw');
+                assert.deepStrictEqual(await fs.readFile(prepared), original);
+                hash = rows[0];
+            }};
+        const prepared = await worker.getPreparedBookFile('book', 'epub');
+        assert.deepStrictEqual(await fs.readFile(prepared.rawFile), original);
+        const cache = path.join(worker.config.bookDir, hash.hash);
+        assert.deepStrictEqual(await utils.gunzipBuffer(await fs.readFile(cache)), original);
+        await fs.remove(prepared.rawFile);
+        assert.deepStrictEqual(await fs.readFile((await worker.getPreparedBookFile('book', 'epub')).rawFile), original);
+        assert.deepStrictEqual(await fs.readdir(worker.config.tempDir), []);
+    });
+}
+
 async function testFb2ImagesDecodeInParallelAndKeepOrder() {
     await temporary(async dir => {
         const source = path.join(dir, 'source');
@@ -536,4 +674,5 @@ async function testFb2ImagesDecodeInParallelAndKeepOrder() {
 module.exports = [testAtomicBookCacheFilesAndRecovery, testJxlCodestreamAndContainerImagesAreRecognized, testCompressedEpubDownloadsRestoreImagesAndInvalidateCache,
     testEpubContainersPreserveResourcesAndOrdinaryEpubBytes, testInvalidCompressedEpubDoesNotPublishPartialResults,
     testSameFilenameEpubAndFb2KeepTheirOwnAssetsAndDownloads, testSolidEpubExtractsAllChaptersOnce,
-    testEpubReusesImageArchiveReadersAndClosesOnFailure, testFb2ImagesDecodeInParallelAndKeepOrder];
+    testEpubReusesImageArchiveReadersAndClosesOnFailure, testEpubBatchesExactNumericImagesInSolidAndPpmdSidecars,
+    testEpubBatchFallsBackOnlyOnUnusableBatch, testColdEpubPublishesRawFileBeforeDescription, testFb2ImagesDecodeInParallelAndKeepOrder];

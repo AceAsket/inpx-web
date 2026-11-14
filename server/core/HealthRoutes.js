@@ -139,6 +139,7 @@ module.exports = function initHealthRoutes(app, config, webWorker, security = nu
             ready: ok,
             serverReady: !!config.server.ready,
             indexReady: !!index.ready,
+            updating: index.updating === true,
             state: index.state,
             serverMessage: index.serverMessage,
             jobMessage: index.jobMessage,

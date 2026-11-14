@@ -81,6 +81,54 @@ async function testPersonalRecommendationToggleClearsCachedAndLateResults(){
     repository.setContext({...config,currentUserProfile:{personalRecommendationsEnabled:true}},settings);
     await repository.loadRecommendations();assert.deepEqual(repository.state.recommendations.map(b=>b._uid),['enabled']);
 }
+async function testOverviewPublishesLocalShelvesBeforeExternalFeed() {
+    const {repository, api, config, settings} = fixture();
+    const external = deferred();
+    const calls = [];
+    api.getDiscoveryShelves = async options => {
+        calls.push(options);
+        if (options.externalOnly) return external.promise;
+        if (options.recommendationsOnly) return {shelves: []};
+        return {shelves: [{id:'newest-7d', items:[{_uid:'local'}]}]};
+    };
+    repository.setContext({...config, discovery:{enabled:true, externalSource:'web-page'},
+        clientApi:{features:[...config.clientApi.features, 'separateExternalDiscovery']}}, settings);
+    const pending = repository.loadHome();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(repository.state.shelves[0].books[0]._uid, 'local');
+    assert.equal(repository.state.shelvesLoading, false);
+    assert.equal(repository.state.externalShelvesLoading, true);
+    assert(calls.some(options => options.includeExternal === false));
+    assert(calls.some(options => options.externalOnly === true));
+    repository.setContext({...config, currentUserId:'bob'}, {...settings, currentUserId:'bob'});
+    external.resolve({shelves:[{id:'external-source', items:[{_uid:'late'}]}]});
+    await pending;
+    assert.deepEqual(repository.state.externalShelves, []);
+}
+
+async function testExternalOnlyDiscoveryReusesResolvedSourceAndSkipsLocalWork() {
+    const Worker = require('../server/core/WebWorker');
+    const worker = Object.create(Worker.prototype);
+    worker.config = {discovery:{externalSource:'web-page', externalName:'shared', externalUrl:'https://books.example'}};
+    worker.checkMyState = () => {};
+    worker.getSharedDiscoveryConfig = async() => ({});
+    worker.requireAdmin = async() => {throw new Error('not admin');};
+    worker.dbConfig = async() => ({inpxHash:'catalog'});
+    worker.selectDiscoveryBookWindows = () => assert.fail('External-only request scanned the local catalog');
+    worker.getPersonalDiscoveryShelvesV2 = () => assert.fail('External-only request loaded personalized shelves');
+    worker.rememberPersistedDiscovery = async(key, load) => {
+        assert(key.includes('https://books.example'));
+        return load();
+    };
+    worker.buildExternalDiscoveryShelfV2 = async(limit, discovery) => {
+        assert.equal(discovery.externalUrl, 'https://books.example');
+        return {id:'external-source', items:[]};
+    };
+    const result = await worker.getDiscoveryShelvesV2({externalOnly:true, externalUrl:'https://other.example'});
+    assert.deepEqual(result.shelves.map(shelf => shelf.id), ['external-source']);
+}
+
 module.exports=[testPersonalRecommendationPreferencePersistsPerProfileAndBackup,testDisabledPersonalRecommendationsSkipServerWorkAndKeepOtherShelves,testPersonalRecommendationToggleClearsCachedAndLateResults,
     testOverviewRecommendationsAreBoundedCachedAndSeparateFromNewest,testOverviewSlowRecommendationsDoNotDelayOtherShelvesAndRejectOldProfile,
-    testOverviewRecommendationsHandleEmptyDisabledOldServerAndExpiredSession,testOverviewRecommendationEndpointDoesNotBuildGlobalShelves];
+    testOverviewRecommendationsHandleEmptyDisabledOldServerAndExpiredSession,testOverviewRecommendationEndpointDoesNotBuildGlobalShelves,
+    testOverviewPublishesLocalShelvesBeforeExternalFeed,testExternalOnlyDiscoveryReusesResolvedSourceAndSkipsLocalWork];

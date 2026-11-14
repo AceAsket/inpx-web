@@ -125,8 +125,8 @@ const shelves = computed(() => {
     const reading = new Map((state.reading?.items || []).map(book => [bookUid(book), book]));
     const flags = {'newest': 'showDiscoveryNewest', 'popular': 'showDiscoveryPopular', 'from-your-lists': 'showDiscoveryFromLists',
         'unfinished-series': 'showDiscoveryUnfinishedSeries', 'external': 'showDiscoveryExternal', 'similar': 'showDiscoverySimilar'};
-    return state.shelves.filter(shelf => shelf.id !== 'continue-reading' && shelf.books?.length
-        && settings.value[flags[shelf.mode] || flags[shelf.id]] !== false)
+    return [...state.shelves, ...state.externalShelves].filter(shelf => shelf.id !== 'continue-reading' && shelf.books?.length
+        && settings.value[flags[shelf.mode] || flags[shelf.id] || flags[shelf.source]] !== false)
         .map((shelf, index) => ({...shelf, id: shelf.id || `discovery-${index}`, books: shelf.books.map(book => {
             const item = reading.get(bookUid(book));
             return item ? {...book, percent: item.percent} : book;

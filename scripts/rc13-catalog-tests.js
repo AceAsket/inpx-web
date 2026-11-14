@@ -212,7 +212,7 @@ async function testRc13SelectiveBookSearchUsesIndexesAndPreservesRegex() {
     await database(async db => {
         await seedSearch(db);
         const searcher = new DbSearcher({queryCacheEnabled:false},db);
-        searcher.recStruct = ['title','author','series','genre','lang','ext','date'].map(field=>({field,type:'S'}));
+        searcher.recStruct = ['title','author','series','genre','lang','ext','date','keywords'].map(field=>({field,type:'S'}));
         searcher.recStruct.push({field:'librate',type:'N'},{field:'del',type:'N'});
         const rows = db.table.get('book').rowsInterface, getRow = rows.getRow.bind(rows); let reads = 0;
         rows.getRow = id => {reads++; return getRow(id);};
@@ -227,8 +227,215 @@ async function testRc13SelectiveBookSearchUsesIndexesAndPreservesRegex() {
             await db.insert({table:'title',rows:[{id:101,value:'123',name:'123',bookIds:[101]}]});
             assert.deepEqual(Array.from(await searcher.bookSearchIds({title:'~^\\D+$'})),[1]);
             assert.equal((await searcher.bookSearchIds({title:'~\\S'})).length,101);
+            await db.insert({table:'book',rows:[{id:102,_uid:'at',title:'@Новая книга',author:'Author',series:'',serno:0,
+                folder:'books.zip',file:'at',ext:'fb2',keywords:'Древние приключения'}]});
+            await db.insert({table:'title',rows:[{id:102,value:'@новая книга',name:'@Новая книга',bookIds:[102]}]});
+            assert.deepEqual(Array.from(await searcher.bookSearchIds({keywords:'@ приключений'})),[102]);
+            assert.deepEqual(Array.from(await searcher.bookSearchIds({title:'~^@'})),[102]);
         } finally {await searcher.close();}
     });
+}
+
+async function testWideBookSearchReadsTableOrderAndKeepsStableDedupeOrder() {
+    await database(async db => {
+        await db.create({table:'book',type:'memory'});
+        await db.create({table:'genre',type:'memory'});
+        const ids = Array.from({length: 8200}, (_, i) => 8200 - i);
+        const book = (id, overrides={}) => ({id,title:'Book',author:'Author',series:'',serno:0,
+            genre:'sf',sourceId:'source',folder:'books.zip',file:String(id),ext:'fb2',...overrides});
+        const rows = ids.slice().reverse().map(id => book(id));
+        rows[0] = book(1,{file:'duplicate',librate:5});
+        rows[8199] = book(8200,{file:'duplicate',librate:1});
+        rows[8189] = book(8190,{genre:'mystery'});
+        await db.insert({table:'book',rows});
+        const searcher = new DbSearcher({queryCacheEnabled:false},db);
+        searcher.recStruct = [{field:'genre',type:'S'}];
+        searcher.selectBookIds = async() => Uint32Array.from(ids);
+        const table = db.table.get('book');
+        const getRow = table.rowsInterface.getRow.bind(table.rowsInterface);
+        const reads = [];
+        table.rowsInterface.getRow = id => {reads.push(id);return getRow(id);};
+        try {
+            const result = Array.from(await searcher.bookSearchIds({genre:'sf'}));
+            assert.deepEqual(reads, ids.slice().reverse());
+            assert.deepEqual(result, [1, ...ids.slice(1,-1).filter(id=>id!==8190)]);
+
+            const firstPage = await searcher.bookSearch({genre:'sf', limit:20});
+            assert.equal(firstPage.totalFound, result.length);
+            assert.deepEqual(firstPage.found.map(row => row.id), result.slice(0, 20));
+        } finally {await searcher.close();}
+    });
+}
+
+async function testBookSearchEarlyPagesKeepExactCountsAndReuseCaches() {
+    await database(async db => {
+        for (const table of ['book', 'query_cache', 'query_time']) await db.create({table});
+        const book = (id, overrides = {}) => ({id, title:`Z ${String(id).padStart(3, '0')}`,
+            author:'Author', series:'', serno:0, genre:'sf', sourceId:'main', folder:'books.zip',
+            file:String(id), ext:'fb2', ...overrides});
+        const rows = [
+            book(1, {title:'A', file:'physical-copy', librate:1}),
+            book(2, {title:'B', file:'physical-copy', librate:5}),
+            book(3, {title:'A', sourceId:'second', ext:'epub'}),
+            book(4, {title:'B', sourceId:'second', ext:'epub', librate:6}),
+            book(5, {title:'É', librate:1}),
+            book(6, {title:'E\u0301'}),
+            book(7, {title:'É', sourceId:'second', librate:5}),
+            ...Array.from({length:321}, (_, i) => book(i + 8)),
+        ];
+        await db.insert({table:'book', rows});
+        const config = {queryCacheEnabled:true, queryCacheMemSize:32, queryCacheDiskSize:32, cacheCleanInterval:0};
+        let scans = 0;
+        const createSearcher = () => {
+            const searcher = new DbSearcher(config, db);
+            searcher.recStruct = [{field:'genre', type:'S'}];
+            const scan = searcher.scanBookSearch.bind(searcher);
+            searcher.scanBookSearch = (...args) => {scans++; return scan(...args);};
+            return searcher;
+        };
+        const query = {genre:'sf', hideCopies:true, limit:2};
+        const expected = [3, 4, 7, 6, ...rows.slice(7).map(row => row.id)];
+        let searcher = createSearcher();
+        const checkPage = async offset => {
+            const result = await searcher.bookSearch({...query, offset});
+            assert.equal(result.totalFound, expected.length);
+            assert.deepEqual(result.found.map(row => row.id), expected.slice(offset, offset + query.limit));
+        };
+        try {
+            await checkPage(0);
+            await checkPage(2);
+            assert.equal(scans, 1);
+            await searcher.close();
+            searcher = createSearcher();
+            await checkPage(254);
+            assert.equal(scans, 1, 'The early page survives a restart through the disk cache');
+            await checkPage(255);
+            await checkPage(expected.length - 1);
+            assert.equal(scans, 2, 'Later pages reuse the full result');
+            assert.deepEqual(Array.from(await searcher.bookSearchIds(query)), expected);
+
+            const withoutFilter = await searcher.bookSearch({hideCopies:true, limit:2});
+            assert.deepEqual(withoutFilter.found.map(row => row.id), [1, 4]);
+            assert.equal(withoutFilter.totalFound, expected.length);
+
+            const base = await searcher.bookSearchIds({...query, hideCopies:false});
+            assert.deepEqual(Array.from(base.slice(0, 3)), [3, 2, 4]);
+            await searcher.close();
+            searcher = new DbSearcher({...config, queryCacheDiskSize:0}, db);
+            searcher.recStruct = [{field:'genre', type:'S'}];
+            await searcher.bookSearchIds({...query, hideCopies:false});
+            await checkPage(0);
+
+            await db.insert({table:'book', rows:[
+                book(400, {genre:'untitled', title:'  ', file:'common'}),
+                book(401, {genre:'untitled', title:'', file:'COMMON', sourceId:'second', librate:6}),
+                book(402, {genre:'untitled', title:'', sourceId:'second'}),
+            ]});
+            const untitled = await searcher.bookSearch({genre:'untitled', hideCopies:true, limit:2});
+            assert.equal(untitled.totalFound, 2);
+            assert.deepEqual(untitled.found.map(row => row.id), [401, 402]);
+        } finally {await searcher.close();}
+    });
+}
+
+async function testBookSearchSharesColdRankingAcrossPagesAndFullResults() {
+    await database(async db => {
+        await db.create({table:'book', type:'memory'});
+        const rows = Array.from({length:320}, (_, i) => ({id:i + 1, title:`Book ${i}`, author:'Author',
+            series:'', serno:0, genre:'sf', del:0, sourceId:i ? 'main' : '', folder:'books.zip', file:String(i), ext:'fb2'}));
+        await db.insert({table:'book', rows});
+        const searcher = new DbSearcher({queryCacheEnabled:false}, db);
+        searcher.recStruct = [{field:'genre', type:'S'}, {field:'del', type:'N'}];
+        const query = {genre:'sf', del:'0', hideCopies:true};
+        const baseline = await searcher.bookSearchIds(query);
+        const scan = searcher.scanBookSearch.bind(searcher);
+        const started = Promise.withResolvers(), release = Promise.withResolvers();
+        const limits = [];
+        searcher.scanBookSearch = async (query, limit) => {
+            limits.push(limit);
+            if (limit === 0) {
+                started.resolve();
+                await release.promise;
+            }
+            return scan(query, limit);
+        };
+        const first = searcher.bookSearch({...query, limit:2});
+        const opds = searcher.bookSearchIds({...query, hideCopies:'1'});
+        try {
+            await started.promise;
+            const second = searcher.bookSearch({...query, offset:2, limit:3});
+            const unrelated = searcher.bookSearch({...query, sourceId:' ', limit:1});
+            assert.deepEqual((await unrelated).found.map(book => book.id), [1]);
+            release.resolve();
+            const [firstPage, secondPage, ids] = await Promise.all([first, second, opds]);
+            assert.deepEqual(ids, baseline);
+            assert.deepEqual(firstPage.found.map(book => book.id), Array.from(baseline.slice(0, 2)));
+            assert.deepEqual(secondPage.found.map(book => book.id), Array.from(baseline.slice(2, 5)));
+            assert.equal(firstPage.totalFound, baseline.length);
+            assert.equal(secondPage.totalFound, baseline.length);
+            assert.equal(limits.filter(limit => limit === 0).length, 1);
+            assert.equal(limits.length, 2, 'Only the other source starts an independent scan');
+
+            const repeat = await searcher.bookSearch({...query, limit:2});
+            assert.deepEqual(repeat, firstPage);
+            assert.equal(limits.length, 3, 'With query caching disabled, the completed scan is released');
+        } finally {
+            release.resolve();
+            await Promise.allSettled([first, opds]);
+            await searcher.close();
+        }
+    });
+}
+
+async function testBookSearchSharesFailureRetriesAndDrainsBeforeClose() {
+    const db = {esc:JSON.stringify, select:async () => [{id:2}]};
+    const searcher = new DbSearcher({queryCacheEnabled:false}, db);
+    searcher.recStruct = [];
+    let scans = 0;
+    const failure = new Error('Database scan failed');
+    const started = Promise.withResolvers(), release = Promise.withResolvers();
+    const fullStarted = Promise.withResolvers(), releaseFull = Promise.withResolvers();
+    searcher.scanBookSearch = async (query, limit) => {
+        if (++scans === 1) throw failure;
+        if (limit) {
+            started.resolve();
+            await release.promise;
+        } else {
+            fullStarted.resolve();
+            await releaseFull.promise;
+        }
+        return {ids:Uint32Array.of(2, 1), totalFound:2};
+    };
+
+    try {
+        const requests = await Promise.allSettled([searcher.bookSearchIds({}), searcher.bookSearch({limit:2})]);
+        assert.deepEqual(requests, [
+            {status:'rejected', reason:failure},
+            {status:'rejected', reason:failure},
+        ]);
+        assert.equal(scans, 1);
+
+        const retried = searcher.bookSearch({limit:1});
+        await started.promise;
+        const ids = searcher.bookSearchIds({});
+        await fullStarted.promise;
+        let closed = false;
+        const closing = searcher.close().then(() => {closed = true;});
+        await assert.rejects(searcher.bookSearchIds({}), /DbSearcher closed/);
+        release.resolve();
+        assert.deepEqual(await retried, {found:[{id:2}], totalFound:2});
+        assert.equal(searcher.searchFlag, 1);
+        assert.equal(closed, false);
+        releaseFull.resolve();
+        assert.deepEqual(await ids, Uint32Array.of(2, 1));
+        await closing;
+        assert.equal(scans, 3, 'A wider request does not change an already-running first-page scan');
+        assert.equal(searcher.bookSearches.size, 0);
+    } finally {
+        release.resolve();
+        releaseFull.resolve();
+        await searcher.close();
+    }
 }
 
 async function testRc13DiskQueryCacheEnforcesCountAndBytesOnEveryWriteAndRestart() {
@@ -311,6 +518,10 @@ module.exports = [testRc13InpxUidSurvivesMetadataAndForcedRebuildFromLegacy14,
     testIndexStatisticsStopsReportingProgressWhenUniqueIndexFails,
     testRc13PriorIdentitiesStreamCompactBatchesAndReleaseCursor,
     testRc13SelectiveBookSearchUsesIndexesAndPreservesRegex,
+    testWideBookSearchReadsTableOrderAndKeepsStableDedupeOrder,
+    testBookSearchEarlyPagesKeepExactCountsAndReuseCaches,
+    testBookSearchSharesColdRankingAcrossPagesAndFullResults,
+    testBookSearchSharesFailureRetriesAndDrainsBeforeClose,
     testRc13DiskQueryCacheEnforcesCountAndBytesOnEveryWriteAndRestart,
     testRc13RatingIndexUsesLeaseBoundsAndIdleCleanup,
     testRc13IsbnIndexReleasesIdleAndOversizedStateWithoutBreakingReaders];

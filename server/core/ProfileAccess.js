@@ -32,15 +32,16 @@ class ProfileAccess {
         delete session.proxyProfileLogin;
     }
 
-    async resolve(req, token = '') {
+    async resolve(req, token = '', {identityOnly = false} = {}) {
+        const store = this.worker.readingListStore;
         let session = this.security && this.security.getSession(req);
         if (this.bindingEnabled) {
             const auth = this.security.verifyRequiredAuth(req);
             if (!auth.ok)
                 throw denied(auth.message, auth.status);
-            const login = this.worker.readingListStore.normalizeLogin(this.security.getProxyAuthUser(req));
-            const data = await this.worker.readingListStore.load();
-            const user = data.users.find(item => item.login && item.login === login);
+            const login = store.normalizeLogin(this.security.getProxyAuthUser(req));
+            const user = login && (identityOnly ? await store.getUserIdentity(login, 'login')
+                : (await store.load()).users.find(item => item.login === login));
             if (user) {
                 session = this.security.ensureSession(req);
                 if (session.proxyProfileUserId !== user.id || session.proxyProfileLogin !== login)
@@ -59,8 +60,8 @@ class ProfileAccess {
         const id = this.worker.getProfileSessionUser(accessToken);
         if (!id)
             return null;
-        const data = await this.worker.readingListStore.load();
-        const user = data.users.find(item => item.id === id);
+        const user = identityOnly ? await store.getUserIdentity(id, 'id')
+            : (await store.load()).users.find(item => item.id === id);
         return user ? {user, token: accessToken, bound: false} : null;
     }
 
@@ -75,7 +76,7 @@ class ProfileAccess {
         delete req.profileLoginRequired;
         if (!this.loginRequired && !this.bindingEnabled && !(socketRequest.securitySession && socketRequest.securitySession.proxyProfileUserId))
             return;
-        const identity = await this.resolve(socketRequest, req.profileAccessToken);
+        const identity = await this.resolve(socketRequest, req.profileAccessToken, {identityOnly:true});
         if (identity && (identity.bound || this.loginRequired)) {
             if (!['get-config', 'get-user-profiles', 'logout-user-profile'].includes(req.action))
                 this.assertProfile(identity, String(req.userId || '').trim());

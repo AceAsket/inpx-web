@@ -35,8 +35,8 @@ async function fixture(test, options = {}) {
             {...common, id: 3, _uid: 'other-author', file: 'missing', ext: 'fb2', author: 'Другой Автор'},
             {...common, id: 4, _uid: 'deleted', file: 'deleted', ext: 'fb2', del: 1}];
         await db.insert({table: 'book', rows: books});
-        const searcher = Object.create(DbSearcher.prototype);
-        Object.assign(searcher, {db, closed: false, searchFlag: 0, recStruct: ['author', 'title', 'file', 'ext', 'lang', 'folder'].map(field => ({field, type: 'S'}))});
+        const searcher = new DbSearcher({queryCacheEnabled:false}, db);
+        searcher.recStruct = ['author', 'title', 'file', 'ext', 'lang', 'folder'].map(field => ({field, type: 'S'}));
         searcher.recStruct.push({field: 'del', type: 'N'});
         const cache = new Map(); searcher.getCached = async key => cache.has(key) ? cache.get(key) : null; searcher.putCached = async(key, value) => cache.set(key, value);
         const worker = Object.create(require('../server/core/WebWorker').prototype);

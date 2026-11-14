@@ -1542,7 +1542,8 @@ class SettingsDialog {
 
     get adminIndexBusy() {
         const state = String(this.adminIndex.state || '');
-        return state === 'db_creating' || state === 'db_loading' || (this.adminReindexInProgress && this.adminIndex.ready !== true);
+        return this.adminIndex.updating === true || state === 'db_creating' || state === 'db_loading'
+            || (this.adminReindexInProgress && this.adminIndex.ready !== true);
     }
 
     get adminIndexStatusVisible() {

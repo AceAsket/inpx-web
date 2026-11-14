@@ -3,6 +3,7 @@ const fs = require('fs-extra');
 const InpxParser = require('./InpxParser');
 const InpxHashCreator = require('./InpxHashCreator');
 const {getEnabledLibrarySources} = require('./LibrarySources');
+const ImportWriteBudget = require('./ImportWriteBudget');
 const utils = require('./utils');
 
 const emptyFieldValue = '?';
@@ -84,8 +85,10 @@ class DbCreator {
 
         //временная таблица
         const incremental = await db.tableExists({table: 'book'});
-        if (!incremental) await db.create({table: 'book', cacheSize: (config.lowMemoryMode ? 5 : 500)});
-        else await db.open({table: 'book'});
+        const bookCacheSize = config.lowMemoryMode ? 5 : config.dbCacheSize;
+        if (!incremental) await db.create({table: 'book', cacheSize:bookCacheSize});
+        else await db.open({table: 'book', cacheSize:bookCacheSize});
+        const bookWrites = new ImportWriteBudget(db, 'book', config.lowMemoryMode);
         if (incremental && (await db.getDbInfo({table: 'book'})).book.hash.some(hash => hash.field === '_uid'))
             await db.drop({in: 'book', hash: {field: '_uid'}});
         const previous = new Map(), physical = new Map(), legacy = new Map();
@@ -233,7 +236,7 @@ class DbCreator {
                 const fieldId = fieldMap.get(value);
                 fieldRec = fieldArr[fieldId];
             } else {
-                fieldRec = {id: fieldArr.length, value, bookIds: new Set()};                
+                fieldRec = {id: fieldArr.length, value, bookIds: []};
                 if (rec !== undefined) {
                     fieldRec.name = fieldValue;
                     fieldRec.bookCount = 0;
@@ -243,8 +246,12 @@ class DbCreator {
                 fieldMap.set(value, fieldRec.id);
             }
 
-            if (fieldValue !== emptyFieldValue || fillBookIds)
-                fieldRec.bookIds.add(bookId);
+            if (fieldValue !== emptyFieldValue || fillBookIds) {
+                // All references for a book are processed together, including
+                // repeated authors or genres. Each accepted book ID is unique.
+                const ids = fieldRec.bookIds;
+                if (ids[ids.length - 1] !== bookId) ids.push(bookId);
+            }
 
             if (rec !== undefined) {
                 if (!rec.del)
@@ -366,7 +373,10 @@ class DbCreator {
                 const old = previous.get(rec._uid);
                 return old?.id !== rec.id || old.hash !== rec._recordHash;
             });
-            if (saveChunk.length) await db.insert({table: 'book', rows: saveChunk, replace: true});
+            if (saveChunk.length) {
+                await db.insert({table: 'book', rows: saveChunk, replace: true});
+                await bookWrites.wait();
+            }
             recordsChanged += saveChunk.length;
             callback({recordsChanged, incremental});
 
@@ -403,8 +413,10 @@ class DbCreator {
         }
 
         const removed = incremental ? [...previous.values()].filter(row => !row.retained).map(row => row.id) : [];
-        for (let offset = 0; offset < removed.length; offset += 10000)
+        for (let offset = 0; offset < removed.length; offset += 10000) {
             await db.delete({table: 'book', where: `@@id(${db.esc(removed.slice(offset, offset + 10000))})`});
+            await bookWrites.wait();
+        }
 
         //чистка памяти, ибо жрет как не в себя
         authorMap = null;
@@ -417,11 +429,13 @@ class DbCreator {
         librateMap = null;
         extMap = null;
         sourceMap = null;
+        wordMap = null;
         physical.clear(); previous.clear(); legacy.clear();
 
         uidSet = null;
 
         await db.close({table: 'book'});
+        bookWrites.check();
         await db.freeMemory();
         utils.freeMemory();
 
@@ -498,12 +512,7 @@ class DbCreator {
 
             //вставка в БД по кусочкам, экономим память
             for (let i = 0; i < arr.length; i += chunkSize) {
-                const chunk = arr.slice(i, i + chunkSize);
-                
-                for (const rec of chunk)
-                    rec.bookIds = Array.from(rec.bookIds);
-
-                await db.insert({table, rows: chunk});
+                await db.insert({table, rows: arr.slice(i, i + chunkSize)});
 
                 if (i % 5 == 0) {
                     await db.freeMemory();
@@ -558,7 +567,6 @@ class DbCreator {
         //ext
         await saveTable('ext', extArr, () => {extArr = null});
         await saveTable('source', sourceArr, () => {sourceArr = null});
-        wordMap = null;
         await saveTable('word', wordArr, () => {wordArr = null});
 
         //кэш-таблицы запросов
@@ -571,7 +579,7 @@ class DbCreator {
         //-- завершающие шаги --------------------------------
         await db.open({
             table: 'book',
-            cacheSize: (config.lowMemoryMode ? 5 : 500),
+            cacheSize: bookCacheSize,
         });
 
         callback({job: 'optimization', jobMessage: 'Оптимизация', jobStep: 8, progress: 0});
@@ -634,6 +642,7 @@ class DbCreator {
             {id: 'inpxInfo', value: inpxInfo},
             {id: 'stats', value: stats},
             {id: 'inpxHash', value: sourceHash},
+            {id: 'dbVersion', value: config.dbVersion},
             {id: 'indexUpdate', value: {incremental, recordsChanged, recordsRemoved: removed.length, updatedAt: new Date().toISOString()}},
         ]});
 
