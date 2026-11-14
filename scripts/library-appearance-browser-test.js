@@ -462,14 +462,21 @@ if (require.main === module) (async() => {
                 await createdProfile.getByRole('button', {name: 'Выбрать', exact: true}).click();
                 await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('browser-profile');
                 await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('browser-profile-password');
-                const loginConfig = holdReply();
-                readingReplies = {'get-config':loginConfig};
+                const loginResult = holdReply(), loginConfig = holdReply();
+                readingReplies = {'login-user-profile':loginResult, 'get-config':loginConfig};
                 await page.getByRole('button', {name: 'OK', exact: true}).click();
+                const switchProfile = panel.getByRole('button', {name: 'Войти в другой профиль', exact: true});
+                const releaseLoginResult = await loginResult.wait();
+                try {
+                    assert(await switchProfile.isDisabled(), 'Profile switching waits for the current credentials to be verified');
+                } finally {
+                    releaseLoginResult();
+                }
                 const releaseLoginConfig = await loginConfig.wait();
                 try {
                     await panel.locator('.profile-card--current').filter({hasText: 'Браузерный профиль'}).waitFor();
                     assert.equal(await panel.getByRole('button', {name: 'Новый профиль', exact: true}).count(), 0, 'Ordinary profiles cannot manage other profiles');
-                    await panel.getByRole('button', {name: 'Войти в другой профиль', exact: true}).click();
+                    await switchProfile.click();
                     await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin', {timeout:5000});
                 } finally {
                     releaseLoginConfig();

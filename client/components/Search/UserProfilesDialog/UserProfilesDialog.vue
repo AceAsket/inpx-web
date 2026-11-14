@@ -67,7 +67,8 @@
                 Профиль выбран по вашему входу через SSO. Для смены пользователя выйдите из SSO.
             </div>
             <div v-else class="profile-session-actions">
-                <q-btn v-if="!canViewAllProfiles" flat dense no-caps color="primary" icon="la la-sign-in-alt" @click="loginOtherProfile">
+                <q-btn v-if="!canViewAllProfiles" flat dense no-caps color="primary" icon="la la-sign-in-alt"
+                    :disable="!!api.profileLoginPromise" @click="loginOtherProfile">
                     {{ uiText.loginOtherProfile }}
                 </q-btn>
                 <ProfileLogout :label="uiText.logout" />
