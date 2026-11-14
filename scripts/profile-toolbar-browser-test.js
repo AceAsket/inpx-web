@@ -8,6 +8,38 @@ const {createFixture, unusedPort} = require('./binary-smoke-test');
 const {chromium} = require(process.env.INPX_PLAYWRIGHT_MODULE || 'playwright');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+function currentTotp(secret) {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    const bits = [...secret].map(letter => alphabet.indexOf(letter).toString(2).padStart(5, '0')).join('');
+    const key = Buffer.from(bits.match(/.{8}/g).map(byte => parseInt(byte, 2)));
+    return require('../server/core/ProfileTotp').hotp(key, Math.floor(Date.now() / 30000));
+}
+
+function profileRequest(page, payload, session) {
+    return page.evaluate(async({payload, session}) => {
+        const stored = JSON.parse(localStorage.getItem('inpx-web-profile-session') || '{}');
+        const {userId = stored.currentUserId, profileAccessToken = stored.profileAccessToken} = session || {};
+        const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
+        const request = (data, requestId) => new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {socket.removeEventListener('message', receive); reject(new Error('Profile fixture API timeout'));}, 10000);
+            function receive(event) {
+                const response = JSON.parse(event.data);
+                if (response.requestId !== requestId || response._rok) return;
+                clearTimeout(timer);
+                socket.removeEventListener('message', receive);
+                resolve(response);
+            }
+            socket.addEventListener('message', receive);
+            socket.send(JSON.stringify({userId, profileAccessToken, ...data, requestId}));
+        });
+        try {
+            await new Promise((resolve, reject) => {socket.onopen = resolve; socket.onerror = reject;});
+            const {csrfToken} = await request({action:'get-config'}, 'fixture-config');
+            return await request({...payload, csrfToken}, 'fixture-profile');
+        } finally {socket.close();}
+    }, {payload, session});
+}
+
 (async() => {
     const directory = process.env.INPX_ARTIFACT_DIR || await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-profile-toolbar-'));
     await fs.ensureDir(directory);
@@ -303,6 +335,62 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await page.reload(); await page.locator('.profile-controls').waitFor();
         assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0, 'Reload cannot restore an admin session');
         await login();
+
+        const reader = {name:'Профиль для восстановления', login:'otp-recovery-reader', password:'recovery-reader-fixture', opdsEnabled:true};
+        const created = await profileRequest(page, {action:'create-user-profile', profile:reader});
+        assert(created.user?.id, created.error);
+        const readerPage = await browser.newPage({serviceWorkers:'block'});
+        await readerPage.goto(base + '/#/books?title=Packaged&lang=en');
+        await readerPage.locator('.profile-controls').waitFor();
+        const readerRequest = (payload, session) => profileRequest(readerPage, payload, session);
+        const loginReader = otp => readerRequest({action:'login-user-profile', login:reader.login, password:reader.password, otp});
+        const readerTotp = (operation, session, code) => readerRequest({action:'profile-totp', operation, payload:{password:reader.password, code}}, session);
+        const enrollReader = async session => {
+            assert(session.profileAccessToken, session.error);
+            const setup = await readerTotp('start', session);
+            assert.match(setup.secret || '', /^[A-Z2-7]{32}$/);
+            const enabled = await readerTotp('enable', session, currentTotp(setup.secret));
+            assert.equal(enabled.otpEnabled, true, enabled.error);
+            assert.equal((await loginReader()).errorCode, 'need_profile_otp');
+            return enabled.recoveryCodes;
+        };
+        const resetButton = page.getByRole('button', {name:`Сбросить OTP: ${reader.name}`, exact:true});
+        const resetDialog = page.getByRole('dialog').filter({hasText:'Сброс двухфакторной авторизации'});
+        const resetReader = async otp => {
+            await page.locator('.user-profiles-btn').click();
+            await resetButton.click();
+            await resetDialog.waitFor();
+            await resetDialog.getByLabel('Пароль администратора', {exact:true}).fill('profile-toolbar-test');
+            const resetOtp = resetDialog.getByLabel('Код из приложения или резервный код', {exact:true});
+            const submitReset = resetDialog.getByRole('button', {name:'Сбросить OTP', exact:true});
+            if (otp) {
+                await submitReset.click();
+                await resetDialog.getByRole('alert').filter({hasText:'Введите пароль и код администратора.'}).waitFor();
+                await resetOtp.fill(otp);
+            } else assert.equal(await resetOtp.count(), 0, 'Administrator without OTP should only confirm the password');
+            await submitReset.click();
+            await resetDialog.waitFor({state:'hidden'});
+            await resetButton.waitFor({state:'hidden'});
+            await page.getByRole('button', {name:'Закрыть окно', exact:true}).click();
+        };
+        const assertReaderSession = async (session, active) => {
+            assert(session.profileAccessToken, session.error);
+            const result = await readerRequest({action:'get-user-reading-library'}, session);
+            if (active) assert(Array.isArray(result.items), result.error);
+            else assert.equal(result.errorCode, 'need_profile_login', 'OTP reset must revoke the reader session');
+        };
+
+        let readerSession = await loginReader();
+        await enrollReader(readerSession);
+        await assertReaderSession(readerSession, true);
+        await resetReader();
+        await assertReaderSession(readerSession, false);
+        readerSession = await loginReader();
+        await assertReaderSession(readerSession, true);
+        const readerRecovery = await enrollReader(readerSession);
+        const anotherReaderSession = await loginReader(readerRecovery[0]);
+        await assertReaderSession(anotherReaderSession, true);
+
         const otpSection = page.getByRole('region', {name: 'Двухфакторная авторизация', exact: true});
         await page.locator('.user-profiles-btn').click();
         const current = page.locator('.profile-card--current');
@@ -314,16 +402,13 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await otpSection.getByRole('button', {name: 'Получить QR-код', exact: true}).click();
         await otpSection.getByRole('img', {name: 'QR-код настройки аутентификатора', exact: true}).waitFor();
         const setupSecret = await otpSection.locator('form code').innerText();
-        const totp = require('../server/core/ProfileTotp');
-        const table = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-        const bits = [...setupSecret].map(letter => table.indexOf(letter).toString(2).padStart(5, '0')).join('');
-        const key = Buffer.from(bits.match(/.{8}/g).map(byte => parseInt(byte, 2)));
         await otpPassword.fill('profile-toolbar-test');
-        await otpSection.getByLabel('Код из приложения', {exact: true}).fill(totp.hotp(key, Math.floor(Date.now() / 30000)));
+        await otpSection.getByLabel('Код из приложения', {exact: true}).fill(currentTotp(setupSecret));
         await otpSection.getByRole('button', {name: 'Включить OTP', exact: true}).click();
         const codes = otpSection.locator('li code');
         await codes.first().waitFor();
         const recovery = await codes.first().innerText();
+        const adminResetRecovery = await codes.nth(1).innerText();
         assert(await page.evaluate(values => !Object.values(localStorage).some(value => values.some(secret => value.includes(secret))), [setupSecret, recovery]));
         await otpSection.getByRole('button', {name: 'Коды сохранены', exact: true}).click();
         await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), page.locator('.profile-session-actions .profile-logout').click()]);
@@ -338,11 +423,16 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await otpCode.fill(recovery);
         await otpLogin.getByRole('button', {name: 'OK', exact: true}).click();
         await page.locator('.profile-controls .profile-logout').waitFor();
+        await resetReader(adminResetRecovery);
+        await assertReaderSession(readerSession, false);
+        await assertReaderSession(anotherReaderSession, false);
+        await assertReaderSession(await loginReader(), true);
+        await readerPage.close();
         await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), page.locator('.profile-controls .profile-logout').click()]);
         await page.locator('.profile-controls').waitFor();
         assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0);
         assert.deepEqual(errors, []);
-        console.log(`Profile UI: TOTP setup, two-factor login, logout, token revocation, responsive toolbar, activity, performance form, shelves and favorites passed; screenshots: ${directory}`);
+        console.log(`Profile UI: TOTP setup, two-factor login, administrator recovery, logout, token revocation, responsive toolbar, activity, performance form, shelves and favorites passed; screenshots: ${directory}`);
     } catch (error) {
         const page = browser?.contexts().flatMap(context => context.pages())[0];
         if (page) {

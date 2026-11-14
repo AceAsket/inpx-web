@@ -88,6 +88,9 @@
                                 flat dense round icon="la la-key" color="primary" :aria-label="`Сменить пароль: ${item.name}`" :title="`Сменить пароль: ${item.name}`"
                                 @click="resetPassword(item)"
                             />
+                            <q-btn v-if="canManageProfiles && config.clientApi?.features?.includes('adminProfileTotpReset') && item.id !== currentUserId && item.otpEnabled"
+                                flat dense round icon="la la-shield-alt" color="negative" :aria-label="`Сбросить OTP: ${item.name}`" :title="`Сбросить OTP: ${item.name}`"
+                                @click="otpResetTarget = item" />
                             <q-btn
                                 v-if="canManageProfiles && !item.isAdmin && !item.anonymousProfile"
                                 flat dense round icon="la la-trash" color="negative" :aria-label="`Удалить профиль: ${item.name}`" :title="`Удалить профиль: ${item.name}`"
@@ -417,6 +420,27 @@
                 {{ uiText.close }}
             </q-btn>
         </template>
+        <q-dialog :model-value="!!otpResetTarget" :persistent="otpResetBusy" @update:model-value="value => {if (!value) closeOtpReset();}">
+            <q-card class="profile-otp-reset" aria-labelledby="otp-reset-title">
+                <q-card-section>
+                    <h2 id="otp-reset-title">Сброс двухфакторной авторизации</h2>
+                    <p>Двухфакторный вход будет отключён для профиля «{{ otpResetTarget?.name }}». Все его сессии, резервные коды и пароль OPDS будут отозваны.</p>
+                </q-card-section>
+                <form @submit.prevent="confirmOtpReset">
+                    <q-card-section class="profile-otp-reset__fields">
+                        <q-input v-model="otpResetPassword" type="password" label="Пароль администратора" autocomplete="current-password"
+                            autofocus outlined dense :disable="otpResetBusy" />
+                        <q-input v-if="currentProfile.otpEnabled" v-model="otpResetCode" label="Код из приложения или резервный код"
+                            autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="64" outlined dense :disable="otpResetBusy" />
+                        <p v-if="otpResetError" class="text-negative" role="alert">{{ otpResetError }}</p>
+                    </q-card-section>
+                    <q-card-actions align="right">
+                        <q-btn flat no-caps label="Отмена" :disable="otpResetBusy" @click="closeOtpReset" />
+                        <q-btn unelevated no-caps color="negative" type="submit" label="Сбросить OTP" :loading="otpResetBusy" />
+                    </q-card-actions>
+                </form>
+            </q-card>
+        </q-dialog>
     </Dialog>
 </template>
 
@@ -447,6 +471,7 @@ const componentOptions = {
         },
         dialogVisible(newValue) {
             this.$emit('update:modelValue', newValue);
+            if (!newValue) this.closeOtpReset();
         },
     },
 };
@@ -472,6 +497,11 @@ class UserProfilesDialog {
     savingProfile = false;
     editableProfile = this.makeEmptyEditable();
     newProfile = this.makeEmptyNew();
+    otpResetTarget = null;
+    otpResetBusy = false;
+    otpResetPassword = '';
+    otpResetCode = '';
+    otpResetError = '';
 
     created() {
         this.api = this.$root.api;
@@ -690,6 +720,7 @@ class UserProfilesDialog {
             login: item.login || '',
             publicId: item.login || item.id,
             requiresLogin: !!item.requiresLogin,
+            otpEnabled: item.otpEnabled === true,
             isAdmin: !!item.isAdmin,
             opdsEnabled: item.opdsEnabled !== false,
             opdsAuthEnabled: item.opdsAuthEnabled === true,
@@ -1058,6 +1089,36 @@ class UserProfilesDialog {
             this.$root.notify.success(this.uiText.resetPasswordSuccess.replace('{name}', String(item.name || '')));
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
+        }
+    }
+
+    closeOtpReset() {
+        this.otpResetTarget = null;
+        this.otpResetPassword = this.otpResetCode = this.otpResetError = '';
+    }
+
+    async confirmOtpReset() {
+        const target = this.otpResetTarget;
+        if (!target || this.otpResetBusy) return;
+        if (!this.otpResetPassword || (this.currentProfile.otpEnabled && !this.otpResetCode.trim())) {
+            this.otpResetError = this.currentProfile.otpEnabled ? 'Введите пароль и код администратора.' : 'Введите пароль администратора.';
+            return;
+        }
+        this.otpResetBusy = true;
+        this.otpResetError = '';
+        try {
+            const result = await this.api.resetUserProfileTotp(target.id, this.otpResetPassword, this.otpResetCode.trim());
+            if (this.otpResetTarget !== target) return;
+            target.otpEnabled = false;
+            if (result.opdsAuthEnabled !== undefined) target.opdsAuthEnabled = result.opdsAuthEnabled;
+            if (result.opdsEnabled !== undefined) target.opdsEnabled = result.opdsEnabled;
+            this.closeOtpReset();
+            this.$root.notify.success('Двухфакторная авторизация профиля сброшена');
+        } catch (failure) {
+            if (this.otpResetTarget === target) this.otpResetError = failure.message;
+        } finally {
+            this.otpResetPassword = this.otpResetCode = '';
+            this.otpResetBusy = false;
         }
     }
 
@@ -1583,6 +1644,11 @@ export default vueComponent(UserProfilesDialog);
 .state-box {
     padding: 18px 8px;
 }
+
+.profile-otp-reset {width: min(460px, 100%); background: var(--app-surface); color: var(--app-text);}
+.profile-otp-reset h2 {font-size: 19px; line-height: 1.4; margin: 0 0 10px;}
+.profile-otp-reset p {margin: 0; overflow-wrap: anywhere;}
+.profile-otp-reset__fields {display: grid; gap: 12px;}
 
 @media (max-width: 820px) {
     .create-grid,

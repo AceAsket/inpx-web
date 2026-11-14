@@ -199,8 +199,83 @@ async function testProfileTotpFullBackupRestoresMatchingKey() {
     });
 }
 
+async function testAdminRecoversAnotherProfileTotp() {
+    await fixture(async(config, clock) => {
+        const worker = makeWorker(config);
+        const store = worker.readingListStore;
+        const addReader = name => store.createUser({name, login:name, passwordHash:ProfilePassword.legacy(name, fixturePassword)});
+        const reader = await addReader('reader');
+        const unrelated = await addReader('unrelated');
+        const makeEnrollment = async(login, password) => {
+            const {profileAccessToken:token, userId} = await worker.loginUserProfile(login, password);
+            const action = (operation, code) => worker.profileTotpAction(userId, token, operation, {password, code});
+            const setup = await action('start');
+            const enabled = await action('enable', codeFor(setup.secret, clock.value));
+            return {token, userId, setup, action, recoveryCodes:enabled.recoveryCodes};
+        };
+        const admin = await makeEnrollment('admin', config.adminPassword);
+        const user = await makeEnrollment(reader.login, fixturePassword);
+        const other = await makeEnrollment(unrelated.login, fixturePassword);
+        const {opdsAppPassword} = await user.action('create-opds-password', user.recoveryCodes[0]);
+        assert.equal((await store.verifyOpdsPassword(reader.id,reader.login,opdsAppPassword)).authorized, true);
+        const reset = (target = reader.id, password = config.adminPassword, code = '', token = admin.token) =>
+            worker.resetUserProfileTotp(admin.userId, token, target, password, code);
+
+        assert.ok((await worker.getUserProfiles()).users.every(profile => !Object.hasOwn(profile,'otpEnabled')));
+        assert.equal((await worker.getUserProfiles(admin.userId,{includeTotpStatus:true})).users.find(profile => profile.id === reader.id).otpEnabled,true);
+        await assert.rejects(reset(reader.id, config.adminPassword,'',other.token), needsLogin);
+        await assert.rejects(worker.resetUserProfileTotp(unrelated.id, other.token, reader.id, fixturePassword, other.recoveryCodes[0]), /Только администратор/);
+        await assert.rejects(reset(admin.userId), /Свою двухфакторную/);
+        await assert.rejects(reset(reader.id,'incorrect',admin.recoveryCodes[0]), badCredentials);
+        await assert.rejects(reset(), badCredentials);
+        await assert.rejects(reset(reader.login, config.adminPassword,admin.recoveryCodes[0]), /Пользователь не найден/);
+
+        clock.value += interval;
+        const code = codeFor(admin.setup.secret, clock.value);
+        const write = store.save;
+        store.save = async() => {throw new Error('Local fixture write failed');};
+        try {
+            await assert.rejects(reset(reader.id, config.adminPassword, code), /fixture write failed/);
+        } finally {store.save = write;}
+        assert.equal(worker.getProfileSessionUser(user.token), reader.id);
+        assert.equal((await store.verifyOpdsPassword(reader.id,reader.login,opdsAppPassword)).authorized, true);
+
+        const readStore = store.load;
+        const extraAdminToken = worker.createProfileSession(admin.userId);
+        store.load = async() => {
+            const data = await readStore.call(store);
+            worker.closeProfileSession(extraAdminToken);
+            return data;
+        };
+        try {
+            await assert.rejects(reset(reader.id, config.adminPassword, code,extraAdminToken), needsLogin);
+        } finally {store.load = readStore;}
+        assert.equal((await store.getUser(reader.id)).opdsAuthEnabled, false);
+
+        worker.pendingProfileTotp.set('expired-target-token', {userId:reader.id});
+        const result = await reset(reader.id, config.adminPassword, code);
+        assert.deepEqual(result,{userId:reader.id,otpEnabled:false,opdsAppPasswordSet:false,opdsEnabled:true,opdsAuthEnabled:true});
+        assert.equal(worker.getProfileSessionUser(user.token),'');
+        assert.equal(worker.getProfileSessionUser(admin.token),admin.userId);
+        assert.equal(worker.getProfileSessionUser(other.token),other.userId);
+        assert.equal(worker.pendingProfileTotp.has('expired-target-token'),false);
+        assert.equal((await store.verifyOpdsPassword(reader.id,reader.login,opdsAppPassword)).authorized,false);
+        assert.equal((await store.verifyOpdsPassword(reader.id,'','')).authorized,false);
+        assert.equal((await store.verifyOpdsPassword(reader.id,reader.login,fixturePassword)).authorized,true);
+        assert.ok((await makeWorker(config).loginUserProfile(reader.login, fixturePassword)).profileAccessToken);
+        assert.deepEqual(worker.adminEvents.at(-1).details,{adminId:admin.userId,userId:reader.id});
+        await assert.rejects(reset(unrelated.id,config.adminPassword,code),badCredentials);
+        await assert.rejects(reset(reader.id,config.adminPassword,admin.recoveryCodes[0]), /не включена/);
+        config.opds = {password:'shared-opds-fixture'};
+        assert.equal((await reset(unrelated.id,config.adminPassword,admin.recoveryCodes[0])).opdsEnabled,false);
+        assert.equal(await store.getOpdsUser(unrelated.id),null);
+        await assert.rejects(worker.loginUserProfile('admin',config.adminPassword,admin.recoveryCodes[0]),badCredentials);
+    });
+}
+
 module.exports = [testProfileTotpRfcVectors, testProfileTotpEnrollmentAndRestarts,
-    testProfileTotpExpiryRateAndFailedWrites, testProfileTotpAdminPasswordReset, testProfileTotpFullBackupRestoresMatchingKey];
+    testProfileTotpExpiryRateAndFailedWrites, testProfileTotpAdminPasswordReset, testProfileTotpFullBackupRestoresMatchingKey,
+    testAdminRecoversAnotherProfileTotp];
 
 if (require.main === module) {
     require('../server/core/Logger');

@@ -1179,7 +1179,7 @@ class ReadingListStore {
         const user = byLogin ? users.find(item => item.login === value) : users.find(item => item.id === value);
         if (!user) return null;
         const {id, login, passwordHash} = user;
-        return {id, login, passwordHash, profileTotp:structuredClone(user.profileTotp),
+        return {id, login, passwordHash, isAdmin:!!user.isAdmin, profileTotp:structuredClone(user.profileTotp),
             opdsAppPasswordSet:!!user.opdsAppPasswordHash};
     }
 
@@ -1193,6 +1193,29 @@ class ReadingListStore {
         if (patch.passwordHash) user.passwordHash = patch.passwordHash;
         authorize();
         await this.save(data);
+    }
+
+    async resetProfileTotp(adminId, targetUserId, adminTotp, authorize) {
+        const data = await this.load();
+        const admin = data.users.find(user => user.id === adminId && user.isAdmin);
+        if (!admin || adminId === targetUserId) throw new Error('Только администратор может сбросить защиту другого профиля');
+        const target = data.users.find(user => user.id === targetUserId);
+        if (!target) throw new Error('Пользователь не найден');
+        if (!target.profileTotp) throw new Error('У профиля не включена двухфакторная защита');
+
+        if (adminTotp) admin.profileTotp = adminTotp;
+        if (target.opdsEnabled && target.login && target.passwordHash) {
+            target.opdsAuthEnabled = true;
+            // The shared catalogue password can access non-TOTP profile scopes.
+            if (this.config.opds?.password) target.opdsEnabled = false;
+        }
+        delete target.profileTotp;
+        delete target.opdsAppPasswordHash;
+        target.updatedAt = this.nowIso();
+        authorize();
+        await this.save(data);
+        return {userId:target.id, otpEnabled:false, opdsAppPasswordSet:false,
+            opdsEnabled:target.opdsEnabled, opdsAuthEnabled:target.opdsAuthEnabled};
     }
     async findTelegramUser(botId, chatId) {
         botId=String(botId);chatId=String(chatId);

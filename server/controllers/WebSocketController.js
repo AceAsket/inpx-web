@@ -348,6 +348,11 @@ class WebSocketController {
                         ? await this.security.withLoginAttempt(ws.req, 'profile', update) : await update();
                     this.send(result, req, ws); break;
                 }
+                case 'reset-user-profile-totp': {
+                    const reset = () => this.webWorker.resetUserProfileTotp(req.userId, req.profileAccessToken,
+                        req.targetUserId, req.password, req.otp);
+                    this.send(this.security ? await this.security.withLoginAttempt(ws.req, 'profile', reset) : await reset(), req, ws); break;
+                }
                 case 'logout-user-profile':
                     await this.logoutUserProfile(req, ws); break;
                 case 'create-user-profile':
@@ -436,6 +441,7 @@ class WebSocketController {
             'cancel-library-audit',
             'login-user-profile',
             'profile-totp',
+            'reset-user-profile-totp',
             'resume-user-profile',
             'subscribe-client-events',
             'logout-user-profile',
@@ -562,8 +568,9 @@ class WebSocketController {
         );
         config.dbConfig = await this.webWorker.dbConfig();
         config.freeAccess = this.webAccess.freeAccess;
-        const profiles = await this.webWorker.getUserProfiles(req.userId);
         const currentProfile = await this.webWorker.getCurrentUserProfile(req.userId, req.profileAccessToken);
+        const profiles = await this.webWorker.getUserProfiles(req.userId,
+            {includeTotpStatus: currentProfile.profileAuthorized && currentProfile.currentUserProfile?.isAdmin === true});
         config.userProfiles = this.profileAccess ? this.profileAccess.filterProfiles(profiles.users, req) : profiles.users;
         config.currentUserId = currentProfile.currentUserId || profiles.currentUserId;
         config.currentUserProfile = currentProfile.currentUserProfile;

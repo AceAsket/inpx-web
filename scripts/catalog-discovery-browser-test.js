@@ -332,13 +332,16 @@ async function fixture(directory) {
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Alphabet navigation retains the scope');
         await page.goto(base + '/#/authors');
         await page.locator('.catalog-alphabet button').first().waitFor();
+        const readyAlphabet = page.locator('.catalog-page[aria-busy="false"]');
+        await readyAlphabet.waitFor();
         let depth = 0;
-        while (await page.locator('.catalog-alphabet button').count()) {
+        while (await readyAlphabet.locator('.catalog-alphabet button').count()) {
             const before = page.url();
-            await page.locator('.catalog-alphabet button').filter({hasText: /^К/}).first().click().catch(async() => page.locator('.catalog-alphabet button').first().click());
+            const buttons = readyAlphabet.locator('.catalog-alphabet button');
+            const preferred = buttons.filter({hasText: /^К/});
+            await (await preferred.count() ? preferred : buttons).first().click();
             await page.waitForFunction(before => location.href !== before, before);
-            await page.locator('.catalog-page__loading').waitFor({state: 'hidden'});
-            await page.locator('.catalog-alphabet button,.catalog-entities a').first().waitFor();
+            await readyAlphabet.locator('.catalog-alphabet button,.catalog-entities a').first().waitFor();
             assert(++depth < 40, 'Alphabet refinement must terminate');
         }
         assert(await page.locator('.catalog-entities a').count());

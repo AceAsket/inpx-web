@@ -3818,7 +3818,7 @@ class WebWorker {
         };
     }
 
-    async getUserProfiles(currentUserId = '') {
+    async getUserProfiles(currentUserId = '', {includeTotpStatus = false} = {}) {
         this.checkMyState();
 
         const {users, currentUser} = await this.readingListStore.getUsers(currentUserId);
@@ -3829,6 +3829,7 @@ class WebWorker {
                     name: getUserDisplayName(item),
                     login: item.login || '',
                     requiresLogin: !!item.passwordHash,
+                    ...(includeTotpStatus ? {otpEnabled:!!item.profileTotp} : {}),
                     anonymousProfile: isAnonymousDefaultUser(item),
                     isAdmin: !!item.isAdmin,
                     opdsEnabled: item.opdsEnabled !== false,
@@ -3983,6 +3984,7 @@ class WebWorker {
                 name: getUserDisplayName(user),
                 login: user.login || '',
                 hasPassword: !!user.passwordHash,
+                otpEnabled: profileAuthorized && !!user.profileTotp,
                 anonymousProfile,
                 isAdmin: !!user.isAdmin,
                 emailTo: (profileAuthorized ? user.emailTo || '' : ''),
@@ -4126,6 +4128,36 @@ class WebWorker {
             this.revokeUserSessions(userId, token);
             authorize();
             return {...status, recoveryCodesRemaining:recoveryCodes.length, recoveryCodes};
+        });
+    }
+
+    async resetUserProfileTotp(adminId, adminToken, targetUserId, password, otp) {
+        this.checkMyState();
+        const authorize = () => {
+            if (!adminId || this.getProfileSessionUser(adminToken) !== adminId)
+                throw new Error('need_profile_login');
+        };
+        authorize();
+        const store = this.readingListStore;
+        return withFileTransaction(store.file, async() => {
+            const admin = await store.getProfileCredentials(adminId);
+            authorize();
+            if (!admin?.isAdmin) throw new Error('Только администратор может управлять профилями');
+            if (admin.id === targetUserId) throw new Error('Свою двухфакторную защиту можно отключить в настройках своего профиля');
+            if (!admin.login || !admin.passwordHash || !await profilePassword.verify(admin.passwordHash, admin.login, password))
+                throw invalidProfileCredentials();
+            authorize();
+            const adminTotp = admin.profileTotp ? await this.verifyProfileTotp(admin, otp) : null;
+            const result = await store.resetProfileTotp(admin.id, targetUserId, adminTotp, authorize);
+            this.revokeUserSessions(result.userId);
+            this.profileTotpAttempts?.delete(result.userId);
+            if (this.pendingProfileTotp) {
+                for (const [token, setup] of this.pendingProfileTotp)
+                    if (setup.userId === result.userId) this.pendingProfileTotp.delete(token);
+            }
+            this.addAdminEvent('warn', 'security', 'Сброшена двухфакторная защита профиля',
+                {adminId:admin.id, userId:result.userId});
+            return result;
         });
     }
 

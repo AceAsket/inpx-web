@@ -750,6 +750,10 @@ class Api {
         return this.request({action: 'profile-totp', operation, payload}, 30, {suppressProfileLogin: true});
     }
 
+    async resetUserProfileTotp(targetUserId, password, otp) {
+        return this.request({action: 'reset-user-profile-totp', targetUserId, password, otp}, 30, {suppressProfileLogin: true});
+    }
+
     async logoutUserProfile() {
         return await this.request({action: 'logout-user-profile'}, 120);
     }
