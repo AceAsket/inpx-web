@@ -123,9 +123,10 @@ function register(app, config, worker, security) {
             res.set('Cache-Control', 'private, no-store');
             const token = req.headers?.['x-inpx-profile-token'];
             const access = typeof token === 'string' ? token : '';
-            const identity = await new (require('./ProfileAccess'))(config, worker, security).resolve(req, access);
+            const profileAccess = new (require('./ProfileAccess'))(config, worker, security);
+            const identity = await profileAccess.resolve(req, access);
             let user = identity?.user;
-            if (!user && config.allowAnonymousAccess !== false && req.params.userId === 'default') {
+            if (!user && !profileAccess.loginRequired && req.params.userId === 'default') {
                 const guest = await worker.readingListStore.getUser('default');
                 if (guest.id === 'default' && !guest.isAdmin && !guest.login && !guest.passwordHash) user = guest;
             }

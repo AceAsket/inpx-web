@@ -210,16 +210,7 @@ class Api {
             if (config.profileLoginRequired && !config.profileAuthorized) {
                 if (options.skipProfileLogin)
                     return;
-                if (!this.profileLoginPromise) {
-                    this.profileLoginPromise = this.showProfileLoginDialog('', {required: true});
-                    try {
-                        await this.profileLoginPromise;
-                    } finally {
-                        this.profileLoginPromise = null;
-                    }
-                } else {
-                    await this.profileLoginPromise;
-                }
+                await this.showProfileLoginDialog('', {required: true});
                 return;
             }
             if (config.profileAuthorized && config.currentUserId && this.settings.currentUserId !== config.currentUserId)
@@ -366,16 +357,7 @@ class Api {
                 } else if (response && response.error == 'need_profile_login') {
                     if (options.suppressProfileLogin)
                         throw new Error('need_profile_login');
-                    if (this.profileLoginPromise) {
-                        await this.profileLoginPromise;
-                    } else {
-                        this.profileLoginPromise = this.showProfileLoginDialog('', {required: !!this.$store.state.config.profileLoginRequired});
-                        try {
-                            await this.profileLoginPromise;
-                        } finally {
-                            this.profileLoginPromise = null;
-                        }
-                    }
+                    await this.showProfileLoginDialog('', {required: !!this.$store.state.config.profileLoginRequired});
                 } else if (response && response.error == 'server_busy') {
                     this.accessGranted = true;
                     await this.showBusyDialog();
@@ -742,8 +724,48 @@ class Api {
         return await this.request({action: 'get-user-profiles'}, 120);
     }
 
-    async loginUserProfile(login, password, otp) {
-        return this.request({action: 'login-user-profile', login, password, otp}, 120);
+    async loginUserProfile(login, password, otp, rememberDevice = false) {
+        const config = this.$store.state.config;
+        if (config.canRememberProfileDevice) {
+            const base = String(config.rootPathStatic || '').replace(/\/+$/, '');
+            const response = await fetch(`${base}/api/profile/login`, {
+                method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({login, password, otp, rememberDevice, csrfToken: config.csrfToken,
+                    accessToken: this.settings.accessToken || this.accessToken}),
+            });
+            const result = await response.json().catch(() => null);
+            if (response.ok && result?.profileAccessToken) return result;
+            if (!['bad_csrf_token', 'need_access_token', 'profile_web_login_unavailable'].includes(result?.code))
+                throw Object.assign(new Error(result?.error || 'Не удалось войти в профиль'), {code: result?.code});
+        }
+        return this.request({action: 'login-user-profile', login, password, otp}, 120, {suppressProfileLogin:true});
+    }
+
+    async enrollRequiredProfileTotp(login, password, dialogOpts) {
+        const enroll = (operation, payload) => this.request({action: 'profile-totp-enrollment', operation,
+            payload: {login, password, ...payload}}, 30, {suppressProfileLogin: true});
+        const setup = await enroll('start');
+        let qr = '';
+        try {
+            const module = await import('qrcode');
+            qr = await (module.default || module).toDataURL(setup.otpAuthUri, {width: 160, margin: 4});
+        } catch { /* The setup key can be entered manually. */ }
+        let error = '';
+        for (;;) {
+            const answer = await this.$root.stdDialog.profileOtp(
+                'Администратор требует OTP для этого профиля. Отсканируйте QR-код или введите ключ вручную в приложении-аутентификаторе.',
+                {...dialogOpts, setup: {secret: setup.secret, qr}, okLabel: 'Включить OTP', error});
+            if (!answer) return null;
+            try {
+                const result = await enroll('enable', {enrollmentId: setup.enrollmentId, code: answer.code});
+                await this.$root.stdDialog.profileOtpRecovery(result.recoveryCodes, dialogOpts);
+                return result;
+            } catch (failure) {
+                if (failure.code !== 'INPX_INVALID_PROFILE_CREDENTIALS') throw failure;
+                error = 'Не удалось подтвердить код. Проверьте код из приложения.';
+            }
+        }
     }
 
     async profileTotp(operation, payload) {
@@ -752,6 +774,14 @@ class Api {
 
     async resetUserProfileTotp(targetUserId, password, otp) {
         return this.request({action: 'reset-user-profile-totp', targetUserId, password, otp}, 30, {suppressProfileLogin: true});
+    }
+
+    async setUserProfileTotpRequired(targetUserId, required, password, otp) {
+        return this.request({action: 'set-user-profile-totp-required', targetUserId, required, password, otp}, 30, {suppressProfileLogin: true});
+    }
+
+    async setProfileAuthPolicy(policy, password, otp) {
+        return this.request({action: 'set-profile-auth-policy', ...policy, password, otp}, 30, {suppressProfileLogin: true});
     }
 
     async logoutUserProfile() {
@@ -887,7 +917,16 @@ class Api {
         await this.request({action: 'test'});
     }
 
-    async showProfileLoginDialog(prefillLogin = '', opts = {}) {
+    showProfileLoginDialog(prefillLogin = '', opts = {}) {
+        if (!this.profileLoginPromise) {
+            this.profileLoginPromise = this.promptProfileLogin(prefillLogin, opts).finally(() => {
+                this.profileLoginPromise = null;
+            });
+        }
+        return this.profileLoginPromise;
+    }
+
+    async promptProfileLogin(prefillLogin, opts) {
         const config = this.$store.state.config || {};
         const selectedUserId = String(this.settings.currentUserId || this.currentUserId || '').trim();
         const selectedProfile = Array.isArray(config.userProfiles)
@@ -917,11 +956,14 @@ class Api {
             try {
                 const password = String(loginPrompt.password || '');
                 result = await this.loginUserProfile(login, password).catch(async error => {
+                    if (error.code === 'need_profile_otp_setup')
+                        return this.enrollRequiredProfileTotp(login, password, {...dialogOpts, noEscDismiss: true, noBackdropDismiss: true});
                     if (error.code !== 'need_profile_otp' && error.message !== 'need_profile_otp') throw error;
-                    const code = await this.$root.stdDialog.profileOtp('Введите текущий код из приложения-аутентификатора или резервный код.', {
+                    const answer = await this.$root.stdDialog.profileOtp('Введите текущий код из приложения-аутентификатора или резервный код.', {
                         ...dialogOpts, noEscDismiss: true, noBackdropDismiss: true,
+                        trustedBrowserDays: config.canRememberProfileDevice ? config.trustedBrowserDays : 0,
                     });
-                    return code ? this.loginUserProfile(login, password, code) : null;
+                    return answer ? this.loginUserProfile(login, password, answer.code, answer.rememberDevice) : null;
                 });
                 if (!result && !opts.required) throw new Error('Вход в профиль отменён');
             } catch (error) {
@@ -938,7 +980,7 @@ class Api {
         this.profileAccessToken = result.profileAccessToken || '';
         this.rememberStoredProfileLogin(result.userId);
         this.writeStoredProfileSession(result.userId, result.profileAccessToken || '');
-        await this.updateConfig();
+        await this.updateConfig({skipProfileLogin:true});
         return result;
     }
 }

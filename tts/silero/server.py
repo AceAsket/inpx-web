@@ -19,7 +19,7 @@ from accentuation import StressProcessor, STRESS_VERSION
 import torch
 from num2words import num2words
 
-MODEL_ID = os.environ.get("SILERO_MODEL", "v5_5_ru")
+MODEL_ID = os.environ.get("SILERO_MODEL", "v5_6_ru")
 SPEAKERS = ("aidar", "baya", "kseniya", "xenia", "eugene")
 SAMPLE_RATE = 24000
 MAX_REQUEST = 16 * 1024 * 1024

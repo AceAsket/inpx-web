@@ -1,4 +1,4 @@
-const sensitive = /password|passwd|token|secret|authorization|contentbase64|^telegramproxyusername$|^data$|^key$|^salt$|^(?:otp|otpAuthUri|code|recoveryCodes|recoveryCode|recoveryHashes)$/i;
+const sensitive = /password|passwd|token|secret|authorization|contentbase64|^telegramproxyusername$|^data$|^key$|^salt$|^(?:otp|otpAuthUri|enrollmentId|code|recoveryCodes|recoveryCode|recoveryHashes)$/i;
 function redact(value, depth = 0) {
     if (depth > 5) return '[…]';
     if (typeof value === 'string') return value.replace(/https:\/\/t\.me\/[A-Za-z0-9_]+\?start=link_[A-Za-z0-9_-]+/g, '[private Telegram link]')

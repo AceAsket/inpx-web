@@ -1,6 +1,6 @@
 const {parseBasicAuth, equal} = require('./opds/Auth');
 
-const bootstrapActions = new Set(['test', 'get-config', 'get-worker-state', 'login-user-profile', 'resume-user-profile', 'logout-user-profile', 'logout']);
+const bootstrapActions = new Set(['test', 'get-config', 'get-worker-state', 'login-user-profile', 'profile-totp-enrollment', 'resume-user-profile', 'logout-user-profile', 'logout']);
 
 function denied(message = 'need_profile_login', status = 401) {
     const error = new Error(message);
@@ -16,11 +16,15 @@ class ProfileAccess {
     }
 
     get loginRequired() {
-        return this.config.allowAnonymousAccess === false;
+        return this.config.allowAnonymousAccess === false || this.globalTotpRequired;
+    }
+
+    get globalTotpRequired() {
+        return this.worker.readingListStore?.profileAuthPolicy?.otpRequired === true;
     }
 
     get bindingEnabled() {
-        return this.config.proxyBindProfile === true && String(this.config.authMode || '').trim().toLowerCase() === 'proxy';
+        return !this.globalTotpRequired && this.config.proxyBindProfile === true && String(this.config.authMode || '').trim().toLowerCase() === 'proxy';
     }
 
     clearBinding(session) {
@@ -110,6 +114,15 @@ class ProfileAccess {
             return null;
         return this.security.withLoginAttempt(req, 'opds', async () => {
             const scope = String(req.query?.user || '').trim();
+            if (this.globalTotpRequired) {
+                const store = this.worker.readingListStore;
+                if (scope) {
+                    const scoped = await store.verifyOpdsPassword(scope, credentials.user, credentials.password, {totpOnly:true});
+                    return scoped.authorized ? {user:scoped.user,opds:true,bound:true} : null;
+                }
+                const user = await store.findOpdsIdentity(credentials.user, credentials.password, {totpOnly:true});
+                return user ? {user,opds:true,bound:true} : null;
+            }
             if (this.config.opds.password) {
                 if (scope) {
                     const scoped = await this.worker.readingListStore.verifyOpdsPassword(scope,credentials.user,credentials.password,{totpOnly:true});

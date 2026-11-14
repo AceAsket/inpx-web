@@ -11,19 +11,20 @@
             <q-btn v-if="!status && error" flat no-caps label="Повторить" @click="run('status')" />
             <template v-if="status">
                 <p>{{ status.otpEnabled ? 'Включена' : 'Выключена' }}<span v-if="status.otpEnabled"> · резервных кодов: {{ status.recoveryCodesRemaining }}</span></p>
+                <p v-if="status.otpRequired">Для этого профиля администратор требует двухфакторный вход.</p>
                 <p v-if="config.profileBoundId">Второй фактор для входа через SSO настраивается у провайдера входа.</p>
                 <p v-else-if="!config.currentUserProfile?.hasPassword">Чтобы включить двухфакторный вход, сначала задайте пароль профиля.</p>
                 <template v-else>
-                    <form v-if="operation" class="profile-totp__form" @submit.prevent="submit">
+                    <form v-if="operation" class="profile-totp__form" @focusout.capture="syncFields($event.currentTarget)" @submit.prevent="submit">
                         <template v-if="setup">
                             <p>Отсканируйте QR-код приложением-аутентификатором или введите ключ вручную.</p>
                             <img v-if="qr" :src="qr" alt="QR-код настройки аутентификатора" width="180" height="180" />
                             <code class="profile-totp__code">{{ setup.secret }}</code>
                             <p>Для входа в нативный INPX Reader понадобится версия с полем одноразового кода. Для OPDS можно создать отдельный пароль после включения OTP.</p>
                         </template>
-                        <q-input v-model="password" type="password" label="Текущий пароль профиля" autocomplete="current-password" outlined dense :disable="busy" />
+                        <q-input v-model="password" name="password" type="password" label="Текущий пароль профиля" autocomplete="current-password" outlined dense :disable="busy" />
                         <q-input v-if="operation !== 'start'" v-model="code" :label="operation === 'enable' ? 'Код из приложения' : 'Код из приложения или резервный код'"
-                            :inputmode="operation === 'enable' ? 'numeric' : undefined" autocomplete="one-time-code" autocapitalize="off" spellcheck="false"
+                            name="otp" :inputmode="operation === 'enable' ? 'numeric' : undefined" autocomplete="one-time-code" autocapitalize="off" spellcheck="false"
                             maxlength="64" outlined dense :disable="busy" />
                         <div class="profile-totp__actions">
                             <q-btn color="primary" unelevated no-caps type="submit" :label="labels[operation]" :loading="busy" />
@@ -34,7 +35,9 @@
                         <q-btn v-if="!status.otpEnabled" color="primary" unelevated no-caps label="Настроить OTP" @click="choose('start')" />
                         <template v-else>
                             <q-btn outline no-caps label="Обновить резервные коды" @click="choose('regenerate-recovery')" />
-                            <q-btn outline no-caps color="negative" label="Отключить OTP" @click="choose('disable')" />
+                            <q-btn v-if="!status.otpRequired" outline no-caps color="negative" label="Отключить OTP" @click="choose('disable')" />
+                            <q-btn v-if="status.trustedDeviceCount > 0" outline no-caps :label="`Отозвать доверие к устройствам (${status.trustedDeviceCount})`"
+                                @click="choose('revoke-trusted-devices')" />
                             <q-btn v-if="config.currentUserProfile?.opdsEnabled" outline no-caps :label="status.opdsAppPasswordSet ? 'Заменить пароль OPDS' : 'Создать пароль OPDS'"
                                 @click="choose('create-opds-password')" />
                             <q-btn v-if="status.opdsAppPasswordSet" flat no-caps label="Отозвать пароль OPDS" @click="choose('revoke-opds-password')" />
@@ -66,7 +69,8 @@ const expanded = ref(false), busy = ref(false), error = ref(''), status = ref(nu
 const operation = ref(''), password = ref(''), code = ref(''), setup = ref(null), qr = ref('');
 const recoveryCodes = ref([]), opdsPassword = ref('');
 const labels = {start: 'Получить QR-код', enable: 'Включить OTP', disable: 'Подтвердить отключение',
-    'regenerate-recovery': 'Создать новые коды', 'create-opds-password': 'Создать пароль OPDS', 'revoke-opds-password': 'Подтвердить отзыв'};
+    'regenerate-recovery': 'Создать новые коды', 'create-opds-password': 'Создать пароль OPDS',
+    'revoke-opds-password': 'Подтвердить отзыв', 'revoke-trusted-devices': 'Отозвать доверие ко всем устройствам'};
 let revision = 0;
 
 function resetForm() {
@@ -90,7 +94,15 @@ function choose(action) {
     operation.value = action;
 }
 
-async function submit() {
+function syncFields(form) {
+    if (busy.value) return;
+    const fields = new FormData(form);
+    password.value = String(fields.get('password') || '');
+    code.value = String(fields.get('otp') || '');
+}
+
+async function submit(event) {
+    syncFields(event.currentTarget);
     if (!password.value || (operation.value !== 'start' && !code.value.trim())) {
         error.value = operation.value === 'start' ? 'Введите пароль профиля.' : 'Введите пароль и код.';
         return;
@@ -118,8 +130,10 @@ async function run(action, payload) {
         }
         status.value = {
             otpEnabled: result.otpEnabled ?? status.value?.otpEnabled,
+            otpRequired: result.otpRequired ?? status.value?.otpRequired,
             recoveryCodesRemaining: result.recoveryCodesRemaining ?? result.recoveryCodes?.length ?? status.value?.recoveryCodesRemaining,
             opdsAppPasswordSet: result.opdsAppPasswordSet ?? status.value?.opdsAppPasswordSet,
+            trustedDeviceCount: result.trustedDeviceCount ?? status.value?.trustedDeviceCount,
         };
         recoveryCodes.value = result.recoveryCodes || [];
         opdsPassword.value = result.opdsAppPassword || '';

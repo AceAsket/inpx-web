@@ -10,6 +10,7 @@ const {normalizeSpeechOptions, hasSpeechOptions} = require('../../shared/speechO
 const {MemoryCache} = require('./MemoryCache');
 
 const speakers = ['aidar', 'baya', 'kseniya', 'xenia', 'eugene'];
+const defaultModel = 'v5_6_ru';
 const maxTextLength = 3000000;
 const tokenLifetime = 24 * 60 * 60 * 1000;
 const chapterLimit = 6000;
@@ -300,7 +301,7 @@ class ReaderSpeech {
         const engineId = await this.engineIdentity();
         if (consumer?.cancelled) return {state:'cancelled'};
         const cacheKey = [
-            'silero-mp3-v1', this.config.ttsModel || 'v5_5_ru', speaker, bookUid, text,
+            'silero-mp3-v1', this.config.ttsModel || defaultModel, speaker, bookUid, text,
         ];
         if (custom) cacheKey.push('speech-options-v1', options, segments);
         if (engineId) cacheKey.push('speech-engine-v1', engineId);
@@ -440,7 +441,7 @@ class ReaderSpeech {
                     };
                     progressTimer = setTimeout(trackProgress, 1000);
                     response = await this.transport.post(`${this.config.ttsUrl.replace(/\/$/, '')}/synthesize`, {
-                        text: job.text, speaker: job.speaker, model: this.config.ttsModel || 'v5_5_ru', requestId: job.attemptId,
+                        text: job.text, speaker: job.speaker, model: this.config.ttsModel || defaultModel, requestId: job.attemptId,
                         ...(job.options ? {options: job.options, segments: job.segments?.map(({text, chapterEnd, paragraphEnd}) => ({text, chapterEnd, paragraphEnd}))} : {}),
                     }, {
                         responseType: 'stream', timeout: Number(this.config.ttsTimeoutMs) || 3600000,

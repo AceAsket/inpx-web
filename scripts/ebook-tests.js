@@ -160,6 +160,14 @@ async function testEbookRequiresOtpBeforeCreatingProfileSession(){
             return loginUserProfile(user,' pass ');
         };
         const base={login:'reader',password,next:destination};
+        const verifyOtp=worker.loginUserProfile;
+        worker.loginUserProfile=async()=>{throw Object.assign(new Error('Настройте OTP'),{code:'need_profile_otp_setup'});};
+        const setup=await request(login,{...base,csrf:csrf(initial.text)});
+        assert.equal(setup.response.status,401);
+        assert.match(setup.text,/href="\/library\/#\/profile"/);
+        assert.doesNotMatch(setup.text,/name="otp"/);
+        assert.equal(sessions.size,0);
+        worker.loginUserProfile=verifyOtp;
         const challenge=await request(login,{...base,csrf:csrf(initial.text)});
         assert.equal(challenge.response.status,401);
         assert.match(challenge.text,/name="otp"[^>]*autocomplete="one-time-code"/);

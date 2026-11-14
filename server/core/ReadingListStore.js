@@ -3,6 +3,8 @@ const path = require('path');
 const crypto = require('crypto');
 const profilePassword = require('./ProfilePassword');
 const profileTotp = require('./ProfileTotp');
+const trustedDevices = require('./ProfileTrustedDevices');
+const profileAuthPolicy = require('./ProfileAuthPolicy');
 const bookFormats = require('../../shared/BookFormats');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const progressJournal = require('./ReaderProgressJournal');
@@ -53,6 +55,15 @@ class ReadingListStore {
             sharedDiscoveryConfig: this.normalizeSharedDiscoveryConfig(),
             metadataOverrides: {},
         };
+    }
+
+    get profileAuthPolicy() {
+        return this.loadedProfileAuthPolicy || profileAuthPolicy.defaults;
+    }
+
+    updateCachedProfileAuthPolicy(value, {invalidateSnapshot = false} = {}) {
+        if (invalidateSnapshot) this.loaded = null;
+        this.loadedProfileAuthPolicy = Object.freeze(profileAuthPolicy.normalize(value));
     }
 
     async ensureData() {
@@ -681,6 +692,11 @@ class ReadingListStore {
         normalized.login = this.validateLogin(normalized.login || '');
         normalized.passwordHash = String(normalized.passwordHash || '').trim();
         if (normalized.profileTotp != null) normalized.profileTotp = profileTotp.normalize(normalized.profileTotp);
+        const devices = trustedDevices.active(normalized.profileTrustedDevices);
+        if (normalized.profileTotp && normalized.login && normalized.passwordHash && devices.length)
+            normalized.profileTrustedDevices = devices;
+        else delete normalized.profileTrustedDevices;
+        if (normalized.otpRequired !== true) delete normalized.otpRequired;
         normalized.emailTo = String(normalized.emailTo || '').trim();
         normalized.telegramChatId = String(normalized.telegramChatId || '').trim();
         normalized.telegramBotId = /^\d{1,20}$/.test(String(normalized.telegramBotId || '')) ? String(normalized.telegramBotId) : '';
@@ -783,6 +799,7 @@ class ReadingListStore {
             version: 5,
             users,
             lists,
+            profileAuthPolicy: profileAuthPolicy.normalize(source.profileAuthPolicy),
             sharedDiscoveryConfig: this.normalizeSharedDiscoveryConfig(source.sharedDiscoveryConfig),
             metadataOverrides: this.normalizeMetadataOverrides(source.metadataOverrides),
         };
@@ -820,6 +837,9 @@ class ReadingListStore {
                 admin.passwordHash = await profilePassword.hash(this.adminPassword());
                 if (this.config.resetAdminPassword) {
                     delete admin.profileTotp;
+                    delete admin.profileTrustedDevices;
+                    delete admin.otpRequired;
+                    source.profileAuthPolicy.otpRequired = false;
                     delete admin.opdsAppPasswordHash;
                 }
                 admin.updatedAt = this.nowIso();
@@ -849,6 +869,7 @@ class ReadingListStore {
                 version: 5,
                 users,
                 lists: source.lists,
+                profileAuthPolicy: source.profileAuthPolicy,
                 sharedDiscoveryConfig: source.sharedDiscoveryConfig,
                 metadataOverrides: source.metadataOverrides,
             },
@@ -898,6 +919,7 @@ class ReadingListStore {
         const {data, changed} = await this.applyAdminBootstrap(raw);
         if (changed || assetsChanged)
             await this.writeData(data);
+        this.updateCachedProfileAuthPolicy(data.profileAuthPolicy);
         this.config.resetAdminPassword = false;
         // After a write the stamp read above is stale: the next load reads the file again.
         if (!changed && !assetsChanged && !reset)
@@ -1042,6 +1064,7 @@ class ReadingListStore {
             && admin.opdsEnabled === false && admin.opdsAuthEnabled === false && data.users[0] === admin);
         this.loaded = {stamp:`${stat.ino}:${stat.size}:${stat.mtimeMs}`, data:structuredClone(data), checkpoint,
             journal: {stamp: journalStamp, offset: 0}, bootstrapped: bootstrapped && journalStamp === null};
+        this.updateCachedProfileAuthPolicy(data.profileAuthPolicy);
         // Only scan assets when the reference set changes, never on each page turn.
         await this.assets.prune(data).catch(error => logWarning(`Reader background cleanup: ${error.message}`));
     }
@@ -1068,8 +1091,10 @@ class ReadingListStore {
 
     async exportSnapshot() {
         const data = await this.load();
-        for (const user of data.users)
+        for (const user of data.users) {
+            delete user.profileTrustedDevices;
             user.readerPreferences = await this.assets.inlinePreferences(user.id, user.readerPreferences);
+        }
         return data;
     }
 
@@ -1175,11 +1200,13 @@ class ReadingListStore {
     }
 
     async getProfileCredentials(value, byLogin = false) {
-        const {users} = await this.loadSnapshot();
+        const {users, profileAuthPolicy} = await this.loadSnapshot();
         const user = byLogin ? users.find(item => item.login === value) : users.find(item => item.id === value);
         if (!user) return null;
         const {id, login, passwordHash} = user;
         return {id, login, passwordHash, isAdmin:!!user.isAdmin, profileTotp:structuredClone(user.profileTotp),
+            profileAuthPolicy, otpRequired:profileAuthPolicy.otpRequired || user.otpRequired === true,
+            profileTrustedDevices:trustedDevices.active(user.profileTrustedDevices),
             opdsAppPasswordSet:!!user.opdsAppPasswordHash};
     }
 
@@ -1188,8 +1215,12 @@ class ReadingListStore {
         const user = this.findProgressUser(data.users, userId);
         if (Object.hasOwn(patch, 'profileTotp')) {
             if (patch.profileTotp) user.profileTotp = patch.profileTotp;
-            else delete user.profileTotp;
+            else {
+                delete user.profileTotp;
+                delete user.profileTrustedDevices;
+            }
         }
+        if (Object.hasOwn(patch, 'profileTrustedDevices')) user.profileTrustedDevices = patch.profileTrustedDevices;
         if (patch.passwordHash) user.passwordHash = patch.passwordHash;
         authorize();
         await this.save(data);
@@ -1210,12 +1241,61 @@ class ReadingListStore {
             if (this.config.opds?.password) target.opdsEnabled = false;
         }
         delete target.profileTotp;
+        delete target.profileTrustedDevices;
         delete target.opdsAppPasswordHash;
         target.updatedAt = this.nowIso();
         authorize();
         await this.save(data);
-        return {userId:target.id, otpEnabled:false, opdsAppPasswordSet:false,
+        return {userId:target.id, otpEnabled:false, otpRequired:target.otpRequired === true, opdsAppPasswordSet:false,
             opdsEnabled:target.opdsEnabled, opdsAuthEnabled:target.opdsAuthEnabled};
+    }
+
+    async setProfileTotpRequired(adminId, targetUserId, required, adminTotp, authorize) {
+        const data = await this.load();
+        const admin = data.users.find(user => user.id === adminId && user.isAdmin);
+        if (!admin || adminId === targetUserId) throw new Error('Только администратор может изменить защиту другого профиля');
+        const target = data.users.find(user => user.id === targetUserId);
+        if (!target) throw new Error('Пользователь не найден');
+        if (required && (!target.login || !target.passwordHash))
+            throw new Error('Для обязательного OTP у профиля должны быть логин и пароль');
+
+        const changed = (target.otpRequired === true) !== required;
+        if (changed) {
+            if (required) {
+                target.otpRequired = true;
+                delete target.profileTrustedDevices;
+            } else delete target.otpRequired;
+            target.updatedAt = this.nowIso();
+        }
+        if (adminTotp) admin.profileTotp = adminTotp;
+        authorize();
+        if (changed || adminTotp) await this.save(data);
+        return {userId:target.id, otpRequired:required, otpEnabled:!!target.profileTotp, changed};
+    }
+
+    async setProfileAuthPolicy(adminId, policy, adminTotp, authorize, isAnonymousUser) {
+        const data = await this.load();
+        const admin = data.users.find(user => user.id === adminId && user.isAdmin);
+        if (!admin) throw new Error('Только администратор может изменить правила входа');
+        const previous = data.profileAuthPolicy;
+        const activatingOtp = policy.otpRequired && !previous.otpRequired;
+        if (activatingOtp) {
+            if (!admin.profileTotp) throw new Error('Сначала настройте OTP в своём профиле');
+            const missingCredentials = data.users.filter(user => (!user.login || !user.passwordHash) && !isAnonymousUser(user));
+            if (missingCredentials.length) throw new Error('Укажите логин и пароль для профилей: '
+                + missingCredentials.slice(0, 5).map(user => user.name).join(', ')
+                + (missingCredentials.length > 5 ? ` и ещё ${missingCredentials.length - 5}` : ''));
+        }
+        const trustChanged = policy.trustedBrowsersEnabled !== previous.trustedBrowsersEnabled
+            || policy.trustedBrowserDays !== previous.trustedBrowserDays;
+        if (trustChanged) {
+            for (const user of data.users) delete user.profileTrustedDevices;
+        }
+        data.profileAuthPolicy = policy;
+        if (adminTotp) admin.profileTotp = adminTotp;
+        authorize();
+        await this.save(data);
+        return {profileAuthPolicy:policy, activatingOtp};
     }
     async findTelegramUser(botId, chatId) {
         botId=String(botId);chatId=String(chatId);
@@ -1323,14 +1403,14 @@ class ReadingListStore {
         if (!user || user.opdsEnabled === false)
             return null;
 
-        return structuredClone(user);
+        return {...structuredClone(user), otpRequired:data.profileAuthPolicy.otpRequired || user.otpRequired === true};
     }
 
     async verifyOpdsPassword(publicId = '', login = '', password = '', {totpOnly = false} = {}) {
         const user = publicId || !totpOnly ? await this.getOpdsUser(publicId) : await this.findOpdsIdentity(login,password,{totpOnly:true});
         if (!publicId && totpOnly) return {user, authorized:!!user};
-        if (totpOnly && !user?.profileTotp) return {user:null, authorized:false};
-        if (!user || (user.opdsAuthEnabled !== true && !user.profileTotp))
+        if (totpOnly && !user?.profileTotp && !user?.otpRequired) return {user:null, authorized:false};
+        if (!user || (user.opdsAuthEnabled !== true && !user.profileTotp && !user.otpRequired))
             return {user, authorized: true};
         return {user, requiresAuthentication:true, authorized:await this.verifyOpdsCredential(user,login,password)};
     }
@@ -1345,6 +1425,7 @@ class ReadingListStore {
 
     async verifyOpdsCredential(user, login, password) {
         if (!user.login || !user.passwordHash || this.normalizeLogin(login) !== user.login) return false;
+        if ((this.profileAuthPolicy.otpRequired || user.otpRequired) && !user.profileTotp) return false;
         // App passwords contain 192 bits of randomness, so a SHA-256 digest
         // supports constant-time validation without a KDF on every book request.
         if (typeof password === 'string' && /^inpx_[A-Za-z0-9_-]{32}$/.test(password) && /^[a-f0-9]{64}$/.test(user.opdsAppPasswordHash || '')) {
@@ -1414,6 +1495,8 @@ class ReadingListStore {
             opdsAuthEnabled: profile.opdsAuthEnabled,
             isAdmin: false,
         });
+        if (data.profileAuthPolicy.otpRequired && (!user.login || !user.passwordHash))
+            throw new Error('При обязательном OTP у профиля должны быть логин и пароль');
         if (user.opdsAuthEnabled && (!user.login || !user.passwordHash))
             throw new Error('Для OPDS-авторизации у профиля должен быть логин и пароль');
         this.checkTelegramChatOwner(data,user.id,user.telegramChatId);
@@ -1431,8 +1514,10 @@ class ReadingListStore {
 
         const nextName = this.validateUserName(utilsHasProp(patch, 'name') ? patch.name : target.name);
         const nextLogin = this.validateLogin(utilsHasProp(patch, 'login') ? patch.login : target.login);
-        if (nextLogin !== target.login || (utilsHasProp(patch, 'passwordHash') && String(patch.passwordHash || '').trim() !== target.passwordHash))
+        if (nextLogin !== target.login || (utilsHasProp(patch, 'passwordHash') && String(patch.passwordHash || '').trim() !== target.passwordHash)) {
             delete target.opdsAppPasswordHash;
+            delete target.profileTrustedDevices;
+        }
         if (nextLogin !== target.login && profilePassword.isLegacy(target.passwordHash)
             && (!String(patch.passwordHash || '').trim() || patch.passwordHash === target.passwordHash))
             throw new Error('Для смены логина укажите пароль заново');
@@ -1472,6 +1557,8 @@ class ReadingListStore {
             target.readerPreferences = this.normalizeReaderPreferences(patch.readerPreferences);
         if (target.opdsAuthEnabled && (!target.login || !target.passwordHash))
             throw new Error('Для OPDS-авторизации у профиля должен быть логин и пароль');
+        if ((data.profileAuthPolicy.otpRequired || target.otpRequired) && (!target.login || !target.passwordHash))
+            throw new Error('Сначала снимите требование OTP для профиля');
         if (target.profileTotp && (!target.login || !target.passwordHash))
             throw new Error('Сначала отключите двухфакторную защиту профиля');
         target.updatedAt = this.nowIso();

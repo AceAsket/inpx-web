@@ -67,10 +67,11 @@ class EbookController {
         if(typeof value!=='string'||value.length>2048||/[\u0000-\u0020\\]/.test(value))return this.base;
         try{const url=new URL(value,'http://ebook.local');return url.origin==='http://ebook.local'&&(url.pathname===this.base||url.pathname.startsWith(this.base+'/'))?url.pathname+url.search:this.base;}catch{return this.base;}
     }
-    form(req,kind,message='',otpRequired=false) {
+    form(req,kind,message='',{otpRequired=false,otpSetupRequired=false}={}) {
         const profile=kind==='profile',csrf=this.security.getCsrfToken(req);
         const next=this.destination(req.body?.next||((req.path==='/login'||req.path==='/access')?req.query.next:req.originalUrl));
         const body=(message?`<p class="error" role="alert">${escape(message)}</p>`:'')+
+            (profile&&otpSetupRequired?`<p><a href="${escape(this.root+'/#/profile')}">Открыть основной интерфейс</a></p>`:'')+
             `<form class="auth" method="post" action="${escape(this.url(profile?'/login':'/access'))}">${this.hidden('csrf',csrf)}${this.hidden('next',next)}`+
             (profile?`<label for="login">Логин</label><input id="login" name="login" value="${escape(typeof req.body?.login==='string'?short(req.body.login,100):'')}" autocomplete="username" maxlength="100" required>`:'')+
             `<label for="password">${profile?'Пароль':'Пароль библиотеки'}</label><input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required>`+
@@ -92,6 +93,7 @@ class EbookController {
             try{result=await this.security.withLoginAttempt(req,'profile',()=>this.worker.loginUserProfile(login,password,otp));}
             catch(error){
                 if(error.code==='need_profile_otp')throw Object.assign(bad('Введите пароль ещё раз и добавьте код из приложения-аутентификатора или резервный код.',401),{otpRequired:true});
+                if(error.code==='need_profile_otp_setup')throw Object.assign(bad('Сначала войдите в основном интерфейсе INPX Web и настройте обязательный OTP.',401),{otpSetupRequired:true});
                 if(error.code==='INPX_INVALID_PROFILE_CREDENTIALS'||error.message==='Неверный логин или пароль')
                     throw Object.assign(bad(otp?'Неверный логин, пароль или код':'Неверный логин или пароль',401),{otpRequired:!!otp});
                 throw error;
@@ -378,7 +380,7 @@ class EbookController {
                 const message=error.status?error.message:status===429?'Слишком много попыток. Повторите позже.':status===503?'Сервер занят или библиотека пока недоступна. Повторите запрос позже.':'Не удалось выполнить запрос. Попробуйте ещё раз.';
                 const loginPath=req.path.replace(/\/$/,'');
                 if(req.method==='POST'&&status===401&&['/login','/access'].includes(loginPath))
-                    return res.status(status).type('html').send(this.form(req,loginPath==='/login'?'profile':'access',message,error.otpRequired));
+                    return res.status(status).type('html').send(this.form(req,loginPath==='/login'?'profile':'access',message,error));
                 const bookLink=typeof req.query.uid==='string'&&req.query.uid.length<=1024?this.link('/book',{uid:req.query.uid},'О книге'):'';
                 res.status(status).type('html').send(this.document(req,'Не удалось открыть страницу',`<p class="error" role="alert">${escape(message)}</p>${bookLink} ${this.link('',{},'К поиску')} ${this.link('/login',{},'Войти')}`,identity));
             }

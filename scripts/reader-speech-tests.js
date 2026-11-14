@@ -75,7 +75,7 @@ async function testCore(directory) {
         assert.throws(() => normalizeSpeechOptions(options));
 
     const audio = Buffer.from('ID3test-audio-range-payload');
-    let calls = 0, mode = 'ok', release, lastPayload, engineId = '';
+    let calls = 0, mode = 'ok', release, lastPayload, engineId = '', expectedModel = 'v5_6_ru';
     let gate = new Promise(resolve => { release = resolve; });
     const mock = express();
     mock.use(express.json());
@@ -84,7 +84,7 @@ async function testCore(directory) {
         calls++;
         lastPayload = req.body;
         assert.equal(req.headers.authorization, 'Bearer test-key');
-        assert.equal(req.body.model, 'v5_5_ru');
+        assert.equal(req.body.model, expectedModel);
         assert.equal(Object.hasOwn(req.body, 'rate'), false, 'Playback speed must not become a synthesis parameter');
         await gate;
         if (mode === 'error') return res.status(503).json({error: 'busy'});
@@ -128,6 +128,12 @@ async function testCore(directory) {
         const second = new ReaderSpeech(config);
         assert.equal((await second.prepare('b', 'book-1', {fb2: sample})).state, 'ready');
         assert.equal(calls, 1, 'Cache survives service restart');
+        expectedModel = 'v5_5_ru';
+        const previousModel = new ReaderSpeech({...config, ttsModel: expectedModel});
+        const previousAudio = await previousModel.prepare('a', 'book-1', {fb2: sample});
+        assert.notEqual(previousAudio.id, id, 'The previous model must retain its own audio cache');
+        assert.equal((await settled(previousModel, 'a', previousAudio.id)).state, 'ready');
+        expectedModel = 'v5_6_ru';
         engineId = 'silero-stress-1.5-pipeline-v1';
         const stressed = await speech.prepare('a', 'book-1', {fb2: sample});
         assert.notEqual(stressed.id, id, 'External accentuation must not reuse the built-in audio cache');
@@ -222,7 +228,8 @@ async function testCore(directory) {
 
 async function testRealService(url) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-silero-real-'));
-    const speech = new ReaderSpeech({dataDir: directory, ttsEnabled: true, ttsUrl: url, ttsTimeoutMs: 600000});
+    const speech = new ReaderSpeech({dataDir: directory, ttsEnabled: true, ttsUrl: url, ttsTimeoutMs: 600000,
+        ttsModel: process.env.INPX_TTS_MODEL});
     const start = Date.now();
     const text = '— Здравствуйте! Это проверка озвучки книги. Silero читает текст на русском языке — можно *слушать*^ и продолжать с «сохранённого места».';
     const job = await speech.prepare('test', 'real-silero', {fb2: fb2(text)});

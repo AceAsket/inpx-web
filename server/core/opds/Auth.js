@@ -33,7 +33,7 @@ module.exports = function opdsAuth(config, verifyPassword, security) {
                 // of an enrolled profile when a personal scope is requested.
                 if (scopedUser || credentials?.user) {
                     const profile = await verifyPassword(scopedUser, credentials?.user || '', credentials?.password || '', {totpOnly:true});
-                    if (profile.user?.profileTotp) return profile;
+                    if (profile.user?.profileTotp || profile.user?.otpRequired) return profile;
                 }
                 return {authorized:!!credentials && equal(credentials.user, config.opds.user) && equal(credentials.password, config.opds.password)};
             };

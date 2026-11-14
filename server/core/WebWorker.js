@@ -23,6 +23,8 @@ const ReadingListStore = require('./ReadingListStore');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const profilePassword = require('./ProfilePassword');
 const profileTotp = require('./ProfileTotp');
+const profileAuthPolicy = require('./ProfileAuthPolicy');
+const trustedDevices = require('./ProfileTrustedDevices');
 const SecretStore = require('./SecretStore');
 const sessionLifetime = require('./SessionLifetime');
 const imageUtils = require('./ImageUtils');
@@ -3829,7 +3831,7 @@ class WebWorker {
                     name: getUserDisplayName(item),
                     login: item.login || '',
                     requiresLogin: !!item.passwordHash,
-                    ...(includeTotpStatus ? {otpEnabled:!!item.profileTotp} : {}),
+                    ...(includeTotpStatus ? {otpEnabled:!!item.profileTotp, otpRequired:item.otpRequired === true} : {}),
                     anonymousProfile: isAnonymousDefaultUser(item),
                     isAdmin: !!item.isAdmin,
                     opdsEnabled: item.opdsEnabled !== false,
@@ -3894,7 +3896,7 @@ class WebWorker {
             : identityOnly ? await this.readingListStore.getUserIdentity(userId)
             : await this.readingListStore.getUser(userId);
         if (!requestedUser) throw new Error('need_profile_login');
-        if (!requestedUser.passwordHash && (!exactId || !profileAccessToken))
+        if (!this.readingListStore.profileAuthPolicy?.otpRequired && !requestedUser.passwordHash && (!exactId || !profileAccessToken))
             return requestedUser;
 
         const sessionUserId = this.getProfileSessionUser(profileAccessToken);
@@ -3937,7 +3939,7 @@ class WebWorker {
     async personalLibraryUser(userId, token) {
         const user = userId && await this.readingListStore.getExactProfileIdentity(userId);
         if (!user || isAnonymousDefaultUser(user)
-            || (user.passwordHash || token) && this.getProfileSessionUser(token) !== user.id)
+            || (user.passwordHash || token || this.readingListStore.profileAuthPolicy?.otpRequired) && this.getProfileSessionUser(token) !== user.id)
             throw new Error('need_profile_login');
         return user;
     }
@@ -3974,7 +3976,8 @@ class WebWorker {
 
         const user = await this.getEffectiveUser(userId, profileAccessToken);
         const anonymousProfile = isAnonymousDefaultUser(user);
-        const profileAuthorized = (!anonymousProfile && (!user.passwordHash || this.getProfileSessionUser(profileAccessToken) === user.id));
+        const otpPolicyRequired = this.readingListStore.profileAuthPolicy?.otpRequired === true;
+        const profileAuthorized = (!anonymousProfile && (!user.passwordHash && !otpPolicyRequired || this.getProfileSessionUser(profileAccessToken) === user.id));
         const readingSummary = (profileAuthorized ? await this.buildUserReadingSummary(user, 48) : {count: 0, items: []});
         return {
             currentUserId: user.id,
@@ -3985,6 +3988,7 @@ class WebWorker {
                 login: user.login || '',
                 hasPassword: !!user.passwordHash,
                 otpEnabled: profileAuthorized && !!user.profileTotp,
+                otpRequired: profileAuthorized && (otpPolicyRequired || user.otpRequired === true),
                 anonymousProfile,
                 isAdmin: !!user.isAdmin,
                 emailTo: (profileAuthorized ? user.emailTo || '' : ''),
@@ -4005,26 +4009,81 @@ class WebWorker {
         };
     }
 
-    async loginUserProfile(login = '', password = '', otp = '') {
+    async loginUserProfile(login = '', password = '', otp = '', {trustedDeviceToken = '', rememberDevice = false} = {}) {
         this.checkMyState();
         const store = this.readingListStore;
         return withFileTransaction(store.file, async() => {
             const user = await store.getProfileCredentials(store.normalizeLogin(login), true);
             if (!user?.passwordHash || !await profilePassword.verify(user.passwordHash, user.login, password))
                 throw invalidProfileCredentials();
+            if (user.otpRequired && !user.profileTotp)
+                throw Object.assign(new Error('Настройте обязательный OTP в веб-интерфейсе INPX Web'), {code:'need_profile_otp_setup'});
             const patch = {};
-            if (user.profileTotp) {
-                if (otp === '' || otp === undefined)
+            const canUseTrust = trustedDevices.available(user.profileAuthPolicy);
+            const trusted = canUseTrust && trustedDevices.recognizes(user.profileTrustedDevices, trustedDeviceToken);
+            let deviceGrant;
+            if (user.profileTotp && (otp !== '' || !trusted)) {
+                if (otp === '')
                     throw Object.assign(new Error('Введите код двухфакторной защиты'), {code:'need_profile_otp'});
                 patch.profileTotp = await this.verifyProfileTotp(user, otp);
+                // Recovery codes are for signing back in after a lost authenticator.
+                if (canUseTrust && rememberDevice && /^\d{6}$/.test(otp)) {
+                    deviceGrant = trustedDevices.issue(user.profileTrustedDevices, trustedDeviceToken, user.profileAuthPolicy.trustedBrowserDays);
+                    patch.profileTrustedDevices = deviceGrant.devices;
+                }
             }
             if (profilePassword.isLegacy(user.passwordHash)) patch.passwordHash = await profilePassword.hash(password);
             if (Object.keys(patch).length) await store.updateProfileCredentials(user.id, patch);
             return {
                 userId: user.id,
                 profileAccessToken: this.createProfileSession(user.id),
+                ...(deviceGrant ? {trustedDeviceToken:deviceGrant.token, trustedDeviceMaxAge:deviceGrant.maxAgeSeconds} : {}),
             };
         });
+    }
+
+    async enrollRequiredProfileTotp(operation, {login = '', password = '', enrollmentId, code} = {}) {
+        this.checkMyState();
+        const store = this.readingListStore;
+        return withFileTransaction(store.file, async() => {
+            const user = await store.getProfileCredentials(store.normalizeLogin(login), true);
+            if (!user?.passwordHash || !await profilePassword.verify(user.passwordHash, user.login, password))
+                throw invalidProfileCredentials();
+            if (!user.otpRequired || user.profileTotp)
+                throw new Error('Войдите в профиль заново');
+            const pending = this.pendingRequiredProfileTotp ??= new Map();
+            if (operation === 'start') {
+                const now = Date.now();
+                for (const [key, setup] of pending)
+                    if (setup.expiresAt <= now || setup.userId === user.id) pending.delete(key);
+                if (pending.size >= profileTotpSetupLimit) throw new Error('Повторите настройку позже');
+                const id = utils.randomHexString(24);
+                const params = profileTotp.start(user.login);
+                pending.set(id, {userId:user.id, secret:params.secret, expiresAt:now + profileTotpSetupLifetimeMs, attempts:0});
+                return {...params, enrollmentId:id};
+            }
+            if (operation !== 'enable') throw new Error('Неизвестное действие с двухфакторной защитой');
+            const {state, recoveryCodes} = await this.confirmProfileTotpSetup(pending, enrollmentId, user.id, code);
+            const patch = {profileTotp:state};
+            if (profilePassword.isLegacy(user.passwordHash)) patch.passwordHash = await profilePassword.hash(password);
+            await store.updateProfileCredentials(user.id, patch);
+            this.revokeUserSessions(user.id);
+            return {userId:user.id, profileAccessToken:this.createProfileSession(user.id), recoveryCodes};
+        });
+    }
+
+    async confirmProfileTotpSetup(pending, key, userId, code) {
+        const setup = pending.get(key);
+        if (!setup || setup.userId !== userId || setup.expiresAt <= Date.now() || setup.attempts >= profileTotpAttemptLimit) {
+            if (setup?.userId === userId) pending.delete(key);
+            throw new Error('Начните настройку двухфакторной защиты заново');
+        }
+        const lastStep = profileTotp.verify(setup.secret, code);
+        if (lastStep === null) {
+            setup.attempts++;
+            throw invalidProfileCredentials();
+        }
+        return profileTotp.enable(new SecretStore(this.readingListStore.config), userId, setup.secret, lastStep);
     }
 
     async verifyProfileTotp(user, code) {
@@ -4064,8 +4123,9 @@ class WebWorker {
                 const identity = await this.personalLibraryUser(userId, token);
                 const user = await store.getProfileCredentials(identity.id);
                 if (token) authorize();
-                return {otpEnabled:!!user.profileTotp, recoveryCodesRemaining:user.profileTotp?.recoveryHashes.length || 0,
-                    opdsAppPasswordSet:user.opdsAppPasswordSet, hasPassword:!!(user.passwordHash && user.login)};
+                return {otpEnabled:!!user.profileTotp, otpRequired:user.otpRequired, recoveryCodesRemaining:user.profileTotp?.recoveryHashes.length || 0,
+                    opdsAppPasswordSet:user.opdsAppPasswordSet, hasPassword:!!(user.passwordHash && user.login),
+                    trustedDeviceCount:user.profileTrustedDevices.length};
             });
         }
         authorize();
@@ -4073,8 +4133,8 @@ class WebWorker {
             const user = await store.getProfileCredentials(userId);
             authorize();
             if (!user?.passwordHash || !user.login) throw new Error('Для защиты нужен локальный профиль с логином и паролем');
-            const status = {otpEnabled:!!user.profileTotp, recoveryCodesRemaining:user.profileTotp?.recoveryHashes.length || 0,
-                opdsAppPasswordSet:user.opdsAppPasswordSet};
+            const status = {otpEnabled:!!user.profileTotp, otpRequired:user.otpRequired, recoveryCodesRemaining:user.profileTotp?.recoveryHashes.length || 0,
+                opdsAppPasswordSet:user.opdsAppPasswordSet, trustedDeviceCount:user.profileTrustedDevices.length};
             if (!await profilePassword.verify(user.passwordHash, user.login, payload?.password))
                 throw invalidProfileCredentials();
             authorize();
@@ -4090,17 +4150,7 @@ class WebWorker {
                     pending.set(token, {userId, secret:params.secret, expiresAt:Date.now() + profileTotpSetupLifetimeMs, attempts:0});
                     return params;
                 }
-                const setup = pending.get(token);
-                if (!setup || setup.userId !== userId || setup.expiresAt <= Date.now() || setup.attempts >= profileTotpAttemptLimit) {
-                    pending.delete(token);
-                    throw new Error('Начните настройку двухфакторной защиты заново');
-                }
-                const lastStep = profileTotp.verify(setup.secret, payload?.code);
-                if (lastStep === null) {
-                    setup.attempts++;
-                    throw invalidProfileCredentials();
-                }
-                const {state, recoveryCodes} = await profileTotp.enable(new SecretStore(store.config), userId, setup.secret, lastStep);
+                const {state, recoveryCodes} = await this.confirmProfileTotpSetup(pending, token, userId, payload?.code);
                 await store.updateProfileCredentials(userId, {profileTotp:state}, authorize);
                 pending.delete(token);
                 this.revokeUserSessions(userId, token);
@@ -4113,25 +4163,32 @@ class WebWorker {
                 authorize();
                 return {...status, recoveryCodesRemaining:state?.recoveryHashes.length ?? status.recoveryCodesRemaining, ...result};
             }
-            if (operation !== 'disable' && operation !== 'regenerate-recovery')
+            if (!['disable', 'regenerate-recovery', 'revoke-trusted-devices'].includes(operation))
                 throw new Error('Неизвестное действие с двухфакторной защитой');
             if (!status.otpEnabled) throw new Error('Двухфакторная защита не включена');
+            if (operation === 'disable' && status.otpRequired) throw new Error('OTP обязателен по настройке администратора');
             const state = await this.verifyProfileTotp(user, payload?.code);
+            if (operation === 'revoke-trusted-devices') {
+                await store.updateProfileCredentials(userId, {profileTotp:state, profileTrustedDevices:[]}, authorize);
+                this.revokeUserSessions(userId, token);
+                authorize();
+                return {...status, recoveryCodesRemaining:state.recoveryHashes.length, trustedDeviceCount:0};
+            }
             if (operation === 'disable') {
                 await store.updateProfileCredentials(userId, {profileTotp:null}, authorize);
                 this.revokeUserSessions(userId, token);
                 authorize();
-                return {...status, otpEnabled:false, recoveryCodesRemaining:0};
+                return {...status, otpEnabled:false, recoveryCodesRemaining:0, trustedDeviceCount:0};
             }
             const {recoveryCodes, recoveryHashes} = profileTotp.newRecoveryCodes(userId);
-            await store.updateProfileCredentials(userId, {profileTotp:{...state, recoveryHashes}}, authorize);
+            await store.updateProfileCredentials(userId, {profileTotp:{...state, recoveryHashes}, profileTrustedDevices:[]}, authorize);
             this.revokeUserSessions(userId, token);
             authorize();
-            return {...status, recoveryCodesRemaining:recoveryCodes.length, recoveryCodes};
+            return {...status, recoveryCodesRemaining:recoveryCodes.length, recoveryCodes, trustedDeviceCount:0};
         });
     }
 
-    async resetUserProfileTotp(adminId, adminToken, targetUserId, password, otp) {
+    async withAdminProfileTotpChange(adminId, adminToken, targetUserId, password, otp, change) {
         this.checkMyState();
         const authorize = () => {
             if (!adminId || this.getProfileSessionUser(adminToken) !== adminId)
@@ -4148,6 +4205,12 @@ class WebWorker {
                 throw invalidProfileCredentials();
             authorize();
             const adminTotp = admin.profileTotp ? await this.verifyProfileTotp(admin, otp) : null;
+            return change(store, admin, adminTotp, authorize);
+        });
+    }
+
+    async resetUserProfileTotp(adminId, adminToken, targetUserId, password, otp) {
+        return this.withAdminProfileTotpChange(adminId, adminToken, targetUserId, password, otp, async(store, admin, adminTotp, authorize) => {
             const result = await store.resetProfileTotp(admin.id, targetUserId, adminTotp, authorize);
             this.revokeUserSessions(result.userId);
             this.profileTotpAttempts?.delete(result.userId);
@@ -4161,10 +4224,40 @@ class WebWorker {
         });
     }
 
+    async setUserProfileTotpRequired(adminId, adminToken, targetUserId, required, password, otp) {
+        if (typeof required !== 'boolean') throw new Error('Укажите требование OTP');
+        return this.withAdminProfileTotpChange(adminId, adminToken, targetUserId, password, otp, async(store, admin, adminTotp, authorize) => {
+            const {changed, ...result} = await store.setProfileTotpRequired(admin.id, targetUserId, required, adminTotp, authorize);
+            if (changed) {
+                this.clearRequiredProfileTotpEnrollment(result.userId);
+                if (required) this.revokeUserSessions(result.userId);
+                this.addAdminEvent('warn', 'security', required ? 'OTP обязателен для профиля' : 'Требование OTP для профиля снято',
+                    {adminId:admin.id, userId:result.userId});
+            }
+            return result;
+        });
+    }
+
+    async setProfileAuthPolicy(adminId, adminToken, policy, password, otp) {
+        if (!profileAuthPolicy.valid(policy)) throw new Error(`Срок доверия должен быть целым числом от 1 до ${profileAuthPolicy.maximumTrustedBrowserDays} дней`);
+        return this.withAdminProfileTotpChange(adminId, adminToken, null, password, otp, async(store, admin, adminTotp, authorize) => {
+            const {activatingOtp, ...result} = await store.setProfileAuthPolicy(admin.id, policy, adminTotp, authorize, isAnonymousDefaultUser);
+            if (activatingOtp) {
+                const keep = String(adminToken || '').trim();
+                for (const token of this.profileSessions.keys()) {
+                    if (token !== keep) this.closeProfileSession(token);
+                }
+            }
+            if (!policy.otpRequired) this.pendingRequiredProfileTotp?.clear();
+            this.addAdminEvent('warn', 'security', 'Изменены правила входа в профили', {adminId:admin.id, ...result.profileAuthPolicy});
+            return result;
+        });
+    }
+
     async createUserProfile(profile = {}) {
         this.checkMyState();
         const user = await this.readingListStore.createUser(profile);
-        return {user:_.omit(user, ['passwordHash', 'profileTotp', 'opdsAppPasswordHash'])};
+        return {user:_.omit(user, ['passwordHash', 'profileTotp', 'opdsAppPasswordHash', 'profileTrustedDevices'])};
     }
 
     async updateUserProfile(userId, patch = {}) {
@@ -4175,7 +4268,7 @@ class WebWorker {
             if(previous.telegramChatId!==user.telegramChatId)this.telegramBot?.cancelDeliveries(userId);
             if (previous.passwordHash !== user.passwordHash || previous.login !== user.login)
                 this.revokeUserSessions(userId);
-            return {user:_.omit(user, ['passwordHash', 'profileTotp', 'opdsAppPasswordHash'])};
+            return {user:_.omit(user, ['passwordHash', 'profileTotp', 'opdsAppPasswordHash', 'profileTrustedDevices'])};
         });
     }
 
@@ -4193,6 +4286,13 @@ class WebWorker {
             if (session.userId === userId && token !== keepToken)
                 this.closeProfileSession(token);
         }
+        this.clearRequiredProfileTotpEnrollment(userId);
+    }
+
+    clearRequiredProfileTotpEnrollment(userId) {
+        if (!this.pendingRequiredProfileTotp) return;
+        for (const [key, setup] of this.pendingRequiredProfileTotp)
+            if (setup.userId === userId) this.pendingRequiredProfileTotp.delete(key);
     }
 
     async getOpdsUsers() {
@@ -5442,6 +5542,7 @@ class WebWorker {
                 let normalized = null;
                 if (archive['reading-lists.json']) {
                     normalized = this.readingListStore.normalizeData(archive['reading-lists.json']);
+                    for (const user of normalized.users) delete user.profileTrustedDevices;
                 }
                 if (normalized || content['secret.key']) {
                     const users = (normalized || await this.readingListStore.load()).users;
@@ -5470,10 +5571,12 @@ class WebWorker {
                         restartRecommended: true};
                 }
                 await transaction.commit(this.config, content);
+                if (normalized) this.readingListStore.updateCachedProfileAuthPolicy(normalized.profileAuthPolicy, {invalidateSnapshot:true});
                 if (runtimePatch)
                     Object.assign(this.config, runtimePatch);
                 this.profileSessions.clear();
                 this.pendingProfileTotp?.clear();
+                this.pendingRequiredProfileTotp?.clear();
                 this.profileTotpAttempts?.clear();
                 if (this.telegramBot) {this.telegramBot.signature = null; this.telegramBot.configure();}
                 if (archive['discovery-cache.json']) {

@@ -273,8 +273,10 @@ async function main() {
 
     const { WebSocketController } = require('./controllers');
     const webSocketController = new WebSocketController(wss, webAccess, config, security);
+    require('./core/ProfileWebLogin').register(app, config, webSocketController.webWorker, security, webAccess, webSocketController.profileAccess);
     const {ServerActivity} = require('./core/ServerActivity');
     webSocketController.webWorker.serverActivity = new ServerActivity(config, security.secret, log);
+    await webSocketController.webWorker.readingListStore.loadSnapshot();
     await webSocketController.webWorker.readingListStore.warnIfDefaultAdminPassword()
         .catch(e => log(LM_WARN, `Cannot check the admin password: ${e.message}`));
 

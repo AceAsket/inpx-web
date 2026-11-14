@@ -231,15 +231,37 @@
             <form class="credentials-form" @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
                 <div class="q-mx-md q-mt-sm">
                     <p>{{ message }}</p>
-                    <q-input ref="input" v-model="inputValue" label="Код из приложения или резервный код"
+                    <div v-if="otpSetup" class="otp-setup q-mb-md">
+                        <img v-if="otpSetup.qr" :src="otpSetup.qr" alt="QR-код настройки аутентификатора" width="160" height="160" />
+                        <code>{{ otpSetup.secret }}</code>
+                    </div>
+                    <q-input ref="input" v-model="inputValue" :label="otpSetup ? 'Код из приложения' : 'Код из приложения или резервный код'"
+                        :inputmode="otpSetup ? 'numeric' : undefined"
                         name="otp" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="64" outlined dense />
+                    <q-checkbox v-if="trustedBrowserDays" v-model="rememberOtpDevice" class="q-mt-sm" :label="`Запомнить это устройство (${trustedBrowserDays} дн.)`" />
+                    <div v-if="trustedBrowserDays" class="text-caption q-ml-sm">После входа с кодом из приложения в этом браузере будет достаточно пароля.</div>
                     <div class="error" role="status" aria-live="polite">{{ error }}</div>
                 </div>
                 <div class="buttons row justify-end q-pa-md">
                     <q-btn v-if="!noCancel" v-close-popup class="q-px-md q-ml-sm" dense no-caps>Отмена</q-btn>
-                    <q-btn class="q-px-md q-ml-sm" color="primary" type="submit" dense no-caps>OK</q-btn>
+                    <q-btn class="q-px-md q-ml-sm" color="primary" type="submit" dense no-caps>{{ okButtonLabel }}</q-btn>
                 </div>
             </form>
+        </div>
+
+        <div v-if="type === 'profileOtpRecovery'" :class="dialogContentClass" :style="dialogContentStyle">
+            <div class="header row">
+                <div class="caption col row items-center q-ml-md">{{ caption }}</div>
+            </div>
+            <div class="q-mx-md q-mt-sm">
+                <p>Сохраните резервные коды. Каждый можно использовать один раз. Эти коды показываются только сейчас.</p>
+                <ul class="otp-recovery-codes">
+                    <li v-for="code in otpRecoveryCodes" :key="code"><code>{{ code }}</code></li>
+                </ul>
+            </div>
+            <div class="buttons row justify-end q-pa-md">
+                <q-btn class="q-px-md q-ml-sm" dense no-caps color="primary" @click="okClick">Коды сохранены</q-btn>
+            </div>
         </div>
 
         <!--------------------------------------------------->
@@ -307,6 +329,10 @@ class StdDialog {
     type = '';
     inputValue = '';
     profilePasswordValue = '';
+    otpSetup = null;
+    otpRecoveryCodes = [];
+    trustedBrowserDays = 0;
+    rememberOtpDevice = false;
     error = '';
     iconColor = '';
     iconName = '';
@@ -333,7 +359,7 @@ class StdDialog {
     }
 
     get dialogPosition() {
-        return (this.isCompactLayout && ['prompt', 'password', 'profileLogin', 'profileOtp'].includes(this.type))
+        return (this.isCompactLayout && ['prompt', 'password', 'profileLogin', 'profileOtp', 'profileOtpRecovery'].includes(this.type))
             ? 'top'
             : 'standard';
     }
@@ -391,6 +417,9 @@ class StdDialog {
             this.profilePasswordValue = '';
             this.passwordVisible = false;
         }
+        this.otpSetup = null;
+        this.otpRecoveryCodes = [];
+        this.rememberOtpDevice = false;
         this.showed = false;
     }
 
@@ -594,10 +623,24 @@ class StdDialog {
     profileOtp(message, opts) {
         return new Promise(resolve => {
             this.enableValidator = false;
-            this.init(message, 'Двухфакторный вход', opts);
+            this.init(message, opts?.setup ? 'Настройка двухфакторного входа' : 'Двухфакторный вход', opts);
             this.type = 'profileOtp';
+            this.otpSetup = opts?.setup || null;
+            this.trustedBrowserDays = opts?.trustedBrowserDays || 0;
+            this.rememberOtpDevice = false;
             this.inputValidator = value => String(value || '').trim() ? true : 'Введите код';
-            this.hideTrigger = () => resolve(this.ok ? String(this.inputValue).trim() : '');
+            this.error = opts?.error || '';
+            this.hideTrigger = () => resolve(this.ok ? {code: String(this.inputValue).trim(), rememberDevice: this.rememberOtpDevice} : null);
+            this.active = true;
+        });
+    }
+
+    profileOtpRecovery(codes, opts) {
+        return new Promise(resolve => {
+            this.init('', 'Резервные коды', {...opts, noEscDismiss: true, noBackdropDismiss: true});
+            this.type = 'profileOtpRecovery';
+            this.otpRecoveryCodes = codes;
+            this.hideTrigger = resolve;
             this.active = true;
         });
     }
@@ -628,7 +671,7 @@ class StdDialog {
                     handled = true;
                 }
             } else {
-                if (event.key == 'Enter' && this.type != 'password' && this.type != 'profileLogin') {
+                if (event.key == 'Enter' && !['password', 'profileLogin', 'profileOtp', 'profileOtpRecovery'].includes(this.type)) {
                     this.okClick();
                     handled = true;
                 }
@@ -658,27 +701,24 @@ export default vueComponent(StdDialog);
     cursor: pointer;
 }
 
-.credentials-form {
-    --credentials-field-bg: var(--app-field-bg, var(--app-surface));
-    --credentials-field-text: var(--app-text);
+.otp-setup {
+    display: grid;
+    gap: 8px;
+    justify-items: start;
+    overflow-wrap: anywhere;
 }
 
-.credentials-form :deep(input:is(:autofill, :-webkit-autofill)) {
-    box-shadow: inset 0 0 0 100px var(--credentials-field-bg);
-    -webkit-text-fill-color: var(--credentials-field-text);
-    caret-color: var(--credentials-field-text);
-}
-
-.credentials-form :deep(.q-field__label) {
-    z-index: 1;
-}
-
-.std-dialog-card--reader .credentials-form {
-    --credentials-field-bg: var(--reader-surface-2);
-    --credentials-field-text: var(--reader-text);
+.otp-recovery-codes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+    list-style: none;
+    padding: 0;
 }
 
 .std-dialog-card--reader {
+    --field-autofill-bg: var(--reader-surface-2);
+    --field-autofill-text: var(--reader-text);
     border: 1px solid var(--reader-border);
     border-radius: 12px;
     background: var(--reader-surface) !important;

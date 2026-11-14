@@ -263,6 +263,16 @@ body {
     color: var(--app-text);
 }
 
+.q-field--outlined input.q-field__native:is(:autofill, :-webkit-autofill) {
+    box-shadow: inset 0 0 0 100px var(--field-autofill-bg, var(--app-field-bg, var(--app-surface)));
+    -webkit-text-fill-color: var(--field-autofill-text, var(--app-text));
+    caret-color: var(--field-autofill-text, var(--app-text));
+}
+
+.q-field--outlined .q-field__label:has(+ input.q-field__native:is(:autofill, :-webkit-autofill)) {
+    z-index: 1;
+}
+
 .q-btn {
     border-radius: 8px;
     font-weight: 650;

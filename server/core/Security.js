@@ -192,6 +192,15 @@ class Security {
         return !!(req.secure || this.requestProto(req) === 'https' || this.forwardedProto(req) === 'https');
     }
 
+    secureBrowserSession(req) {
+        if (!req || !this.isSecureRequest(req) || !this.normalizeOrigin(req.headers.origin).startsWith('https://')
+            || !this.isSameOrigin(req)) return null;
+        const cookies = this.parseCookies(req.headers.cookie);
+        const id = this.unpackSessionId(cookies[sessionCookieName]);
+        const session = id && this.getSession(req);
+        return session && session.id === id ? session : null;
+    }
+
     applySecurityHeaders(req, res) {
         res.setHeader('X-Robots-Tag', 'noindex, nofollow');
         if (this.isSecureRequest(req)) {

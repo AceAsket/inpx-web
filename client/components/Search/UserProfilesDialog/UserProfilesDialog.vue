@@ -48,6 +48,15 @@
             <div v-if="!canManageProfiles" class="admin-note">
                 {{ uiText.adminOnly }}
             </div>
+            <div v-if="canManageOtpPolicy && config.profileAuthPolicy" class="profile-auth-policy">
+                <div>
+                    <strong>Безопасность входа</strong>
+                    <p v-if="config.profileAuthPolicy.otpRequired">OTP обязателен для всех профилей.</p>
+                    <p v-if="config.profileAuthPolicy.trustedBrowsersEnabled">Доверие к браузерам действует {{ config.profileAuthPolicy.trustedBrowserDays }} дн.</p>
+                    <p v-else>Доверие к браузерам отключено.</p>
+                </div>
+                <q-btn outline dense no-caps color="primary" label="Настроить безопасность входа" @click="openAuthPolicy" />
+            </div>
 
             <div class="section-title section-title--actions profiles-title">
                 <span>{{ uiText.availableProfiles }}</span>
@@ -78,6 +87,7 @@
                             <span v-if="item.id === currentUserId && item.requiresLogin && !config.profileAuthorized" class="pending-badge">{{ uiText.loginNotCompleted }}</span>
                             <span v-if="item.isAdmin && item.name !== 'Администратор'" class="admin-badge">Администратор</span>
                             <span v-if="item.requiresLogin && !item.isAdmin" class="lock-badge"><q-icon name="la la-lock" size="14px" /> Пароль</span>
+                            <span v-if="item.otpRequired" class="lock-badge">{{ item.otpEnabled ? 'OTP обязателен' : 'Требуется настройка OTP' }}</span>
                         </div>
                         <div class="profile-actions">
                             <q-btn v-if="item.id !== currentUserId" :disable="!!config.profileBoundId && item.id !== config.profileBoundId" outline dense no-caps color="primary" @click="selectProfile(item)">
@@ -90,7 +100,10 @@
                             />
                             <q-btn v-if="canManageProfiles && config.clientApi?.features?.includes('adminProfileTotpReset') && item.id !== currentUserId && item.otpEnabled"
                                 flat dense round icon="la la-shield-alt" color="negative" :aria-label="`Сбросить OTP: ${item.name}`" :title="`Сбросить OTP: ${item.name}`"
-                                @click="otpResetTarget = item" />
+                                @click="openOtpAdmin(item, 'reset')" />
+                            <q-btn v-if="canManageOtpPolicy && !config.profileAuthPolicy?.otpRequired && item.id !== currentUserId && item.requiresLogin && item.login && !item.anonymousProfile"
+                                flat dense no-caps color="primary" :aria-label="`${otpPolicyLabel(item)}: ${item.name}`" :label="otpPolicyLabel(item)"
+                                @click="openOtpAdmin(item, 'policy')" />
                             <q-btn
                                 v-if="canManageProfiles && !item.isAdmin && !item.anonymousProfile"
                                 flat dense round icon="la la-trash" color="negative" :aria-label="`Удалить профиль: ${item.name}`" :title="`Удалить профиль: ${item.name}`"
@@ -420,23 +433,54 @@
                 {{ uiText.close }}
             </q-btn>
         </template>
-        <q-dialog :model-value="!!otpResetTarget" :persistent="otpResetBusy" @update:model-value="value => {if (!value) closeOtpReset();}">
-            <q-card class="profile-otp-reset" aria-labelledby="otp-reset-title">
+        <q-dialog :model-value="!!otpAdminTarget" :persistent="otpAdminBusy" @update:model-value="value => {if (!value) closeOtpAdmin();}">
+            <q-card class="profile-otp-reset" aria-labelledby="otp-admin-title">
                 <q-card-section>
-                    <h2 id="otp-reset-title">Сброс двухфакторной авторизации</h2>
-                    <p>Двухфакторный вход будет отключён для профиля «{{ otpResetTarget?.name }}». Все его сессии, резервные коды и пароль OPDS будут отозваны.</p>
+                    <h2 id="otp-admin-title">{{ otpAdminAction === 'reset' ? 'Сброс двухфакторной авторизации' : otpAdminLabel }}</h2>
+                    <p v-if="otpAdminAction === 'reset'">
+                        Сессии, резервные коды и пароль OPDS профиля «{{ otpAdminTarget?.name }}» будут отозваны.
+                        {{ otpAdminTarget?.otpRequired || config.profileAuthPolicy?.otpRequired ? 'При следующем входе пользователь настроит OTP заново.' : 'Двухфакторный вход будет отключён.' }}
+                    </p>
+                    <p v-else-if="otpAdminTarget?.otpRequired">Профиль «{{ otpAdminTarget.name }}» сможет отключить OTP в настройках. Уже настроенный OTP продолжит действовать.</p>
+                    <p v-else>Для профиля «{{ otpAdminTarget?.name }}» понадобится OTP. Если он ещё не настроен, при следующем входе появится QR-код настройки.</p>
                 </q-card-section>
-                <form @submit.prevent="confirmOtpReset">
+                <form @focusout.capture="syncOtpAdminFields($event.currentTarget)" @submit.prevent="confirmOtpAdmin">
                     <q-card-section class="profile-otp-reset__fields">
-                        <q-input v-model="otpResetPassword" type="password" label="Пароль администратора" autocomplete="current-password"
-                            autofocus outlined dense :disable="otpResetBusy" />
-                        <q-input v-if="currentProfile.otpEnabled" v-model="otpResetCode" label="Код из приложения или резервный код"
-                            autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="64" outlined dense :disable="otpResetBusy" />
-                        <p v-if="otpResetError" class="text-negative" role="alert">{{ otpResetError }}</p>
+                        <q-input v-model="otpAdminPassword" name="password" type="password" label="Пароль администратора" autocomplete="current-password"
+                            autofocus outlined dense :disable="otpAdminBusy" />
+                        <q-input v-if="currentProfile.otpEnabled" v-model="otpAdminCode" name="otp" label="Код из приложения или резервный код"
+                            autocomplete="one-time-code" autocapitalize="off" spellcheck="false" maxlength="64" outlined dense :disable="otpAdminBusy" />
+                        <p v-if="otpAdminError" class="text-negative" role="alert">{{ otpAdminError }}</p>
                     </q-card-section>
                     <q-card-actions align="right">
-                        <q-btn flat no-caps label="Отмена" :disable="otpResetBusy" @click="closeOtpReset" />
-                        <q-btn unelevated no-caps color="negative" type="submit" label="Сбросить OTP" :loading="otpResetBusy" />
+                        <q-btn flat no-caps label="Отмена" :disable="otpAdminBusy" @click="closeOtpAdmin" />
+                        <q-btn unelevated no-caps :color="otpAdminAction === 'reset' ? 'negative' : 'primary'" type="submit" :label="otpAdminLabel" :loading="otpAdminBusy" />
+                    </q-card-actions>
+                </form>
+            </q-card>
+        </q-dialog>
+        <q-dialog :model-value="!!authPolicyDraft" :persistent="authPolicyBusy" @update:model-value="value => {if (!value) closeAuthPolicy();}">
+            <q-card v-if="authPolicyDraft" class="profile-otp-reset" aria-labelledby="auth-policy-title">
+                <q-card-section>
+                    <h2 id="auth-policy-title">Безопасность входа</h2>
+                </q-card-section>
+                <form @focusout.capture="syncAuthPolicyFields($event.currentTarget)" @submit.prevent="saveAuthPolicy">
+                    <q-card-section class="profile-otp-reset__fields">
+                        <q-toggle v-model="authPolicyDraft.otpRequired" :disable="authPolicyBusy || (!currentProfile.otpEnabled && !authPolicyDraft.otpRequired)" label="Требовать пароль и OTP для всех" />
+                        <p v-if="!currentProfile.otpEnabled && !authPolicyDraft.otpRequired">Сначала настройте OTP в своём профиле.</p>
+                        <p v-else-if="authPolicyDraft.otpRequired">Гостевой доступ будет закрыт. Пользователи без OTP настроят его при следующем веб-входе.</p>
+                        <q-toggle v-model="authPolicyDraft.trustedBrowsersEnabled" :disable="authPolicyBusy" label="Разрешить доверенные браузеры по HTTPS" />
+                        <q-input v-if="authPolicyDraft.trustedBrowsersEnabled" v-model.number="authPolicyDraft.trustedBrowserDays" type="number" min="1" max="180" step="1"
+                            label="Срок доверия в днях" hint="От 1 до 180" outlined dense :disable="authPolicyBusy" />
+                        <p v-if="authPolicyDraft.trustedBrowsersEnabled">Пока действует доверие, для повторного входа в этом браузере достаточно пароля.</p>
+                        <q-input v-model="authPolicyPassword" name="password" type="password" label="Пароль администратора" autocomplete="current-password" outlined dense :disable="authPolicyBusy" />
+                        <q-input v-if="currentProfile.otpEnabled" v-model="authPolicyCode" name="otp" label="Код из приложения или резервный код" autocomplete="one-time-code"
+                            autocapitalize="off" spellcheck="false" maxlength="64" outlined dense :disable="authPolicyBusy" />
+                        <p v-if="authPolicyError" class="text-negative" role="alert">{{ authPolicyError }}</p>
+                    </q-card-section>
+                    <q-card-actions align="right">
+                        <q-btn flat no-caps label="Отмена" :disable="authPolicyBusy" @click="closeAuthPolicy" />
+                        <q-btn unelevated no-caps color="primary" type="submit" label="Сохранить" :loading="authPolicyBusy" />
                     </q-card-actions>
                 </form>
             </q-card>
@@ -471,7 +515,10 @@ const componentOptions = {
         },
         dialogVisible(newValue) {
             this.$emit('update:modelValue', newValue);
-            if (!newValue) this.closeOtpReset();
+            if (!newValue) {
+                this.closeOtpAdmin();
+                this.closeAuthPolicy();
+            }
         },
     },
 };
@@ -497,11 +544,17 @@ class UserProfilesDialog {
     savingProfile = false;
     editableProfile = this.makeEmptyEditable();
     newProfile = this.makeEmptyNew();
-    otpResetTarget = null;
-    otpResetBusy = false;
-    otpResetPassword = '';
-    otpResetCode = '';
-    otpResetError = '';
+    otpAdminTarget = null;
+    otpAdminAction = '';
+    otpAdminBusy = false;
+    otpAdminPassword = '';
+    otpAdminCode = '';
+    otpAdminError = '';
+    authPolicyDraft = null;
+    authPolicyBusy = false;
+    authPolicyError = '';
+    authPolicyPassword = '';
+    authPolicyCode = '';
 
     created() {
         this.api = this.$root.api;
@@ -525,6 +578,14 @@ class UserProfilesDialog {
 
     get currentProfile() {
         return this.config.currentUserProfile || {};
+    }
+
+    get canManageOtpPolicy() {
+        return this.canManageProfiles && !this.config.profileBoundId && this.config.clientApi?.features?.includes('adminProfileTotpPolicy');
+    }
+
+    get otpAdminLabel() {
+        return this.otpAdminAction === 'reset' ? 'Сбросить OTP' : this.otpPolicyLabel(this.otpAdminTarget);
     }
 
     get shelvesAppearance() {return this.$store.state.settings.catalogAppearance === 'shelves';}
@@ -721,6 +782,7 @@ class UserProfilesDialog {
             publicId: item.login || item.id,
             requiresLogin: !!item.requiresLogin,
             otpEnabled: item.otpEnabled === true,
+            otpRequired: item.otpRequired === true,
             isAdmin: !!item.isAdmin,
             opdsEnabled: item.opdsEnabled !== false,
             opdsAuthEnabled: item.opdsAuthEnabled === true,
@@ -1092,33 +1154,103 @@ class UserProfilesDialog {
         }
     }
 
-    closeOtpReset() {
-        this.otpResetTarget = null;
-        this.otpResetPassword = this.otpResetCode = this.otpResetError = '';
+    otpPolicyLabel(profile) {
+        return profile?.otpRequired ? 'Отменить требование OTP' : 'Требовать OTP';
     }
 
-    async confirmOtpReset() {
-        const target = this.otpResetTarget;
-        if (!target || this.otpResetBusy) return;
-        if (!this.otpResetPassword || (this.currentProfile.otpEnabled && !this.otpResetCode.trim())) {
-            this.otpResetError = this.currentProfile.otpEnabled ? 'Введите пароль и код администратора.' : 'Введите пароль администратора.';
+    openOtpAdmin(profile, action) {
+        this.closeOtpAdmin();
+        this.otpAdminTarget = profile;
+        this.otpAdminAction = action;
+    }
+
+    closeOtpAdmin() {
+        this.otpAdminTarget = null;
+        this.otpAdminPassword = this.otpAdminCode = this.otpAdminError = '';
+    }
+
+    syncOtpAdminFields(form) {
+        if (this.otpAdminBusy) return;
+        const fields = new FormData(form);
+        this.otpAdminPassword = String(fields.get('password') || '');
+        this.otpAdminCode = String(fields.get('otp') || '');
+    }
+
+    async confirmOtpAdmin(event) {
+        const target = this.otpAdminTarget;
+        if (!target || this.otpAdminBusy) return;
+        this.syncOtpAdminFields(event.currentTarget);
+        const password = this.otpAdminPassword;
+        const otp = this.otpAdminCode.trim();
+        if (!password || (this.currentProfile.otpEnabled && !otp)) {
+            this.otpAdminError = this.currentProfile.otpEnabled ? 'Введите пароль и код администратора.' : 'Введите пароль администратора.';
             return;
         }
-        this.otpResetBusy = true;
-        this.otpResetError = '';
+        const isReset = this.otpAdminAction === 'reset';
+        this.otpAdminBusy = true;
+        this.otpAdminError = '';
         try {
-            const result = await this.api.resetUserProfileTotp(target.id, this.otpResetPassword, this.otpResetCode.trim());
-            if (this.otpResetTarget !== target) return;
-            target.otpEnabled = false;
+            const result = isReset
+                ? await this.api.resetUserProfileTotp(target.id, password, otp)
+                : await this.api.setUserProfileTotpRequired(target.id, !target.otpRequired, password, otp);
+            if (this.otpAdminTarget !== target) return;
+            target.otpEnabled = result.otpEnabled === true;
+            if (result.otpRequired !== undefined) target.otpRequired = result.otpRequired;
             if (result.opdsAuthEnabled !== undefined) target.opdsAuthEnabled = result.opdsAuthEnabled;
             if (result.opdsEnabled !== undefined) target.opdsEnabled = result.opdsEnabled;
-            this.closeOtpReset();
-            this.$root.notify.success('Двухфакторная авторизация профиля сброшена');
+            this.closeOtpAdmin();
+            this.$root.notify.success(isReset ? 'Двухфакторная авторизация профиля сброшена' : 'Требование OTP обновлено');
         } catch (failure) {
-            if (this.otpResetTarget === target) this.otpResetError = failure.message;
+            if (this.otpAdminTarget === target) this.otpAdminError = failure.message;
         } finally {
-            this.otpResetPassword = this.otpResetCode = '';
-            this.otpResetBusy = false;
+            this.otpAdminPassword = this.otpAdminCode = '';
+            this.otpAdminBusy = false;
+        }
+    }
+
+    openAuthPolicy() {
+        this.authPolicyError = '';
+        this.authPolicyDraft = {...this.config.profileAuthPolicy};
+    }
+
+    closeAuthPolicy() {
+        this.authPolicyDraft = null;
+        this.authPolicyError = this.authPolicyPassword = this.authPolicyCode = '';
+    }
+
+    syncAuthPolicyFields(form) {
+        if (this.authPolicyBusy) return;
+        const fields = new FormData(form);
+        this.authPolicyPassword = String(fields.get('password') || '');
+        this.authPolicyCode = String(fields.get('otp') || '');
+    }
+
+    async saveAuthPolicy(event) {
+        if (!this.authPolicyDraft || this.authPolicyBusy) return;
+        this.syncAuthPolicyFields(event.currentTarget);
+        const password = this.authPolicyPassword;
+        const otp = this.authPolicyCode.trim();
+        if (!password || (this.currentProfile.otpEnabled && !otp)) {
+            this.authPolicyError = this.currentProfile.otpEnabled ? 'Введите пароль и код администратора.' : 'Введите пароль администратора.';
+            return;
+        }
+        const policy = {...this.authPolicyDraft, trustedBrowserDays: Number(this.authPolicyDraft.trustedBrowserDays)};
+        if (!Number.isInteger(policy.trustedBrowserDays) || policy.trustedBrowserDays < 1 || policy.trustedBrowserDays > 180) {
+            this.authPolicyError = 'Укажите срок доверия от 1 до 180 дней.';
+            return;
+        }
+        this.authPolicyBusy = true;
+        this.authPolicyError = '';
+        try {
+            await this.api.setProfileAuthPolicy(policy, password, otp);
+            this.closeAuthPolicy();
+            await this.loadProfiles({preserveState:true});
+            this.$root.notify.success('Настройки безопасности сохранены');
+        } catch (failure) {
+            if (this.authPolicyDraft) this.authPolicyError = failure.message;
+        } finally {
+            this.authPolicyPassword = this.authPolicyCode = '';
+            this.authPolicyBusy = false;
         }
     }
 
@@ -1649,6 +1781,8 @@ export default vueComponent(UserProfilesDialog);
 .profile-otp-reset h2 {font-size: 19px; line-height: 1.4; margin: 0 0 10px;}
 .profile-otp-reset p {margin: 0; overflow-wrap: anywhere;}
 .profile-otp-reset__fields {display: grid; gap: 12px;}
+.profile-auth-policy {display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--app-border); border-radius: 12px;}
+.profile-auth-policy p {margin: 4px 0 0;}
 
 @media (max-width: 820px) {
     .create-grid,

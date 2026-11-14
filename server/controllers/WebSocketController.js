@@ -340,6 +340,16 @@ class WebSocketController {
                     await this.getUserProfiles(req, ws); break;
                 case 'login-user-profile':
                     await this.loginUserProfile(req, ws); break;
+                case 'profile-totp-enrollment': {
+                    if (this.profileAccess?.bindingEnabled)
+                        throw new Error('Настройте второй фактор у провайдера SSO');
+                    const enroll = () => this.webWorker.enrollRequiredProfileTotp(req.operation, req.payload || {});
+                    const result = this.security ? await this.security.withLoginAttempt(ws.req, 'profile', enroll,
+                        value => value.profileAccessToken ? true : undefined) : await enroll();
+                    if (result.profileAccessToken) this.establishProfileLogin(result, req, ws);
+                    else this.send(result, req, ws);
+                    break;
+                }
                 case 'profile-totp': {
                     if (req.profileBoundId && req.operation !== 'status')
                         throw new Error('Настройте второй фактор у провайдера SSO');
@@ -352,6 +362,20 @@ class WebSocketController {
                     const reset = () => this.webWorker.resetUserProfileTotp(req.userId, req.profileAccessToken,
                         req.targetUserId, req.password, req.otp);
                     this.send(this.security ? await this.security.withLoginAttempt(ws.req, 'profile', reset) : await reset(), req, ws); break;
+                }
+                case 'set-user-profile-totp-required': {
+                    if (this.profileAccess?.bindingEnabled)
+                        throw new Error('Настройте второй фактор у провайдера SSO');
+                    const setRequired = () => this.webWorker.setUserProfileTotpRequired(req.userId, req.profileAccessToken,
+                        req.targetUserId, req.required, req.password, req.otp);
+                    this.send(this.security ? await this.security.withLoginAttempt(ws.req, 'profile', setRequired) : await setRequired(), req, ws); break;
+                }
+                case 'set-profile-auth-policy': {
+                    if (this.profileAccess?.bindingEnabled)
+                        throw new Error('Настройте защиту входа у провайдера SSO');
+                    const policy = _.pick(req, ['otpRequired', 'trustedBrowsersEnabled', 'trustedBrowserDays']);
+                    const setPolicy = () => this.webWorker.setProfileAuthPolicy(req.userId, req.profileAccessToken, policy, req.password, req.otp);
+                    this.send(this.security ? await this.security.withLoginAttempt(ws.req, 'profile', setPolicy) : await setPolicy(), req, ws); break;
                 }
                 case 'logout-user-profile':
                     await this.logoutUserProfile(req, ws); break;
@@ -441,7 +465,10 @@ class WebSocketController {
             'cancel-library-audit',
             'login-user-profile',
             'profile-totp',
+            'profile-totp-enrollment',
             'reset-user-profile-totp',
+            'set-user-profile-totp-required',
+            'set-profile-auth-policy',
             'resume-user-profile',
             'subscribe-client-events',
             'logout-user-profile',
@@ -538,22 +565,31 @@ class WebSocketController {
     }
 
     async getConfig(req, ws) {
+        const clientApi = this.profileAccess?.bindingEnabled ? {...clientProtocol.info,
+            features:clientProtocol.info.features.filter(feature => !['adminProfileTotpPolicy','profileAuthPolicy'].includes(feature))} : clientProtocol.info;
+        const trustPolicy = this.webWorker.readingListStore?.profileAuthPolicy;
+        const canRememberProfileDevice = require('../core/ProfileTrustedDevices').available(trustPolicy)
+            && req.client?.type !== 'android' && !this.profileAccess?.bindingEnabled
+            && !!this.security?.secureBrowserSession(ws.req);
+        const trustedBrowserDays = canRememberProfileDevice ? trustPolicy?.trustedBrowserDays : undefined;
         if (req.profileLoginRequired) {
             const config = _.pick(this.config, ['name', 'version', 'branch', 'dbVersion', 'rootPathStatic']);
-            Object.assign(config, {clientApi:clientProtocol.info,profileLoginRequired: true, profileAuthorized: false, userProfiles: [],
-                currentUserId: '', currentUserProfile: null, freeAccess: this.webAccess.freeAccess});
+            Object.assign(config, {clientApi,profileLoginRequired: true, profileAuthorized: false, userProfiles: [],
+                currentUserId: '', currentUserProfile: null, freeAccess: this.webAccess.freeAccess, canRememberProfileDevice, trustedBrowserDays});
             if (this.security)
                 config.csrfToken = this.security.getCsrfToken(ws.req);
             this.send(config, req, ws);
             return;
         }
         const config = _.pick(this.config, this.config.webConfigParams);
-        config.clientApi = clientProtocol.info;
+        config.clientApi = clientApi;
         config.libraryProtocol = require('../core/LibraryExchange').protocol;
         config.ttsEnabled = Boolean(this.config.ttsEnabled && this.config.ttsUrl);
         config.ebookReaderEnabled = !this.webWorker.remoteLib;
-        config.profileLoginRequired = this.config.allowAnonymousAccess === false;
+        config.profileLoginRequired = this.profileAccess?.loginRequired ?? (this.config.allowAnonymousAccess === false);
         config.profileBoundId = req.profileBoundId || '';
+        config.canRememberProfileDevice = canRememberProfileDevice;
+        config.trustedBrowserDays = trustedBrowserDays;
         config.librarySources = (Array.isArray(this.config.librarySources) ? this.config.librarySources : []).map(source => ({
             id: source.id || '',
             name: source.name || source.id || '',
@@ -598,6 +634,7 @@ class WebSocketController {
             && (currentUser.emailTo || this.config.emailTo)
         );
         if (currentUser && currentUser.isAdmin && config.profileAuthorized) {
+            if (!this.profileAccess?.bindingEnabled) config.profileAuthPolicy = this.webWorker.readingListStore?.profileAuthPolicy;
             config.adminIntegrations = this.webWorker.getAdminIntegrationConfig();
             config.adminOpds = this.webWorker.getAdminOpdsConfig();
         }
@@ -959,6 +996,10 @@ class WebSocketController {
     async loginUserProfile(req, ws) {
         const verify = () => this.webWorker.loginUserProfile(req.login, req.password, req.otp);
         const result = this.security ? await this.security.withLoginAttempt(ws.req, 'profile', verify) : await verify();
+        this.establishProfileLogin(result, req, ws);
+    }
+
+    establishProfileLogin(result, req, ws) {
         if (this.security && ws.req && ws.req.securitySession)
             ws.req.securitySession.profileAccessToken = result.profileAccessToken;
         ws.userId = String(result.userId || '').trim();

@@ -9,6 +9,13 @@ const Security = require('../server/core/Security');
 const ProfileAccess = require('../server/core/ProfileAccess');
 const ReadingListStore = require('../server/core/ReadingListStore');
 
+function currentTotpCode(secret) {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    const bits = [...secret].map(letter => alphabet.indexOf(letter).toString(2).padStart(5, '0')).join('');
+    const key = Buffer.from(bits.match(/.{8}/g).map(byte => parseInt(byte, 2)));
+    return require('../server/core/ProfileTotp').hotp(key, Math.floor(Date.now() / 30000));
+}
+
 async function fixture(options, test) {
     const Worker = require('../server/core/WebWorker');
     const Controller = require('../server/controllers/WebSocketController');
@@ -420,5 +427,103 @@ async function testAndroidProtocolKeepsLegacyLoginAndRequiresOtpForEnrolledProfi
     });
 }
 
-module.exports = [testAndroidProtocolKeepsLegacyLoginAndRequiresOtpForEnrolledProfile,testOpdsAppPasswordIsProfileScopedRevocableAndCannotCreateWebSession,testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
+async function testRequiredTotpEnrollmentBeforePrivateAccess() {
+    await fixture({allowAnonymousAccess:false}, async({alice,request,session,connect}) => {
+        const administrator = session();
+        const admin = await connect({cookie:administrator.cookie});
+        const adminConfig = await admin({action:'get-config'});
+        assert(adminConfig.clientApi.features.includes('adminProfileTotpPolicy'));
+        const adminLogin = await admin({action:'login-user-profile', login:'admin', password:'admin-fixture', csrfToken:adminConfig.csrfToken});
+        assert(adminLogin.profileAccessToken);
+        const setPolicy = {action:'set-user-profile-totp-required', targetUserId:alice.id, required:true, password:'admin-fixture'};
+        assert.equal((await admin(setPolicy)).error, 'bad_csrf_token');
+        assert.equal((await admin({...setPolicy, csrfToken:adminConfig.csrfToken})).otpRequired, true);
+
+        const reader = session();
+        const call = await connect({cookie:reader.cookie});
+        const config = await call({action:'get-config'});
+        const payload = {login:'alice', password:'alice-fixture'};
+        const csrfToken = config.csrfToken;
+        const login = await call({action:'login-user-profile', ...payload, csrfToken});
+        assert.equal(login.errorCode, 'need_profile_otp_setup');
+        assert.equal(reader.value.profileAccessToken, undefined);
+        const enrollment = {action:'profile-totp-enrollment', operation:'start', payload};
+        assert.equal((await call(enrollment)).error, 'bad_csrf_token');
+        const pending = await call({...enrollment, csrfToken});
+        assert.equal(pending.profileAccessToken, undefined);
+        assert.equal((await request('/book/fixture.txt', {cookie:reader.cookie})).status, 401);
+        const basic = {authorization:'Basic '+Buffer.from('alice:alice-fixture').toString('base64')};
+        assert.equal((await request('/opds?user='+alice.id,basic)).status, 401);
+        const code = currentTotpCode(pending.secret);
+        const enabled = await call({...enrollment, operation:'enable', csrfToken, payload:{...payload, enrollmentId:pending.enrollmentId, code}});
+        assert.equal(enabled.userId, alice.id);
+        assert.equal(enabled.recoveryCodes.length, 8);
+        assert.equal(reader.value.profileAccessToken, enabled.profileAccessToken);
+        assert.equal((await request('/book/fixture.txt', {cookie:reader.cookie})).status, 200);
+    });
+}
+
+async function testGlobalProfileTotpOverridesAnonymousAndSharedOpdsAccess() {
+    await fixture({allowAnonymousAccess:true, opds:{enabled:true,user:'catalog',password:'shared-opds'}},
+        async({worker,alice,bob,request,session,connect}) => {
+            const adminBrowser = session();
+            const admin = await connect({cookie:adminBrowser.cookie});
+            const {csrfToken} = await admin({action:'get-config'});
+            const signIn = await admin({action:'login-user-profile', login:'admin', password:'admin-fixture', csrfToken});
+            assert(signIn.profileAccessToken);
+            const act = (action, payload = {}) => admin({action, csrfToken, userId:signIn.userId,
+                profileAccessToken:signIn.profileAccessToken, ...payload});
+            const policy = {otpRequired:true, trustedBrowsersEnabled:true, trustedBrowserDays:180, password:'admin-fixture'};
+            assert.match((await act('set-profile-auth-policy',policy)).error, /Сначала настройте OTP/);
+            const start = await act('profile-totp', {operation:'start', payload:{password:policy.password}});
+            const enrolled = await act('profile-totp', {operation:'enable', payload:{password:policy.password, code:currentTotpCode(start.secret)}});
+            assert.equal(enrolled.otpEnabled, true);
+            assert.match((await act('set-profile-auth-policy',{...policy,otp:enrolled.recoveryCodes[0]})).error, /Bob/);
+            await worker.updateUserProfile(bob.id, {passwordHash:await worker.hashProfilePassword(bob.login, 'bob-fixture')});
+            const guestPreferences = await worker.readingListStore.updateReaderPreferences('default',
+                {backgroundImage:'data:image/png;base64,'+Buffer.alloc(100,7).toString('base64')});
+            const previousReader = await worker.loginUserProfile(alice.login,'alice-fixture');
+            assert.equal((await request('/book/fixture.txt')).status, 200);
+            assert.equal((await request(guestPreferences.backgroundImage)).status, 200);
+            const enabled = await act('set-profile-auth-policy',{...policy,otp:enrolled.recoveryCodes[0]});
+            assert.deepEqual(enabled.profileAuthPolicy, {otpRequired:true,trustedBrowsersEnabled:true,trustedBrowserDays:180});
+            assert.equal(worker.getProfileSessionUser(previousReader.profileAccessToken), '');
+            assert.equal(worker.getProfileSessionUser(signIn.profileAccessToken), signIn.userId);
+            assert.equal((await request('/book/fixture.txt')).status, 401);
+            assert.equal((await request(guestPreferences.backgroundImage)).status, 401);
+            const shared = {authorization:'Basic '+Buffer.from('catalog:shared-opds').toString('base64')};
+            assert.equal((await request('/opds',shared)).status, 401);
+            assert.equal((await request('/opds?user='+alice.id,shared)).status, 401);
+            await assert.rejects(worker.createUserProfile({name:'No credentials'}), /логин и пароль/);
+            const future = await worker.createUserProfile({name:'Future',login:'future',passwordHash:await worker.hashProfilePassword('future','future-fixture')});
+            await assert.rejects(worker.loginUserProfile(future.user.login,'future-fixture'), {code:'need_profile_otp_setup'});
+            await assert.rejects(worker.loginUserProfile(alice.login,'alice-fixture'), {code:'need_profile_otp_setup'});
+            const restarted = new ReadingListStore({...worker.readingListStore.config});
+            await restarted.loadSnapshot();
+            assert.equal(restarted.profileAuthPolicy.otpRequired, true);
+
+            const reader = session();
+            const call = await connect({cookie:reader.cookie});
+            const guest = await call({action:'get-config'});
+            assert.equal(guest.profileLoginRequired, true);
+            assert.equal(guest.profileAuthPolicy, undefined);
+            const payload = {login:alice.login,password:'alice-fixture'};
+            const enrollment = {action:'profile-totp-enrollment',csrfToken:guest.csrfToken};
+            const pending = await call({...enrollment,operation:'start',payload});
+            const confirmed = await call({...enrollment,operation:'enable',payload:{...payload,
+                enrollmentId:pending.enrollmentId,code:currentTotpCode(pending.secret)}});
+            assert(confirmed.profileAccessToken);
+            const app = await call({action:'profile-totp',operation:'create-opds-password',csrfToken:guest.csrfToken,
+                payload:{password:payload.password,code:confirmed.recoveryCodes[0]}});
+            const scoped = {authorization:'Basic '+Buffer.from(alice.login+':'+app.opdsAppPassword).toString('base64')};
+            assert.equal((await request('/opds?user='+alice.id,scoped)).status, 200);
+            const disabled = await act('set-profile-auth-policy',{...policy,otpRequired:false,otp:enrolled.recoveryCodes[1]});
+            assert.equal(disabled.profileAuthPolicy.otpRequired, false);
+            assert.equal(disabled.profileAuthPolicy.trustedBrowserDays, 180);
+            assert.equal((await request('/book/fixture.txt')).status, 200);
+            await assert.rejects(worker.loginUserProfile(alice.login,'alice-fixture'), {code:'need_profile_otp'});
+        });
+}
+
+module.exports = [testGlobalProfileTotpOverridesAnonymousAndSharedOpdsAccess,testRequiredTotpEnrollmentBeforePrivateAccess,testAndroidProtocolKeepsLegacyLoginAndRequiresOtpForEnrolledProfile,testOpdsAppPasswordIsProfileScopedRevocableAndCannotCreateWebSession,testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
     testProxyProfileBindingAndIdentityChange, testWebSocketCatalogAuthorizationUsesProfileIdentity, testLegacyAccessAndGlobalOpdsCredentials];
