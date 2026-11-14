@@ -462,11 +462,19 @@ if (require.main === module) (async() => {
                 await createdProfile.getByRole('button', {name: 'Выбрать', exact: true}).click();
                 await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('browser-profile');
                 await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('browser-profile-password');
+                const loginConfig = holdReply();
+                readingReplies = {'get-config':loginConfig};
                 await page.getByRole('button', {name: 'OK', exact: true}).click();
-                await panel.locator('.profile-card--current').filter({hasText: 'Браузерный профиль'}).waitFor();
-                assert.equal(await panel.getByRole('button', {name: 'Новый профиль', exact: true}).count(), 0, 'Ordinary profiles cannot manage other profiles');
-                await panel.getByRole('button', {name: 'Войти в другой профиль', exact: true}).click();
-                await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
+                const releaseLoginConfig = await loginConfig.wait();
+                try {
+                    await panel.locator('.profile-card--current').filter({hasText: 'Браузерный профиль'}).waitFor();
+                    assert.equal(await panel.getByRole('button', {name: 'Новый профиль', exact: true}).count(), 0, 'Ordinary profiles cannot manage other profiles');
+                    await panel.getByRole('button', {name: 'Войти в другой профиль', exact: true}).click();
+                    await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin', {timeout:5000});
+                } finally {
+                    releaseLoginConfig();
+                    readingReplies = null;
+                }
                 await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('appearance-local-test');
                 await page.getByRole('button', {name: 'OK', exact: true}).click();
                 await panel.getByRole('button', {name: 'Новый профиль', exact: true}).waitFor();

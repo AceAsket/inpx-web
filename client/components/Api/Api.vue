@@ -919,9 +919,10 @@ class Api {
 
     showProfileLoginDialog(prefillLogin = '', opts = {}) {
         if (!this.profileLoginPromise) {
+            // Release the dialog before account controls for the new profile become visible.
             this.profileLoginPromise = this.promptProfileLogin(prefillLogin, opts).finally(() => {
                 this.profileLoginPromise = null;
-            });
+            }).then(result => this.applyProfileLogin(result));
         }
         return this.profileLoginPromise;
     }
@@ -972,6 +973,10 @@ class Api {
                 await this.$root.stdDialog.alert(error.message, 'Ошибка входа');
             }
         }
+        return result;
+    }
+
+    async applyProfileLogin(result) {
         this.commit('setSettings', {
             currentUserId: result.userId,
             profileAccessToken: result.profileAccessToken || '',
