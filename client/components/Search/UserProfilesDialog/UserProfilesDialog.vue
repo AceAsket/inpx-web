@@ -52,26 +52,33 @@
                 <div>
                     <strong>Безопасность входа</strong>
                     <p v-if="config.profileAuthPolicy.otpRequired">OTP обязателен для всех профилей.</p>
-                    <p v-if="config.profileAuthPolicy.trustedBrowsersEnabled">Доверие к браузерам действует {{ config.profileAuthPolicy.trustedBrowserDays }} дн.</p>
+                    <p v-if="config.profileAuthPolicy.trustedBrowsersEnabled">
+                        Доверие к браузерам действует <span class="text-no-wrap">{{ config.profileAuthPolicy.trustedBrowserDays }} дн.</span>
+                    </p>
                     <p v-else>Доверие к браузерам отключено.</p>
                 </div>
-                <q-btn outline dense no-caps color="primary" label="Настроить безопасность входа" @click="openAuthPolicy" />
+                <q-btn outline dense no-caps color="primary" label="Настроить" aria-label="Настроить безопасность входа" @click="openAuthPolicy" />
             </div>
 
-            <div class="section-title section-title--actions profiles-title">
+            <div class="profiles-title">
                 <span>{{ uiText.availableProfiles }}</span>
-                <q-btn v-if="canManageProfiles" outline no-caps color="primary" icon="la la-user-plus" @click="showCreateProfileForm = true">{{ uiText.showCreateForm }}</q-btn>
+                <div v-if="canManageProfiles || !config.profileBoundId" class="profile-session-actions">
+                    <q-btn
+                        v-if="canManageProfiles" outline dense no-caps color="primary" icon="la la-user-plus"
+                        :label="uiText.showCreateForm" @click="showCreateProfileForm = true"
+                    />
+                    <template v-if="!config.profileBoundId">
+                        <q-btn
+                            v-if="!canViewAllProfiles" flat dense no-caps color="primary" icon="la la-sign-in-alt"
+                            :label="uiText.loginOtherProfile" :disable="!!api.profileLoginPromise" @click="loginOtherProfile"
+                        />
+                        <ProfileLogout />
+                    </template>
+                </div>
             </div>
 
             <div v-if="config.profileBoundId" class="admin-note">
                 Профиль выбран по вашему входу через SSO. Для смены пользователя выйдите из SSO.
-            </div>
-            <div v-else class="profile-session-actions">
-                <q-btn v-if="!canViewAllProfiles" flat dense no-caps color="primary" icon="la la-sign-in-alt"
-                    :disable="!!api.profileLoginPromise" @click="loginOtherProfile">
-                    {{ uiText.loginOtherProfile }}
-                </q-btn>
-                <ProfileLogout :label="uiText.logout" />
             </div>
 
             <div v-if="!profiles.length" class="state-box text-grey-7">
@@ -667,7 +674,6 @@ class UserProfilesDialog {
             adminOnly: '\u0421\u043e\u0437\u0434\u0430\u0432\u0430\u0442\u044c \u0438 \u0443\u0434\u0430\u043b\u044f\u0442\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u0438 \u043c\u043e\u0436\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440.',
             availableProfiles: '\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u044b\u0435 \u043f\u0440\u043e\u0444\u0438\u043b\u0438',
             loginOtherProfile: '\u0412\u043e\u0439\u0442\u0438 \u0432 \u0434\u0440\u0443\u0433\u043e\u0439 \u043f\u0440\u043e\u0444\u0438\u043b\u044c',
-            logout: '\u0412\u044b\u0439\u0442\u0438 \u0438\u0437 \u043f\u0440\u043e\u0444\u0438\u043b\u044f',
             noProfiles: '\u041f\u0440\u043e\u0444\u0438\u043b\u0435\u0439 \u043f\u043e\u043a\u0430 \u043d\u0435\u0442',
             current: '\u0422\u0435\u043a\u0443\u0449\u0438\u0439',
             loginNotCompleted: '\u0412\u0445\u043e\u0434 \u043d\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d',
@@ -1363,7 +1369,6 @@ export default vueComponent(UserProfilesDialog);
 }
 
 .profiles-dialog--new {max-height: none; overflow: visible;}
-.profiles-dialog--new .profiles-title {margin: 0 0 16px;}
 .profile-form-intro {color: var(--app-muted); line-height: 1.6; margin: 0 0 20px; font-size: 13px;}
 .profile-name-field, .profile-create-extra {grid-column: 1 / -1;}
 .profile-create-extra {border: 1px solid var(--app-border); border-radius: 12px; overflow: hidden; margin-top: 6px;}
@@ -1387,27 +1392,24 @@ export default vueComponent(UserProfilesDialog);
 .profiles-dialog--new .profile-actions {width: auto;}
 .profiles-dialog--new .profile-tabs {gap: 4px; border-bottom: 1px solid var(--app-border); padding-bottom: 10px;}
 .profiles-dialog--new .profile-tab-btn {border: 0; border-radius: 9px; font-size: 12px; padding: 8px 12px;}
-.profiles-dialog--new .profile-session-actions {justify-content: flex-end; margin: 0 0 14px;}
 @media (max-width: 599px) {
     .profiles-dialog--new .profile-head {flex-wrap: wrap; align-items: flex-start; gap: 10px;}
     .profiles-dialog--new .profile-actions {margin-left: auto;}
-    .profiles-dialog--new .profiles-title {font-size: 14px;}
-    .profiles-dialog--new .profiles-title .q-btn {font-size: 12px;}
     .profile-create-extra .profile-grid {padding: 12px;}
 }
 
-.section-title {
-    margin: 4px 0 10px;
+.profiles-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    margin: 0 0 10px;
     font-size: 15px;
     font-weight: 700;
 }
 
-.section-title--actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-}
+.profiles-dialog--new .profiles-title {font-weight: 550;}
 
 .create-grid,
 .profile-grid {
@@ -1795,9 +1797,28 @@ export default vueComponent(UserProfilesDialog);
 
 .profile-session-actions {
     display: flex;
-    gap: 8px;
     flex-wrap: wrap;
-    margin-bottom: 12px;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+}
+
+.profile-session-actions :deep(.q-btn),
+.profile-auth-policy :deep(.q-btn) {
+    min-height: 36px;
+    margin: 0;
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+@media (max-width: 520px) {
+    .profiles-title {
+        font-size: 14px;
+    }
+
+    .profile-session-actions :deep(.q-icon) {
+        display: none;
+    }
 }
 
 .opds-link {
@@ -1821,8 +1842,19 @@ export default vueComponent(UserProfilesDialog);
 .profile-otp-reset h2 {font-size: 19px; line-height: 1.4; margin: 0 0 10px;}
 .profile-otp-reset p {margin: 0; overflow-wrap: anywhere;}
 .profile-otp-reset__fields {display: grid; gap: 12px;}
-.profile-auth-policy {display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--app-border); border-radius: 12px;}
-.profile-auth-policy p {margin: 4px 0 0;}
+.profile-auth-policy {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    border: 1px solid var(--app-border);
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.35;
+}
+.profile-auth-policy p {margin: 2px 0 0; color: var(--app-muted); font-size: 12px;}
 
 @media (max-width: 820px) {
     .create-grid,
