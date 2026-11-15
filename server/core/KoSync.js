@@ -7,7 +7,7 @@ const position = require('./KoSyncPosition');
 const {equal} = require('./opds/Auth');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const documentId = value => /^[a-f0-9]{32}$/.test(String(value || ''));
-const isPersonalProfile = user => !!user?.id && !(user.id === 'default' && !user.login && !user.passwordHash) && !user.anonymousProfile;
+const isPersonalProfile = user => !!user?.id && !user.blocked && !(user.id === 'default' && !user.login && !user.passwordHash) && !user.anonymousProfile;
 
 async function partialMd5(file) {
     const handle = await fs.open(file, 'r');

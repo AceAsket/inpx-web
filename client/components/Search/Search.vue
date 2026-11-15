@@ -1198,7 +1198,7 @@ class Search {
         const users = (this.canViewAllProfiles
             ? (this.config.userProfiles || [])
             : [this.currentSelectedProfile].filter(Boolean));
-        return users.map((item) => ({
+        return users.filter(item => !item.blocked).map((item) => ({
             label: item.name,
             value: item.id,
             disable: !!(this.config.profileLoginRequired && item.anonymousProfile),
@@ -2278,7 +2278,7 @@ class Search {
     async selectUserProfile(userId) {
         const users = this.config.userProfiles || [];
         const target = users.find((item) => item.id === userId);
-        if (!target)
+        if (!target || target.blocked)
             return;
 
         if (this.config.profileAuthorized) {

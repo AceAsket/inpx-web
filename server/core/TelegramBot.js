@@ -373,7 +373,7 @@ class TelegramBot {
         const data = await this.worker.readingListStore.load();
         const follows = this.worker.libraryFollows || (this.worker.libraryFollows = new (require('./LibraryFollows'))(this.worker));
         for (const user of data.users) {
-            if (!user.telegramDigest || user.telegramBotId !== run.botId || !user.telegramBotChatId || !user.telegramBotLinkedAt) continue;
+            if (user.blocked || !user.telegramDigest || user.telegramBotId !== run.botId || !user.telegramBotChatId || !user.telegramBotLinkedAt) continue;
             if (user.telegramDigestAt && this.now() - Date.parse(user.telegramDigestAt) < 6 * 86400000) continue;
             const ctx = {run, chatId: user.telegramBotChatId, userId: user.id};
             try {

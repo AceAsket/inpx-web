@@ -87,11 +87,14 @@
                             <span v-if="item.id === currentUserId" class="current-badge">{{ uiText.current }}</span>
                             <span v-if="item.id === currentUserId && item.requiresLogin && !config.profileAuthorized" class="pending-badge">{{ uiText.loginNotCompleted }}</span>
                             <span v-if="item.isAdmin && item.name !== 'Администратор'" class="admin-badge">Администратор</span>
-                            <span v-if="item.requiresLogin && !item.isAdmin" class="lock-badge"><q-icon name="la la-lock" size="14px" /> Пароль</span>
-                            <span v-if="item.otpRequired" class="lock-badge">{{ item.otpEnabled ? 'OTP обязателен' : 'Требуется настройка OTP' }}</span>
+                            <span v-if="item.blocked" class="pending-badge" role="status">Заблокирован</span>
+                            <template v-else>
+                                <span v-if="item.requiresLogin && !item.isAdmin" class="lock-badge"><q-icon name="la la-lock" size="14px" /> Пароль</span>
+                                <span v-if="item.otpRequired" class="lock-badge">{{ item.otpEnabled ? 'OTP обязателен' : 'Требуется настройка OTP' }}</span>
+                            </template>
                         </div>
                         <div class="profile-actions">
-                            <q-btn v-if="item.id !== currentUserId" :disable="!!config.profileBoundId && item.id !== config.profileBoundId" outline dense no-caps color="primary" @click="selectProfile(item)">
+                            <q-btn v-if="item.id !== currentUserId && !item.blocked" :disable="!!config.profileBoundId && item.id !== config.profileBoundId" outline dense no-caps color="primary" @click="selectProfile(item)">
                                 {{ uiText.select }}
                             </q-btn>
                             <q-btn
@@ -105,6 +108,10 @@
                             <q-btn v-if="canManageOtpPolicy && !config.profileAuthPolicy?.otpRequired && item.id !== currentUserId && item.requiresLogin && item.login && !item.anonymousProfile"
                                 flat dense no-caps color="primary" :aria-label="`${otpPolicyLabel(item)}: ${item.name}`" :label="otpPolicyLabel(item)"
                                 @click="openOtpAdmin(item, 'policy')" />
+                            <q-btn v-if="canManageProfileBlocking && item.id !== currentUserId && !item.isAdmin && !item.anonymousProfile"
+                                flat dense round :icon="item.blocked ? 'la la-unlock' : 'la la-ban'" :color="item.blocked ? 'primary' : 'negative'"
+                                :aria-label="`${blockActionLabel(item)}: ${item.name}`" :title="blockActionLabel(item)"
+                                :disable="!!profileBlockPendingId" :loading="profileBlockPendingId === item.id" @click="toggleProfileBlocked(item)" />
                             <q-btn
                                 v-if="canManageProfiles && !item.isAdmin && !item.anonymousProfile"
                                 flat dense round icon="la la-trash" color="negative" :aria-label="`Удалить профиль: ${item.name}`" :title="`Удалить профиль: ${item.name}`"
@@ -491,6 +498,7 @@
 
 <script>
 import {defineAsyncComponent} from 'vue';
+import escape from 'lodash/escape';
 import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
 import TelegramAccountPanel from '../../Library/TelegramAccountPanel.vue';
@@ -543,6 +551,7 @@ class UserProfilesDialog {
     editableProfilePasswordVisible = false;
     creatingProfile = false;
     savingProfile = false;
+    profileBlockPendingId = '';
     editableProfile = this.makeEmptyEditable();
     newProfile = this.makeEmptyNew();
     otpAdminTarget = null;
@@ -583,6 +592,10 @@ class UserProfilesDialog {
 
     get canManageOtpPolicy() {
         return this.canManageProfiles && !this.config.profileBoundId && this.config.clientApi?.features?.includes('adminProfileTotpPolicy');
+    }
+
+    get canManageProfileBlocking() {
+        return this.canManageProfiles && this.config.clientApi?.features?.includes('adminProfileBlock');
     }
 
     get otpAdminLabel() {
@@ -782,6 +795,7 @@ class UserProfilesDialog {
             login: item.login || '',
             publicId: item.login || item.id,
             requiresLogin: !!item.requiresLogin,
+            blocked: item.blocked === true,
             otpEnabled: item.otpEnabled === true,
             otpRequired: item.otpRequired === true,
             isAdmin: !!item.isAdmin,
@@ -1110,6 +1124,31 @@ class UserProfilesDialog {
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
         } finally {this.savingProfile = false;}
+    }
+
+    blockActionLabel(profile) {
+        return profile.blocked ? 'Разблокировать профиль' : 'Заблокировать профиль';
+    }
+
+    async toggleProfileBlocked(profile) {
+        if (this.profileBlockPendingId) return;
+        this.profileBlockPendingId = profile.id;
+        const blocked = !profile.blocked;
+        const name = escape(profile.name);
+        try {
+            const confirmed = await this.$root.stdDialog.confirm(blocked
+                ? `Заблокировать профиль «${name}»? Его сеансы завершатся. Полки и прогресс сохранятся.`
+                : `Разблокировать профиль «${name}»? Пользователь сможет войти снова.`, this.blockActionLabel(profile));
+            if (!confirmed) return;
+            const result = await this.api.setUserProfileBlocked(profile.id, blocked);
+            profile.blocked = result.blocked;
+            await this.loadProfiles({preserveState:true});
+            this.$root.notify.success(result.blocked ? 'Профиль заблокирован' : 'Профиль разблокирован');
+        } catch (error) {
+            this.$root.stdDialog.alert(escape(error.message), this.uiText.errorTitle);
+        } finally {
+            this.profileBlockPendingId = '';
+        }
     }
 
     async deleteProfile(item) {

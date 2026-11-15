@@ -383,6 +383,8 @@ class WebSocketController {
                     await this.createUserProfile(req, ws); break;
                 case 'update-user-profile':
                     await this.updateUserProfile(req, ws); break;
+                case 'set-user-profile-blocked':
+                    this.send(await this.webWorker.setUserProfileBlocked(req.userId, req.profileAccessToken, req.targetUserId, req.blocked), req, ws); break;
                 case 'delete-user-profile':
                     await this.deleteUserProfile(req, ws); break;
                 case 'get-reading-list':
@@ -474,6 +476,7 @@ class WebSocketController {
             'logout-user-profile',
             'create-user-profile',
             'update-user-profile',
+            'set-user-profile-blocked',
             'delete-user-profile',
             'update-discovery-preferences',
             'record-discovery-events',
@@ -987,7 +990,7 @@ class WebSocketController {
     }
 
     async getUserProfiles(req, ws) {
-        const result = await this.webWorker.getUserProfiles(req.userId);
+        const result = await this.webWorker.getUserProfiles(req.userId, {profileAccessToken:req.profileAccessToken});
         if (this.profileAccess)
             result.users = this.profileAccess.filterProfiles(result.users, req);
         this.send(result, req, ws);

@@ -819,6 +819,10 @@ class Api {
         return await this.request({action: 'delete-user-profile', targetUserId}, 120);
     }
 
+    async setUserProfileBlocked(targetUserId, blocked) {
+        return this.request({action: 'set-user-profile-blocked', targetUserId, blocked}, 30, {suppressProfileLogin:true});
+    }
+
     async getReadingList(listId, requestOptions = {}) {
         return await this.request({action: 'get-reading-list', listId}, 120, requestOptions);
     }

@@ -46,6 +46,10 @@ class ProfileAccess {
             const login = store.normalizeLogin(this.security.getProxyAuthUser(req));
             const user = login && (identityOnly ? await store.getUserIdentity(login, 'login')
                 : (await store.load()).users.find(item => item.login === login));
+            if (user?.blocked) {
+                this.clearBinding(session);
+                throw denied('Профиль недоступен', 403);
+            }
             if (user) {
                 session = this.security.ensureSession(req);
                 if (session.proxyProfileUserId !== user.id || session.proxyProfileLogin !== login)
@@ -66,7 +70,8 @@ class ProfileAccess {
             return null;
         const user = identityOnly ? await store.getUserIdentity(id, 'id')
             : (await store.load()).users.find(item => item.id === id);
-        return user ? {user, token: accessToken, bound: false} : null;
+        if (user?.blocked) this.worker.closeProfileSession(accessToken);
+        return user && !user.blocked ? {user, token: accessToken, bound: false} : null;
     }
 
     assertProfile(identity, requested = '') {

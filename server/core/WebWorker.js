@@ -3627,7 +3627,7 @@ class WebWorker {
             return [];
 
         const user = await this.getEffectiveUser(normalizedUserId, profileAccessToken);
-        if (!user)
+        if (!user || user.blocked)
             return [];
 
         if (user.passwordHash && this.getProfileSessionUser(profileAccessToken) !== user.id)
@@ -3820,18 +3820,21 @@ class WebWorker {
         };
     }
 
-    async getUserProfiles(currentUserId = '', {includeTotpStatus = false} = {}) {
+    async getUserProfiles(currentUserId = '', {includeTotpStatus = false, profileAccessToken = ''} = {}) {
         this.checkMyState();
 
         const {users, currentUser} = await this.readingListStore.getUsers(currentUserId);
+        const sessionUserId = profileAccessToken && this.getProfileSessionUser(profileAccessToken);
+        const includeAdminDetails = includeTotpStatus || !!sessionUserId && users.some(user => user.id === sessionUserId && user.isAdmin && !user.blocked);
         return {
             users: users
+                .filter(item => includeAdminDetails || !item.blocked)
                 .map((item) => ({
                     id: item.id,
                     name: getUserDisplayName(item),
                     login: item.login || '',
                     requiresLogin: !!item.passwordHash,
-                    ...(includeTotpStatus ? {otpEnabled:!!item.profileTotp, otpRequired:item.otpRequired === true} : {}),
+                    ...(includeAdminDetails ? {otpEnabled:!!item.profileTotp, otpRequired:item.otpRequired === true, blocked:item.blocked === true} : {}),
                     anonymousProfile: isAnonymousDefaultUser(item),
                     isAdmin: !!item.isAdmin,
                     opdsEnabled: item.opdsEnabled !== false,
@@ -3841,7 +3844,7 @@ class WebWorker {
                     updatedAt: item.updatedAt,
                 }))
                 .sort((a, b) => a.name.localeCompare(b.name, 'ru')),
-            currentUserId: (currentUser ? currentUser.id : ''),
+            currentUserId: (currentUser && (includeAdminDetails || !currentUser.blocked) ? currentUser.id : ''),
         };
     }
 
@@ -3895,7 +3898,7 @@ class WebWorker {
         const requestedUser = exactId && userId ? await this.readingListStore.getUserIdentity(userId, 'id')
             : identityOnly ? await this.readingListStore.getUserIdentity(userId)
             : await this.readingListStore.getUser(userId);
-        if (!requestedUser) throw new Error('need_profile_login');
+        if (!requestedUser || requestedUser.blocked) throw new Error('need_profile_login');
         if (!this.readingListStore.profileAuthPolicy?.otpRequired && !requestedUser.passwordHash && (!exactId || !profileAccessToken))
             return requestedUser;
 
@@ -3938,7 +3941,7 @@ class WebWorker {
 
     async personalLibraryUser(userId, token) {
         const user = userId && await this.readingListStore.getExactProfileIdentity(userId);
-        if (!user || isAnonymousDefaultUser(user)
+        if (!user || user.blocked || isAnonymousDefaultUser(user)
             || (user.passwordHash || token || this.readingListStore.profileAuthPolicy?.otpRequired) && this.getProfileSessionUser(token) !== user.id)
             throw new Error('need_profile_login');
         return user;
@@ -3974,10 +3977,11 @@ class WebWorker {
     async getCurrentUserProfile(userId = '', profileAccessToken = '') {
         this.checkMyState();
 
-        const user = await this.getEffectiveUser(userId, profileAccessToken);
+        const requestedUser = await this.getEffectiveUser(userId, profileAccessToken);
+        const user = !requestedUser || requestedUser.blocked ? await this.readingListStore.getUser('default') : requestedUser;
         const anonymousProfile = isAnonymousDefaultUser(user);
         const otpPolicyRequired = this.readingListStore.profileAuthPolicy?.otpRequired === true;
-        const profileAuthorized = (!anonymousProfile && (!user.passwordHash && !otpPolicyRequired || this.getProfileSessionUser(profileAccessToken) === user.id));
+        const profileAuthorized = (!user.blocked && !anonymousProfile && (!user.passwordHash && !otpPolicyRequired || this.getProfileSessionUser(profileAccessToken) === user.id));
         const readingSummary = (profileAuthorized ? await this.buildUserReadingSummary(user, 48) : {count: 0, items: []});
         return {
             currentUserId: user.id,
@@ -4014,7 +4018,7 @@ class WebWorker {
         const store = this.readingListStore;
         return withFileTransaction(store.file, async() => {
             const user = await store.getProfileCredentials(store.normalizeLogin(login), true);
-            if (!user?.passwordHash || !await profilePassword.verify(user.passwordHash, user.login, password))
+            if (!user?.passwordHash || user.blocked || !await profilePassword.verify(user.passwordHash, user.login, password))
                 throw invalidProfileCredentials();
             if (user.otpRequired && !user.profileTotp)
                 throw Object.assign(new Error('Настройте обязательный OTP в веб-интерфейсе INPX Web'), {code:'need_profile_otp_setup'});
@@ -4047,7 +4051,7 @@ class WebWorker {
         const store = this.readingListStore;
         return withFileTransaction(store.file, async() => {
             const user = await store.getProfileCredentials(store.normalizeLogin(login), true);
-            if (!user?.passwordHash || !await profilePassword.verify(user.passwordHash, user.login, password))
+            if (!user?.passwordHash || user.blocked || !await profilePassword.verify(user.passwordHash, user.login, password))
                 throw invalidProfileCredentials();
             if (!user.otpRequired || user.profileTotp)
                 throw new Error('Войдите в профиль заново');
@@ -4277,6 +4281,29 @@ class WebWorker {
         return withFileTransaction(this.readingListStore.file, async() => {
             const result = await this.readingListStore.deleteUser(userId);
             this.revokeUserSessions(userId);
+            return result;
+        });
+    }
+
+    async setUserProfileBlocked(adminId, adminToken, targetUserId, blocked) {
+        this.checkMyState();
+        if (typeof blocked !== 'boolean') throw new Error('Укажите состояние профиля');
+        const store = this.readingListStore;
+        return withFileTransaction(store.file, async() => {
+            const admin = await this.requireAdmin(adminId, adminToken);
+            const authorize = () => {
+                if (this.getProfileSessionUser(adminToken) !== admin.id) throw new Error('need_profile_login');
+            };
+            const {changed, ...result} = await store.setUserBlocked(admin.id, targetUserId, blocked, authorize);
+            if (changed) {
+                if (blocked) {
+                    this.revokeUserSessions(result.userId);
+                    this.profileTotpAttempts?.delete(result.userId);
+                    this.telegramBot?.cancelDeliveries(result.userId);
+                }
+                this.addAdminEvent('warn', 'security', blocked ? 'Профиль заблокирован' : 'Профиль разблокирован',
+                    {adminId:admin.id, userId:result.userId});
+            }
             return result;
         });
     }

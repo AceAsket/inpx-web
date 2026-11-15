@@ -609,6 +609,27 @@ function profileRequest(page, payload, session) {
         await updateAuthPolicy(allowOptionalOtpRecovery, async dialog => {
             await dialog.getByLabel('Требовать пароль и OTP для всех', {exact:true}).click();
         }, 'Доверие к браузерам действует 180 дн.');
+        const liveReaderSession = await securePage.evaluate(() => {
+            const stored = JSON.parse(localStorage.getItem('inpx-web-profile-session'));
+            return {userId:stored.currentUserId, profileAccessToken:stored.profileAccessToken};
+        });
+        await page.locator('.user-profiles-btn').click();
+        const readerCard = page.locator('.profile-card').filter({has:page.getByText(reader.name, {exact:true})});
+        const blockReader = readerCard.getByRole('button', {name:`Заблокировать профиль: ${reader.name}`,exact:true});
+        const unblockReader = readerCard.getByRole('button', {name:`Разблокировать профиль: ${reader.name}`,exact:true});
+        const confirmBlock = (text) => page.getByRole('dialog').filter({hasText:text}).getByRole('button', {name:'OK',exact:true});
+        await blockReader.click();
+        await confirmBlock('Его сеансы завершатся').click();
+        await readerCard.getByText('Заблокирован', {exact:true}).waitFor();
+        assert.equal(await readerCard.getByRole('button', {name:'Выбрать',exact:true}).count(), 0);
+        await assertReaderSession(liveReaderSession, false);
+        assert.equal((await loginReader()).errorCode, 'INPX_INVALID_PROFILE_CREDENTIALS');
+        await unblockReader.click();
+        await confirmBlock('Пользователь сможет войти снова').click();
+        await blockReader.waitFor();
+        assert.equal((await loginReader()).errorCode, 'need_profile_otp');
+        await assertReaderSession(liveReaderSession, false);
+        await page.getByRole('button', {name:'Закрыть окно',exact:true}).click();
         await secureContext.close();
         await readerPage.close();
         await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), page.locator('.profile-controls .profile-logout').click()]);
@@ -620,7 +641,8 @@ function profileRequest(page, payload, session) {
         await page.locator('.std-dialog-card--reader .credentials-form input[name="password"]').waitFor();
         await checkAutofillColors('.std-dialog-card--reader .credentials-form input[name="password"]');
         assert.deepEqual(errors, []);
-        console.log(`Profile UI: TOTP setup, required enrollment, administrator recovery, trusted HTTPS browser and revocation, logout, token revocation, responsive toolbar, activity, performance form, shelves and favorites passed; screenshots: ${directory}`);
+        console.log('Profile UI: OTP, HTTPS browser trust, block and unblock, session revocation, responsive toolbar, activity, performance, shelves and favorites passed.');
+        console.log(`Screenshots: ${directory}`);
     } catch (error) {
         const page = browser?.contexts().flatMap(context => context.pages())[0];
         if (page) {

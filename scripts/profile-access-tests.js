@@ -525,5 +525,113 @@ async function testGlobalProfileTotpOverridesAnonymousAndSharedOpdsAccess() {
         });
 }
 
-module.exports = [testGlobalProfileTotpOverridesAnonymousAndSharedOpdsAccess,testRequiredTotpEnrollmentBeforePrivateAccess,testAndroidProtocolKeepsLegacyLoginAndRequiresOtpForEnrolledProfile,testOpdsAppPasswordIsProfileScopedRevocableAndCannotCreateWebSession,testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
+async function testProfileBlockRevokesAuthenticationAndPreservesData() {
+    await fixture({allowAnonymousAccess:false,opds:{enabled:true,user:'catalog',password:'shared-fixture'}}, async({worker,alice,bob,request,session,connect}) => {
+        const store = worker.readingListStore;
+        const adminBrowser = session();
+        const admin = await connect({cookie:adminBrowser.cookie});
+        const config = await admin({action:'get-config'});
+        assert(config.clientApi.features.includes('adminProfileBlock'));
+        const auth = await admin({action:'login-user-profile',login:'admin',password:'admin-fixture',csrfToken:config.csrfToken});
+        const action = {action:'set-user-profile-blocked',targetUserId:alice.id,blocked:true};
+        const manage = (patch = {}) => admin({...action,csrfToken:config.csrfToken,...patch});
+        assert.equal((await admin(action)).error,'bad_csrf_token');
+        assert.match((await manage({targetUserId:auth.userId})).error,/собственный профиль/);
+        assert.match((await manage({targetUserId:'default'})).error,/нельзя заблокировать/);
+
+        const readerBrowser = session();
+        const reader = await connect({cookie:readerBrowser.cookie});
+        const readerConfig = await reader({action:'get-config'});
+        const client = {type:'android',version:'0.17.4',protocol:1};
+        const login = {action:'login-user-profile',login:alice.login,password:'alice-fixture',csrfToken:readerConfig.csrfToken,client};
+        const readerLogin = await reader(login);
+        assert(readerLogin.profileAccessToken);
+        assert.match((await reader({...action,targetUserId:bob.id,csrfToken:readerConfig.csrfToken})).error,/Только администратор/);
+        const list = await store.createList(alice.id, 'Alice shelf', 'opds');
+        await store.updateUser(alice.id,{telegramChatId:'42'});
+        assert.equal((await store.findTelegramUser('1','42')).id, alice.id);
+        const otpAction = (operation, payload = {}) => reader({action:'profile-totp',operation,csrfToken:readerConfig.csrfToken,
+            payload:{password:login.password,...payload}});
+        const setup = await otpAction('start');
+        const enrollCode = currentTotpCode(setup.secret);
+        const enabled = await otpAction('enable',{code:enrollCode});
+        assert(enabled.otpEnabled);
+        const opds = await otpAction('create-opds-password',{code:enabled.recoveryCodes[0]});
+        const basic = {authorization:'Basic '+Buffer.from(alice.login+':'+opds.opdsAppPassword).toString('base64')};
+        const shared = {authorization:'Basic '+Buffer.from('catalog:shared-fixture').toString('base64')};
+        assert.equal((await request('/opds?user='+alice.id,basic)).status,200);
+        const koSync = new (require('../server/core/KoSync').KoSync)(worker.config,worker);
+        const koAccount = await koSync.settings(alice,'enable');
+        const koRequest = {headers:{'x-auth-user':alice.login,'x-auth-key':require('crypto').createHash('md5').update(koAccount.password).digest('hex')}};
+        assert.equal((await koSync.authenticate(koRequest)).id,alice.id);
+        const trusted = require('../server/core/ProfileTrustedDevices').issue([]);
+        await store.updateProfileCredentials(alice.id,{profileTrustedDevices:trusted.devices});
+        const existing = await worker.loginUserProfile(alice.login,login.password,'',{trustedDeviceToken:trusted.token});
+        assert.equal(existing.userId,alice.id);
+
+        assert.equal((await manage()).blocked,true);
+        assert.equal((await manage()).blocked,true, 'Repeated block is safe');
+        assert.equal(worker.getProfileSessionUser(readerLogin.profileAccessToken),'');
+        assert.equal(worker.getProfileSessionUser(existing.profileAccessToken),'');
+        assert.equal(worker.getProfileSessionUser(auth.profileAccessToken),auth.userId);
+        const stored = await new ReadingListStore(store.config).getProfileCredentials(alice.id);
+        assert.equal(stored.blocked,true);
+        assert.deepEqual(stored.profileTrustedDevices,[]);
+        assert.equal((await reader(login)).errorCode,'INPX_INVALID_PROFILE_CREDENTIALS');
+        assert.equal((await reader({...login,otp:enabled.recoveryCodes[1]})).errorCode,'INPX_INVALID_PROFILE_CREDENTIALS');
+        await assert.rejects(worker.loginUserProfile(alice.login,login.password,'',{trustedDeviceToken:trusted.token}), {code:'INPX_INVALID_PROFILE_CREDENTIALS'});
+        assert.equal((await request('/book/fixture.txt',{cookie:readerBrowser.cookie})).status,401);
+        assert.equal((await request('/opds?user='+alice.id,basic)).status,401);
+        assert.equal((await request('/opds',shared)).status,200);
+        assert.equal((await request('/opds?user='+alice.id,shared)).status,404);
+        assert.equal(await koSync.authenticate(koRequest),null);
+        assert.equal(await store.findTelegramUser('1','42'),null);
+        assert.equal((await admin({action:'get-config'})).userProfiles.find(user=>user.id===alice.id).blocked,true);
+        assert.equal((await store.getList(alice.id,list.id)).name,'Alice shelf');
+
+        assert.equal((await manage({blocked:false})).blocked,false);
+        assert.equal((await reader(login)).errorCode,'need_profile_otp');
+        const fresh = await reader({...login,otp:enabled.recoveryCodes[1]});
+        assert.equal(fresh.userId,alice.id);
+        assert.notEqual(fresh.profileAccessToken,readerLogin.profileAccessToken);
+        await assert.rejects(worker.loginUserProfile(alice.login,login.password,'',{trustedDeviceToken:trusted.token}),{code:'need_profile_otp'});
+        assert.equal((await request('/opds?user='+alice.id,basic)).status,200);
+        assert.equal((await koSync.authenticate(koRequest)).id,alice.id);
+        assert.equal((await store.findTelegramUser('1','42')).id,alice.id);
+    });
+}
+
+async function testBlockedProfileCannotUseGuestOrProxyAuthorization() {
+    const proxyConfig = {authMode:'proxy',proxyBindProfile:true,trustProxy:true,trustedProxyCidrs:['127.0.0.1/32']};
+    await fixture(proxyConfig, async({config,worker,bob,request,session,connect}) => {
+        const readerBrowser = session();
+        const headers = {cookie:readerBrowser.cookie,'Remote-User':'bob'};
+        const reader = await connect(headers);
+        assert.equal((await reader({action:'get-config'})).profileBoundId,bob.id);
+        const token = readerBrowser.value.profileAccessToken;
+        const ownerBrowser = session();
+        const owner = await connect({cookie:ownerBrowser.cookie,'Remote-User':'admin'});
+        const ownerConfig = await owner({action:'get-config'});
+        const action = {action:'set-user-profile-blocked',targetUserId:bob.id,blocked:true,csrfToken:ownerConfig.csrfToken};
+        assert.equal((await owner(action)).blocked,true);
+        assert.equal(worker.getProfileSessionUser(token),'');
+        assert.equal((await reader({action:'get-config'})).error,'Профиль недоступен');
+        assert.equal((await request('/book/fixture.txt',headers)).status,403);
+        assert.equal((await request('/opds?user=bob',headers)).status,403);
+
+        config.proxyBindProfile = false;
+        const guest = await connect();
+        const guestConfig = await guest({action:'get-config',userId:bob.id});
+        assert(!guestConfig.userProfiles.some(user=>user.id===bob.id));
+        assert.equal(guestConfig.profileAuthorized,false);
+        assert.equal((await guest({action:'get-reading-lists',userId:bob.id})).errorCode,'need_profile_login');
+        assert.equal((await request('/opds?user=bob')).status,404);
+        config.proxyBindProfile = true;
+        assert.equal((await owner({...action,blocked:false})).blocked,false);
+        assert.equal((await reader({action:'get-config'})).profileBoundId,bob.id);
+        assert.notEqual(readerBrowser.value.profileAccessToken,token);
+    });
+}
+
+module.exports = [testProfileBlockRevokesAuthenticationAndPreservesData,testBlockedProfileCannotUseGuestOrProxyAuthorization,testGlobalProfileTotpOverridesAnonymousAndSharedOpdsAccess,testRequiredTotpEnrollmentBeforePrivateAccess,testAndroidProtocolKeepsLegacyLoginAndRequiresOtpForEnrolledProfile,testOpdsAppPasswordIsProfileScopedRevocableAndCannotCreateWebSession,testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
     testProxyProfileBindingAndIdentityChange, testWebSocketCatalogAuthorizationUsesProfileIdentity, testLegacyAccessAndGlobalOpdsCredentials];

@@ -691,9 +691,11 @@ class ReadingListStore {
         normalized.name = this.validateUserName(normalized.name || fallback.name || 'Пользователь');
         normalized.login = this.validateLogin(normalized.login || '');
         normalized.passwordHash = String(normalized.passwordHash || '').trim();
+        if (normalized.blocked !== true || normalized.isAdmin || normalized.id === 'default' && !normalized.login && !normalized.passwordHash)
+            delete normalized.blocked;
         if (normalized.profileTotp != null) normalized.profileTotp = profileTotp.normalize(normalized.profileTotp);
         const devices = trustedDevices.active(normalized.profileTrustedDevices);
-        if (normalized.profileTotp && normalized.login && normalized.passwordHash && devices.length)
+        if (!normalized.blocked && normalized.profileTotp && normalized.login && normalized.passwordHash && devices.length)
             normalized.profileTrustedDevices = devices;
         else delete normalized.profileTrustedDevices;
         if (normalized.otpRequired !== true) delete normalized.otpRequired;
@@ -820,6 +822,7 @@ class ReadingListStore {
         } else {
             if (!admin.isAdmin) {
                 admin.isAdmin = true;
+                delete admin.blocked;
                 changed = true;
             }
 
@@ -1188,7 +1191,7 @@ class ReadingListStore {
         const user = field ? users.find(item => item[field] === value) : this.findUser(users, value);
         if (!user) return null;
         const {id, login, passwordHash} = user;
-        return {id, login, passwordHash, otpEnabled:!!user.profileTotp};
+        return {id, login, passwordHash, otpEnabled:!!user.profileTotp, blocked:user.blocked === true};
     }
 
     async getExactProfileIdentity(userId) {
@@ -1196,7 +1199,7 @@ class ReadingListStore {
         const profile = users.find(item => item.id === userId);
         if (!profile) return null;
         const {id, name, login, passwordHash} = profile;
-        return {id, name, login, passwordHash, otpEnabled:!!profile.profileTotp};
+        return {id, name, login, passwordHash, otpEnabled:!!profile.profileTotp, blocked:profile.blocked === true};
     }
 
     async getProfileCredentials(value, byLogin = false) {
@@ -1204,7 +1207,7 @@ class ReadingListStore {
         const user = byLogin ? users.find(item => item.login === value) : users.find(item => item.id === value);
         if (!user) return null;
         const {id, login, passwordHash} = user;
-        return {id, login, passwordHash, isAdmin:!!user.isAdmin, profileTotp:structuredClone(user.profileTotp),
+        return {id, login, passwordHash, isAdmin:!!user.isAdmin, blocked:user.blocked === true, profileTotp:structuredClone(user.profileTotp),
             profileAuthPolicy, otpRequired:profileAuthPolicy.otpRequired || user.otpRequired === true,
             profileTrustedDevices:trustedDevices.active(user.profileTrustedDevices),
             opdsAppPasswordSet:!!user.opdsAppPasswordHash};
@@ -1297,6 +1300,29 @@ class ReadingListStore {
         await this.save(data);
         return {profileAuthPolicy:policy, activatingOtp};
     }
+
+    async setUserBlocked(adminId, targetUserId, blocked, authorize) {
+        const data = await this.load();
+        if (!data.users.some(user => user.id === adminId && user.isAdmin && !user.blocked))
+            throw new Error('Только администратор может управлять профилями');
+        const target = data.users.find(user => user.id === targetUserId);
+        if (!target) throw new Error('Пользователь не найден');
+        if (target.id === adminId) throw new Error('Нельзя заблокировать собственный профиль');
+        if (target.isAdmin || target.id === 'default' && !target.login && !target.passwordHash)
+            throw new Error('Этот профиль нельзя заблокировать');
+        const changed = (target.blocked === true) !== blocked;
+        authorize();
+        if (changed) {
+            if (blocked) {
+                target.blocked = true;
+                delete target.profileTrustedDevices;
+            } else delete target.blocked;
+            target.updatedAt = this.nowIso();
+            await this.save(data);
+        }
+        return {userId:target.id, blocked, changed};
+    }
+
     async findTelegramUser(botId, chatId) {
         botId=String(botId);chatId=String(chatId);
         if(!/^[1-9]\d{0,19}$/.test(botId)||!/^[1-9]\d{0,19}$/.test(chatId)||!Number.isSafeInteger(Number(chatId)))return null;
@@ -1305,9 +1331,9 @@ class ReadingListStore {
         const linked=data.users.filter(user=>user.telegramBotId===botId&&user.telegramBotChatId===chatId&&user.telegramBotLinkedAt);
         if(linked.length) {
             const user=linked[0];
-            return linked.length===1&&!user.telegramBotBlocked&&(!user.telegramBotAutoLinked||configured.length===1&&configured[0].id===user.id) ? user:null;
+            return linked.length===1&&!user.blocked&&!user.telegramBotBlocked&&(!user.telegramBotAutoLinked||configured.length===1&&configured[0].id===user.id) ? user:null;
         }
-        if(configured.length!==1||configured[0].telegramBotBlocked||configured[0].telegramBotLinkedAt&&!configured[0].telegramBotAutoLinked)return null;
+        if(configured.length!==1||configured[0].blocked||configured[0].telegramBotBlocked||configured[0].telegramBotLinkedAt&&!configured[0].telegramBotAutoLinked)return null;
         // Persist once so digests and profile status use the same binding. The
         // serialized mutation rechecks uniqueness after concurrent profile edits.
         return this.changeTelegramBinding(configured[0].id,'auto-link',{botId,chatId});
@@ -1315,7 +1341,7 @@ class ReadingListStore {
 
     async changeTelegramBinding(userId, operation, patch = {}) {
         const data = await this.load(), user = data.users.find(user => user.id === userId);
-        if (!user || user.id === 'default' && !user.login) throw new Error('Личный профиль не найден');
+        if (!user || user.blocked || user.id === 'default' && !user.login) throw new Error('Личный профиль не найден');
         if (operation === 'link' || operation === 'auto-link') {
             const botId = String(patch.botId || ''), chatId = String(patch.chatId || '');
             if (!/^\d{1,20}$/.test(botId) || !/^\d{1,20}$/.test(chatId)) throw new Error('Некорректная привязка Telegram');
@@ -1379,7 +1405,7 @@ class ReadingListStore {
         }
 
         return data.users
-            .filter((item) => item.opdsEnabled && (stats.has(item.id) || progressCounts.has(item.id)))
+            .filter((item) => !item.blocked && item.opdsEnabled && (stats.has(item.id) || progressCounts.has(item.id)))
             .map((item) => ({
                 id: item.id,
                 publicId: item.login || item.id,
@@ -1400,7 +1426,7 @@ class ReadingListStore {
         // Match resolveUser: an exact ID must win over another profile's login.
         const user = data.users.find((item) => item.id === normalized)
             || data.users.find((item) => item.login === normalized);
-        if (!user || user.opdsEnabled === false)
+        if (!user || user.blocked || user.opdsEnabled === false)
             return null;
 
         return {...structuredClone(user), otpRequired:data.profileAuthPolicy.otpRequired || user.otpRequired === true};
@@ -1419,12 +1445,12 @@ class ReadingListStore {
         const normalized = this.normalizeLogin(login);
         if (!normalized) return null;
         const user = (await this.loadSnapshot()).users.find(item => item.login === normalized);
-        if (!user || user.opdsEnabled === false || (totpOnly ? !user.profileTotp : !(user.opdsAuthEnabled || user.profileTotp))) return null;
+        if (!user || user.blocked || user.opdsEnabled === false || (totpOnly ? !user.profileTotp : !(user.opdsAuthEnabled || user.profileTotp))) return null;
         return await this.verifyOpdsCredential(user,login,password) ? structuredClone(user) : null;
     }
 
     async verifyOpdsCredential(user, login, password) {
-        if (!user.login || !user.passwordHash || this.normalizeLogin(login) !== user.login) return false;
+        if (user.blocked || !user.login || !user.passwordHash || this.normalizeLogin(login) !== user.login) return false;
         if ((this.profileAuthPolicy.otpRequired || user.otpRequired) && !user.profileTotp) return false;
         // App passwords contain 192 bits of randomness, so a SHA-256 digest
         // supports constant-time validation without a KDF on every book request.
@@ -1438,7 +1464,7 @@ class ReadingListStore {
     async manageOpdsAppPassword(userId, operation, {profileTotp, authorize} = {}) {
         const data = await this.load();
         const user = data.users.find(item => item.id === userId);
-        if (!user) throw new Error('need_profile_login');
+        if (!user || user.blocked) throw new Error('need_profile_login');
         if (operation === 'revoke-opds-password') {
             if (authorize) await authorize();
             if (user.opdsAppPasswordHash || profileTotp) {
@@ -1462,7 +1488,7 @@ class ReadingListStore {
     async verifyUserPassword(userId, password) {
         const data = await this.load();
         const user = data.users.find(item => item.id === userId);
-        if (!user || !user.passwordHash || !await profilePassword.verify(user.passwordHash, user.login, password))
+        if (!user || user.blocked || !user.passwordHash || !await profilePassword.verify(user.passwordHash, user.login, password))
             return false;
         if (profilePassword.isLegacy(user.passwordHash)) {
             user.passwordHash = await profilePassword.hash(password);

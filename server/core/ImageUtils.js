@@ -103,8 +103,10 @@ async function tryNativeJxl(buf, extension, tempDir) {
     try {
         await fs.writeFile(input, buf);
         const args = [process.pkg ? nativeJxl.workerFlag : require.resolve('./NativeJxl'), input, extension];
+        // pkg normally makes a child invocation treat its first argument as a Node entrypoint.
+        const env = process.pkg ? {...process.env, PKG_EXECPATH: ''} : undefined;
         const data = await runProcess(process.execPath, args,
-            {resourceKind:'images', captureStdout:true, maxOutputBytes:nativeJxl.maxOutputBytes});
+            {resourceKind:'images', captureStdout:true, maxOutputBytes:nativeJxl.maxOutputBytes, env});
         return contentType(data) === (png ? 'image/png' : 'image/jpeg') ? data : null;
     } catch (error) {
         if (error.exitCode === nativeJxl.sizeExit) throw nativeJxl.sizeError();

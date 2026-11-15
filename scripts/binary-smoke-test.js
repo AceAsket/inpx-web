@@ -9,7 +9,37 @@ const {setTimeout: sleep} = require('timers/promises');
 const WebSocket = require('ws');
 const yazl = require('yazl');
 
-async function createFixture(dir) {
+async function isolateNativeJxl(binary, directory) {
+    const bundledTools = path.join(path.dirname(binary), 'bin');
+    const binDir = path.join(directory, 'bin');
+    await fs.ensureDir(binDir);
+    const executable = path.join(directory, path.basename(binary));
+    await fs.copyFile(binary, executable);
+    if (process.platform !== 'win32') await fs.chmod(executable, 0o755);
+    await fs.copyFile(path.join(bundledTools, 'inpx-jxl.node'), path.join(binDir, 'inpx-jxl.node'));
+    if (process.env.INPX_SMOKE_EPUB === 'true') {
+        const suffix = process.platform === 'win32' ? '.exe' : '';
+        for (const tool of [`fbc${suffix}`, `kindling${suffix}`]) {
+            const source = path.join(bundledTools, tool);
+            if (await fs.pathExists(source)) await fs.copy(source, path.join(binDir, tool));
+        }
+    }
+    return executable;
+}
+
+async function checkNativeJxlCover(url, uid) {
+    const response = await fetch(`${url}/cover/by-uid?${new URLSearchParams({uid})}`, {signal: AbortSignal.timeout(30000)});
+    if (response.status !== 200)
+        throw new Error(`Packaged native JXL cover returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
+    assert.match(response.headers.get('content-type'), /^image\/png$/);
+    const png = Buffer.from(await response.arrayBuffer());
+    assert.deepStrictEqual(png.subarray(0, 16), Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'));
+    assert.equal(png.readUInt32BE(16), 192);
+    assert.equal(png.readUInt32BE(20), 192);
+    console.log('ok packaged native JXL cover over HTTP without djxl');
+}
+
+async function createFixture(dir, {nativeJxlCover = false} = {}) {
     await fs.ensureDir(dir);
     const zip = new yazl.ZipFile();
     const output = fs.createWriteStream(path.join(dir, 'smoke.inpx'));
@@ -35,6 +65,15 @@ async function createFixture(dir) {
         rows += epubRow.join('\x04') + '\n';
     }
     books.end(); await bookDone;
+    if (nativeJxlCover) {
+        const coverDir = path.join(dir, 'covers');
+        await fs.ensureDir(coverDir);
+        const covers = new yazl.ZipFile();
+        const coversDone = require('stream/promises').pipeline(covers.outputStream, fs.createWriteStream(path.join(coverDir, 'smoke.zip')));
+        covers.addBuffer(require('../server/core/benchmarkFixture'), '1');
+        covers.end();
+        await coversDone;
+    }
     zip.addBuffer(Buffer.from(rows), 'smoke.inp');
     zip.end();
     await complete;
@@ -65,15 +104,16 @@ async function unusedPort() {
 }
 
 async function checkWebSocket(url) {
-    await new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
         const socket = new WebSocket(url.replace(/^http/, 'ws'));
+        let bookUid;
         let epubUid;
         const timer = setTimeout(() => finish(new Error('WebSocket response timed out')), 60000);
         const finish = error => {
             clearTimeout(timer);
             socket.terminate();
             if (error) reject(error);
-            else resolve();
+            else resolve(bookUid);
         };
         socket.once('error', finish);
         socket.once('open', () => socket.send(JSON.stringify({action: 'test', requestId: 'smoke'})));
@@ -106,7 +146,8 @@ async function checkWebSocket(url) {
                         epubUid = epub._uid;
                     }
                     const book = response.books.find(book => book.ext === 'fb2'); assert(book);
-                    socket.send(JSON.stringify({action:'get-book-gallery', bookUid:book._uid, requestId:'gallery'}));
+                    bookUid = book._uid;
+                    socket.send(JSON.stringify({action:'get-book-gallery', bookUid, requestId:'gallery'}));
                 } else if (response.requestId === 'gallery') {
                     assert.strictEqual(response.images.length, 1, 'Packaged gallery includes its bounded parser and original FB2 image');
                     assert.strictEqual(response.images[0].id, 'illustration');
@@ -185,9 +226,12 @@ async function checkEbookGuestDownload(url,html,format='fb2'){
 }
 
 async function main() {
-    const [target, imageName] = process.argv.slice(2);
+    const [target, argument] = process.argv.slice(2);
+    const binary = target && target !== '--image' ? path.resolve(target) : null;
+    const imageName = target === '--image' ? argument : null;
+    const allowMissingNativeJxl = argument === '--allow-missing-native-jxl';
     if (!target || (target === '--image' && !imageName))
-        throw new Error('Usage: node scripts/binary-smoke-test.js <binary> | --image <local-image>');
+        throw new Error('Usage: node scripts/binary-smoke-test.js <binary> [--allow-missing-native-jxl] | --image <local-image>');
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-binary-smoke-'));
     const library = path.join(dir, 'library');
     const containerName = `inpx-smoke-${process.pid}-${Date.now()}`;
@@ -195,9 +239,11 @@ async function main() {
     let exited;
     let output = '';
     try {
-        await createFixture(library);
+        const nativeJxlCover = binary !== null && (!allowMissingNativeJxl
+            || await fs.pathExists(path.join(path.dirname(binary), 'bin', 'inpx-jxl.node')));
+        await createFixture(library, {nativeJxlCover});
         const port = await unusedPort();
-        let command;
+        let command, cwd;
         let args;
         if (target === '--image') {
             command = 'docker';
@@ -209,7 +255,11 @@ async function main() {
                 '--mount', `type=bind,source=${library},target=/library,readonly`, imageName,
                 'sh', '-c', 'cp /library/config.json /data/config.json && exec inpx-web --data-dir=/data --config=/data/config.json --lib-dir=/library --host=0.0.0.0 --port=12380'];
         } else {
-            command = path.resolve(target);
+            command = binary;
+            if (nativeJxlCover) {
+                cwd = path.join(dir, 'standalone');
+                command = await isolateNativeJxl(binary, cwd);
+            }
             args = [`--data-dir=${path.join(dir, 'data')}`, `--lib-dir=${library}`,
                 `--config=${path.join(library, 'config.json')}`, '--host=127.0.0.1', `--port=${port}`];
         }
@@ -218,8 +268,13 @@ async function main() {
             INPX_OPDS_FEEDS_FILE:path.join(library, 'opds-feeds.json'),
             INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true',
             INPX_ENABLE_CONVERSION: process.env.INPX_SMOKE_EPUB === 'true' ? 'true' : 'false'};
+        if (nativeJxlCover) {
+            for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
+            env.PATH = cwd;
+            env.INPX_JXL_DECODER = 'native';
+        }
         if(process.env.INPX_SMOKE_EPUB==='true'){delete env.INPX_MOBI_ENABLED;env.INPX_CONVERSION_FORMATS='fb2,epub';}
-        child = spawn(command, args, {env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
+        child = spawn(command, args, {cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
         exited = new Promise(resolve => {
             child.once('exit', resolve);
             child.once('error', error => { output += error.message; resolve(); });
@@ -247,6 +302,8 @@ async function main() {
         assert.strictEqual(home.status, 200);
         assert.strictEqual(home.headers.get('x-robots-tag'),'noindex, nofollow');
         assert.match(await home.text(), /<html/i);
+        const bookUid = await checkWebSocket(url);
+        if (nativeJxlCover) await checkNativeJxlCover(url, bookUid);
         const ebook=await fetch(`${url}/ebook?q=Packaged&lang=en`);
         assert.strictEqual(ebook.status,200);
         const ebookHtml=await ebook.text();
@@ -264,7 +321,6 @@ async function main() {
         const shelf = await fetch(`${url}/opds/catalog-shelves?id=smoke`);
         assert.strictEqual(shelf.status, 200);
         assert.match(await shelf.text(), /Packaged smoke book/);
-        await checkWebSocket(url);
         await require('./opds2-integration-test')(url,{adminPassword:'local-smoke-fixture'});
         console.log(`ok packaged application: indexing, health, web UI, OPDS, WebSocket (${target === '--image' ? imageName : target})`);
     } finally {

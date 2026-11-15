@@ -1,5 +1,5 @@
 const info = Object.freeze({version:1, features:['resumeSession','readerEvents','mobileHome','requestBudget','cancelAudio','bookSearchFormats',
-    'catalogSuggest','catalogBrowse','catalogEntity','telegramAccount','backupVault','overviewRecommendations','separateExternalDiscovery','overviewPinnedShelves','libraryFollowNews','profileTotp','adminProfileTotpReset','adminProfileTotpPolicy','profileAuthPolicy']});
+    'catalogSuggest','catalogBrowse','catalogEntity','telegramAccount','backupVault','overviewRecommendations','separateExternalDiscovery','overviewPinnedShelves','libraryFollowNews','profileTotp','adminProfileTotpReset','adminProfileTotpPolicy','profileAuthPolicy','adminProfileBlock']});
 const expensive = new Set(['catalog-entity','catalog-suggest','catalog-browse','search','bookSearch','get-author-book-list','get-author-series-list','get-series-book-list','get-discovery-shelves','get-overview-pinned-shelves']);
 const readerChanges = new Set(['update-reader-progress','delete-reader-progress','clear-reader-progress','update-reader-preferences',
     'add-reader-bookmark','delete-reader-bookmark','import-reading-lists','import-user-backup','mark-reader-books-read','mark-series-read','mark-series-until']);
