@@ -77,6 +77,7 @@ const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const discoveryCacheTtl = 15*60*1000;//15 minutes
 const discoveryCacheBytes = 8 * 1024 ** 2;
 const discoveryNewestWindows = [7, 30, 90, 180, 365];
+const overviewCandidates = require('./OverviewCandidates');
 const discoveryStaleGrace = 24 * 60 * 60 * 1000;
 const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
@@ -1602,7 +1603,15 @@ class WebWorker {
         const db = this.db;
         const generation = this.libraryAssetGeneration;
         const now = Date.now();
-        const scores = Object.fromEntries(Object.entries(popularityMap).map(([uid, activity]) => [uid, activity.score]));
+        const activityLimit = Math.max(limit, popularLimit) * 64;
+        const scores = Object.fromEntries(Object.entries(popularityMap)
+            .filter(([,activity]) => activity.score > 0)
+            .sort((a,b) => b[1].score - a[1].score)
+            .slice(0,activityLimit).map(([uid,activity]) => [uid,activity.score]));
+        const [recent, rated] = await Promise.all([
+            mode === 'newest' ? overviewCandidates.dates(db,now,daysWindows,Math.max(128,limit*24)) : [],
+            mode === 'popular' || popularLimit ? overviewCandidates.postings(db,'librate',[5,4,3,2,1],activityLimit) : [],
+        ]);
         const rows = await db.select({
             table: 'book',
             rawResult: true,
@@ -1690,8 +1699,11 @@ class WebWorker {
                 };
                 const popularLimit = ${db.esc(popularLimit)};
                 const popular = popularLimit ? new Map() : null;
+                const ids = new Set(${db.esc([...recent,...rated])});
+                for (const uid of Object.keys(scores))
+                    for (const id of @hash('_uid',uid)) ids.add(id);
                 let visited = 0;
-                for (const id of @all()) {
+                for (const id of ids) {
                     if (++visited % 1024 === 0)
                         await new Promise(resolve => setImmediate(resolve));
                     const row = @unsafeRow(id);
@@ -3378,7 +3390,13 @@ class WebWorker {
             .split('')
             .reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) % 9973, Math.floor(Date.now() / 86400000));
 
-        const rows = await this.db.select({
+        const db = this.db;
+        const generation = this.libraryAssetGeneration;
+        const candidates = await overviewCandidates.recommendations(db, {
+            authors:preferredAuthors, series:preferredSeries, genres:preferredGenres,
+            languages:preferredLanguages, keywords:preferredKeywords,
+        }, displayLimit, rotationSeed, Date.now());
+        const rows = await db.select({
             table: 'book',
             rawResult: true,
             where: `
@@ -3404,7 +3422,7 @@ class WebWorker {
                 let order = 0;
                 let readCount = 0;
                 const now = Date.now();
-                for (const id of @all()) {
+                for (const id of ${db.esc(candidates)}) {
                     if (++readCount % 1024 === 0)
                         await new Promise(resolve => setImmediate(resolve));
                     const row = @unsafeRow(id);
@@ -3477,6 +3495,7 @@ class WebWorker {
                 return ranked(affinity, false).concat(ranked(exploration, true));
             `
         });
+        this.checkLibraryAssetState(generation, db);
 
         const rawItems = ((rows[0] && rows[0].rawResult) ? rows[0].rawResult : [])
             .map(book => Object.assign({}, book, {
