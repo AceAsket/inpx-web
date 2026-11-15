@@ -1702,8 +1702,9 @@ class WebWorker {
                 const ids = new Set(${db.esc([...recent,...rated])});
                 for (const uid of Object.keys(scores))
                     for (const id of @hash('_uid',uid)) ids.add(id);
+                const readOrder = ${overviewCandidates.bookReadOrder.toString()};
                 let visited = 0;
-                for (const id of ids) {
+                for (const id of readOrder(ids, __tr._rowsInterface.blockIndex)) {
                     if (++visited % 1024 === 0)
                         await new Promise(resolve => setImmediate(resolve));
                     const row = @unsafeRow(id);
@@ -3422,7 +3423,8 @@ class WebWorker {
                 let order = 0;
                 let readCount = 0;
                 const now = Date.now();
-                for (const id of ${db.esc(candidates)}) {
+                const readOrder = ${overviewCandidates.bookReadOrder.toString()};
+                for (const id of readOrder(${db.esc(candidates)}, __tr._rowsInterface.blockIndex)) {
                     if (++readCount % 1024 === 0)
                         await new Promise(resolve => setImmediate(resolve));
                     const row = @unsafeRow(id);

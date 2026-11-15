@@ -61,6 +61,10 @@ function tasteKeys(weights, max) {
     return Object.entries(weights).sort((a,b) => b[1] - a[1]).slice(0,max).map(([key]) => key);
 }
 
+function bookReadOrder(ids, blocks) {
+    return Array.from(ids).sort((a,b) => (blocks?.get(a) || 0) - (blocks?.get(b) || 0) || a-b);
+}
+
 async function recommendations(db, weights, limit, seed, now) {
     const {authors, series, genres, languages, keywords} = weights;
     const candidates = await Promise.all([
@@ -77,4 +81,4 @@ async function recommendations(db, weights, limit, seed, now) {
     return [...new Set(candidates.flat())];
 }
 
-module.exports = {dates, postings, recommendations};
+module.exports = {dates, postings, recommendations, bookReadOrder};
