@@ -1,6 +1,9 @@
 const fs = require('fs-extra');
 //const _ = require('lodash');
 const utils = require('./utils');
+const {RustLookupIndex} = require('./RustLookupIndex');
+const {compareBooks, compareBookFields, bookScore, normalizeKeyPart, physicalBookKey} = require('./BookSearchProjection');
+const {words, root} = require('../../shared/CatalogSearch');
 
 const maxLimit = 1000;
 
@@ -48,6 +51,7 @@ class DbSearcher {
         await this.fillBookIdMap('series');
         await this.fillBookIdMap('title');
         await this.fillDbConfig();
+        this.rustLookup = new RustLookupIndex(this.dbPath, this.dbConfig);
     }
 
     queryKey(q) {
@@ -164,20 +168,48 @@ class DbSearcher {
         return where;
     }
 
+    async lookupBookIds(fallback, table, ranges) {
+        const lookup = this.rustLookup;
+        if (!lookup) return fallback();
+        const db = this.db;
+        return lookup.run(async process => {
+            const [result] = await db.select({table, rawResult:true, where:`
+                const ranges = ${db.esc(ranges)}, groups = [];
+                const index = __tr._index?.get('value');
+                for (const [start, end] of ranges) {
+                    if (!index?.unique || index.depth !== 1000000 ||
+                        index.prepareValue(start) !== start || index.prepareValue(end) !== end) return null;
+                    groups.push(Array.from(@dirtyIndexLR('value', start, end)));
+                }
+                return groups;
+            `});
+            if (!result.rawResult) return fallback();
+            const ids = await process.query({op:'books', table, groups:result.rawResult});
+            if (!Array.isArray(ids) || ids.some(id => !Number.isInteger(id) || id < 0 || id > 0xffffffff))
+                throw new Error('Invalid Rust book lookup response');
+            return new Uint32Array(ids);
+        }, fallback);
+    }
+
     async wordBookIds(field, query) {
         if (/^[=*#~?]/.test(query) || !await this.db.tableExists({table: 'word'})) return null;
         const search = require('../../shared/CatalogSearch');
         const tokens = [...new Set(search.words(query).map(search.root))];
         if (!tokens.length) return new Uint32Array();
-        let matches = null;
-        for (const token of tokens) {
+        const ranges = tokens.map(token => {
             const key = `${field}:${token}`;
-            const rows = await this.db.select({table: 'word', where: `@@indexLR('value', ${this.db.esc(key)}, ${this.db.esc(key + maxUtf8Char)})`});
-            const ids = new Set(rows.flatMap(row => row.bookIds));
-            matches = matches === null ? ids : new Set([...matches].filter(id => ids.has(id)));
-            if (!matches.size) break;
-        }
-        return new Uint32Array(matches || []);
+            return [key, key + maxUtf8Char];
+        });
+        return this.lookupBookIds(async () => {
+            let matches = null;
+            for (const [from, to] of ranges) {
+                const rows = await this.db.select({table:'word', where:`@@indexLR('value', ${this.db.esc(from)}, ${this.db.esc(to)})`});
+                const ids = new Set(rows.flatMap(row => row.bookIds));
+                matches = matches === null ? ids : new Set([...matches].filter(id => ids.has(id)));
+                if (!matches.size) break;
+            }
+            return new Uint32Array(matches || []);
+        }, 'word', ranges);
     }
 
     async selectBookIds(query, {bookPredicates = false} = {}) {
@@ -187,24 +219,24 @@ class DbSearcher {
         const idsArr = [];
 
         const tableBookIds = async(table, where) => {
-            const rows = await db.select({
-                table,
-                rawResult: true,
-                where: `
-                    const ids = ${where};
+            const [result] = await db.select({table, rawResult:true, where:`
+                const ids = ${where}, result = new Set();
+                for (const id of ids) {
+                    const row = @unsafeRow(id);
+                    for (const bookId of row.bookIds)
+                        result.add(bookId);
+                }
+                return new Uint32Array(result);
+            `});
+            return result.rawResult;
+        };
 
-                    const result = new Set();
-                    for (const id of ids) {
-                        const row = @unsafeRow(id);
-                        for (const bookId of row.bookIds)
-                            result.add(bookId);
-                    }
-
-                    return new Uint32Array(result);
-                `
-            });
-
-            return rows[0].rawResult;
+        const nameBookIds = (table, value, options) => {
+            const where = this.getWhere(value, options);
+            const fallback = () => tableBookIds(table, where);
+            if (!value.startsWith('=')) return fallback();
+            const exact = value.toLowerCase().slice(1);
+            return this.lookupBookIds(fallback, table, [[exact, exact]]);
         };
 
         //авторы
@@ -213,7 +245,7 @@ class DbSearcher {
             let ids = await this.getCached(key);
 
             if (ids === null) {
-                ids = await this.wordBookIds('author', query.author) || await tableBookIds('author', this.getWhere(query.author));
+                ids = await this.wordBookIds('author', query.author) || await nameBookIds('author', query.author);
 
                 await this.putCached(key, ids);
             }
@@ -227,7 +259,7 @@ class DbSearcher {
             let ids = await this.getCached(key);
 
             if (ids === null) {
-                ids = await this.wordBookIds('series', query.series) || await tableBookIds('series', this.getWhere(query.series));
+                ids = await this.wordBookIds('series', query.series) || await nameBookIds('series', query.series);
 
                 await this.putCached(key, ids);
             }
@@ -241,7 +273,7 @@ class DbSearcher {
             let ids = await this.getCached(key);
 
             if (ids === null) {
-                ids = await this.wordBookIds('title', query.title) || await tableBookIds('title', this.getWhere(query.title, {looseTitlePrefix: true}));
+                ids = await this.wordBookIds('title', query.title) || await nameBookIds('title', query.title, {looseTitlePrefix:true});
 
                 await this.putCached(key, ids);
             }
@@ -512,18 +544,20 @@ class DbSearcher {
         this.bookIdMap[from] = idMap;
     }
 
-    async tableIdsFilter(from, query) {
+    async tableIdsFilter(from, query, candidates) {
         //т.к. авторы у книги идут списком (т.е. одна книга относиться сразу к нескольким авторам),
         //то в выборку по bookId могут попасть авторы, которые отсутствуют в критерии query.author,
         //поэтому дополнительно фильтруем
-        let result = null;
-        if (from == 'author' && query.author) {
+        if (from !== 'author' || !query.author) return null;
+        const explicit = /^[=*#~?]/.test(query.author);
+        const search = require('../../shared/CatalogSearch');
+        const fallback = async () => {
             const key = `filter-ids-author-${query.author}`;
             let authorIds = await this.getCached(key);
 
             if (authorIds === null) {
-                const where = /^[=*#~?]/.test(query.author) ? this.getWhere(query.author)
-                    : `@indexIter('value', (value) => ${require('../../shared/CatalogSearch').expression('value', query.author)})`;
+                const where = explicit ? this.getWhere(query.author)
+                    : `@indexIter('value', (value) => ${search.expression('value', query.author)})`;
                 const rows = await this.db.select({
                     table: 'author',
                     rawResult: true,
@@ -535,10 +569,18 @@ class DbSearcher {
                 await this.putCached(key, authorIds);
             }
 
-            result = new Set(authorIds);
-        }
-
-        return result;
+            return new Set(authorIds);
+        };
+        if (explicit || !this.rustLookup || !(candidates?.size <= 32768)) return fallback();
+        if (!candidates.size) return candidates;
+        return this.rustLookup.run(async process => {
+            const ids = [...candidates].sort((a,b) => a-b);
+            const labels = await process.query({op:'labels', table:'author', ids});
+            if (!Array.isArray(labels) || labels.length !== ids.length || labels.some(label => typeof label !== 'string'))
+                throw new Error('Invalid Rust author lookup response');
+            const match = search.createMatcher(query.author);
+            return new Set(ids.filter((_, index) => match(labels[index].toLowerCase())));
+        }, fallback);
     }
 
     async selectTableIds(from, query) {
@@ -559,9 +601,6 @@ class DbSearcher {
 
             //id книг (bookIds) нашли, теперь надо их смаппировать в id таблицы from (авторов, серий, названий)
             if (bookIds) {
-                //т.к. авторы у книги идут списком, то дополнительно фильтруем
-                const filter = await this.tableIdsFilter(from, query);
-
                 const tableIdsSet = new Set();
                 const idMap = this.bookIdMap[from];
                 let proc = 0;
@@ -569,15 +608,13 @@ class DbSearcher {
                 for (const bookId of bookIds) {
                     const tableId = idMap.arr[bookId];
                     if (tableId) {
-                        if (!filter || filter.has(tableId))
-                            tableIdsSet.add(tableId);
+                        tableIdsSet.add(tableId);
                         proc++;
                     } else {
                         const tableIdArr = idMap.map.get(bookId);
                         if (tableIdArr) {
                             for (const tableId of tableIdArr) {
-                            if (!filter || filter.has(tableId))
-                                    tableIdsSet.add(tableId);
+                                tableIdsSet.add(tableId);
                                 proc++;
                             }
                         }
@@ -590,6 +627,10 @@ class DbSearcher {
                     }
                 }
 
+                const filter = await this.tableIdsFilter(from, query, tableIdsSet);
+                if (filter) {
+                    for (const id of tableIdsSet) if (!filter.has(id)) tableIdsSet.delete(id);
+                }
                 tableIds = new Uint32Array(tableIdsSet);
             } else {//bookIds пустой - критерии не заданы, значит берем все id из from
                 const rows = await db.select({
@@ -709,7 +750,7 @@ class DbSearcher {
         }
 
         //выбираем книги
-        const books = await db.select({
+        const books = db.booksByIds ? await db.booksByIds(bookIds) : await db.select({
             table: 'book',
             where: `@@id(${db.esc(bookIds)})`
         });
@@ -997,6 +1038,26 @@ class DbSearcher {
             const selected = new Set(query[ratingSelection].ids);
             candidateIds = candidateIds ? candidateIds.filter(id => selected.has(id)) : query[ratingSelection].ids;
         }
+        if (db.bookStore && candidateIds && !hideCopies && !query[ratingSelection]
+            && candidateIds.length <= 16384
+            && ['author','series','title'].some(field => fields.has(field) && query[field])
+            && this.recStruct.every(({field}) => !query[field] || ['author','series','title','del'].includes(field))) {
+            const text = ['author','series','title'].map(field => fields.has(field) ? query[field] : '');
+            const terms = text.map(value => value ? words(value).map(word => [word,root(word)]) : []);
+            if (text.every((value,index) => !value || !/^[=*#~?]/.test(value) && terms[index].length)
+                && (!query.del || /^\d+$/.test(query.del))) {
+                const result = await db.bookStore.run(async process => {
+                    const matches = await process.query({op:'search',ids:Array.from(candidateIds),terms,
+                        deleted:fields.has('del') && query.del ? Number(query.del) : null,
+                        source:query.sourceId ? String(query.sourceId).trim() : null});
+                    if (!Array.isArray(matches)) throw new Error('Invalid Rust book search result');
+                    matches.sort(compareBooks);
+                    return {ids:Uint32Array.from(prefixLimit ? matches.slice(0,prefixLimit) : matches,row => row.id),
+                        totalFound:matches.length};
+                },() => null);
+                if (result) return result;
+            }
+        }
         const scanInTableOrder = candidateIds && candidateIds.length >= orderedScanThreshold
             && (cachedPhysicalIds || query[ratingSelection] || reorderedIndexFields.some(field => indexedQuery[field]));
         const idsExpression = candidateIds ? db.esc(Array.from(candidateIds)) : '';
@@ -1022,7 +1083,11 @@ class DbSearcher {
                     return ${checks.join(' && ')};
                 };
 
-                const normalizeKeyPart = (value) => String(value || '').trim().toLowerCase().replace(/\\s+/g, ' ');
+                const normalizeKeyPart = ${normalizeKeyPart.toString()};
+                const physicalBookKey = ${physicalBookKey.toString()};
+                const rowScore = ${bookScore.toString()};
+                const compareBookFields = ${compareBookFields.toString()};
+                const compareBooks = ${compareBooks.toString()};
 
                 const authorKey = (value) => normalizeKeyPart(value)
                     .split(/[;,\\n]/)
@@ -1031,8 +1096,6 @@ class DbSearcher {
                     .join('|');
 
                 const dedupeKey = (row, mergeSources) => {
-                    const sourceKey = mergeSources ? '' : (row.sourceId || '');
-
                     if (mergeSources) {
                         const titleKey = normalizeKeyPart(row.title);
                         const mainAuthorKey = authorKey(row.author);
@@ -1043,44 +1106,7 @@ class DbSearcher {
                             return 'copy-title:' + titleKey;
                     }
 
-                    if (row.libid && !row.folder && !row.file)
-                        return ['libid', sourceKey, row.sourcelib || '', row.libid, row.ext || ''].join(':');
-
-                    const parts = [
-                        sourceKey,
-                        row.folder || '',
-                        row.file || '',
-                        row.ext || '',
-                        String(row.insno || 0),
-                    ].map(normalizeKeyPart);
-
-                    if (parts.some(Boolean))
-                        return 'file:' + parts.join('|');
-
-                    return [
-                        'meta',
-                        sourceKey,
-                        row.author || '',
-                        row.series || '',
-                        String(row.serno || 0),
-                        row.title || '',
-                        String(row.size || 0),
-                        row.ext || '',
-                    ].map(normalizeKeyPart).join('|');
-                };
-
-                const rowScore = (row) => {
-                    let score = 0;
-                    if (!row.del)
-                        score += 1000;
-                    if (row.librate)
-                        score += row.librate * 100;
-                    if (row.ext === 'fb2')
-                        score += 20;
-                    if (row.size)
-                        score += Math.min(row.size, 100000000) / 1000000;
-
-                    return score;
+                    return physicalBookKey(row,mergeSources);
                 };
 
                 const pickBetterRow = (current, next) => {
@@ -1092,20 +1118,6 @@ class DbSearcher {
 
                     return (next.id < current.id ? next : current);
                 };
-
-                const compareBookFields = (a, b) => {
-                    let cmp = a.author.localeCompare(b.author);
-                    if (cmp === 0 && (a.series || b.series)) {
-                        cmp = (a.series && b.series ? a.series.localeCompare(b.series) : (a.series ? -1 : 1));
-                    }
-                    if (cmp === 0)
-                        cmp = a.serno - b.serno;
-                    if (cmp === 0)
-                        cmp = a.title.localeCompare(b.title);
-
-                    return cmp;
-                };
-                const compareBooks = (a, b) => compareBookFields(a, b) || a.order - b.order;
 
                 let deduped = new Map();
                 let position = 0;
@@ -1199,7 +1211,7 @@ class DbSearcher {
             const slice = ids.slice(offset, offset + limit);
 
             //выборка найденных значений
-            const found = await db.select({
+            const found = db.booksByIds ? await db.booksByIds(slice) : await db.select({
                 table: 'book',
                 where: `@@id(${db.esc(Array.from(slice))})`
             });
@@ -1557,6 +1569,7 @@ class DbSearcher {
         }
 
         await this.ratingIndex?.close?.();
+        await this.rustLookup?.close();
         await this.diskCacheQueue?.catch(() => {});
         this.diskCacheItems?.clear();
         this.memCache.close();

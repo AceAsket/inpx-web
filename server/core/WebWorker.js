@@ -955,9 +955,9 @@ class WebWorker {
         try {
             await db.lock({dbPath, softLock:true, tableDefaults:{cacheSize:config.dbCacheSize}});
             await db.openAll({exclude:['author_id', 'series_id', 'title_id', 'book', 'catalog_lookup']});
-            await db.open({table:'book', cacheSize:config.dbCacheSize});
             searcher = new DbSearcher(config, db, dbPath);
             await searcher.init();
+            await db.configureBookStore(dbPath,searcher.dbConfig.rustBookStoreGeneration,config.dbCacheSize);
             db.wwCache = {config:searcher.dbConfig};
             return {db, searcher};
         } catch (error) {
@@ -1598,11 +1598,29 @@ class WebWorker {
         return result;
     }
 
-    async selectDiscoveryBookWindows(mode, limit, daysWindows = [], popularityMap = {}, popularLimit = 0) {
+    async selectDiscoveryBookWindows(mode, limit, daysWindows = [], popularityMap = {}, popularLimit = 0, now = Date.now()) {
         const db = this.db;
         const generation = this.libraryAssetGeneration;
-        const now = Date.now();
+        const selection = require('./DiscoverySelection');
         const scores = Object.fromEntries(Object.entries(popularityMap).map(([uid, activity]) => [uid, activity.score]));
+        if (mode === 'newest' && daysWindows.length) {
+            let indexed;
+            try {
+                indexed = await require('./RustShelfIndex').selectShelfBooks(db, this.dbSearcher?.dbConfig, {
+                    nowMs:now, daysWindows, newestLimit:limit, popularLimit, scores,
+                });
+            } catch (error) {
+                if (resourceRuntime.signal()?.aborted) throw error;
+                this.checkLibraryAssetState(generation, db);
+                this.addAdminEvent('warn', 'search', 'Ошибка запроса к Rust-индексу полок. Используется каталог JembaDB.', {
+                    reason:String(error.code || error.message).slice(0, 300),
+                });
+            }
+            if (indexed) {
+                this.checkLibraryAssetState(generation, db);
+                return indexed;
+            }
+        }
         const rows = await db.select({
             table: 'book',
             rawResult: true,
@@ -1611,51 +1629,9 @@ class WebWorker {
                 const limit = ${db.esc(limit)};
                 const daysWindows = ${db.esc(daysWindows)};
                 const scores = ${db.esc(scores)};
-                const selectBest = ${require('./DiscoverySelection').selectDiverseBestSource};
-                const dedupeKey = (row) => {
-                    const sourceKey = row.sourceId || '';
-                    if (row.libid)
-                        return 'libid:' + sourceKey + ':' + row.libid;
-
-                    const parts = [
-                        sourceKey,
-                        row.folder || '',
-                        row.file || '',
-                        row.ext || '',
-                        String(row.insno || 0),
-                    ];
-                    if (parts.some(Boolean))
-                        return 'file:' + parts.join('|');
-
-                    return [
-                        'meta',
-                        sourceKey,
-                        row.author || '',
-                        row.series || '',
-                        String(row.serno || 0),
-                        row.title || '',
-                        String(row.size || 0),
-                        row.ext || '',
-                    ].join('|');
-                };
-                const rowQuality = (row) => {
-                    let score = 0;
-                    if (!row.del)
-                        score += 1000;
-                    if (row.ext === 'fb2')
-                        score += 120;
-                    else if (row.ext === 'epub')
-                        score += 90;
-                    else if (row.ext === 'mobi')
-                        score += 70;
-                    else if (row.ext === 'pdf')
-                        score += 50;
-                    if (row.librate)
-                        score += row.librate * 10;
-                    if (row.size)
-                        score += Math.min(row.size, 50000000) / 1000000;
-                    return score;
-                };
+                const selectBest = ${selection.selectDiverseBestSource};
+                const dedupeKey = ${selection.copyKey.toString()};
+                const rowQuality = ${selection.rowQuality.toString()};
                 const pickBetterRow = (current, next) => {
                     if (next.quality !== current.quality)
                         return (next.quality > current.quality ? next : current);
@@ -3657,7 +3633,8 @@ class WebWorker {
     }
 
     async getBookRecordByUid(bookUid) {
-        const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
+        const rows = this.db.booksByUids ? await this.db.booksByUids([bookUid])
+            : await this.db.select({table:'book',where:`@@hash('_uid', ${this.db.esc(bookUid)})`});
         return (rows.length ? rows[0] : null);
     }
 
@@ -5710,7 +5687,8 @@ class WebWorker {
         for (let offset = 0; offset < uids.length; offset += candidateLimit) {
             this.checkLibraryAssetState(generation, db);
             const batch = uids.slice(offset, offset + candidateLimit);
-            const books = await db.select({table:'book', where:`@@hash('_uid', ${db.esc(batch)})`});
+            const books = db.booksByUids ? await db.booksByUids(batch)
+                : await db.select({table:'book',where:`@@hash('_uid', ${db.esc(batch)})`});
             for (const book of books) if (!book.del) byUid.set(book._uid, book);
         }
         for (const item of pinned) {
@@ -5753,7 +5731,9 @@ class WebWorker {
         for (let offset = 0; offset < listEntries.length; offset += 500) {
             const chunk = listEntries.slice(offset, offset + 500);
             const read = new Map(chunk.map(entry => [entry.bookUid, !!entry.read]));
-            const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(chunk.map(entry => entry.bookUid))})`});
+            const uids = chunk.map(entry => entry.bookUid);
+            const rows = this.db.booksByUids ? await this.db.booksByUids(uids)
+                : await this.db.select({table:'book',where:`@@hash('_uid', ${this.db.esc(uids)})`});
             for (const book of rows) {
                 book._readingListRead = read.get(book._uid);
                 const progress = progressByBook[book._uid];
@@ -5789,7 +5769,9 @@ class WebWorker {
         const ids = await this.dbSearcher.bookSearchIds(require('./SmartShelf').query(filters));
         const entries = [];
         for (let offset = 0; offset < ids.length; offset += 1000) {
-            const rows = await this.db.select({table: 'book', where: `@@id(${this.db.esc(Array.from(ids.slice(offset, offset + 1000)))})`, map: '(row) => ({_uid: row._uid})'});
+            const page = Array.from(ids.slice(offset, offset + 1000));
+            const rows = this.db.booksByIds ? await this.db.booksByIds(page,['_uid'])
+                : await this.db.select({table:'book',where:`@@id(${this.db.esc(page)})`,map:'(row) => ({_uid: row._uid})'});
             for (const book of rows) {
                 if (!filters.unreadOnly || !read.has(book._uid)) entries.push({bookUid: book._uid, read: read.has(book._uid)});
             }

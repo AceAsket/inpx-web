@@ -19,6 +19,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust-catalog:
+    name: Rust reader and catalog
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.browser_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt --component clippy
+      - run: cargo +1.100.0 fmt --manifest-path rust/Cargo.toml --all --check
+      - run: cargo +1.100.0 clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo +1.100.0 test --manifest-path rust/Cargo.toml --locked --release
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-catalog
+      - run: node scripts/rust-jemba-compat-tests.js rust/target/release/inpx-catalog
+
   browser-ui:
     name: Classic and shelves UI
     runs-on: ubuntu-latest

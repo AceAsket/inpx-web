@@ -1,5 +1,17 @@
 const {Worker} = require('worker_threads');
 const {JembaDbThread} = require('jembadb');
+const {RustLookupIndex} = require('./RustLookupIndex');
+
+async function readBookBatches(process, request, key, values, batchSize) {
+    const rows = [];
+    for (let offset=0; offset<values.length; offset+=batchSize) {
+        const batch = await process.query({...request,[key]:values.slice(offset,offset+batchSize)});
+        if (!Array.isArray(batch)) throw new Error('Invalid Rust book store response');
+        rows.push(...batch);
+    }
+    return rows;
+}
+
 class DatabaseThread extends JembaDbThread {
     constructor(config) {
         super(); this.cachePolicy = require('./DatabaseCache').policy(config);
@@ -42,9 +54,12 @@ class DatabaseThread extends JembaDbThread {
         if (worker) this.stopWorker(worker);
     }
 
-    _action(action, query) {
+    async _action(action, query) {
+        if (this.legacyBookOptions && action === 'select' && (query?.table === 'book'
+            || query?.joinById && [query.joinById].flat().some(join => join?.table === 'book')))
+            await this.openLegacyBooks();
         const worker = this.worker;
-        if (!worker || !this.available) return Promise.reject(this.unavailableError());
+        if (!worker || !this.available) throw this.unavailableError();
         return new Promise((resolve,reject) => {
             const requestId = ++this.requestId;
             this.listeners.set(requestId, message => {
@@ -68,8 +83,57 @@ class DatabaseThread extends JembaDbThread {
     }
 
     async unlock() {
-        try {if (this.worker) await this._action('unlock');}
-        finally {this._terminate(); await this.termination;}
+        try {
+            await this.bookStore?.close();
+            if (this.worker) await this._action('unlock');
+        }
+        finally {
+            this.bookStore = this.legacyBookOptions = this.legacyBookOpen = undefined;
+            this._terminate();
+            await this.termination;
+        }
+    }
+
+    async configureBookStore(directory, generation, cacheSize) {
+        this.legacyBookOptions = {table:'book',cacheSize};
+        if (generation) {
+            const store = new RustLookupIndex(directory,null,{directory,generation});
+            const available = await store.run(process => process.query({op:'probe'}),() => false);
+            if (available === true) {
+                this.bookStore = store;
+                return;
+            }
+            await store.close();
+        }
+        await this.openLegacyBooks();
+    }
+
+    async openLegacyBooks() {
+        if (!this.legacyBookOptions) return;
+        if (!this.legacyBookOpen) {
+            this.legacyBookOpen = this.open(this.legacyBookOptions).catch(error => {
+                this.legacyBookOpen = null;
+                throw error;
+            });
+        }
+        await this.legacyBookOpen;
+    }
+
+    async booksByIds(ids, fields) {
+        const keys = [...new Set(ids)];
+        const fallback = () => this.select({table:'book',where:`@@id(${this.esc(keys)})`,
+            ...(fields ? {map:`row => Object.fromEntries(${this.esc(fields)}.filter(key => row[key] !== undefined).map(key => [key,row[key]]))`} : {})});
+        if (!keys.length) return [];
+        if (!this.bookStore) return fallback();
+        return this.bookStore.run(process => readBookBatches(process,{op:'rows',fields},'ids',keys,fields ? 2048 : 512),fallback);
+    }
+
+    async booksByUids(uids) {
+        const keys = [...new Set(uids)];
+        const fallback = () => this.select({table:'book',where:`@@hash('_uid',${this.esc(keys)})`});
+        if (!keys.length) return [];
+        if (!this.bookStore || keys.some(uid => typeof uid !== 'string' || uid.length > 100)) return fallback();
+        return this.bookStore.run(process => readBookBatches(process,{op:'uids'},'uids',keys,512),fallback);
     }
 
     _runWoker() {

@@ -1,0 +1,16 @@
+[package]
+name = "inpx-catalog"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+inpx-reader = { path = "../inpx" }
+redb = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+tempfile = "3"
+unicode-general-category = "1.1"
+unicode-normalization = "0.1"

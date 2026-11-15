@@ -1,0 +1,3 @@
+[workspace]
+members = ["catalog", "inpx"]
+resolver = "3"

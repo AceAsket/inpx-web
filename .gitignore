@@ -1,6 +1,7 @@
 /node_modules
 /server/.inpx-web*
 /dist
+/rust/target/
 dev*.sh
 /.local-data
 /.tools

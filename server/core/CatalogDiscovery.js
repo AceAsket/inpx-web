@@ -23,21 +23,7 @@ function matchesScope(book, filters) {
 class CatalogDiscovery {
     constructor(worker) {this.worker = worker; this.cache = new Map(); this.pending = new Map(); this.cacheBytes = 0;}
 
-    async warm(wait = false) {
-        if (!this.lookup || this.lookup.db !== this.worker.db || this.lookup.generation !== this.worker.libraryAssetGeneration) {
-            const previous = this.lookup;
-            this.lookup = new (require('./CatalogLookupIndex'))(this.worker);
-            const lookup = this.lookup;
-            this.lookupStart = (async() => {await previous?.close(); await lookup.ensure();})();
-        }
-        const lookup = this.lookup;
-        await this.lookupStart;
-        await lookup.ensure();
-        if (wait && lookup.building) await lookup.building;
-        return lookup.ready;
-    }
-
-    async close() {await this.lookup?.close(); this.cache.clear(); this.pending.clear(); this.cacheBytes = 0;}
+    close() {this.cache.clear(); this.pending.clear(); this.cacheBytes = 0;}
 
     async cached(key, work) {
         const {db, libraryAssetGeneration: generation} = this.worker;
@@ -71,51 +57,61 @@ class CatalogDiscovery {
         const kind = options.kind ?? '';
         if (kind !== '' && !KINDS.includes(kind)) throw new Error('Укажите title, author или series для подсказок');
         if (Array.from(query).length < model.MIN_SUGGEST_CHARS || !search.words(query).length || /^[=~*#?]/.test(query)) return {query, groups: [], corrections: []};
-        return this.cached(JSON.stringify(['suggest', query, filters, kind]), async db => {
-            const groups = [];
-            const scoped = Object.keys(filters).length > 1;
-            let limited=false;
-            for (const field of kind ? [kind] : KINDS) {
-                // Suggestions never trigger or await a second full-library
-                // index. All candidate and posting limits apply BEFORE rows
-                // cross the database worker boundary, including scoped queries.
-                const candidates=await Lookup.candidates(db,field,query,scoped);
-                limited ||= candidates.limited;
-                const rows=candidates.rows.filter(row=>row.count>0).sort((a,b)=>
-                    model.relevance(b.name,query)-model.relevance(a.name,query) || b.count-a.count || a.name.localeCompare(b.name));
-                const byId=new Map((candidates.books || []).map(book=>[book.id,book]));
-                if (scoped || field==='title') {
-                    const ids=[...new Set(rows.flatMap(row=>row.bookIds))].filter(id=>!byId.has(id));
-                    limited ||= ids.length>Lookup.fastLimits.books;
-                    for(const book of await Lookup.books(db,ids))byId.set(book.id,book);
-                }
-                const items=[];
-                for(const row of rows) {
-                    const matching=row.bookIds.map(id=>byId.get(id)).filter(book=>matchesScope(book,filters));
-                    if ((scoped || field==='title') && !matching.length) {limited ||= !row.complete;continue;}
-                    const complete=row.complete && row.bookIds.every(id=>byId.has(id));
-                    const count=scoped ? (complete ? matching.length:null):row.count;
-                    const item={name:row.name,count};
-                    if(scoped && !complete) {item.limited=true;limited=true;}
-                    if(field==='title')item.book=matching[0];
-                    items.push(item);
-                    if(items.length===6)break;
-                }
-                groups.push({kind:field,items});
-            }
-            const corrections = groups.some(group => group.items.length) ? [] : await this.correct(query, kind ? [kind] : KINDS, filters, db);
-            return {query, groups, corrections, ...(limited ? {limited:true}:{})};
+        return this.cached(JSON.stringify(['suggest', query, filters, kind]), db => {
+            const lookup = this.worker.dbSearcher?.rustLookup;
+            const suggest = native => this.suggestGroups(query, filters, kind, db, native);
+            return lookup ? lookup.run(suggest, suggest) : suggest();
         });
     }
 
-    async correct(query, fields, filters, db) {
+    async suggestGroups(query, filters, kind, db, native) {
+        const groups = [];
+        const scoped = Object.keys(filters).length > 1;
+        let limited = false;
+        for (const field of kind ? [kind] : KINDS) {
+            const candidates = await Lookup.candidates(db, field, query, scoped, native);
+            limited ||= candidates.limited;
+            const rows = candidates.rows.filter(row => row.count > 0).sort((a, b) =>
+                model.relevance(b.name, query) - model.relevance(a.name, query) || b.count - a.count || a.name.localeCompare(b.name));
+            const byId = new Map((candidates.books || []).map(book => [book.id, book]));
+            if (scoped || field === 'title') {
+                const ids = [...new Set(rows.flatMap(row => row.bookIds))].filter(id => !byId.has(id));
+                limited ||= ids.length > Lookup.fastLimits.books;
+                for (const book of await Lookup.books(db, ids)) byId.set(book.id, book);
+            }
+            const items = [];
+            for (const row of rows) {
+                const matching = row.bookIds.map(id => byId.get(id)).filter(book => matchesScope(book, filters));
+                if ((scoped || field === 'title') && !matching.length) {
+                    limited ||= !row.complete;
+                    continue;
+                }
+                const complete = row.complete && row.bookIds.every(id => byId.has(id));
+                const count = scoped ? (complete ? matching.length : null) : row.count;
+                const item = {name:row.name, count};
+                if (scoped && !complete) {
+                    item.limited = true;
+                    limited = true;
+                }
+                if (field === 'title') item.book = matching[0];
+                items.push(item);
+                if (items.length === 6) break;
+            }
+            groups.push({kind:field, items});
+        }
+        const corrections = groups.some(group => group.items.length) ? []
+            : await this.correct(query, kind ? [kind] : KINDS, filters, db, native);
+        return {query, groups, corrections, ...(limited ? {limited:true} : {})};
+    }
+
+    async correct(query, fields, filters, db, native) {
         const tokens = search.words(query), result = [], deadline = Date.now() + 240;
         if (tokens.length > 6 || !await db.tableExists({table: 'word'})) return result;
         for (const field of fields) for (let position = 0; position < tokens.length; position++) {
             if (result.length >= 3 || Date.now() >= deadline) return result;
             if (tokens[position].length < 4 || tokens[position].length > 40) continue;
             const token = search.root(tokens[position]);
-            const words=await Lookup.wordCandidates(db,field,token,{typo:true});
+            const words=await Lookup.wordCandidates(db,field,token,{typo:true,native});
             const candidates=words.rows.filter(row=>model.distance(row.word,token,1)===1);
             if (!candidates.length) continue;
             const books=await Lookup.books(db,[...new Set(candidates.flatMap(row=>row.bookIds))]);
@@ -194,7 +190,8 @@ class CatalogDiscovery {
         const pageCount = Math.max(1, Math.ceil(ordered.length / limit)), currentPage = Math.min(page, pageCount);
         const slice = ordered.slice((currentPage - 1) * limit, currentPage * limit);
         const wanted = [...new Set([...slice.map(row => row.id), ...(next ? [next.id] : [])])];
-        const books = wanted.length ? await db.select({table: 'book', where: `@@id(${db.esc(wanted)})`}) : [];
+        const books = db.booksByIds ? await db.booksByIds(wanted)
+            : wanted.length ? await db.select({table:'book',where:`@@id(${db.esc(wanted)})`}) : [];
         await this.worker.applyMetadataOverridesToSearchResult({found: books});
         const byId = new Map(books.map(book => [book.id, {...book, _readerProgress: progress[book._uid]}]));
         if (db !== this.worker.db || generation !== this.worker.libraryAssetGeneration) throw new Error('Библиотека обновилась. Повторите запрос');

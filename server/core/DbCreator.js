@@ -1,12 +1,55 @@
 const fs = require('fs-extra');
+const path = require('node:path');
+const {hash} = require('node:crypto');
 
 const InpxParser = require('./InpxParser');
+const RustInpxParser = require('./RustInpxParser');
+const RustTableBuilder = require('./RustTableBuilder');
+const readBookIdentities = require('./RustIdentityReader');
+const {RustBookStoreBuild, exportBooks} = require('./RustBookStoreBuild');
+const {readPostings} = require('./RustCatalogUpdate');
 const InpxHashCreator = require('./InpxHashCreator');
 const {getEnabledLibrarySources} = require('./LibrarySources');
 const ImportWriteBudget = require('./ImportWriteBudget');
+const {buildLookup} = require('./RustLookupBuilder');
+const {executable, fileName:lookupFileName, lookupGeneration} = require('./RustLookupIndex');
 const utils = require('./utils');
+const search = require('../../shared/CatalogSearch');
 
 const emptyFieldValue = '?';
+const bookMapTables = ['author', 'series', 'title'];
+const bulkIndexTables = new Set(['author', 'title', 'word']);
+const compareLabels = new Intl.Collator().compare;
+const compareIndexRows = (left, right) => compareLabels(left.value, right.value);
+
+function fileStatistics() {
+    const files = new Set(), deleted = new Set();
+    return {
+        add(book) {
+            (book.del ? deleted : files).add(`${book.folder}/${book.file}.${book.ext}`);
+        },
+        totals() {
+            let filesDelCount = 0;
+            for (const file of deleted) if (!files.has(file)) filesDelCount++;
+            return {filesCount:files.size, filesDelCount};
+        },
+    };
+}
+
+function appendBook(row, id) {
+    const ids = row.bookIds;
+    if (ids[ids.length - 1] !== id) ids.push(id);
+}
+
+function getPosting(map, rows, value, withCounts = false, name) {
+    const id = map.get(value);
+    if (id !== undefined) return rows[id];
+    const row = {id:rows.length, value, bookIds:[]};
+    if (withCounts) Object.assign(row, {name, bookCount:0, bookDelCount:0});
+    rows.push(row);
+    map.set(value, row.id);
+    return row;
+}
 
 class DbCreator {
     constructor(config) {
@@ -22,7 +65,7 @@ class DbCreator {
         if (rec.file) identity = ['file', source, String(rec.folder || '').replace(/\\/g, '/'), String(rec.file), ext, Number(rec.insno) || 0];
         else if (rec.libid) identity = ['libid', source, String(rec.sourcelib || ''), String(rec.libid), ext];
         else return '';
-        return require('crypto').createHash('sha256').update('inpx-physical-v1:' + JSON.stringify(identity)).digest('base64');
+        return hash('sha256', 'inpx-physical-v1:' + JSON.stringify(identity), 'base64');
     }
 
     async previousIdentities(db, consume) {
@@ -75,10 +118,8 @@ class DbCreator {
     }
 
     //процедура формировани БД несколько усложнена, в целях экономии памяти
-    async run(db, callback) {
+    async loadBooks(db, callback, sourceHash, inpxFilter) {
         const config = this.config;
-        const inpxHashCreator = new InpxHashCreator(config);
-        const sourceHash = await inpxHashCreator.getHash();
 
         callback({jobStepCount: 5});
         callback({job: 'load inpx', jobMessage: 'Загрузка INPX', jobStep: 1, progress: 0});
@@ -86,25 +127,69 @@ class DbCreator {
         //временная таблица
         const incremental = await db.tableExists({table: 'book'});
         const bookCacheSize = config.lowMemoryMode ? 5 : config.dbCacheSize;
-        if (!incremental) await db.create({table: 'book', cacheSize:bookCacheSize});
-        else await db.open({table: 'book', cacheSize:bookCacheSize});
-        const bookWrites = new ImportWriteBudget(db, 'book', config.lowMemoryMode);
-        if (incremental && (await db.getDbInfo({table: 'book'})).book.hash.some(hash => hash.field === '_uid'))
-            await db.drop({in: 'book', hash: {field: '_uid'}});
+        const binary = executable();
+        const useBulkIndexes = !!(binary && config.indexDbPath && !config.lowMemoryMode && !config.fullOptimization
+            && require('jembadb/package.json').version === '5.1.7');
+        if (incremental) await db.open({table: 'book', cacheSize:bookCacheSize});
+        let bookWrites, nativeBook;
+        const uidIndex = incremental && (await db.getDbInfo({table:'book'})).book.hash.find(index => index.field === '_uid');
+        let keepUidIndex = !!(useBulkIndexes && uidIndex?.unique && uidIndex.type === 'string' && uidIndex.depth === 100);
+        const dropUidIndex = async (flushWrites = false) => {
+            if (flushWrites) {
+                // JembaDB saves accepted inserts asynchronously. Flush the
+                // hash deltas before removing the index they refer to.
+                await db.close({table:'book'});
+                bookWrites.check();
+                await db.open({table:'book', cacheSize:bookCacheSize});
+                bookWrites = new ImportWriteBudget(db,'book',config.lowMemoryMode);
+            }
+            await db.drop({in:'book', hash:{field:'_uid'}});
+            keepUidIndex = false;
+        };
+        if (uidIndex && !keepUidIndex) await dropUidIndex();
         const previous = new Map(), physical = new Map(), legacy = new Map();
-        let lastBookId = 0;
+        let lastBookId = 0, hasLongUid = false;
+        const rememberLegacy = row => {
+            if (!row.legacyUid) return;
+            const key = `${row.identity}:${row.legacyUid}`;
+            legacy.set(key, legacy.has(key) ? null : row);
+        };
         const rememberPrevious = rows => {
             for (const row of rows) {
                 previous.set(row.uid,row); lastBookId = Math.max(lastBookId,row.id);
-                if (row.identity && row.legacyUid) {
-                    const key = `${row.identity}:${row.legacyUid}`;
-                    legacy.set(key,legacy.has(key) ? null : row);
+                hasLongUid ||= typeof row.uid !== 'string' || row.uid.length > 100;
+                if (row.identity) {
+                    const owner = physical.get(row.identity);
+                    if (owner === undefined) physical.set(row.identity, row);
+                    else {
+                        // Only ambiguous physical identities need another
+                        // lookup by the original INPX record's UID.
+                        if (owner) rememberLegacy(owner);
+                        rememberLegacy(row);
+                        physical.set(row.identity, null);
+                    }
                 }
-                if (row.identity) physical.set(row.identity,physical.has(row.identity) ? null : row);
             }
         };
         if (incremental) {
-            await this.previousIdentities(db,rememberPrevious);
+            let nativeIdentities = false;
+            callback({job:'previous identities', jobMessage:'Чтение идентификаторов действующего каталога', jobStep:1, progress:0});
+            if (useBulkIndexes) {
+                try {
+                    const [count] = await db.select({table:'book', count:true});
+                    await readBookIdentities(binary, path.join(config.indexDbPath,'book'), count.count,
+                        row => this.physicalIdentity(row), rememberPrevious);
+                    nativeIdentities = true;
+                } catch (error) {
+                    previous.clear(); physical.clear(); legacy.clear();
+                    lastBookId = 0;
+                    hasLongUid = false;
+                    callback({rustIdentityWarning:error.message});
+                }
+            }
+            if (!nativeIdentities) await this.previousIdentities(db,rememberPrevious);
+            if (keepUidIndex && hasLongUid) await dropUidIndex();
+            callback({nativeIdentities});
         } else if (config.identityDbPath) {
             const compatibility = new (require('jembadb/src/JembaDb'))();
             try {
@@ -138,6 +223,10 @@ class DbCreator {
         let extArr = [];
         let wordMap = new Map();
         let wordArr = [];
+        const wordCache = {author:new Map(), series:new Map()};
+        const wordCacheLimit = config.lowMemoryMode ? 4096 : 32768;
+        const genreCache = new Map();
+        let importFiles = config.lowMemoryMode ? null : fileStatistics();
         let sourceMap = new Map(), sourceArr = [];
 
         let uidSet = new Set();//уникальные идентификаторы
@@ -156,7 +245,6 @@ class DbCreator {
         let chunkNum = 0;
 
         //фильтр
-        const inpxFilter = await this.loadInpxFilter();
         let filter = () => true;
         if (inpxFilter) {
 
@@ -231,26 +319,12 @@ class DbCreator {
                 value = fieldValue.toLowerCase();
             }
 
-            let fieldRec;
-            if (fieldMap.has(value)) {
-                const fieldId = fieldMap.get(value);
-                fieldRec = fieldArr[fieldId];
-            } else {
-                fieldRec = {id: fieldArr.length, value, bookIds: []};
-                if (rec !== undefined) {
-                    fieldRec.name = fieldValue;
-                    fieldRec.bookCount = 0;
-                    fieldRec.bookDelCount = 0;
-                }
-                fieldArr.push(fieldRec);
-                fieldMap.set(value, fieldRec.id);
-            }
+            const fieldRec = getPosting(fieldMap, fieldArr, value, rec !== undefined, fieldValue);
 
             if (fieldValue !== emptyFieldValue || fillBookIds) {
                 // All references for a book are processed together, including
                 // repeated authors or genres. Each accepted book ID is unique.
-                const ids = fieldRec.bookIds;
-                if (ids[ids.length - 1] !== bookId) ids.push(bookId);
+                appendBook(fieldRec, bookId);
             }
 
             if (rec !== undefined) {
@@ -261,11 +335,34 @@ class DbCreator {
             }
         };        
 
+        const wordPostings = (field, value) => {
+            const cache = wordCache[field];
+            const saved = cache?.get(value);
+            if (saved) return saved;
+            const keys = new Set(search.words(value).map(word => `${field}:${search.root(word)}`));
+            const rows = Array.from(keys, key => getPosting(wordMap, wordArr, key.toLowerCase()));
+            if (cache && (!value || value.length <= 512)) {
+                if (cache.size >= wordCacheLimit) cache.clear();
+                cache.set(value, rows);
+            }
+            return rows;
+        };
+
+        const genrePostings = value => {
+            const saved = genreCache.get(value);
+            if (saved) return saved;
+            const rows = value.split(',').map(genre => getPosting(genreMap, genreArr, (genre || emptyFieldValue).toLowerCase()));
+            if (value.length <= 512) {
+                if (genreCache.size >= 4096) genreCache.clear();
+                genreCache.set(value, rows);
+            }
+            return rows;
+        };
+
         const parseBookRec = (rec) => {
             parseField(rec.sourceId, sourceMap, sourceArr, rec.id);
             for (const field of ['title', 'author', 'series']) {
-                for (const word of new Set(require('../../shared/CatalogSearch').words(rec[field]).map(require('../../shared/CatalogSearch').root)))
-                    parseField(`${field}:${word}`, wordMap, wordArr, rec.id);
+                for (const entry of wordPostings(field, rec[field])) appendBook(entry, rec.id);
             }
             //авторы
             const author = splitAuthor(rec.author);
@@ -287,12 +384,7 @@ class DbCreator {
             parseField(rec.title, titleMap, titleArr, rec.id, rec);
 
             //жанры
-            let genre = rec.genre || emptyFieldValue;
-            genre = rec.genre.split(',');
-
-            for (let g of genre) {
-                parseField(g, genreMap, genreArr, rec.id);
-            }
+            for (const entry of genrePostings(rec.genre)) appendBook(entry, rec.id);
 
             //языки
             parseField(rec.lang, langMap, langArr, rec.id);
@@ -312,8 +404,27 @@ class DbCreator {
 
         //основная процедура парсинга
         let id = lastBookId;
+        let bookStore = null, storeFailed = false, rustBookStoreGeneration;
+        const buildStore = useBulkIndexes && !inpxFilter?.filter && config.rustBookStoreEnabled !== false;
+        const storeGeneration = buildStore && lookupGeneration({inpxHash:sourceHash,dbVersion:config.dbVersion,
+            rustLookupBuiltAt:new Date().toISOString()});
+        const storeWork = async work => {
+            try {await work();}
+            catch (error) {
+                storeFailed = true;
+                await bookStore?.close();
+                bookStore = null;
+                callback({rustStoreWarning:error.message});
+            }
+        };
+        if (buildStore && incremental && config.previousIndexPath) {
+            await storeWork(async () => {
+                bookStore = await RustBookStoreBuild.openPatch(binary,config.indexDbPath,storeGeneration,config.previousIndexPath);
+            });
+        }
         const parsedCallback = async(chunk) => {
-            let filtered = false;
+            const encodedBooks = nativeBook ? [] : null;
+            const saveChunk = [];
             for (const rec of chunk) {
                 rec.sourceId = currentSource.id;
                 rec.sourceName = currentSource.name;
@@ -326,28 +437,33 @@ class DbCreator {
                 // The same INPX line can occur in several archives, since the
                 // archive name can come from the enclosing .inp entry.
                 let prior = uidPrior;
-                if (identity && uidPrior?.identity !== identity)
-                    prior = legacy.get(`${identity}:${parsedUid}`) || physical.get(identity);
+                if (identity && uidPrior?.identity !== identity) {
+                    const owner = physical.get(identity);
+                    prior = owner === null ? legacy.get(`${identity}:${parsedUid}`) : owner;
+                }
                 if (prior && !uidSet.has(prior.uid)) rec._uid = prior.uid;
                 else {
                     prior = null;
                     if (identity && !physical.has(identity) && !uidSet.has(identity) && !previous.has(identity)) {
                         rec._uid = identity;
                     } else if (identity && uidPrior && uidPrior.identity !== identity) {
-                        rec._uid = require('crypto').createHash('sha256').update(`inpx-record-v1:${identity}:${parsedUid}`).digest('base64');
+                        rec._uid = hash('sha256', `inpx-record-v1:${identity}:${parsedUid}`, 'base64');
                         const variant = previous.get(rec._uid);
                         if (variant && variant.identity === identity) prior = variant;
                     }
                 }
                 //сначала фильтр
-                if (!filter(rec) || uidSet.has(rec._uid)) {
-                    rec.id = 0;
-                    filtered = true;
-                    continue;
-                }
+                if (!filter(rec) || uidSet.has(rec._uid)) continue;
 
-                rec._recordHash = require('crypto').createHash('sha256').update(JSON.stringify(rec)).digest('hex');
+                const serialized = JSON.stringify(rec);
+                const reuseEncoding = encodedBooks && !Object.hasOwn(rec, 'id') && !Object.hasOwn(rec, '_recordHash');
+                if (!reuseEncoding) rec._recordHash = hash('sha256', serialized, 'hex');
                 rec.id = prior ? prior.id : ++id;
+                if (encodedBooks) {
+                    const uidKey = JSON.stringify(rec._uid.slice(0, 100));
+                    const row = reuseEncoding ? serialized + ',true' : JSON.stringify(rec);
+                    encodedBooks.push(`[${rec.id},${uidKey},${row}]\n`);
+                } else if (!incremental || !prior || prior.hash !== rec._recordHash) saveChunk.push(rec);
                 if (prior) prior.retained = true;
                 uidSet.add(rec._uid);
 
@@ -360,24 +476,20 @@ class DbCreator {
                 }
 
                 parseBookRec(rec);
+                importFiles?.add(rec);
             }
 
-            let saveChunk = [];
-            if (filtered) {
-                saveChunk = chunk.filter(r => r.id);
-            } else {
-                saveChunk = chunk;
-            }
-
-            if (incremental) saveChunk = saveChunk.filter(rec => {
-                const old = previous.get(rec._uid);
-                return old?.id !== rec.id || old.hash !== rec._recordHash;
-            });
+            if (encodedBooks?.length) await nativeBook.append(encodedBooks);
             if (saveChunk.length) {
+                if (keepUidIndex && saveChunk.some(rec => {
+                    const old = previous.get(rec._uid);
+                    return typeof rec._uid !== 'string' || rec._uid.length > 100 || old && old.id !== rec.id;
+                })) await dropUidIndex(true);
                 await db.insert({table: 'book', rows: saveChunk, replace: true});
                 await bookWrites.wait();
+                if (bookStore) await storeWork(() => bookStore.add(saveChunk));
             }
-            recordsChanged += saveChunk.length;
+            recordsChanged += encodedBooks?.length ?? saveChunk.length;
             callback({recordsChanged, incremental});
 
             recsLoaded += chunk.length;
@@ -387,35 +499,69 @@ class DbCreator {
                 utils.freeMemory();
         };
 
+        if (useBulkIndexes && !incremental && !config.identityDbPath && !inpxFilter?.filter
+            && librarySources.every(source => source.type !== 'folder')) {
+            try {
+                nativeBook = await RustTableBuilder.open(binary, path.join(config.indexDbPath, 'book'), 'build-book');
+            } catch (error) {
+                callback({rustBookWarning:error.message});
+            }
+        }
+        if (!nativeBook) {
+            if (!incremental) await db.create({table:'book', cacheSize:bookCacheSize});
+            bookWrites = new ImportWriteBudget(db, 'book', config.lowMemoryMode);
+        }
         //парсинг
         const parserInfos = [];
-        for (const source of librarySources) {
-            currentSource = source;
-            totalFiles = 0;
-            callback({
-                job: 'load inpx',
-                jobMessage: `Loading INPX: ${source.name}`,
-                jobStep: 1,
-                progress: 0,
-                sourceId: source.id,
-                sourceName: source.name,
-            });
+        try {
+            for (const source of librarySources) {
+                currentSource = source;
+                totalFiles = 0;
+                callback({
+                    job:'load inpx', jobMessage:`Loading INPX: ${source.name}`, jobStep:1, progress:0,
+                    sourceId:source.id, sourceName:source.name,
+                });
 
-            const parser = source.type === 'folder' ? new (require('./FolderIndexer').FolderIndexer)(source, config) : new InpxParser();
-            await parser.parse(source.inpxFile || source.inpx, readFileCallback, parsedCallback);
-            parserInfos.push({
-                id: source.id,
-                name: source.name,
-                inpx: source.inpxFile || source.inpx,
-                libDir: source.libDir,
-                info: parser.info,
-            });
+                const rustReader = process.env.INPX_RUST_READER_BINARY;
+                const parser = source.type === 'folder' ? new (require('./FolderIndexer').FolderIndexer)(source, config)
+                    : rustReader ? new RustInpxParser(rustReader) : new InpxParser();
+                await parser.parse(source.inpxFile || source.inpx, readFileCallback, parsedCallback);
+                if (rustReader && source.type !== 'folder') callback({rustReader:!!parser.usedRust});
+                parserInfos.push({
+                    id:source.id, name:source.name, inpx:source.inpxFile || source.inpx,
+                    libDir:source.libDir, info:parser.info,
+                });
+            }
+            if (nativeBook) {
+                await nativeBook.finish(recordsChanged);
+                callback({nativeBook:true});
+            }
+        } catch (error) {
+            await bookStore?.close();
+            throw error;
+        } finally {
+            await nativeBook?.close();
         }
 
-        const removed = incremental ? [...previous.values()].filter(row => !row.retained).map(row => row.id) : [];
-        for (let offset = 0; offset < removed.length; offset += 10000) {
-            await db.delete({table: 'book', where: `@@id(${db.esc(removed.slice(offset, offset + 10000))})`});
-            await bookWrites.wait();
+        const removed = [];
+        if (incremental) {
+            for (const row of previous.values()) if (!row.retained) removed.push(row.id);
+        }
+        try {
+            for (let offset = 0; offset < removed.length; offset += 10000) {
+                const ids = removed.slice(offset,offset+10000);
+                await db.delete({table:'book',where:`@@id(${db.esc(ids)})`});
+                await bookWrites.wait();
+                if (bookStore) await storeWork(() => bookStore.remove(ids));
+            }
+            if (bookStore) await storeWork(async () => {
+                await bookStore.finish();
+                rustBookStoreGeneration = storeGeneration;
+                callback({bookStoreMode:'patch'});
+            });
+        } finally {
+            await bookStore?.close();
+            bookStore = null;
         }
 
         //чистка памяти, ибо жрет как не в себя
@@ -430,50 +576,88 @@ class DbCreator {
         extMap = null;
         sourceMap = null;
         wordMap = null;
+        wordCache.author.clear();
+        wordCache.series.clear();
+        genreCache.clear();
+        const fileCounts = importFiles?.totals();
+        importFiles = null;
         physical.clear(); previous.clear(); legacy.clear();
 
         uidSet = null;
 
-        await db.close({table: 'book'});
-        bookWrites.check();
+        if (!nativeBook) {
+            await db.close({table: 'book'});
+            bookWrites.check();
+        }
         await db.freeMemory();
         utils.freeMemory();
+
+        return {authorArr, seriesArr, titleArr, genreArr, langArr, delArr, dateArr, librateArr, extArr, sourceArr, wordArr,
+            authorCount, bookCount, bookDelCount, noAuthorBookCount, fileCounts, parserInfos, recsLoaded,
+            incremental, recordsChanged, recordsRemoved:removed.length, bookCacheSize, nativeBook:!!nativeBook,
+            useBulkIndexes, keepUidIndex, buildStore, storeFailed, storeGeneration, rustBookStoreGeneration};
+    }
+
+    async run(db, callback, prepared = null) {
+        const config = this.config;
+        const binary = executable();
+        const inpxHashCreator = new InpxHashCreator(config);
+        const sourceHash = prepared?.sourceHash ?? await inpxHashCreator.getHash();
+        const inpxFilter = prepared?.filter ?? await this.loadInpxFilter();
+        let {authorArr, seriesArr, titleArr, genreArr, langArr, delArr, dateArr, librateArr, extArr, sourceArr, wordArr,
+            authorCount, bookCount, bookDelCount, noAuthorBookCount, fileCounts, parserInfos, recsLoaded,
+            incremental, recordsChanged, recordsRemoved, bookCacheSize, nativeBook, useBulkIndexes, keepUidIndex,
+            buildStore, storeFailed, storeGeneration, rustBookStoreGeneration} = prepared ? {
+                ...await readPostings(config.indexDbPath), ...prepared, ...prepared.counts, fileCounts:prepared.counts,
+                incremental:true, nativeBook:true, useBulkIndexes:true, keepUidIndex:true, rustBookStoreGeneration:prepared.generation,
+            } : await this.loadBooks(db,callback,sourceHash,inpxFilter);
 
         //отсортируем таблицы выдадим им правильные id
         //порядок id соответствует ASC-сортировке по value
         callback({job: 'sort', jobMessage: 'Сортировка', jobStep: 2, progress: 0});
-        await utils.sleep(100);
         //сортировка авторов
-        authorArr.sort((a, b) => a.value.localeCompare(b.value));
+        authorArr.sort(compareIndexRows);
         callback({progress: 0.2});
-        await utils.sleep(100);
 
-        id = 0;
-        for (const authorRec of authorArr) {
-            authorRec.id = ++id;
-        }
+        authorArr.forEach((row,index) => {row.id = index + 1;});
         callback({progress: 0.3});
-        await utils.sleep(100);
 
         //сортировка серий
-        seriesArr.sort((a, b) => a.value.localeCompare(b.value));
+        seriesArr.sort(compareIndexRows);
         callback({progress: 0.5});
-        await utils.sleep(100);
 
-        id = 0;
-        for (const seriesRec of seriesArr) {
-            seriesRec.id = ++id;
-        }
+        seriesArr.forEach((row,index) => {row.id = index + 1;});
         callback({progress: 0.6});
-        await utils.sleep(100);
 
         //сортировка названий
-        titleArr.sort((a, b) => a.value.localeCompare(b.value));
+        titleArr.sort(compareIndexRows);
         callback({progress: 0.8});
         await utils.sleep(100);        
-        id = 0;
-        for (const titleRec of titleArr) {
-            titleRec.id = ++id;
+        titleArr.forEach((row,index) => {row.id = index + 1;});
+
+        let rustLookupBuiltAt, nativeBookMaps = false;
+        if (executable()) {
+            const lookupPath = path.join(config.indexDbPath || path.join(config.dataDir, 'db'), lookupFileName);
+            const builtAt = new Date().toISOString();
+            const generation = lookupGeneration({inpxHash:sourceHash, rustLookupBuiltAt:builtAt, dbVersion:config.dbVersion});
+            const tables = Object.entries({author:authorArr, series:seriesArr, title:titleArr, word:wordArr});
+            const count = tables.reduce((total, [, rows]) => total + rows.length, 0);
+            function* postings() {
+                for (const [table, rows] of tables) {
+                    for (const row of rows) yield [table, row];
+                }
+            }
+            callback({job:'rust lookup', jobMessage:'Построение Rust-индекса поиска', progress:0});
+            try {
+                const bookMaps = !config.fullOptimization && !config.lowMemoryMode;
+                await buildLookup(executable(), lookupPath, {generation, count, bookMaps, rows:postings()});
+                if (bookMaps) nativeBookMaps = (await Promise.all(bookMapTables.map(table =>
+                    fs.pathExists(path.join(path.dirname(lookupPath), `${table}_id.map`))))).every(Boolean);
+                rustLookupBuiltAt = builtAt;
+                callback({progress:1, nativeBookMaps});
+            } catch (error) {
+                callback({job:'rust lookup unavailable', jobMessage:`Используется JembaDB: ${error.message}`});
+            }
         }
 
         //stats
@@ -500,10 +684,26 @@ class DbCreator {
 
         const saveTable = async(table, arr, nullArr, indexType = 'string', delEmpty = false) => {
             
-            if (indexType == 'string')
-                arr.sort((a, b) => a.value.localeCompare(b.value));
-            else
+            if (indexType === 'string') {
+                if (!bookMapTables.includes(table)) arr.sort(compareIndexRows);
+            } else {
                 arr.sort((a, b) => a.value - b.value);
+            }
+
+            if (prepared || (nativeBook || incremental && useBulkIndexes) && bulkIndexTables.has(table)) {
+                const tablePath = path.join(config.indexDbPath, table);
+                try {
+                    const rows = delEmpty ? arr.filter(row => row.value.localeCompare(emptyFieldValue,'en') !== 0) : arr;
+                    await RustTableBuilder.buildIndex(binary,tablePath,rows,callback,indexType);
+                    if (delEmpty && stats[`${table}Count`]) stats[`${table}Count`] -= arr.length - rows.length;
+                    callback({nativeIndex:table});
+                    nullArr();
+                    return;
+                } catch (error) {
+                    if (await fs.pathExists(tablePath)) throw error;
+                    callback({rustTableWarning:`${table}: ${error.message}`});
+                }
+            }
 
             await db.create({
                 table,
@@ -577,35 +777,51 @@ class DbCreator {
         await db.create({table: 'file_hash'});
 
         //-- завершающие шаги --------------------------------
-        await db.open({
-            table: 'book',
-            cacheSize: bookCacheSize,
-        });
+        const needsBookAtEnd = !nativeBook && (!keepUidIndex || !fileCounts || config.fullOptimization);
+        if (needsBookAtEnd) await db.open({table:'book', cacheSize:bookCacheSize});
 
         callback({job: 'optimization', jobMessage: 'Оптимизация', jobStep: 8, progress: 0});
-        await this.optimizeTable('author', db, (p) => {
-            if (p.progress)
-                p.progress = 0.3*p.progress;
-            callback(p);
-        });
-        await this.optimizeTable('series', db, (p) => {
-            if (p.progress)
-                p.progress = 0.3 + 0.2*p.progress;
-            callback(p);
-        });
-        await this.optimizeTable('title', db, (p) => {
-            if (p.progress)
-                p.progress = 0.5 + 0.5*p.progress;
-            callback(p);
-        });
+        const mapSteps = [0, 0.3, 0.5, 1];
+        for (const [index, table] of bookMapTables.entries()) {
+            const start = mapSteps[index], end = mapSteps[index + 1];
+            if (nativeBookMaps) {
+                await db.create({table:`${table}_book`});
+                await db.close({table:`${table}_book`});
+                callback({progress:end});
+            } else {
+                await this.optimizeTable(table, db, state =>
+                    callback({...state, progress:start + (end - start) * state.progress}));
+            }
+        }
 
         callback({job: 'stats count', jobMessage: 'Подсчет статистики', jobStep: 9, progress: 0});
-        await this.countStats(db, callback, stats);
+        await this.countStats(db, callback, stats, fileCounts, !!nativeBook || keepUidIndex);
 
         //чистка памяти, ибо жрет как не в себя
-        await db.close({table: 'book'});
+        if (needsBookAtEnd) await db.close({table: 'book'});
         await db.freeMemory();
         utils.freeMemory();
+
+        if (buildStore && !storeFailed && !rustBookStoreGeneration) {
+            callback({job:'book store',jobMessage:'Сборка хранилища книг Rust',progress:0});
+            let bookStore;
+            try {
+                bookStore = await RustBookStoreBuild.open(binary,config.indexDbPath,storeGeneration);
+                await db.open({table:'book',cacheSize:bookCacheSize});
+                try {
+                    await exportBooks(bookStore,db);
+                    await bookStore.finish();
+                    rustBookStoreGeneration = storeGeneration;
+                    callback({bookStoreMode:'base'});
+                } finally {
+                    await db.close({table:'book'});
+                    await bookStore.close();
+                }
+            } catch (error) {
+                await bookStore?.close();
+                callback({rustStoreWarning:error.message});
+            }
+        }
 
         //config сохраняем в самом конце, нет конфига - с базой что-то не так
         if (sourceHash !== await inpxHashCreator.getHash())
@@ -643,10 +859,12 @@ class DbCreator {
             {id: 'stats', value: stats},
             {id: 'inpxHash', value: sourceHash},
             {id: 'dbVersion', value: config.dbVersion},
-            {id: 'indexUpdate', value: {incremental, recordsChanged, recordsRemoved: removed.length, updatedAt: new Date().toISOString()}},
+            {id: 'indexUpdate', value: {incremental, recordsChanged, recordsRemoved, updatedAt: new Date().toISOString()}},
+            ...(rustLookupBuiltAt ? [{id:'rustLookupBuiltAt', value:rustLookupBuiltAt}] : []),
+            ...(rustBookStoreGeneration ? [{id:'rustBookStoreGeneration',value:rustBookStoreGeneration}] : []),
         ]});
 
-        callback({job: 'done', jobMessage: ''});
+        callback({job:'done', jobMessage:'', reusedUidIndex:keepUidIndex});
     }
 
     async optimizeTable(from, db, callback) {
@@ -772,42 +990,28 @@ class DbCreator {
         utils.freeMemory();
     }
 
-    async countStats(db, callback, stats) {
+    async countStats(db, callback, stats, fileCounts, uidIndexExists = false) {
         let percent = 0;
         const timer = setInterval(() => {
             percent = Math.min(95, percent + 5);
             callback({progress: percent / 100});
         }, 1000);
         try {
-            const countRes = await db.select({table: 'book', rawResult: true, where: `
-                const files = new Set();
-                const filesDel = new Set();
-
-                for (const id of @all()) {
-                    const r = @row(id);
-                    const file = ${"`${r.folder}/${r.file}.${r.ext}`"};
-                    if (!r.del) {
-                        files.add(file);
-                    } else {
-                        filesDel.add(file);
-                    }
-                }
-
-                for (const file of filesDel)
-                    if (files.has(file))
-                        filesDel.delete(file);
-
-                return {filesCount: files.size, filesDelCount: filesDel.size};
-            `});
-
-            if (countRes.length) {
-                const res = countRes[0].rawResult;
-                stats.filesCount = res.filesCount;
-                stats.filesCountAll = res.filesCount + res.filesDelCount;
-                stats.filesDelCount = res.filesDelCount;
+            if (!fileCounts) {
+                const [result] = await db.select({table:'book', rawResult:true, where:`
+                    const count = (${fileStatistics.toString()})();
+                    for (const id of @all()) count.add(@unsafeRow(id));
+                    return count.totals();
+                `});
+                fileCounts = result?.rawResult;
+            }
+            if (fileCounts) {
+                stats.filesCount = fileCounts.filesCount;
+                stats.filesCountAll = fileCounts.filesCount + fileCounts.filesDelCount;
+                stats.filesDelCount = fileCounts.filesDelCount;
             }
 
-            await db.create({
+            if (!uidIndexExists) await db.create({
                 in: 'book',
                 hash: {field: '_uid', type: 'string', depth: 100, unique: true},
             });
