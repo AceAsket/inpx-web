@@ -47,6 +47,7 @@
                     </select>
                 </label>
             </div>
+            <q-checkbox dense :model-value="followSpeech" label="Следить за озвучкой" @update:model-value="setFollowSpeech" />
             <p v-if="parts.length" class="browser-speech-position" role="status">
                 {{ preview ? 'Проба голоса' : status === 'ended' ? 'Книга озвучена' : `Фраза ${Math.min(index + 1, parts.length)} из ${parts.length}` }}
             </p>
@@ -62,6 +63,7 @@
 
 <script>
 const {BrowserSpeech, partsFromHtml, supported} = require('./browserSpeech');
+const speechFollow = require('./readerSpeechFollow');
 const settingsKey = 'inpx.browserSpeech.settings.v1';
 
 export default {
@@ -70,9 +72,9 @@ export default {
         scopeKey: {type: String, default: ''}, title: {type: String, default: ''},
         language: {type: String, default: 'ru'}, sileroEnabled: {type: Boolean, default: false},
     },
-    emits: ['listen-here', 'use-silero'],
+    emits: ['listen-here', 'use-silero', 'follow-anchor'],
     data: () => ({visible: false, minimized: false, voices: [], voiceId: '', rate: 1, pitch: 1,
-        status: 'idle', index: 0, preview: false, parts: [], error: '', sleepMinutes: 0,
+        status: 'idle', index: 0, preview: false, parts: [], error: '', sleepMinutes: 0, followSpeech: false,
         pitches: [{value: 0.75, label: 'Низкий'}, {value: 1, label: 'Обычный'}, {value: 1.25, label: 'Высокий'}]}),
     watch: {sourceKey() { this.reset(); }, scopeKey() { this.reset(); }, html() { this.reset(); }},
     mounted() {
@@ -101,6 +103,7 @@ export default {
         },
         open() {
             this.visible = true; this.minimized = false; this.error = '';
+            this.followSpeech = speechFollow.load();
             if (!supported(window)) { this.error = 'Этот браузер не поддерживает системную озвучку.'; return; }
             this.loadVoices();
             if (this.speech) return;
@@ -116,7 +119,8 @@ export default {
                 onChange: state => {
                     Object.assign(this, state);
                     if (!state.preview) this.savePosition();
-                }});
+                },
+                onStart: () => this.followCurrentPhrase()});
             let index = 0;
             try {
                 const saved = JSON.parse(localStorage.getItem(this.loadedStorageKey) || '{}');
@@ -125,6 +129,16 @@ export default {
             this.speech.setParts(this.parts, index);
             this.applySettings();
             if (!this.parts.length) this.error = 'В книге нет текста для озвучки.';
+        },
+        setFollowSpeech(value) {
+            this.followSpeech = value;
+            speechFollow.save(value);
+            this.followCurrentPhrase();
+        },
+        followCurrentPhrase() {
+            if (!this.visible || !this.followSpeech || this.preview || !this.speech?.started) return;
+            const anchor = this.parts[this.index]?.anchor;
+            if (anchor) this.$emit('follow-anchor', anchor);
         },
         savePosition() {
             if (!this.loadedStorageKey || !this.parts.length) return;

@@ -41,6 +41,7 @@
                     <q-tooltip>С начала текущего фрагмента</q-tooltip>
                 </q-btn>
             </div>
+            <q-checkbox v-if="mode !== 'book'" dense :model-value="followSpeech" label="Следить за озвучкой" @update:model-value="setFollowSpeech" />
             <div class="reader-audio-options">
                 <label>Таймер сна
                     <select v-model="sleepChoice" @change="setSleep">
@@ -116,7 +117,7 @@
             <q-btn v-if="(!src || isPreview) && !busy" class="reader-audio-start" :disabled="planLoading || tuningDirty" no-caps outline icon="la la-headphones" :label="error ? 'Повторить подготовку' : mode === 'book' ? 'Создать аудиокнигу' : 'Подготовить и слушать'" @click="prepare(false)" />
             <audio
                 v-show="src" ref="audio" :src="src || undefined" controls preload="metadata"
-                @loadedmetadata="restorePosition" @play="onPlay" @pause="onPause"
+                @loadedmetadata="restorePosition" @play="onPlay" @playing="followCurrentClip" @pause="onPause"
                 @timeupdate="onTimeUpdate" @seeked="savePosition(true)" @ended="onEnded" @error="onAudioError"
             />
             <audio ref="preloadAudio" class="reader-audio-preload" :src="nextSrc || undefined" preload="auto" aria-hidden="true" />
@@ -131,6 +132,7 @@
 <script>
 const {defaultSpeechOptions, normalizeSpeechOptions, hasSpeechOptions} = require('../../../shared/speechOptions');
 const sleep = require('../../../shared/AudioSleepTimer');
+const speechFollow = require('./readerSpeechFollow');
 let mediaOwner = null;
 const mediaActions = ['play', 'pause', 'seekbackward', 'seekforward', 'seekto', 'stop'];
 
@@ -143,10 +145,11 @@ export default {
         cover: {type: String, default: ''},
         browserSpeechAvailable: {type: Boolean, default: false},
     },
-    emits: ['read-here','listen-here','use-browser'],
+    emits: ['read-here','listen-here','use-browser','follow-anchor'],
     data() {
         return {
             visible: false, minimized: false, speaker: 'xenia', rate: 1, mode: 'online',
+            followSpeech: false, followedGeneration: null,
             sleepChoice:'off', sleepTimer:sleep.arm('off'), sleepNow:Date.now(), sleepInterval:null, rewindSeconds:0, pausedAt:0, skipRestoreOnce:false,
             speechOptions: defaultSpeechOptions(), draftOptions: defaultSpeechOptions(), loadedTuningKey: '', engineId: '',
             sampleText: 'Гермиона открыла книгу и устроилась поудобнее. За окном тихо шумел дождь.\n\nКаждая новая история — это путешествие. Послушайте мой голос и выберите удобную скорость чтения.',
@@ -201,7 +204,13 @@ export default {
     },
     deactivated() { this.close(); },
     methods: {
-        open() { this.loadTuning(); this.visible = true; this.minimized = false; if (!this.src) this.loadPlan(); },
+        open() {
+            this.followSpeech = speechFollow.load();
+            this.loadTuning();
+            this.visible = true;
+            this.minimized = false;
+            if (!this.src) this.loadPlan();
+        },
         close() {
             this.openAtGeneration++; this.planGeneration++; this.planLoading = false;
             this.disarmSleep(); this.clearAudio(); this.visible = false;
@@ -220,14 +229,33 @@ export default {
         },
         stopForSleep() {this.autoPlay = false; this.$refs.audio?.pause(); this.savePosition(true); this.disarmSleep();},
         onTimeUpdate() {if (!this.isPreview) this.checkSleep(); this.savePosition(false);},
-        readHere() {
+        currentClipAnchor() {
             if (this.positionProfileIdentity && this.positionProfileIdentity !== this.profileIdentity) return;
             if (this.positionBookUid && this.positionBookUid !== this.bookUid) return;
-            const anchor = this.chapters[this.activeChapter]?.anchor;
+            return this.chapters[this.activeChapter]?.anchor;
+        },
+        readHere() {
+            const anchor = this.currentClipAnchor();
             if (!anchor) return;
             this.$refs.audio?.pause(); this.savePosition(true);
             this.minimized = true;
             this.$emit('read-here',anchor);
+        },
+        setFollowSpeech(value) {
+            this.followSpeech = value;
+            speechFollow.save(value);
+            this.followedGeneration = null;
+            this.followCurrentClip();
+        },
+        followCurrentClip() {
+            if (!this.visible || !this.followSpeech || this.mode === 'book' || this.isPreview || this.followedGeneration === this.generation) return;
+            const audio = this.$refs.audio;
+            if (!this.src || !audio || audio.paused || audio.ended
+                || audio.readyState < audio.HAVE_FUTURE_DATA || audio.currentSrc !== audio.src) return;
+            const anchor = this.currentClipAnchor();
+            if (!anchor?.textSnippet) return;
+            this.followedGeneration = this.generation;
+            this.$emit('follow-anchor', anchor);
         },
         async openAt(anchor) {
             const generation = ++this.openAtGeneration;

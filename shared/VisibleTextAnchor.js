@@ -1,5 +1,6 @@
-const {key,locate} = require('./SpeechAnchor');
-const selector = 'p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,.reader-epigraph-author,.reader-opening-title';
+const {key,locate,createLocator} = require('./SpeechAnchor');
+const selector = 'p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,td,.reader-epigraph-author,.reader-opening-title';
+const indexes = new WeakMap();
 
 function blocks(scroller) {
     const root = scroller?.querySelector('.reader-html');
@@ -33,4 +34,49 @@ function find(scroller, anchor) {
     try {return rows[locate(rows,anchor)].node;} catch {return null;}
 }
 
-module.exports = {capture,find};
+function rectAtTextOffset(block, offset) {
+    const doc = block.ownerDocument;
+    const walker = doc.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
+        acceptNode: node => node.parentElement.closest('.reader-note-link') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+    });
+    while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const text = node.nodeValue;
+        const length = key(text).length;
+        if (offset >= length) {
+            offset -= length;
+            continue;
+        }
+        let start = 0, end = text.length;
+        while (end - start > 1) {
+            const middle = Math.floor((start + end) / 2);
+            if (key(text.slice(0, middle)).length <= offset) start = middle;
+            else end = middle;
+        }
+        const range = doc.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, end);
+        const rect = range.getBoundingClientRect();
+        if (rect.height > 0) return rect;
+        break;
+    }
+    return block.getBoundingClientRect();
+}
+
+function findTextRect(scroller, anchor) {
+    const documentStart = scroller?.querySelector('.reader-html')?.firstChild;
+    if (!documentStart) return null;
+    let cached = indexes.get(documentStart);
+    if (!cached) {
+        const rows = blocks(scroller);
+        if (!rows.length) return null;
+        cached = {rows, locate:createLocator(rows)};
+        indexes.set(documentStart, cached);
+    }
+    try {
+        const {index, offset} = cached.locate(anchor);
+        return rectAtTextOffset(cached.rows[index].node, offset);
+    } catch {return null;}
+}
+
+module.exports = {capture,find,findTextRect};

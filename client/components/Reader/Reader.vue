@@ -1529,13 +1529,13 @@
             v-if="bookUid && config.ttsEnabled && !isStandaloneMode"
             ref="audioPlayer" :book-uid="bookUid" :title="title" :author="authorLine" :cover="coverSrc"
             :browser-speech-available="browserSpeechSupported" @use-browser="useBrowserAudio"
-            @listen-here="listenFromReader" @read-here="readFromAudio"
+            @listen-here="listenFromReader" @read-here="readFromAudio" @follow-anchor="followReaderAudio"
         />
         <reader-browser-speech
             v-if="(bookUid || isStandaloneMode) && browserSpeechSupported"
             ref="browserAudio" :html="readerHtml" :source-key="readerSourceKey" :title="title" :language="readerLanguage"
             :scope-key="`${currentUserId}:${!!config.profileAuthorized}`" :silero-enabled="serverSpeechAvailable"
-            @listen-here="listenFromReader" @use-silero="useSileroAudio"
+            @listen-here="listenFromReader" @use-silero="useSileroAudio" @follow-anchor="followReaderAudio"
         />
 
         <q-dialog v-model="readerReplacementOpen" :persistent="readerReplacementSaving">
@@ -1608,8 +1608,11 @@ import he from 'he';
 import ReaderAudio from './ReaderAudio.vue';
 import ReaderBrowserSpeech from './ReaderBrowserSpeech.vue';
 import readerPreferencesStorage from './readerPreferencesStorage';
+import {createLocator} from '../../../shared/SpeechAnchor';
+import {findTextRect} from '../../../shared/VisibleTextAnchor';
 
 const readerProgressStorageKey = 'inpx.reader.progress.v1';
+const speechPageLocations = new WeakMap();
 const readerPreferencesVersion = 3;
 const readerDeviceProfileKeys = ['regularProfile', 'compactProfile'];
 const readerDeviceScopedPreferenceKeys = new Set([
@@ -11218,6 +11221,32 @@ class Reader {
         catch {this.$root.stdDialog.alert('Фрагмент не найден в тексте книги'); return;}
         const restored = this.restoreReaderReflowAnchor({...anchor,mode:'paged',pageIndex});
         if (restored) {this.scheduleReaderReflowAnchorHighlight(anchor); this.queuePersistProgress();}
+    }
+
+    followReaderAudio(anchor) {
+        if (!anchor?.textSnippet || !this.readerHtml) return;
+        if (this.isPagedMode) {
+            if (this.isPagedBuildPending || !this.pagedPages.length) return;
+            let locate = speechPageLocations.get(this.pagedPages);
+            if (!locate) {
+                locate = createLocator(this.pagedPages.map((_page, index) => ({text:this.getPagedPageSearchText(index)})));
+                speechPageLocations.set(this.pagedPages, locate);
+            }
+            let pageIndex;
+            try {pageIndex = locate(anchor).index;} catch {return;}
+            const visiblePages = this.isDualPagedSpread ? 2 : 1;
+            if (pageIndex < this.currentPageIndex || pageIndex >= this.currentPageIndex + visiblePages)
+                this.setCurrentPagedPage(pageIndex, true);
+            return;
+        }
+        const scroller = this.$refs.scroller;
+        const phrase = findTextRect(scroller, anchor);
+        if (!phrase) return;
+        const bounds = scroller.getBoundingClientRect();
+        if (phrase.top >= bounds.top + 4 && phrase.bottom <= bounds.bottom - 4) return;
+        scroller.scrollTop = Math.max(0, scroller.scrollTop + phrase.top - bounds.top - 24);
+        this.updateCurrentSectionFromScroll();
+        this.queuePersistProgress();
     }
 
     async ensureReaderProfileReady() {

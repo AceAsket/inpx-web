@@ -8,6 +8,29 @@ const {createFixture, unusedPort} = require('./binary-smoke-test');
 const {chromium} = require(process.env.INPX_PLAYWRIGHT_MODULE || 'playwright');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function playThrough(page, phrase) {
+    const reached = await page.evaluate(async expected => {
+        for (let i = 0; i < 80; i++) {
+            const utterance = window.__utterance;
+            if (!utterance) return false;
+            if (utterance.text === expected) return true;
+            utterance.onend();
+            await new Promise(requestAnimationFrame);
+        }
+        return false;
+    }, phrase);
+    assert(reached, `The speech engine reached «${phrase}»`);
+}
+
+function phraseInScrollViewport(phrase) {
+    const scroller = document.querySelector('.reader-scroll');
+    if (!scroller) return false;
+    const target = [...scroller.querySelectorAll('.reader-html p')].find(item => item.textContent.trim() === phrase);
+    if (!target) return false;
+    const bounds = scroller.getBoundingClientRect(), rect = target.getBoundingClientRect();
+    return rect.bottom > bounds.top && rect.top < bounds.bottom;
+}
+
 (async() => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-browser-speech-'));
     let browser, child, output = '';
@@ -46,7 +69,10 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
             window.__spoken = []; window.__voices = [];
             const events = new EventTarget();
             const synth = {getVoices: () => window.__voices,
-                speak(utterance) {window.__spoken.push(utterance.text); window.__utterance = utterance;},
+                speak(utterance) {
+                    window.__spoken.push(utterance.text); window.__utterance = utterance;
+                    queueMicrotask(() => {if (window.__utterance === utterance) utterance.onstart?.();});
+                },
                 cancel() {const u = window.__utterance; window.__utterance = null; if (u) setTimeout(() => u.onerror?.({error: 'interrupted'}), 0);},
                 addEventListener: (...args) => events.addEventListener(...args), removeEventListener: (...args) => events.removeEventListener(...args)};
             Object.defineProperty(window, 'speechSynthesis', {value: synth});
@@ -54,10 +80,16 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
             window.__loadVoices = () => {window.__voices = [{voiceURI: 'test-local', name: 'Тестовый голос', lang: 'ru-RU', localService: true}]; events.dispatchEvent(new Event('voiceschanged'));};
         });
         await page.goto(url + '/#/reader-lab');
+        const firstAnchor = 'Начало проверочного фрагмента вдали от верхнего края.';
+        const lastAnchor = 'Последний проверочный фрагмент внизу книги.';
+        const paragraphs = offset => Array.from({length: 30}, (_, index) =>
+            `<p>Абзац ${index + offset} содержит обычный текст для проверки видимой области читалки.</p>`).join('');
         const xml = '<FictionBook><description><title-info><book-title>Локальная озвучка</book-title><lang>ru</lang>' +
             '<annotation><p>Не читать аннотацию.</p></annotation></title-info></description><body><section>' +
-            '<p>Первая фраза книги.</p><p>Вторая фраза книги.</p></section></body><body name="notes"><section id="n1"><p>Не читать примечания.</p></section></body></FictionBook>';
-        await page.locator('input[type=file]').first().setInputFiles({name: 'local.fb2', mimeType: 'application/xml', buffer: Buffer.from(xml)});
+            `<p>Первая фраза книги.</p><p>Вторая фраза книги.</p>${paragraphs(1)}<p>${firstAnchor}</p>` +
+            `${paragraphs(31)}<p>${lastAnchor}</p></section></body><body name="notes"><section id="n1"><p>Не читать примечания.</p></section></body></FictionBook>`;
+        const localBook = {name: 'local.fb2', mimeType: 'application/xml', buffer: Buffer.from(xml)};
+        await page.locator('input[type=file]').first().setInputFiles(localBook);
         await page.waitForFunction(() => document.querySelector('.reader-html')?.textContent.includes('Первая фраза книги.'));
         await page.getByRole('button', {name: 'Озвучка книги', exact: true}).click({timeout: 60000});
         await page.evaluate(() => window.__loadVoices());
@@ -81,6 +113,49 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await panel.getByRole('button', {name: 'Продолжить', exact: true}).click();
         assert.equal(await page.evaluate(() => window.__utterance.text), 'Вторая фраза книги.');
         assert(!(await page.evaluate(() => window.__spoken.join(' '))).includes('Не читать'));
+
+        const follow = panel.getByRole('checkbox', {name: 'Следить за озвучкой', exact: true});
+        const scroller = page.locator('.reader-scroll');
+        const scrollPosition = () => scroller.evaluate(element => element.scrollTop);
+        assert.equal(await follow.getAttribute('aria-checked'), 'false');
+        assert.equal(await page.evaluate(phraseInScrollViewport, firstAnchor), false);
+        const initialScroll = await scrollPosition();
+        await playThrough(page, firstAnchor);
+        assert.equal(await scrollPosition(), initialScroll, 'Playback leaves scrolling unchanged by default');
+        await follow.click();
+        await page.waitForFunction(phraseInScrollViewport, firstAnchor);
+        const firstScroll = await scrollPosition();
+        assert(firstScroll > initialScroll, 'Enabling follow moves to the phrase already playing');
+        await playThrough(page, lastAnchor);
+        await page.waitForFunction(phraseInScrollViewport, lastAnchor);
+        assert(await scrollPosition() > firstScroll, 'Playback continues scrolling to subsequent phrases');
+        await panel.getByRole('button', {name: 'Пауза', exact: true}).click();
+        await scroller.evaluate(element => {element.scrollTop = 0;});
+        await panel.getByRole('button', {name: 'Предыдущая фраза', exact: true}).click();
+        await panel.getByRole('button', {name: 'Следующая фраза', exact: true}).click();
+        assert.equal(await scrollPosition(), 0, 'Changing the phrase while paused leaves scrolling unchanged');
+        await panel.getByRole('button', {name: 'Закрыть озвучку устройства'}).click();
+
+        // Reload the app so the local book starts with paginated layout.
+        await page.goto(url + '/?view=paged#/reader-lab?debugReader=1&debugReadMode=paged');
+        await page.locator('input[type=file]').first().setInputFiles(localBook);
+        const livePage = page.locator('.reader-page-sheet--live');
+        await page.waitForFunction(() => document.querySelector('.reader-scroll--paged .reader-page-sheet--live')
+            && !document.querySelector('.reader-reflow-indicator,.reader-loading'));
+        const originalPage = await livePage.first().getAttribute('data-page-index');
+        assert(originalPage !== null, 'Paginated reader has a visible page');
+        assert.equal(await livePage.getByText(lastAnchor, {exact: true}).count(), 0, 'Last phrase starts on another page');
+        await page.getByRole('button', {name: 'Озвучка книги', exact: true}).click();
+        assert.equal(await follow.getAttribute('aria-checked'), 'true', 'Following preference survives a reload');
+        await panel.getByRole('button', {name: 'Проба', exact: true}).click();
+        assert.equal(await livePage.first().getAttribute('data-page-index'), originalPage, 'Voice preview leaves the page unchanged');
+        await page.evaluate(() => window.__utterance.onend());
+        await panel.getByRole('button', {name: /^(Слушать|Продолжить)$/}).click();
+        await playThrough(page, lastAnchor);
+        const spokenPage = livePage.filter({hasText: lastAnchor});
+        await spokenPage.getByText(lastAnchor, {exact: true}).waitFor();
+        assert.notEqual(await spokenPage.getAttribute('data-page-index'), originalPage, 'Following can turn pages');
+
         await page.setViewportSize({width: 390, height: 844}); await pause(300);
         const bounds = await panel.boundingBox(); assert(bounds.x >= 0 && bounds.x + bounds.width <= 391);
         await page.screenshot({path: path.join(directory, 'browser-speech-mobile.png')});
@@ -90,7 +165,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
         await page.locator('input[type=file]').last().setInputFiles({name: 'other.fb2', mimeType: 'application/xml', buffer: Buffer.from(xml.replace('Первая фраза', 'Другая книга'))});
         assert.equal(await panel.count(), 0, 'A new file closes the old player');
         assert.deepEqual(serverSpeech, []); assert.deepEqual(errors, []);
-        console.log(`Browser speech UI: local FB2 without Silero, late voices, preview, rate, phrases, position, mobile layout and cleanup passed; screenshot: ${directory}/browser-speech-mobile.png`);
+        console.log(`Browser speech UI: local FB2, voices, playback position, optional scrolling and paging, mobile layout and cleanup passed; screenshot: ${directory}/browser-speech-mobile.png`);
     } catch (error) {console.error(output); throw error;}
     finally {if (browser) await browser.close(); if (child) child.kill();}
 })().catch(error => {console.error(error); process.exitCode = 1;});

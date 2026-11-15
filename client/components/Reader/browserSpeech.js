@@ -43,10 +43,11 @@ function partsFromHtml(html, doc = document) {
 }
 
 class BrowserSpeech {
-    constructor({synth, Utterance, onChange = () => {}}) {
+    constructor({synth, Utterance, onChange = () => {}, onStart = () => {}}) {
         this.synth = synth;
         this.Utterance = Utterance;
         this.onChange = onChange;
+        this.onStart = onStart;
         this.parts = [];
         this.index = 0;
         this.status = 'idle';
@@ -56,6 +57,7 @@ class BrowserSpeech {
         this.rate = 1;
         this.pitch = 1;
         this.preview = false;
+        this.started = false;
         this.utterance = null;
     }
 
@@ -65,6 +67,7 @@ class BrowserSpeech {
 
     cancel() {
         this.generation++;
+        this.started = false;
         if (this.utterance) {
             this.utterance = null;
             this.synth.cancel();
@@ -97,8 +100,14 @@ class BrowserSpeech {
         utterance.rate = this.rate;
         utterance.pitch = this.pitch;
         this.utterance = utterance;
+        utterance.onstart = () => {
+            if (this.utterance !== utterance || this.started) return;
+            this.started = true;
+            if (!this.preview) this.onStart();
+        };
         utterance.onend = () => {
             if (generation !== this.generation) return;
+            this.started = false;
             this.utterance = null;
             if (this.preview) { this.preview = false; this.status = 'paused'; this.notify(); return; }
             this.index++;
@@ -107,6 +116,7 @@ class BrowserSpeech {
         };
         utterance.onerror = event => {
             if (generation !== this.generation) return;
+            this.started = false;
             this.utterance = null;
             this.status = 'paused';
             this.preview = false;

@@ -22,16 +22,16 @@ docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts 
 
 Сервис Silero включён в необязательный Compose-профиль `tts`. Без `--profile tts` он не запускается; основной контейнер работает без него. Сам адрес `INPX_TTS_URL` не включает озвучку. Чтобы выключить озвучку, задайте `INPX_TTS_ENABLED=false` и пересоздайте основной контейнер; ненужный сервис можно остановить командой `docker compose -f docker-compose.yml -f docker-compose.silero.yml stop silero`.
 
-### Переход на 1.8.3-rc.12
+### Переход на 1.8.3-rc.13
 
 Для Compose задайте версию обоих образов и общую модель перед запуском команд выше.
 
 ```sh
-export INPX_TTS_RELEASE=1.8.3-rc.12
+export INPX_TTS_RELEASE=1.8.3-rc.13
 export INPX_TTS_MODEL=v5_6_ru
 ```
 
-На Unraid выберите теги `1.8.3-rc.12` и `1.8.3-rc.12-silero`. Если в шаблонах уже задана модель, установите `INPX_TTS_MODEL=v5_6_ru` в INPX Web и `SILERO_MODEL=v5_6_ru` в Silero. Сохраните том `/models`. Новая модель скачается при первом синтезе и будет использовать свой кэш MP3. Для возврата к `v5_5_ru` задайте её в обоих контейнерах.
+На Unraid выберите теги `1.8.3-rc.13` и `1.8.3-rc.13-silero`. Если в шаблонах уже задана модель, установите `INPX_TTS_MODEL=v5_6_ru` в INPX Web и `SILERO_MODEL=v5_6_ru` в Silero. Сохраните том `/models`. Новая модель скачается при первом синтезе и будет использовать свой кэш MP3. Для возврата к `v5_5_ru` задайте её в обоих контейнерах.
 
 ### Стабильная 1.8.2 на Unraid
 
