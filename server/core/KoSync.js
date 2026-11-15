@@ -4,10 +4,13 @@ const fs = require('fs-extra');
 const express = require('express');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const position = require('./KoSyncPosition');
+const profilePassword = require('./ProfilePassword');
 const {equal} = require('./opds/Auth');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const documentId = value => /^[a-f0-9]{32}$/.test(String(value || ''));
 const isPersonalProfile = user => !!user?.id && !user.blocked && !(user.id === 'default' && !user.login && !user.passwordHash) && !user.anonymousProfile;
+const matchesWebPassword = (account, user) => !account.webPasswordFingerprint
+    || !!user.passwordHash && account.webPasswordFingerprint === digest(user.passwordHash);
 
 async function partialMd5(file) {
     const handle = await fs.open(file, 'r');
@@ -46,23 +49,41 @@ class KoSync {
         await writeFileAtomic(this.file, json);
     }
 
-    async settings(user, operation = 'status') {
+    async settings(user, operation = 'status', password) {
         if (!isPersonalProfile(user)) throw new Error('need_profile_login');
+        if (operation === 'set-password' && (typeof password !== 'string' || password.length > 128 || password.trim().length < 6))
+            throw new Error('Пароль KOReader должен содержать от 6 до 128 символов');
         return withFileTransaction(this.file, async() => {
             const data = await this.load();
-            let password;
-            if (operation === 'enable') {
+            let generatedPassword;
+            const useWebPassword = operation === 'use-web-password';
+            if (operation === 'enable' || operation === 'set-password' || useWebPassword) {
                 if (this.config.kosyncEnabled === false) throw new Error('KOSync выключен при запуске сервера');
-                password = crypto.randomBytes(24).toString('base64url');
-                const clientKey = crypto.createHash('md5').update(password).digest('hex');
-                data.accounts[user.id] = {verifier: digest(clientKey), documents: data.accounts[user.id]?.documents || {}};
+                if (useWebPassword) {
+                    if (!user.passwordHash) throw new Error('У профиля нет пароля INPX Web');
+                    if (typeof password !== 'string' || !await profilePassword.verify(user.passwordHash, user.login, password))
+                        throw Object.assign(new Error('Неверный пароль INPX Web'), {code:'INPX_INVALID_PROFILE_CREDENTIALS'});
+                }
+                if (operation === 'enable') generatedPassword = crypto.randomBytes(24).toString('base64url');
+                const clientKey = crypto.createHash('md5').update(generatedPassword || password).digest('hex');
+                const verifier = generatedPassword ? digest(clientKey) : await profilePassword.hash(clientKey);
+                const account = {verifier, documents: data.accounts[user.id]?.documents || {}};
+                if (useWebPassword) {
+                    account.webPasswordFingerprint = digest(user.passwordHash);
+                    const current = await this.worker.readingListStore.getUserIdentity(user.id, 'id');
+                    if (!isPersonalProfile(current) || !matchesWebPassword(account, current)) throw new Error('need_profile_login');
+                }
+                data.accounts[user.id] = account;
                 await this.save(data);
             } else if (operation === 'disable') {
                 delete data.accounts[user.id]; await this.save(data);
             } else if (operation !== 'status') throw new Error('Неизвестная операция KOSync');
-            return {available: this.config.kosyncEnabled !== false, enabled: !!data.accounts[user.id],
+            const account = data.accounts[user.id];
+            return {available: this.config.kosyncEnabled !== false, enabled: !!account,
                 username: user.login || user.id, path: `${this.config.rootPathStatic || ''}/kosync`,
-                ...(password ? {password} : {})};
+                hasWebPassword: !!user.passwordHash, usesWebPassword: !!account?.webPasswordFingerprint,
+                webPasswordChanged: !!account && !matchesWebPassword(account, user),
+                ...(generatedPassword ? {password: generatedPassword} : {})};
         });
     }
 
@@ -74,7 +95,10 @@ class KoSync {
         const users = (await this.worker.readingListStore.load()).users;
         const user = users.find(user => isPersonalProfile(user) && (user.login || user.id) === username);
         const account = user && data.accounts[user.id];
-        return account && equal(account.verifier, digest(key)) ? {...user, kosyncVerifier: account.verifier} : null;
+        if (!account || !matchesWebPassword(account, user)) return null;
+        const {verifier} = account;
+        const accepted = profilePassword.isLegacy(verifier) ? equal(verifier, digest(key)) : await profilePassword.verify(verifier, '', key);
+        return accepted ? {...user, kosyncVerifier: verifier} : null;
     }
 
     async linkDownload(file, bookUid, ext) {
@@ -144,7 +168,8 @@ class KoSync {
             // getUser deliberately falls back to the guest profile. A deleted KOSync
             // account must never use that fallback during an in-flight request.
             const currentUser = (await this.worker.readingListStore.load()).users.find(row => row.id === user.id);
-            if (!isPersonalProfile(currentUser)) throw Object.assign(new Error('Unauthorized'), {status: 401});
+            if (!isPersonalProfile(currentUser) || !matchesWebPassword(account, currentUser))
+                throw Object.assign(new Error('Unauthorized'), {status: 401});
             const previous = account.documents[document] || {};
             const book = data.books[document];
             const linked = book?.bookUid && await this.worker.getBookRecordByUid(book.bookUid);
@@ -175,7 +200,8 @@ class KoSync {
                         const store = this.worker.readingListStore;
                         const result = await withFileTransaction(store.file, async() => {
                             const existing = (await store.load()).users.find(row => row.id === user.id);
-                            if (!isPersonalProfile(existing)) throw Object.assign(new Error('Unauthorized'), {status: 401});
+                            if (!isPersonalProfile(existing) || !matchesWebPassword(account, existing))
+                                throw Object.assign(new Error('Unauthorized'), {status: 401});
                             return this.worker.updateReaderProgress(user.id, book.bookUid, {
                                 ...(anchor || {textSnippet: '', textOffset: -1, pageIndex: 0, sectionId: ''}),
                                 percent: patch.percentage, hidden: false, updatedAt: new Date().toISOString(),

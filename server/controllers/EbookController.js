@@ -5,7 +5,7 @@ const Budget=require('../core/ClientRequestBudget');
 const {getEnabledLibrarySources}=require('../core/LibrarySources');
 const formats=require('../../shared/BookFormats');
 const converter=require('../core/BookConverter');
-const {EbookReader, limits, pageSizes}=require('../core/EbookReader');
+const {EbookReader, limits, pageSizes, compactPageSize}=require('../core/EbookReader');
 const {withFileTransaction}=require('../core/FilePersistence');
 const shelves=require('../core/EbookShelves');
 
@@ -52,15 +52,17 @@ class EbookController {
     hidden(name,value){return `<input type="hidden" name="${escape(name)}" value="${escape(value)}">`;}
     headers(res){res.set({'Cache-Control':'private, no-store','Pragma':'no-cache','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
         'Content-Security-Policy':"default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",'Referrer-Policy':'same-origin'});}
-    document(req,title,body,identity=null,reading=false) {
+    document(req,title,body,identity=null,reading=false,compact=false) {
         title=short(title,600);
         const brand=this.config.name==='inpx-web'?'INPX Web':this.config.name||'INPX Web',current=req.path||'/';
         const csrf=this.security.getCsrfToken(req);
         const user=identity ? `<span>${escape(identity.user.name||identity.user.login)}</span> `+(identity.bound?'· Вход через proxy':`<form class="inline" method="post" action="${escape(this.url('/logout'))}">${this.hidden('csrf',csrf)}<button>Выйти</button></form>`):this.link('/login',{},'Войти');
+        const header = `<header class="masthead"><div class="brand">${this.link('',{},brand)}</div><div class="account">${user}</div></header>`;
         return '<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">'+
-            `<title>${escape(title)} — ${escape(brand)}</title><style>${require('../core/EbookStyle')}</style></head><body><div class="wrap"><header class="masthead"><div class="brand">${this.link('',{},brand)}</div><div class="account">${user}</div></header>`+
+            `<title>${escape(title)} — ${escape(brand)}</title><style>${require('../core/EbookStyle')}</style></head><body${compact?' class="reader-compact"':''}><div class="wrap">`+
+            (compact ? `<main>${body}</main>` : header+
             (reading?`<p>${this.link('',{},'Библиотека')} · ${escape(title)}</p><main>${body}</main>`:
-                `<nav class="nav" aria-label="Навигация">${this.link('',{},'Каталог',current==='/'?'active':'')} ${this.link('/shelves',{},'Мои полки',current.startsWith('/shel')?'active':'')} ${this.link('/recent',{},'Сейчас читаю',current==='/recent'?'active':'')}</nav><main><h1>${escape(title)}</h1>${body}</main>`)+
+                `<nav class="nav" aria-label="Навигация">${this.link('',{},'Каталог',current==='/'?'active':'')} ${this.link('/shelves',{},'Мои полки',current.startsWith('/shel')?'active':'')} ${this.link('/recent',{},'Сейчас читаю',current==='/recent'?'active':'')}</nav><main><h1>${escape(title)}</h1>${body}</main>`))+
             '</div></body></html>';
     }
     destination(value) {
@@ -246,6 +248,7 @@ class EbookController {
 
     async reading(req, identity) {
         const {book, text, at, page, total, boundaries, query, bookQuery} = await this.readingPage(req, identity);
+        const compact = query.length === compactPageSize;
         const current = {...query, at};
         const previous = at > boundaries[page - 1] ? boundaries[page - 1] : boundaries[page - 2];
         const progress = savedProgress(identity?.user, query.uid);
@@ -258,19 +261,27 @@ class EbookController {
                 this.hidden('revision', progress?.revision || 0)+`<button type="submit">${escape(label)}</button></form>`;
         };
         const navigation = `<nav class="pagination reader-pages" aria-label="Страницы">`+
-            (previous !== undefined ? turn(previous, 'Предыдущая') : '')+
-            `<span>Страница ${page} из ${total}</span>`+
-            (page < total ? turn(boundaries[page], 'Следующая') : '')+'</nav>';
-        let body = this.link('/book', bookQuery, 'О книге');
-        body += '<nav class="reader-options" aria-label="Размер шрифта">Шрифт '+[24, 30, 36].map(size =>
-            size === query.font ? `<strong>${size}</strong>` : this.link('/read', {...current, font: size}, String(size))).join(' ')+'</nav>';
-        body += '<nav class="reader-options" aria-label="Длина страницы">Страницы '+['Короткие', 'Средние', 'Длинные'].map((label, i) =>
-            pageSizes[i] === query.length ? `<strong>${label}</strong>` : this.link('/read', {...current, length: pageSizes[i]}, label)).join(' ')+'</nav>';
+            (previous !== undefined ? turn(previous, compact ? 'Назад' : 'Предыдущая') : '')+
+            `<span>${compact ? `${page} / ${total}` : `Страница ${page} из ${total}`}</span>`+
+            (page < total ? turn(boundaries[page], compact ? 'Вперёд' : 'Следующая') : '')+'</nav>';
+        const bookLink = this.link('/book', bookQuery, 'О книге');
+        const viewLink = this.link('/read', {...current, length: compact ? pageSizes[0] : compactPageSize}, compact ? 'Обычный вид' : 'Малый экран');
+        const links = `<div class="reader-view-links">${bookLink} ${viewLink}</div>`;
+        let body = '';
+        if (!compact) {
+            body = links;
+            body += '<nav class="reader-options" aria-label="Размер шрифта">Шрифт '+[24, 30, 36].map(size =>
+                size === query.font ? `<strong>${size}</strong>` : this.link('/read', {...current, font: size}, String(size))).join(' ')+'</nav>';
+            body += '<nav class="reader-options" aria-label="Длина страницы">Страницы '+['Короткие', 'Средние', 'Длинные'].map((label, i) =>
+                pageSizes[i] === query.length ? `<strong>${label}</strong>` : this.link('/read', {...current, length: pageSizes[i]}, label)).join(' ')+'</nav>';
+        }
         if (identity && req.query.progress === 'changed')
             body += '<p class="meta" role="status">Место в профиле изменилось. '+this.link('/read', query, 'Открыть сохранённое место')+'</p>';
         const paragraphs = text.slice(at, boundaries[page]).split(/\n+/).filter(part => part.trim());
-        body += navigation+`<div class="reading" style="font-size:${query.font}px">${paragraphs.map(part => `<p>${escape(part)}</p>`).join('')}</div>`+navigation;
-        return {title: book.title || 'Чтение', body, reading: true};
+        const font = compact ? Math.min(query.font, 20) : query.font;
+        body += (compact ? '' : navigation)+`<div class="reading" style="font-size:${font}px">${paragraphs.map(part => `<p>${escape(part)}</p>`).join('')}</div>`+navigation;
+        if (compact) body += links;
+        return {title: book.title || 'Чтение', body, reading: true, compact};
     }
 
     async saveReading(req, identity) {
@@ -372,7 +383,7 @@ class EbookController {
                 this.worker.checkLibraryAssetState(generation,db);
                 this.checkIdentity(req,identity);
                 if(result.redirect)return res.redirect(302,result.redirect);
-                res.type('html').send(this.document(req,result.title,result.body,identity,result.reading));
+                res.type('html').send(this.document(req,result.title,result.body,identity,result.reading,result.compact));
             }catch(error){
                 const status=error.code==='INPX_LOGIN_RATE_LIMIT'?429:error.code==='server_busy'||error.code==='INPX_DATABASE_UNAVAILABLE'?503:error.status||500;
                 if(status===401)identity=null;

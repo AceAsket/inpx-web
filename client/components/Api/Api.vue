@@ -811,8 +811,8 @@ class Api {
         return await this.request({action: 'update-user-profile', targetUserId, profile}, 120);
     }
 
-    async koSyncSettings(operation = 'status') {
-        return await this.request({action: 'kosync-settings', operation}, 120);
+    async koSyncSettings(operation = 'status', password) {
+        return await this.request({action: 'kosync-settings', operation, password}, 120);
     }
 
     async deleteUserProfile(targetUserId) {
@@ -883,16 +883,21 @@ class Api {
         return await this.request({action: 'send-book-email', bookUid, format}, 300);
     }
 
-    async prepareReaderAudio(bookUid, speaker, mode, chapterIndex, options) {
-        return await this.request({action: 'prepare-reader-audio', bookUid, speaker, mode, chapterIndex, options}, 120);
+    async prepareReaderAudio(bookUid, speaker, mode, chapterIndex, options, consumerId) {
+        return await this.request({action: 'prepare-reader-audio', bookUid, speaker, mode, chapterIndex, options, consumerId}, 120);
     }
 
     async getReaderAudioPlan(bookUid, mode, anchor = null) {
         return await this.request({action: 'get-reader-audio-plan', bookUid, mode, anchor}, 120);
     }
 
-    async previewReaderVoice(speaker, options, sampleText) {
-        return await this.request({action: 'preview-reader-voice', speaker, options, sampleText}, 120);
+    async previewReaderVoice(speaker, options, sampleText, consumerId) {
+        return await this.request({action: 'preview-reader-voice', speaker, options, sampleText, consumerId}, 120);
+    }
+
+    async cancelReaderAudio(consumerId) {
+        if (this.$store.state.config?.clientApi?.features?.includes('cancelAudio'))
+            return await this.request({action: 'cancel-reader-audio', consumerId}, 10, {suppressProfileLogin:true});
     }
 
     async getReaderAudioStatus(jobId) {

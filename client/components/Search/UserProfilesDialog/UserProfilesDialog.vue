@@ -184,51 +184,29 @@
                                         color="primary"
                                         class="reading-progress-toggle-btn"
                                         :icon="expandedReadingSection ? 'la la-angle-up' : 'la la-angle-down'"
+                                        :aria-expanded="expandedReadingSection"
+                                        :label="expandedReadingSection ? uiText.collapseList : uiText.expandList"
                                         @click="toggleReadingSectionExpanded"
-                                    >
-                                        {{ expandedReadingSection ? uiText.collapseList : uiText.expandList }}
-                                    </q-btn>
+                                    />
                                 </div>
                                 <div v-if="expandedReadingSection" class="reading-progress-list">
-                                    <div v-for="book in currentReadingItems" :key="book.bookUid" class="reading-progress-item">
-                                        <div class="reading-progress-head">
-                                            <div class="reading-progress-book">
-                                                {{ book.title }}
+                                    <div v-for="book in currentReadingItems" :key="book.bookUid" class="reading-progress-item profile-reading-row">
+                                        <div class="profile-reading-copy">
+                                            <div class="reading-progress-head">
+                                                <div class="reading-progress-book">{{ book.title }}</div>
+                                                <div class="reading-progress-percent">{{ formatPercent(book.percent) }}%</div>
                                             </div>
-                                            <div class="reading-progress-percent">
-                                                {{ formatPercent(book.percent) }}%
+                                            <div v-if="book.author || book.series" class="reading-progress-meta profile-reading-meta">
+                                                <span v-if="book.author">{{ book.author }}</span>
+                                                <span v-if="book.series">{{ uiText.series }}: {{ book.series }}<template v-if="book.serno"> #{{ book.serno }}</template></span>
+                                            </div>
+                                            <div class="reading-progress-bar" aria-hidden="true">
+                                                <div class="reading-progress-bar-fill" :style="{width: `${formatPercent(book.percent)}%`}"></div>
                                             </div>
                                         </div>
-                                        <div class="reading-progress-bar">
-                                            <div class="reading-progress-bar-fill" :style="{width: `${formatPercent(book.percent)}%`}"></div>
-                                        </div>
-                                        <div v-if="book.author" class="reading-progress-meta">
-                                            {{ book.author }}
-                                        </div>
-                                        <div v-if="book.series" class="reading-progress-meta">
-                                            {{ uiText.series }}: {{ book.series }}<span v-if="book.serno"> #{{ book.serno }}</span>
-                                        </div>
-                                        <div class="reading-progress-actions">
-                                            <q-btn
-                                                flat
-                                                dense
-                                                no-caps
-                                                color="primary"
-                                                icon="la la-book-open"
-                                                @click="openReader(book)"
-                                            >
-                                                Читать
-                                            </q-btn>
-                                            <q-btn
-                                                flat
-                                                dense
-                                                no-caps
-                                                color="negative"
-                                                icon="la la-times"
-                                                @click="removeReadingBook(book)"
-                                            >
-                                                Убрать
-                                            </q-btn>
+                                        <div class="reading-progress-actions profile-reading-actions">
+                                            <q-btn flat dense no-caps color="primary" icon="la la-book-open" label="Читать" @click="openReader(book)" />
+                                            <q-btn flat dense no-caps color="negative" icon="la la-times" label="Убрать" @click="removeReadingBook(book)" />
                                         </div>
                                     </div>
                                 </div>
@@ -239,65 +217,33 @@
                         </div>
 
                         <div v-else-if="currentProfileTab === 'lists'" class="reading-progress-box">
-                            <div class="reading-progress-actions reading-progress-actions--header">
-                                <q-btn
-                                    flat
-                                    dense
-                                    no-caps
-                                    color="primary"
-                                    icon="la la-list"
-                                    @click="readingListsDialogVisible = true"
-                                >
-                                    {{ uiText.manageLists }}
-                                </q-btn>
+                            <div class="reading-progress-actions profile-list-toolbar">
+                                <q-btn outline dense no-caps color="primary" icon="la la-list" :label="uiText.manageLists" @click="readingListsDialogVisible = true" />
                             </div>
                             <div v-if="currentReadingLists.length" class="reading-progress-list">
                                 <div v-for="list in currentReadingLists" :key="list.id" class="reading-progress-item">
-                                    <div class="reading-progress-head">
-                                        <div class="reading-progress-book">
-                                            {{ list.name }}
+                                    <div class="profile-reading-row">
+                                        <div class="profile-reading-copy">
+                                            <div class="reading-progress-book">{{ list.name }}</div>
+                                            <div class="reading-progress-meta profile-reading-meta">
+                                                <span>{{ list.visibility === 'opds' ? 'OPDS' : uiText.private }}</span>
+                                                <span>{{ formatBookCountLabel(list.bookCount) }}</span>
+                                                <span v-if="Number(list.readCount || 0) > 0">{{ list.readCount }}/{{ list.bookCount }} прочитано</span>
+                                            </div>
                                         </div>
-                                        <div class="reading-progress-percent">
-                                            {{ formatBookCountLabel(list.bookCount) }}
+                                        <div class="reading-progress-actions profile-reading-actions">
+                                            <q-btn
+                                                flat dense no-caps color="primary"
+                                                :icon="isReadingListExpanded(list.id) ? 'la la-angle-up' : 'la la-angle-down'"
+                                                :aria-expanded="isReadingListExpanded(list.id)"
+                                                :label="isReadingListExpanded(list.id) ? uiText.collapseList : uiText.expandList"
+                                                @click="toggleReadingListExpanded(list.id)"
+                                            />
+                                            <q-btn flat dense no-caps color="primary" icon="la la-pen" label="Переименовать"
+                                                class="profile-list-compact-action" aria-label="Переименовать" title="Переименовать" @click="renameList(list)" />
+                                            <q-btn flat dense no-caps color="negative" icon="la la-trash" label="Удалить"
+                                                class="profile-list-compact-action" aria-label="Удалить" title="Удалить" @click="deleteListEntry(list)" />
                                         </div>
-                                    </div>
-                                    <div class="reading-progress-meta">
-                                        {{ list.visibility === 'opds' ? 'OPDS' : uiText.private }}
-                                        <template v-if="Number(list.readCount || 0) > 0">
-                                            · {{ list.readCount }}/{{ list.bookCount }}
-                                        </template>
-                                    </div>
-                                    <div class="reading-progress-actions reading-progress-actions--list">
-                                        <q-btn
-                                            flat
-                                            dense
-                                            no-caps
-                                            color="primary"
-                                            :icon="isReadingListExpanded(list.id) ? 'la la-angle-up' : 'la la-angle-down'"
-                                            @click="toggleReadingListExpanded(list.id)"
-                                        >
-                                            {{ isReadingListExpanded(list.id) ? uiText.collapseList : uiText.expandList }}
-                                        </q-btn>
-                                        <q-btn
-                                            flat
-                                            dense
-                                            no-caps
-                                            color="primary"
-                                            icon="la la-pen"
-                                            @click="renameList(list)"
-                                        >
-                                            Переименовать
-                                        </q-btn>
-                                        <q-btn
-                                            flat
-                                            dense
-                                            no-caps
-                                            color="negative"
-                                            icon="la la-trash"
-                                            @click="deleteListEntry(list)"
-                                        >
-                                            Удалить
-                                        </q-btn>
                                     </div>
                                     <div
                                         v-if="isReadingListExpanded(list.id) && list.books && list.books.length"
@@ -306,7 +252,7 @@
                                         <div
                                             v-for="book in list.books"
                                             :key="`${list.id}-${book.bookUid}`"
-                                            class="profile-list-preview-item profile-list-preview-item--row"
+                                            class="profile-list-preview-item"
                                         >
                                             <div class="profile-list-preview-main">
                                                 <div class="profile-list-preview-title">
@@ -316,20 +262,11 @@
                                                     {{ book.author }}
                                                 </div>
                                             </div>
-                                            <q-checkbox
-                                                :model-value="book.read"
-                                                dense
-                                                :label="uiText.readStatus"
-                                                @update:model-value="toggleListBookRead(list, book, $event)"
-                                            />
-                                            <q-btn
-                                                flat
-                                                dense
-                                                round
-                                                color="negative"
-                                                icon="la la-times"
-                                                @click="removeBookFromList(list, book)"
-                                            />
+                                            <div class="profile-list-preview-actions">
+                                                <q-checkbox :model-value="book.read" dense :label="uiText.readStatus" @update:model-value="toggleListBookRead(list, book, $event)" />
+                                                <q-btn flat dense round color="negative" icon="la la-times" title="Убрать из списка"
+                                                    :aria-label="`Убрать из списка: ${book.title || uiText.untitledBook}`" @click="removeBookFromList(list, book)" />
+                                            </div>
                                         </div>
                                     </div>
                                     <div v-else-if="isReadingListExpanded(list.id)" class="reading-progress-meta">
@@ -342,59 +279,69 @@
                             </div>
                         </div>
 
-                        <div v-else-if="currentProfileTab === 'settings'" class="profile-grid profile-edit-grid">
-                            <q-input v-model="editableProfile.name" outlined dense :label="uiText.name" />
-                            <q-input v-model="editableProfile.login" :disable="!!config.profileBoundId" autocomplete="section-edit-profile username" autocapitalize="none" spellcheck="false" outlined dense clearable :label="uiText.login" />
-                            <q-input
-                                v-model="editableProfile.password"
-                                outlined
-                                dense
-                                clearable
-                                :type="editableProfilePasswordVisible ? 'text' : 'password'"
-                                autocomplete="section-edit-profile new-password"
-                                :label="uiText.newPassword"
-                            >
-                                <template #append>
-                                    <q-icon
-                                        :name="editableProfilePasswordVisible ? 'la la-eye-slash' : 'la la-eye'"
-                                        class="password-visibility-toggle"
-                                        @click="editableProfilePasswordVisible = !editableProfilePasswordVisible"
-                                    />
-                                </template>
-                            </q-input>
-                            <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
-                            <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" hint="Этот личный чат получает книги и доступ к Telegram-боту профиля." />
-                            <TelegramAccountPanel />
-                            <ProfileTotpPanel v-if="config.profileAuthorized && config.clientApi?.features?.includes('profileTotp')" />
-                            <div>
+                        <div v-else-if="currentProfileTab === 'settings'" class="profile-settings">
+                            <section class="profile-settings-section">
+                                <h3>Профиль</h3>
+                                <div class="profile-settings-fields">
+                                    <q-input v-model="editableProfile.name" outlined dense :label="uiText.name" />
+                                    <q-input v-model="editableProfile.login" :disable="!!config.profileBoundId" autocomplete="section-edit-profile username" autocapitalize="none" spellcheck="false" outlined dense clearable :label="uiText.login" />
+                                </div>
+                            </section>
+                            <section class="profile-settings-section">
+                                <h3>Безопасность</h3>
+                                <q-input
+                                    v-model="editableProfile.password" outlined dense clearable
+                                    :type="editableProfilePasswordVisible ? 'text' : 'password'"
+                                    autocomplete="section-edit-profile new-password" :label="uiText.newPassword"
+                                >
+                                    <template #append>
+                                        <q-btn flat round dense :icon="editableProfilePasswordVisible ? 'la la-eye-slash' : 'la la-eye'"
+                                            :aria-label="editableProfilePasswordVisible ? 'Скрыть пароль' : 'Показать пароль'"
+                                            @click="editableProfilePasswordVisible = !editableProfilePasswordVisible" />
+                                    </template>
+                                </q-input>
+                                <ProfileTotpPanel v-if="config.profileAuthorized && config.clientApi?.features?.includes('profileTotp')" />
+                            </section>
+                            <section class="profile-settings-section">
+                                <h3>Отправка книг</h3>
+                                <div class="profile-settings-fields">
+                                    <q-input v-model="editableProfile.emailTo" outlined dense clearable label="Email" />
+                                    <q-input v-model="editableProfile.telegramChatId" outlined dense clearable label="Личный Telegram chat id" hint="Этот личный чат получает книги и доступ к Telegram-боту профиля." />
+                                </div>
+                                <TelegramAccountPanel />
+                            </section>
+                            <section class="profile-settings-section">
+                                <h3>Подборки</h3>
                                 <q-toggle class="profile-toggle" v-model="editableProfile.personalRecommendationsEnabled" label="Персональные рекомендации" />
                                 <div class="profile-format-hint">Подбирать книги по вашей истории чтения и полкам. При отключении подборка не рассчитывается на сервере.</div>
-                            </div>
-                            <div class="profile-format-setting">
-                                <div class="profile-format-title">
-                                    Форматы книг
+                            </section>
+                            <section class="profile-settings-section">
+                                <h3>Форматы книг</h3>
+                                <div class="profile-settings-fields">
+                                    <div v-for="formatSetting in formatFields" :key="formatSetting.field">
+                                        <q-select
+                                            v-model="editableProfile[formatSetting.field]"
+                                            :options="formatOptions(formatSetting.field)"
+                                            emit-value map-options outlined dense :label="formatSetting.label"
+                                        />
+                                        <q-checkbox v-if="formatSetting.archive" v-model="editableProfile[formatSetting.archive]" dense label="Отправлять ZIP" class="q-mt-sm" />
+                                    </div>
                                 </div>
-                                <div v-for="formatSetting in formatFields" :key="formatSetting.field" class="profile-format-row">
-                                    <q-select
-                                        v-model="editableProfile[formatSetting.field]"
-                                        :options="formatOptions(formatSetting.field)"
-                                        emit-value map-options outlined dense :label="formatSetting.label"
-                                    />
-                                    <q-checkbox v-if="formatSetting.archive" v-model="editableProfile[formatSetting.archive]" dense label="Отправлять ZIP" class="q-mt-sm" />
-                                </div>
-                                <div class="profile-format-hint profile-backup-hint">
+                                <div class="profile-format-hint">
                                     Если формат недоступен для книги, используется исходный. В ZIP упаковывается книга в выбранном формате.
                                 </div>
-                                <div class="profile-format-hint profile-backup-hint">
-                                    В персональном OPDS выбранный формат предлагается первым. Клиент OPDS может использовать свои предпочтения.
+                            </section>
+                            <section class="profile-settings-section">
+                                <h3>OPDS</h3>
+                                <div class="profile-settings-fields">
+                                    <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :disable="!!currentProfile.isAdmin" :label="uiText.showProfileInOpds" />
+                                    <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!!currentProfile.isAdmin || !editableProfile.opdsEnabled || !editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
                                 </div>
-                            </div>
-                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsEnabled" :disable="!!currentProfile.isAdmin" :label="uiText.showProfileInOpds" />
-                            <q-toggle class="profile-toggle" v-model="editableProfile.opdsAuthEnabled" :disable="!!currentProfile.isAdmin || !editableProfile.opdsEnabled || !editableProfile.login || (!currentProfile.hasPassword && !editableProfile.password)" :label="uiText.requireOpdsAuth" />
-                            <div v-if="currentProfile.isAdmin" class="profile-backup-hint profile-opds-admin-note">
-                                {{ uiText.adminNotInOpds }}
-                            </div>
-                            <KoSyncSettings :user-id="currentUserId" />
+                                <div class="profile-format-hint">
+                                    {{ currentProfile.isAdmin ? 'Профиль администратора не публикуется в OPDS.' : 'В персональном OPDS выбранный формат предлагается первым. Клиент OPDS может использовать свои предпочтения.' }}
+                                </div>
+                            </section>
+                            <KoSyncSettings class="profile-settings-section" :user-id="currentUserId" />
                             <div class="profile-submit-row">
                                 <q-btn v-if="config.profileAuthorized" unelevated no-caps color="primary" label="Сохранить изменения" :loading="savingProfile" @click="saveCurrentProfile" />
                             </div>
@@ -1433,32 +1380,44 @@ export default vueComponent(UserProfilesDialog);
     gap: 8px;
 }
 
-.password-visibility-toggle {
-    cursor: pointer;
-}
-
-.profile-edit-grid {
-    margin-top: 6px;
-}
-
-.profile-format-setting {
-    grid-column: 1 / -1;
+.profile-settings {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
+    gap: 10px;
+    min-width: 0;
 }
 
-.profile-format-title,
-.profile-format-hint {
-    grid-column: 1 / -1;
+.profile-settings-section {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid var(--app-border);
+    border-radius: 12px;
+    background: rgba(15, 159, 143, 0.035);
 }
 
-.profile-format-title {
+.profile-settings-section > :deep(h3) {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.4;
     font-weight: 600;
 }
 
+.profile-settings-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 8px 12px;
+}
+
+.profile-format-hint {
+    color: var(--app-muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
 @media (max-width: 600px) {
-    .profile-format-setting {
+    .profile-settings-fields {
         grid-template-columns: minmax(0, 1fr);
     }
 }
@@ -1573,10 +1532,6 @@ export default vueComponent(UserProfilesDialog);
     line-height: 1.35;
 }
 
-.profile-opds-admin-note {
-    grid-column: 1 / -1;
-}
-
 .profile-backup-actions {
     display: flex;
     gap: 8px;
@@ -1610,10 +1565,7 @@ export default vueComponent(UserProfilesDialog);
 }
 
 .reading-progress-box {
-    padding: 12px;
-    border: 1px solid var(--app-border);
-    border-radius: 14px;
-    background: rgba(15, 159, 143, 0.04);
+    min-width: 0;
 }
 
 .reading-progress-title {
@@ -1677,6 +1629,30 @@ export default vueComponent(UserProfilesDialog);
     border: 1px solid var(--app-border);
 }
 
+.profile-reading-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+}
+
+.profile-reading-copy {
+    flex: 1 1 250px;
+    min-width: 0;
+}
+
+.profile-reading-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px 10px;
+    overflow-wrap: anywhere;
+}
+
+.profile-reading-meta span + span {
+    padding-left: 9px;
+    border-left: 1px solid var(--app-border);
+}
+
 .reading-progress-head {
     display: flex;
     align-items: baseline;
@@ -1724,8 +1700,13 @@ export default vueComponent(UserProfilesDialog);
     gap: 6px;
 }
 
-.reading-progress-actions--list {
-    justify-content: flex-start;
+.profile-reading-actions {
+    flex: 0 1 auto;
+    margin: 0 0 0 auto;
+}
+
+.profile-list-toolbar {
+    margin: 0 0 10px;
 }
 
 .reading-progress-toggle-btn {
@@ -1733,29 +1714,31 @@ export default vueComponent(UserProfilesDialog);
 }
 
 .profile-list-preview {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-top: 8px;
+    margin-top: 10px;
+    border-top: 1px solid var(--app-border);
 }
 
 .profile-list-preview-item {
-    padding: 8px 10px;
-    border: 1px solid var(--app-border);
-    border-radius: 10px;
-    background: rgba(15, 159, 143, 0.04);
-}
-
-.profile-list-preview-item--row {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: 7px 0;
 }
 
-.profile-list-preview-main {
-    min-width: 0;
-    flex: 1 1 auto;
+.profile-list-preview-item + .profile-list-preview-item {
+    border-top: 1px solid var(--app-border);
+}
+
+.profile-list-preview-item:last-child {padding-bottom: 0;}
+.profile-list-preview-main {flex: 1 1 180px; min-width: 0;}
+
+.profile-list-preview-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    font-size: 12px;
 }
 
 .profile-list-preview-title {
@@ -1765,14 +1748,16 @@ export default vueComponent(UserProfilesDialog);
     overflow-wrap: anywhere;
 }
 
-.profile-list-preview-meta,
-.profile-list-preview-more {
+.profile-list-preview-meta {
     font-size: 12px;
     color: var(--app-muted);
+    overflow-wrap: anywhere;
 }
 
-.profile-list-preview-more {
-    padding: 0 2px;
+@media (max-width: 520px) {
+    .profile-list-compact-action {min-width: 36px; min-height: 36px;}
+    .profile-list-compact-action :deep(.block) {display: none !important;}
+    .profile-list-compact-action :deep(.q-icon) {margin: 0;}
 }
 
 .reading-empty {

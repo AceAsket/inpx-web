@@ -158,7 +158,7 @@ export default {
                 {key: 'paragraphPauseMs', label: 'Между абзацами', values: [0, 300, 500, 1000, 2000, 3000, 5000]},
                 {key: 'chapterPauseMs', label: 'Между главами', values: [0, 500, 1000, 2000, 3000, 5000, 10000]},
             ],
-            state: '', src: '', error: '', jobId: '', generation: 0,
+            state: '', src: '', error: '', jobId: '', generation: 0, consumerId: '',
             pollTimer: null, storageKey: '', lastSaved: 0, pageHideHandler: null,
             serverPosition: {}, positionVariant: '', positionWrite: null, positionConflict: false,
             positionProfileIdentity: '',
@@ -195,7 +195,7 @@ export default {
         mode() { this.clearAudio(); this.chapters = []; this.chapterIndex = 0; this.loadPlan(); },
     },
     mounted() {
-        this.pageHideHandler = () => this.savePosition(true);
+        this.pageHideHandler = () => this.close();
         window.addEventListener('pagehide', this.pageHideHandler);
     },
     beforeUnmount() {
@@ -227,7 +227,7 @@ export default {
             if (!sleep.expired(this.sleepTimer,this.sleepNow)) return false;
             this.stopForSleep(); return true;
         },
-        stopForSleep() {this.autoPlay = false; this.$refs.audio?.pause(); this.savePosition(true); this.disarmSleep();},
+        stopForSleep() {this.autoPlay = false; this.$refs.audio?.pause(); this.savePosition(true); this.cancelAudioWork(); this.disarmSleep();},
         onTimeUpdate() {if (!this.isPreview) this.checkSleep(); this.savePosition(false);},
         currentClipAnchor() {
             if (this.positionProfileIdentity && this.positionProfileIdentity !== this.profileIdentity) return;
@@ -333,33 +333,49 @@ export default {
             finally { if (generation === this.planGeneration) this.planLoading = false; }
         },
         changeChapter() { this.clearAudio(); },
-        clearAudio() {
-            this.generation++;
+        audioConsumer() {
+            if (!this.consumerId)
+                this.consumerId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+            return this.consumerId;
+        },
+        cancelAudioWork() {
+            const consumerId = this.consumerId;
+            this.consumerId = '';
+            this.clearAudioRequests();
+            if (consumerId) this.$root.api.cancelReaderAudio(consumerId).catch(() => {});
+        },
+        clearAudioRequests() {
             clearTimeout(this.pollTimer);
             clearTimeout(this.nextTimer);
+            this.nextSrc = ''; this.nextJob = null; this.nextError = '';
+            const preload = this.$refs.preloadAudio;
+            if (preload?.hasAttribute('src')) { preload.removeAttribute('src'); preload.load(); }
+        },
+        clearAudio(keepConsumer = false) {
+            this.generation++;
+            if (keepConsumer) this.clearAudioRequests();
+            else this.cancelAudioWork();
             this.savePosition(true);
             const audio = this.$refs.audio;
             if (audio) { audio.pause(); audio.removeAttribute('src'); audio.load(); }
             this.pausedAt = 0;
-            const preload = this.$refs.preloadAudio;
-            if (preload) { preload.removeAttribute('src'); preload.load(); }
             this.releaseMediaSession();
             this.src = ''; this.state = ''; this.error = ''; this.jobId = ''; this.storageKey = '';
-            this.nextSrc = ''; this.nextJob = null; this.nextError = ''; this.autoPlay = false;
+            this.autoPlay = false;
             this.progress = 0; this.remainingSeconds = null; this.queuePosition = 0; this.phase = '';
         },
-        async prepare(preview = false, autoPlay = false) {
-            this.clearAudio();
-            const generation = this.generation;
+        async prepare(preview = false, autoPlay = false, keepConsumer = false) {
+            this.clearAudio(keepConsumer);
+            const generation = this.generation, consumerId = this.audioConsumer();
             this.isPreview = preview; this.autoPlay = autoPlay;
             this.activeChapter = this.chapterIndex;
             this.storageKey = preview ? '' : this.positionKey();
             this.state = 'requesting';
             try {
-                const result = preview ? await this.$root.api.previewReaderVoice(this.speaker, this.speechOptions, this.sampleText)
-                    : await this.$root.api.prepareReaderAudio(this.bookUid, this.speaker, this.mode, this.activeChapter, this.speechOptions);
-                if (generation === this.generation) this.acceptStatus(result, generation);
-            } catch (error) { if (generation === this.generation) this.fail(error); }
+                const result = preview ? await this.$root.api.previewReaderVoice(this.speaker, this.speechOptions, this.sampleText, consumerId)
+                    : await this.$root.api.prepareReaderAudio(this.bookUid, this.speaker, this.mode, this.activeChapter, this.speechOptions, consumerId);
+                if (generation === this.generation && consumerId === this.consumerId) this.acceptStatus(result, generation);
+            } catch (error) { if (generation === this.generation && consumerId === this.consumerId) this.fail(error); }
         },
         acceptStatus(result, generation) {
             if (typeof result.engineId === 'string' && result.engineId !== this.engineId) {
@@ -372,27 +388,33 @@ export default {
             this.error = result.error || '';
             this.progress = result.progress || 0; this.remainingSeconds = result.remainingSeconds ?? null; this.queuePosition = result.queuePosition || 0;
             this.phase = result.phase || '';
-            if (result.state === 'ready') { this.src = result.url; if (!this.isPreview) this.prefetchNext(generation); return; }
-            if (result.state === 'error') return;
+            if (result.state === 'ready') { this.src = result.url; return; }
+            if (result.state === 'error' || result.state === 'cancelled') return;
             this.pollTimer = setTimeout(() => this.poll(generation), 2000);
         },
         async poll(generation) {
+            const consumerId = this.consumerId;
             try {
                 const result = await this.$root.api.getReaderAudioStatus(this.jobId);
-                if (generation === this.generation) this.acceptStatus(result, generation);
-            } catch (error) { if (generation === this.generation) this.fail(error); }
+                if (generation === this.generation && consumerId === this.consumerId) this.acceptStatus(result, generation);
+            } catch (error) { if (generation === this.generation && consumerId === this.consumerId) this.fail(error); }
         },
         fail(error) { this.state = 'error'; this.error = error.message || String(error); },
         async prefetchNext(generation) {
-            if (this.activeChapter + 1 >= this.chapters.length) return;
+            if (this.isPreview || this.nextJob || this.activeChapter + 1 >= this.chapters.length) return;
+            const consumerId = this.audioConsumer();
+            this.nextJob = {state:'requesting'};
             try {
-                const next = await this.$root.api.prepareReaderAudio(this.bookUid, this.speaker, this.mode, this.activeChapter + 1, this.speechOptions);
-                if (generation !== this.generation) return;
-                this.nextJob = next;
-                this.acceptNext(next, generation);
-            } catch (error) { if (generation === this.generation) this.nextError = `Следующий фрагмент: ${error.message || error}`; }
+                const next = await this.$root.api.prepareReaderAudio(this.bookUid, this.speaker, this.mode, this.activeChapter + 1, this.speechOptions, consumerId);
+                if (generation === this.generation && consumerId === this.consumerId) this.acceptNext(next, generation, consumerId);
+            } catch (error) {
+                if (generation === this.generation && consumerId === this.consumerId) {
+                    this.nextJob = null;
+                    this.nextError = `Следующий фрагмент: ${error.message || error}`;
+                }
+            }
         },
-        acceptNext(result, generation) {
+        acceptNext(result, generation, consumerId) {
             this.nextJob = result;
             if (typeof result.engineId === 'string' && result.engineId !== this.engineId) {
                 this.nextError = 'Способ расстановки ударений изменился. Откройте плеер заново.';
@@ -400,11 +422,12 @@ export default {
             }
             if (result.state === 'ready') { this.nextSrc = result.url; return; }
             if (result.state === 'error') { this.nextError = `Следующий фрагмент: ${result.error}`; return; }
+            if (result.state === 'cancelled') return;
             this.nextTimer = setTimeout(async() => {
                 try {
                     const next = await this.$root.api.getReaderAudioStatus(result.id);
-                    if (generation === this.generation) this.acceptNext(next, generation);
-                } catch (error) { if (generation === this.generation) this.nextError = `Следующий фрагмент: ${error.message || error}`; }
+                    if (generation === this.generation && consumerId === this.consumerId) this.acceptNext(next, generation, consumerId);
+                } catch (error) { if (generation === this.generation && consumerId === this.consumerId) this.nextError = `Следующий фрагмент: ${error.message || error}`; }
             }, 2000);
         },
         restorePosition() {
@@ -456,6 +479,7 @@ export default {
         },
         onPlay() {
             if (!this.isPreview && this.checkSleep()) return;
+            this.prefetchNext(this.generation);
             if (!this.isPreview && this.rewindSeconds && this.pausedAt && Date.now() - this.pausedAt > 10000)
                 this.seek(-this.rewindSeconds);
             this.pausedAt = 0;
@@ -483,11 +507,20 @@ export default {
         onPause() {
             this.pausedAt = Date.now();
             this.savePosition(true);
+            const audio = this.$refs.audio;
+            if (audio?.paused && !audio.ended && this.src && audio.currentSrc === audio.src) this.cancelAudioWork();
             if (mediaOwner === this && navigator.mediaSession) navigator.mediaSession.playbackState = 'paused';
         },
         onEnded() {
             const stopAtEnd = !this.isPreview && sleep.chapterEnded(this.sleepTimer,this.chapters[this.activeChapter]);
-            if (stopAtEnd) this.stopForSleep();
+            if (stopAtEnd) {
+                this.stopForSleep();
+                if (this.activeChapter + 1 < this.chapters.length) {
+                    this.chapterIndex = this.activeChapter + 1;
+                    this.clearAudio();
+                } else this.releaseMediaSession();
+                return;
+            }
             if (this.$refs.audio) this.$refs.audio.currentTime = 0;
             this.savePosition(true);
             if (!this.isPreview && this.activeChapter + 1 < this.chapters.length) {
@@ -501,9 +534,8 @@ export default {
                     clearTimeout(this.nextTimer);
                     const next = this.nextSrc;
                     this.generation++; this.activeChapter = this.chapterIndex;
-                    this.nextSrc = ''; this.nextJob = null; this.nextError = ''; this.autoPlay = !stopAtEnd; this.src = next;
-                    if (!stopAtEnd) this.prefetchNext(this.generation);
-                } else this.prepare(false, !stopAtEnd);
+                    this.nextSrc = ''; this.nextJob = null; this.nextError = ''; this.autoPlay = true; this.src = next;
+                } else this.prepare(false, true, true);
             } else { this.releaseMediaSession(); if (this.isPreview) this.loadPlan(); }
         },
         seek(offset) { this.seekTo(this.$refs.audio.currentTime + offset); },
@@ -530,6 +562,7 @@ export default {
         onAudioError() {
             if (!this.src) return;
             this.savePosition(true);
+            this.cancelAudioWork();
             this.releaseMediaSession();
             this.src = '';
             this.fail(new Error('Не удалось загрузить аудио. Повторите подготовку, чтобы обновить ссылку.'));

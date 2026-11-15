@@ -127,7 +127,10 @@ class WebSocketController {
                     const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
                     if (user.anonymousProfile) throw new Error('Войдите в личный профиль');
                     const service = this.webWorker.koSync || (this.webWorker.koSync = new (require('../core/KoSync').KoSync)(this.config, this.webWorker));
-                    this.send(await service.settings(user, req.operation), req, ws); break;
+                    const update = () => service.settings(user, req.operation, req.password);
+                    const result = this.security && req.operation === 'use-web-password'
+                        ? await this.security.withLoginAttempt(ws.req, 'profile', update) : await update();
+                    this.send(result, req, ws); break;
                 }
                 case 'test':
                     await this.test(req, ws); break;
@@ -904,10 +907,12 @@ class WebSocketController {
     async prepareReaderAudio(req, ws) {
         const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
         const speech = getReaderSpeech(this.config);
-        speech.consumer(user.id, req.consumerId);
+        const consumer = speech.consumer(user.id, req.consumerId);
+        if (consumer?.cancelled) return this.send({state:'cancelled'}, req, ws);
         if (!speech.enabled) throw new Error('Серверная озвучка не настроена.');
         if (!req.bookUid) throw new Error('bookUid is empty');
         const {bookInfo} = await this.webWorker.getBookInfo(req.bookUid, {readerOnly:true});
+        if (consumer?.cancelled) return this.send({state:'cancelled'}, req, ws);
         const result = req.mode ? await speech.preparePart(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.mode, req.chapterIndex, req.options, req.consumerId)
             : await speech.prepare(user.id, req.bookUid, bookInfo, req.speaker || 'xenia', req.options, req.consumerId);
         this.send(result, req, ws);

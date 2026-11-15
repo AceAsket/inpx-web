@@ -12,12 +12,14 @@ module.exports = async function testReaderAudioPlayer() {
     const parts = [{index: 0, title: 'Первая', characters: 100}, {index: 1, title: 'Вторая', characters: 100}, {index: 2, title: 'Третья', characters: 100}];
     function player(api = {}) {
         const audio = {currentTime: 0, duration: 60, paused: true, playbackRate: 1,
-            pause() { this.paused = true; }, load() {}, removeAttribute() {}, play() { this.paused = false; return Promise.resolve(); }};
+            pause() { this.paused = true; }, load() {}, removeAttribute() {}, hasAttribute() {return false;},
+            play() { this.paused = false; return Promise.resolve(); }};
         const instance = {...component.data(), bookUid: 'book-a',
             $store: {state: {settings: {currentUserId: 'profile-a'}, config: {rootPathStatic: '/books'}}},
             $refs: {audio, preloadAudio: {...audio}},
             $root: {api: {getReaderAudioPlan: async() => ({chapters: parts, estimate: null}),
                 audioPosition: async() => ({progress: {revision: 0}}),
+                cancelReaderAudio: async() => {},
                 prepareReaderAudio: async() => ({id: 'chapter', state: 'ready', url: '/chapter.mp3'}),
                 previewReaderVoice: async() => ({id: 'preview', state: 'ready', url: '/preview.mp3'}), ...api}},
         };
@@ -57,16 +59,30 @@ module.exports = async function testReaderAudioPlayer() {
     assert.equal(continuation.$refs.audio.currentTime, 0, 'The next chapter must not inherit the previous chapter position');
     assert.equal(continuation.$refs.audio.paused, false);
     assert.equal(continuation.$refs.audio.playbackRate, 1.25);
+    assert.deepEqual(requested, [], 'Prefetch waits until playback starts');
+    continuation.onPlay();
     assert.deepEqual(requested, [2], 'Playback uses the prefetched second chapter and prepares only the third');
     continuation.close();
+    const nextConsumers = [], nextCancels = [];
+    const waiting = player({prepareReaderAudio: async(_book, _voice, _mode, chapter, _options, id) => {
+        nextConsumers.push([chapter, id]); return {state:'ready', url:'/part.mp3'};
+    }, cancelReaderAudio:async id => {nextCancels.push(id);}});
+    await waiting.loadPlan(); waiting.chapterIndex = 0; await waiting.prepare();
+    waiting.onEnded();
+    assert.deepEqual(nextConsumers, [[0, waiting.consumerId], [1, waiting.consumerId]]);
+    assert.deepEqual(nextCancels, [], 'Starting the next part reuses the consumer of an unfinished prefetch');
+    await Promise.resolve(); waiting.close();
 
-    let finish;
-    const delayed = player({prepareReaderAudio: () => new Promise(resolve => { finish = resolve; })});
+    let finish, delayedId, cancelledId;
+    const delayed = player({prepareReaderAudio: (_book, _voice, _mode, _chapter, _options, id) => new Promise(resolve => { finish = resolve; delayedId = id; }),
+        cancelReaderAudio:async id => {cancelledId = id;}});
     const preparing = delayed.prepare();
     delayed.close();
     finish({state: 'ready', url: '/late.mp3'});
     await preparing;
     assert.equal(delayed.src, '', 'An old response must not resurrect a closed player');
+    assert.match(delayedId, /^[a-f0-9]{32}$/);
+    assert.equal(cancelledId, delayedId, 'Closing while preparing cancels the request before it returns a job ID');
     delayed.bookUid = 'book-b';
     assert.notEqual(delayed.positionKey(), key);
     delayed.bookUid = 'book-a'; delayed.$store.state.settings.currentUserId = 'profile-b';
@@ -80,7 +96,8 @@ module.exports = async function testReaderAudioPlayer() {
     assert.notEqual(tuning.positionKey(), plainKey, 'Changed speech timing must not reuse a previous audio position');
     tuning.sampleText = 'Гермиона открыла книгу.';
     await tuning.prepare(true);
-    assert.deepEqual(tuningCalls[0], ['xenia', tuning.speechOptions, tuning.sampleText]);
+    assert.deepEqual(tuningCalls[0].slice(0, 3), ['xenia', tuning.speechOptions, tuning.sampleText]);
+    assert.match(tuningCalls[0][3], /^[a-f0-9]{32}$/);
     await tuning.prepare();
     assert.deepEqual(tuningCalls[1].slice(0, 4), ['book-a', 'xenia', 'online', 0]);
     assert.deepEqual(tuningCalls[1][4], tuning.speechOptions);
@@ -144,15 +161,40 @@ module.exports = async function testReaderAudioPlayer() {
     assert.equal(timed.autoPlay,false); assert.equal(timed.sleepChoice,'off');
     assert.equal(timed.src,'/chapter.mp3','Sleep preserves the loaded recording and listening position');
     timed.close(); await timed.positionWrite;
-    const chapterTimer = player(); await chapterTimer.loadPlan(); chapterTimer.chapterIndex = 0; await chapterTimer.prepare();
+    const timerPreparations = [];
+    const chapterTimer = player({prepareReaderAudio: async(_book, _voice, _mode, chapter) => {
+        timerPreparations.push(chapter); return {state:'ready', url:'/part-1.mp3'};
+    }});
+    await chapterTimer.loadPlan(); chapterTimer.chapterIndex = 0; await chapterTimer.prepare();
     chapterTimer.chapters = parts.map((part,i) => ({...part,chapterEnd:i !== 0}));
     chapterTimer.sleepChoice = 'chapter'; chapterTimer.setSleep();
     chapterTimer.nextSrc = '/part-2.mp3'; chapterTimer.onEnded();
     assert.equal(chapterTimer.activeChapter,1); assert.equal(chapterTimer.autoPlay,true);
     assert.equal(chapterTimer.sleepChoice,'chapter','Do not stop at an internal fragment boundary');
-    chapterTimer.nextSrc = '/part-3.mp3'; chapterTimer.onEnded();
+    chapterTimer.onEnded();
     assert.equal(chapterTimer.autoPlay,false,'The next chapter may be ready but must not play after the timer');
+    assert.deepEqual(timerPreparations,[0], 'The timer does not prepare an uncached next chapter');
+    assert.equal(chapterTimer.chapterIndex, 2, 'The next chapter is selected for manual resumption');
     assert.equal(chapterTimer.sleepChoice,'off'); chapterTimer.close(); await chapterTimer.positionWrite;
+    let releasePrefetch;
+    const aborted = [], consumers = [];
+    const paused = player({prepareReaderAudio: async(_book, _voice, _mode, chapter, _options, id) => {
+        consumers.push(id);
+        return chapter ? new Promise(resolve => {releasePrefetch = resolve;}) : {state:'ready', url:'/chapter.mp3'};
+    }, cancelReaderAudio:async id => {aborted.push(id);}});
+    await paused.loadPlan(); paused.chapterIndex = 0; await paused.prepare();
+    assert.equal(consumers.length, 1, 'Preparing audio does not prefetch while idle');
+    await paused.$refs.audio.play(); paused.onPlay();
+    assert.equal(consumers[0], consumers[1]);
+    paused.$refs.audio.src = paused.$refs.audio.currentSrc = paused.src;
+    paused.$refs.audio.pause(); paused.onPause();
+    assert.deepEqual(aborted,[consumers[0]]);
+    releasePrefetch({state:'ready', url:'/next.mp3'}); await Promise.resolve(); await Promise.resolve();
+    assert.equal(paused.nextSrc, '', 'Late prefetch results do not reload paused audio');
+    assert.equal(paused.src, '/chapter.mp3');
+    await paused.$refs.audio.play(); paused.onPlay();
+    assert.notEqual(consumers[2], consumers[0], 'Resuming uses a fresh consumer');
+    paused.close(); releasePrefetch({state:'ready', url:'/next.mp3'});
     const events = [], linked = player({getReaderAudioPlan:async(book,mode,anchor) => ({chapters:parts, startChapter:anchor ? 2 : null})});
     linked.$emit = (...args) => events.push(args); linked.$nextTick = async() => {};
     await linked.openAt({textSnippet:'Текст текущей страницы'});
@@ -176,5 +218,5 @@ module.exports = async function testReaderAudioPlayer() {
     component.watch.bookUid.call(scoped); await scoped.positionWrite;
     assert.equal(writes,previousBookWrites,'Changing books must not write the old recording position into the new book');
     scoped.close();
-    console.log('TTS player: resume, speed, preview isolation, chapter continuation, conflicts, sleep timer and text/audio anchors passed');
+    console.log('TTS player: resume, preview isolation, continuation, cancellation, sleep timer and text/audio anchors passed');
 };

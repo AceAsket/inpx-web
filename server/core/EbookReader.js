@@ -10,7 +10,8 @@ const {coverCacheKey} = require('./BookAssets');
 const formats = require('../../shared/BookFormats');
 
 const limits = Object.freeze({fileBytes:32*1024**2, characters:2*1024**2, pageChars:3000, cacheBytes:16*1024**2});
-const pageSizes = Object.freeze([1000, 1600, limits.pageChars]);
+const compactPageSize = 360;
+const pageSizes = Object.freeze([1000, 1600, limits.pageChars, compactPageSize]);
 const tooLarge = () => Object.assign(new Error('Для текстового режима книга слишком велика. Скачайте файл для чтения на устройстве.'), {status:413});
 
 function pageOffsets(text, maximum = limits.pageChars) {
@@ -110,4 +111,4 @@ class EbookReader {
         this.pending.add(task);const result=await task;guard();return {book,...result};
     }
 }
-module.exports={EbookReader,readText,pageOffsets,pageSizes,limits};
+module.exports={EbookReader,readText,pageOffsets,pageSizes,compactPageSize,limits};

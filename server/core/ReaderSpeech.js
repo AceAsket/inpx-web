@@ -257,15 +257,16 @@ class ReaderSpeech {
         if (consumerId === undefined) return null; // Legacy clients retain their shared preparation.
         if (typeof consumerId !== 'string' || !/^[a-zA-Z0-9_-]{16,128}$/.test(consumerId)) throw new Error('Некорректный идентификатор озвучки.');
         const key = JSON.stringify([userId, consumerId]);
+        const now = Date.now();
         for (const [id, value] of this.consumers) {
-            if (Date.now() - value.touched > 24 * 3600000 && !value.jobs.some(job => ['queued','generating'].includes(job.state))) this.consumers.delete(id);
+            if (now - value.touched > 10 * 60 * 1000 && !value.jobs.some(job => ['queued','generating'].includes(job.state))) this.consumers.delete(id);
         }
         if (!this.consumers.has(key)) {
             if (this.consumers.size >= 4096) throw new Error('Слишком много запросов озвучки. Повторите позже.');
-            this.consumers.set(key, {key, cancelled:false, touched:Date.now(), jobs:[]});
+            this.consumers.set(key, {key, cancelled:false, touched:now, jobs:[]});
         }
         const result = this.consumers.get(key);
-        result.touched = Date.now();
+        result.touched = now;
         return result;
     }
 
@@ -288,6 +289,7 @@ class ReaderSpeech {
                 } else { job.text = ''; job.segments = undefined; job.options = undefined; }
             }
         }
+        consumer.jobs = [];
         return {state:'cancelled'};
     }
 
@@ -428,6 +430,7 @@ class ReaderSpeech {
                     job.attemptId = crypto.randomBytes(32).toString('hex');
                     const progressUrl = `${this.config.ttsUrl.replace(/\/$/, '')}/jobs/${job.attemptId}`;
                     const trackProgress = async() => {
+                        if (job.state === 'cancelled') return;
                         try {
                             const status = await this.transport.get(progressUrl, {timeout: 3000, maxRedirects: 0,
                                 headers: this.config.ttsApiKey ? {'Authorization': `Bearer ${this.config.ttsApiKey}`} : {}});
@@ -437,7 +440,7 @@ class ReaderSpeech {
                                 job.remainingSeconds = Number.isFinite(status.data.remainingSeconds) ? Math.max(0, status.data.remainingSeconds) : null;
                             }
                         } catch { /* Progress is optional for old services. */ }
-                        if (!finished) progressTimer = setTimeout(trackProgress, 2000);
+                        if (!finished && job.state !== 'cancelled') progressTimer = setTimeout(trackProgress, 2000);
                     };
                     progressTimer = setTimeout(trackProgress, 1000);
                     response = await this.transport.post(`${this.config.ttsUrl.replace(/\/$/, '')}/synthesize`, {
@@ -448,6 +451,7 @@ class ReaderSpeech {
                         maxRedirects: 0, maxBodyLength: 16 * 1024 * 1024,
                         headers: this.config.ttsApiKey ? {'Authorization': `Bearer ${this.config.ttsApiKey}`} : {},
                     });
+                    if (job.state === 'cancelled') { response.data.destroy(); continue; }
                     const actualEngine = response.headers['x-inpx-speech-engine'];
                     if ((job.engineId || actualEngine) && actualEngine !== (job.engineId || 'builtin'))
                         throw new Error('Способ расстановки ударений изменился. Повторите подготовку аудио.');
@@ -458,6 +462,7 @@ class ReaderSpeech {
                     let bytes = 0;
                     const maximum = this.cacheLimit - await this.cleanCache();
                     const limiter = new Transform({transform(chunk, encoding, callback) {
+                        if (job.state === 'cancelled') return callback(new Error('Озвучка отменена.'));
                         bytes += chunk.length;
                         callback(bytes > maximum ? new Error('Недостаточно места в кэше озвучки.') : null, chunk);
                     }});

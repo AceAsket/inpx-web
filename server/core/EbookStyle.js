@@ -97,6 +97,15 @@ select{box-sizing:border-box;max-width:100%;background:#fff;color:#111;border:1p
 .reader-pages{padding:10px 0;font-size:20px}
 .reader-pages form{display:inline}
 .reader-pages a,.reader-pages button{margin:4px 5px;padding:8px 11px;font:inherit}
+.reader-view-links a{display:inline-block;margin-right:12px}
+.reader-compact .wrap{padding:0 10px}
+.reader-compact main{padding:8px 0 12px}
+.reader-compact .reading{line-height:1.35}
+.reader-compact .reading p{margin:0 0 .4em}
+.reader-compact .reader-pages{padding:0;font-size:16px;line-height:1.3}
+.reader-compact .reader-pages a,.reader-compact .reader-pages button{margin:2px 5px 2px 0;padding:4px 8px}
+.reader-compact .reader-pages span{margin-right:5px}
+.reader-compact .reader-view-links,.reader-compact .meta{font-size:15px;margin:4px 0 0}
 .error{border:1px solid #333;padding:16px}
 fieldset{border:1px solid #aaa;margin:20px 0;padding:18px}
 fieldset label{margin-top:14px}

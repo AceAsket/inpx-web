@@ -123,7 +123,7 @@ async function testClosedAnchoredAudioCannotRestartAfterLateResponses() {
         const chapters = [{index: 0, title: 'Chapter', characters: 100}];
         const plan = {chapters, startChapter: 0};
         const element = {currentTime: 0, duration: 60, paused: true, pause() {this.paused = true;},
-            load() {}, removeAttribute() {}, play() {this.paused = false; return Promise.resolve();}};
+            hasAttribute() {return false;}, load() {}, removeAttribute() {}, play() {this.paused = false; return Promise.resolve();}};
         const player = instance(options, {bookUid: 'book', title: 'Book', $emit() {},
             $nextTick: () => pendingStage === 'mode' ? delayed.promise : Promise.resolve(),
             $store: {state: {settings: {currentUserId: 'reader'}, config: {profileAuthorized: true}}},
@@ -132,6 +132,7 @@ async function testClosedAnchoredAudioCannotRestartAfterLateResponses() {
                 getReaderAudioPlan: async(uid, mode, anchor) => anchor && pendingStage === 'plan' ? delayed.promise : plan,
                 audioPosition: async() => pendingStage === 'position' ? delayed.promise : {progress: {revision: 0}},
                 prepareReaderAudio: async() => {preparations++; return {state: 'ready', url: '/late.mp3'};},
+                cancelReaderAudio: async() => {},
             }}});
         if (pendingStage === 'mode') player.mode = 'book';
         const opening = player.openAt({textSnippet: 'Current reader paragraph'});

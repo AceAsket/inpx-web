@@ -226,6 +226,43 @@ async function testCore(directory) {
     } finally { release(); await close(media.server); await close(service.server); }
 }
 
+async function testCancellation(directory) {
+    let start, rejectSynthesis;
+    const started = new Promise(resolve => {start = resolve;});
+    const calls = [];
+    const speech = new ReaderSpeech({dataDir:directory, ttsEnabled:true, ttsUrl:'http://silero.test'}, {
+        get: async() => ({data:{}}),
+        post: async(url, body) => {
+            calls.push(url);
+            if (url.endsWith('/cancel')) {
+                rejectSynthesis(new Error('Cancelled by test service'));
+                return {};
+            }
+            return new Promise((_, reject) => {rejectSynthesis = reject; start(body.requestId);});
+        },
+    });
+    const consumerA = 'browser-listener-a', consumerB = 'browser-listener-b';
+    const job = await speech.prepareText('a','cancel-shared','Первый фрагмент','xenia',false,undefined,undefined,consumerA);
+    const attempt = await started;
+    const shared = await speech.prepareText('b','cancel-shared','Первый фрагмент','xenia',false,undefined,undefined,consumerB);
+    assert.equal(job.id, shared.id);
+    const waiting = await speech.prepareText('a','cancel-waiting','Следующий фрагмент','xenia',false,undefined,undefined,consumerA);
+    assert.equal(waiting.state, 'queued');
+    speech.cancel('a', consumerA);
+    assert.equal(speech.status('a', waiting.id).state, 'cancelled');
+    assert.equal(speech.status('b', shared.id).state, 'generating');
+    assert.equal(calls.length, 1, 'A shared synthesis continues until the last listener stops');
+    const active = speech.jobs.get(job.id);
+    speech.cancel('b', consumerB);
+    await active.completion;
+    assert.equal(active.state, 'cancelled');
+    assert.equal(active.text, '');
+    assert.equal(await fs.pathExists(`${active.file}.partial`), false);
+    assert.deepEqual(calls, ['http://silero.test/synthesize', `http://silero.test/jobs/${attempt}/cancel`]);
+    assert.deepEqual(await speech.prepareText('a','late','Отложенный запрос','xenia',false,undefined,undefined,consumerA), {state:'cancelled'});
+    console.log('TTS cancellation: queued and delayed requests discarded, shared synthesis stops after the last listener');
+}
+
 async function testRealService(url) {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-silero-real-'));
     const speech = new ReaderSpeech({dataDir: directory, ttsEnabled: true, ttsUrl: url, ttsTimeoutMs: 600000,
@@ -256,7 +293,7 @@ async function testRealService(url) {
 
 (async() => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-speech-tests-'));
-    try { await testCore(directory); } finally { await fs.remove(directory); }
+    try { await testCore(directory); await testCancellation(directory); } finally { await fs.remove(directory); }
     await require('./reader-audio-player-tests')();
     const index = process.argv.indexOf('--silero-url');
     if (index >= 0) await testRealService(process.argv[index + 1]);
