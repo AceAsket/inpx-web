@@ -1,6 +1,5 @@
 const {spawn} = require('node:child_process');
 const {createInterface} = require('node:readline');
-const TableIndex = require('jembadb/src/TableIndex');
 const compareIndexKeys = new Intl.Collator('en').compare;
 
 class RustTableBuilder {
@@ -19,6 +18,7 @@ class RustTableBuilder {
     }
 
     static async buildIndex(binary, directory, rows, report, type = 'string') {
+        const TableIndex = require('jembadb/src/TableIndex');
         const writer = await this.open(binary, directory, type === 'number' ? 'build-number-index' : 'build-index');
         const index = new TableIndex({type, depth:1000000, unique:true});
         if (type === 'string') index.cmp = compareIndexKeys;

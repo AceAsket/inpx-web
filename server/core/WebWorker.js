@@ -15,7 +15,6 @@ const RustBookArchive = require('./RustBookArchive');
 const bookFileCache = require('./BookFileCache');
 const LockQueue = require('./LockQueue');
 const WorkerState = require('./WorkerState');//singleton
-const { JembaDb } = require('jembadb');
 const DbSearcher = require('./DbSearcher');
 const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
@@ -863,14 +862,8 @@ class WebWorker {
                 if (hasDb && iteration === 0) {
                     // A second server sharing the data directory must not move
                     // another process's active catalogue during --recreate.
-                    if (await fs.pathExists(path.join(dbPath,'catalogue.json'))) {
-                        const release = await require('./CatalogueLock').lock(dbPath);
-                        await release();
-                    } else {
-                        const guard = new JembaDb();
-                        await guard.lock({dbPath,softLock:true});
-                        await guard.unlock();
-                    }
+                    const release = await require('./CatalogueLock').lock(dbPath);
+                    await release();
                 }
                 const staging = `${dbPath}.building-${utils.randomHexString(8)}`;
                 const previous = `${dbPath}.previous`;
@@ -953,7 +946,10 @@ class WebWorker {
 
     async openCatalogue(dbPath) {
         const config = this.config;
-        const db = new (require('./DatabaseThread'))(config);
+        const db = new (require('./DatabaseThread'))(config,error=>{
+            log(LM_FATAL,error.message);
+            asyncExit.exit(1);
+        });
         if (config.rustServiceCacheEnabled!==false) require('./CatalogueServiceCache').CatalogueServiceCache.attach(db,dbPath);
         let searcher;
         try {

@@ -32,6 +32,7 @@ async function verify(directory,binary) {
     };
 
     const created = await run({},async access=>{
+        await assert.rejects(openWebAccessStore(path,fingerprint,5,binary),{code:'INPX_CATALOGUE_LOCKED'});
         assert(await access.hasAccess(retained));
         assert.equal(await access.hasAccess(retained.slice(0,63)+'я'),false);
         assert.equal(await access.hasAccess(retained+'0'),false);

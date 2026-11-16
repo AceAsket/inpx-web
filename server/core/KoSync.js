@@ -5,14 +5,18 @@ const express = require('express');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const position = require('./KoSyncPosition');
 const profilePassword = require('./ProfilePassword');
+const native = require('./RustKoSync');
 const {equal} = require('./opds/Auth');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const documentId = value => /^[a-f0-9]{32}$/.test(String(value || ''));
 const isPersonalProfile = user => !!user?.id && !user.blocked && !(user.id === 'default' && !user.login && !user.passwordHash) && !user.anonymousProfile;
 const matchesWebPassword = (account, user) => !account.webPasswordFingerprint
     || !!user.passwordHash && account.webPasswordFingerprint === digest(user.passwordHash);
+const unauthorized = ()=>Object.assign(new Error('Unauthorized'),{status:401});
 
 async function partialMd5(file) {
+    const binary = native.executable();
+    if (binary) return native.fingerprint(binary,file);
     const handle = await fs.open(file, 'r');
     const hash = crypto.createHash('md5');
     try {
@@ -54,7 +58,8 @@ class KoSync {
         if (operation === 'set-password' && (typeof password !== 'string' || password.length > 128 || password.trim().length < 6))
             throw new Error('Пароль KOReader должен содержать от 6 до 128 символов');
         return withFileTransaction(this.file, async() => {
-            const data = await this.load();
+            const binary = native.executable();
+            const data = binary ? null : await this.load();
             let generatedPassword;
             const useWebPassword = operation === 'use-web-password';
             if (operation === 'enable' || operation === 'set-password' || useWebPassword) {
@@ -64,25 +69,37 @@ class KoSync {
                     if (typeof password !== 'string' || !await profilePassword.verify(user.passwordHash, user.login, password))
                         throw Object.assign(new Error('Неверный пароль INPX Web'), {code:'INPX_INVALID_PROFILE_CREDENTIALS'});
                 }
-                if (operation === 'enable') generatedPassword = crypto.randomBytes(24).toString('base64url');
-                const clientKey = crypto.createHash('md5').update(generatedPassword || password).digest('hex');
-                const verifier = generatedPassword ? digest(clientKey) : await profilePassword.hash(clientKey);
-                const account = {verifier, documents: data.accounts[user.id]?.documents || {}};
-                if (useWebPassword) {
-                    account.webPasswordFingerprint = digest(user.passwordHash);
-                    const current = await this.worker.readingListStore.getUserIdentity(user.id, 'id');
-                    if (!isPersonalProfile(current) || !matchesWebPassword(account, current)) throw new Error('need_profile_login');
+                let verifier;
+                if (operation === 'enable' && binary) {
+                    ({password:generatedPassword,verifier} = await native.pair(binary));
+                } else {
+                    if (operation === 'enable') generatedPassword = crypto.randomBytes(24).toString('base64url');
+                    const secret = generatedPassword || password;
+                    const clientKey = binary ? await native.clientKey(binary,secret) : crypto.createHash('md5').update(secret).digest('hex');
+                    verifier = generatedPassword ? digest(clientKey) : await profilePassword.hash(clientKey);
                 }
-                data.accounts[user.id] = account;
-                await this.save(data);
+                if (useWebPassword) {
+                    const current = await this.worker.readingListStore.getUserIdentity(user.id, 'id');
+                    if (!isPersonalProfile(current) || current.passwordHash!==user.passwordHash) throw new Error('need_profile_login');
+                }
+                if (binary) {
+                    await native.setAccount(binary,this.file,user.id,verifier,useWebPassword ? user.passwordHash : undefined);
+                } else {
+                    const account = {verifier,documents:data.accounts[user.id]?.documents || {}};
+                    if (useWebPassword) account.webPasswordFingerprint = digest(user.passwordHash);
+                    data.accounts[user.id] = account;
+                    await this.save(data);
+                }
             } else if (operation === 'disable') {
-                delete data.accounts[user.id]; await this.save(data);
+                if (binary) await native.disableAccount(binary,this.file,user.id);
+                else {delete data.accounts[user.id]; await this.save(data);}
             } else if (operation !== 'status') throw new Error('Неизвестная операция KOSync');
-            const account = data.accounts[user.id];
+            const account = binary ? await native.account(binary,this.file,user) : data.accounts[user.id];
             return {available: this.config.kosyncEnabled !== false, enabled: !!account,
                 username: user.login || user.id, path: `${this.config.rootPathStatic || ''}/kosync`,
-                hasWebPassword: !!user.passwordHash, usesWebPassword: !!account?.webPasswordFingerprint,
-                webPasswordChanged: !!account && !matchesWebPassword(account, user),
+                hasWebPassword: !!user.passwordHash,
+                usesWebPassword: binary ? !!account?.usesWebPassword : !!account?.webPasswordFingerprint,
+                webPasswordChanged: binary ? !!account?.webPasswordChanged : !!account && !matchesWebPassword(account, user),
                 ...(generatedPassword ? {password: generatedPassword} : {})};
         });
     }
@@ -91,18 +108,29 @@ class KoSync {
         const username = String(req.headers['x-auth-user'] || '');
         const key = String(req.headers['x-auth-key'] || '');
         if (username.length > 128 || !documentId(key)) return null;
-        const data = await this.load();
-        const users = (await this.worker.readingListStore.load()).users;
+        const {users} = await this.worker.readingListStore.loadSnapshot();
         const user = users.find(user => isPersonalProfile(user) && (user.login || user.id) === username);
-        const account = user && data.accounts[user.id];
+        if (!user) return null;
+        const binary = native.executable();
+        if (binary) {
+            const account = await native.account(binary,this.file,user,key);
+            if (!account || account.requiresVerification && !await profilePassword.verify(account.verifier,'',key)) return null;
+            return {id:user.id,kosyncVerifier:account.verifier};
+        }
+        const account = (await this.load()).accounts[user.id];
         if (!account || !matchesWebPassword(account, user)) return null;
         const {verifier} = account;
         const accepted = profilePassword.isLegacy(verifier) ? equal(verifier, digest(key)) : await profilePassword.verify(verifier, '', key);
-        return accepted ? {...user, kosyncVerifier: verifier} : null;
+        return accepted ? {id:user.id,kosyncVerifier:verifier} : null;
     }
 
     async linkDownload(file, bookUid, ext) {
         if (this.config.kosyncEnabled === false || !bookUid || !['fb2', 'epub', 'pdf', 'djvu'].includes(ext)) return;
+        const binary = native.executable();
+        if (binary) {
+            await withFileTransaction(this.file,()=>native.link(binary,this.file,file,bookUid,ext,Date.now()));
+            return;
+        }
         if (!await fs.pathExists(this.file)) return;
         return withFileTransaction(this.file, async() => {
             const data = await this.load();
@@ -122,23 +150,49 @@ class KoSync {
         });
     }
 
-    async bookIndex(document, book) {
+    async rawBookFile(book) {
+        let raw = path.join(this.config.bookDir, path.basename(book.cacheFile));
+        if (!await fs.pathExists(raw)) {
+            const result = await this.worker.getBookLink(book.bookUid);
+            const base = path.join(this.config.bookDir, path.basename(result.link));
+            raw = base + '.raw';
+            const desc = await fs.readJson(base + '.d.json');
+            await require('./utils').ensureGunzipFile(base, raw, desc.size);
+        }
+        return raw;
+    }
+
+    async bookPosition(document, book, query) {
         if (book.ext !== 'fb2') return null;
         const file = path.join(this.config.dataDir, 'kosync', `${document}.json`);
+        const binary = native.executable();
+        if (binary) {
+            const cached = await native.lookup(binary,file,query);
+            if (cached.ready) return cached;
+            await this.buildIndex(document,async()=>{
+                await native.build(binary,file,await this.rawBookFile(book),document);
+            });
+            const result = await native.lookup(binary,file,query);
+            return result.ready ? result : null;
+        }
+        const index = await this.legacyBookIndex(document,book,file);
+        return {value:query.direction==='from' ? position.fromKo(index,query.pointer) : position.toKo(index,query)};
+    }
+
+    async buildIndex(document, task) {
+        if (this.indexJobs.has(document)) return this.indexJobs.get(document);
+        if (this.indexJobs.size >= 2) throw new Error('Индекс KOSync занят, повторите позже');
+        const job = task();
+        this.indexJobs.set(document, job);
+        try {return await job;} finally {this.indexJobs.delete(document);}
+    }
+
+    async legacyBookIndex(document, book, file) {
         try {
             if ((await fs.stat(file)).size <= 8 * 1024 * 1024) return await fs.readJson(file);
         } catch (error) { if (error.code !== 'ENOENT') throw error; }
-        if (this.indexJobs.has(document)) return this.indexJobs.get(document);
-        if (this.indexJobs.size >= 2) throw new Error('Индекс KOSync занят, повторите позже');
-        const job = (async() => {
-            let raw = path.join(this.config.bookDir, path.basename(book.cacheFile));
-            if (!await fs.pathExists(raw)) {
-                const result = await this.worker.getBookLink(book.bookUid);
-                const base = path.join(this.config.bookDir, path.basename(result.link));
-                raw = base + '.raw';
-                const desc = await fs.readJson(base + '.d.json');
-                await require('./utils').ensureGunzipFile(base, raw, desc.size);
-            }
+        return this.buildIndex(document,async()=>{
+            const raw = await this.rawBookFile(book);
             if (await partialMd5(raw) !== document) throw new Error('Файл книги изменился. Скачайте его заново для KOSync');
             const index = await position.indexFile(raw);
             await writeFileAtomic(file, JSON.stringify(index));
@@ -156,30 +210,53 @@ class KoSync {
                 if (i >= 128 || bytes > 128 * 1024 * 1024) await fs.remove(ordered[i].file);
             }
             return index;
-        })();
-        this.indexJobs.set(document, job);
-        try { return await job; } finally { this.indexJobs.delete(document); }
+        });
     }
 
     async progress(user, document, patch) {
         return withFileTransaction(this.file, async() => {
-            const data = await this.load(), account = data.accounts[user.id];
-            if (!account || (user.kosyncVerifier && account.verifier !== user.kosyncVerifier)) throw Object.assign(new Error('Unauthorized'), {status: 401});
             // getUser deliberately falls back to the guest profile. A deleted KOSync
             // account must never use that fallback during an in-flight request.
-            const currentUser = (await this.worker.readingListStore.load()).users.find(row => row.id === user.id);
-            if (!isPersonalProfile(currentUser) || !matchesWebPassword(account, currentUser))
-                throw Object.assign(new Error('Unauthorized'), {status: 401});
-            const previous = account.documents[document] || {};
-            const book = data.books[document];
+            const currentUser = (await this.worker.readingListStore.loadSnapshot()).users.find(row => row.id === user.id);
+            if (!isPersonalProfile(currentUser)) throw unauthorized();
+            const binary = native.executable();
+            const data = binary ? null : await this.load();
+            const account = data?.accounts[user.id];
+            let stored;
+            if (binary) {
+                stored = await native.progress(binary,this.file,currentUser,user.kosyncVerifier,document);
+                if (!stored) throw unauthorized();
+            } else {
+                if (!account || (user.kosyncVerifier && account.verifier!==user.kosyncVerifier) || !matchesWebPassword(account,currentUser))
+                    throw unauthorized();
+                stored = {previous:account.documents[document],book:data.books[document],verifier:account.verifier};
+            }
+            const previous = stored.previous || {};
+            const {book} = stored;
+            const persist = (record,prune = false)=>{
+                if (binary) return native.saveProgress(binary,this.file,user.id,document,stored.stamp,record,prune);
+                account.documents[document] = record;
+                if (prune) {
+                    const keys = Object.keys(account.documents);
+                    if (keys.length > 2000) {
+                        keys.sort((a,b)=>account.documents[a].timestamp - account.documents[b].timestamp);
+                        for (const key of keys.slice(0,keys.length - 2000)) delete account.documents[key];
+                    }
+                }
+                return this.save(data);
+            };
             const linked = book?.bookUid && await this.worker.getBookRecordByUid(book.bookUid);
             let current;
             if (linked) {
                 current = currentUser.readerProgress?.[book.bookUid] || {};
             }
-            let index = null;
+            let bridge = null;
             if (linked && book.ext === 'fb2') {
-                try { index = await this.bookIndex(document, book); }
+                const percent = Number(current.percent) || 0;
+                const query = patch
+                    ? {direction:'from',pointer:patch.progress}
+                    : {direction:'to',textSnippet:String(current.textSnippet || ''),percent:Number.isFinite(percent) ? percent : Math.sign(percent)};
+                try { bridge = await this.bookPosition(document, book, query); }
                 catch { /* Native KOReader-to-KOReader sync remains available if bridging fails. */ }
             }
             if (patch) {
@@ -195,13 +272,16 @@ class KoSync {
                         record.bridgeRevision = revision;
                         record.bridgeGeneration = generation;
                     }
-                    const anchor = index ? position.fromKo(index, patch.progress) : null;
+                    const anchor = bridge?.value;
                     if (canBridge && (anchor || book.ext !== 'fb2')) {
                         const store = this.worker.readingListStore;
                         const result = await withFileTransaction(store.file, async() => {
-                            const existing = (await store.load()).users.find(row => row.id === user.id);
-                            if (!isPersonalProfile(existing) || !matchesWebPassword(account, existing))
-                                throw Object.assign(new Error('Unauthorized'), {status: 401});
+                            const existing = (await store.loadSnapshot()).users.find(row => row.id === user.id);
+                            if (!isPersonalProfile(existing)) throw unauthorized();
+                            if (binary) {
+                                const fresh = await native.account(binary,this.file,existing,undefined,stored.verifier);
+                                if (!fresh || fresh.webPasswordChanged) throw unauthorized();
+                            } else if (!matchesWebPassword(account,existing)) throw unauthorized();
                             return this.worker.updateReaderProgress(user.id, book.bookUid, {
                                 ...(anchor || {textSnippet: '', textOffset: -1, pageIndex: 0, sectionId: ''}),
                                 percent: patch.percentage, hidden: false, updatedAt: new Date().toISOString(),
@@ -214,35 +294,25 @@ class KoSync {
                         }
                     }
                 }
-                account.documents[document] = record;
-                const keys = Object.keys(account.documents);
-                if (keys.length > 2000) {
-                    keys.sort((a, b) => account.documents[a].timestamp - account.documents[b].timestamp);
-                    for (const key of keys.slice(0, keys.length - 2000)) delete account.documents[key];
-                }
-                await this.save(data);
+                await persist(record,true);
                 return {document, timestamp: record.timestamp};
             }
             let result = previous.progress ? {...previous} : {};
             if (currentUser?.readerProgressGeneration > (previous.bridgeGeneration || 0) && !Number(current?.revision)) {
-                account.documents[document] = {bridgeGeneration: currentUser.readerProgressGeneration, bridgeRevision: 0};
-                await this.save(data); return {};
+                await persist({bridgeGeneration:currentUser.readerProgressGeneration,bridgeRevision:0});
+                return {};
             }
-            if (current && index && Number(current.revision)) {
-                const pointer = position.toKo(index, current);
+            if (current && bridge && Number(current.revision)) {
+                const pointer = bridge.value;
                 if (pointer && Number(current.revision) !== previous.bridgeRevision) result = {
                     document, progress: pointer, percentage: current.percent,
                     device: 'INPX Web', device_id: 'inpx-web', timestamp: Math.floor(Date.parse(current.updatedAt) / 1000),
                 };
                 if (pointer) {
-                    account.documents[document] = {...result, bridgeRevision: current.revision,
-                        bridgeGeneration: currentUser.readerProgressGeneration || 0};
-                    await this.save(data);
+                    await persist({...result,bridgeRevision:current.revision,bridgeGeneration:currentUser.readerProgressGeneration || 0});
                 }
-            } else if (current && !index) {
-                account.documents[document] = {...previous, bridgeRevision: Number(current.revision) || 0,
-                    bridgeGeneration: currentUser.readerProgressGeneration || 0};
-                await this.save(data);
+            } else if (current && !bridge) {
+                await persist({...previous,bridgeRevision:Number(current.revision) || 0,bridgeGeneration:currentUser.readerProgressGeneration || 0});
             }
             delete result.bridgeRevision; delete result.bridgeGeneration;
             return result;

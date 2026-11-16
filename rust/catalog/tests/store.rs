@@ -26,6 +26,63 @@ fn query(store: &BookStore, request: Value) -> Value {
 }
 
 #[test]
+fn low_memory_file_counts_deduplicate_live_and_deleted_files_across_patches() {
+    let directory = tempdir().unwrap();
+    let path = directory.path();
+    let row = |id: u32, file: &str, ext: &str, del| {
+        let mut value: Value =
+            serde_json::from_str(&book(id, &format!("book-{id}"), file, "", 1.0, del)).unwrap();
+        value[0]["folder"] = json!("Издание");
+        value[0]["file"] = json!(file);
+        value[0]["ext"] = json!(ext);
+        value.to_string()
+    };
+    assert!(write(
+        path,
+        "base",
+        None,
+        &[
+            row(1, "duplicate", "fb2", 1),
+            row(2, "duplicate", "fb2", 0),
+            row(3, "different", "epub", 1),
+            row(4, "different", "fb2", 0),
+            row(5, "duplicate", "fb2", 0),
+        ]
+    ));
+    {
+        let store = BookStore::open_low_memory(path).unwrap();
+        assert_eq!(
+            serde_json::to_value(store.count_files("base").unwrap()).unwrap(),
+            json!({"filesCount":2,"filesDelCount":1})
+        );
+    }
+    assert!(write(
+        path,
+        "patch",
+        Some("base"),
+        &[
+            "remove 2".into(),
+            "remove 5".into(),
+            row(3, "different", "epub", 0),
+            row(6, "different", "epub", 1),
+        ]
+    ));
+    let store = BookStore::open_low_memory(path).unwrap();
+    assert!(store.count_files("base").is_err());
+    assert_eq!(
+        serde_json::to_value(store.count_files("patch").unwrap()).unwrap(),
+        json!({"filesCount":2,"filesDelCount":1})
+    );
+    assert!(!std::fs::read_dir(path).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".catalogue-files-")
+    }));
+}
+
+#[test]
 fn overlays_update_rows_and_uids_across_generations() {
     let dir = tempdir().unwrap();
     let path = dir.path();

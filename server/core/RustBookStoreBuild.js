@@ -2,6 +2,7 @@ const fs = require('fs-extra');
 const {join} = require('node:path');
 const RustTableBuilder = require('./RustTableBuilder');
 const {encodeBook} = require('./BookSearchProjection');
+const {RustLookupIndex} = require('./RustLookupIndex');
 
 const BASE = 'books.redb', PATCH = 'books-patch.redb', MARKER = 'books-store.json';
 
@@ -24,15 +25,15 @@ async function preparePatch(directory, previousPath) {
 }
 
 class RustBookStoreBuild {
-    static async openPatch(binary,directory,generation,previousPath) {
+    static async openPatch(binary,directory,generation,previousPath,lowMemory = false) {
         const previous = await preparePatch(directory,previousPath);
-        return previous ? this.open(binary,directory,generation,previous) : null;
+        return previous ? this.open(binary,directory,generation,previous,lowMemory) : null;
     }
 
-    static async open(binary,directory,generation,previous = null) {
+    static async open(binary,directory,generation,previous = null,lowMemory = false) {
         const writer = await RustTableBuilder.open(binary,directory,'build-store');
         try {
-            await writer.append([JSON.stringify({generation,previous}) + '\n']);
+            await writer.append([JSON.stringify({generation,previous,lowMemory}) + '\n']);
             return new RustBookStoreBuild(writer,directory,generation,previous);
         } catch (error) {
             await writer.close();
@@ -66,6 +67,18 @@ class RustBookStoreBuild {
     close() {return this.writer.close();}
 }
 
+async function countBookFiles(binary,directory,generation) {
+    const reader = new RustLookupIndex(directory,null,{binary,file:directory,generation,command:'count-book-files'});
+    try {
+        const result = await reader.run(process=>process.query({}),()=>{
+            throw new Error(reader.lastError || 'Не удалось подсчитать файлы Rust-каталога');
+        });
+        if (!result || !['filesCount','filesDelCount'].every(key=>Number.isSafeInteger(result[key]) && result[key]>=0))
+            throw new Error('Rust вернул некорректное число файлов каталога');
+        return result;
+    } finally {await reader.close();}
+}
+
 async function exportBooks(store,db) {
     const token = 'rust-store-export';
     try {
@@ -89,4 +102,4 @@ async function exportBooks(store,db) {
     }
 }
 
-module.exports = {RustBookStoreBuild, exportBooks, preparePatch, writeStoreMarker};
+module.exports = {RustBookStoreBuild, countBookFiles, exportBooks, preparePatch, writeStoreMarker};

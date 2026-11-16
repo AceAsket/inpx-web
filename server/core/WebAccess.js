@@ -28,7 +28,11 @@ class WebAccess {
     async init() {
         const config = this.config;
         const fingerprint = utils.getBufHash(config.accessPassword,'sha256','hex');
-        const {store,sessions} = await openWebAccessStore(join(config.dataDir,'web-access'),fingerprint,config.dbCacheSize);
+        const {store,sessions} = await openWebAccessStore(join(config.dataDir,'web-access'),fingerprint,config.dbCacheSize,undefined,error=>{
+            this.closed = true;
+            log(LM_FATAL,error.message);
+            asyncExit.exit(1);
+        });
         try {
             this.sessions.restore(sessions);
         } catch (error) {

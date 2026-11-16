@@ -175,12 +175,20 @@ async function checkCatalogueUpdate(binary, directory) {
         const updated = path.join(directory,'without-jemba-updated');
         const open = dbPath => require('../server/core/WebWorker').prototype.openCatalogue.call({config:nativeConfig},dbPath);
         const run = async (dbPath,work) => {
-            const {db,searcher} = await open(dbPath);
+            const Module = require('node:module');
+            const load = Module._load;
+            Module._load = function(specifier,...args) {
+                assert(!/^jembadb(?:\/|$)/.test(specifier),'Native catalogue loaded '+specifier);
+                return load.call(this,specifier,...args);
+            };
             try {
-                assert(db.nativeCatalogue);
-                assert.equal(db.worker,null);
-                return await work(db,searcher);
-            } finally {try {await searcher.close();} finally {await db.unlock();}}
+                const {db,searcher} = await open(dbPath);
+                try {
+                    assert(db.nativeCatalogue);
+                    assert.equal(db.worker,null);
+                    return await work(db,searcher);
+                } finally {try {await searcher.close();} finally {await db.unlock();}}
+            } finally {Module._load=load;}
         };
         await new (require('../server/core/AppLogger'))().init({...nativeConfig,loggingEnabled:false});
         await write([original,fixed,remove]);
@@ -236,7 +244,7 @@ async function checkFolderCatalogue(binary,directory) {
     const dataDir=path.join(directory,'folder-data'), libDir=path.join(directory,'folder-books');
     await fs.mkdir(dataDir);
     await fs.mkdir(libDir);
-    const config={...require('../server/config/base'),dataDir,libDir,dbCacheSize:5,queryCacheEnabled:false,
+    const config={...require('../server/config/base'),dataDir,libDir,dbCacheSize:5,queryCacheEnabled:false,lowMemoryMode:true,
         inpxFilterFile:path.join(dataDir,'filter.json'),allowUnsafeFilter:true,
         librarySources:[{id:'folder',name:'Folder',type:'folder',libDir}]};
     await fs.writeFile(config.inpxFilterFile,JSON.stringify({filter:'row => row.title !== "Exclude"'}));
@@ -262,6 +270,8 @@ async function checkFolderCatalogue(binary,directory) {
             const {found}=await searcher.bookSearch({title:'=One',limit:10});
             assert.equal(found.length,1);
             assert.equal(searcher.dbConfig.stats.bookCountAll,2);
+            assert.equal(searcher.dbConfig.stats.filesCount,2);
+            assert.equal(searcher.dbConfig.stats.filesDelCount,0);
             return found[0];
         });
         await fs.writeFile(first,book('One updated'));
@@ -276,10 +286,12 @@ async function checkFolderCatalogue(binary,directory) {
             assert.equal(updated.title,'One updated');
             assert.equal(searcher.dbConfig.indexUpdate.recordsChanged,2);
             assert.equal(searcher.dbConfig.indexUpdate.recordsRemoved,1);
+            assert.equal(searcher.dbConfig.stats.filesCount,2);
+            assert.equal(searcher.dbConfig.stats.filesDelCount,0);
             assert.equal((await searcher.bookSearch({title:'=Exclude',limit:10})).found.length,0);
             assert.equal(await fs.access(path.join(target,'books-patch.redb')),undefined);
         });
-        console.log('ok Folder catalogue publishes and updates a Rust snapshot with a custom filter');
+        console.log('ok low-memory Folder catalogue builds and updates a Rust snapshot with a custom filter');
     } finally {
         if (original===undefined) delete process.env.INPX_RUST_CATALOG_BINARY;
         else process.env.INPX_RUST_CATALOG_BINARY=original;

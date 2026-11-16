@@ -25,11 +25,11 @@ class RustWorkerPool {
         }));
     }
 
-    start(binary) {
+    start(binary,{lazy = false} = {}) {
         const entry = this.entry(binary);
         entry.held = true;
         clearTimeout(entry.idle);
-        entry.workers[0].process ||= new RustFramedProcess(binary,this.command);
+        if (!lazy) entry.workers[0].process ||= new RustFramedProcess(binary,this.command);
         return ()=>this.stop(entry);
     }
 

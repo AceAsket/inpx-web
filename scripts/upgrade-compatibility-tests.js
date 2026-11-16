@@ -100,6 +100,7 @@ async function testUpgradeRelocatesWorkingDirectoryWithoutLosingProfiles() {
         await fs.outputFile(path.join(destination, 'reading-lists.json'), 'separate installation');
         await fs.outputFile(path.join(dir, 'public', 'custom-reader', 'index.html'), 'custom reader');
         await fs.outputFile(path.join(dir, 'db', '__softlock'), 'old lock');
+        await fs.outputFile(path.join(dir, 'db', '__inpx_lock'), '');
         await fs.outputFile(path.join(dir, 'tmp', 'old-cache'), 'temporary data');
         await fs.outputFile(path.join(dir, 'inpx-web'), 'binary fixture');
 
@@ -147,7 +148,7 @@ async function testUpgradeRelocatesWorkingDirectoryWithoutLosingProfiles() {
         assert.strictEqual((await fs.readJson(configFile)).dataDir, dataDir);
         assert.strictEqual(await fs.readFile(path.join(destination, 'reading-lists.json'), 'utf8'), 'separate installation');
         assert.strictEqual(await fs.readFile(path.join(dataDir, 'public', 'custom-reader', 'index.html'), 'utf8'), 'custom reader');
-        for (const entry of ['db/__softlock', 'tmp', 'inpx-web'])
+        for (const entry of ['db/__softlock', 'db/__inpx_lock', 'tmp', 'inpx-web'])
             assert(!await fs.pathExists(path.join(dataDir, entry)));
         assert(!await fs.pathExists(path.join(dir, '.upgrade-version.json')));
         const {snapshot} = await fs.readJson(path.join(dataDir, '.upgrade-version.json'));

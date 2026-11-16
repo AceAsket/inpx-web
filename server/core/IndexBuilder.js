@@ -16,7 +16,7 @@ async function buildIndex(config, dbPath, previousPath, report, signal) {
         return;
     }
     if (!prepared && executable() && config.rustCompatibilityTables!==true && config.rustBookStoreEnabled!==false
-        && config.rustCatalogUpdateEnabled!==false && !config.lowMemoryMode) {
+        && config.rustCatalogUpdateEnabled!==false) {
         await creator.buildStandaloneCatalogue(report);
         return;
     }

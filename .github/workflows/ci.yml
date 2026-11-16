@@ -49,6 +49,8 @@ jobs:
       - run: node scripts/rust-book-cache-tests.js rust/target/release/inpx-catalog
       - run: node scripts/rust-book-export-tests.js rust/target/release/inpx-catalog
       - run: node scripts/rust-book-metadata-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-kosync-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-catalogue-lock-tests.js rust/target/release/inpx-catalog
       - run: rustup target add wasm32-unknown-unknown --toolchain 1.100.0
       - run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
       - run: node scripts/rust-auth-state-tests.js rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm

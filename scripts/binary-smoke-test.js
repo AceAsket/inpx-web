@@ -76,7 +76,7 @@ async function createFixture(dir, {nativeJxlCover = false} = {}) {
     const books = new yazl.ZipFile();
     const bookDone = require('stream/promises').pipeline(books.outputStream, fs.createWriteStream(path.join(dir, 'smoke.zip')));
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZcQAAAAASUVORK5CYII=';
-    books.addBuffer(Buffer.from('<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>Packaged smoke book</book-title><coverpage><image l:href="#cover"/></coverpage><lang>en</lang></title-info></description><body><section><p>Smoke text</p><image l:href="#illustration"/></section></body><binary id="illustration" content-type="image/png">'+png+'</binary><binary id="cover" content-type="image/png">'+png+'</binary></FictionBook>'), '1.fb2');
+    books.addBuffer(Buffer.from('<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>Packaged smoke book</book-title><coverpage><image l:href="#cover"/></coverpage><lang>en</lang></title-info></description><body><section><p>Smoke text</p><p>Second paragraph for reader synchronization.</p><image l:href="#illustration"/></section></body><binary id="illustration" content-type="image/png">'+png+'</binary><binary id="cover" content-type="image/png">'+png+'</binary></FictionBook>'), '1.fb2');
     if (process.env.INPX_SMOKE_EPUB === 'true') {
         const epubFile = path.join(dir, 'original.epub'); await require('./epub-fb2-tests').fixture(epubFile);
         const epubData = await fs.readFile(epubFile);
@@ -412,6 +412,10 @@ async function main() {
         assert.strictEqual(shelf.status, 200);
         assert.match(await shelf.text(), /Packaged smoke book/);
         await require('./opds2-integration-test')(url,{adminPassword:'local-smoke-fixture'});
+        if (requireRustCatalogue) await require('./kosync-integration-test')(url,dir,{
+            sessionPath:'/ebook/login',adminPassword:'local-smoke-fixture',
+            firstSnippet:'Smoke text',secondSnippet:'Second paragraph for reader synchronization.',
+        });
         console.log(`ok packaged application: indexing, health, web UI, OPDS, WebSocket (${target === '--image' ? imageName : target})`);
     } finally {
         if (target === '--image')

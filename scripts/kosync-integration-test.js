@@ -5,9 +5,16 @@ const crypto = require('crypto');
 const WebSocket = require('ws');
 const {partialMd5} = require('../server/core/KoSync');
 
-module.exports = async function checkKoSync(url, directory) {
-    const response = await fetch(url + '/');
-    const cookie = response.headers.get('set-cookie').split(';')[0];
+module.exports = async function checkKoSync(url, directory, {
+    sessionPath = '/',
+    adminPassword = 'browser-speech-test',
+    firstSnippet = 'Текст книги для синхронизации KOReader.',
+    secondSnippet = 'Второй абзац книги для синхронизации.',
+} = {}) {
+    const response = await fetch(url + sessionPath);
+    const session = response.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session='));
+    assert(session,'KOSync integration requires a web session');
+    const cookie = session.split(';')[0];
     const socket = new WebSocket(url.replace(/^http/, 'ws') + '/ws', {headers: {cookie, origin: url}});
     await new Promise((resolve, reject) => {socket.once('open', resolve); socket.once('error', reject);});
     let counter = 0;
@@ -25,7 +32,7 @@ module.exports = async function checkKoSync(url, directory) {
     try {
         const config = await request({action: 'get-config'}); common.csrfToken = config.csrfToken;
         assert.equal((await request({action: 'kosync-settings', operation: 'enable'})).error, 'need_profile_login');
-        const login = await request({action: 'login-user-profile', login: 'admin', password: 'browser-speech-test'});
+        const login = await request({action: 'login-user-profile', login: 'admin', password: adminPassword});
         assert(!login.error, login.error); Object.assign(common, login);
         delete common.requestId;
         const settings = await request({action: 'kosync-settings', operation: 'enable'});
@@ -44,9 +51,9 @@ module.exports = async function checkKoSync(url, directory) {
         assert.equal((await fetch(url + settings.path + '/syncs/progress', {method: 'PUT', headers, body: JSON.stringify(push)})).status, 200);
         const state = await request({action: 'get-reader-state', bookUid});
         assert.equal(state.progress.percent, 0.3, JSON.stringify(state));
-        assert.equal(state.progress.textSnippet, 'Текст книги для синхронизации KOReader.');
+        assert.equal(state.progress.textSnippet, firstSnippet);
         const updated = await request({action: 'update-reader-progress', bookUid,
-            progress: {...state.progress, percent: 0.7, textSnippet: 'Второй абзац книги для синхронизации.', baseRevision: state.progress.revision}});
+            progress: {...state.progress, percent: 0.7, textSnippet: secondSnippet, baseRevision: state.progress.revision}});
         assert(!updated.error, updated.error);
         const result = await (await fetch(url + settings.path + '/syncs/progress/' + document, {headers})).json();
         assert.equal(result.percentage, 0.7, JSON.stringify(result)); assert(result.progress.includes('p[2]'));
@@ -61,7 +68,7 @@ module.exports = async function checkKoSync(url, directory) {
         assert.equal((await fetch(url + settings.path + '/users/auth', {headers:customHeaders})).status, 200);
         const preserved = await (await fetch(url + settings.path + '/syncs/progress/' + document, {headers:customHeaders})).json();
         assert.equal(preserved.percentage, 0.7);
-        const useWebPassword = {action:'kosync-settings', operation:'use-web-password', password:'browser-speech-test'};
+        const useWebPassword = {action:'kosync-settings', operation:'use-web-password', password:adminPassword};
         assert.equal((await request({...useWebPassword, password})).errorCode, 'INPX_INVALID_PROFILE_CREDENTIALS');
         const linked = await request(useWebPassword);
         assert(linked.enabled && linked.usesWebPassword, linked.error);

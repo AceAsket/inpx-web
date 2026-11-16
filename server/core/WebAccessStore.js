@@ -66,6 +66,8 @@ class RustAccessStore {
     }
 
     query(request) {
+        if (this.lockFailure)
+            throw Object.assign(new Error('Хранилище сеансов доступа недоступно',{cause:this.lockFailure}),{code:'INPX_ACCESS_STORE_UNAVAILABLE'});
         return runtime.withSignal(undefined,()=>this.reader.run(process=>process.query(request),()=>{
             throw Object.assign(new Error('Хранилище сеансов доступа недоступно'),{code:'INPX_ACCESS_STORE_UNAVAILABLE'});
         }));
@@ -85,7 +87,7 @@ class RustAccessStore {
     }
 }
 
-async function openWebAccessStore(directory,fingerprint,cacheSize,binary=executable()) {
+async function openWebAccessStore(directory,fingerprint,cacheSize,binary=executable(),onLockLost) {
     if (!binary) {
         if (await exists(join(directory,storeFile)))
             throw new Error('Для открытия хранилища сеансов доступа нужен Rust-бинарник каталога');
@@ -95,8 +97,13 @@ async function openWebAccessStore(directory,fingerprint,cacheSize,binary=executa
     }
     await fs.mkdir(directory,{recursive:true,mode:0o700});
     const store = new RustAccessStore(binary,directory);
+    const hold = ()=>lock(directory,binary,error=>{
+        store.lockFailure = error;
+        void store.reader.close();
+        onLockLost?.(error);
+    });
     try {
-        store.release = await lock(directory);
+        store.release = await hold();
         const file = await fs.open(join(directory,storeFile),'a',0o600);
         await file.close();
         let result = await store.query({op:'init',fingerprint});
@@ -105,7 +112,7 @@ async function openWebAccessStore(directory,fingerprint,cacheSize,binary=executa
             store.release = null;
             const legacy = await JembaAccessStore.open(directory,cacheSize);
             await legacy.close();
-            store.release = await lock(directory);
+            store.release = await hold();
             result = await store.query({op:'init',fingerprint});
         }
         if (result?.state!=='ready' || !Array.isArray(result.sessions))

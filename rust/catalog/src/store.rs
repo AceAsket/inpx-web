@@ -1,8 +1,8 @@
-use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, hash_map::Entry};
 use std::io::{BufRead, Write};
 use std::ops::Bound::{Excluded, Unbounded};
 use std::path::{Path, PathBuf};
+use std::{borrow::Cow, cell::RefCell};
 
 use redb::{
     Database, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction, ReadableDatabase, ReadableTable,
@@ -11,6 +11,7 @@ use redb::{
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+use crate::catalog_files::{FileCounter, FileTotals};
 use crate::catalog_query::{Copies, Filter, merged_key};
 use crate::facets::{Facet, Label, Postings};
 use crate::lookup::{LookupIndex, Table as LookupTable};
@@ -25,6 +26,7 @@ const PATCH_FILE: &str = "books-patch.redb";
 const RECORDS: TableDefinition<u32, &[u8]> = TableDefinition::new("catalog_records_v1");
 const UIDS: TableDefinition<&str, u32> = TableDefinition::new("catalog_book_uids_v1");
 const BASE: &str = "base";
+const READ_CACHE_BYTES: usize = 96 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct Header {
@@ -185,9 +187,9 @@ fn apply(writer: &mut BookStoreWriter<'_>, input: &mut impl BufRead) -> Result<u
     }
 }
 
-fn open_read(path: &Path) -> Result<ReadOnlyDatabase> {
+fn open_read(path: &Path, cache_bytes: usize) -> Result<ReadOnlyDatabase> {
     Ok(Database::builder()
-        .set_cache_size(96 * 1024 * 1024)
+        .set_cache_size(cache_bytes)
         .open_read_only(path)?)
 }
 
@@ -231,7 +233,14 @@ pub(crate) fn write_store<T>(
             populate(tx, None)
         });
     };
-    let base = open_read(&directory.join(BASE_FILE))?;
+    let base = open_read(
+        &directory.join(BASE_FILE),
+        if low_memory {
+            REDUCED_CACHE_BYTES
+        } else {
+            READ_CACHE_BYTES
+        },
+    )?;
     let base_read = base.begin_read()?;
     let base_meta = base_read.open_table(METADATA)?;
     let origin = base_meta
@@ -268,6 +277,24 @@ fn check_base(patch: &redb::ReadTransaction, origin: &str) -> Result<()> {
         .is_some_and(|value| value.value() == origin)
     {
         return Err("catalog patch is from a different book store".into());
+    }
+    Ok(())
+}
+
+fn check_snapshot(
+    base: &ReadTransaction,
+    patch: Option<&ReadTransaction>,
+    generation: &str,
+) -> Result<()> {
+    if let Some(patch) = patch {
+        check_generation(patch, generation)?;
+        let metadata = base.open_table(METADATA)?;
+        let origin = metadata
+            .get("generation")?
+            .ok_or("missing base generation")?;
+        check_base(patch, origin.value())?;
+    } else {
+        check_generation(base, generation)?;
     }
     Ok(())
 }
@@ -403,11 +430,19 @@ fn project(record: &[u8], fields: Option<&[String]>) -> Result<Box<RawValue>> {
 
 impl BookStore {
     pub fn open(directory: &Path) -> Result<Self> {
+        Self::open_with_cache(directory, READ_CACHE_BYTES)
+    }
+
+    pub fn open_low_memory(directory: &Path) -> Result<Self> {
+        Self::open_with_cache(directory, REDUCED_CACHE_BYTES)
+    }
+
+    fn open_with_cache(directory: &Path, cache_bytes: usize) -> Result<Self> {
         let patch = directory.join(PATCH_FILE);
         Ok(Self {
-            base: open_read(&directory.join(BASE_FILE))?,
+            base: open_read(&directory.join(BASE_FILE), cache_bytes)?,
             patch: if patch.try_exists()? {
-                Some(open_read(&patch)?)
+                Some(open_read(&patch, cache_bytes)?)
             } else {
                 None
             },
@@ -418,13 +453,24 @@ impl BookStore {
         })
     }
 
-    pub(crate) fn visit(&self, mut visitor: impl FnMut(u32, &[u8]) -> Result<()>) -> Result<()> {
+    pub(crate) fn visit(&self, visitor: impl FnMut(u32, &[u8]) -> Result<()>) -> Result<()> {
+        self.visit_rows(None, visitor)
+    }
+
+    fn visit_rows(
+        &self,
+        generation: Option<&str>,
+        mut visitor: impl FnMut(u32, &[u8]) -> Result<()>,
+    ) -> Result<()> {
         let base = self.base.begin_read()?;
         let patch = self
             .patch
             .as_ref()
             .map(ReadableDatabase::begin_read)
             .transpose()?;
+        if let Some(generation) = generation {
+            check_snapshot(&base, patch.as_ref(), generation)?;
+        }
         let records = base.open_table(RECORDS)?;
         let updated = patch
             .as_ref()
@@ -433,6 +479,25 @@ impl BookStore {
         wide_search::visit_rows(&records, updated.as_ref(), 0..=u32::MAX, &mut |id, data| {
             visitor(id, decode(data)?.0)
         })
+    }
+
+    pub fn count_files(&self, generation: &str) -> Result<FileTotals> {
+        #[derive(Deserialize)]
+        struct FileRow<'a> {
+            #[serde(default, borrow)]
+            folder: Cow<'a, str>,
+            #[serde(default, borrow)]
+            file: Cow<'a, str>,
+            #[serde(default, borrow)]
+            ext: Cow<'a, str>,
+            del: Option<i64>,
+        }
+        let mut counts = FileCounter::new(&self.directory, true)?;
+        self.visit_rows(Some(generation), |_, record| {
+            let row: FileRow = serde_json::from_slice(record)?;
+            counts.add(&row.folder, &row.file, &row.ext, row.del.unwrap_or(0) != 0)
+        })?;
+        counts.finish()
     }
 
     fn facet<T>(
@@ -455,16 +520,7 @@ impl BookStore {
             .as_ref()
             .map(ReadableDatabase::begin_read)
             .transpose()?;
-        if let Some(patch) = &patch {
-            check_generation(patch, &request.generation)?;
-            let metadata = base.open_table(METADATA)?;
-            let origin = metadata
-                .get("generation")?
-                .ok_or("missing base generation")?;
-            check_base(patch, origin.value())?;
-        } else {
-            check_generation(&base, &request.generation)?;
-        }
+        check_snapshot(&base, patch.as_ref(), &request.generation)?;
         let records = base.open_table(RECORDS)?;
         let updated = patch
             .as_ref()

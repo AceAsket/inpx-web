@@ -5,7 +5,7 @@ const {targets} = require('./BackupTransaction');
 const {fileName: progressJournal} = require('./ReaderProgressJournal');
 
 const databaseDirectories = ['db', 'db.previous', 'web-access'];
-const databaseLocks = new Set(['__lock', '__softlock', '__softlockcheck']);
+const databaseLocks = new Set(['__lock', '__softlock', '__softlockcheck', '__inpx_lock']);
 const stateEntries = [
     'session-secret', 'reader-backgrounds', progressJournal, 'public', 'backups',
     'kosync.json', 'kosync', 'telegram-bot-state.json', 'resource-benchmark.json',

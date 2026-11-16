@@ -337,7 +337,7 @@ impl Import<'_> {
                 self.changes.insert(id, ChangedBook { uid, raw });
             }
         }
-        self.postings.add(&row, id);
+        self.postings.add(&row, id)?;
         Ok(())
     }
 }
@@ -398,7 +398,7 @@ pub fn prepare_update<'a>(
         changed_ids: Vec::new(),
         seen: HashSet::with_capacity(previous_count),
         changes: HashMap::new(),
-        postings: Postings::new(request.low_memory),
+        postings: Postings::new(directory, request.low_memory)?,
     };
     let (parser_infos, recs_loaded, records_removed) = write_store(
         directory,

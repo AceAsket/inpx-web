@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use std::hash::Hash;
 use std::io::{BufWriter, Write};
@@ -8,6 +8,7 @@ use inpx_reader::Record;
 use serde::Serialize;
 
 use crate::Result;
+use crate::catalog_files::{FileCounter, FileTotals};
 use crate::catalog_text::{field, lower, number, words};
 
 const EMPTY: &str = "?";
@@ -122,8 +123,7 @@ pub(crate) struct Postings {
     ext: Table<String>,
     source: Table<String>,
     word_cache: [HashMap<String, Vec<usize>>; 2],
-    files: HashSet<String>,
-    deleted_files: HashSet<String>,
+    files: FileCounter,
     author_count: usize,
     book_count: usize,
     deleted_count: usize,
@@ -134,8 +134,8 @@ pub(crate) struct Postings {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CountsSummary {
-    files_count: usize,
-    files_del_count: usize,
+    #[serde(flatten)]
+    files: FileTotals,
     author_count: usize,
     book_count: usize,
     book_del_count: usize,
@@ -146,11 +146,12 @@ pub(crate) struct CountsSummary {
 }
 
 impl Postings {
-    pub fn new(low_memory: bool) -> Self {
-        Self {
+    pub fn new(directory: &Path, low_memory: bool) -> Result<Self> {
+        Ok(Self {
+            files: FileCounter::new(directory, low_memory)?,
             low_memory,
             ..Default::default()
-        }
+        })
     }
 
     fn add_words(&mut self, field: &str, value: &str, id: u32, cache: Option<usize>) {
@@ -185,7 +186,7 @@ impl Postings {
         }
     }
 
-    pub fn add(&mut self, row: &Record, id: u32) {
+    pub fn add(&mut self, row: &Record, id: u32) -> Result<()> {
         let author = field(row, "author");
         let title = field(row, "title");
         let series = field(row, "series");
@@ -200,12 +201,8 @@ impl Postings {
                 self.no_author_count += 1;
             }
         }
-        let file = format!("{}/{}.{}", field(row, "folder"), field(row, "file"), ext);
-        if deleted {
-            self.deleted_files.insert(file);
-        } else {
-            self.files.insert(file);
-        }
+        self.files
+            .add(field(row, "folder"), field(row, "file"), ext, deleted)?;
 
         self.add_words("title", title, id, None);
         self.add_words("author", author, id, Some(0));
@@ -231,9 +228,11 @@ impl Postings {
         self.librate.add(number(row, "librate"), id);
         self.ext.add_text(ext, id);
         self.source.add_text(field(row, "sourceId"), id);
+        Ok(())
     }
 
     pub fn save(self, directory: &Path, facets: &Path) -> Result<CountsSummary> {
+        let files = self.files.finish()?;
         let genre_count = self.genre.rows.len();
         let lang_count = self.lang.rows.len();
         let name_counts = [
@@ -269,8 +268,7 @@ impl Postings {
         write(facets, "del", &self.del.rows)?;
         write(facets, "librate", &self.librate.rows)?;
         Ok(CountsSummary {
-            files_count: self.files.len(),
-            files_del_count: self.deleted_files.difference(&self.files).count(),
+            files,
             author_count: self.author_count,
             book_count: self.book_count,
             book_del_count: self.deleted_count,

@@ -1,6 +1,11 @@
 const {Worker} = require('worker_threads');
-const {JembaDbThread} = require('jembadb');
 const {RustLookupIndex} = require('./RustLookupIndex');
+
+const actions = [
+    'create','drop','truncate','clone','open','openAll','close','closeAll',
+    'tableExists','getDbInfo','getDbSize','setMonitoring','select','insert','update','delete',
+    'markCorrupted','freeMemory',
+];
 
 async function readBookBatches(process, request, key, values, batchSize) {
     const rows = [];
@@ -12,10 +17,15 @@ async function readBookBatches(process, request, key, values, batchSize) {
     return rows;
 }
 
-class DatabaseThread extends JembaDbThread {
-    constructor(config) {
-        super(); this.cachePolicy = require('./DatabaseCache').policy(config);
+class DatabaseThread {
+    constructor(config,onLockLost) {
+        this.cachePolicy = require('./DatabaseCache').policy(config);
+        this.onLockLost = onLockLost;
+        this.worker = null;
+        this.listeners = new Map();
+        this.requestId = 0;
         this.available = false; this.failure = null; this.termination = Promise.resolve();
+        for (const action of actions) this[action] = async query=>this._action(action,query);
     }
 
     unavailableError() {
@@ -85,12 +95,24 @@ class DatabaseThread extends JembaDbThread {
 
     async lock(query) {
         await this.termination;
-        return super.lock(query);
+        if (this.worker) throw new Error('Worker has been created already');
+        this._runWoker();
+        try {await this._action('lock',query);}
+        catch (error) {this._terminate();throw error;}
+    }
+
+    esc(value) {
+        if (this.nativeCatalogue) return JSON.stringify(value).replace(/@/g,'\\x40');
+        return require('jembadb/src/utils').esc(value);
     }
 
     async openNative(directory,config,cacheSize) {
         this.nativeCatalogue = config;
-        this.releaseCatalogue = await require('./CatalogueLock').lock(directory);
+        this.releaseCatalogue = await require('./CatalogueLock').lock(directory,undefined,error=>{
+            this.available = false;
+            this.failure = {code:'INPX_CATALOGUE_LOCK_LOST',message:error.message,at:new Date().toISOString()};
+            this.onLockLost?.(error);
+        });
         await this.configureBookStore(directory,config.rustBookStoreGeneration,cacheSize);
         this.available = true;
     }

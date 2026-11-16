@@ -241,6 +241,8 @@ async function main() {
     if (closeBookArchive) ayncExit.addAfter(closeBookArchive);
     const closeBookCache = require('./core/RustBookCache').start();
     if (closeBookCache) ayncExit.addAfter(closeBookCache);
+    const closeKoSync = require('./core/RustKoSync').start();
+    if (closeKoSync) ayncExit.addAfter(closeKoSync);
     const closeBatchArchive = require('./core/RustBatchArchive').start();
     if (closeBatchArchive) ayncExit.addAfter(closeBatchArchive);
 

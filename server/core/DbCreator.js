@@ -6,7 +6,7 @@ const InpxParser = require('./InpxParser');
 const RustInpxParser = require('./RustInpxParser');
 const RustTableBuilder = require('./RustTableBuilder');
 const readBookIdentities = require('./RustIdentityReader');
-const {RustBookStoreBuild, exportBooks} = require('./RustBookStoreBuild');
+const {RustBookStoreBuild, countBookFiles, exportBooks} = require('./RustBookStoreBuild');
 const {readPostings} = require('./RustCatalogUpdate');
 const InpxHashCreator = require('./InpxHashCreator');
 const {getEnabledLibrarySources} = require('./LibrarySources');
@@ -453,10 +453,12 @@ class DbCreator {
         };
         if (buildStore && incremental && config.previousIndexPath) {
             await storeWork(async () => {
-                bookStore = await RustBookStoreBuild.openPatch(binary,config.indexDbPath,storeGeneration,config.previousIndexPath);
+                bookStore = await RustBookStoreBuild.openPatch(binary,config.indexDbPath,storeGeneration,
+                    config.previousIndexPath,!!config.lowMemoryMode);
             });
         }
-        if (standalone && !bookStore) bookStore = await RustBookStoreBuild.open(binary,config.indexDbPath,storeGeneration);
+        if (standalone && !bookStore)
+            bookStore = await RustBookStoreBuild.open(binary,config.indexDbPath,storeGeneration,null,!!config.lowMemoryMode);
         const patch = standalone && !!bookStore.previous;
         const changedIds = standalone ? [] : null;
         const parsedCallback = async(chunk) => {
@@ -666,7 +668,12 @@ class DbCreator {
         const records=await this.loadBooks(null,report,sourceHash,filter);
         await writeFacets(indexDbPath,records);
         const {authorCount,bookCount,bookDelCount,noAuthorBookCount}=records;
-        const counts={...records.fileCounts,authorCount,bookCount,bookDelCount,noAuthorBookCount,
+        let fileCounts = records.fileCounts;
+        if (!fileCounts) {
+            report({job:'rust file stats',jobMessage:'Подсчёт файлов Rust-каталога',jobStep:2,progress:0});
+            fileCounts = await countBookFiles(executable(),indexDbPath,records.storeGeneration);
+        }
+        const counts={...fileCounts,authorCount,bookCount,bookDelCount,noAuthorBookCount,
             genreCount:records.genreArr.length,langCount:records.langArr.length};
         return this.finishNativeCatalogue({...records,counts,sourceHash,filter,generation:records.storeGeneration},report,records);
     }

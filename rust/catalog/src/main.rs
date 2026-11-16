@@ -64,12 +64,12 @@ fn serve<Q: serde::de::DeserializeOwned, R: Serialize>(
 }
 
 fn run(args: &[OsString]) -> Result<()> {
-    const USAGE: &str = "usage: inpx-catalog <build|shelves|serve-shelves|build-lookup|seal-lookup|lookup|build-book|build-index|build-number-index|book-identities|build-store|store|prepare-update|service-cache|access-store|progress-journal|backup-zip|backup-vault|book-archive|book-batch|book-cache|isbn-store|credentials> <path>";
+    const USAGE: &str = "usage: inpx-catalog <build|shelves|serve-shelves|build-lookup|seal-lookup|lookup|build-book|build-index|build-number-index|book-identities|build-store|store|count-book-files|prepare-update|catalogue-lock|service-cache|access-store|progress-journal|backup-zip|backup-vault|book-archive|book-batch|book-cache|isbn-store|credentials|kosync> <path>";
     let [command, path] = args else {
         return Err(USAGE.into());
     };
-    let input = io::stdin().lock();
     let path = Path::new(path);
+    let input = io::stdin().lock();
     if command == "build" || command == "build-lookup" {
         let mut lines = input.lines();
         let first = lines.next().ok_or("missing catalog header")??;
@@ -114,6 +114,17 @@ fn run(args: &[OsString]) -> Result<()> {
     } else if command == "store" {
         let store = BookStore::open(path)?;
         serve(input, |request| store.query(request))?;
+    } else if command == "count-book-files" {
+        #[derive(Deserialize)]
+        struct CountsRequest {
+            generation: String,
+        }
+        let store = BookStore::open_low_memory(path)?;
+        serve(input, |request: CountsRequest| {
+            store.count_files(&request.generation)
+        })?;
+    } else if command == "catalogue-lock" {
+        inpx_catalog::catalogue_lock::serve(input, BufWriter::new(io::stdout().lock()))?;
     } else if command == "service-cache" {
         let cache = inpx_catalog::service_cache::ServiceCache::open(path)?;
         serve(input, |request| cache.query(request))?;
@@ -139,6 +150,8 @@ fn run(args: &[OsString]) -> Result<()> {
         inpx_catalog::book_batch::serve(input, BufWriter::new(io::stdout().lock()))?;
     } else if command == "book-cache" {
         inpx_catalog::book_cache::serve(input, BufWriter::new(io::stdout().lock()))?;
+    } else if command == "kosync" {
+        inpx_catalog::kosync::serve(input, BufWriter::new(io::stdout().lock()))?;
     } else if command == "isbn-store" {
         inpx_catalog::isbn_store::serve(input, BufWriter::new(io::stdout().lock()))?;
     } else if command == "build-store" {
