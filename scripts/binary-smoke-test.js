@@ -75,7 +75,8 @@ async function createFixture(dir, {nativeJxlCover = false} = {}) {
     let rows = row.join('\x04') + '\n';
     const books = new yazl.ZipFile();
     const bookDone = require('stream/promises').pipeline(books.outputStream, fs.createWriteStream(path.join(dir, 'smoke.zip')));
-    const png = (await fs.readFile(path.join(__dirname, '../client/assets/pwa-icon-192.png'))).toString('base64');
+    // Keep the 1×1 fixture distinct from the JXL cover and decodable by fb2cng.
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
     books.addBuffer(Buffer.from('<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>Packaged smoke book</book-title><coverpage><image l:href="#cover"/></coverpage><lang>en</lang></title-info></description><body><section><p>Smoke text</p><p>Second paragraph for reader synchronization.</p><image l:href="#illustration"/></section></body><binary id="illustration" content-type="image/png">'+png+'</binary><binary id="cover" content-type="image/png">'+png+'</binary></FictionBook>'), '1.fb2');
     if (process.env.INPX_SMOKE_EPUB === 'true') {
         const epubFile = path.join(dir, 'original.epub'); await require('./epub-fb2-tests').fixture(epubFile);
