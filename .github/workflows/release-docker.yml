@@ -13,10 +13,11 @@ on:
         description: Update Docker Hub description without rebuilding images
         type: boolean
         default: false
-      rust_only:
-        description: Rebuild only the standalone Rust preview for this tag
-        type: boolean
-        default: false
+      component:
+        description: Image to rebuild for this tag
+        type: choice
+        options: [all, web, rust, silero]
+        default: all
       cleanup_old_rc:
         description: Delete old RC tags, keeping the two latest RC versions and all stable tags
         type: boolean
@@ -38,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: ${{ fromJSON(inputs.rust_only && '["rust"]' || '["web","rust","silero"]') }}
+        component: ${{ fromJSON(inputs.component && inputs.component != 'all' && format('["{0}"]', inputs.component) || '["web","rust","silero"]') }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -84,6 +85,11 @@ jobs:
           if [ "$COMPONENT" = 'rust' ]; then args+=(--build-arg INPX_SERVER_RUNTIME=rust); fi
           revision=$(git rev-parse HEAD)
           docker build "${args[@]}" --label "org.opencontainers.image.revision=$revision" -t "$IMAGE" "$CONTEXT"
+      - name: Load the corrected package smoke test for this rebuild
+        if: github.event_name == 'workflow_dispatch' && inputs.component == matrix.component && matrix.component != 'silero'
+        run: |
+          git fetch --no-tags origin "$GITHUB_WORKFLOW_SHA"
+          git show "$GITHUB_WORKFLOW_SHA:scripts/binary-smoke-test.js" > scripts/binary-smoke-test.js
       - name: Test packaged web application
         if: matrix.component == 'web'
         env:
@@ -96,13 +102,7 @@ jobs:
         env:
           IMAGE: ${{ steps.version.outputs.image }}
           INPX_SMOKE_EPUB: 'true'
-          RUST_ONLY: ${{ inputs.rust_only }}
-        run: |
-          if [ "$RUST_ONLY" = 'true' ]; then
-            git fetch --no-tags origin "$GITHUB_WORKFLOW_SHA"
-            git show "$GITHUB_WORKFLOW_SHA:scripts/binary-smoke-test.js" > scripts/binary-smoke-test.js
-          fi
-          node scripts/binary-smoke-test.js --image "$IMAGE" --rust
+        run: node scripts/binary-smoke-test.js --image "$IMAGE" --rust
       - name: Test image fb2cng and MOBI conversion
         if: matrix.component == 'web'
         env:
@@ -142,7 +142,7 @@ jobs:
   promote-stable:
     name: Promote stable image to latest
     needs: publish
-    if: (github.event_name != 'workflow_dispatch' || (!inputs.metadata_only && !inputs.rust_only)) && !contains(github.event.inputs.tag || github.ref_name, '-')
+    if: (github.event_name != 'workflow_dispatch' || (!inputs.metadata_only && inputs.component == 'all')) && !contains(github.event.inputs.tag || github.ref_name, '-')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
