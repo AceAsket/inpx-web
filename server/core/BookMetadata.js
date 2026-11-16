@@ -267,4 +267,4 @@ class BookMetadata {
     }
 }
 
-module.exports = {BookMetadata, fb2Metadata, epubMetadata, plainText, isbnFromData};
+module.exports = {BookMetadata, fb2Metadata, epubMetadata, legacyEpubMetadata, plainText, isbnFromData};

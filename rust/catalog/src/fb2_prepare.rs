@@ -5,7 +5,8 @@ use std::ops::Range;
 use std::path::Path;
 
 use encoding_rs::{
-    Encoding, IBM866, ISO_8859_5, KOI8_R, KOI8_U, UTF_16BE, UTF_16LE, WINDOWS_1251, X_MAC_CYRILLIC,
+    Encoding, IBM866, ISO_8859_5, KOI8_R, KOI8_U, UTF_16BE, UTF_16LE, WINDOWS_1250, WINDOWS_1251,
+    WINDOWS_1252, WINDOWS_1254, X_MAC_CYRILLIC,
 };
 use memchr::{memchr, memchr_iter};
 use serde::Serialize;
@@ -85,9 +86,25 @@ fn declared_encoding(name: &str, bytes: &[u8]) -> Option<&'static Encoding> {
         .filter(char::is_ascii_alphanumeric)
         .map(|ch| ch.to_ascii_lowercase())
         .collect();
+    // iconv-lite and encoding_rs treat undefined Windows code-page bytes differently.
+    let is_defined = |undefined: &[u8]| undefined.iter().all(|byte| memchr(*byte, bytes).is_none());
     Some(match key.as_str() {
-        // iconv-lite represents the undefined byte 0x98 as a replacement character.
-        "windows1251" | "cp1251" | "win1251" | "1251" if !bytes.contains(&0x98) => WINDOWS_1251,
+        "windows1250" | "cp1250" | "win1250" | "1250"
+            if is_defined(&[0x81, 0x83, 0x88, 0x90, 0x98]) =>
+        {
+            WINDOWS_1250
+        }
+        "windows1251" | "cp1251" | "win1251" | "1251" if is_defined(&[0x98]) => WINDOWS_1251,
+        "windows1252" | "cp1252" | "win1252" | "1252"
+            if is_defined(&[0x81, 0x8d, 0x8f, 0x90, 0x9d]) =>
+        {
+            WINDOWS_1252
+        }
+        "windows1254" | "cp1254" | "win1254" | "1254"
+            if is_defined(&[0x81, 0x8d, 0x8e, 0x8f, 0x90, 0x9d, 0x9e]) =>
+        {
+            WINDOWS_1254
+        }
         "cp866" | "ibm866" | "866" => IBM866,
         "koi8r" => KOI8_R,
         "koi8u" => KOI8_U,

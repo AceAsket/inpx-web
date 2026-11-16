@@ -298,6 +298,177 @@ async function checkFolderCatalogue(binary,directory) {
     }
 }
 
+async function checkFolderInventory(binary,directory) {
+    const {inventory,fingerprint}=require('../server/core/FolderIndexer');
+    const root=path.join(directory,'inventory');
+    const nested=path.join(root,'Подпапка');
+    const outside=path.join(directory,'outside');
+    await fs.mkdir(nested,{recursive:true});
+    await fs.mkdir(outside);
+    for (const file of ['Я.fb2','е\u0308.epub','ё.epub','note.txt','Подпапка/Alpha.FB2','Подпапка/Ёж.EpUb']) {
+        const target=path.join(root,file);
+        await fs.writeFile(target,file);
+        await fs.utimes(target,1700000000.123456,1700000000.654321);
+    }
+    await fs.writeFile(path.join(outside,'excluded.fb2'),'Outside');
+    await fs.symlink(outside,path.join(root,'junction'),process.platform==='win32'?'junction':'dir');
+    if (process.platform!=='win32') await fs.symlink(path.join(outside,'excluded.fb2'),path.join(root,'link.fb2'));
+    const original=process.env.INPX_RUST_CATALOG_BINARY;
+    delete process.env.INPX_RUST_CATALOG_BINARY;
+    try {
+        const expected=await inventory(root);
+        const expectedHash=await fingerprint({libDir:root});
+        assert.equal(expected.length,5);
+        process.env.INPX_RUST_CATALOG_BINARY=binary;
+        assert.deepEqual(await inventory(root),expected);
+        assert.equal(await fingerprint({libDir:root}),expectedHash);
+        await assert.rejects(inventory(path.join(root,'absent')));
+        const signal=AbortSignal.abort(new Error('Inventory cancelled'));
+        await assert.rejects(inventory(root,signal),/Inventory cancelled/);
+        console.log('ok native folder inventory preserves names, timestamps, fingerprint and symlink handling');
+    } finally {
+        if (original===undefined) delete process.env.INPX_RUST_CATALOG_BINARY;
+        else process.env.INPX_RUST_CATALOG_BINARY=original;
+    }
+}
+
+async function checkFolderRecordCache(binary,directory) {
+    const {FolderIndexer}=require('../server/core/FolderIndexer');
+    const libDir=path.join(directory,'record-books');
+    await fs.mkdir(path.join(libDir,'Серия'),{recursive:true});
+    const folder={id:'cached',name:'Folder',type:'folder',libDir};
+    const legacyDir=path.join(directory,'old-record-cache'), nativeDir=path.join(directory,'new-record-cache');
+    const cacheFile=dataDir=>path.join(dataDir,'folder-index','cached.json');
+    const book=(title,encoding='UTF-8')=>`<?xml version="1.0" encoding="${encoding}"?><FictionBook><description><title-info><book-title>${title}</book-title><genre>sf</genre><author><nickname>Reader &amp; Writer</nickname></author><sequence name="Same &amp; Series" number="0x10"/></title-info></description><body><p>Text</p></body></FictionBook>`;
+    const first=path.join(libDir,'Серия','one.FB2'), fallback=path.join(libDir,'two.fb2');
+    await fs.writeFile(first,book('  First &amp; original  '));
+    await fs.writeFile(fallback,Buffer.from(book('Café','ISO-8859-1'),'latin1'));
+    await fs.utimes(first,1700000000.123456,1700000000.654321);
+    const read=async (dataDir, check=()=>{})=>{
+        const rows=[];
+        await new FolderIndexer(folder,{dataDir}).parse('',()=>{},chunk=>{
+            rows.push(...chunk);
+            check();
+        });
+        return rows;
+    };
+    const original=process.env.INPX_RUST_CATALOG_BINARY;
+    delete process.env.INPX_RUST_CATALOG_BINARY;
+    try {
+        const legacy=await read(legacyDir);
+        process.env.INPX_RUST_CATALOG_BINARY=binary;
+        assert.equal(require('../server/core/RustBookArchive').executable(),binary);
+        assert.deepEqual(await read(nativeDir),legacy,'Cold Rust assembly and legacy decoding must preserve the rows');
+        assert.equal(legacy.find(row=>row.file==='one').serno,16);
+        assert.equal(legacy.find(row=>row.file==='two').title,'Café');
+
+        const cache=cacheFile(legacyDir);
+        const earlier=await fs.readFile(cache);
+        const stamp=await fs.stat(cache);
+        assert.deepEqual(await read(legacyDir),legacy,'Rust reads the existing JSON cache');
+        assert.deepEqual(await fs.readFile(cache),earlier);
+        assert.equal((await fs.stat(cache)).ino,stamp.ino);
+        assert.equal((await fs.stat(cache)).mtimeMs,stamp.mtimeMs);
+
+        await fs.writeFile(first,book('Updated title'));
+        await fs.unlink(fallback);
+        await assert.rejects(read(legacyDir,()=>{throw new Error('cancelled import');}),/cancelled import/);
+        assert.deepEqual(await fs.readFile(cache),earlier,'An unfinished import leaves the cache intact');
+        const [updated]=await read(legacyDir);
+        assert.equal(updated.title,'Updated title');
+        assert.equal(updated._uid,legacy.find(row=>row.file==='one')._uid);
+        assert.deepEqual(Object.keys(JSON.parse(await fs.readFile(cache,'utf8'))),['Серия/one.FB2']);
+        delete process.env.INPX_RUST_CATALOG_BINARY;
+        assert.deepEqual(await read(legacyDir),[updated],'Legacy reader can reuse a cache published by Rust');
+        console.log('ok Rust folder records preserve legacy rows, encoding fallback, cache reuse, and publication on success');
+    } finally {
+        if (original===undefined) delete process.env.INPX_RUST_CATALOG_BINARY;
+        else process.env.INPX_RUST_CATALOG_BINARY=original;
+    }
+}
+
+async function checkDirectFolderCatalogue(binary,directory) {
+    const dataDir=path.join(directory,'mixed-data'), libDir=path.join(directory,'mixed-loose');
+    const inpx=path.join(directory,'mixed-library.inpx');
+    await fs.mkdir(libDir);
+    const zip=new (require('yazl').ZipFile)();
+    const archive=pipeline(zip.outputStream,createWriteStream(inpx));
+    zip.addBuffer(Buffer.from(['Archive Author:','prose:','Archive book','','0','10','500','10','0','fb2','2026-10-01','en','0',''].join('\x04')+'\n'),'archive.inp');
+    zip.end();
+    await archive;
+    const book=(title,number)=>`<FictionBook><description><title-info><author><nickname>Folder Author</nickname></author><book-title>${title}</book-title><sequence name="Series" number="${number}"/></title-info></description><body><p>Text</p></body></FictionBook>`;
+    const edit=path.join(libDir,'а.FB2'), removed=path.join(libDir,'z.fb2');
+    await fs.writeFile(edit,book('Folder book','1e-7'));
+    await fs.writeFile(removed,book('Remove this','0x10'));
+    const config={...require('../server/config/base'),dataDir,libDir,lowMemoryMode:true,queryCacheEnabled:false,
+        inpxFilterFile:path.join(dataDir,'no-filter'),librarySources:[
+            {id:'loose',type:'folder',name:'Folder',libDir},
+            {id:'archive',type:'inpx',name:'Archive',libDir:directory,inpx},
+        ]};
+    const reference=path.join(dataDir,'reference'), first=path.join(dataDir,'first'), update=path.join(dataDir,'update');
+    const earlier=process.env.INPX_RUST_CATALOG_BINARY;
+    process.env.INPX_RUST_CATALOG_BINARY=binary;
+    const snapshot=async directory=>{
+        const {db,searcher}=await require('../server/core/WebWorker').prototype.openCatalogue.call({config},directory);
+        try {
+            const rows=await db.booksByIds(await db.catalogueBookIds());
+            const {stats,inpxInfo,indexUpdate,inpxHash}=searcher.dbConfig;
+            return {rows,stats,inpxInfo,inpxHash,indexUpdate};
+        } finally {try {await searcher.close();} finally {await db.unlock();}}
+    };
+    const buildDirect=async (destination,previous)=>{
+        const state={};
+        await buildIndexInWorker(config,destination,previous,frame=>Object.assign(state,frame));
+        assert.equal(state.rustUpdateWarning,undefined);
+        assert.equal(state.rustFolderCacheWarning,undefined);
+        assert.equal(state.nativeUpdate,Boolean(previous),'Both source types must use the direct compiler');
+        assert.equal(state.nativePackedLookup,true);
+        await assert.rejects(fs.stat(path.join(destination,'.folder-input')),{code:'ENOENT'});
+        await assert.rejects(fs.stat(path.join(destination,'.folder-cache')),{code:'ENOENT'});
+    };
+    try {
+        await new DbCreator({...config,indexDbPath:reference}).buildStandaloneCatalogue(()=>{});
+        await buildDirect(first,null);
+        const existing=await snapshot(reference), candidate=await snapshot(first);
+        assert.deepEqual(candidate.rows,existing.rows);
+        assert.deepEqual(candidate.stats,existing.stats);
+        assert.deepEqual(candidate.inpxInfo,existing.inpxInfo);
+        assert.equal(candidate.inpxHash,existing.inpxHash);
+        assert.equal(candidate.rows.find(row=>row.title==='Folder book').serno,1e-7);
+
+        await fs.writeFile(edit,book('Folder book updated','2.5'));
+        await fs.unlink(removed);
+        const epub=new (require('yazl').ZipFile)();
+        const epubOutput=pipeline(epub.outputStream,createWriteStream(path.join(libDir,'new.epub')));
+        epub.addBuffer(Buffer.from('<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>'),'META-INF/container.xml');
+        epub.addBuffer(Buffer.from('<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>New EPUB</dc:title><dc:creator>Folder Author</dc:creator></metadata></package>'),'book.opf');
+        epub.end();
+        await epubOutput;
+        await buildDirect(update,reference);
+        const next=await snapshot(update);
+        assert.equal(next.indexUpdate.recordsChanged,2);
+        assert.equal(next.indexUpdate.recordsRemoved,1);
+        const changed=next.rows.find(row=>row.title==='Folder book updated'), original=existing.rows.find(row=>row.title==='Folder book');
+        assert.equal(changed._uid,original._uid);
+        assert.equal(changed.id,original.id);
+        assert.equal(changed.serno,2.5);
+        assert.deepEqual(next.rows.find(row=>row.sourceId==='archive'),existing.rows.find(row=>row.sourceId==='archive'));
+        assert.equal(next.rows.find(row=>row.ext==='epub').title,'New EPUB');
+        assert.equal(changed._legacyUid,undefined);
+
+        await fs.writeFile(path.join(libDir,'legacy.fb2'),Buffer.from('<?xml version="1.0" encoding="ISO-8859-1"?>'+book('Café','0'),'latin1'));
+        const fallback=path.join(dataDir,'fallback');
+        const phases=[];
+        await buildIndexInWorker(config,fallback,update,state=>phases.push(state));
+        assert.match(phases.find(state=>state.rustUpdateWarning)?.rustUpdateWarning,/compatibility decoder: legacy\.fb2/);
+        assert.equal((await snapshot(fallback)).rows.find(row=>row.file==='legacy').title,'Café');
+        console.log('ok direct mixed-source Rust catalogue matches folder and INPX records and updates prior snapshots');
+    } finally {
+        if (earlier===undefined) delete process.env.INPX_RUST_CATALOG_BINARY;
+        else process.env.INPX_RUST_CATALOG_BINARY=earlier;
+    }
+}
+
 async function main() {
     if (!process.argv[2]) throw new Error('Usage: node scripts/rust-jemba-compat-tests.js <catalog-binary>');
     const binary = path.resolve(process.argv[2] || '');
@@ -309,6 +480,9 @@ async function main() {
         await checkIndex(binary, directory, db);
         await checkIncomplete(binary, directory);
         await checkCatalogueUpdate(binary,directory);
+        await checkFolderInventory(binary,directory);
+        await checkFolderRecordCache(binary,directory);
+        await checkDirectFolderCatalogue(binary,directory);
         await checkFolderCatalogue(binary,directory);
         console.log('ok Rust table snapshots can be queried and updated by JembaDB 5.1.7');
     } finally {

@@ -8,7 +8,7 @@ class InpxHashCreator {
         this.config = config;
     }
 
-    async getHash() {
+    async getHash(onFolderInventory) {
         const config = this.config;
 
         let inpxFilterHash = '';
@@ -16,13 +16,14 @@ class InpxHashCreator {
             inpxFilterHash = await utils.getFileHash(config.inpxFilterFile, 'sha256', 'hex');
 
         const sourceHashes = [];
-        for (const source of getEnabledLibrarySources(config)) {
+        for (const [index,source] of getEnabledLibrarySources(config).entries()) {
             const inpxFile = source.inpxFile || source.inpx;
+            const inventory = onFolderInventory && (contents => onFolderInventory(source,index,contents));
             sourceHashes.push([
                 source.id,
                 source.name,
                 source.libDir,
-                source.type === 'folder' ? await require('./FolderIndexer').fingerprint(source) : await utils.getFileHash(inpxFile, 'sha256', 'hex'),
+                source.type === 'folder' ? await require('./FolderIndexer').fingerprint(source,inventory) : await utils.getFileHash(inpxFile, 'sha256', 'hex'),
             ].join(':'));
         }
 

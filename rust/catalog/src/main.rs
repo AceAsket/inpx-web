@@ -64,7 +64,7 @@ fn serve<Q: serde::de::DeserializeOwned, R: Serialize>(
 }
 
 fn run(args: &[OsString]) -> Result<()> {
-    const USAGE: &str = "usage: inpx-catalog <build|shelves|serve-shelves|build-lookup|seal-lookup|lookup|build-book|build-index|build-number-index|book-identities|build-store|store|count-book-files|prepare-update|catalogue-lock|service-cache|access-store|progress-journal|backup-zip|backup-vault|book-archive|book-batch|book-cache|isbn-store|credentials|kosync> <path>";
+    const USAGE: &str = "usage: inpx-catalog <build|shelves|serve-shelves|build-lookup|publish-lookup|seal-lookup|lookup|build-book|build-index|build-number-index|book-identities|build-store|store|count-book-files|folder-inventory|folder-index|publish-folder-cache|prepare-update|catalogue-lock|service-cache|access-store|progress-journal|backup-zip|backup-vault|book-archive|book-batch|book-cache|isbn-store|credentials|kosync> <path>";
     let [command, path] = args else {
         return Err(USAGE.into());
     };
@@ -90,6 +90,9 @@ fn run(args: &[OsString]) -> Result<()> {
                 lines.map(|line| Ok(serde_json::from_str(&line?)?)),
             )?
         };
+        println!("{}", json!({"indexed": records}));
+    } else if command == "publish-lookup" {
+        let records = inpx_catalog::lookup_staging::publish(path, input)?;
         println!("{}", json!({"indexed": records}));
     } else if command == "shelves" {
         let request: ShelfRequest = serde_json::from_reader(input)?;
@@ -123,6 +126,15 @@ fn run(args: &[OsString]) -> Result<()> {
         serve(input, |request: CountsRequest| {
             store.count_files(&request.generation)
         })?;
+    } else if command == "folder-inventory" {
+        inpx_catalog::folder_inventory::write_inventory(
+            path,
+            BufWriter::with_capacity(128 * 1024, io::stdout().lock()),
+        )?;
+    } else if command == "folder-index" {
+        inpx_catalog::folder_index::serve(input, BufWriter::new(io::stdout().lock()))?;
+    } else if command == "publish-folder-cache" {
+        inpx_catalog::folder_index::publish_staged(path)?;
     } else if command == "catalogue-lock" {
         inpx_catalog::catalogue_lock::serve(input, BufWriter::new(io::stdout().lock()))?;
     } else if command == "service-cache" {

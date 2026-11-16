@@ -5,12 +5,18 @@ const {writeFileAtomic} = require('./FilePersistence');
 const InpxParser = require('./InpxParser');
 const Fb2Parser = require('./fb2/Fb2Parser');
 const Fb2Helper = require('./fb2/Fb2Helper');
-const {epubMetadata} = require('./BookMetadata');
+const {epubMetadata,legacyEpubMetadata} = require('./BookMetadata');
+const rustArchive = require('./RustBookArchive');
+const {executable} = require('./RustPrograms');
+const {readInventory} = require('./RustFolderInventory');
+const {readFolderRecords} = require('./RustFolderIndex');
+const runtime = require('./ResourceRuntime');
 
 // Never follow directory symlinks; a failed scan must not erase a source from the index.
-async function inventory(root) {
+async function legacyInventory(root, signal) {
     const files = [], directories = [root];
     while (directories.length) {
+        signal?.throwIfAborted();
         const dir = directories.pop();
         const entries = await fs.readdir(dir, {withFileTypes: true});
         for (const entry of entries) {
@@ -22,17 +28,38 @@ async function inventory(root) {
             }
         }
     }
+    signal?.throwIfAborted();
+    return files;
+}
+async function inventory(root, signal = runtime.signal()) {
+    const binary = executable('catalog');
+    const files = binary ? await readInventory(binary, root, signal) : await legacyInventory(root, signal);
+    return sortInventory(files);
+}
+function sortInventory(files) {
+    // The catalogue's order and fingerprint use the server's default locale.
     return files.sort((a, b) => a.relative.localeCompare(b.relative));
 }
-async function fingerprint(source) {
+async function fingerprint(source, onInventory) {
     const files = await inventory(source.libDir);
-    return crypto.createHash('sha256').update(JSON.stringify(files)).digest('hex');
+    const contents = JSON.stringify(files);
+    if (onInventory) await onInventory(contents);
+    return crypto.createHash('sha256').update(contents).digest('hex');
 }
-async function metadata(file, ext, config) {
-    if (ext === 'epub') {
-        const info = await epubMetadata(file, config);
-        return {title: info.title, author: (info.authors || []).join(','), lang: info.language, keywords: (info.tags || []).join(',')};
-    }
+function indexEpubMetadata(info) {
+    return {title:info.title,author:(info.authors || []).join(','),lang:info.language,keywords:(info.tags || []).join(',')};
+}
+async function metadata(file, ext, config = {}) {
+    if (ext === 'epub') return indexEpubMetadata(await epubMetadata(file,config));
+    const native = await rustArchive.metadata(file, null, 'folderFb2', {
+        signal:config.resourceSignal, timeoutMs:config.resourceTimeoutMs,
+    });
+    if (native !== null) return {title:native.title ?? null, author:native.author || '', genre:native.genre || '',
+        lang:native.lang ?? null, keywords:native.keywords ?? null, series:native.series || '', serno:Number(native.seriesNumber) || 0};
+    return legacyFb2Metadata(file);
+}
+
+async function legacyFb2Metadata(file) {
     const handle = await fs.open(file, 'r');
     let data;
     try {
@@ -57,11 +84,36 @@ class FolderIndexer {
     async parse(unused, onFile, onRecords) {
         const root = this.source.libDir;
         const cacheFile = path.join(this.config.dataDir, 'folder-index', `${this.source.id}.json`);
+        const signal=this.config.resourceSignal || runtime.signal();
+        const chunk = [];
+        const onInventory = async files => {
+            sortInventory(files);
+            await onFile({totalFiles:files.length});
+        };
+        let current = 0;
+        const emit = async (file,record) => {
+            chunk.push({...record});
+            await onFile({fileName:file.relative, current:++current});
+            if (chunk.length >= 1000) {await onRecords(chunk.splice(0)); await new Promise(resolve=>setImmediate(resolve));}
+        };
+        const flush = async () => {if (chunk.length) await onRecords(chunk.splice(0));};
+        const binary = executable('catalog');
+        if (binary) {
+            const config = {...this.config,resourceSignal:signal};
+            const fallback = async (file,ext) => ext === 'epub'
+                ? indexEpubMetadata(await legacyEpubMetadata(file,config)) : legacyFb2Metadata(file);
+            return readFolderRecords(binary,this.source,cacheFile,{signal,timeoutMs:config.resourceTimeoutMs},fallback,onInventory,emit,flush);
+        }
+        const files = await legacyInventory(root,signal);
+        await onInventory(files);
+        await this.parseLegacy(files,cacheFile,emit,flush);
+    }
+
+    async parseLegacy(files, cacheFile, emit, flush) {
+        const root = this.source.libDir;
         let previous = {};
         try { previous = await fs.readJson(cacheFile); } catch { /* First scan. */ }
-        const files = await inventory(root), next = {}, chunk = [];
-        await onFile({totalFiles: files.length});
-        let current = 0;
+        const next = {};
         for (const file of files) {
             const ext = path.extname(file.relative).slice(1).toLowerCase();
             const old = previous[file.relative];
@@ -78,11 +130,9 @@ class FolderIndexer {
                 for (const field of ['author', 'genre', 'series', 'lang', 'keywords']) record[field] = String(record[field] || '');
             }
             next[file.relative] = {...file, record: {...record}};
-            chunk.push({...record});
-            await onFile({fileName: file.relative, current: ++current});
-            if (chunk.length >= 1000) { await onRecords(chunk.splice(0)); await new Promise(resolve => setImmediate(resolve)); }
+            await emit(file,record);
         }
-        if (chunk.length) await onRecords(chunk);
+        await flush();
         await fs.ensureDir(path.dirname(cacheFile));
         await writeFileAtomic(cacheFile, JSON.stringify(next));
     }

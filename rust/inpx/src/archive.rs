@@ -23,6 +23,34 @@ pub struct Info {
     pub rec_struct: Vec<Field>,
 }
 
+impl Info {
+    pub fn folder(collection: String) -> Self {
+        Self {
+            collection,
+            structure: "folder".into(),
+            version: String::new(),
+            rec_struct: record_fields(DEFAULT_STRUCTURE),
+        }
+    }
+}
+
+fn record_fields(structure: &str) -> Vec<Field> {
+    let lower = structure.to_lowercase();
+    let mut fields: Vec<_> = lower.split(';').collect();
+    if !fields.contains(&"folder") {
+        fields.push("folder");
+    }
+    fields
+        .into_iter()
+        .filter_map(|field| {
+            field_type(field).map(|kind| Field {
+                field: field.into(),
+                kind,
+            })
+        })
+        .collect()
+}
+
 pub struct Archive<R> {
     zip: ZipArchive<R>,
     info: Info,
@@ -47,20 +75,7 @@ impl<R: Read + Seek> Archive<R> {
             structure = DEFAULT_STRUCTURE.into();
         }
 
-        let lower = structure.to_lowercase();
-        let mut fields: Vec<_> = lower.split(';').collect();
-        if !fields.contains(&"folder") {
-            fields.push("folder");
-        }
-        let rec_struct = fields
-            .into_iter()
-            .filter_map(|field| {
-                field_type(field).map(|kind| Field {
-                    field: field.into(),
-                    kind,
-                })
-            })
-            .collect();
+        let rec_struct = record_fields(&structure);
         Ok(Self {
             zip,
             info: Info {

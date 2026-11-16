@@ -47,6 +47,12 @@ function rankMergedBooks(matches) {
     return [...groups.values()].sort((a,b) => compareBookFields(a.row,b.row) || a.rank - b.rank).map(group => group.row);
 }
 
+function lookupIds(ids) {
+    if (!Array.isArray(ids) || ids.some(id=>!Number.isInteger(id) || id<0 || id>0xffffffff))
+        throw new Error('Invalid Rust book lookup response');
+    return new Uint32Array(ids);
+}
+
 class DbSearcher {
     constructor(config, db, dbPath = `${config.dataDir}/db`) {
         this.config = config;
@@ -201,6 +207,12 @@ class DbSearcher {
         if (!lookup) return fallback();
         const db = this.db;
         return lookup.run(async process => {
+            const windows=await process.nameWindows?.(table,ranges);
+            if (windows) {
+                const selections=windows.map(range=>({kind:'windows',ranges:[range]}));
+                const ids=await process.nameQuery('selectNameBooks',table,{selections});
+                if (ids!==null) return lookupIds(ids);
+            }
             const order = await process.labelOrder?.(table);
             const groups = order && ranges.every(([from,to]) => from.length<=1000000 && to.length<=1000000)
                 ? ranges.map(([from,to])=>nameRanges.range(order,from,to))
@@ -215,10 +227,7 @@ class DbSearcher {
                 return groups;
             `}))[0].rawResult;
             if (!groups) return fallback();
-            const ids = await process.query({op:'books', table, groups});
-            if (!Array.isArray(ids) || ids.some(id => !Number.isInteger(id) || id < 0 || id > 0xffffffff))
-                throw new Error('Invalid Rust book lookup response');
-            return new Uint32Array(ids);
+            return lookupIds(await process.query({op:'books',table,groups}));
         }, fallback);
     }
 
@@ -260,6 +269,16 @@ class DbSearcher {
                 result.push(id);
         }
         return result;
+    }
+
+    async nativeNameSelection(process,table,value,{looseTitlePrefix=false}={}) {
+        if (!process.nameQuery || value[0]==='~' || value.length>1000000 || !value.isWellFormed()) return null;
+        value=value.toLowerCase();
+        if (value[0]==='*' || value[0]==='#') return {kind:'contains',text:value.slice(1),symbol:value[0]==='#'};
+        const prefixes=looseTitlePrefix ? this.getTitleSearchPrefixCandidates(value) : [value];
+        const ranges=value[0]==='=' ? [[value.slice(1),value.slice(1)]] : prefixes.map(prefix=>[prefix,prefix+maxUtf8Char]);
+        const windows=await process.nameWindows(table,ranges);
+        return windows && {kind:'windows',ranges:windows};
     }
 
     async selectBookIds(query, {bookPredicates = false} = {}) {
@@ -315,10 +334,15 @@ class DbSearcher {
             const fallback = () => tableBookIds(table, where);
             if (!this.rustLookup) return fallback();
             return this.rustLookup.run(async process=>{
+                const selection=await this.nativeNameSelection(process,table,value,options);
+                if (selection) {
+                    const ids=await process.nameQuery('selectNameBooks',table,{selections:[selection]});
+                    if (ids!==null) return lookupIds(ids);
+                }
                 const order = await process.labelOrder?.(table);
                 if (!order || value.length>1000000) return fallback();
                 const ids = await this.namedIds(order,value,options);
-                return new Uint32Array(await process.query({op:'books',table,groups:[ids]}));
+                return lookupIds(await process.query({op:'books',table,groups:[ids]}));
             },fallback);
         };
 
@@ -522,9 +546,17 @@ class DbSearcher {
         };
         if (!this.rustLookup) return fallback();
         if (explicit || !(candidates?.size <= 32768)) return this.rustLookup.run(async process=>{
+            if (explicit) {
+                this.getWhere(query.author);
+                const selection=await this.nativeNameSelection(process,from,query.author);
+                if (selection) {
+                    const ids=await process.nameQuery('selectNames',from,{selection});
+                    if (ids!==null) return new Set(ids);
+                }
+            }
             const order = await process.labelOrder?.(from);
             if (!order) return fallback();
-            if (explicit) {this.getWhere(query.author);return new Set(await this.namedIds(order,query.author));}
+            if (explicit) return new Set(await this.namedIds(order,query.author));
             const match = search.createMatcher(query.author), selected = new Set();
             for (const [index,[id,label]] of order.labels.entries()) {
                 if (index && index%16384===0) await utils.processLoop();
@@ -599,6 +631,8 @@ class DbSearcher {
                     where: `return new Uint32Array(@all())`
                 }))[0].rawResult;
                 tableIds = this.rustLookup ? await this.rustLookup.run(async process=>{
+                    const ids=await process.nameQuery?.('selectNames',from,{selection:{kind:'all'}});
+                    if (ids!=null) return lookupIds(ids);
                     const order = await process.labelOrder?.(from);
                     return order ? new Uint32Array(order.labels.map(([id])=>id)) : fallback();
                 },fallback) : await fallback();
@@ -696,6 +730,20 @@ class DbSearcher {
             const order = await process.labelOrder(table);
             if (!order) throw new Error(`Rust catalogue names for ${table} are unavailable`);
             return {order,ids:from===undefined ? order.labels.map(([id])=>id) : nameRanges.range(order,from,to)};
+        },()=>{throw new Error(`Rust catalogue names for ${table} are unavailable`);});
+    }
+
+    async exactNameIds(table,names) {
+        const ranges=Array.from(names,value=>[value,value]);
+        return this.rustLookup.run(async process=>{
+            const windows=await process.nameWindows?.(table,ranges);
+            if (windows) {
+                const ids=await process.nameQuery('selectNames',table,{selection:{kind:'windows',ranges:windows}});
+                if (ids!==null) return ids;
+            }
+            const order=await process.labelOrder(table);
+            if (!order) throw new Error(`Rust catalogue names for ${table} are unavailable`);
+            return [...new Set(ranges.flatMap(([from,to])=>nameRanges.range(order,from,to)))];
         },()=>{throw new Error(`Rust catalogue names for ${table} are unavailable`);});
     }
 
@@ -1466,7 +1514,7 @@ class DbSearcher {
                 authorId = 0;
                 author = author.toLowerCase();
 
-                const rows = db.nativeCatalogue ? [{rawResult:(await this.nameKeys('author',author)).ids}] : await db.select({
+                const rows = db.nativeCatalogue ? [{rawResult:await this.exactNameIds('author',[author])}] : await db.select({
                     table: 'author',
                     rawResult: true,
                     where: `return Array.from(@dirtyIndexLR('value', ${db.esc(author)}, ${db.esc(author)}))`
@@ -1518,9 +1566,7 @@ class DbSearcher {
             if (seriesSet.size) {
                 //выборка серий по названиям
                 if (db.nativeCatalogue) {
-                    const {order} = await this.nameKeys('series');
-                    const ids = new Set();
-                    for (const value of seriesSet) for (const id of nameRanges.range(order,value,value)) ids.add(id);
+                    const ids=await this.exactNameIds('series',seriesSet);
                     series = (await this.readNameRows('series',ids)).map(({name,...row})=>({...row,series:name}));
                 } else series = await db.select({
                     table: 'series',
@@ -1559,7 +1605,7 @@ class DbSearcher {
             series = series.toLowerCase();
 
             //выборка серии по названию серии
-            let rows = db.nativeCatalogue ? [{rawResult:(await this.nameKeys('series',series)).ids}] : await db.select({
+            let rows = db.nativeCatalogue ? [{rawResult:await this.exactNameIds('series',[series])}] : await db.select({
                 table: 'series',
                 rawResult: true,
                 where: `return Array.from(@dirtyIndexLR('value', ${db.esc(series)}, ${db.esc(series)}))`

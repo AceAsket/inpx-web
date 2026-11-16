@@ -226,6 +226,7 @@ async function testFolderBootAndFailedRefreshKeepsIndex() {
         worker.wState = {set:patch => {state = {...state, ...patch};}, get:() => state};
         worker.logServerStats = () => {};
         worker.inpxHashCreator = new (require('../server/core/InpxHashCreator'))(config);
+        const readBooks = async () => worker.db.booksByIds(await worker.db.catalogueBookIds());
         try {
             const boot = new AbortController();
             const setState = worker.wState.set;
@@ -241,7 +242,7 @@ async function testFolderBootAndFailedRefreshKeepsIndex() {
 
             await worker.loadOrCreateDb();
             assert.strictEqual(worker.myState, 'normal');
-            const [first] = await worker.db.select({table:'book'});
+            const [first] = await readBooks();
             const original = worker.db;
 
             await fs.writeFile(path.join(config.libDir, 'one.fb2'), fb2('Первое новое название'));
@@ -250,9 +251,9 @@ async function testFolderBootAndFailedRefreshKeepsIndex() {
             assert.strictEqual(worker.recreateDb(), refresh, 'Concurrent rebuild requests join one job');
             assert.strictEqual(worker.db, original);
             assert.deepStrictEqual(await worker.getIndexStatus().then(({ready, updating}) => ({ready, updating})), {ready:true, updating:true});
-            assert.strictEqual((await worker.db.select({table:'book'})).length, 1);
+            assert.strictEqual((await readBooks()).length, 1);
             await refresh;
-            const books = await worker.db.select({table:'book'});
+            const books = await readBooks();
             assert.strictEqual(books.length, 2);
             const updated = books.find(book => book.file === first.file);
             assert.strictEqual(updated._uid, first._uid);
@@ -266,7 +267,7 @@ async function testFolderBootAndFailedRefreshKeepsIndex() {
             assert.strictEqual(worker.myState, 'normal');
             assert.strictEqual(worker.db, activeDb);
             assert.strictEqual(worker.libraryAssetGeneration, generation);
-            assert.strictEqual((await worker.db.select({table: 'book'})).length, 2, 'A failed refresh keeps the old working catalog');
+            assert.strictEqual((await readBooks()).length, 2, 'A failed refresh keeps the old working catalog');
             assert.strictEqual((await worker.getIndexStatus()).updating, false);
             assert.deepStrictEqual((await fs.readdir(config.dataDir)).filter(name => name.startsWith('db.')), []);
             await fs.remove(path.join(config.libDir, 'broken.fb2'));
@@ -285,19 +286,20 @@ async function testFolderBootAndFailedRefreshKeepsIndex() {
             await worker.recreateDb();
             assert.strictEqual(failPublication, false);
             assert.strictEqual((await worker.getIndexStatus()).ready, true);
-            assert.strictEqual((await worker.db.select({table:'book'})).length, 2, 'Reopen failure rolls back the directory swap');
+            assert.strictEqual((await readBooks()).length, 2, 'Reopen failure rolls back the directory swap');
             delete worker.openCatalogue;
 
             await worker.dbSearcher.close(); worker.dbSearcher = null; await worker.closeDb();
             await fs.move(dbPath, path.join(config.dataDir, 'db.previous'));
             await worker.loadOrCreateDb();
-            assert.strictEqual((await worker.db.select({table: 'book'})).length, 2, 'Startup recovers the previous index and serves it immediately');
+            assert.strictEqual((await readBooks()).length, 2, 'Startup recovers the previous index and serves it immediately');
             await worker.indexStartupCheck;
-            assert.strictEqual((await worker.db.select({table:'book'})).length, 3, 'Startup schedules a rebuild when the source changed');
+            assert.strictEqual((await readBooks()).length, 3, 'Startup schedules a rebuild when the source changed');
+            const damagedTable = worker.db.nativeCatalogue ? 'lookup.redb' : path.join('title','state');
             await worker.dbSearcher.close(); worker.dbSearcher = null; await worker.closeDb();
-            await fs.writeFile(path.join(config.dataDir, 'db', 'title', 'state'), '0');
+            await fs.writeFile(path.join(dbPath,damagedTable), '0');
             await worker.loadOrCreateDb();
-            const restored = await worker.db.select({table:'book'});
+            const restored = await readBooks();
             assert.strictEqual(restored.length, 3, 'A damaged auxiliary table triggers a full rebuild');
             assert.strictEqual(restored.find(book => book.file === first.file)._uid, first._uid, 'Recovery retains previous book identity');
             assert.strictEqual((await worker.dbConfig()).indexUpdate.incremental, false);

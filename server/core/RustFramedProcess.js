@@ -68,7 +68,7 @@ class RustFramedProcess {
         signal?.throwIfAborted();
         const abort = () => this.interrupt(signal.reason || Object.assign(new Error('Запрос к Rust отменён'),{code:'ABORT_ERR'}));
         signal?.addEventListener('abort',abort,{once:true});
-        const timer = setTimeout(() => this.interrupt(Object.assign(new Error('Истекло время запроса к Rust'),{code:'INPX_RESOURCE_TIMEOUT'})), timeoutMs);
+        const timer = timeoutMs === null ? undefined : setTimeout(() => this.interrupt(Object.assign(new Error('Истекло время запроса к Rust'),{code:'INPX_RESOURCE_TIMEOUT'})), timeoutMs);
         const sent = this.transmit(header,buffers);
         const received = Promise.resolve().then(() => consume(this.body()));
         let result, status;

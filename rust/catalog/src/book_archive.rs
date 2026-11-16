@@ -227,7 +227,7 @@ fn run(cache: &mut ArchiveCache, request: &Request) -> Extraction<Option<serde_j
         )
         .map(Some),
     };
-    let file = File::open(&request.source)?;
+    let mut file = File::open(&request.source)?;
     if let Some(name) = &request.name {
         let archive = cache.open(&request.source, file)?;
         let result = archive
@@ -240,17 +240,21 @@ fn run(cache: &mut ArchiveCache, request: &Request) -> Extraction<Option<serde_j
         if !metadata.is_file() {
             return Err(Failure::InvalidType);
         }
-        if let Operation::Inspect(settings) = &request.operation
-            && settings.metadata == Format::Epub
-        {
-            if settings.isbn_only && metadata.len() > settings.limit {
-                return Err(Failure::Limit);
+        if let Operation::Inspect(settings) = &request.operation {
+            match settings.metadata {
+                Format::Epub => {
+                    if settings.isbn_only && metadata.len() > settings.limit {
+                        return Err(Failure::Limit);
+                    }
+                    return book_metadata::read_epub(
+                        BufReader::with_capacity(READER_BYTES, file),
+                        settings.isbn_only,
+                    )
+                    .map(Some);
+                }
+                Format::FolderFb2 => return process(metadata.len(), &mut file),
+                Format::Fb2 => {}
             }
-            return book_metadata::read_epub(
-                BufReader::with_capacity(READER_BYTES, file),
-                settings.isbn_only,
-            )
-            .map(Some);
         }
         process(
             metadata.len(),

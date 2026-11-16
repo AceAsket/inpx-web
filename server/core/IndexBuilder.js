@@ -2,8 +2,9 @@ const fs = require('fs-extra');
 const path = require('node:path');
 const {Worker, isMainThread, parentPort, workerData} = require('node:worker_threads');
 const DbCreator = require('./DbCreator');
-const {prepareRustCatalogueUpdate} = require('./RustCatalogUpdate');
+const {prepareRustCatalogueUpdate,publishFolderCaches} = require('./RustCatalogUpdate');
 const {executable} = require('./RustLookupIndex');
+const runtime = require('./ResourceRuntime');
 
 async function buildIndex(config, dbPath, previousPath, report, signal) {
     if (await fs.pathExists(dbPath))
@@ -13,6 +14,7 @@ async function buildIndex(config, dbPath, previousPath, report, signal) {
     const prepared = await prepareRustCatalogueUpdate(creator,previousPath,dbPath,report,signal);
     if (prepared?.nativeCatalogue) {
         await creator.finishNativeCatalogue(prepared,report);
+        await publishFolderCaches(dbPath,report,signal);
         return;
     }
     if (!prepared && executable() && config.rustCompatibilityTables!==true && config.rustBookStoreEnabled!==false
@@ -73,10 +75,10 @@ if (!isMainThread && workerData?.indexBuild) {
     parentPort.on('message', message => {if (message.abort) controller.abort();});
     (async() => {
         await new (require('./AppLogger'))().init({...config, loggingEnabled:false});
-        await buildIndex(config, dbPath, previousPath, progress => {
+        await runtime.withSignal(controller.signal, () => buildIndex(config, dbPath, previousPath, progress => {
             controller.signal.throwIfAborted();
             parentPort.postMessage({progress});
-        },controller.signal);
+        },controller.signal));
         parentPort.postMessage({done:true});
     })().catch(error => parentPort.postMessage({error:error.message}))
         .finally(() => parentPort.close());

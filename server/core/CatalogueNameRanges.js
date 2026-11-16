@@ -1,11 +1,11 @@
 const collator = new Intl.Collator('en');
+const {MemoryCache} = require('./MemoryCache');
 
 function bound(order,run,key,after) {
     let left=0,right=run.length;
     while (left<right) {
         const mid = (left+right)>>>1;
-        const cmp = collator.compare(order.labels[run[mid]][1],key);
-        if (cmp<0 || after && cmp===0) left=mid+1;
+        if (goRight(order.labels[run[mid]][1],key,after)) left=mid+1;
         else right=mid;
     }
     return left;
@@ -60,4 +60,93 @@ function suggestions(order,keys,limit,maxChar) {
     return {ids:[...ids],limited};
 }
 
-module.exports = {range,suggestions};
+class NativeNameRanges {
+    constructor(process) {
+        this.process=process;
+        this.directories=new Map();
+        this.cache=new MemoryCache({bytes:4*1024*1024,entries:256});
+    }
+
+    async available() {
+        this.capabilities ||= this.process.query({op:'probe',capabilities:true}).then(result=>result?.nameRanges===true)
+            .catch(error=>{this.capabilities=null;throw error;});
+        return this.capabilities;
+    }
+
+    directory(table) {
+        if (!this.directories.has(table)) {
+            const ready=this.process.query({op:'nameDirectory',table}).then(runs=>{
+                if (runs===null) return null;
+                if (!Array.isArray(runs) || runs.some(({length,pivots})=>!Number.isSafeInteger(length) || length<0 || !Array.isArray(pivots)))
+                    throw new Error('Invalid Rust name range directory');
+                return runs.map(({length,pivots})=>({length,pivots:new Map(pivots)}));
+            }).catch(error=>{this.directories.delete(table);throw error;});
+            this.directories.set(table,ready);
+        }
+        return this.directories.get(table);
+    }
+
+    async windows(table,ranges) {
+        if (ranges.some(([from,to])=>from.length>1000000 || to.length>1000000 || !from.isWellFormed() || !to.isWellFormed())) return null;
+        if (!await this.available()) return null;
+        const requestKey=JSON.stringify([table,ranges]);
+        const resolved=this.cache.get(requestKey);
+        if (resolved) return resolved;
+        const runs=await this.directory(table);
+        if (!runs) return null;
+        const needed=new Map(), pages=new Map();
+        const boundary=(runIndex,key,after)=>{
+            const run=runs[runIndex];
+            let left=0,right=run.length;
+            while (left<right) {
+                const mid=(left+right)>>>1, label=run.pivots.get(mid);
+                if (label===undefined) break;
+                if (goRight(label,key,after)) left=mid+1;
+                else right=mid;
+            }
+            if (left===right) return {left,right};
+            const window=[runIndex,left,right];
+            const pageKey=table+':'+window.join(':');
+            if (!pages.has(pageKey) && !needed.has(pageKey)) {
+                const page=this.cache.get(pageKey);
+                if (page) pages.set(pageKey,page);
+                else needed.set(pageKey,window);
+            }
+            return {left,right,pageKey,key,after};
+        };
+        const bounds=ranges.map(([from,to])=>runs.map((_,run)=>[boundary(run,from,false),boundary(run,to,true)]));
+        const requests=[...needed];
+        for (let offset=0;offset<requests.length;offset+=32) {
+            const batch=requests.slice(offset,offset+32);
+            const labels=await this.process.query({op:'nameSlices',table,windows:batch.map(([,window])=>window)});
+            if (!Array.isArray(labels) || labels.length!==batch.length) throw new Error('Invalid Rust name label slices');
+            for (const [index,[key,[,left,right]]] of batch.entries()) {
+                const page=labels[index];
+                if (!Array.isArray(page) || page.length!==right-left || page.some(label=>typeof label!=='string'))
+                    throw new Error('Invalid Rust name label slice');
+                pages.set(key,page);
+                this.cache.set(key,page);
+            }
+        }
+        const windows=bounds.map(byRun=>byRun.map(pair=>pair.map(({left,right,pageKey,key,after})=>{
+            const start=left, page=pages.get(pageKey);
+            while (left<right) {
+                const mid=(left+right)>>>1;
+                if (goRight(page[mid-start],key,after)) left=mid+1;
+                else right=mid;
+            }
+            return left;
+        })));
+        this.cache.set(requestKey,windows);
+        return windows;
+    }
+
+    close() {this.directories.clear(); this.cache.close();}
+}
+
+function goRight(label,key,after) {
+    const cmp=collator.compare(label,key);
+    return cmp<0 || after && cmp===0;
+}
+
+module.exports = {range,suggestions,NativeNameRanges};

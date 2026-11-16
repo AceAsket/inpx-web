@@ -131,3 +131,62 @@ fn label_order_and_counts_can_be_read_without_compatibility_files() {
         json!([{"id":1,"name":"E","bookCount":3,"bookDelCount":2}])
     );
 }
+
+#[test]
+fn native_name_windows_keep_run_merge_order_and_book_intersection() {
+    let dir = tempdir().unwrap();
+    let old = dir.path().join("title");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::write(old.join("meta.0"),r#"1{"index":[{"field":"value","type":"string","unique":true,"depth":1000000,"fileName":"index1"}]}"#).unwrap();
+    std::fs::write(old.join("index1.0"),r#"1{"hash":[["?",1],["apple",2],["[apple]",3],["яблоко apple",4]],"sorted":[["?"],["[apple]","apple","яблоко apple"]],"delCount":0}"#).unwrap();
+    let file = dir.path().join("lookup.redb");
+    let rows = [
+        (1, vec![9, 1]),
+        (2, vec![4, 5]),
+        (3, vec![6, 1]),
+        (4, vec![9, 5]),
+    ];
+    build_lookup(
+        &file,
+        "test",
+        4,
+        false,
+        rows.into_iter().map(|(id, books)| {
+            Ok(serde_json::from_value(json!({
+                "table":"title","id":id,"name":id.to_string(),"bookIds":books,
+            }))?)
+        }),
+    )
+    .unwrap();
+    seal_lookup(&file, "test").unwrap();
+    let index = LookupIndex::open(&file).unwrap();
+    let get = |op| {
+        serde_json::to_value(index.query(serde_json::from_value(op).unwrap()).unwrap()).unwrap()
+    };
+    let windows = json!({"kind":"windows","ranges":[[[0,1],[0,2]]]});
+    let contains = json!({"kind":"contains","text":"apple"});
+    assert_eq!(
+        get(json!({"generation":"test","op":"probe","capabilities":true})),
+        json!({"nameRanges":true})
+    );
+    assert_eq!(
+        get(json!({"generation":"test","op":"nameSlices","table":"title","windows":[[1,0,2]]})),
+        json!([["[apple]", "apple"]])
+    );
+    assert_eq!(
+        get(json!({"generation":"test","op":"selectNames","table":"title","selection":windows})),
+        json!([3, 2, 1])
+    );
+    assert_eq!(
+        get(
+            json!({"generation":"test","op":"selectNameBooks","table":"title","selections":[windows,contains]})
+        ),
+        json!([6, 1, 4, 5, 9])
+    );
+    assert_eq!(
+        get(
+            json!({"generation":"test","op":"selectNames","table":"title","selection":{"kind":"contains","text":"apple","symbol":true}})
+        ),
+        json!([3])
+    );
+}

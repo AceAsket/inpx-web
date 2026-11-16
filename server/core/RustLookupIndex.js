@@ -4,6 +4,7 @@ const {createInterface} = require('node:readline');
 const runtime = require('./ResourceRuntime');
 const {catalogGeneration} = require('./RustShelfIndex');
 const programs = require('./RustPrograms');
+const {NativeNameRanges} = require('./CatalogueNameRanges');
 
 const fileName = 'lookup.redb';
 const maxPending = 16;
@@ -55,6 +56,16 @@ class LookupProcess {
         return this.labelOrders.get(table);
     }
 
+    nameWindows(table,ranges) {
+        this.names ||= new NativeNameRanges(this);
+        return this.names.windows(table,ranges);
+    }
+
+    async nameQuery(op,table,params) {
+        this.names ||= new NativeNameRanges(this);
+        return await this.names.available() ? this.query({op,table,...params}) : null;
+    }
+
     receive(line) {
         try {
             const {id, result, error} = JSON.parse(line);
@@ -91,6 +102,7 @@ class LookupProcess {
     fail(error) {
         if (this.failure) return;
         this.failure = error;
+        this.names?.close();
         for (const entry of this.pending.values()) entry.finish(error);
         this.lines?.close();
         this.child.stdin.destroy();

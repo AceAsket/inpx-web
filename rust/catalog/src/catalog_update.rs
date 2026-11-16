@@ -3,17 +3,20 @@ use std::fs::{self, File};
 use std::io::{self, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::time::Instant;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use inpx_reader::{Archive, Event, Info, Record};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 use serde_json::{json, value::RawValue};
 use sha2::{Digest, Sha256};
 
 use crate::Result;
 use crate::catalog_postings::{CountsSummary, Postings};
 use crate::catalog_text::{SearchProjection, field, lower, number, supported_text};
+use crate::folder_index::{CacheStaging, FolderCache};
+use crate::folder_inventory::Entry;
 use crate::jemba::write_updated_books;
 use crate::jemba_identity::{BookRows, Identity, physical_identity};
 use crate::store::{BookStore, BookStoreWriter, write_store};
@@ -46,8 +49,41 @@ pub struct UpdateRequest {
 struct Source {
     id: String,
     name: String,
-    inpx: PathBuf,
+    inpx: Option<PathBuf>,
     lib_dir: String,
+    folder: Option<FolderInput>,
+}
+
+#[derive(Deserialize)]
+struct FolderInput {
+    inventory: PathBuf,
+    cache: PathBuf,
+}
+
+struct PreparedFolder {
+    entries: Vec<Entry>,
+    cache: FolderCache,
+}
+
+impl PreparedFolder {
+    fn open(source: &Source, folder: &FolderInput) -> Result<Self> {
+        let entries: Vec<Entry> = serde_json::from_slice(&fs::read(&folder.inventory)?)?;
+        let mut cache = FolderCache::open(
+            source.lib_dir.clone(),
+            source.id.clone(),
+            folder.cache.clone(),
+        )?;
+        for entry in &entries {
+            if !cache.prepare(entry)? {
+                return Err(format!(
+                    "folder book requires a compatibility decoder: {}",
+                    entry.relative
+                )
+                .into());
+            }
+        }
+        Ok(Self { entries, cache })
+    }
 }
 
 #[derive(Serialize)]
@@ -55,7 +91,8 @@ struct Source {
 struct UpdatedSource<'a> {
     id: &'a str,
     name: &'a str,
-    inpx: &'a Path,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inpx: Option<&'a Path>,
     lib_dir: &'a str,
     info: Info,
 }
@@ -64,6 +101,8 @@ struct UpdatedSource<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSummary<'a> {
     parser_infos: Vec<UpdatedSource<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lookup_postings: Option<&'static str>,
     counts: CountsSummary,
     recs_loaded: u64,
     records_changed: usize,
@@ -248,26 +287,28 @@ impl Import<'_> {
         {
             return Err("unsupported INPX text field or Unicode version".into());
         }
+        let folder = source.folder.is_some();
         if parsed.is_empty()
-            || ["serno", "size", "del", "insno", "librate"]
+            || (!folder && !safe_integer(&row, "serno"))
+            || ["size", "del", "insno", "librate"]
                 .iter()
-                .any(|key| {
-                    row.get(*key)
-                        .and_then(serde_json::Value::as_i64)
-                        .is_none_or(|value| value.unsigned_abs() >= 1 << 53)
-                })
+                .any(|key| !safe_integer(&row, key))
         {
             return Err("unsupported INPX numeric value or UID".into());
         }
-        let identity = physical_identity(
-            &source.id,
-            field(&row, "folder"),
-            field(&row, "file"),
-            field(&row, "ext"),
-            number(&row, "insno"),
-            field(&row, "libid"),
-            field(&row, "sourcelib"),
-        )?;
+        let identity = if folder {
+            String::new()
+        } else {
+            physical_identity(
+                &source.id,
+                field(&row, "folder"),
+                field(&row, "file"),
+                field(&row, "ext"),
+                number(&row, "insno"),
+                field(&row, "libid"),
+                field(&row, "sourcelib"),
+            )?
+        };
         row.insert("sourceId".into(), source.id.as_str().into());
         row.insert("sourceName".into(), source.name.as_str().into());
         row.insert("sourceLibDir".into(), source.lib_dir.as_str().into());
@@ -317,7 +358,11 @@ impl Import<'_> {
                 id
             }
         };
-        let mut serialized = serde_json::to_string(&row)?;
+        let mut serialized = if folder {
+            serde_json::to_string(&FolderRow(&row))?
+        } else {
+            serde_json::to_string(&row)?
+        };
         let hash = format!("{:x}", Sha256::digest(serialized.as_bytes()));
         let changed =
             prior.is_none_or(|i| self.previous.books[i].hash.as_deref() != Some(hash.as_str()));
@@ -342,6 +387,41 @@ impl Import<'_> {
     }
 }
 
+fn safe_integer(row: &Record, key: &str) -> bool {
+    row.get(key)
+        .and_then(serde_json::Value::as_i64)
+        .is_some_and(|value| value.unsigned_abs() < 1 << 53)
+}
+
+struct FolderRow<'a>(&'a Record);
+
+impl Serialize for FolderRow<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in self.0 {
+            if key == "serno"
+                && let Some(number) = value.as_f64()
+            {
+                // JSON.stringify normalizes floating-point series numbers before the row is hashed.
+                let text = if number == 0.0 {
+                    "0".to_owned()
+                } else if number.abs() >= 1e21 {
+                    format!("{number:e}").replace('e', "e+")
+                } else if number.abs() < 1e-6 {
+                    format!("{number:e}")
+                } else {
+                    number.to_string()
+                };
+                let raw = RawValue::from_string(text).map_err(serde::ser::Error::custom)?;
+                map.serialize_entry(key, &raw)?;
+            } else {
+                map.serialize_entry(key, value)?;
+            }
+        }
+        map.end()
+    }
+}
+
 fn write_json_suffix(row: &mut String, hash: &str, id: u32) -> Result<()> {
     use std::fmt::Write;
     write!(row, ",\"_recordHash\":\"{hash}\",\"id\":{id}}}")?;
@@ -354,14 +434,174 @@ fn report(output: &mut impl Write, value: serde_json::Value) -> io::Result<()> {
     output.flush()
 }
 
+fn report_source(
+    output: &mut impl Write,
+    source: &Source,
+    total_files: usize,
+    current: usize,
+) -> Result<()> {
+    report(
+        output,
+        json!({"job":"load inpx","jobMessage":format!("Loading INPX: {}",source.name),"jobStep":1,
+        "sourceId":source.id,"sourceName":source.name,"totalFiles":total_files,"current":current,"progress":0}),
+    )?;
+    Ok(())
+}
+
+const ARCHIVE_BATCH_SIZE: usize = 512;
+
+enum ArchiveBatch {
+    File(String),
+    Records(Vec<Record>),
+}
+
+fn read_archive_batches(
+    mut archive: Archive<BufReader<File>>,
+    sender: SyncSender<ArchiveBatch>,
+) -> std::result::Result<Info, String> {
+    let mut batch = Vec::with_capacity(ARCHIVE_BATCH_SIZE);
+    let send = |event| {
+        sender
+            .send(event)
+            .map_err(|_| io::Error::other("catalogue importer closed"))
+    };
+    let flush = |rows: &mut Vec<_>| -> io::Result<()> {
+        if !rows.is_empty() {
+            send(ArchiveBatch::Records(std::mem::replace(
+                rows,
+                Vec::with_capacity(ARCHIVE_BATCH_SIZE),
+            )))?;
+        }
+        Ok(())
+    };
+    archive
+        .scan(|event| {
+            match event {
+                Event::File(name) => {
+                    flush(&mut batch)?;
+                    send(ArchiveBatch::File(name.to_owned()))?;
+                }
+                Event::Record(row) => {
+                    batch.push(row);
+                    if batch.len() == ARCHIVE_BATCH_SIZE {
+                        flush(&mut batch)?;
+                    }
+                }
+            }
+            Ok(())
+        })
+        .and_then(|_| flush(&mut batch))
+        .map_err(|error| error.to_string())?;
+    Ok(archive.into_info())
+}
+
+fn scan_archive(
+    source: &Source,
+    import: &mut Import<'_>,
+    store: &mut BookStoreWriter<'_>,
+    output: &mut impl Write,
+    recs_loaded: &mut u64,
+) -> Result<Info> {
+    let path = source.inpx.as_ref().ok_or("missing INPX source path")?;
+    let archive = Archive::open(BufReader::new(File::open(path)?))?;
+    let structure = archive.info().structure.to_lowercase();
+    let columns: HashSet<_> = structure.split(';').collect();
+    if !TEXT_FIELDS.iter().all(|key| columns.contains(key))
+        || columns.iter().any(|key| {
+            matches!(*key, "id" | "_uid")
+                || !key.is_empty() && key.bytes().all(|c| c.is_ascii_digit())
+        })
+    {
+        return Err("unsupported INPX structure for native update".into());
+    }
+    let total_files = archive.input_files() + 3;
+    report_source(output, source, total_files, 3)?;
+    let mut current = 3;
+    let mut last = Instant::now();
+    std::thread::scope(|scope| {
+        let (sender, receiver) = sync_channel(4);
+        let reading = scope.spawn(move || read_archive_batches(archive, sender));
+        let imported = (|| -> Result<()> {
+            for batch in &receiver {
+                match batch {
+                    ArchiveBatch::File(name) => {
+                        current += 1;
+                        if last.elapsed().as_millis() >= 125 {
+                            report(
+                                output,
+                                json!({"fileName":name,"current":current,"totalFiles":total_files,"recsLoaded":*recs_loaded,
+                                "sourceId":source.id,"sourceName":source.name,"progress":current as f64 / total_files as f64}),
+                            )?;
+                            last = Instant::now();
+                        }
+                    }
+                    ArchiveBatch::Records(rows) => {
+                        for row in rows {
+                            *recs_loaded += 1;
+                            import.add(row, source, store)?;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })();
+        drop(receiver);
+        let info = reading.join().map_err(|_| "INPX reader thread failed")?;
+        imported?;
+        info.map_err(Into::into)
+    })
+}
+
+fn scan_folder(
+    source: &Source,
+    folder: PreparedFolder,
+    import: &mut Import<'_>,
+    store: &mut BookStoreWriter<'_>,
+    output: &mut impl Write,
+    recs_loaded: &mut u64,
+    caches: &mut CacheStaging,
+) -> Result<Info> {
+    let total_files = folder.entries.len();
+    report_source(output, source, total_files, 0)?;
+    let mut last = Instant::now();
+    for (index, entry) in folder.entries.iter().enumerate() {
+        let row = serde_json::from_str(folder.cache.record(&entry.relative)?.get())?;
+        import.add(row, source, store)?;
+        *recs_loaded += 1;
+        let current = index + 1;
+        if current == total_files || last.elapsed().as_millis() >= 125 {
+            report(
+                output,
+                json!({"fileName":entry.relative,"current":current,"totalFiles":total_files,"recsLoaded":*recs_loaded,
+                "sourceId":source.id,"sourceName":source.name,"progress":current as f64 / total_files as f64}),
+            )?;
+            last = Instant::now();
+        }
+    }
+    caches.stage(folder.cache)?;
+    Ok(Info::folder(source.name.clone()))
+}
+
 pub fn prepare_update<'a>(
     directory: &Path,
     request: &'a UpdateRequest,
     mut output: impl Write,
 ) -> Result<UpdateSummary<'a>> {
     if request.sources.is_empty() {
-        return Err("missing INPX sources".into());
+        return Err("missing catalogue sources".into());
     }
+    // Check folder metadata ahead of reading previous identities or streaming large INPX archives.
+    let folders = request
+        .sources
+        .iter()
+        .map(|source| {
+            source
+                .folder
+                .as_ref()
+                .map(|folder| PreparedFolder::open(source, folder))
+                .transpose()
+        })
+        .collect::<Result<Vec<_>>>()?;
     report(
         &mut output,
         json!({"job":"previous identities","jobMessage":"Чтение идентификаторов Rust","jobStep":1,"progress":0}),
@@ -391,6 +631,7 @@ pub fn prepare_update<'a>(
         None
     };
     let previous_count = previous.books.len();
+    let mut caches = CacheStaging::new(directory);
     let mut import = Import {
         request,
         previous,
@@ -408,49 +649,27 @@ pub fn prepare_update<'a>(
         |store| {
             let mut parser_infos = Vec::new();
             let mut recs_loaded = 0;
-            for source in &request.sources {
-                let mut archive = Archive::open(BufReader::new(File::open(&source.inpx)?))?;
-                let structure = archive.info().structure.to_lowercase();
-                let columns: HashSet<_> = structure.split(';').collect();
-                if !TEXT_FIELDS.iter().all(|key| columns.contains(key))
-                    || columns.iter().any(|key| {
-                        matches!(*key, "id" | "_uid")
-                            || !key.is_empty() && key.bytes().all(|c| c.is_ascii_digit())
-                    })
-                {
-                    return Err("unsupported INPX structure for native update".into());
-                }
-                let total_files = archive.input_files() + 3;
-                report(
-                    &mut output,
-                    json!({"job":"load inpx","jobMessage":format!("Loading INPX: {}",source.name),"jobStep":1,
-            "sourceId":source.id,"sourceName":source.name,"totalFiles":total_files,"current":3,"progress":0}),
-                )?;
-                let mut current = 3;
-                let mut last = Instant::now();
-                archive.scan(|event| {
-            match event {
-                Event::File(name) => {
-                    current += 1;
-                    if last.elapsed().as_millis() >= 125 {
-                        report(&mut output,json!({"fileName":name,"current":current,"totalFiles":total_files,"recsLoaded":recs_loaded,
-                            "sourceId":source.id,"sourceName":source.name,"progress":current as f64 / total_files as f64}))?;
-                        last = Instant::now();
+            for (source, folder) in request.sources.iter().zip(folders) {
+                let info = match folder {
+                    Some(folder) => scan_folder(
+                        source,
+                        folder,
+                        &mut import,
+                        store,
+                        &mut output,
+                        &mut recs_loaded,
+                        &mut caches,
+                    )?,
+                    None => {
+                        scan_archive(source, &mut import, store, &mut output, &mut recs_loaded)?
                     }
-                }
-                Event::Record(row) => {
-                    recs_loaded += 1;
-                    import.add(row,source,store).map_err(|error| io::Error::other(error.to_string()))?;
-                }
-            }
-            Ok(())
-        })?;
+                };
                 parser_infos.push(UpdatedSource {
                     id: &source.id,
                     name: &source.name,
-                    inpx: &source.inpx,
+                    inpx: source.inpx.as_deref(),
                     lib_dir: &source.lib_dir,
-                    info: archive.into_info(),
+                    info,
                 });
             }
             report(
@@ -541,9 +760,11 @@ pub fn prepare_update<'a>(
     } else {
         posting_path.clone()
     };
-    let counts = postings.save(&posting_path, &facet_path)?;
+    let counts = postings.save(&posting_path, &facet_path, request.native_catalogue)?;
+    caches.finish()?;
     Ok(UpdateSummary {
         parser_infos,
+        lookup_postings: request.native_catalogue.then_some("packed-v1"),
         counts,
         recs_loaded,
         records_changed,

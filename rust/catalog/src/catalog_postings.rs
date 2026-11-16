@@ -10,6 +10,7 @@ use serde::Serialize;
 use crate::Result;
 use crate::catalog_files::{FileCounter, FileTotals};
 use crate::catalog_text::{field, lower, number, words};
+use crate::lookup_staging::{StagedPosting, write_table};
 
 const EMPTY: &str = "?";
 
@@ -231,7 +232,12 @@ impl Postings {
         Ok(())
     }
 
-    pub fn save(self, directory: &Path, facets: &Path) -> Result<CountsSummary> {
+    pub fn save(
+        self,
+        directory: &Path,
+        facets: &Path,
+        packed_lookup: bool,
+    ) -> Result<CountsSummary> {
         let files = self.files.finish()?;
         let genre_count = self.genre.rows.len();
         let lang_count = self.lang.rows.len();
@@ -254,7 +260,25 @@ impl Postings {
             ("title", self.title),
             ("word", self.word),
         ] {
-            write(directory, name, &table.rows)?;
+            if packed_lookup {
+                write_table(
+                    directory,
+                    name,
+                    table.rows.iter().map(|row| {
+                        let counts = row.counts.as_ref();
+                        StagedPosting {
+                            id: row.id,
+                            label: &row.value,
+                            name: counts.map_or("", |row| row.name.as_str()),
+                            active: counts.map_or(0, |row| row.book_count),
+                            deleted: counts.map_or(0, |row| row.book_del_count),
+                            books: &row.book_ids,
+                        }
+                    }),
+                )?;
+            } else {
+                write(directory, name, &table.rows)?;
+            }
         }
         for (name, table) in [
             ("genre", self.genre),

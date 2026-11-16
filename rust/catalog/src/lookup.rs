@@ -3,14 +3,16 @@ use std::collections::{HashMap, HashSet, hash_map::Entry as MapEntry};
 use std::path::{Path, PathBuf};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use redb::{Database, ReadOnlyDatabase, ReadableDatabase, ReadableTable, TableDefinition};
+use redb::{
+    Database, ReadOnlyDatabase, ReadTransaction, ReadableDatabase, ReadableTable, TableDefinition,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::book_maps::BookIds;
 use crate::index::{check_generation, publish_with_cache};
 use crate::jemba_identity::BookRows;
-use crate::lookup_order::{LabelOrder, load_order};
+use crate::lookup_order::{LabelOrder, NameRunDirectory, NameSelection, load_order};
 
 const POSTINGS: TableDefinition<(u8, u32), &[u8]> = TableDefinition::new("lookup_v1");
 const LABEL_ORDER: TableDefinition<u8, &[u8]> = TableDefinition::new("lookup_label_order_v1");
@@ -27,9 +29,9 @@ pub enum Table {
 }
 
 impl Table {
-    const ALL: [Self; 4] = [Self::Author, Self::Series, Self::Title, Self::Word];
+    pub(crate) const ALL: [Self; 4] = [Self::Author, Self::Series, Self::Title, Self::Word];
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Author => "author",
             Self::Series => "series",
@@ -71,18 +73,18 @@ pub fn seal_lookup(path: &Path, generation: &str) -> Result<usize> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Posting {
-    table: Table,
-    id: u32,
-    name: String,
+    pub(crate) table: Table,
+    pub(crate) id: u32,
+    pub(crate) name: String,
     #[serde(default)]
-    value: Option<String>,
+    pub(crate) value: Option<String>,
     #[serde(default)]
-    count: u32,
+    pub(crate) count: u32,
     #[serde(default)]
-    deleted: Option<u32>,
+    pub(crate) deleted: Option<u32>,
     #[serde(default)]
-    omit_from_book_map: bool,
-    book_ids: Vec<u32>,
+    pub(crate) omit_from_book_map: bool,
+    pub(crate) book_ids: Vec<u32>,
 }
 
 pub fn build_lookup(
@@ -214,7 +216,29 @@ pub struct LookupRequest {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum LookupQuery {
-    Probe,
+    Probe {
+        #[serde(default)]
+        capabilities: bool,
+    },
+    #[serde(rename = "nameDirectory")]
+    NameDirectory {
+        table: Table,
+    },
+    #[serde(rename = "nameSlices")]
+    NameSlices {
+        table: Table,
+        windows: Vec<[usize; 3]>,
+    },
+    #[serde(rename = "selectNames")]
+    SelectNames {
+        table: Table,
+        selection: NameSelection,
+    },
+    #[serde(rename = "selectNameBooks")]
+    SelectNameBooks {
+        table: Table,
+        selections: Vec<NameSelection>,
+    },
     Books {
         table: Table,
         groups: Vec<Vec<u32>>,
@@ -261,6 +285,13 @@ pub struct Sample {
 #[serde(untagged)]
 pub enum LookupResult {
     Probe(bool),
+    Capabilities {
+        #[serde(rename = "nameRanges")]
+        name_ranges: bool,
+    },
+    NameDirectory(Option<Vec<NameRunDirectory>>),
+    NameSlices(Option<Vec<Vec<String>>>),
+    NameIds(Option<Vec<u32>>),
     Books(Vec<u32>),
     Samples(Vec<Sample>),
     Labels(Vec<String>),
@@ -307,6 +338,7 @@ pub struct LookupIndex {
     db: ReadOnlyDatabase,
     directory: PathBuf,
     old_counts: RefCell<HashMap<Table, HashMap<u32, u32>>>,
+    orders: RefCell<HashMap<Table, Option<LabelOrder>>>,
 }
 
 impl LookupIndex {
@@ -317,7 +349,34 @@ impl LookupIndex {
                 .open_read_only(path)?,
             directory: path.parent().unwrap_or_else(|| Path::new(".")).into(),
             old_counts: RefCell::new(HashMap::new()),
+            orders: RefCell::new(HashMap::new()),
         })
+    }
+
+    fn with_order<T>(
+        &self,
+        transaction: &ReadTransaction,
+        table: Table,
+        read: impl FnOnce(Option<&LabelOrder>) -> Result<T>,
+    ) -> Result<T> {
+        let mut orders = self.orders.borrow_mut();
+        let order = match orders.entry(table) {
+            MapEntry::Occupied(entry) => entry.into_mut(),
+            MapEntry::Vacant(entry) => {
+                let persisted = match transaction.open_table(LABEL_ORDER) {
+                    Ok(data) => data
+                        .get(table.key(0).0)?
+                        .map(|row| serde_json::from_slice(row.value()))
+                        .transpose()?,
+                    Err(redb::TableError::TableDoesNotExist(_)) => None,
+                    Err(error) => return Err(error.into()),
+                };
+                entry.insert(
+                    persisted.or_else(|| load_order(&self.directory.join(table.name())).ok()),
+                )
+            }
+        };
+        read(order.as_ref())
     }
 
     pub(crate) fn postings(
@@ -361,7 +420,43 @@ impl LookupIndex {
         check_generation(&transaction, &request.generation)?;
         let data = transaction.open_table(POSTINGS)?;
         match request.query {
-            LookupQuery::Probe => Ok(LookupResult::Probe(true)),
+            LookupQuery::Probe { capabilities: true } => {
+                Ok(LookupResult::Capabilities { name_ranges: true })
+            }
+            LookupQuery::Probe {
+                capabilities: false,
+            } => Ok(LookupResult::Probe(true)),
+            LookupQuery::NameDirectory { table } => self.with_order(&transaction, table, |order| {
+                Ok(LookupResult::NameDirectory(
+                    order.map(LabelOrder::directory).transpose()?,
+                ))
+            }),
+            LookupQuery::NameSlices { table, windows } => {
+                self.with_order(&transaction, table, |order| {
+                    Ok(LookupResult::NameSlices(
+                        order.map(|order| order.slices(windows)).transpose()?,
+                    ))
+                })
+            }
+            LookupQuery::SelectNames { table, selection } => {
+                self.with_order(&transaction, table, |order| {
+                    Ok(LookupResult::NameIds(
+                        order.map(|order| order.select(selection)).transpose()?,
+                    ))
+                })
+            }
+            LookupQuery::SelectNameBooks { table, selections } => {
+                self.with_order(&transaction, table, |order| {
+                    let Some(order) = order else {
+                        return Ok(LookupResult::NameIds(None));
+                    };
+                    let groups = selections
+                        .into_iter()
+                        .map(|selection| order.select(selection))
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(LookupResult::NameIds(Some(book_ids(&data, table, groups)?)))
+                })
+            }
             LookupQuery::Books { table, groups } => {
                 Ok(LookupResult::Books(book_ids(&data, table, groups)?))
             }
@@ -394,19 +489,9 @@ impl LookupIndex {
                 }
                 Ok(LookupResult::Labels(labels))
             }
-            LookupQuery::Order { table } => {
-                let persisted = match transaction.open_table(LABEL_ORDER) {
-                    Ok(data) => data
-                        .get(table.key(0).0)?
-                        .map(|row| serde_json::from_slice(row.value()))
-                        .transpose()?,
-                    Err(redb::TableError::TableDoesNotExist(_)) => None,
-                    Err(error) => return Err(error.into()),
-                };
-                Ok(LookupResult::Order(persisted.or_else(|| {
-                    load_order(&self.directory.join(table.name())).ok()
-                })))
-            }
+            LookupQuery::Order { table } => self.with_order(&transaction, table, |order| {
+                Ok(LookupResult::Order(order.cloned()))
+            }),
             LookupQuery::Postings { table, ids } => {
                 if ids.len() > 1024 {
                     return Err("lookup postings exceed row limit".into());

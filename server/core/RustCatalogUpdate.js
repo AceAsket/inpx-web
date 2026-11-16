@@ -1,13 +1,15 @@
 const fs = require('fs-extra');
 const path = require('node:path');
-const {spawn} = require('node:child_process');
+const {execFile,spawn} = require('node:child_process');
 const {createInterface} = require('node:readline');
+const {promisify} = require('node:util');
 const {getEnabledLibrarySources} = require('./LibrarySources');
 const InpxHashCreator = require('./InpxHashCreator');
 const {executable,lookupGeneration} = require('./RustLookupIndex');
 const {preparePatch,writeStoreMarker} = require('./RustBookStoreBuild');
 
 const postingTables = ['author','series','title','word','genre','lang','del','date','librate','ext','source'];
+const runFile = promisify(execFile);
 
 async function prepare(binary, directory, request, report, signal) {
     signal?.throwIfAborted();
@@ -54,7 +56,7 @@ async function prepareRustCatalogueUpdate(creator, previousPath, destination, re
     if (!nativeCatalogue && (config.lowMemoryMode || config.fullOptimization || !previousPath || config.identityDbPath
         || require('jembadb/package.json').version !== '5.1.7')) return null;
     const sources = getEnabledLibrarySources(config);
-    if (!sources.length || sources.some(source => source.type === 'folder')) return null;
+    if (!sources.length || !nativeCatalogue && sources.some(source => source.type === 'folder')) return null;
     const identityPath = previousPath || config.identityDbPath;
     const previousNative = nativeCatalogue && identityPath && await fs.pathExists(path.join(identityPath,'catalogue.json'));
     const previousBook = !previousNative && identityPath && path.join(identityPath,'book');
@@ -68,16 +70,24 @@ async function prepareRustCatalogueUpdate(creator, previousPath, destination, re
     let publishing = false;
     try {
         const previousGeneration = await preparePatch(stage,previousPath);
-        const sourceHash = await new InpxHashCreator(config).getHash();
+        const inputs = path.join(stage,'.folder-input');
+        const nativeSources = sources.map(({id,name,inpx,inpxFile,libDir}) => ({id,name,inpx:inpxFile || inpx,libDir}));
+        const sourceHash = await new InpxHashCreator(config).getHash(async (source,index,contents) => {
+            await fs.ensureDir(inputs);
+            const inventory = path.join(inputs,`${index}.json`);
+            await fs.writeFile(inventory,contents);
+            nativeSources[index].folder = {inventory,cache:path.join(config.dataDir,'folder-index',`${source.id}.json`)};
+        });
         const generation = lookupGeneration({inpxHash:sourceHash,dbVersion:config.dbVersion,rustLookupBuiltAt:new Date().toISOString()});
         const previousCatalogueGeneration = previousNative
             ? (await fs.readJson(path.join(identityPath,'catalogue.json'))).rustBookStoreGeneration : undefined;
         const request = {previousBook:legacyBook,previousCatalogue:previousNative ? identityPath : undefined,
             previousCatalogueGeneration,previousGeneration,generation,nativeCatalogue,lowMemory:!!config.lowMemoryMode,
-            sources:sources.map(({id,name,inpx,inpxFile,libDir}) => ({id,name,inpx:inpxFile || inpx,libDir})),
+            sources:nativeSources,
             includeAuthors:filter?.includeAuthors,excludeAuthors:filter?.excludeAuthors};
         report({jobStepCount:9});
         const summary = await prepare(binary,stage,request,report,signal);
+        await fs.remove(inputs);
         await writeStoreMarker(stage,generation);
         signal?.throwIfAborted();
         publishing = true;
@@ -105,4 +115,16 @@ async function readPostings(directory, namesOnly = false) {
     return result;
 }
 
-module.exports = {prepareRustCatalogueUpdate,readPostings};
+async function publishFolderCaches(directory,report,signal) {
+    signal?.throwIfAborted();
+    const staged=path.join(directory,'.folder-cache');
+    if (!await fs.pathExists(staged)) return;
+    try {
+        await runFile(executable(),['publish-folder-cache',directory],{windowsHide:true,signal});
+    } catch (error) {
+        signal?.throwIfAborted();
+        report({rustFolderCacheWarning:error.stderr?.trim() || error.message});
+    } finally {await fs.remove(staged);}
+}
+
+module.exports = {prepareRustCatalogueUpdate,publishFolderCaches,readPostings};

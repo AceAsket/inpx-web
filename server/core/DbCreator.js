@@ -11,7 +11,7 @@ const {readPostings} = require('./RustCatalogUpdate');
 const InpxHashCreator = require('./InpxHashCreator');
 const {getEnabledLibrarySources} = require('./LibrarySources');
 const ImportWriteBudget = require('./ImportWriteBudget');
-const {buildLookup,sealLookup} = require('./RustLookupBuilder');
+const {buildLookup,buildPackedLookup,sealLookup} = require('./RustLookupBuilder');
 const {readBookSequence,writeBookSequence,writeFacets} = require('./CataloguePublication');
 const {encodeBook} = require('./BookSearchProjection');
 const {executable, fileName:lookupFileName, lookupGeneration} = require('./RustLookupIndex');
@@ -693,24 +693,31 @@ class DbCreator {
             seriesCount:fromDisk ? 0 : loaded.seriesArr.filter(realSeries).length};
         if (!fromDisk) sizes[1]=stats.seriesCount;
         report({job:'rust lookup',jobMessage:'Построение Rust-индекса поиска',jobStep:2,progress:0});
-        async function* postings() {
-            for (const [position,table] of tables.entries()) {
-                const rows=fromDisk ? await fs.readJson(path.join(directory,'.postings',table)) : loaded[`${table}Arr`];
-                if (fromDisk && rows.length!==sizes[position]) throw new Error('Rust catalogue posting count differs');
-                rows.sort(compareIndexRows);
-                for (const [index,row] of rows.entries()) {
-                    if (table!=='word') row.id=index+1;
-                    if (table==='series') {
-                        if (!fromDisk && !realSeries(row)) continue;
-                        if (fromDisk && realSeries(row)) stats.seriesCount++;
+        const lookupPath=path.join(directory,lookupFileName);
+        if (fromDisk && prepared.lookupPostings==='packed-v1') {
+            stats.seriesCount=await buildPackedLookup(executable(),lookupPath,{generation,nameCounts,compareLabels,
+                lowMemory:config.lowMemoryMode,signal:require('./ResourceRuntime').signal()});
+            report({nativePackedLookup:true});
+        } else {
+            async function* postings() {
+                for (const [position,table] of tables.entries()) {
+                    const rows=fromDisk ? await fs.readJson(path.join(directory,'.postings',table)) : loaded[`${table}Arr`];
+                    if (fromDisk && rows.length!==sizes[position]) throw new Error('Rust catalogue posting count differs');
+                    rows.sort(compareIndexRows);
+                    for (const [index,row] of rows.entries()) {
+                        if (table!=='word') row.id=index+1;
+                        if (table==='series') {
+                            if (!fromDisk && !realSeries(row)) continue;
+                            if (fromDisk && realSeries(row)) stats.seriesCount++;
+                        }
+                        yield [table,row];
                     }
-                    yield [table,row];
                 }
             }
+            const count=sizes.reduce((sum,size)=>sum+size,0);
+            await buildLookup(executable(),lookupPath,{generation,count,bookMaps:true,ordered:true,
+                lowMemory:config.lowMemoryMode,rows:postings()});
         }
-        const count=sizes.reduce((sum,size)=>sum+size,0);
-        await buildLookup(executable(),path.join(directory,lookupFileName),{generation,count,bookMaps:true,ordered:true,
-            lowMemory:config.lowMemoryMode,rows:postings()});
         if (fromDisk) await fs.remove(path.join(directory,'.postings'));
         if (config.fullOptimization) {
             report({job:'rust wide order',jobMessage:'Подготовка сортировки широких запросов',jobStep:3,progress:0});

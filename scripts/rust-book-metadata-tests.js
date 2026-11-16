@@ -99,6 +99,34 @@ async function checkLegacyIndex(directory) {
     } finally {await index.close();}
 }
 
+async function checkFolderMetadata(directory) {
+    const {metadata} = require('../server/core/FolderIndexer');
+    const fields = '<description><TITLE-INFO><genre> sf </genre><genre/>'
+        + '<author><last-name>Иванов</last-name><first-name> И. </first-name><nickname>Ignored</nickname></author>'
+        + '<author><nickname>Автор &amp; друг</nickname></author><author/>'
+        + '<book-title><![CDATA[Ignored]]> Роман &amp; повесть<!-- Split -->ignored</book-title>'
+        + '<lang> ru </lang><keywords> A, B </keywords>'
+        + '<sequence NAME="Серия &amp; книги" number="0x10"/><sequence name="Ignored" number="2"/></TITLE-INFO></description>';
+    const samples = [
+        ['utf8', fields], ['windows-1251', fields], ['cp866', fields], ['utf16-le', fields], ['utf16-be', fields],
+        ...['windows-1250','windows-1252','windows-1254'].map(encoding => [encoding, fields.replace('Иванов','Renée')]),
+        ['utf8', '<description><title-info><book-title/><book-title>Ignored</book-title></title-info><title-info><book-title>Ignored</book-title></title-info></description>'],
+        ['utf8', '<description><publish-info><book-name>Print title</book-name></publish-info></description>'],
+    ];
+    for (const [i,[encoding,description]] of samples.entries()) {
+        const file=join(directory,`folder-${i}.fb2`);
+        const bom=encoding.startsWith('utf16')?'\uFEFF':'';
+        const xml=`${bom}<?xml version="1.0" encoding="${encoding}"?><FictionBook>${description}<body><p>Текст</p></body></FictionBook>`;
+        await fs.writeFile(file,iconv.encode(xml,encoding));
+        assert(await archive.metadata(file,null,'folderFb2'), `Native reader rejected ${encoding} fixture ${i}`);
+        assert.deepEqual(await metadata(file,'fb2'),await withoutRust(()=>metadata(file,'fb2')));
+    }
+    const malformed=join(directory,'broken.fb2');
+    await fs.writeFile(malformed,'<FictionBook><body/>');
+    assert.equal(await archive.metadata(malformed,null,'folderFb2'),null);
+    await assert.rejects(metadata(malformed,'fb2'),/Не найдены метаданные FB2/);
+}
+
 async function main() {
     process.env.INPX_RUST_CATALOG_BINARY = resolve(process.argv[2]);
     await new (require('../server/core/AppLogger'))().init({loggingEnabled:false});
@@ -106,6 +134,7 @@ async function main() {
     const stop = archive.start();
     try {
         await checkMetadata(directory);
+        await checkFolderMetadata(directory);
         await checkLegacyIndex(directory);
         for (const test of require('./isbn-tests')) await test();
         console.log('Rust book metadata and ISBN storage tests passed');

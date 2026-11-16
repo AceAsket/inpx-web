@@ -12,7 +12,7 @@ use crate::epub_fb2_input::{Child, Node, parse_xml};
 use crate::fb2_prepare::{decode, js_space};
 use crate::isbn;
 
-const FB2_PREFIX: u64 = 2 * 1024 * 1024;
+pub(crate) const FB2_PREFIX: u64 = 2 * 1024 * 1024;
 const EPUB_CONTAINER: &str = "META-INF/container.xml";
 const EPUB_CONTAINER_BYTES: u64 = 1024 * 1024;
 const EPUB_PACKAGE_BYTES: u64 = 4 * 1024 * 1024;
@@ -22,6 +22,8 @@ const EPUB_PACKAGE_BYTES: u64 = 4 * 1024 * 1024;
 pub(crate) enum Format {
     Fb2,
     Epub,
+    #[serde(rename = "folderFb2")]
+    FolderFb2,
 }
 
 pub(crate) fn read_stream(
@@ -40,6 +42,7 @@ pub(crate) fn read_stream(
             limit,
             isbn_only,
         ),
+        Format::FolderFb2 => crate::folder_fb2::read(reader, limit),
         Format::Epub => {
             if size > limit {
                 return Err(Failure::Unsupported);
@@ -55,11 +58,23 @@ pub(crate) fn read_fb2(
     limit: u64,
     isbn_only: bool,
 ) -> Result<Value, Failure> {
+    static END: LazyLock<regex::bytes::Regex> =
+        LazyLock::new(|| regex::bytes::Regex::new(r"(?i-u)</description\s*>").unwrap());
     let limit = limit.min(FB2_PREFIX);
+    let parse = |text: &str| {
+        let doc = document(text.as_bytes())?;
+        doc.children
+            .into_iter()
+            .find_map(|item| match item {
+                Child::Element(node) => Some(node),
+                Child::Text(_) => None,
+            })
+            .ok_or(Failure::Unsupported)
+    };
     let description = if reader.fill_buf()?.starts_with(b"\x1f\x8b") {
-        read_description(MultiGzDecoder::new(reader), limit)?
+        read_description(MultiGzDecoder::new(reader), limit, &END, parse)?
     } else {
-        read_description(reader, limit)?
+        read_description(reader, limit, &END, parse)?
     };
     let Some(description) = description else {
         return Ok(empty(isbn_only));
@@ -87,9 +102,12 @@ pub(crate) fn read_fb2(
     }))
 }
 
-fn read_description(mut reader: impl Read, limit: u64) -> Result<Option<Node>, Failure> {
-    static END: LazyLock<regex::bytes::Regex> =
-        LazyLock::new(|| regex::bytes::Regex::new(r"(?i-u)</description\s*>").unwrap());
+pub(crate) fn read_description<T>(
+    mut reader: impl Read,
+    limit: u64,
+    end_tag: &regex::bytes::Regex,
+    parse: impl FnOnce(&str) -> Result<T, Failure>,
+) -> Result<Option<T>, Failure> {
     static START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<description\b").unwrap());
     let mut bytes = Vec::with_capacity(16 * 1024);
     let mut position = 0_usize;
@@ -103,20 +121,16 @@ fn read_description(mut reader: impl Read, limit: u64) -> Result<Option<Node>, F
             [0xff, 0xfe, ..] | [0xfe, 0xff, ..] | [b'<', 0, _, 0, ..] | [0, b'<', 0, ..]
         );
         // Search only the newly read bytes and the boundary with the prior chunk.
-        let end = END
+        let end = end_tag
             .find_at(&bytes, position.saturating_sub(22))
             .map(|m| m.end());
         if utf16 || end.is_some() {
             let content = trim_incomplete_utf8(&bytes[..end.unwrap_or(bytes.len())]);
             let text = decode(content).ok_or(Failure::Unsupported)?;
-            if let Some(end) = END.find(text.as_bytes())
+            if let Some(end) = end_tag.find(text.as_bytes())
                 && let Some(start) = START.find(&text[..end.start()])
             {
-                let document = document(text[start.start()..end.end()].as_bytes())?;
-                return Ok(document.children.into_iter().find_map(|item| match item {
-                    Child::Element(node) => Some(node),
-                    Child::Text(_) => None,
-                }));
+                return parse(&text[start.start()..end.end()]).map(Some);
             }
         }
         if count == 0 {
