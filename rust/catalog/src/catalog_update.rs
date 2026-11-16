@@ -44,20 +44,53 @@ pub struct UpdateRequest {
     exclude_authors: HashSet<String>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Source {
-    id: String,
-    name: String,
-    inpx: Option<PathBuf>,
-    lib_dir: String,
-    folder: Option<FolderInput>,
+impl UpdateRequest {
+    pub(crate) fn initial(
+        generation: String,
+        low_memory: bool,
+        sources: Vec<Source>,
+        include_authors: Option<HashSet<String>>,
+        exclude_authors: HashSet<String>,
+    ) -> Self {
+        Self {
+            previous_book: None,
+            previous_catalogue: None,
+            previous_catalogue_generation: None,
+            native_catalogue: true,
+            low_memory,
+            previous_generation: None,
+            generation,
+            sources,
+            include_authors,
+            exclude_authors,
+        }
+    }
+
+    pub(crate) fn set_previous(&mut self, directory: &Path, generation: &str, patch: bool) {
+        self.previous_catalogue = Some(directory.into());
+        self.previous_catalogue_generation = Some(generation.into());
+        self.previous_generation = patch.then(|| generation.into());
+    }
+
+    pub(crate) fn set_previous_jemba(&mut self, book_table: &Path) {
+        self.previous_book = Some(book_table.into());
+    }
 }
 
 #[derive(Deserialize)]
-struct FolderInput {
-    inventory: PathBuf,
-    cache: PathBuf,
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Source {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) inpx: Option<PathBuf>,
+    pub(crate) lib_dir: String,
+    pub(crate) folder: Option<FolderInput>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FolderInput {
+    pub(crate) inventory: PathBuf,
+    pub(crate) cache: PathBuf,
 }
 
 struct PreparedFolder {
@@ -88,25 +121,25 @@ impl PreparedFolder {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct UpdatedSource<'a> {
-    id: &'a str,
-    name: &'a str,
+pub(crate) struct UpdatedSource<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    inpx: Option<&'a Path>,
-    lib_dir: &'a str,
-    info: Info,
+    pub(crate) inpx: Option<&'a Path>,
+    pub(crate) lib_dir: &'a str,
+    pub(crate) info: Info,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateSummary<'a> {
-    parser_infos: Vec<UpdatedSource<'a>>,
+    pub(crate) parser_infos: Vec<UpdatedSource<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     lookup_postings: Option<&'static str>,
-    counts: CountsSummary,
-    recs_loaded: u64,
-    records_changed: usize,
-    records_removed: usize,
+    pub(crate) counts: CountsSummary,
+    pub(crate) recs_loaded: u64,
+    pub(crate) records_changed: usize,
+    pub(crate) records_removed: usize,
 }
 
 struct OldBook {
@@ -428,24 +461,16 @@ fn write_json_suffix(row: &mut String, hash: &str, id: u32) -> Result<()> {
     Ok(())
 }
 
-fn report(output: &mut impl Write, value: serde_json::Value) -> io::Result<()> {
-    serde_json::to_writer(&mut *output, &value)?;
-    output.write_all(b"\n")?;
-    output.flush()
-}
-
 fn report_source(
-    output: &mut impl Write,
+    output: &mut impl FnMut(serde_json::Value) -> Result<()>,
     source: &Source,
     total_files: usize,
     current: usize,
 ) -> Result<()> {
-    report(
-        output,
+    output(
         json!({"job":"load inpx","jobMessage":format!("Loading INPX: {}",source.name),"jobStep":1,
         "sourceId":source.id,"sourceName":source.name,"totalFiles":total_files,"current":current,"progress":0}),
-    )?;
-    Ok(())
+    )
 }
 
 const ARCHIVE_BATCH_SIZE: usize = 512;
@@ -499,7 +524,7 @@ fn scan_archive(
     source: &Source,
     import: &mut Import<'_>,
     store: &mut BookStoreWriter<'_>,
-    output: &mut impl Write,
+    output: &mut impl FnMut(serde_json::Value) -> Result<()>,
     recs_loaded: &mut u64,
 ) -> Result<Info> {
     let path = source.inpx.as_ref().ok_or("missing INPX source path")?;
@@ -527,8 +552,7 @@ fn scan_archive(
                     ArchiveBatch::File(name) => {
                         current += 1;
                         if last.elapsed().as_millis() >= 125 {
-                            report(
-                                output,
+                            output(
                                 json!({"fileName":name,"current":current,"totalFiles":total_files,"recsLoaded":*recs_loaded,
                                 "sourceId":source.id,"sourceName":source.name,"progress":current as f64 / total_files as f64}),
                             )?;
@@ -557,7 +581,7 @@ fn scan_folder(
     folder: PreparedFolder,
     import: &mut Import<'_>,
     store: &mut BookStoreWriter<'_>,
-    output: &mut impl Write,
+    output: &mut impl FnMut(serde_json::Value) -> Result<()>,
     recs_loaded: &mut u64,
     caches: &mut CacheStaging,
 ) -> Result<Info> {
@@ -570,8 +594,7 @@ fn scan_folder(
         *recs_loaded += 1;
         let current = index + 1;
         if current == total_files || last.elapsed().as_millis() >= 125 {
-            report(
-                output,
+            output(
                 json!({"fileName":entry.relative,"current":current,"totalFiles":total_files,"recsLoaded":*recs_loaded,
                 "sourceId":source.id,"sourceName":source.name,"progress":current as f64 / total_files as f64}),
             )?;
@@ -586,6 +609,19 @@ pub fn prepare_update<'a>(
     directory: &Path,
     request: &'a UpdateRequest,
     mut output: impl Write,
+) -> Result<UpdateSummary<'a>> {
+    prepare_update_reporting(directory, request, |value| {
+        serde_json::to_writer(&mut output, &value)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+        Ok(())
+    })
+}
+
+pub(crate) fn prepare_update_reporting<'a>(
+    directory: &Path,
+    request: &'a UpdateRequest,
+    mut output: impl FnMut(serde_json::Value) -> Result<()>,
 ) -> Result<UpdateSummary<'a>> {
     if request.sources.is_empty() {
         return Err("missing catalogue sources".into());
@@ -602,8 +638,7 @@ pub fn prepare_update<'a>(
                 .transpose()
         })
         .collect::<Result<Vec<_>>>()?;
-    report(
-        &mut output,
+    output(
         json!({"job":"previous identities","jobMessage":"Чтение идентификаторов Rust","jobStep":1,"progress":0}),
     )?;
     let rows = request
@@ -619,7 +654,12 @@ pub fn prepare_update<'a>(
             .ok_or("missing previous catalogue generation")?;
         let order = source_order(path, generation)?;
         previous = Previous::new(order.len());
-        BookStore::open(path)?.visit(|id, raw| previous.add(id, &serde_json::from_slice(raw)?))?;
+        let store = if request.low_memory {
+            BookStore::open_low_memory(path)?
+        } else {
+            BookStore::open(path)?
+        };
+        store.visit(|id, raw| previous.add(id, &serde_json::from_slice(raw)?))?;
         if previous.books.len() != order.len() {
             return Err("previous catalogue order count differs".into());
         }
@@ -672,8 +712,7 @@ pub fn prepare_update<'a>(
                     info,
                 });
             }
-            report(
-                &mut output,
+            output(
                 json!({"job":"book save","jobMessage":"Сохранение обновлённых книг Rust","jobStep":1,
         "recsLoaded":recs_loaded,"recordsChanged":import.changed_ids.len(),"progress":0}),
             )?;

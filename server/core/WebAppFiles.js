@@ -25,6 +25,11 @@ async function destination(root, name) {
 
 async function install(config, bundle) {
     const prefix = config.rootPathStatic || '';
+    const native = await require('./RustStartup').run('install-web-app', [], {
+        publicDir:config.publicDir,tempDir:config.tempDir,version:String(config.version ?? ''),
+        prefix,appDirectory,bundle:bundle.data,
+    });
+    if (native?.installed === true) return;
     const digest = crypto.createHash('sha256').update(bundle.data).digest('hex');
     const version = [config.version, prefix, digest].join(':') + (prefix ? ':prefixed-v1' : '');
     const markerFile = path.join(config.publicDir, marker);

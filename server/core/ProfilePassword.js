@@ -59,4 +59,4 @@ async function verify(stored, login, password) {
     });
 }
 
-module.exports = {hash, verify, isLegacy, legacy};
+module.exports = {hash, verify, isLegacy, legacy, maxPasswordBytes, withScrypt};

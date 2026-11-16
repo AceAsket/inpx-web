@@ -5,6 +5,8 @@ const {isWebSocketBridge} = require('./RustHttpServer');
 const text = 1, binary = 2, request = 3, close = 8, complete = 9, terminate = 10, peerClosed = 11;
 const headerSize = 5;
 const requestPrefix = 9;
+const profilePrefix = 17;
+const maxProfileUser = 128;
 const empty = Buffer.alloc(0);
 
 class BridgeClient extends EventEmitter {
@@ -24,7 +26,7 @@ class BridgeClient extends EventEmitter {
             if (!header) return;
             if (header.length !== headerSize) return this.socket.destroy();
             const kind = header[0], size = header.readUInt32LE(1);
-            if (kind === request ? size < requestPrefix || size > this.maxPayload + requestPrefix
+            if (kind === request ? size < requestPrefix || size > this.maxPayload + requestPrefix + profilePrefix + maxProfileUser
                 : kind === peerClosed ? size !== 0 : (kind !== text && kind !== binary) || size > this.maxPayload)
                 return this.socket.destroy();
             const payload = size ? this.socket.read(size) : empty;
@@ -38,11 +40,25 @@ class BridgeClient extends EventEmitter {
     }
 
     receiveRequest(payload) {
-        const validation = payload[8];
-        if (validation > 2) return this.socket.destroy();
+        const flags = payload[8];
+        if (![0,1,2,5,9,13].includes(flags)) return this.socket.destroy();
+        const validation = flags & 3;
+        const libraryAuthorized = Boolean(flags & 4);
+        let start = requestPrefix, profile;
+        if (flags & 8) {
+            if (payload.length < 26 || payload[25] > maxProfileUser) return this.socket.destroy();
+            start += profilePrefix + payload[25];
+            if (start > payload.length) return this.socket.destroy();
+            profile = {
+                revision:Number(payload.readBigUInt64LE(9)),
+                deadline:Number(payload.readBigInt64LE(17)),
+                user:payload.toString('utf8',26,start),
+            };
+        }
+        if (payload.length - start > this.maxPayload) return this.socket.destroy();
         const ticket = Buffer.from(payload.subarray(0,8));
         const done = () => {if (!this.socket.destroyed) this.write(complete,ticket);};
-        if (this.readyState === WebSocket.OPEN) this.emit('message',payload.subarray(requestPrefix),false,{validation,complete:done});
+        if (this.readyState === WebSocket.OPEN) this.emit('message',payload.subarray(start),false,{validation,libraryAuthorized,profile,complete:done});
         else done();
     }
 

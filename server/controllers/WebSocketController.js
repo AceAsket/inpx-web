@@ -10,12 +10,13 @@ const {getReaderSpeech} = require('../core/ReaderSpeech');
 const {withFileTransaction} = require('../core/FilePersistence');
 const clientProtocol = require('../core/ClientProtocol');
 const requestLimits = require('../core/RequestLimits');
+const {admission:profileAdmission} = require('../core/ProfileSessions');
 
 const cleanPeriod = 1*60*1000;//1 минута
 const closeSocketOnIdle = 5*60*1000;//5 минут
 
 class WebSocketController {
-    constructor(wss, webAccess, config, security = null) {
+    constructor(wss, webAccess, config, security = null, readingListStore) {
         this.config = config;
         this.isDevelopment = (config.branch == 'development');
         this.security = security;
@@ -23,12 +24,13 @@ class WebSocketController {
         this.webAccess = webAccess;
 
         this.workerState = new WorkerState();
-        this.webWorker = new WebWorker(config);
+        this.webWorker = new WebWorker(config, readingListStore);
         this.profileAccess = security ? new (require('../core/ProfileAccess'))(config, this.webWorker, security) : null;
 
         this.wss = wss;
         this.activeRequests = 0;
-        const onReaderChange = ({userId, bookUid}) => this.publishUserChange(userId, 'reader', bookUid);
+        const onReaderChange = ({userId, bookUid}) =>
+            this.publishUserChange(userId, 'reader', bookUid).catch(error=>log(LM_ERR,error));
         require('../core/ReaderEvents').on('change', onReaderChange);
         wss.once?.('close', () => require('../core/ReaderEvents').off('change', onReaderChange));
 
@@ -92,6 +94,7 @@ class WebSocketController {
 
             req = JSON.parse(message);
             requestLimits.checkRequest(req, messageBytes, this.config, admission?.validation);
+            if (admission?.profile) req[profileAdmission] = {...admission.profile,token:req.profileAccessToken};
             req.__startTime = Date.now();
             metricToken = runtimeMetrics.beginAction(req.action, clientProtocol.client(req.client));
             if (!req.profileAccessToken && this.security && ws.req && ws.req.securitySession && ws.req.securitySession.profileAccessToken)
@@ -103,17 +106,13 @@ class WebSocketController {
             this.send({_rok: 1}, req, ws);
 
             //access
-            if (!await this.webAccess.hasAccess(req.accessToken)) {
-                if (this.security && req.accessToken) {
-                    this.security.checkLoginRate(ws.req);
-                    this.security.recordLoginAttempt(ws.req, false);
-                }
+            const access = (!this.webAccess.closed && admission?.libraryAuthorized) || await this.webAccess.hasAccess(req.accessToken);
+            if (this.security && req.accessToken) this.security.recordSocketAccess(ws.req,access);
+            if (!access) {
                 await utils.sleep(500);
-                const salt = this.webAccess.newToken(this.security?.clientIp(ws.req) || ws.req?.socket?.remoteAddress);
+                const salt = await this.webAccess.newToken(this.security?.clientIp(ws.req) || ws.req?.socket?.remoteAddress);
                 this.send({error: 'need_access_token', salt}, req, ws);
                 return;
-            } else if (this.security && req.accessToken) {
-                this.security.recordLoginAttempt(ws.req, true);
             }
 
             if (this.security && this.isCsrfProtectedAction(req.action) && !this.security.hasValidCsrf(ws.req, req.csrfToken)) {
@@ -183,8 +182,8 @@ class WebSocketController {
                 case 'catalog-browse':
                     this.send(await this.readWithBudget(req, ws, () => this.webWorker.getCatalogDiscovery().browse(req.options)), req, ws); break;
                 case 'catalog-entity': {
-                    const id = this.webWorker.getProfileSessionUser(req.profileAccessToken);
-                    const user = id ? await this.webWorker.requireAuthorizedUser(id, req.profileAccessToken) : null;
+                    const id = await this.webWorker.getProfileSessionUser(req.profileAccessToken,req[profileAdmission]);
+                    const user = id ? await this.webWorker.requireAuthorizedUser(id, req.profileAccessToken, {profileProof:req[profileAdmission]}) : null;
                     this.send(await this.readWithBudget(req, ws, () => this.webWorker.getCatalogDiscovery().entity(req.options, user)), req, ws); break;
                 }
                 case 'mark-series-until': {
@@ -429,7 +428,7 @@ class WebSocketController {
                     throw new Error(`Action not found: ${req.action}`);
             }
             metricOk = true;
-            this.publishClientChanges(req,ws);
+            await this.publishClientChanges(req,ws).catch(error=>log(LM_ERR,error));
         } catch (e) {
             this.send({error: e.message, errorCode:e.code || e.message,
                 ...((e.retryAfterMs || e.retryAfter) ? {retryAfterMs:e.retryAfterMs || e.retryAfter * 1000} : {})}, req || {}, ws);
@@ -614,7 +613,7 @@ class WebSocketController {
         );
         config.dbConfig = await this.webWorker.dbConfig();
         config.freeAccess = this.webAccess.freeAccess;
-        const currentProfile = await this.webWorker.getCurrentUserProfile(req.userId, req.profileAccessToken);
+        const currentProfile = await this.webWorker.getCurrentUserProfile(req.userId, req.profileAccessToken,req[profileAdmission]);
         const profiles = await this.webWorker.getUserProfiles(req.userId,
             {includeTotpStatus: currentProfile.profileAuthorized && currentProfile.currentUserProfile?.isAdmin === true});
         config.userProfiles = this.profileAccess ? this.profileAccess.filterProfiles(profiles.users, req) : profiles.users;
@@ -896,7 +895,7 @@ class WebSocketController {
     }
 
     async getReadingLists(req, ws) {
-        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
+        const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken, {profileProof:req[profileAdmission]});
         const result = await this.webWorker.getReadingLists(user.id, req.bookUid, req.options || {});
         this.send(result, req, ws);
     }
@@ -999,7 +998,7 @@ class WebSocketController {
     }
 
     async getUserProfiles(req, ws) {
-        const result = await this.webWorker.getUserProfiles(req.userId, {profileAccessToken:req.profileAccessToken});
+        const result = await this.webWorker.getUserProfiles(req.userId, {profileAccessToken:req.profileAccessToken,profileProof:req[profileAdmission]});
         if (this.profileAccess)
             result.users = this.profileAccess.filterProfiles(result.users, req);
         this.send(result, req, ws);
@@ -1020,9 +1019,9 @@ class WebSocketController {
     }
 
     async resumeUserProfile(req,ws) {
-        const id=this.webWorker.getProfileSessionUser(req.profileAccessToken);
+        const id=await this.webWorker.getProfileSessionUser(req.profileAccessToken,req[profileAdmission]);
         if(!id)throw Object.assign(new Error('need_profile_login'),{code:'need_profile_login'});
-        const user=await this.webWorker.requireAuthorizedUser(id,req.profileAccessToken);
+        const user=await this.webWorker.requireAuthorizedUser(id,req.profileAccessToken,{profileProof:req[profileAdmission]});
         if(req.userId&&req.userId!==user.id)throw new Error('need_profile_login');
         if(this.security&&ws.req?.securitySession)ws.req.securitySession.profileAccessToken=req.profileAccessToken;
         ws.userId=user.id;ws.userLastActivity=Date.now();
@@ -1030,26 +1029,28 @@ class WebSocketController {
     }
 
     async subscribeClientEvents(req,ws) {
-        const user=await this.webWorker.requireAuthorizedUser(req.userId,req.profileAccessToken);
-        const enabled=this.webWorker.getProfileSessionUser(req.profileAccessToken)===user.id;
+        const user=await this.webWorker.requireAuthorizedUser(req.userId,req.profileAccessToken,{profileProof:req[profileAdmission]});
+        const enabled=await this.webWorker.getProfileSessionUser(req.profileAccessToken,req[profileAdmission])===user.id;
         ws.clientEvents=enabled?{userId:user.id,token:req.profileAccessToken}:null;
         this.send({enabled},req,ws);
     }
 
-    publishClientChanges(req,origin) {
+    async publishClientChanges(req,origin) {
         const audio=req.action==='update-audio-position';
         if(!audio&&!clientProtocol.readerChanges.has(req.action))return;
-        const id=this.webWorker.getProfileSessionUser?.(req.profileAccessToken);
+        const id=await this.webWorker.getProfileSessionUser?.(req.profileAccessToken);
         if(!id)return;
-        this.publishUserChange(id, audio ? 'audio' : 'reader', req.bookUid, origin);
+        await this.publishUserChange(id, audio ? 'audio' : 'reader', req.bookUid, origin);
     }
 
-    publishUserChange(id, kind, bookUid, origin) {
+    async publishUserChange(id, kind, bookUid, origin) {
         for(const socket of this.wss?.clients||[]) {
             if(socket===origin)continue;
             const subscription=socket.clientEvents;
             if(!subscription||subscription.userId!==id||socket.readyState!==WebSocket.OPEN)continue;
-            if(this.webWorker.getProfileSessionUser(subscription.token)!==id){socket.close(1008,'Session expired');continue;}
+            const owner = await this.webWorker.getProfileSessionUser(subscription.token);
+            if (socket.clientEvents !== subscription || socket.readyState !== WebSocket.OPEN) continue;
+            if(owner!==id){socket.close(1008,'Session expired');continue;}
             socket.lastActivity=Date.now();
             socket.send(JSON.stringify({type:'client-event',kind,bookUid:String(bookUid||'').slice(0,1024)}));
         }
@@ -1065,9 +1066,9 @@ class WebSocketController {
             indexGeneration:this.webWorker.libraryAssetGeneration||0},req,ws);
     }
 
-    readWithBudget(req,ws,work,options) {
+    async readWithBudget(req,ws,work,options) {
         if(!this.clientRequests)this.clientRequests=new (require('../core/ClientRequestBudget'))({background:2});
-        const user=this.webWorker.getProfileSessionUser?.(req.profileAccessToken);
+        const user=await this.webWorker.getProfileSessionUser?.(req.profileAccessToken,req[profileAdmission]);
         const identity=user?`profile:${user}`:`guest:${this.security?.clientIp(ws.req)||ws.req?.socket?.remoteAddress||'local'}`;
         const payload=_.omit(req,['requestId','accessToken','csrfToken','profileAccessToken','client','__startTime']);
         const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'

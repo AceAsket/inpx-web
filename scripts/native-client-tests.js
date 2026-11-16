@@ -133,7 +133,7 @@ async function testReaderEventsAreOptInProfileScopedAndExcludeTheWriter(){
         foreign=socket('foreign','foreign','foreign'),expired=socket('expired','owner','expired');
     value.wss={clients:new Set([origin,other,legacy,foreign,expired])};
     value.webWorker={getProfileSessionUser:token=>token==='valid'?'owner':token==='foreign'?'foreign':''};
-    value.publishClientChanges({action:'update-reader-progress',profileAccessToken:'valid',bookUid:'book'},origin);
+    await value.publishClientChanges({action:'update-reader-progress',profileAccessToken:'valid',bookUid:'book'},origin);
     assert.deepStrictEqual(received,[{name:'other',type:'client-event',kind:'reader',bookUid:'book'},{name:'expired',closed:true}]);
     assert(!JSON.stringify(received).includes('valid'),'Events never include authorization tokens');
 }

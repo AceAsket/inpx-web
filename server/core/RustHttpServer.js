@@ -12,6 +12,7 @@ const binaryName = programs.fileName('server');
 const prefaceLimit = 160;
 const transports = new WeakMap();
 const nativePeer = Symbol('native HTTP peer');
+const serviceApproval = Symbol('native service approval');
 const assetProbeHeader = 'x-inpx-managed-asset';
 const fileHeader = 'x-inpx-file';
 const accessHeader = 'x-inpx-request-access';
@@ -24,6 +25,8 @@ class RustHttpServer {
         this.control = new Map();
         this.deliveries = new Map();
         this.sequence = 0;
+        this.profileRevision = 0;
+        this.profileWrites = 0;
         this.sockets = new Set();
         this.listener = createServer(socket=>{
             this.sockets.add(socket);
@@ -63,10 +66,31 @@ class RustHttpServer {
         const lines = createInterface({input:child.stdout});
         lines.on('line',line=>{
             try {
-                const {port,updated,delivery,complete,websocketRejected,peer} = JSON.parse(line);
+                const {port,updated,delivery,complete,websocketRejected,peer,libraryAccess,libraryReply,
+                    profileSessions,profileReply,profileLogin,profileLoginReply,revision,result} = JSON.parse(line);
                 if (updated !== undefined && this.control.has(updated)) {
                     this.control.get(updated).resolve();
+                } else if (Number.isSafeInteger(libraryReply)) {
+                    const pending=this.control.get(libraryReply);
+                    if (typeof result?.Err === 'string') pending?.reject(new Error(result.Err));
+                    else if (result?.Ok?.state) pending?.resolve(result.Ok);
+                    else throw new Error('Некорректный ответ WebAccess');
+                } else if (Number.isSafeInteger(profileReply)) {
+                    const pending = this.control.get(profileReply);
+                    if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('Некорректная ревизия сеансов профилей');
+                    if (this.profileRevision !== null) this.profileRevision = revision;
+                    if (typeof result?.Err === 'string') pending?.reject(new Error(result.Err));
+                    else if (result && Object.hasOwn(result,'Ok')) pending?.resolve(result.Ok);
+                    else throw new Error('Некорректный ответ хранилища сеансов профилей');
+                } else if (Number.isSafeInteger(profileLoginReply)) {
+                    const pending = this.control.get(profileLoginReply);
+                    if (typeof result?.Err === 'string') pending?.reject(new Error(result.Err));
+                    else if (result?.Ok?.state) pending?.resolve(result.Ok);
+                    else throw new Error('Некорректный ответ проверки входа в профиль');
                 } else if (!this.ready && Number.isInteger(port) && port>=1 && port<=65535) {
+                    if (options.libraryAccess && libraryAccess !== true) throw new Error('Rust HTTP не поддерживает нативный WebAccess');
+                    if (options.bindProfileSessions && profileSessions !== true) throw new Error('Rust HTTP не поддерживает нативные сеансы профилей');
+                    if (options.bindProfileSessions && profileLogin !== 2) throw new Error('Rust HTTP не поддерживает нативное хранилище входа в профиль');
                     ready.resolve(port);
                 } else if (Number.isSafeInteger(delivery) && typeof complete==='boolean') {
                     this.finishDelivery(delivery,complete);
@@ -96,7 +120,8 @@ class RustHttpServer {
         child.stdin.write(JSON.stringify({
             host:config.server.host,port:Number(config.server.port),upstreamPort:this.listener.address().port,
             key:this.key,...routes,version:config.version,uptime:process.uptime(),opdsPath:config.opdsRoot,files:this.files,
-            websocket:options.websocket,
+            websocket:options.websocket,libraryAccess:options.libraryAccess,
+            profileSessions:!!options.bindProfileSessions,
             assets:options.assets && config.publicDir ? {
                 directory:resolve(config.publicDir),prefix:config.rootPathStatic || '',appDirectory,
                 metricsPath:config.metricsPath || '/metrics',
@@ -118,6 +143,48 @@ class RustHttpServer {
         const callback = this.deliveries.get(id);
         this.deliveries.delete(id);
         callback?.(complete);
+    }
+
+    libraryRequest(request) {
+        return this.stateRequest({libraryAccess:request},'WebAccess');
+    }
+
+    profileLogin(request) {
+        return this.stateRequest({profileLogin:request},'входа в профиль');
+    }
+
+    async profileRequest(operation, params) {
+        const invalidates = ['issue','close','revoke','clear'].includes(operation);
+        if (invalidates) this.profileWrites++;
+        try {
+            return await this.stateRequest({profileSession:{operation,...params}},'сеансов профилей');
+        } catch (error) {
+            if (invalidates) this.profileRevision = null;
+            throw error;
+        } finally {
+            if (invalidates) this.profileWrites--;
+        }
+    }
+
+    profileProofUser(token, proof) {
+        if (proof && proof.token === token && !this.profileWrites && proof.revision === this.profileRevision
+            && proof.deadline > Date.now()) return proof.user;
+    }
+
+    async stateRequest(command, label) {
+        await this.boot;
+        if (this.closing || this.child.exitCode !== null || this.child.signalCode !== null)
+            throw new Error('Хранилище сеансов доступа недоступно');
+        const id=++this.sequence;
+        const pending=Promise.withResolvers();
+        const timeout=setTimeout(()=>pending.reject(new Error(`Истекло время запроса ${label}`)),30000);
+        this.control.set(id,pending);
+        this.child.stdin.write(JSON.stringify({id,...command})+'\n',error=>{if (error) pending.reject(error);});
+        try {return await pending.promise;}
+        finally {
+            clearTimeout(timeout);
+            this.control.delete(id);
+        }
     }
 
     directRoutes() {
@@ -227,7 +294,10 @@ async function start(http,config,options) {
     if (!binary) return null;
     const transport = new RustHttpServer(http,options.onFailure);
     try {
-        await transport.start(binary,config,options);
+        transport.boot=transport.start(binary,config,options);
+        options.bindLibraryAccess?.(transport);
+        options.bindProfileSessions?.(transport);
+        await transport.boot;
         transports.set(config,transport);
         return transport;
     } catch (error) {
@@ -274,7 +344,26 @@ function acceptAccess(req,protocol) {
     if (marker === undefined) return false;
     delete req.headers[accessHeader];
     const revision = req.socket?.[nativePeer]?.approvedAccess;
-    return revision !== undefined && marker === `${revision}:${protocol}`;
+    if (revision === undefined) return false;
+    const prefix = `${revision}:${protocol}`;
+    if (marker === prefix) return true;
+    if (protocol !== 'http' || typeof marker !== 'string') return false;
+    if (marker === `${prefix}:metrics` || marker === `${prefix}:metadata`) {
+        req[serviceApproval] = {revision,service:marker.slice(prefix.length+1)};
+        return true;
+    }
+    const signedCover = `${prefix}:cover:`;
+    if (!marker.startsWith(signedCover)) return false;
+    const expires = Number(marker.slice(signedCover.length));
+    if (!Number.isSafeInteger(expires) || expires <= Date.now()) return false;
+    req[serviceApproval] = {revision,service:'cover',expires};
+    return true;
+}
+
+function wasServiceAuthorized(req,service) {
+    const approval = req[serviceApproval];
+    return approval?.service === service && approval.revision === req.socket?.[nativePeer]?.approvedAccess
+        && (approval.expires === undefined || approval.expires > Date.now());
 }
 
 function deliverFile(req,res,kind,file,complete) {
@@ -299,4 +388,4 @@ function deliverFile(req,res,kind,file,complete) {
     return true;
 }
 
-module.exports = {start,pauseDirectRoutes,assetProbe,opdsModelRequested,deliverFile,isWebSocketBridge,acceptAccess,binaryName};
+module.exports = {start,pauseDirectRoutes,assetProbe,opdsModelRequested,deliverFile,isWebSocketBridge,acceptAccess,wasServiceAuthorized,binaryName};

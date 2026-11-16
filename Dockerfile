@@ -2,6 +2,7 @@
 
 ARG NODE_IMAGE=node:24-bookworm-slim
 ARG RUNTIME_IMAGE=debian:bookworm-slim
+ARG INPX_SERVER_RUNTIME=node
 ARG FB2CNG_VERSION=v1.9.0
 ARG FB2CNG_ARCH=linux-amd64
 
@@ -26,9 +27,13 @@ FROM rust:1.99.1-alpine3.23 AS rust-build
 RUN apk add --no-cache build-base cmake nasm
 WORKDIR /src
 COPY rust/ ./rust/
+COPY package.json ./
+COPY server/core/genres/genresText.js ./server/core/genres/
+RUN cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
+
+FROM rust-build AS rust-auth-build
 RUN rustup target add wasm32-unknown-unknown \
     && cargo build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
-RUN cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
 
 FROM ${NODE_IMAGE} AS build-deps
 
@@ -37,15 +42,29 @@ WORKDIR /app
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
     npm ci --ignore-scripts --no-audit --no-fund
+
+FROM build-deps AS web-source
+COPY .babelrc README.md LICENSE.md ./
+COPY build/ ./build/
+COPY client/ ./client/
+COPY server/ ./server/
+COPY shared/ ./shared/
+COPY rust/catalog/config-fields.json ./rust/catalog/config-fields.json
+COPY rust/server/app-directory.json ./rust/server/app-directory.json
+
+FROM web-source AS build-node
 # Let the locked packaging dependency select and verify its matching base binary.
 RUN node -e "require('@yao-pkg/pkg-fetch').need({nodeRange:'node24',platform:'linux',arch:'x64'}).catch(error=>{console.error(error);process.exit(1)})"
 
-FROM build-deps AS build
-
-COPY . .
-COPY --from=rust-build /src/rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm /app/rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm
+COPY --from=rust-auth-build /src/rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm /app/rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm
 COPY --from=rust-build /src/rust/target/release/inpx-server /src/rust/target/release/inpx-catalog /src/rust/target/release/inpx-reader /app/rust/target/release/
 RUN npm run build:linux
+
+FROM web-source AS build-rust
+COPY --from=rust-build /src/rust/target/release/inpx-server /src/rust/target/release/inpx-catalog /src/rust/target/release/inpx-reader /app/rust/target/release/
+RUN npm run build:rust -- linux
+
+FROM build-${INPX_SERVER_RUNTIME} AS build-app
 
 FROM ${NODE_IMAGE} AS webp-tools
 
@@ -88,8 +107,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 COPY --from=webp-tools /webp-runtime/bin/dwebp /usr/local/bin/dwebp
 COPY --from=webp-tools /webp-runtime/lib/ /usr/local/lib/
-COPY --from=build /app/dist/linux/inpx-web /usr/local/bin/inpx-web
-COPY --from=build /app/dist/linux/bin/ /usr/local/bin/bin/
+COPY --from=build-app /app/dist/linux/inpx-web /usr/local/bin/inpx-web
+COPY --from=build-app /app/dist/linux/bin/ /usr/local/bin/bin/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \

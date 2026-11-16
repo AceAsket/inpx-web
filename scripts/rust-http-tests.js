@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
+const {createHash} = require('node:crypto');
 const {once} = require('node:events');
-const {mkdir,mkdtemp,rm,writeFile} = require('node:fs/promises');
+const {mkdir,mkdtemp,readFile,rm,writeFile} = require('node:fs/promises');
 const http = require('node:http');
 const net = require('node:net');
 const {tmpdir} = require('node:os');
@@ -9,8 +10,10 @@ const WebSocket = require('ws');
 const express = require('express');
 const Security = require('../server/core/Security');
 const initHealthRoutes = require('../server/core/HealthRoutes');
-const {start,pauseDirectRoutes,assetProbe} = require('../server/core/RustHttpServer');
+const audiobookshelf = require('../server/core/AudiobookshelfProvider');
+const {start,pauseDirectRoutes,assetProbe,wasServiceAuthorized} = require('../server/core/RustHttpServer');
 const {attach} = require('../server/core/WebSocketListener');
+const {ProfileTotpAttempts,attemptLimit} = require('../server/core/ProfileTotpAttempts');
 const requestLimits = require('../server/core/RequestLimits');
 const appDirectory = require('../build/appdir');
 const chunkPath = `/${appDirectory}/fixture.1234abcd.js`;
@@ -43,7 +46,7 @@ async function listen(server) {
 
 async function fixture(binary,folder,protectedRoutes = false,rootPathStatic = '',{
     serveAssets = true,nativeWebSocket = true,textOnly = false,maxPayload = 6*1024*1024,
-    websocketRequests = false,nativeAccess = true,onRequest,...overlap
+    websocketRequests = false,nativeAccess = true,onRequest,libraryAccess,bindProfileSessions,...overlap
 } = {}) {
     const publicDir = join(folder,'public');
     const config = {
@@ -55,6 +58,7 @@ async function fixture(binary,folder,protectedRoutes = false,rootPathStatic = ''
     const security=new Security(config);
     security.secret='http-security-fixture';
     let authChecks=0;
+    const serviceApprovals={metrics:0,metadata:0,cover:0};
     const verifyRequiredAuth=security.verifyRequiredAuth.bind(security);
     security.verifyRequiredAuth=req=>{authChecks++;return verifyRequiredAuth(req);};
     const app=express();
@@ -69,9 +73,15 @@ async function fixture(binary,folder,protectedRoutes = false,rootPathStatic = ''
     app.use((_req,_res,next)=>{requests++;next();});
     if (config.trustProxy) app.set('trust proxy',address=>security.isTrustedProxyAddress(address));
     app.use(security.middleware(),security.requiredAuthMiddleware());
-    if (config.metricsEnabled) app.get(config.metricsPath || '/metrics',(_req,res)=>res.send('fixture metrics'));
-    if (config.absEnabled) app.get('/api/audiobookshelf/cover',(_req,res)=>res.send('fixture cover'));
-    initHealthRoutes(app,config,{getIndexStatus:async()=>({ready:true,progress:1})},security);
+    const worker={config,getIndexStatus:async()=>({ready:true,progress:1}),getBookRecordByUid:async()=>null};
+    if (config.metricsEnabled || config.absEnabled) app.use((req,_res,next)=>{
+        for (const service of Object.keys(serviceApprovals)) {
+            if (wasServiceAuthorized(req,service)) serviceApprovals[service]++;
+        }
+        next();
+    });
+    if (config.absEnabled) audiobookshelf.init(app,config,worker,security);
+    initHealthRoutes(app,config,worker,security);
     app.get('/small',(_req,res)=>res.send('sample'));
     app.get('/peer',(req,res)=>res.json({
         ip:req.socket.remoteAddress,port:req.socket.remotePort,protocol:req.protocol,host:req.headers.host,
@@ -120,14 +130,14 @@ async function fixture(binary,folder,protectedRoutes = false,rootPathStatic = ''
         if (binary) {
             process.env.INPX_RUST_SERVER_BINARY=binary;
             const websocket=nativeWebSocket ? {maxPayload,textOnly} : undefined;
-            transport=await start(server,config,{health:true,assets:serveAssets,websocket,websocketRequests,
+            transport=await start(server,config,{health:true,assets:serveAssets,websocket,websocketRequests,libraryAccess,bindProfileSessions,
                 requestAccess:nativeAccess ? ()=>security.requestAccessPolicy() : undefined,
                 onWebSocketRejected:(reason,peer)=>security.logNativeWebSocketRejection(reason,peer),onFailure:error=>errors.push(error)});
             port=transport.port;
         } else port=await listen(server);
         return {
             config,security,transport,port,finish,streamEntered,errors,bytes,requestCount:()=>requests,
-            authChecks:()=>authChecks,
+            authChecks:()=>authChecks,serviceApprovals,
             nativeConnections:()=>nativeConnections,
             sendToClients(payload) {for (const socket of wss.clients) socket.send(payload);},
             url:`http://127.0.0.1:${port}`,
@@ -358,15 +368,13 @@ async function verifyAccess(binary,folder) {
         assert.equal(rust.authChecks(),oldChecks+1);
 
         const metrics=await request(rust,'/metrics',false,{Authorization:'Bearer fixture-metrics'});
-        assert.equal(metrics.body.toString(),'fixture metrics');
+        assert.equal(metrics.status,200);
+        assert.match(metrics.body.toString(),/inpx_web_build_info/);
         assert.equal(rust.authChecks(),oldChecks+1,'Bearer token can be checked in Rust');
-        assert.equal((await request(rust,'/metrics?token=fixture-metrics',false)).status,200);
+        assert.equal(rust.serviceApprovals.metrics,1);
         assert.equal((await request(rust,'/small',false,{Authorization:'Bearer fixture-metrics'})).status,401);
-        assert.equal((await request(rust,'/api/audiobookshelf/cover',false,{Authorization:'fixture-abs'})).status,200);
-        const expires=String(Date.now()+60000);
-        const signature=require('../server/core/AudiobookshelfProvider').coverSignature(rust.config,'fixture-book',expires);
-        assert.equal((await request(rust,`/api/audiobookshelf/cover?uid=fixture-book&expires=${expires}&signature=${signature}`,false)).status,200);
         assert.equal((await request(rust,'/small',false,{Authorization:'fixture-abs'})).status,401);
+        await verifyServiceAccess(node,rust,proxy);
 
         assert.equal((await request(rust,'/small',false,{...proxy,Connection:'keep-alive, remote-user'})).status,401);
         const update={proxyAuthHeader:'X-New-Proxy-User'};
@@ -394,6 +402,81 @@ async function verifyAccess(binary,folder) {
     console.log('ok Rust access policy, protected assets, WebSocket origins, service credentials and live policy updates');
 }
 
+function coverPath(config,uid='fixture-book',expires=String(Date.now()+60000),signature) {
+    const query = new URLSearchParams({uid,expires,signature:signature ?? audiobookshelf.coverSignature(config,uid,expires)});
+    return `${audiobookshelf.rootPath(config)}/cover?${query}`;
+}
+
+async function verifyServiceAccess(node,rust,proxy) {
+    const parity = async (path,status,headers,method,body) => {
+        for (const site of [node,rust]) {
+            const response=await request(site,path,false,headers,method);
+            assert.equal(response.status,status,`${method || 'GET'} ${path.slice(0,130)}`);
+            if (body !== undefined) assert.equal(response.body.toString(),body);
+        }
+    };
+    const prior = rust.authChecks();
+    const cover = coverPath(rust.config,'книга + [слово] / 📚');
+    const notFound = '{"error":"Book not found"}';
+    await parity('/metrics?t%6fken=+%EF%BB%BFfixture-metrics%09',200);
+    await parity(cover,404,{},'GET',notFound);
+    await parity(cover,404,{},'HEAD','');
+    await parity('/api/audiobookshelf/cover?uid=fixture-book',404,{Authorization:'fixture-abs'},'GET',notFound);
+    assert.equal(rust.authChecks(),prior,'Common service credentials must be verified by Rust');
+    assert.deepEqual(rust.serviceApprovals,{metrics:2,metadata:1,cover:2});
+
+    await parity('/metrics?token[]=fixture-metrics',200);
+    await parity('/metrics?token=fixture-metrics&token=fixture-metrics',401);
+    await parity('/metrics?token=fixture-metrics&token%5Bextra%5D=value',401);
+    await parity('/metrics?token=fixture-metrics&extra=foo%5D=bar',200);
+    await parity(coverPath(rust.config,'fixture-book',`+${Date.now()+60000}`),404,{},'GET',notFound);
+    assert.equal(rust.authChecks(),prior+5,'Legacy query shapes retain Express parsing');
+    await parity(`/metrics?${'x=&'.repeat(999)}token=fixture-metrics`,200);
+    await parity(`/metrics?${'x=&'.repeat(1000)}token=fixture-metrics`,401);
+    await parity('/metrics?token=%EF%BF',401);
+    await parity('/metrics?token=%C2%85fixture-metrics',401);
+    await parity('/metrics?token=fixture-metrics',401,{Authorization:'Bearer wrong'});
+    await parity('/small?token=fixture-metrics',401);
+    await parity(cover.replace('/cover?','/search?'),401);
+    await parity(cover,401,{},'POST');
+    await parity(`${cover}&uid=other`,401);
+    await parity(cover.replace(/signature=.+$/,'signature='+'A'.repeat(64)),401);
+    await parity(coverPath(rust.config,'📚'.repeat(129)),401);
+    await parity(coverPath(rust.config,'fixture-book',String(Date.now()-60000)),401);
+    await parity(coverPath(rust.config,'fixture-book',String(Date.now()+172800000)),401);
+    const proof = `${rust.transport.approvedAccess}:http`;
+    await parity('/metrics',401,{...proxy,'x-inpx-request-access':`${proof}:metrics`});
+    await parity('/api/audiobookshelf/cover',401,{...proxy,'x-inpx-request-access':`${proof}:metadata`});
+    await parity('/api/audiobookshelf/cover',401,{...proxy,'x-inpx-request-access':`${proof}:cover:${Date.now()+60000}`});
+
+    const update = {metricsExemptAuth:true,metricsToken:'next-metrics',absToken:'next-abs'};
+    const resume = await pauseDirectRoutes(rust.config,update);
+    for (const site of [node,rust]) Object.assign(site.config,update);
+    await parity(cover,401);
+    await resume();
+    await parity(cover,401);
+    await parity(coverPath(rust.config),404,{},'GET',notFound);
+    await parity('/metrics?token=fixture-metrics',401);
+    await parity('/metrics?token=next-metrics',200);
+}
+
+async function verifyServiceRouteOverlap(binary,folder) {
+    const config={metricsPath:'/api/audiobookshelf/cover',metricsEnabled:true,metricsToken:'fixture-metrics',
+        absEnabled:true,absToken:'fixture-abs'};
+    const site=await fixture(binary,folder,false,'',config);
+    try {
+        const metrics=await request(site,`${config.metricsPath}?token=${config.metricsToken}`,false);
+        assert.equal(metrics.status,401);
+        assert.equal(metrics.body.toString(),'{"error":"Invalid authorization token"}');
+        const cover=await request(site,coverPath(config),false);
+        assert.equal(cover.status,404);
+        assert.equal(cover.body.toString(),'{"error":"Book not found"}');
+        assert.deepEqual(site.serviceApprovals,{metrics:1,metadata:0,cover:1});
+        assert.deepEqual(site.errors,[]);
+    } finally {await site.close();}
+    console.log('ok Rust service credential scopes remain separate with overlapping routes');
+}
+
 function readRequest(message,admission,config) {
     const text=message.toString();
     let request={};
@@ -410,6 +493,241 @@ async function jsonMessage(socket,payload) {
     const response=once(socket,'message',{signal:AbortSignal.timeout(10000)});
     socket.send(typeof payload==='string' ? payload : JSON.stringify(payload));
     return JSON.parse((await response)[0]);
+}
+
+async function verifyNativeLibraryAccess(binary,folder) {
+    const password=' пароль теста 🙂 ';
+    const libraryAccess={file:join(folder,'sessions.redb'),password,timeoutMs:60_000};
+    const launch=()=>fixture(binary,folder,false,'',{libraryAccess,websocketRequests:true,
+        onRequest(socket,_message,admission) {
+            socket.send(JSON.stringify({authorized:admission.libraryAuthorized,validation:admission.validation}));
+        },
+    });
+    let site=await launch();
+    let socket;
+    const command=request=>site.transport.libraryRequest(request);
+    try {
+        socket=await openSocket(site);
+        const {salt,state}=await command({op:'issue',client:'fixture'});
+        assert.equal(state,'challenge');
+        const token=createHash('sha256').update(password+salt).digest('hex');
+        const request={action:'test',accessToken:token,libraryAuthorized:true};
+        const denied={authorized:false,validation:1};
+        const approved={authorized:true,validation:1};
+        assert.deepEqual(await jsonMessage(socket,request),denied);
+        assert.equal((await command({op:'check',token})).state,'allowed');
+        assert.deepEqual(await jsonMessage(socket,request),approved);
+        assert.deepEqual(await jsonMessage(socket,{...request,action:null}),denied);
+        assert.deepEqual(await jsonMessage(socket,`{"action":"test","accessToken":"${token}","accessToken":""}`),denied);
+        assert.deepEqual(await jsonMessage(socket,{...request,data:'1'.repeat(65536)}),denied);
+        const resume=await pauseDirectRoutes(site.config,{logQueries:true});
+        site.config.logQueries=true;
+        await resume();
+        assert.deepEqual(await jsonMessage(socket,request),approved);
+        await site.close();
+        site=await launch();
+        socket=await openSocket(site);
+        assert.deepEqual(await jsonMessage(socket,request),approved);
+        assert.equal((await command({op:'revoke',token})).state,'applied');
+        assert.deepEqual(await jsonMessage(socket,request),denied);
+        assert.equal((await command({op:'check',token})).state,'denied');
+        assert.equal((await command({op:'login',client:'fixture',password:password.trim()})).state,'denied');
+        const granted=await command({op:'login',client:'fixture',password});
+        assert.equal(granted.state,'granted');
+        assert.deepEqual(await jsonMessage(socket,{...request,accessToken:granted.token}),approved);
+        assert.deepEqual(site.errors,[]);
+    } finally {socket?.terminate();await site.close();}
+    console.log('ok native WebAccess persistence, direct WebSocket approval, duplicate token rejection and revocation');
+}
+
+async function verifyNativeProfileSessions(binary,folder) {
+    const launch = () => fixture(binary,folder,false,'',{
+        websocketRequests:true,
+        bindProfileSessions() {},
+        onRequest(socket,_message,admission) {socket.send(JSON.stringify(admission.profile ?? null));},
+    });
+    const user = 'читатель';
+    let site = await launch();
+    let socket;
+    try {
+        const token = await site.transport.profileRequest('issue',{user});
+        assert.match(token,/^[a-f0-9]{48}$/);
+        socket = await openSocket(site);
+        const payload = {action:'resume-user-profile',profileAccessToken:token};
+        const proof = await jsonMessage(socket,payload);
+        assert.equal(proof.user,user);
+        assert.equal(site.transport.profileProofUser(token,{...proof,token}),user);
+        assert.equal(await jsonMessage(socket,`{"action":"resume-user-profile","profileAccessToken":"${token}","profileAccessToken":""}`),null);
+
+        const attempts = new ProfileTotpAttempts(null,site.transport);
+        const now = Date.now();
+        for (let index=0; index<attemptLimit; index++) await attempts.failed(user,now);
+        assert.equal(await attempts.allows(user,now),false);
+        assert.equal(await attempts.allows('another-reader',now),true);
+        assert.equal(site.transport.profileProofUser(token,{...proof,token}),user);
+        await attempts.delete(user);
+        assert.equal(await attempts.allows(user,now),true);
+        for (let index=0; index<attemptLimit; index++) await attempts.failed(user,now);
+        assert.equal(await attempts.allows(user,now+5*60*1000),true);
+        for (let index=0; index<attemptLimit; index++) await attempts.failed(user,now);
+        await attempts.clear();
+        assert.equal(await attempts.allows(user,now),true);
+
+        await site.transport.profileRequest('close',{token});
+        assert.equal(site.transport.profileProofUser(token,{...proof,token}),undefined);
+        assert.equal((await jsonMessage(socket,payload)).user,'');
+
+        const beforeRestart = await site.transport.profileRequest('issue',{user});
+        await site.close();
+        site = await launch();
+        socket = await openSocket(site);
+        assert.equal(await site.transport.profileRequest('check',{token:beforeRestart}),'');
+        assert.equal((await jsonMessage(socket,{...payload,profileAccessToken:beforeRestart})).user,'');
+        assert.deepEqual(site.errors,[]);
+    } finally {
+        socket?.terminate();
+        await site.close();
+    }
+    console.log('ok native profile session proofs, revocation, restart and TOTP attempt limits');
+}
+
+async function verifyNativeProfileLogin(binary, folder) {
+    const site = await fixture(binary, folder, false, '', {bindProfileSessions() {}});
+    const WebWorker = require('../server/core/WebWorker');
+    const ReadingListStore = require('../server/core/ReadingListStore');
+    const ProfilePassword = require('../server/core/ProfilePassword');
+    const ProfileTotp = require('../server/core/ProfileTotp');
+    const SecretStore = require('../server/core/SecretStore');
+    const {writeFileAtomic} = require('../server/core/FilePersistence');
+    const config = {dataDir:folder,adminPassword:'local-http-test-fixture',adminEventLogEnabled:false};
+    const store = new ReadingListStore(config);
+    const worker = Object.assign(Object.create(WebWorker.prototype),{
+        config,myState:'normal',readingListStore:store,profileTransport:site.transport,
+    });
+    const login = 'native-reader';
+    const password = 'пароль 🤖 \0 test';
+    const denied = {code:'INPX_INVALID_PROFILE_CREDENTIALS'};
+    const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+    try {
+        const user = await store.createUser({name:'Native reader',login,passwordHash:ProfilePassword.legacy(login,password)});
+        const getCredentials = store.getProfileCredentials;
+        const saveCredentials = store.updateProfileCredentials;
+        store.getProfileCredentials = () => assert.fail('Read a current profile through the compatibility path');
+        store.updateProfileCredentials = () => assert.fail('Wrote a current profile through the compatibility path');
+        try {
+            await assert.rejects(worker.loginUserProfile(login,'wrong'),denied);
+            assert.equal((await worker.loginUserProfile(login,password)).userId,user.id);
+        } finally {
+            store.getProfileCredentials = getCredentials;
+            store.updateProfileCredentials = saveCredentials;
+        }
+        assert.match((await store.getProfileCredentials(user.id)).passwordHash,/^scrypt:v1:/);
+
+        const admin = await worker.loginUserProfile('admin',config.adminPassword);
+        await worker.setUserProfileTotpRequired(admin.userId,admin.profileAccessToken,user.id,true,config.adminPassword);
+        await assert.rejects(worker.loginUserProfile(login,password),{code:'need_profile_otp_setup'});
+        const {state,recoveryCodes} = await ProfileTotp.enable(new SecretStore(config),user.id,secret,-1);
+        await store.updateProfileCredentials(user.id,{profileTotp:state});
+        await assert.rejects(worker.loginUserProfile(login,password),{code:'need_profile_otp'});
+        await store.updateReaderProgress(user.id,'fixture-book',{percent:0.4});
+        const journal = await readFile(store.progressFile);
+        const previous = JSON.parse(await readFile(store.file,'utf8'));
+        previous.fixtureExtra = {unknown:['preserve',17]};
+        await writeFileAtomic(store.file,JSON.stringify(previous));
+        const signIn = () => worker.loginUserProfile(login,password,recoveryCodes[0],{rememberDevice:true});
+        let concurrent;
+        store.updateProfileCredentials = () => assert.fail('Wrote a recovery code through the compatibility path');
+        try {
+            concurrent = await Promise.allSettled([signIn(),signIn()]);
+        } finally {
+            store.updateProfileCredentials = saveCredentials;
+        }
+        const accepted = concurrent.filter(result=>result.status==='fulfilled');
+        assert.equal(accepted.length,1);
+        assert.equal(accepted[0].value.userId,user.id);
+        assert.equal(accepted[0].value.trustedDeviceToken,undefined);
+        assert.equal(concurrent.find(result=>result.status==='rejected').reason.code,denied.code);
+        const committed = JSON.parse(await readFile(store.file,'utf8'));
+        assert.equal(committed.readerProgressCheckpoint,previous.readerProgressCheckpoint);
+        assert.deepEqual(committed.fixtureExtra,previous.fixtureExtra);
+        assert.deepEqual(await readFile(store.progressFile),journal);
+        assert.equal((await store.getUser(user.id)).readerProgress['fixture-book'].percent,0.4);
+
+        const code = ProfileTotp.hotp(Buffer.from('12345678901234567890'),Math.floor(Date.now()/30000));
+        const trusted = await worker.loginUserProfile(login,password,code,{rememberDevice:true});
+        assert.match(trusted.trustedDeviceToken,/^[a-f0-9]{64}$/);
+        assert.equal((await worker.loginUserProfile(login,password,'',trusted)).userId,user.id);
+        await assert.rejects(worker.loginUserProfile(login,password,code),denied);
+
+        const attempts = new ProfileTotpAttempts(null,site.transport);
+        const now = Date.now();
+        for (let index=1; index<attemptLimit; index++) await attempts.failed(user.id,now);
+        assert.equal(await attempts.allows(user.id,now),false);
+        await assert.rejects(worker.loginUserProfile(login,password,recoveryCodes[1]),denied);
+        await worker.setUserProfileBlocked(admin.userId,admin.profileAccessToken,user.id,true);
+        assert.equal(await attempts.allows(user.id,now),true);
+        assert.equal(await worker.getProfileSessionUser(trusted.profileAccessToken),'');
+
+        const oldLogin = 'legacy-reader';
+        const old = await store.createUser({name:'Legacy reader',login:oldLogin,passwordHash:ProfilePassword.legacy(oldLogin,password)});
+        const oldData = JSON.parse(await readFile(store.file,'utf8'));
+        oldData.version = 4;
+        delete oldData.readerProgressCheckpoint;
+        delete oldData.profileAuthPolicy;
+        const oldRow = oldData.users.find(user=>user.id===old.id);
+        oldRow.id = ` ${old.id} `;
+        oldRow.login = '  LEGACY-READER  ';
+        oldRow.name = '  Legacy    reader  ';
+        oldRow.blocked = 'true';
+        oldData.users.splice(1,0,{id:'invalid-name',name:'\t ',login:oldLogin,passwordHash:oldRow.passwordHash});
+        oldData.users.push({...oldRow,id:old.id,login:'duplicate-login',passwordHash:ProfilePassword.legacy('duplicate-login',password)});
+        await writeFileAtomic(store.file,'\ufeff'+JSON.stringify(oldData));
+        store.getProfileCredentials = () => assert.fail('Read a version 4 profile through the compatibility path');
+        store.updateProfileCredentials = () => assert.fail('Wrote a version 4 profile through the compatibility path');
+        try {
+            await assert.rejects(worker.loginUserProfile('duplicate-login',password),denied);
+            assert.equal((await worker.loginUserProfile(oldLogin,password)).userId,old.id);
+            const persisted = JSON.parse(await readFile(store.file,'utf8'));
+            const row = persisted.users.find(user=>user.id===oldRow.id);
+            assert.match(row.passwordHash,/^scrypt:v1:/);
+            assert.equal(row.login,oldRow.login);
+            assert.equal(persisted.version,4);
+            assert.equal(persisted.readerProgressCheckpoint,undefined);
+
+            const recovery = 'ABCDE-FGHIJ-KLMNO-PQRST';
+            const hash = createHash('sha256').update(old.id+'\0'+recovery.replaceAll('-','')).digest('hex');
+            row.profileTotp = {secret:'damaged secret',lastStep:'invalid step',recoveryHashes:[hash,hash,null]};
+            await writeFileAtomic(store.file,JSON.stringify(persisted));
+            await assert.rejects(worker.loginUserProfile(oldLogin,password),{code:'need_profile_otp'});
+            await assert.rejects(worker.loginUserProfile(oldLogin,password,'123456'),denied);
+            assert.equal((await worker.loginUserProfile(oldLogin,password,recovery)).userId,old.id);
+            await assert.rejects(worker.loginUserProfile(oldLogin,password,recovery),denied);
+        } finally {
+            store.getProfileCredentials = getCredentials;
+            store.updateProfileCredentials = saveCredentials;
+        }
+
+        const fallbackLogin = 'fallback-reader';
+        const fallback = await store.createUser({name:'Fallback reader',login:fallbackLogin,passwordHash:ProfilePassword.legacy(fallbackLogin,password)});
+        const fallbackData = JSON.parse(await readFile(store.file,'utf8'));
+        fallbackData.users.push({id:'', name:'Needs a generated ID', login:'unassigned'});
+        await writeFileAtomic(store.file,JSON.stringify(fallbackData));
+        const save = store.save;
+        const issue = worker.createProfileSession;
+        store.save = async () => {throw new Error('Fixture credentials write failed');};
+        worker.createProfileSession = () => assert.fail('Issued a session before the credential write');
+        try {
+            await assert.rejects(worker.loginUserProfile(fallbackLogin,password),/Fixture credentials write failed/);
+        } finally {
+            store.save = save;
+            worker.createProfileSession = issue;
+        }
+        assert.equal((await worker.loginUserProfile(fallbackLogin,password)).userId,fallback.id);
+        assert.match((await store.getProfileCredentials(fallback.id)).passwordHash,/^scrypt:v1:/);
+        assert.equal(JSON.parse(await readFile(store.file,'utf8')).version,5);
+        assert.deepEqual(site.errors,[]);
+    } finally {await site.close();}
+    console.log('ok native profile registry, journal continuity, recovery replay protection, trusted browsers and legacy profile upgrade');
 }
 
 async function verifyRequestAdmission(binary,folder) {
@@ -648,6 +966,33 @@ async function accessBenchmark(binary,folder,control) {
     }
 }
 
+async function serviceAccessBenchmark(binary,folder,control) {
+    const config={trustedProxyCidrs:['127.0.0.1/32'],metricsEnabled:true,metricsToken:'fixture-metrics',
+        absEnabled:true,absToken:'fixture-abs'};
+    const before=await fixture(control,join(folder,'before'),true,'',config);
+    const agents=[new http.Agent({keepAlive:true,maxSockets:1}),new http.Agent({keepAlive:true,maxSockets:1})];
+    let after;
+    try {
+        after=await fixture(binary,join(folder,'after'),true,'',config);
+        const sites=[before,after];
+        const get=(path,status,body)=>async i=>{
+            const result=await request(sites[i],path,agents[i]);
+            assert.equal(result.status,status);
+            if (body) assert.equal(result.body.toString(),body);
+        };
+        const denied=coverPath(config,'fixture-book',undefined,'0'.repeat(64));
+        await timed('metrics-query-valid',1200,get('/metrics?token=fixture-metrics',200),200);
+        await timed('metrics-query-invalid',1200,get('/metrics?token=invalid',401),200);
+        await timed('abs-cover-signature-valid',1200,get(coverPath(config),404,'{"error":"Book not found"}'),200);
+        await timed('abs-cover-signature-invalid',1200,get(denied,401),200);
+        assert.deepEqual(after.serviceApprovals,{metrics:1400,metadata:0,cover:1400});
+        assert.deepEqual(before.serviceApprovals,{metrics:0,metadata:0,cover:0});
+    } finally {
+        for (const agent of agents) agent.destroy();
+        await Promise.all([before.close(),after?.close()]);
+    }
+}
+
 async function benchmark(binary,folder,assetsOnly) {
     const direct=await fixture(assetsOnly ? binary : null,folder,false,'',{serveAssets:false});
     let rust;
@@ -684,22 +1029,27 @@ async function benchmark(binary,folder,assetsOnly) {
 }
 
 async function main(binary,mode,control) {
-    const paired=['websocket-benchmark','requests-benchmark','access-benchmark'];
+    const paired=['websocket-benchmark','requests-benchmark','access-benchmark','service-access-benchmark'];
     if(!binary || (paired.includes(mode) && !control))
-        throw new Error('Usage: node scripts/rust-http-tests.js <inpx-server> [benchmark | websocket-benchmark, requests-benchmark or access-benchmark <old-inpx-server>]');
+        throw new Error(`Usage: node scripts/rust-http-tests.js <inpx-server> [benchmark | ${paired.join(' | ')} <old-inpx-server>]`);
     const root=resolve(tmpdir());
     const folder=await mkdtemp(join(root,'inpx-rust-http-'));
     try {
         await new (require('../server/core/AppLogger'))().init({dataDir:folder,loggingEnabled:false});
-        if (mode==='access-benchmark') await accessBenchmark(resolve(binary),folder,resolve(control));
+        if (mode==='service-access-benchmark') await serviceAccessBenchmark(resolve(binary),folder,resolve(control));
+        else if (mode==='access-benchmark') await accessBenchmark(resolve(binary),folder,resolve(control));
         else if (mode==='requests-benchmark') await requestBenchmark(resolve(binary),folder,resolve(control));
         else if (mode==='websocket-benchmark') await websocketBenchmark(resolve(binary),folder,resolve(control));
         else if (mode==='benchmark' || mode==='assets-benchmark') await benchmark(resolve(binary),folder,mode==='assets-benchmark');
         else {
             await verify(resolve(binary),join(folder,'transport'));
             await verifyAccess(resolve(binary),join(folder,'access'));
+            await verifyServiceRouteOverlap(resolve(binary),join(folder,'access-overlap'));
             await verifyWebSocketLimits(resolve(binary),join(folder,'websocket'));
             await verifyRequestAdmission(resolve(binary),join(folder,'requests'));
+            await verifyNativeLibraryAccess(resolve(binary),join(folder,'library-access'));
+            await verifyNativeProfileSessions(resolve(binary),join(folder,'profile-sessions'));
+            await verifyNativeProfileLogin(resolve(binary),join(folder,'profile-login'));
             await verifyAssets(resolve(binary),join(folder,'assets'));
         }
     } finally {

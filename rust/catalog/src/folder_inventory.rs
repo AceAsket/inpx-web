@@ -17,7 +17,7 @@ pub(crate) struct Entry {
 }
 
 // Match Node's Stats.mtimeMs so existing fingerprints and folder caches are reusable.
-fn modified_ms(time: SystemTime) -> f64 {
+pub(crate) fn modified_ms(time: SystemTime) -> f64 {
     let nanos = match time.duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_nanos() as i128,
         Err(error) => -(error.duration().as_nanos() as i128),

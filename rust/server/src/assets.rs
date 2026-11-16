@@ -19,11 +19,11 @@ const TOTAL_LIMIT: usize = 32 * 1024 * 1024;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
-    directory: PathBuf,
-    prefix: String,
-    app_directory: String,
-    metrics_path: String,
-    opds_path: Option<String>,
+    pub(crate) directory: PathBuf,
+    pub(crate) prefix: String,
+    pub(crate) app_directory: String,
+    pub(crate) metrics_path: String,
+    pub(crate) opds_path: Option<String>,
 }
 
 #[derive(Deserialize)]

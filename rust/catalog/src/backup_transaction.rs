@@ -23,7 +23,15 @@ pub enum Entry {
 }
 
 impl Entry {
-    fn name(self) -> &'static str {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Config,
+        Self::Secret,
+        Self::Profiles,
+        Self::Discovery,
+        Self::Vault,
+    ];
+
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Config => "config.json",
             Self::Secret => "secret.key",
@@ -90,6 +98,17 @@ impl<'a> BackupTransaction<'a> {
             message: error.to_string(),
             blocked: false,
         })
+    }
+
+    pub(crate) fn recover_startup(&self) -> Result<bool> {
+        if self.folder.try_exists()? && matches!(self.recover()?, BackupResponse::ClearProgress) {
+            let journal = self.data.join(crate::progress_journal::FILE_NAME);
+            if !crate::progress_snapshot::clear_obsolete(&journal, &self.target(Entry::Profiles))? {
+                return Ok(false);
+            }
+            self.finish()?;
+        }
+        Ok(true)
     }
 
     fn target(&self, entry: Entry) -> PathBuf {

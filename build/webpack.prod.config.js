@@ -11,7 +11,7 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 const CopyWebpackPlugin = require('copy-webpack-plugin');
 const pckg = require('../package.json');
 
-const publicDir = path.resolve(__dirname, '../dist/tmp/public');
+const publicDir = path.join(require('./dist-dir'), 'tmp/public');
 const clientDir = path.resolve(__dirname, '../client');
 const buildId = `${pckg.version}-${Date.now()}`;
 

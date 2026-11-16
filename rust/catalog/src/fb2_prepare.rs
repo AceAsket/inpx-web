@@ -24,11 +24,21 @@ pub(crate) fn normalize(source: &Path) -> Result<Option<Prepared>> {
 }
 
 pub(crate) fn normalize_bytes(source: &Path, input: &[u8]) -> Result<Option<Prepared>> {
+    normalize_bounded_bytes(source, input, u64::MAX)
+}
+
+pub(crate) fn normalize_bounded(source: &Path, limit: u64) -> Result<Option<Prepared>> {
+    normalize_bounded_bytes(source, &fs::read(source)?, limit)
+}
+
+fn normalize_bounded_bytes(source: &Path, input: &[u8], limit: u64) -> Result<Option<Prepared>> {
     let mut bytes = Cow::Borrowed(input);
     let compressed = bytes.starts_with(b"\x1f\x8b");
     if compressed {
         let mut plain = Vec::new();
-        crate::gzip::inflate(bytes.as_ref(), &mut plain, u64::MAX)?;
+        if crate::gzip::inflate(bytes.as_ref(), &mut plain, limit.saturating_add(1))? > limit {
+            return Err(crate::book_archive::Failure::Limit.into());
+        }
         bytes = Cow::Owned(plain);
     }
     let Some(text) = decode(&bytes) else {
@@ -39,6 +49,13 @@ pub(crate) fn normalize_bytes(source: &Path, input: &[u8]) -> Result<Option<Prep
         .and_then(encoding_attribute)
         .map(|(range, _)| range);
     let replacement = encoding.filter(|range| &clean[range.clone()] != "encoding=\"utf-8\"");
+    let size = clean.len() - replacement.as_ref().map_or(0, Range::len)
+        + replacement
+            .as_ref()
+            .map_or(0, |_| "encoding=\"utf-8\"".len());
+    if size as u64 > limit {
+        return Err(crate::book_archive::Failure::Limit.into());
+    }
     let has_binary = memchr_iter(b'<', clean.as_bytes())
         .any(|start| tag_name(&clean.as_bytes()[start + 1..], b"binary"));
     if compressed

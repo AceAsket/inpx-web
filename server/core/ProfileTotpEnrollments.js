@@ -4,14 +4,20 @@ const lifetime = 5*60*1000;
 const maxPending = 128;
 
 class ProfileTotpEnrollments {
-    constructor(sessions, required) {
+    constructor(sessions, required, transport) {
         this.sessions = sessions;
         this.required = required;
+        this.transport = transport;
         this.native = sessions.native;
-        if (!this.native) this.pending = new Map();
+        if (!this.native && !transport) this.pending = new Map();
+    }
+
+    request(operation, params) {
+        return this.transport.profileRequest('enrollment',{required:this.required,request:{operation,...params}});
     }
 
     prepare(key, now) {
+        if (this.transport) return this.request('prepare',{key});
         if (this.native) {
             this.native.input(key);
             return this.native.api.enrollment_prepare(this.required,now) !== 0;
@@ -24,6 +30,7 @@ class ProfileTotpEnrollments {
     }
 
     create(key, user, secret, now) {
+        if (this.transport) return this.request('create',{key,user,secret});
         if (this.native) {
             const length = this.native.input(key,user+secret);
             if (!this.native.api.enrollment_create(this.required,length,Buffer.byteLength(user),now))
@@ -34,6 +41,7 @@ class ProfileTotpEnrollments {
     }
 
     secret(key, user, now) {
+        if (this.transport) return this.request('secret',{key,user});
         if (this.native) {
             const length = this.native.input(key,user);
             return this.native.output(this.native.api.enrollment_secret(this.required,length,now));
@@ -45,6 +53,7 @@ class ProfileTotpEnrollments {
     }
 
     failed(key, user) {
+        if (this.transport) return this.request('failed',{key,user});
         if (this.native) {
             const length = this.native.input(key,user);
             return this.native.api.enrollment_failed(this.required,length);
@@ -54,6 +63,7 @@ class ProfileTotpEnrollments {
     }
 
     delete(key) {
+        if (this.transport) return this.request('remove',{key});
         if (this.native) {
             if (typeof key !== 'string' || key.length > 48) return;
             this.native.input(key);
@@ -71,6 +81,7 @@ class ProfileTotpEnrollments {
     }
 
     revoke(user, keep = '') {
+        if (this.transport) return this.request('revoke',{user});
         if (this.native) {
             const length = this.native.input(user,keep);
             return this.native.api.enrollment_revoke(this.required,length);
@@ -81,6 +92,7 @@ class ProfileTotpEnrollments {
     }
 
     clear(keep = '') {
+        if (this.transport) return this.request('clear');
         if (this.native) {
             this.native.input(keep);
             return this.native.api.enrollment_clear(this.required);

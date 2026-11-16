@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use crate::{deadlines::Deadlines, hex::hex32};
+use crate::{deadlines::Deadlines, hex::hex32, library_password::LibraryPassword};
 
 const MAX_CLIENT: u8 = 16;
 const MAX_PENDING: usize = 4096;
@@ -35,7 +35,7 @@ impl WebAccessChallenges {
             .expire(now, |client| release(&mut self.clients, &client));
     }
 
-    fn allows(&mut self, client: &str, now: i64) -> bool {
+    pub fn has_capacity(&mut self, client: &str, now: i64) -> bool {
         self.prune(now);
         self.pending.len() < MAX_PENDING
             && self.clients.get(client).copied().unwrap_or_default() < MAX_CLIENT
@@ -49,17 +49,43 @@ impl WebAccessChallenges {
         timeout: i64,
         random: impl FnOnce() -> Option<[u8; 32]>,
     ) -> Issue {
-        if !self.allows(client, now) {
+        self.issue_using(client, now, timeout, random, |salt| {
+            let mut hash = Sha256::new();
+            hash.update(password);
+            hash.update(salt);
+            hex32(&hash.finalize().into())
+        })
+    }
+
+    pub fn issue_configured(
+        &mut self,
+        client: &str,
+        password: &LibraryPassword,
+        now: i64,
+        timeout: i64,
+        random: impl FnOnce() -> Option<[u8; 32]>,
+    ) -> Issue {
+        self.issue_using(client, now, timeout, random, |salt| {
+            password.challenge(salt)
+        })
+    }
+
+    fn issue_using(
+        &mut self,
+        client: &str,
+        now: i64,
+        timeout: i64,
+        random: impl FnOnce() -> Option<[u8; 32]>,
+        token: impl FnOnce(&[u8; 64]) -> [u8; 64],
+    ) -> Issue {
+        if !self.has_capacity(client, now) {
             return Issue::Limited;
         }
         let Some(entropy) = random() else {
             return Issue::EntropyUnavailable;
         };
         let salt = hex32(&entropy);
-        let mut hash = Sha256::new();
-        hash.update(password);
-        hash.update(salt);
-        let token = hex32(&hash.finalize().into());
+        let token = token(&salt);
         let token = std::str::from_utf8(&token).expect("hex is ASCII");
         let lifetime = if timeout > 0 {
             timeout.min(CHALLENGE_LIFETIME_MS)

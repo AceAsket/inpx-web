@@ -10,6 +10,7 @@ base64 = "0.22"
 encoding_rs = "0.8"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 html-escape = "0.3"
+inpx-auth-state = { path = "../auth-state" }
 indexmap = { version = "2", features = ["serde"] }
 inpx-reader = { path = "../inpx" }
 memchr = "2"

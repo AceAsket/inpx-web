@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use http_body_util::{BodyExt, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
@@ -55,7 +57,7 @@ pub(crate) async fn send(
     conditions: &HeaderMap,
     head: bool,
 ) -> Option<Response<Body>> {
-    let (mut parts, body_stream) = response.into_parts();
+    let (parts, body_stream) = response.into_parts();
     let input = Limited::new(body_stream, LIMIT)
         .collect()
         .await
@@ -66,9 +68,22 @@ pub(crate) async fn send(
         Format::Atom => atom::render(&input),
         Format::OpenSearch => atom::opensearch(&input),
     }?;
+    document(parts, bytes, conditions, head)
+}
+
+pub(crate) fn document(
+    mut parts: hyper::http::response::Parts,
+    bytes: Vec<u8>,
+    conditions: &HeaderMap,
+    head: bool,
+) -> Option<Response<Body>> {
     let length = bytes.len();
-    let digest = Sha256::digest(&bytes);
-    let etag = format!("W/\"{length:x}-{digest:x}\"");
+    let mut etag = String::with_capacity(2 + 2 + 2 * std::mem::size_of::<usize>() + 1 + 64);
+    write!(etag, "W/\"{length:x}-").expect("formatting a string");
+    for byte in Sha256::digest(&bytes) {
+        write!(etag, "{byte:02x}").expect("formatting a string");
+    }
+    etag.push('"');
     let fresh = fresh(conditions, &etag);
     let headers = &mut parts.headers;
     headers.remove(header::TRANSFER_ENCODING);

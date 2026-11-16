@@ -25,6 +25,7 @@ use crate::http::{Body, body, error, forward, strip_hop_headers};
 use crate::receipts::Receipts;
 use crate::request_access::{APPROVAL, Decision, Denial};
 use crate::upstream::Upstream;
+use inpx_catalog::access_runtime::AccessSessions;
 
 pub(crate) use requests::Limits as RequestLimits;
 
@@ -43,13 +44,22 @@ pub(crate) struct Config {
 pub(crate) struct Endpoint {
     config: Config,
     requests: Option<Arc<requests::Gate>>,
+    library: Option<AccessSessions>,
+    profiles: Option<crate::profile_sessions::Shared>,
 }
 
 impl Endpoint {
-    pub(crate) fn new(config: Config, limits: Option<RequestLimits>) -> Self {
+    pub(crate) fn new(
+        config: Config,
+        limits: Option<RequestLimits>,
+        library: Option<AccessSessions>,
+        profiles: Option<crate::profile_sessions::Shared>,
+    ) -> Self {
         Self {
             config,
             requests: limits.map(|limits| Arc::new(requests::Gate::new(limits))),
+            library,
+            profiles,
         }
     }
 
@@ -60,7 +70,7 @@ impl Endpoint {
     }
 }
 
-fn public_reply(request: &Request<Incoming>) -> Response<Body> {
+pub(crate) fn public_reply(request: &Request<Incoming>) -> Response<Body> {
     if request.method() != Method::GET {
         return error(StatusCode::METHOD_NOT_ALLOWED);
     }
@@ -185,7 +195,12 @@ async fn relay(
     private: impl AsyncRead + AsyncWrite + Unpin,
     endpoint: Endpoint,
 ) {
-    let Endpoint { config, requests } = endpoint;
+    let Endpoint {
+        config,
+        requests,
+        library,
+        profiles,
+    } = endpoint;
     let options = WebSocketConfig::default()
         .max_message_size(Some(config.max_payload))
         .max_frame_size(Some(config.max_payload))
@@ -217,8 +232,9 @@ async fn relay(
                         return End::close(CloseCode::Again,"Too many active requests");
                     };
                     let (validation, checked) = limits.check(&bytes);
+                    let (validation, profile) = requests::access_metadata(validation, &checked, library.as_ref(), profiles.as_ref());
                     let payload = match checked { Cow::Borrowed(_) => bytes, Cow::Owned(rejected) => rejected.into() };
-                    private_write.request(ticket,validation,payload).await
+                    private_write.request(ticket,validation,payload,profile).await
                 } else {
                     private_write.send(kind,&[],bytes).await
                 };

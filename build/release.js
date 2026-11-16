@@ -1,11 +1,10 @@
 const fs = require('fs-extra');
-const path = require('path');
 const {createReleaseArchive} = require('./release-archive');
 
 const pckg = require('../package.json');
 const platform = process.argv[2];
 
-const distDir = path.resolve(__dirname, '../dist');
+const distDir = require('./dist-dir');
 const outDir = `${distDir}/release`;
 
 async function makeRelease(target) {

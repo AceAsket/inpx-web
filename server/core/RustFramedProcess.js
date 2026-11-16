@@ -3,8 +3,8 @@ const runtime = require('./ResourceRuntime');
 const frameBytes = 128*1024;
 
 class RustFramedProcess {
-    constructor(binary, command) {
-        this.child = spawn(binary, [command,'.'], {windowsHide:true, stdio:['pipe','pipe','pipe']});
+    constructor(binary, command, path = '.') {
+        this.child = spawn(binary, [command,path], {windowsHide:true, stdio:['pipe','pipe','pipe']});
         this.output = this.child.stdout[Symbol.asyncIterator]();
         this.buffer = Buffer.alloc(0);
         let stderr = '';

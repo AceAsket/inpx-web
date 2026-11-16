@@ -2,6 +2,8 @@ const {open} = require('./RustAuthState');
 const lifetime = require('./SessionLifetime');
 
 class ProfileSessions {
+    static admission = Symbol('profile session admission');
+
     constructor() {
         this.native = open();
         if (!this.native) this.sessions = new Map();

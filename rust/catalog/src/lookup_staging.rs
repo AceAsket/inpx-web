@@ -270,6 +270,52 @@ pub fn publish(path: &Path, mut input: impl BufRead) -> Result<u64> {
     )
 }
 
+pub(crate) fn publish_sorted(
+    path: &Path,
+    generation: &str,
+    name_counts: [usize; 4],
+    low_memory: bool,
+) -> Result<usize> {
+    let directory = path
+        .parent()
+        .ok_or("missing catalogue lookup directory")?
+        .join(".postings");
+    let mut input = serde_json::to_vec(
+        &serde_json::json!({"generation":generation,"nameCounts":name_counts,"lowMemory":low_memory}),
+    )?;
+    input.push(b'\n');
+    let mut series = name_counts[1];
+    for (table, count) in Table::ALL.into_iter().zip(name_counts) {
+        let labels: Vec<String> = serde_json::from_reader(File::open(
+            directory.join(format!("{}.labels", table.name())),
+        )?)?;
+        if labels.len() != count {
+            return Err("staged lookup label count differs".into());
+        }
+        let mut positions = (0..u32::try_from(count)?).collect::<Vec<_>>();
+        positions.sort_by(|&left, &right| {
+            labels[left as usize]
+                .encode_utf16()
+                .cmp(labels[right as usize].encode_utf16())
+        });
+        let mut omitted = (table == Table::Series).then(|| vec![0u8; count.div_ceil(8)]);
+        for (rank, position) in positions.into_iter().enumerate() {
+            input.extend_from_slice(&position.to_le_bytes());
+            if let Some(omitted) = &mut omitted
+                && labels[position as usize] == "?"
+            {
+                omitted[rank / 8] |= 1 << (rank % 8);
+                series -= 1;
+            }
+        }
+        if let Some(omitted) = omitted {
+            input.extend_from_slice(&omitted);
+        }
+    }
+    publish(path, input.as_slice())?;
+    Ok(series)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -121,6 +121,22 @@ async function normalizeSource(source, index, options = {}) {
 }
 
 async function resolveLibrarySources(config, argv = {}) {
+    const argument = String(argv['library-sources'] || '');
+    const {sources: native} = await require('./RustStartup').run('library-sources', [], {
+        configured: Array.isArray(config.librarySources) ? config.librarySources : [],
+        argument,
+        environment: process.env.INPX_LIBRARY_SOURCES || process.env.LIBRARY_SOURCES || '',
+        libDir: argv['lib-dir'] || config.libDir || '',
+        inpx: argv.inpx || config.inpx || '',
+        execDir: config.execDir || '',
+        remote: config.remoteLib ? {inpx:config.inpxFile,libDir:config.libDir || config.dataDir} : null,
+    }) || {};
+    if (Array.isArray(native)) {
+        config.librarySources = native;
+        if (!config.remoteLib) applyPrimarySource(config, native[0]);
+        return native;
+    }
+    if (argument) config.librarySources = parseSourcesFromString(argument);
     if (config.remoteLib) {
         config.librarySources = [{
             id: 'remote',
@@ -164,11 +180,14 @@ async function resolveLibrarySources(config, argv = {}) {
         throw new Error('No enabled INPX library sources configured');
 
     config.librarySources = result;
-    config.libDir = result[0].libDir;
-    config.inpx = result[0].inpx;
-    config.inpxFile = result[0].inpxFile;
-
+    applyPrimarySource(config, result[0]);
     return result;
+}
+
+function applyPrimarySource(config, source) {
+    config.libDir = source.libDir;
+    config.inpx = source.inpx;
+    config.inpxFile = source.inpxFile;
 }
 
 function getEnabledLibrarySources(config = {}) {

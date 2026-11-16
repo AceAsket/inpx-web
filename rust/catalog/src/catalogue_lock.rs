@@ -17,6 +17,36 @@ const SOFT: &str = "__softlock";
 const HARD: &str = "__lock";
 const CHECK: &str = "__softlockcheck";
 
+pub struct CatalogueLease {
+    stop: mpsc::Sender<()>,
+    watcher: Option<thread::JoinHandle<()>>,
+}
+
+impl CatalogueLease {
+    pub fn open(directory: &Path) -> Result<Self> {
+        let lease = Lease::acquire(directory)?
+            .ok_or_else(|| format!("Database locked: {}", directory.display()))?;
+        let leases = Mutex::new(HashMap::from([(directory.into(), lease)]));
+        let (stop, parent) = mpsc::channel();
+        let watcher = thread::Builder::new()
+            .name("catalogue-lock".into())
+            .spawn(move || watch(&leases, parent))?;
+        Ok(Self {
+            stop,
+            watcher: Some(watcher),
+        })
+    }
+}
+
+impl Drop for CatalogueLease {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 enum Command {

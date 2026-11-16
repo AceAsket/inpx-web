@@ -6,17 +6,26 @@ const {execFileSync} = require('child_process');
 const StreamZip = require('node-stream-zip');
 const {executableNames,rustProgramEntry} = require('../build/release-archive');
 
-async function checkArchivePermissions(archive, target, converters = true) {
+async function checkArchivePermissions(archive, target, converters = true, rust = false) {
     const zip = new StreamZip.async({file:archive});
     try {
         const entries = await zip.entries();
         for (const program of ['server','catalog','reader']) {
             const name = rustProgramEntry(target,program);
-            const required = process.env[program==='server' ? 'INPX_SMOKE_REQUIRE_RUST_HTTP' : 'INPX_SMOKE_REQUIRE_RUST_CATALOG']==='true';
+            if (rust && program === 'server') {
+                assert(!entries[name], 'The standalone Rust executable is the archive entry point');
+                continue;
+            }
+            const required = rust || process.env[program==='server' ? 'INPX_SMOKE_REQUIRE_RUST_HTTP' : 'INPX_SMOKE_REQUIRE_RUST_CATALOG']==='true';
             if (required || entries[name]) {
                 assert(entries[name] && !entries[name].isDirectory,`Missing Rust executable: ${name}`);
                 if (target !== 'win') assert.equal((entries[name].attr >>> 16) & 0o7777,0o755);
             }
+        }
+        if (rust) {
+            assert(entries['bin/public.json'] && !entries['bin/public.json'].isDirectory,'Missing packaged web application');
+            assert(!Object.keys(entries).some(name=>/\.(?:node|wasm)$|(?:^|\/)node(?:\.exe)?$/i.test(name)),
+                'Rust archive must not contain Node runtimes, addons or its authentication module');
         }
         for (const name of executableNames(target, converters)) {
             assert(entries[name] && !entries[name].isDirectory, `Missing release executable: ${name}`);
@@ -42,19 +51,22 @@ async function extractArchive(archive, directory) {
 async function main() {
     const [target, archive, ...options] = process.argv.slice(2);
     const converters = !options.includes('--application-only');
+    const rust = options.includes('--rust');
     const names = executableNames(target, converters);
-    await checkArchivePermissions(archive, target, converters);
+    await checkArchivePermissions(archive, target, converters, rust);
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-release-extracted-'));
     try {
         await extractArchive(archive, directory);
-        const authState = path.join(directory, 'bin', require('../server/core/RustAuthState').fileName);
-        assert(WebAssembly.validate(await fs.readFile(authState)), 'Release must include a valid Rust authentication module');
+        if (!rust) {
+            const authState = path.join(directory, 'bin', require('../server/core/RustAuthState').fileName);
+            assert(WebAssembly.validate(await fs.readFile(authState)), 'Release must include a valid Rust authentication module');
+        }
         for (const name of names) {
             if (target !== 'win')
                 assert.equal((await fs.stat(path.join(directory, name))).mode & 0o7777, 0o755, `Extracted mode: ${name}`);
         }
         const run = (script, args) => execFileSync(process.execPath, [path.join(__dirname, script), ...args], {stdio:'inherit', windowsHide:true});
-        run('binary-smoke-test.js', [path.join(directory, names[0]), ...(!converters ? ['--allow-missing-native-jxl'] : [])]);
+        run('binary-smoke-test.js', [path.join(directory, names[0]), ...(!converters ? ['--allow-missing-native-jxl'] : []), ...(rust ? ['--rust'] : [])]);
         if (converters) {
             run('fb2cng-integration-tests.js', ['--fbc', path.join(directory, names[1])]);
             run('mobi-integration-tests.js', ['--fbc', path.join(directory, names[1]), '--kindling', path.join(directory, names[2])]);

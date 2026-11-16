@@ -13,7 +13,7 @@ use crate::crypto_support::{
 };
 use crate::{Result, atomic_file};
 
-const PREFIX: &str = "enc:v1:";
+pub(crate) const PREFIX: &str = "enc:v1:";
 const INVALID: &str = "Invalid encrypted secret format";
 const MISSING: &str = "Secret key is missing; restore secret.key from backup";
 const BASE64: GeneralPurpose = GeneralPurpose::new(

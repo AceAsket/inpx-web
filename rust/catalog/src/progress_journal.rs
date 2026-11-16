@@ -15,9 +15,11 @@ use crate::file_stamp::stamp;
 use crate::profile_snapshot::{ProfileSnapshot, SnapshotRequest};
 use crate::progress_update::{ProgressDecision, ProgressPolicy};
 
-const MAX_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = 1024 * 1024;
 const CHECKPOINT_BYTES: usize = 32;
 const HEADER_BYTES: usize = CHECKPOINT_BYTES + 1;
+pub(crate) const FILE_NAME: &str = "reader-progress.log";
+pub(crate) const CHECKPOINT_FIELD: &str = "readerProgressCheckpoint";
 
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -49,10 +51,10 @@ pub enum JournalRequest {
 
 #[derive(Deserialize)]
 pub struct JournalAppend {
-    checkpoint: String,
-    expected: Option<String>,
-    offset: usize,
-    line: String,
+    pub(crate) checkpoint: String,
+    pub(crate) expected: Option<String>,
+    pub(crate) offset: usize,
+    pub(crate) line: String,
 }
 
 struct CommittedAppend {
@@ -94,6 +96,10 @@ enum JournalResponse<'a> {
     Ready {
         updates: bool,
         snapshots: bool,
+        #[serde(rename = "profileCredentials")]
+        profile_credentials: bool,
+        #[serde(rename = "profileBootstrap")]
+        profile_bootstrap: bool,
         backups: bool,
     },
     Changed,
@@ -126,6 +132,8 @@ impl ProgressJournal {
             JournalRequest::Probe => encode(JournalResponse::Ready {
                 updates: true,
                 snapshots: true,
+                profile_credentials: true,
+                profile_bootstrap: true,
                 backups: true,
             }),
             JournalRequest::Replay {
@@ -158,14 +166,14 @@ impl ProgressJournal {
     }
 }
 
-fn valid_checkpoint(checkpoint: &str) -> bool {
+pub(crate) fn valid_checkpoint(checkpoint: &str) -> bool {
     checkpoint.len() == CHECKPOINT_BYTES
         && checkpoint
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-fn replay(
+pub(crate) fn replay(
     file: &Path,
     checkpoint: &str,
     generations: &HashMap<String, f64>,

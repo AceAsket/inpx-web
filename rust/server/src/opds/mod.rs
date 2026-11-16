@@ -1,6 +1,7 @@
 mod atom;
 mod html;
 pub(crate) mod response;
+pub(crate) mod standalone;
 mod urls;
 mod xml;
 
@@ -45,6 +46,7 @@ struct Context {
     formats: Option<Vec<String>>,
     mobi: bool,
     preference: String,
+    fallback_cover: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -393,7 +395,7 @@ fn publication(entry: Entry, context: &Context) -> Publication {
                 links.push(link);
             }
         }
-        if images.is_empty() {
+        if images.is_empty() && context.fallback_cover.unwrap_or(true) {
             images.push(Link::new(
                 format!("{}/cover/by-uid?uid={uid}", context.static_root),
                 "",

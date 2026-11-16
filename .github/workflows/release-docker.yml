@@ -39,6 +39,10 @@ jobs:
             context: .
             target: runtime
             suffix: ''
+          - component: rust
+            context: .
+            target: runtime-lite
+            suffix: -rust
           - component: silero
             context: tts/silero
             target: ''
@@ -75,9 +79,11 @@ jobs:
           IMAGE: ${{ steps.version.outputs.image }}
           CONTEXT: ${{ matrix.context }}
           TARGET: ${{ matrix.target }}
+          COMPONENT: ${{ matrix.component }}
         run: |
           args=()
           if [ -n "$TARGET" ]; then args+=(--target "$TARGET"); fi
+          if [ "$COMPONENT" = 'rust' ]; then args+=(--build-arg INPX_SERVER_RUNTIME=rust); fi
           docker build "${args[@]}" --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "$IMAGE" "$CONTEXT"
       - name: Test packaged web application
         if: matrix.component == 'web'
@@ -86,6 +92,12 @@ jobs:
           INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
           INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
         run: node scripts/binary-smoke-test.js --image "$IMAGE"
+      - name: Test packaged Rust application
+        if: matrix.component == 'rust'
+        env:
+          IMAGE: ${{ steps.version.outputs.image }}
+          INPX_SMOKE_EPUB: 'true'
+        run: node scripts/binary-smoke-test.js --image "$IMAGE" --rust
       - name: Test image fb2cng and MOBI conversion
         if: matrix.component == 'web'
         env:

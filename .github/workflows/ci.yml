@@ -47,6 +47,9 @@ jobs:
           node scripts/rust-book-archive-tests.js rust/target/release/inpx-catalog
           node scripts/rust-book-prepare-tests.js rust/target/release/inpx-catalog
       - run: node scripts/rust-book-cache-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-directory-diagnostics-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-startup-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-standalone-tests.js rust/target/release/inpx-server
       - run: node scripts/rust-book-export-tests.js rust/target/release/inpx-catalog
       - run: node scripts/rust-book-metadata-tests.js rust/target/release/inpx-catalog
       - run: node scripts/rust-kosync-tests.js rust/target/release/inpx-catalog
@@ -175,6 +178,16 @@ jobs:
           node build/release.js ${{ matrix.target }}
           version=$(node -p "require('./package.json').version")
           node scripts/release-archive-smoke-test.js ${{ matrix.target }} "dist/release/inpx-web-$version-${{ matrix.target }}.zip" --application-only
+      - name: Test the standalone Rust release archive
+        env:
+          INPX_BUILD_DIST_DIR: ${{ runner.temp }}/inpx-rust-release
+          INPX_SMOKE_EPUB: 'true'
+        shell: bash
+        run: |
+          npm run build:rust -- ${{ matrix.target }}
+          node build/release.js ${{ matrix.target }}
+          version=$(node -p "require('./package.json').version")
+          node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$INPX_BUILD_DIST_DIR/release/inpx-web-$version-${{ matrix.target }}.zip" --application-only --rust
       - if: matrix.target == 'linux'
         run: docker build --target runtime-lite -t inpx-web:ci .
       - if: matrix.target == 'linux'
@@ -188,3 +201,8 @@ jobs:
       - name: Test real image converters
         if: matrix.target == 'linux'
         run: bash scripts/test-image-converters.sh inpx-web:ci-full
+      - name: Build and run the standalone Rust image
+        if: matrix.target == 'linux'
+        run: |
+          docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-lite -t inpx-web:ci-rust .
+          node scripts/binary-smoke-test.js --image inpx-web:ci-rust --rust

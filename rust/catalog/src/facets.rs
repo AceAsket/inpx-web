@@ -137,6 +137,14 @@ impl Postings {
         self.runs.clone()
     }
 
+    pub(crate) fn matching(&self, matches: impl Fn(&Label) -> bool) -> Vec<&[u32]> {
+        self.rows
+            .values()
+            .filter(|row| matches(&row.value))
+            .map(|row| row.book_ids.as_slice())
+            .collect()
+    }
+
     pub fn book_lists(&self, ids: &[u32]) -> Result<Vec<&[u32]>> {
         ids.iter()
             .map(|id| {

@@ -1090,6 +1090,31 @@ npm run build:win-installer
 
 Готовый файл будет создан как `dist\release\inpx-web-<version>-win-setup.exe`.
 
+#### Сборка с автономным Rust-сервером
+
+Для проверки перехода на Rust используйте отдельный каталог сборки. Node.js
+используется для сборки и упаковки веб-интерфейса. Из распакованного архива
+сервер запускается командой `inpx-web` без установленного Node.js.
+
+```sh
+export INPX_BUILD_DIST_DIR="$PWD/dist/rust-preview"
+cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
+npm run build:rust -- linux
+node build/release.js linux
+```
+
+Для других платформ передайте `linux-arm64`, `win` или `macos` обеим командам
+упаковки и используйте Rust-бинарники соответствующей платформы. Для `win`
+можно собрать установщик через `npm run build:win-installer` с тем же
+`INPX_BUILD_DIST_DIR`. Файл `bin/public.json` содержит веб-интерфейс и должен
+оставаться рядом с `inpx-web` в каталоге `bin`.
+
+Docker-образ с Rust-сервером собирается из того же Dockerfile:
+
+```sh
+docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-lite -t inpx-web:rust .
+```
+
 <a id="native_run" />
 
 ### Локальный запуск через Node.js без Docker

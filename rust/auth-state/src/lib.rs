@@ -1,6 +1,8 @@
+pub mod access_wire;
 pub mod browser_sessions;
 mod deadlines;
 mod hex;
+pub mod library_password;
 pub mod login_rate;
 pub mod sessions;
 pub mod totp_attempts;

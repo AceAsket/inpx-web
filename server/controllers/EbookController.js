@@ -1,5 +1,4 @@
 const express=require('express');
-const {equal}=require('../core/opds/Auth');
 const ProfileAccess=require('../core/ProfileAccess');
 const Budget=require('../core/ClientRequestBudget');
 const {getEnabledLibrarySources}=require('../core/LibrarySources');
@@ -83,7 +82,7 @@ class EbookController {
     }
     async libraryAllowed(req){return !this.webAccess||this.webAccess.freeAccess||await this.webAccess.hasAccess(req.securitySession?.ebookAccessToken);}
     async identity(req){return await this.access.resolve(req);}
-    checkIdentity(req,identity){if(identity&&(!this.worker.getProfileSessionUser(identity.token)||req.securitySession?.profileAccessToken!==identity.token))throw bad('Сеанс завершён. Войдите снова.',401);}
+    async checkIdentity(req,identity){if(identity&&(!await this.worker.getProfileSessionUser(identity.token)||req.securitySession?.profileAccessToken!==identity.token))throw bad('Сеанс завершён. Войдите снова.',401);}
     async authenticate(req,kind) {
         if(!this.security.hasValidCsrf(req,scalar(req.body,'csrf',128)))throw bad('Обновите страницу и повторите вход.',403);
         const profile=kind==='profile';
@@ -104,11 +103,9 @@ class EbookController {
             if(previous)await this.worker.closeProfileSession(previous);
             session.profileAccessToken=result.profileAccessToken;
         }else{
-            const valid=await this.security.withLoginAttempt(req,'access',()=>equal(password,this.config.accessPassword));
-            if(!valid)throw bad('Неверный пароль.',401);
-            const salt=this.webAccess.newToken(this.security.clientIp(req));
-            req.securitySession.ebookAccessToken=require('../core/utils').getBufHash(password+salt,'sha256','hex');
-            await this.webAccess.hasAccess(req.securitySession.ebookAccessToken);
+            const token=await this.webAccess.loginPassword(password,req,this.security);
+            if(!token)throw bad('Неверный пароль.',401);
+            req.securitySession.ebookAccessToken=token;
         }
     }
     searchForm(p,advanced=false) {
@@ -291,7 +288,7 @@ class EbookController {
         const {text, at, query} = await this.readingPage(req, identity);
         const textSnippet = text.slice(at, at + 160).trim().split('\n', 1)[0].trim().replace(/[\ud800-\udbff]$/, '');
         const {progress} = await withFileTransaction(this.worker.readingListStore.file, async() => {
-            this.checkIdentity(req, identity);
+            await this.checkIdentity(req, identity);
             return await this.worker.updateReaderProgress(identity.user.id, query.uid, {
                 percent: at / text.length, sectionId: '', pageIndex: 0, textOffset: -1, textSnippet, hidden: false, generation, baseRevision,
             });
@@ -351,14 +348,14 @@ class EbookController {
                         if (path === '/read') {
                             const next = await this.budget.run('profile:'+identity.user.id, 'read:'+require('crypto').randomUUID(),
                                 () => this.saveReading(req, identity), () => !res.destroyed);
-                            this.checkIdentity(req, identity);
+                            await this.checkIdentity(req, identity);
                             return res.redirect(303, next);
                         }
                         const format=scalar(req.body,'format',12);
                         if(format!=='original'&&!formats.formats.includes(format))throw bad('Неизвестный формат скачивания.');
                         await this.budget.run('profile:'+identity.user.id,'format:'+require('crypto').randomUUID(),async()=>{
-                            this.checkIdentity(req,identity);await this.worker.updateUserProfile(identity.user.id,{defaultDownloadFormat:format});
-                        },()=>!res.destroyed);this.checkIdentity(req,identity);
+                            await this.checkIdentity(req,identity);await this.worker.updateUserProfile(identity.user.id,{defaultDownloadFormat:format});
+                        },()=>!res.destroyed);await this.checkIdentity(req,identity);
                     }else if(path==='/logout') {
                         if(!this.security.hasValidCsrf(req,scalar(req.body,'csrf',128)))throw bad('Обновите страницу и повторите действие.',403);
                         const token=req.securitySession.profileAccessToken;
@@ -381,7 +378,7 @@ class EbookController {
                 const key=JSON.stringify([req.securitySession.id,path,req.query]);
                 const result=await this.budget.run(identity?'profile:'+identity.user.id:'session:'+req.securitySession.id,key,handler,()=>!res.destroyed);
                 this.worker.checkLibraryAssetState(generation,db);
-                this.checkIdentity(req,identity);
+                await this.checkIdentity(req,identity);
                 if(result.redirect)return res.redirect(302,result.redirect);
                 res.type('html').send(this.document(req,result.title,result.body,identity,result.reading,result.compact));
             }catch(error){

@@ -148,13 +148,13 @@ function mountCatalog(app, config, security, catalogRoot, version) {
     } else require('./Compatibility').mount(app, opdsPaths, opds, catalogConfig);
 }
 
-module.exports = function(app, config, security = new (require('../Security'))(config)) {
+module.exports = function(app, config, security = new (require('../Security'))(config), readingListStore) {
     if (!config.opds || !config.opds.enabled) return;
     const opdsRoot = config.opds.root || '/opds';
     config.opdsRoot = opdsRoot;
     // WebWorker is shared: its first construction must use the server config,
     // never the presentation config whose catalog root points to OPDS 2.
-    new (require('../WebWorker'))(config);
+    new (require('../WebWorker'))(config, readingListStore);
 
     // The more specific routes must precede the OPDS 1 wildcard and its guards.
     mountCatalog(app, config, security, `${opdsRoot}/v2`, 2);

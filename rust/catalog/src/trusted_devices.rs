@@ -7,27 +7,46 @@ use crate::crypto_support::{KEY_BYTES, equal, hex, parse_hex, random};
 const MAX_DEVICES: usize = 10;
 const SECONDS_PER_DAY: u32 = 86_400;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Device {
     hash: String,
     expires_at: i64,
 }
 
+impl Device {
+    pub(crate) fn from_stored(value: &serde_json::Value) -> Vec<Self> {
+        let Some(rows) = value.as_array() else {
+            return Vec::new();
+        };
+        rows[rows.len().saturating_sub(MAX_DEVICES)..]
+            .iter()
+            .filter_map(|row| {
+                let hash = row["hash"].as_str().filter(|hash| valid_token(hash))?;
+                let expires_at = crate::profile_decode::safe_integer(&row["expiresAt"])?;
+                Some(Self {
+                    hash: hash.into(),
+                    expires_at,
+                })
+            })
+            .collect()
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Remember {
-    devices: Vec<Device>,
-    replaced: String,
-    days: u32,
+    pub(crate) devices: Vec<Device>,
+    pub(crate) replaced: String,
+    pub(crate) days: u32,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Grant {
-    token: String,
-    max_age_seconds: u32,
-    devices: Vec<Device>,
+    pub(crate) token: String,
+    pub(crate) max_age_seconds: u32,
+    pub(crate) devices: Vec<Device>,
 }
 
 fn valid_token(token: &str) -> bool {

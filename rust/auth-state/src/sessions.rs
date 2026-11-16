@@ -107,6 +107,16 @@ impl<T: SessionData> SessionTable<T> {
         now: i64,
         read: impl FnOnce(&T) -> Option<R>,
     ) -> Option<R> {
+        self.with_session_deadline(token, now, read)
+            .map(|(value, _)| value)
+    }
+
+    pub fn with_session_deadline<R>(
+        &mut self,
+        token: &str,
+        now: i64,
+        read: impl FnOnce(&T) -> Option<R>,
+    ) -> Option<(R, i64)> {
         let session = self.tokens.get_mut(token)?;
         if session.expires_at <= now {
             self.remove(token);
@@ -121,7 +131,7 @@ impl<T: SessionData> SessionTable<T> {
             self.expiry.insert((expires_at, session.id));
             session.expires_at = expires_at;
         }
-        Some(result)
+        Some((result, expires_at))
     }
 
     pub fn remove(&mut self, token: &str) {

@@ -1,5 +1,6 @@
 use std::io;
 
+use crate::profile_sessions::{MAX_PROOF_USER, Proof};
 use bytes::{Buf, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio_tungstenite::tungstenite::{Message, protocol::CloseFrame};
@@ -12,6 +13,9 @@ const COMPLETE: u8 = 9;
 const TERMINATE: u8 = 10;
 pub(super) const PEER_CLOSED: u8 = 11;
 const HEADER: usize = 5;
+const REQUEST_PREFIX: usize = 9;
+const PROFILE_PREFIX: usize = 17;
+const EXTENDED_PREFIX: usize = REQUEST_PREFIX + PROFILE_PREFIX + MAX_PROOF_USER;
 
 pub(super) enum Packet {
     Message(Message),
@@ -85,7 +89,7 @@ impl<R: AsyncRead + Unpin> Reader<R> {
 
 pub(super) struct Writer<W> {
     output: BufWriter<W>,
-    header: [u8; HEADER + 9],
+    header: [u8; HEADER + EXTENDED_PREFIX],
     start: usize,
     end: usize,
     payload: Bytes,
@@ -95,7 +99,7 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
     pub(super) fn new(output: W) -> Self {
         Self {
             output: BufWriter::with_capacity(16 * 1024, output),
-            header: [0; HEADER + 9],
+            header: [0; HEADER + EXTENDED_PREFIX],
             start: 0,
             end: 0,
             payload: Bytes::new(),
@@ -107,10 +111,21 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
         ticket: u64,
         validation: u8,
         payload: Bytes,
+        profile: Option<Proof>,
     ) -> io::Result<()> {
-        let mut prefix = [validation; 9];
+        let mut prefix = [0; EXTENDED_PREFIX];
         prefix[..8].copy_from_slice(&ticket.to_le_bytes());
-        self.send(REQUEST, &prefix, payload).await
+        prefix[8] = validation;
+        let mut end = REQUEST_PREFIX;
+        if let Some(profile) = profile {
+            prefix[8] |= 8;
+            prefix[9..17].copy_from_slice(&profile.revision.to_le_bytes());
+            prefix[17..25].copy_from_slice(&profile.deadline.to_le_bytes());
+            prefix[25] = profile.user.len() as u8;
+            end += PROFILE_PREFIX + profile.user.len();
+            prefix[26..end].copy_from_slice(profile.user.as_bytes());
+        }
+        self.send(REQUEST, &prefix[..end], payload).await
     }
 
     pub(super) async fn send(&mut self, kind: u8, prefix: &[u8], payload: Bytes) -> io::Result<()> {
@@ -153,7 +168,7 @@ mod tests {
         let payload = Bytes::from_static(b"{\"action\":\"test\"}");
         let mut received = Vec::new();
         tokio::select! {
-            result = writer.request(17,1,payload.clone()) => panic!("write should still be pending: {result:?}"),
+            result = writer.request(17,1,payload.clone(),None) => panic!("write should still be pending: {result:?}"),
             first = input.read_u8() => received.push(first.unwrap()),
         }
         let notify = async {

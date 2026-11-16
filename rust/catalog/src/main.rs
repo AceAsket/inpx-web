@@ -64,7 +64,59 @@ fn serve<Q: serde::de::DeserializeOwned, R: Serialize>(
 }
 
 fn run(args: &[OsString]) -> Result<()> {
-    const USAGE: &str = "usage: inpx-catalog <build|shelves|serve-shelves|build-lookup|publish-lookup|seal-lookup|lookup|build-book|build-index|build-number-index|book-identities|build-store|store|count-book-files|folder-inventory|folder-index|publish-folder-cache|prepare-update|catalogue-lock|service-cache|access-store|progress-journal|backup-zip|backup-vault|book-archive|book-batch|book-cache|isbn-store|credentials|kosync> <path>";
+    if let [command] = args
+        && command == "load-config"
+    {
+        let options = serde_json::from_reader(io::stdin().lock())
+            .map_err(|_| "Invalid configuration load request")?;
+        let result = inpx_catalog::configuration::load(options)?;
+        serde_json::to_writer(io::stdout().lock(), &result)?;
+        return Ok(());
+    }
+    if let [command] = args
+        && command == "save-config"
+    {
+        let saved = inpx_catalog::configuration::save_from(io::stdin().lock())?;
+        println!("{}", json!({ "saved": saved }));
+        return Ok(());
+    }
+    if let [command] = args
+        && command == "install-web-app"
+    {
+        let options = serde_json::from_reader(io::stdin().lock())?;
+        inpx_catalog::web_app::install(options)?;
+        println!("{}", json!({ "installed": true }));
+        return Ok(());
+    }
+    if let [command] = args
+        && command == "library-sources"
+    {
+        let options = serde_json::from_reader(io::stdin().lock())?;
+        let sources = inpx_catalog::library_sources::resolve(options)?;
+        println!("{}", json!({ "sources": sources }));
+        return Ok(());
+    }
+    if let [command, data, config, version] = args
+        && command == "upgrade-snapshot"
+    {
+        let version = version.to_str().ok_or("invalid upgrade version")?;
+        let result =
+            inpx_catalog::upgrade_data::snapshot(Path::new(data), Path::new(config), version)?;
+        println!("{}", serde_json::to_string(&result)?);
+        return Ok(());
+    }
+    if let [command, destination, source, config] = args
+        && command == "migrate-data"
+    {
+        let directory = inpx_catalog::upgrade_data::migrate(
+            Path::new(destination),
+            Path::new(source),
+            Path::new(config),
+        )?;
+        println!("{}", json!({ "directory": directory }));
+        return Ok(());
+    }
+    const USAGE: &str = "usage: inpx-catalog <build|shelves|serve-shelves|build-lookup|publish-lookup|seal-lookup|lookup|build-book|build-index|build-number-index|book-identities|build-store|store|count-book-files|folder-inventory|folder-index|publish-folder-cache|prepare-update|catalogue-lock|service-cache|access-store|progress-journal|backup-zip|backup-vault|book-archive|book-batch|book-cache|directory-diagnostics|isbn-store|credentials|kosync> <path>";
     let [command, path] = args else {
         return Err(USAGE.into());
     };
@@ -141,8 +193,11 @@ fn run(args: &[OsString]) -> Result<()> {
         let cache = inpx_catalog::service_cache::ServiceCache::open(path)?;
         serve(input, |request| cache.query(request))?;
     } else if command == "access-store" {
-        let store = inpx_catalog::access_store::AccessStore::open(path)?;
-        serve(input, |request| store.query(request))?;
+        inpx_catalog::access_store::serve(
+            path,
+            input,
+            BufWriter::with_capacity(128 * 1024, io::stdout().lock()),
+        )?;
     } else if command == "progress-journal" {
         let journal = inpx_catalog::progress_journal::ProgressJournal::new(path);
         serve(input, |request| journal.query(request))?;
@@ -162,6 +217,8 @@ fn run(args: &[OsString]) -> Result<()> {
         inpx_catalog::book_batch::serve(input, BufWriter::new(io::stdout().lock()))?;
     } else if command == "book-cache" {
         inpx_catalog::book_cache::serve(input, BufWriter::new(io::stdout().lock()))?;
+    } else if command == "directory-diagnostics" {
+        inpx_catalog::directory_diagnostics::serve(input, BufWriter::new(io::stdout().lock()))?;
     } else if command == "kosync" {
         inpx_catalog::kosync::serve(input, BufWriter::new(io::stdout().lock()))?;
     } else if command == "isbn-store" {

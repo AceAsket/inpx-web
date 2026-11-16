@@ -30,6 +30,14 @@ function applyEnvSecurityOverrides(targetConfig) {
     targetConfig.reviewIndexMaxEntries = Math.max(1, parseInt(process.env.INPX_REVIEW_INDEX_MAX_ENTRIES || '100000',10) || 100000);
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_LOW_MEMORY_MODE'))
         targetConfig.lowMemoryMode = process.env.INPX_LOW_MEMORY_MODE === 'true';
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_ENABLE_CONVERSION'))
+        targetConfig.conversionEnabled = process.env.INPX_ENABLE_CONVERSION !== 'false';
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_CONVERSION_FORMATS')) {
+        const formats = process.env.INPX_CONVERSION_FORMATS.split(',').map(value => value.trim().toLowerCase())
+            .filter(value => value && value !== 'mobi');
+        if (targetConfig.mobiEnabled !== false) formats.push('mobi');
+        targetConfig.conversionFormats = [...new Set(formats)];
+    }
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_OPDS_COMPATIBILITY')) {
         const compatibility = process.env.INPX_OPDS_COMPATIBILITY;
         if (!['standard', 'tolino'].includes(compatibility)) throw new Error('INPX_OPDS_COMPATIBILITY: standard или tolino');
@@ -182,19 +190,13 @@ async function init() {
         config.resetAdminPassword = true;
     }
 
-    if (argv['library-sources']) {
-        const {parseSourcesFromString} = require('./core/LibrarySources');
-        config.librarySources = parseSourcesFromString(argv['library-sources']);
-    }
-
+    if (config.remoteLib) config.inpxFile = `${config.dataDir}/remote.inpx`;
+    await resolveLibrarySources(config, argv);
     if (config.remoteLib) {
-        config.inpxFile = `${config.dataDir}/remote.inpx`;
         const RemoteLib = require('./core/RemoteLib');//singleton
         const remoteLib = new RemoteLib(config);
         await remoteLib.downloadInpxFile();
     }
-
-    await resolveLibrarySources(config, argv);
 
     config.recreateDb = argv.recreate || false;
     config.inpxFilterFile = config.inpxFilterFile || `${path.dirname(config.configFile)}/filter.json`;
@@ -240,6 +242,8 @@ async function main() {
     if (closeBookArchive) ayncExit.addAfter(closeBookArchive);
     const closeBookCache = require('./core/RustBookCache').start();
     if (closeBookCache) ayncExit.addAfter(closeBookCache);
+    const closeDirectoryDiagnostics = require('./core/DirectoryDiagnostics').start({lazy:!config.metricsEnabled});
+    if (closeDirectoryDiagnostics) ayncExit.addAfter(closeDirectoryDiagnostics);
     const closeKoSync = require('./core/RustKoSync').start();
     if (closeKoSync) ayncExit.addAfter(closeKoSync);
     const closeBatchArchive = require('./core/RustBatchArchive').start();
@@ -275,19 +279,22 @@ async function main() {
     if (devModule)
         devModule.logQueries(app);
 
+    const readingListStore = new (require('./core/ReadingListStore'))(config);
+    await readingListStore.initialize();
     const opds = require('./core/opds');
-    opds(app, config, security);
+    opds(app, config, security, readingListStore);
 
-    const webAccess = new (require('./core/WebAccess'))(config);
-    await webAccess.init();
+    const rustPrograms = require('./core/RustPrograms');
+    const nativeLibraryAccess = !!(rustPrograms.executable('server') && rustPrograms.executable('catalog'));
+    const webAccess = new (require('./core/WebAccess'))(config,security.nativeAuth,nativeLibraryAccess);
+    const libraryAccess = await webAccess.init();
 
     const { WebSocketController } = require('./controllers');
-    const webSocketController = new WebSocketController(wss, webAccess, config, security);
+    const webSocketController = new WebSocketController(wss, webAccess, config, security, readingListStore);
     require('./core/ProfileWebLogin').register(app, config, webSocketController.webWorker, security, webAccess, webSocketController.profileAccess);
     const {ServerActivity} = require('./core/ServerActivity');
     webSocketController.webWorker.serverActivity = new ServerActivity(config, security.secret, log);
-    await webSocketController.webWorker.readingListStore.loadSnapshot();
-    await webSocketController.webWorker.readingListStore.warnIfDefaultAdminPassword()
+    await readingListStore.warnIfDefaultAdminPassword()
         .catch(e => log(LM_WARN, `Cannot check the admin password: ${e.message}`));
 
     require('./core/AudiobookshelfProvider').init(app, config, webSocketController.webWorker, security);
@@ -319,6 +326,9 @@ async function main() {
         assets:!devModule,
         websocket:{maxPayload:maxWebSocketPayload,textOnly:true},
         websocketRequests:true,
+        libraryAccess,
+        bindLibraryAccess:libraryAccess ? transport=>webAccess.bindNative(transport) : undefined,
+        bindProfileSessions:transport=>{webSocketController.webWorker.profileTransport = transport;},
         requestAccess:()=>security.requestAccessPolicy(),
         onWebSocketRejected:(reason,peer)=>security.logNativeWebSocketRejection(reason,peer),
         onFailure(error) {

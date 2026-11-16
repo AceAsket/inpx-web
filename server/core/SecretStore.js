@@ -4,13 +4,7 @@ const fs = require('fs-extra');
 const native = require('./RustCredentials');
 
 const encryptedPrefix = 'enc:v1:';
-const secretFields = [
-    'telegramBotToken',
-    'telegramProxyPassword',
-    'smtpPass',
-    'opds.password',
-    'metricsToken',
-];
+const {secrets:secretFields} = require('../../rust/catalog/config-fields.json');
 
 function getPath(obj = {}, field = '') {
     return String(field || '').split('.').reduce((acc, key) => (

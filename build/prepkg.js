@@ -4,11 +4,13 @@ const yazl = require('yazl');
 
 const MarkdownIt = require('markdown-it');
 const {fileName: authStateFile} = require('../server/core/RustAuthState');
-const {rustProgramEntry} = require('./release-archive');
+const {executableNames, rustProgramEntry} = require('./release-archive');
 
-const platform = process.argv[2];
+const args = process.argv.slice(2);
+const native = args.includes('--rust');
+const platform = args.find(value => value !== '--rust');
 
-const distDir = path.resolve(__dirname, '../dist');
+const distDir = require('./dist-dir');
 const tmpDir = `${distDir}/tmp`;
 const publicDir = `${tmpDir}/public`;
 const outDir = `${distDir}/${platform}`;
@@ -72,13 +74,14 @@ async function bundleJxlDecoder() {
 }
 
 async function build() {
-    if (!platform)
-        throw new Error(`Please set platform`);
+    if (!platform || args.filter(value => value !== '--rust').length !== 1)
+        throw new Error('Usage: node build/prepkg.js <target> [--rust]');
+    const [application] = executableNames(platform, false);
 
     const rustTarget = process.env.CARGO_TARGET_DIR || path.resolve(__dirname,'../rust/target');
     const authState = process.env.INPX_RUST_AUTH_WASM || path.join(rustTarget,'wasm32-unknown-unknown/release',authStateFile);
-    const authBytes = await fs.readFile(authState);
-    if (!WebAssembly.validate(authBytes))
+    const authBytes = native ? null : await fs.readFile(authState);
+    if (authBytes && !WebAssembly.validate(authBytes))
         throw new Error(`Invalid Rust authentication module: ${authState}`);
     const nativePlatform = {win:'win32:x64',linux:'linux:x64','linux-arm64':'linux:arm64',macos:'darwin:x64'};
     const programs = [];
@@ -91,15 +94,21 @@ async function build() {
         }
         if (source) {
             await fs.access(source);
-            programs.push({source,entry});
+            programs.push({source,entry:native && program === 'server' ? application : entry});
+        } else if (native) {
+            throw new Error(`Missing Rust ${program} for ${platform}. Build it or set INPX_RUST_${program.toUpperCase()}_BINARY.`);
         }
     }
 
-    require('./patch-pkg')();
+    if (!native) require('./patch-pkg')();
+    await fs.access(path.join(publicDir,'index.html'));
 
     await fs.emptyDir(outDir);
-    await bundleJxlDecoder();
-    await fs.writeFile(path.join(outDir,'bin',authStateFile),authBytes);
+    await fs.ensureDir(path.join(outDir,'bin'));
+    if (authBytes) {
+        await bundleJxlDecoder();
+        await fs.writeFile(path.join(outDir,'bin',authStateFile),authBytes);
+    }
     for (const {source,entry} of programs) {
         const output = path.join(outDir,entry);
         await fs.copyFile(source,output);
@@ -112,20 +121,12 @@ async function build() {
     readme = converter.render(readme);
     await fs.writeFile(`${outDir}/readme.html`, readme);
 
-    // Упаковываем public в public.json для pkg.
-    if (await fs.pathExists(publicDir)) {
-
-        const zipFile = `${tmpDir}/public.zip`;
-        const jsonFile = `${distDir}/public.json`;//distDir !!!
-
-        await fs.remove(zipFile);
-        await zipDirectoryToFile(publicDir, zipFile);
-
-        const data = (await fs.readFile(zipFile)).toString('base64');
-        await fs.writeFile(jsonFile, JSON.stringify({data}));
-    } else {
-        throw new Error(`publicDir: ${publicDir} does not exist`);
-    }
+    const zipFile = `${tmpDir}/public.zip`;
+    const jsonFile = native ? path.join(outDir,'bin','public.json') : path.join(distDir,'public.json');
+    await fs.remove(zipFile);
+    await zipDirectoryToFile(publicDir, zipFile);
+    const data = (await fs.readFile(zipFile)).toString('base64');
+    await fs.writeFile(jsonFile, JSON.stringify({data}));
 }
 
 async function main() {

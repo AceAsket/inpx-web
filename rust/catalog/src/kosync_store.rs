@@ -27,9 +27,9 @@ type Accounts = IndexMap<String, AccountEntry>;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Client {
-    user_id: String,
-    password_hash: Option<String>,
-    expected_verifier: Option<String>,
+    pub(crate) user_id: String,
+    pub(crate) password_hash: Option<String>,
+    pub(crate) expected_verifier: Option<String>,
 }
 
 struct Account {
@@ -450,10 +450,10 @@ impl Store {
     pub fn link(
         &mut self,
         file: &Path,
-        source: &Path,
         uid: &str,
         ext: &str,
         now: u64,
+        source: impl FnOnce() -> Result<PathBuf>,
     ) -> Result<()> {
         if uid.is_empty() || !matches!(ext, "fb2" | "epub" | "pdf" | "djvu") {
             return Ok(());
@@ -462,7 +462,7 @@ impl Store {
             if state.accounts.is_empty() {
                 return Ok(false);
             }
-            update_link(&mut state.books, source, uid, ext, now)
+            update_link(&mut state.books, &source()?, uid, ext, now)
         })
     }
 }

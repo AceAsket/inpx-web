@@ -126,6 +126,65 @@ impl From<sevenz_rust2::Error> for Failure {
 
 type Extraction<T> = std::result::Result<T, Failure>;
 
+pub(crate) fn extract_input(
+    input: crate::book_source::Input,
+    output: &mut impl Write,
+    limit: u64,
+) -> Extraction<()> {
+    let copy = |declared: u64, reader: &mut dyn Read, output: &mut dyn Write| {
+        if declared > limit {
+            return Err(Failure::Limit);
+        }
+        if io::copy(&mut reader.take(declared.saturating_add(1)), output)? != declared {
+            return Err(io::Error::other("Размер файла книги изменился при извлечении").into());
+        }
+        Ok(())
+    };
+    let crate::book_source::Input { file, path, member } = input;
+    if let Some(member) = member {
+        read_member(&path, file, &member, |size, reader| {
+            copy(size, reader, output)
+        })
+    } else {
+        let declared = file.metadata()?.len();
+        copy(
+            declared,
+            &mut BufReader::with_capacity(READER_BYTES, file),
+            output,
+        )
+    }
+}
+
+fn read_member<T>(
+    path: &Path,
+    file: File,
+    member: &str,
+    process: impl FnMut(u64, &mut dyn Read) -> Extraction<T>,
+) -> Extraction<T> {
+    let legacy = encoding_rs::IBM866.encode(member).0;
+    let legacy = String::from_utf8_lossy(&legacy);
+    ArchiveReader::open(path, file)?
+        .directory
+        .read(member, Some(&legacy), process)
+}
+
+pub(crate) fn metadata_input(
+    input: crate::book_source::Input,
+    format: Format,
+    limit: u64,
+) -> Extraction<serde_json::Value> {
+    let crate::book_source::Input { file, path, member } = input;
+    if let Some(member) = member {
+        read_member(&path, file, &member, |size, reader| {
+            book_metadata::read_stream(&format, size, reader, limit, false)
+        })
+    } else if format == Format::Epub {
+        book_metadata::read_epub(BufReader::with_capacity(READER_BYTES, file), false)
+    } else {
+        book_metadata::read_fb2(BufReader::with_capacity(READER_BYTES, file), limit, false)
+    }
+}
+
 struct ArchiveCache(VecDeque<CachedArchive>);
 
 struct CachedArchive {

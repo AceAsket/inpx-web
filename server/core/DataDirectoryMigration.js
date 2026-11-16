@@ -15,6 +15,8 @@ const stateEntries = [
 
 async function copyWorkingDirectory(source, destination, config) {
     const configFile = path.resolve(config.configFile);
+    const native = await require('./RustStartup').run('migrate-data', [destination, source, configFile]);
+    if (typeof native?.directory === 'string') return native.directory;
     const entries = Object.keys(targets({...config, dataDir: source})).filter(name => name !== 'config.json');
     const existing = [];
     for (const entry of [...entries, ...stateEntries]) {

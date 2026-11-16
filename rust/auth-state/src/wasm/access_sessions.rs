@@ -4,13 +4,10 @@ use super::{
     INPUT, OUTPUT_LEN,
     web_access::{prune_pending, remove_pending, take_pending},
 };
+use crate::access_wire::{
+    self, COUNTS_BYTES, Counts, REMOVAL_BYTES, SNAPSHOT_BYTES, TOKEN_BYTES, UPDATE_BYTES,
+};
 use crate::web_access_sessions::{Access, SessionValue, WebAccessSessions};
-
-const TOKEN_BYTES: usize = 64;
-// Counts are little-endian u32. A row contains the hex token followed by little-endian f64 fields.
-const LOAD_BYTES: usize = TOKEN_BYTES + 16;
-const REFRESH_BYTES: usize = TOKEN_BYTES + 24;
-const REMOVAL_BYTES: usize = TOKEN_BYTES + 8;
 
 thread_local! {
     static SESSIONS: RefCell<WebAccessSessions> = RefCell::new(WebAccessSessions::default());
@@ -23,6 +20,10 @@ fn with_session<R>(f: impl FnOnce(&mut WebAccessSessions, &str) -> R) -> R {
         let token = std::str::from_utf8(input).expect("host writes UTF-8");
         SESSIONS.with_borrow_mut(|sessions| f(sessions, token))
     })
+}
+
+pub(super) fn issue_verified(token: &str, now: i64) -> Option<u64> {
+    SESSIONS.with_borrow_mut(|sessions| sessions.issue_verified(token, now))
 }
 
 #[unsafe(no_mangle)]
@@ -40,13 +41,11 @@ pub extern "C" fn access_configure(timeout: f64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn access_restore() -> u32 {
     INPUT.with_borrow(|input| {
-        let (rows, trailing) = input.as_chunks::<LOAD_BYTES>();
+        let (rows, trailing) = input.as_chunks::<SNAPSHOT_BYTES>();
         if !trailing.is_empty()
-            || rows.iter().any(|row| {
-                !row[..TOKEN_BYTES]
-                    .iter()
-                    .all(|byte| matches!(byte,b'0'..=b'9'|b'a'..=b'f'))
-            })
+            || rows
+                .iter()
+                .any(|row| access_wire::token(&row[..TOKEN_BYTES]).is_none())
         {
             return 0;
         }
@@ -128,7 +127,9 @@ pub extern "C" fn access_collect(now: f64) -> *const u8 {
     BATCH.with_borrow_mut(|output| {
         output.clear();
         output.reserve(
-            8 + changes.updates.len() * REFRESH_BYTES + changes.removals.len() * REMOVAL_BYTES,
+            COUNTS_BYTES
+                + changes.updates.len() * UPDATE_BYTES
+                + changes.removals.len() * REMOVAL_BYTES,
         );
         output.extend_from_slice(&(changes.updates.len() as u32).to_le_bytes());
         output.extend_from_slice(&(changes.removals.len() as u32).to_le_bytes());
@@ -145,4 +146,38 @@ pub extern "C" fn access_collect(now: f64) -> *const u8 {
         OUTPUT_LEN.set(output.len());
         output.as_ptr()
     })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn access_complete_batch(success: u32) {
+    INPUT.with_borrow(|input| {
+        let Some((header, rows)) = input.split_first_chunk::<COUNTS_BYTES>() else {
+            return;
+        };
+        let counts = Counts::read(header);
+        if counts.byte_len() != Some(input.len()) {
+            return;
+        }
+        let (updates, removals) = rows.split_at(counts.updates * UPDATE_BYTES);
+        let (rows, stride) = if success != 0 {
+            (removals, REMOVAL_BYTES)
+        } else {
+            (updates, UPDATE_BYTES)
+        };
+        SESSIONS.with_borrow_mut(|sessions| {
+            for row in rows.chunks_exact(stride) {
+                let Some(token) = access_wire::token(&row[..TOKEN_BYTES]) else {
+                    continue;
+                };
+                let Some(version) = access_wire::number(&row[TOKEN_BYTES..TOKEN_BYTES + 8]) else {
+                    continue;
+                };
+                if success != 0 {
+                    sessions.finish_revocation(token, version);
+                } else {
+                    sessions.retry_refresh(token, version);
+                }
+            }
+        });
+    });
 }

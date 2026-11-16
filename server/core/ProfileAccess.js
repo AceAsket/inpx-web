@@ -1,4 +1,5 @@
 const {parseBasicAuth, equal} = require('./opds/Auth');
+const {admission} = require('./ProfileSessions');
 
 const bootstrapActions = new Set(['test', 'get-config', 'get-worker-state', 'login-user-profile', 'profile-totp-enrollment', 'resume-user-profile', 'logout-user-profile', 'logout']);
 
@@ -30,13 +31,36 @@ class ProfileAccess {
     clearBinding(session) {
         if (!session || !session.proxyProfileUserId)
             return;
-        this.worker.closeProfileSession(session.profileAccessToken);
+        const token = session.profileAccessToken;
         session.profileAccessToken = undefined;
         session.proxyProfileUserId = undefined;
         session.proxyProfileLogin = undefined;
+        return this.worker.closeProfileSession(token);
     }
 
-    async resolve(req, token = '', {identityOnly = false} = {}) {
+    async bind(session, user, login) {
+        if (session.proxyProfileUserId !== user.id || session.proxyProfileLogin !== login)
+            await this.clearBinding(session);
+        if (await this.worker.getProfileSessionUser(session.profileAccessToken) !== user.id) {
+            session.profileAccessToken = await this.worker.createProfileSession(user.id);
+            session.proxyProfileUserId = user.id;
+            session.proxyProfileLogin = login;
+        }
+        return {user, token: session.profileAccessToken, bound: true};
+    }
+
+    bindSession(session, user, login) {
+        if (!this.worker.profileTransport) return this.bind(session,user,login);
+        const pending = this.worker.profileBindings ||= new Map();
+        const previous = pending.get(session.id) || Promise.resolve();
+        const binding = previous.catch(()=>{}).then(()=>this.bind(session,user,login));
+        pending.set(session.id,binding);
+        return binding.finally(()=>{
+            if (pending.get(session.id) === binding) pending.delete(session.id);
+        });
+    }
+
+    async resolve(req, token = '', {identityOnly = false, profileProof} = {}) {
         const store = this.worker.readingListStore;
         let session = this.security && this.security.getSession(req);
         if (this.bindingEnabled) {
@@ -47,30 +71,23 @@ class ProfileAccess {
             const user = login && (identityOnly ? await store.getUserIdentity(login, 'login')
                 : (await store.load()).users.find(item => item.login === login));
             if (user?.blocked) {
-                this.clearBinding(session);
+                await this.clearBinding(session);
                 throw denied('Профиль недоступен', 403);
             }
             if (user) {
                 session = this.security.ensureSession(req);
-                if (session.proxyProfileUserId !== user.id || session.proxyProfileLogin !== login)
-                    this.clearBinding(session);
-                if (this.worker.getProfileSessionUser(session.profileAccessToken) !== user.id) {
-                    session.profileAccessToken = this.worker.createProfileSession(user.id);
-                    session.proxyProfileUserId = user.id;
-                    session.proxyProfileLogin = login;
-                }
-                return {user, token: session.profileAccessToken, bound: true};
+                return this.bindSession(session,user,login);
             }
         }
         // A removed/renamed SSO profile must not leave an old authenticated token.
-        this.clearBinding(session);
+        await this.clearBinding(session);
         const accessToken = token || (session && session.profileAccessToken) || '';
-        const id = this.worker.getProfileSessionUser(accessToken);
+        const id = await this.worker.getProfileSessionUser(accessToken,profileProof);
         if (!id)
             return null;
         const user = identityOnly ? await store.getUserIdentity(id, 'id')
             : (await store.load()).users.find(item => item.id === id);
-        if (user?.blocked) this.worker.closeProfileSession(accessToken);
+        if (user?.blocked) await this.worker.closeProfileSession(accessToken);
         return user && !user.blocked ? {user, token: accessToken, bound: false} : null;
     }
 
@@ -85,7 +102,7 @@ class ProfileAccess {
         delete req.profileLoginRequired;
         if (!this.loginRequired && !this.bindingEnabled && !(socketRequest.securitySession && socketRequest.securitySession.proxyProfileUserId))
             return;
-        const identity = await this.resolve(socketRequest, req.profileAccessToken, {identityOnly:true});
+        const identity = await this.resolve(socketRequest, req.profileAccessToken, {identityOnly:true,profileProof:req[admission]});
         if (identity && (identity.bound || this.loginRequired)) {
             if (!['get-config', 'get-user-profiles', 'logout-user-profile'].includes(req.action))
                 this.assertProfile(identity, String(req.userId || '').trim());

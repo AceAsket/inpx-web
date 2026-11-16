@@ -259,27 +259,65 @@ pub(crate) async fn send(
     receipts: &Receipts,
 ) -> Response<Body> {
     let Delivery {
-        mut parts,
+        parts,
         model,
         receipt,
     } = delivery;
     let Some(path) = config.path(&model) else {
         return error(StatusCode::BAD_GATEWAY);
     };
-    let prepared = match tokio::task::spawn_blocking(move || prepare(&path, &conditions, head))
-        .await
-    {
-        Ok(Ok(prepared)) => prepared,
+    match prepare_async(path, conditions, head).await {
+        Ok(prepared) => file_response(
+            parts,
+            prepared,
+            head,
+            receipt.map(|receipt| (receipts.clone(), receipt)),
+        ),
+        Err(status) => error(status),
+    }
+}
+
+pub(crate) async fn send_local(
+    path: PathBuf,
+    headers: HeaderMap,
+    conditions: HeaderMap,
+    head: bool,
+) -> Response<Body> {
+    match prepare_async(path, conditions, head).await {
+        Ok(prepared) => {
+            let (mut parts, ()) = Response::new(()).into_parts();
+            parts.headers = headers;
+            file_response(parts, prepared, head, None)
+        }
+        Err(status) => error(status),
+    }
+}
+
+async fn prepare_async(
+    path: PathBuf,
+    conditions: HeaderMap,
+    head: bool,
+) -> Result<Prepared, StatusCode> {
+    match tokio::task::spawn_blocking(move || prepare(&path, &conditions, head)).await {
+        Ok(Ok(prepared)) => Ok(prepared),
         Ok(Err(failure))
             if matches!(
                 failure.kind(),
                 io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
             ) || link_open_error().is_some_and(|code| failure.raw_os_error() == Some(code)) =>
         {
-            return error(StatusCode::NOT_FOUND);
+            Err(StatusCode::NOT_FOUND)
         }
-        _ => return error(StatusCode::INTERNAL_SERVER_ERROR),
-    };
+        _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+fn file_response(
+    mut parts: hyper::http::response::Parts,
+    prepared: Prepared,
+    head: bool,
+    receipt: Option<(Receipts, Receipt)>,
+) -> Response<Body> {
     let Prepared {
         version,
         status,
@@ -346,25 +384,18 @@ pub(crate) async fn send(
     let whole = !head && length == total;
     let payload = match data {
         Data::Empty => {
-            if let Some(receipt) = receipt {
+            if let Some((receipts, receipt)) = receipt {
                 receipts.ready(receipt, whole);
             }
             body(Bytes::new())
         }
         Data::Buffered(bytes) => {
-            FileBody::new(Payload::Buffered(bytes), length, receipts, receipt, whole).boxed_unsync()
+            FileBody::new(Payload::Buffered(bytes), length, receipt, whole).boxed_unsync()
         }
         Data::Stream(file) => {
             let mut file = tokio::fs::File::from_std(file);
             file.set_max_buf_size(FRAME);
-            FileBody::new(
-                Payload::Stream(file, Vec::new()),
-                length,
-                receipts,
-                receipt,
-                whole,
-            )
-            .boxed_unsync()
+            FileBody::new(Payload::Stream(file, Vec::new()), length, receipt, whole).boxed_unsync()
         }
     };
     Response::from_parts(parts, payload)
@@ -398,8 +429,7 @@ enum Payload {
 struct FileBody {
     payload: Payload,
     remaining: u64,
-    receipts: Receipts,
-    receipt: Option<Receipt>,
+    receipt: Option<(Receipts, Receipt)>,
     whole: bool,
 }
 
@@ -407,14 +437,12 @@ impl FileBody {
     fn new(
         payload: Payload,
         remaining: u64,
-        receipts: &Receipts,
-        receipt: Option<Receipt>,
+        receipt: Option<(Receipts, Receipt)>,
         whole: bool,
     ) -> Self {
         Self {
             payload,
             remaining,
-            receipts: receipts.clone(),
             receipt,
             whole,
         }
@@ -454,9 +482,9 @@ impl StreamBody for FileBody {
         }
         self.remaining -= bytes.len() as u64;
         if self.remaining == 0
-            && let Some(receipt) = self.receipt.take()
+            && let Some((receipts, receipt)) = self.receipt.take()
         {
-            self.receipts.ready(receipt, self.whole);
+            receipts.ready(receipt, self.whole);
         }
         Poll::Ready(Some(Ok(Frame::data(bytes))))
     }

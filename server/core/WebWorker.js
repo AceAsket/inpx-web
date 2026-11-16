@@ -12,6 +12,7 @@ const nodemailer = require('nodemailer');
 
 const ZipReader = require('./ZipReader');
 const RustBookArchive = require('./RustBookArchive');
+const directoryDiagnostics = require('./DirectoryDiagnostics');
 const bookFileCache = require('./BookFileCache');
 const LockQueue = require('./LockQueue');
 const WorkerState = require('./WorkerState');//singleton
@@ -20,6 +21,7 @@ const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
 const FileDownloader = require('./FileDownloader');
 const ReadingListStore = require('./ReadingListStore');
+const readerProgressJournal = require('./ReaderProgressJournal');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const profilePassword = require('./ProfilePassword');
 const profileTotp = require('./ProfileTotp');
@@ -63,6 +65,14 @@ const profileSessionTokenBytes = 24;
 
 function invalidProfileCredentials() {
     return Object.assign(new Error('Неверный логин, пароль или код'), {code:'INPX_INVALID_PROFILE_CREDENTIALS'});
+}
+
+function needProfileOtp() {
+    return Object.assign(new Error('Введите код двухфакторной защиты'), {code:'need_profile_otp'});
+}
+
+function needProfileOtpSetup() {
+    return Object.assign(new Error('Настройте обязательный OTP в веб-интерфейсе INPX Web'), {code:'need_profile_otp_setup'});
 }
 
 const stateToText = {
@@ -676,7 +686,7 @@ function getAuthorArchiveEntryHash(entryName = '') {
 let instance = null;
 
 class WebWorker {
-    constructor(config) {
+    constructor(config, readingListStore) {
         if (!instance) {
             this.config = config;
             this.workerState = new WorkerState();
@@ -687,7 +697,7 @@ class WebWorker {
             }
             
             this.inpxHashCreator = new InpxHashCreator(config);
-            this.readingListStore = new ReadingListStore(config);
+            this.readingListStore = readingListStore || new ReadingListStore(config);
             this.fb2Helper = new Fb2Helper();
             this.inpxFileHash = '';
             this.discoveryCache = new Map();
@@ -3410,7 +3420,7 @@ class WebWorker {
         if (!user || user.blocked)
             return [];
 
-        if (user.passwordHash && this.getProfileSessionUser(profileAccessToken) !== user.id)
+        if (user.passwordHash && await this.getProfileSessionUser(profileAccessToken) !== user.id)
             return [];
 
         const lists = await this.readingListStore.getLists(user.id, {});
@@ -3601,11 +3611,11 @@ class WebWorker {
         };
     }
 
-    async getUserProfiles(currentUserId = '', {includeTotpStatus = false, profileAccessToken = ''} = {}) {
+    async getUserProfiles(currentUserId = '', {includeTotpStatus = false, profileAccessToken = '', profileProof} = {}) {
         this.checkMyState();
 
         const {users, currentUser} = await this.readingListStore.getUsers(currentUserId);
-        const sessionUserId = profileAccessToken && this.getProfileSessionUser(profileAccessToken);
+        const sessionUserId = profileAccessToken && await this.getProfileSessionUser(profileAccessToken,profileProof);
         const includeAdminDetails = includeTotpStatus || !!sessionUserId && users.some(user => user.id === sessionUserId && user.isAdmin && !user.blocked);
         return {
             users: users
@@ -3638,14 +3648,23 @@ class WebWorker {
     }
 
     createProfileSession(userId) {
+        if (this.profileTransport)
+            return this.profileTransport.profileRequest('issue',{user:userId}).then(token=>{
+                this.serverActivity?.record(userId, 'logins');
+                return token;
+            });
         const token = utils.randomHexString(profileSessionTokenBytes);
         this.profileSessions.create(token,userId);
         this.serverActivity?.record(userId, 'logins');
         return token;
     }
 
-    getProfileSessionUser(token = '') {
+    getProfileSessionUser(token = '', proof) {
         const key = String(token || '').trim();
+        if (this.profileTransport) {
+            if (!/^[0-9a-f]{48}$/.test(key)) return '';
+            return this.profileTransport.profileProofUser(key,proof) ?? this.profileTransport.profileRequest('check',{token:key});
+        }
         const user = key.length === profileSessionTokenBytes*2 ? this.profileSessions.user(key) : '';
         if (!user) this.pendingProfileTotp?.delete(key);
         return user;
@@ -3653,13 +3672,16 @@ class WebWorker {
 
     closeProfileSession(token = '') {
         const key = String(token || '').trim();
+        if (this.profileTransport)
+            return /^[0-9a-f]{48}$/.test(key) ? this.profileTransport.profileRequest('close',{token:key}).then(()=>({success:true}))
+                : {success:true};
         if (key.length === profileSessionTokenBytes*2) this.profileSessions.delete(key);
         this.pendingProfileTotp?.delete(key);
         return {success: true};
     }
 
-    async getEffectiveUser(userId = '', profileAccessToken = '') {
-        const sessionUserId = this.getProfileSessionUser(profileAccessToken);
+    async getEffectiveUser(userId = '', profileAccessToken = '', profileProof) {
+        const sessionUserId = await this.getProfileSessionUser(profileAccessToken,profileProof);
         if (sessionUserId)
             return await this.readingListStore.getUser(sessionUserId);
 
@@ -3670,7 +3692,7 @@ class WebWorker {
         return requestedUser;
     }
 
-    async requireAuthorizedUser(userId = '', profileAccessToken = '', {identityOnly = false, exactId = false} = {}) {
+    async requireAuthorizedUser(userId = '', profileAccessToken = '', {identityOnly = false, exactId = false, profileProof} = {}) {
         const requestedUser = exactId && userId ? await this.readingListStore.getUserIdentity(userId, 'id')
             : identityOnly ? await this.readingListStore.getUserIdentity(userId)
             : await this.readingListStore.getUser(userId);
@@ -3678,7 +3700,7 @@ class WebWorker {
         if (!this.readingListStore.profileAuthPolicy?.otpRequired && !requestedUser.passwordHash && (!exactId || !profileAccessToken))
             return requestedUser;
 
-        const sessionUserId = this.getProfileSessionUser(profileAccessToken);
+        const sessionUserId = await this.getProfileSessionUser(profileAccessToken,profileProof);
         if (!sessionUserId || sessionUserId !== requestedUser.id)
             throw new Error('need_profile_login');
 
@@ -3718,7 +3740,7 @@ class WebWorker {
     async personalLibraryUser(userId, token) {
         const user = userId && await this.readingListStore.getExactProfileIdentity(userId);
         if (!user || user.blocked || isAnonymousDefaultUser(user)
-            || (user.passwordHash || token || this.readingListStore.profileAuthPolicy?.otpRequired) && this.getProfileSessionUser(token) !== user.id)
+            || (user.passwordHash || token || this.readingListStore.profileAuthPolicy?.otpRequired) && await this.getProfileSessionUser(token) !== user.id)
             throw new Error('need_profile_login');
         return user;
     }
@@ -3750,14 +3772,14 @@ class WebWorker {
         return user;
     }
 
-    async getCurrentUserProfile(userId = '', profileAccessToken = '') {
+    async getCurrentUserProfile(userId = '', profileAccessToken = '', profileProof) {
         this.checkMyState();
 
-        const requestedUser = await this.getEffectiveUser(userId, profileAccessToken);
+        const requestedUser = await this.getEffectiveUser(userId, profileAccessToken,profileProof);
         const user = !requestedUser || requestedUser.blocked ? await this.readingListStore.getUser('default') : requestedUser;
         const anonymousProfile = isAnonymousDefaultUser(user);
         const otpPolicyRequired = this.readingListStore.profileAuthPolicy?.otpRequired === true;
-        const profileAuthorized = (!user.blocked && !anonymousProfile && (!user.passwordHash && !otpPolicyRequired || this.getProfileSessionUser(profileAccessToken) === user.id));
+        const profileAuthorized = (!user.blocked && !anonymousProfile && (!user.passwordHash && !otpPolicyRequired || await this.getProfileSessionUser(profileAccessToken,profileProof) === user.id));
         const readingSummary = (profileAuthorized ? await this.buildUserReadingSummary(user, 48) : {count: 0, items: []});
         return {
             currentUserId: user.id,
@@ -3789,40 +3811,86 @@ class WebWorker {
         };
     }
 
-    async loginUserProfile(login = '', password = '', otp = '', {trustedDeviceToken = '', rememberDevice = false} = {}) {
+    async loginUserProfile(login = '', password = '', otp = '', options = {}) {
         this.checkMyState();
         const store = this.readingListStore;
         return withFileTransaction(store.file, async() => {
-            const user = await store.getProfileCredentials(store.normalizeLogin(login), true);
-            if (!user?.passwordHash || user.blocked || !await profilePassword.verify(user.passwordHash, user.login, password))
-                throw invalidProfileCredentials();
-            if (user.otpRequired && !user.profileTotp)
-                throw Object.assign(new Error('Настройте обязательный OTP в веб-интерфейсе INPX Web'), {code:'need_profile_otp_setup'});
-            const patch = {};
-            const canUseTrust = trustedDevices.available(user.profileAuthPolicy);
-            let deviceGrant;
-            if (user.profileTotp && otp === '') {
-                const trusted = canUseTrust && await trustedDevices.recognizes(user.profileTrustedDevices,trustedDeviceToken);
-                if (!trusted)
-                    throw Object.assign(new Error('Введите код двухфакторной защиты'), {code:'need_profile_otp'});
-            } else if (user.profileTotp) {
-                // Recovery codes are for signing back in after a lost authenticator.
-                const remember = canUseTrust && rememberDevice && /^\d{6}$/.test(otp)
-                    ? trustedDevices.remember(user.profileTrustedDevices,trustedDeviceToken,user.profileAuthPolicy.trustedBrowserDays)
-                    : undefined;
-                const result = await this.verifyProfileSecondFactor(user,otp,remember);
-                patch.profileTotp = result.state;
-                deviceGrant = result.grant;
-                if (deviceGrant) patch.profileTrustedDevices = deviceGrant.devices;
+            const username = store.normalizeLogin(login);
+            let authenticated;
+            if (this.profileTransport) {
+                if (username.length > 64) throw invalidProfileCredentials();
+                authenticated = await this.authenticateNativeProfile({
+                    source:'registry',file:path.resolve(store.file),login:username.toWellFormed(),
+                },password,otp,options);
             }
-            if (profilePassword.isLegacy(user.passwordHash)) patch.passwordHash = await profilePassword.hash(password);
-            if (Object.keys(patch).length) await store.updateProfileCredentials(user.id, patch);
+            if (!authenticated || authenticated.state === 'legacy') {
+                const user = await store.getProfileCredentials(username, true);
+                if (!user?.passwordHash || user.blocked) throw invalidProfileCredentials();
+                const result = this.profileTransport
+                    ? await this.authenticateNativeProfile({source:'profile',profile:{...user,id:user.id.toWellFormed()}},password,otp,options)
+                    : await this.authenticateProfile(user,password,otp,options);
+                authenticated = {...result,userId:user.id};
+            }
+            const {userId,patch,deviceGrant} = authenticated;
+            if (patch && Object.keys(patch).length) await store.updateProfileCredentials(userId, patch);
             return {
-                userId: user.id,
-                profileAccessToken: this.createProfileSession(user.id),
+                userId,
+                profileAccessToken: await this.createProfileSession(userId),
                 ...(deviceGrant ? {trustedDeviceToken:deviceGrant.token, trustedDeviceMaxAge:deviceGrant.maxAgeSeconds} : {}),
             };
         });
+    }
+
+    async authenticateNativeProfile(source, password, otp, {trustedDeviceToken, rememberDevice}) {
+        password = String(password || '').toWellFormed();
+        if (Buffer.byteLength(password) > profilePassword.maxPasswordBytes) throw invalidProfileCredentials();
+        const keyFile = path.resolve(new SecretStore(this.readingListStore.config).keyFile);
+        const result = await profilePassword.withScrypt(()=>this.profileTransport.profileLogin({
+            ...source,keyFile,password,
+            otp:typeof otp === 'string' && otp.length <= 64 ? otp.toWellFormed() : null,
+            trustedDeviceToken:typeof trustedDeviceToken === 'string' && trustedDeviceToken.length === 64
+                ? trustedDeviceToken.toWellFormed() : '',
+            rememberDevice:!!rememberDevice,
+        }));
+        switch (result.state) {
+            case 'accepted': return result;
+            case 'legacy': return result;
+            case 'denied': throw invalidProfileCredentials();
+            case 'needOtp': throw needProfileOtp();
+            case 'needOtpSetup': throw needProfileOtpSetup();
+            default: throw new Error('Некорректный ответ проверки входа в профиль');
+        }
+    }
+
+    async authenticateProfile(user, password, otp, {trustedDeviceToken, rememberDevice}) {
+        if (!await profilePassword.verify(user.passwordHash, user.login, password))
+            throw invalidProfileCredentials();
+        if (user.otpRequired && !user.profileTotp) throw needProfileOtpSetup();
+        const patch = {};
+        const canUseTrust = trustedDevices.available(user.profileAuthPolicy);
+        let deviceGrant;
+        if (user.profileTotp && otp === '') {
+            const trusted = canUseTrust && await trustedDevices.recognizes(user.profileTrustedDevices,trustedDeviceToken);
+            if (!trusted) throw needProfileOtp();
+        } else if (user.profileTotp) {
+            const remember = canUseTrust && rememberDevice && /^\d{6}$/.test(otp)
+                ? trustedDevices.remember(user.profileTrustedDevices,trustedDeviceToken,user.profileAuthPolicy.trustedBrowserDays)
+                : undefined;
+            const result = await this.verifyProfileSecondFactor(user,otp,remember);
+            patch.profileTotp = result.state;
+            deviceGrant = result.grant;
+            if (deviceGrant) patch.profileTrustedDevices = deviceGrant.devices;
+        }
+        if (profilePassword.isLegacy(user.passwordHash)) patch.passwordHash = await profilePassword.hash(password);
+        return {patch,deviceGrant};
+    }
+
+    async saveProfileCredentials(userId, patch, authorize = () => {}) {
+        const store = this.readingListStore;
+        if (this.profileTransport && await readerProgressJournal.writeProfileCredentials(
+            store.file,store.progressFile,userId,patch,authorize,
+        )) return;
+        await store.updateProfileCredentials(userId,patch,authorize);
     }
 
     async enrollRequiredProfileTotp(operation, {login = '', password = '', enrollmentId, code} = {}) {
@@ -3834,33 +3902,33 @@ class WebWorker {
                 throw invalidProfileCredentials();
             if (!user.otpRequired || user.profileTotp)
                 throw new Error('Войдите в профиль заново');
-            const pending = this.pendingRequiredProfileTotp ??= new ProfileTotpEnrollments(this.profileSessions,true);
+            const pending = this.pendingRequiredProfileTotp ??= new ProfileTotpEnrollments(this.profileSessions,true,this.profileTransport);
             if (operation === 'start') {
                 const now = Date.now();
-                if (!pending.prepare(user.id,now)) throw new Error('Повторите настройку позже');
+                if (!await pending.prepare(user.id,now)) throw new Error('Повторите настройку позже');
                 const id = utils.randomHexString(24);
                 const params = await profileTotp.start(user.login);
-                pending.create(id,user.id,params.secret,now);
+                await pending.create(id,user.id,params.secret,now);
                 return {...params, enrollmentId:id};
             }
             if (operation !== 'enable') throw new Error('Неизвестное действие с двухфакторной защитой');
             const {state, recoveryCodes} = await this.confirmProfileTotpSetup(pending, enrollmentId, user.id, code);
             const patch = {profileTotp:state};
             if (profilePassword.isLegacy(user.passwordHash)) patch.passwordHash = await profilePassword.hash(password);
-            await store.updateProfileCredentials(user.id, patch);
-            this.revokeUserSessions(user.id);
-            return {userId:user.id, profileAccessToken:this.createProfileSession(user.id), recoveryCodes};
+            await this.saveProfileCredentials(user.id, patch);
+            await this.revokeUserSessions(user.id);
+            return {userId:user.id, profileAccessToken:await this.createProfileSession(user.id), recoveryCodes};
         });
     }
 
     async confirmProfileTotpSetup(pending, key, userId, code) {
         const secret = typeof key === 'string' && key.length === profileSessionTokenBytes*2
-            ? pending.secret(key,userId,Date.now()) : undefined;
+            ? await pending.secret(key,userId,Date.now()) : undefined;
         if (!secret)
             throw new Error('Начните настройку двухфакторной защиты заново');
         const accepted = await profileTotp.confirm(new SecretStore(this.readingListStore.config),userId,secret,code);
         if (!accepted) {
-            pending.failed(key,userId);
+            await pending.failed(key,userId);
             throw invalidProfileCredentials();
         }
         return accepted;
@@ -3870,67 +3938,73 @@ class WebWorker {
         return (await this.verifyProfileSecondFactor(user,code)).state;
     }
 
+    get profileTotpAttempts() {
+        return this.profileTotpAttemptStore ??= new ProfileTotpAttempts(
+            this.profileTransport ? null : this.profileSessions.native,this.profileTransport,
+        );
+    }
+
     async verifyProfileSecondFactor(user, code, remember) {
-        const attempts = this.profileTotpAttempts ||= new ProfileTotpAttempts(this.profileSessions.native);
+        const attempts = this.profileTotpAttempts;
         const now = Date.now();
-        if (!attempts.allows(user.id,now)) throw invalidProfileCredentials();
+        if (!await attempts.allows(user.id,now)) throw invalidProfileCredentials();
         const accepted = await profileTotp.consumeWithTrust(new SecretStore(this.readingListStore.config),user.id,user.profileTotp,code,now,remember);
         if (!accepted) {
-            attempts.failed(user.id,now);
+            await attempts.failed(user.id,now);
             throw invalidProfileCredentials();
         }
-        attempts.delete(user.id);
+        await attempts.delete(user.id);
         return accepted;
     }
 
     async profileTotpAction(userId, profileAccessToken, operation, payload = {}) {
         const token = String(profileAccessToken || '').trim();
         const store = this.readingListStore;
-        const authorize = () => {
-            if (!token || !userId || this.getProfileSessionUser(token) !== userId)
+        const authorize = async () => {
+            if (!token || !userId || await this.getProfileSessionUser(token) !== userId)
                 throw new Error('need_profile_login');
         };
         if (operation === 'status') {
             return withFileTransaction(store.file, async() => {
                 const identity = await this.personalLibraryUser(userId, token);
                 const user = await store.getProfileCredentials(identity.id);
-                if (token) authorize();
+                if (token) await authorize();
                 return {otpEnabled:!!user.profileTotp, otpRequired:user.otpRequired, recoveryCodesRemaining:user.profileTotp?.recoveryHashes.length || 0,
                     opdsAppPasswordSet:user.opdsAppPasswordSet, hasPassword:!!(user.passwordHash && user.login),
                     trustedDeviceCount:user.profileTrustedDevices.length};
             });
         }
-        authorize();
+        await authorize();
         return withFileTransaction(store.file, async() => {
             const user = await store.getProfileCredentials(userId);
-            authorize();
+            await authorize();
             if (!user?.passwordHash || !user.login) throw new Error('Для защиты нужен локальный профиль с логином и паролем');
             const status = {otpEnabled:!!user.profileTotp, otpRequired:user.otpRequired, recoveryCodesRemaining:user.profileTotp?.recoveryHashes.length || 0,
                 opdsAppPasswordSet:user.opdsAppPasswordSet, trustedDeviceCount:user.profileTrustedDevices.length};
             if (!await profilePassword.verify(user.passwordHash, user.login, payload?.password))
                 throw invalidProfileCredentials();
-            authorize();
+            await authorize();
             if (operation === 'start' || operation === 'enable') {
                 if (status.otpEnabled) throw new Error('Двухфакторная защита уже включена');
-                const pending = this.pendingProfileTotp ??= new ProfileTotpEnrollments(this.profileSessions,false);
+                const pending = this.pendingProfileTotp ??= new ProfileTotpEnrollments(this.profileSessions,false,this.profileTransport);
                 if (operation === 'start') {
-                    if (!pending.prepare(token,Date.now())) throw new Error('Повторите настройку позже');
+                    if (!await pending.prepare(token,Date.now())) throw new Error('Повторите настройку позже');
                     const params = await profileTotp.start(user.login);
-                    authorize();
-                    pending.create(token,userId,params.secret,Date.now());
+                    await authorize();
+                    await pending.create(token,userId,params.secret,Date.now());
                     return params;
                 }
                 const {state, recoveryCodes} = await this.confirmProfileTotpSetup(pending, token, userId, payload?.code);
-                await store.updateProfileCredentials(userId, {profileTotp:state}, authorize);
-                pending.delete(token);
-                this.revokeUserSessions(userId, token);
-                authorize();
+                await this.saveProfileCredentials(userId, {profileTotp:state}, authorize);
+                await pending.delete(token);
+                await this.revokeUserSessions(userId, token);
+                await authorize();
                 return {...status, otpEnabled:true, recoveryCodesRemaining:recoveryCodes.length, recoveryCodes};
             }
             if (operation === 'create-opds-password' || operation === 'revoke-opds-password') {
                 const state = user.profileTotp ? await this.verifyProfileTotp(user, payload?.code) : null;
                 const result = await store.manageOpdsAppPassword(userId, operation, {profileTotp:state, authorize});
-                authorize();
+                await authorize();
                 return {...status, recoveryCodesRemaining:state?.recoveryHashes.length ?? status.recoveryCodesRemaining, ...result};
             }
             if (!['disable', 'regenerate-recovery', 'revoke-trusted-devices'].includes(operation))
@@ -3939,41 +4013,41 @@ class WebWorker {
             if (operation === 'disable' && status.otpRequired) throw new Error('OTP обязателен по настройке администратора');
             const state = await this.verifyProfileTotp(user, payload?.code);
             if (operation === 'revoke-trusted-devices') {
-                await store.updateProfileCredentials(userId, {profileTotp:state, profileTrustedDevices:[]}, authorize);
-                this.revokeUserSessions(userId, token);
-                authorize();
+                await this.saveProfileCredentials(userId, {profileTotp:state, profileTrustedDevices:[]}, authorize);
+                await this.revokeUserSessions(userId, token);
+                await authorize();
                 return {...status, recoveryCodesRemaining:state.recoveryHashes.length, trustedDeviceCount:0};
             }
             if (operation === 'disable') {
-                await store.updateProfileCredentials(userId, {profileTotp:null}, authorize);
-                this.revokeUserSessions(userId, token);
-                authorize();
+                await this.saveProfileCredentials(userId, {profileTotp:null}, authorize);
+                await this.revokeUserSessions(userId, token);
+                await authorize();
                 return {...status, otpEnabled:false, recoveryCodesRemaining:0, trustedDeviceCount:0};
             }
             const {recoveryCodes, recoveryHashes} = await profileTotp.newRecoveryCodes(userId);
-            await store.updateProfileCredentials(userId, {profileTotp:{...state, recoveryHashes}, profileTrustedDevices:[]}, authorize);
-            this.revokeUserSessions(userId, token);
-            authorize();
+            await this.saveProfileCredentials(userId, {profileTotp:{...state, recoveryHashes}, profileTrustedDevices:[]}, authorize);
+            await this.revokeUserSessions(userId, token);
+            await authorize();
             return {...status, recoveryCodesRemaining:recoveryCodes.length, recoveryCodes, trustedDeviceCount:0};
         });
     }
 
     async withAdminProfileTotpChange(adminId, adminToken, targetUserId, password, otp, change) {
         this.checkMyState();
-        const authorize = () => {
-            if (!adminId || this.getProfileSessionUser(adminToken) !== adminId)
+        const authorize = async () => {
+            if (!adminId || await this.getProfileSessionUser(adminToken) !== adminId)
                 throw new Error('need_profile_login');
         };
-        authorize();
+        await authorize();
         const store = this.readingListStore;
         return withFileTransaction(store.file, async() => {
             const admin = await store.getProfileCredentials(adminId);
-            authorize();
+            await authorize();
             if (!admin?.isAdmin) throw new Error('Только администратор может управлять профилями');
             if (admin.id === targetUserId) throw new Error('Свою двухфакторную защиту можно отключить в настройках своего профиля');
             if (!admin.login || !admin.passwordHash || !await profilePassword.verify(admin.passwordHash, admin.login, password))
                 throw invalidProfileCredentials();
-            authorize();
+            await authorize();
             const adminTotp = admin.profileTotp ? await this.verifyProfileTotp(admin, otp) : null;
             return change(store, admin, adminTotp, authorize);
         });
@@ -3982,8 +4056,8 @@ class WebWorker {
     async resetUserProfileTotp(adminId, adminToken, targetUserId, password, otp) {
         return this.withAdminProfileTotpChange(adminId, adminToken, targetUserId, password, otp, async(store, admin, adminTotp, authorize) => {
             const result = await store.resetProfileTotp(admin.id, targetUserId, adminTotp, authorize);
-            this.revokeUserSessions(result.userId);
-            this.profileTotpAttempts?.delete(result.userId);
+            await this.revokeUserSessions(result.userId);
+            await this.profileTotpAttempts.delete(result.userId);
             this.addAdminEvent('warn', 'security', 'Сброшена двухфакторная защита профиля',
                 {adminId:admin.id, userId:result.userId});
             return result;
@@ -3995,8 +4069,8 @@ class WebWorker {
         return this.withAdminProfileTotpChange(adminId, adminToken, targetUserId, password, otp, async(store, admin, adminTotp, authorize) => {
             const {changed, ...result} = await store.setProfileTotpRequired(admin.id, targetUserId, required, adminTotp, authorize);
             if (changed) {
-                this.clearRequiredProfileTotpEnrollment(result.userId);
-                if (required) this.revokeUserSessions(result.userId);
+                await this.clearRequiredProfileTotpEnrollment(result.userId);
+                if (required) await this.revokeUserSessions(result.userId);
                 this.addAdminEvent('warn', 'security', required ? 'OTP обязателен для профиля' : 'Требование OTP для профиля снято',
                     {adminId:admin.id, userId:result.userId});
             }
@@ -4010,10 +4084,9 @@ class WebWorker {
             const {activatingOtp, ...result} = await store.setProfileAuthPolicy(admin.id, policy, adminTotp, authorize, isAnonymousDefaultUser);
             if (activatingOtp) {
                 const keep = String(adminToken || '').trim();
-                this.profileSessions.clear(keep);
-                this.pendingProfileTotp?.clear(keep);
+                await this.clearProfileSessions(keep);
             }
-            if (!policy.otpRequired) this.pendingRequiredProfileTotp?.clear();
+            if (!policy.otpRequired) await this.pendingRequiredProfileTotp?.clear();
             this.addAdminEvent('warn', 'security', 'Изменены правила входа в профили', {adminId:admin.id, ...result.profileAuthPolicy});
             return result;
         });
@@ -4032,7 +4105,7 @@ class WebWorker {
             const user = await this.readingListStore.updateUser(userId, patch);
             if(previous.telegramChatId!==user.telegramChatId)this.telegramBot?.cancelDeliveries(userId);
             if (previous.passwordHash !== user.passwordHash || previous.login !== user.login)
-                this.revokeUserSessions(userId);
+                await this.revokeUserSessions(userId);
             return {user:_.omit(user, ['passwordHash', 'profileTotp', 'opdsAppPasswordHash', 'profileTrustedDevices'])};
         });
     }
@@ -4041,7 +4114,7 @@ class WebWorker {
         this.checkMyState();
         return withFileTransaction(this.readingListStore.file, async() => {
             const result = await this.readingListStore.deleteUser(userId);
-            this.revokeUserSessions(userId);
+            await this.revokeUserSessions(userId);
             return result;
         });
     }
@@ -4052,14 +4125,14 @@ class WebWorker {
         const store = this.readingListStore;
         return withFileTransaction(store.file, async() => {
             const admin = await this.requireAdmin(adminId, adminToken);
-            const authorize = () => {
-                if (this.getProfileSessionUser(adminToken) !== admin.id) throw new Error('need_profile_login');
+            const authorize = async () => {
+                if (await this.getProfileSessionUser(adminToken) !== admin.id) throw new Error('need_profile_login');
             };
             const {changed, ...result} = await store.setUserBlocked(admin.id, targetUserId, blocked, authorize);
             if (changed) {
                 if (blocked) {
-                    this.revokeUserSessions(result.userId);
-                    this.profileTotpAttempts?.delete(result.userId);
+                    await this.revokeUserSessions(result.userId);
+                    await this.profileTotpAttempts.delete(result.userId);
                     this.telegramBot?.cancelDeliveries(result.userId);
                 }
                 this.addAdminEvent('warn', 'security', blocked ? 'Профиль заблокирован' : 'Профиль разблокирован',
@@ -4070,13 +4143,21 @@ class WebWorker {
     }
 
     revokeUserSessions(userId, keepToken = '') {
+        if (this.profileTransport) return this.profileTransport.profileRequest('revoke',{user:userId,keep:keepToken});
         this.profileSessions.revoke(userId,keepToken);
         this.pendingProfileTotp?.revoke(userId,keepToken);
         this.clearRequiredProfileTotpEnrollment(userId);
     }
 
     clearRequiredProfileTotpEnrollment(userId) {
-        this.pendingRequiredProfileTotp?.revoke(userId);
+        return this.pendingRequiredProfileTotp?.revoke(userId);
+    }
+
+    clearProfileSessions(keep = '') {
+        if (this.profileTransport) return this.profileTransport.profileRequest('clear',{keep});
+        this.profileSessions.clear(keep);
+        this.pendingProfileTotp?.clear(keep);
+        if (!keep) this.pendingRequiredProfileTotp?.clear();
     }
 
     async getOpdsUsers() {
@@ -4194,139 +4275,14 @@ class WebWorker {
         return event;
     }
 
-    async dirSize(dir = '', maxFiles = 20000) {
-        const result = {path: dir, exists: false, size: 0, files: 0, truncated: false};
-        if (!dir || !await fs.pathExists(dir))
-            return result;
-
-        result.exists = true;
-        const stack = [dir];
-        while (stack.length) {
-            const current = stack.pop();
-            let list = [];
-            try {
-                list = await fs.readdir(current);
-            } catch (e) {
-                continue;
-            }
-
-            for (const name of list) {
-                const filePath = path.join(current, name);
-                let stat = null;
-                try {
-                    stat = await fs.stat(filePath);
-                } catch (e) {
-                    continue;
-                }
-
-                if (stat.isDirectory()) {
-                    stack.push(filePath);
-                } else {
-                    result.files++;
-                    result.size += stat.size;
-                    if (result.files >= maxFiles) {
-                        result.truncated = true;
-                        return result;
-                    }
-                }
-            }
-        }
-
-        return result;
-    }
-
-    async findFilesByExt(dir = '', exts = [], maxFiles = 200) {
-        const result = [];
-        const normalizedExts = new Set(exts.map(ext => String(ext || '').toLowerCase()));
-        if (!dir || !await fs.pathExists(dir))
-            return result;
-
-        const stack = [dir];
-        while (stack.length && result.length < maxFiles) {
-            const current = stack.pop();
-            let list = [];
-            try {
-                list = await fs.readdir(current, {withFileTypes: true});
-            } catch (e) {
-                continue;
-            }
-
-            for (const entry of list) {
-                const filePath = path.join(current, entry.name);
-                if (entry.isDirectory()) {
-                    stack.push(filePath);
-                    continue;
-                }
-
-                if (normalizedExts.has(path.extname(entry.name).toLowerCase()))
-                    result.push(filePath);
-
-                if (result.length >= maxFiles)
-                    break;
-            }
-        }
-
-        return result;
-    }
-
-    async countArchives(dir = '', maxFiles = 20000) {
-        const result = {count: 0, truncated: false};
-        if (!dir || !await fs.pathExists(dir))
-            return result;
-
-        const stack = [dir];
-        while (stack.length) {
-            const current = stack.pop();
-            let list = [];
-            try {
-                list = await fs.readdir(current, {withFileTypes: true});
-            } catch (e) {
-                continue;
-            }
-
-            for (const entry of list) {
-                const filePath = path.join(current, entry.name);
-                if (entry.isDirectory()) {
-                    stack.push(filePath);
-                    continue;
-                }
-
-                if (['.zip', '.7z', '.fb2', '.epub'].includes(path.extname(entry.name).toLowerCase()))
-                    result.count++;
-
-                if (result.count >= maxFiles) {
-                    result.truncated = true;
-                    return result;
-                }
-            }
-        }
-
-        return result;
-    }
-
-    async getLibrarySourceDiagnostics(source = {}) {
-        const libDir = String(source.libDir || '').trim();
-        const inpx = String(source.inpx || source.inpxFile || '').trim();
-        const foundInpx = libDir ? await this.findFilesByExt(libDir, ['.inpx'], 20) : [];
-        const archiveInfo = libDir ? await this.countArchives(libDir) : {count: 0, truncated: false};
-        const exists = async(name) => !!(libDir && await fs.pathExists(path.join(libDir, name)));
-
-        return {
-            inpxExists: !!inpx && await fs.pathExists(inpx),
-            libDirExists: !!libDir && await fs.pathExists(libDir),
-            foundInpx,
-            archiveCount: archiveInfo.count,
-            archiveCountTruncated: archiveInfo.truncated,
-            hasCovers: await exists('covers'),
-            hasEtc: await exists('etc'),
-            hasImages: await exists('images'),
-            hasBin: await exists('bin'),
-        };
-    }
-
     async cleanBrokenCoverCacheFiles(dir = '') {
         const result = {dir, removed: 0, checked: 0};
-        if (!dir || !await fs.pathExists(dir))
+        if (!dir)
+            return result;
+        const native = await directoryDiagnostics.purgeBrokenCovers(dir);
+        if (native)
+            return {...result,...native};
+        if (!await fs.pathExists(dir))
             return result;
 
         const allowed = new Set(['.png', '.jpg', '.gif']);
@@ -4359,7 +4315,10 @@ class WebWorker {
         index = index || await this.getIndexStatus();
         dbConfig = dbConfig || (index.ready ? await this.dbConfig() : {});
         const coverDir = this.config.coverDir || `${this.config.publicFilesDir}/cover`;
-        const coverSize = await this.dirSize(coverDir);
+        const [dbSize,bookSize,coverSize,tempSize] = await directoryDiagnostics.sizes([
+            {path:`${this.config.dataDir}/db`},{path:this.config.bookDir},{path:coverDir},
+            {path:this.config.tempDir,maxFiles:5000},
+        ]);
         const bookCacheSize = this.effectiveBookCacheSize();
         const coverCacheSize = cleanDirMaxSize(this.config.coverCacheSize);
         const cacheCleanTargetRatio = this.cacheCleanTargetRatio();
@@ -4403,10 +4362,10 @@ class WebWorker {
                 tempDir: this.config.tempDir,
             },
             sizes: {
-                db: await this.dirSize(`${this.config.dataDir}/db`),
-                bookCache: await this.dirSize(this.config.bookDir),
+                db: dbSize,
+                bookCache: bookSize,
                 coverCache: coverSize,
-                tempDir: await this.dirSize(this.config.tempDir, 5000),
+                tempDir: tempSize,
             },
             limits: {
                 maxFilesDirSize: this.config.maxFilesDirSize,
@@ -4440,7 +4399,7 @@ class WebWorker {
             enabled: source.enabled !== false,
             inpx: source.inpx || source.inpxFile || '',
             libDir: source.libDir || '',
-        }, await this.getLibrarySourceDiagnostics(source))));
+        }, await directoryDiagnostics.source(source))));
         const coverErrors = (this.config.adminEventLogEnabled === false ? [] : this.adminEvents.slice().reverse())
             .filter(event => {
                 if (event.level !== 'error')
@@ -4617,7 +4576,7 @@ class WebWorker {
 
     async diagnoseLibrarySource(userId = '', profileAccessToken = '', source = {}) {
         await this.requireAdmin(userId, profileAccessToken);
-        return await this.getLibrarySourceDiagnostics(source);
+        return await directoryDiagnostics.source(source);
     }
 
     effectiveBookCacheSize() {
@@ -5338,10 +5297,8 @@ class WebWorker {
                 } finally {
                     await resumeRoutes?.();
                 }
-                this.profileSessions.clear();
-                this.pendingProfileTotp?.clear();
-                this.pendingRequiredProfileTotp?.clear();
-                this.profileTotpAttempts?.clear();
+                await this.clearProfileSessions();
+                await this.profileTotpAttempts.clear();
                 if (this.telegramBot) {this.telegramBot.signature = null; this.telegramBot.configure();}
                 if (archive['discovery-cache.json']) {
                     this.discoveryCache = new Map();
@@ -7637,6 +7594,15 @@ class WebWorker {
         if (!dir || maxSize === null)
             return result;
 
+        const native = await directoryDiagnostics.rotateCache(dir,maxSize,targetSize,result.forceTarget);
+        if (native) {
+            const {failed,failures,...summary} = native;
+            for (const {name,error} of failures)
+                log(LM_ERR, `clean dir ${dir}, remove ${path.join(dir,name)}: ${error}`);
+            if (failed > failures.length)
+                log(LM_ERR, `clean dir ${dir}, ${failed-failures.length} more removal errors`);
+            return this.reportCacheRotation({...result,...summary});
+        }
         if (!await fs.pathExists(dir))
             return result;
 
@@ -7675,13 +7641,17 @@ class WebWorker {
             i++;
         }
 
-        if (i) {
-            log(LM_WARN, `clean dir ${dir}, maxSize=${maxSize}, targetSize=${targetSize}, found ${files.length} files, total size=${initialSize}, after=${size}`);
-            log(LM_WARN, `removed ${i} files`);
-        }
-
         result.removed = i;
         result.after = size;
+        return this.reportCacheRotation(result);
+    }
+
+    reportCacheRotation(result) {
+        if (result.removed) {
+            const {dir,maxSize,targetSize,found,size,after,removed} = result;
+            log(LM_WARN, `clean dir ${dir}, maxSize=${maxSize}, targetSize=${targetSize}, found ${found} files, total size=${size}, after=${after}`);
+            log(LM_WARN, `removed ${removed} files`);
+        }
         return result;
     }
 

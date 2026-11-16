@@ -55,6 +55,12 @@ module.exports = async function checkKoSync(url, directory, {
         const updated = await request({action: 'update-reader-progress', bookUid,
             progress: {...state.progress, percent: 0.7, textSnippet: secondSnippet, baseRevision: state.progress.revision}});
         assert(!updated.error, updated.error);
+        const stale = await fetch(url + settings.path + '/syncs/progress', {
+            method:'PUT',headers,body:JSON.stringify({...push,percentage:0.2}),
+        });
+        assert.equal(stale.status,200);
+        const current = await request({action:'get-reader-state',bookUid});
+        assert.equal(current.progress.percent,0.7,'A KOReader push must preserve a newer web edit');
         const result = await (await fetch(url + settings.path + '/syncs/progress/' + document, {headers})).json();
         assert.equal(result.percentage, 0.7, JSON.stringify(result)); assert(result.progress.includes('p[2]'));
         const password = 'KoSix!';

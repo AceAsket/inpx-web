@@ -13,6 +13,7 @@ pub enum BrowseFilter {
     Ids(String),
 }
 
+#[derive(Clone)]
 pub(crate) enum SelectedBooks {
     Bitmap(Vec<u8>),
     Ids(HashSet<u32>),

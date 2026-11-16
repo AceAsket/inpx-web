@@ -1,11 +1,15 @@
 const fs = require('node:fs/promises');
-const {join} = require('node:path');
-const {RustLookupIndex,executable} = require('./RustLookupIndex');
+const {join,resolve} = require('node:path');
+const programs = require('./RustPrograms');
+const RustFramedProcess = require('./RustFramedProcess');
 const {lock} = require('./CatalogueLock');
-const runtime = require('./ResourceRuntime');
 
 const storeFile = 'sessions.redb';
-const batchSize = 2048;
+const tokenBytes = 64;
+const loadBytes = tokenBytes+16;
+const updateBytes = tokenBytes+24;
+const removalBytes = tokenBytes+8;
+const tokenPattern = /^[0-9a-f]{64}$/;
 
 async function exists(path) {
     try {await fs.access(path);return true;}
@@ -61,33 +65,90 @@ class JembaAccessStore {
 
 class RustAccessStore {
     constructor(binary,directory) {
-        this.reader = new RustLookupIndex(directory,null,{binary,file:join(directory,storeFile),
-            generation:'access-v1',command:'access-store'});
+        this.binary = binary;
+        this.file = resolve(directory,storeFile);
+        this.queue = Promise.resolve();
     }
 
-    query(request) {
-        if (this.lockFailure)
-            throw Object.assign(new Error('Хранилище сеансов доступа недоступно',{cause:this.lockFailure}),{code:'INPX_ACCESS_STORE_UNAVAILABLE'});
-        return runtime.withSignal(undefined,()=>this.reader.run(process=>process.query(request),()=>{
-            throw Object.assign(new Error('Хранилище сеансов доступа недоступно'),{code:'INPX_ACCESS_STORE_UNAVAILABLE'});
-        }));
+    request(request,buffers,consume) {
+        const unavailable = ()=>Object.assign(new Error('Хранилище сеансов доступа недоступно',{cause:this.lockFailure}),
+            {code:'INPX_ACCESS_STORE_UNAVAILABLE'});
+        if (this.closing) return Promise.reject(unavailable());
+        const result = this.queue.then(async()=>{
+            if (this.process?.failure) {
+                await this.process.closed;
+                this.process = null;
+            }
+            if (this.lockFailure) throw unavailable();
+            this.process ||= new RustFramedProcess(this.binary,'access-store',this.file);
+            return this.process.request(request,buffers,consume);
+        });
+        this.queue = result.catch(()=>{});
+        return result;
+    }
+
+    init(fingerprint,restore) {
+        return this.request({op:'init',fingerprint,prepareOnly:restore===false},[],async stream=>{
+            let state;
+            const sessions = [];
+            for await (const block of stream) {
+                if (state === undefined) {
+                    if (block.length !== 1 || ![1,2].includes(block[0])) throw new Error('Некорректный ответ хранилища сеансов');
+                    state = block[0];
+                } else {
+                    if (state !== 1 || block.length%loadBytes) throw new Error('Некорректный блок сеансов доступа');
+                    if (restore===false) continue;
+                    if (restore) restore(block);
+                    else for (let offset=0;offset<block.length;offset+=loadBytes) {
+                        const token = block.toString('ascii',offset,offset+tokenBytes);
+                        sessions.push([token,{time:block.readDoubleLE(offset+tokenBytes),used:block.readDoubleLE(offset+tokenBytes+8)}]);
+                    }
+                }
+            }
+            return {state:state===1 ? 'ready' : state===2 ? 'repairLegacy' : undefined,sessions};
+        });
     }
 
     async apply(updates,removals) {
-        for (let offset=0;offset<Math.max(updates.length,removals.length);offset+=batchSize) {
-            const result = await this.query({op:'apply',updates:updates.slice(offset,offset+batchSize),
-                removals:removals.slice(offset,offset+batchSize)});
-            if (result?.state!=='applied') throw new Error('Хранилище сеансов не подтвердило запись');
+        if (!updates.length && !removals.length) return;
+        const bytes = Buffer.allocUnsafe(8+updates.length*updateBytes+removals.length*removalBytes);
+        bytes.writeUInt32LE(updates.length,0);
+        bytes.writeUInt32LE(removals.length,4);
+        let offset=8;
+        for (const [token,{time,used}] of updates) {
+            if (!tokenPattern.test(token)) throw new Error('invalid session key');
+            bytes.write(token,offset,tokenBytes,'ascii');
+            bytes.writeDoubleLE(0,offset+tokenBytes);
+            bytes.writeDoubleLE(time,offset+tokenBytes+8);
+            bytes.writeDoubleLE(used,offset+tokenBytes+16);
+            offset += updateBytes;
         }
+        for (const token of removals) {
+            if (!tokenPattern.test(token)) throw new Error('invalid session key');
+            bytes.write(token,offset,tokenBytes,'ascii');
+            bytes.writeDoubleLE(0,offset+tokenBytes);
+            offset += removalBytes;
+        }
+        return this.applyPacked(bytes);
     }
 
-    async close() {
-        try {await this.reader.close();}
-        finally {await this.release?.();}
+    applyPacked(bytes) {
+        return this.request({op:'apply',bytes:bytes.length},[bytes],async stream=>{
+            for await (const _ of stream) throw new Error('Некорректное подтверждение записи сеансов');
+        });
+    }
+
+    close() {
+        return this.closing ||= (async()=>{
+            try {
+                await this.queue;
+                await this.process?.stop();
+            } finally {await this.release?.();}
+        })();
     }
 }
 
-async function openWebAccessStore(directory,fingerprint,cacheSize,binary=executable(),onLockLost) {
+async function openWebAccessStore(directory,fingerprint,cacheSize,binary=programs.executable('catalog'),onLockLost,restore) {
     if (!binary) {
         if (await exists(join(directory,storeFile)))
             throw new Error('Для открытия хранилища сеансов доступа нужен Rust-бинарник каталога');
@@ -99,21 +160,21 @@ async function openWebAccessStore(directory,fingerprint,cacheSize,binary=executa
     const store = new RustAccessStore(binary,directory);
     const hold = ()=>lock(directory,binary,error=>{
         store.lockFailure = error;
-        void store.reader.close();
+        store.process?.interrupt(error);
         onLockLost?.(error);
     });
     try {
         store.release = await hold();
         const file = await fs.open(join(directory,storeFile),'a',0o600);
         await file.close();
-        let result = await store.query({op:'init',fingerprint});
+        let result = await store.init(fingerprint,restore);
         if (result?.state==='repairLegacy') {
             await store.release();
             store.release = null;
             const legacy = await JembaAccessStore.open(directory,cacheSize);
             await legacy.close();
             store.release = await hold();
-            result = await store.query({op:'init',fingerprint});
+            result = await store.init(fingerprint,restore);
         }
         if (result?.state!=='ready' || !Array.isArray(result.sessions))
             throw new Error('Не удалось перенести прежние сеансы доступа');
@@ -125,4 +186,19 @@ async function openWebAccessStore(directory,fingerprint,cacheSize,binary=executa
     }
 }
 
-module.exports = {openWebAccessStore};
+async function prepareNativeWebAccess(directory,fingerprint,cacheSize,onLockLost) {
+    const binary=programs.executable('catalog');
+    await fs.mkdir(directory,{recursive:true,mode:0o700});
+    const file=resolve(directory,storeFile);
+    if (await exists(join(directory,'access')) || await exists(join(directory,'config'))) {
+        const {store}=await openWebAccessStore(directory,fingerprint,cacheSize,binary,onLockLost,false);
+        await store.close();
+    }
+    const release=await lock(directory,binary,onLockLost);
+    try {
+        await (await fs.open(file,'a',0o600)).close();
+        return {file,release};
+    } catch (error) {await release();throw error;}
+}
+
+module.exports = {openWebAccessStore,prepareNativeWebAccess};

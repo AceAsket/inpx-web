@@ -162,12 +162,15 @@ async function testAtomicConfigSave() {
         const disk = await fs.readFile(manager._config.configFile, 'utf8');
         assert.strictEqual(await new SecretStore({dataDir}).decrypt(JSON.parse(disk).smtpPass), 'two');
         const rename = fs.rename;
+        const binary = process.env.INPX_RUST_CATALOG_BINARY;
+        delete process.env.INPX_RUST_CATALOG_BINARY;
         fs.rename = async() => { throw new Error('simulated replacement failure'); };
         try {
             manager._config.smtpPass = 'three';
             await assert.rejects(manager.save(), /simulated replacement failure/);
         } finally {
             fs.rename = rename;
+            if (binary !== undefined) process.env.INPX_RUST_CATALOG_BINARY = binary;
         }
         assert.strictEqual(await fs.readFile(manager._config.configFile, 'utf8'), disk);
         assert.ok(!(await fs.readdir(dataDir)).some(name => name.includes('.tmp-')));

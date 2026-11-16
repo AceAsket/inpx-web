@@ -5,8 +5,9 @@ const { spawnSync } = require('child_process');
 const pckg = require('../package.json');
 
 const rootDir = path.resolve(__dirname, '..');
-const sourceDir = path.join(rootDir, 'dist', 'win');
-const outputDir = path.join(rootDir, 'dist', 'release');
+const distDir = require('./dist-dir');
+const sourceDir = path.join(distDir, 'win');
+const outputDir = path.join(distDir, 'release');
 const scriptFile = path.join(__dirname, 'windows-installer.iss');
 
 function quoteDefine(value) {
@@ -50,7 +51,7 @@ function findCompiler() {
 function ensureInputFiles() {
     const exeFile = path.join(sourceDir, 'inpx-web.exe');
     if (!fs.existsSync(exeFile))
-        throw new Error(`Windows build output is missing: ${exeFile}. Run "npm run build:win" first.`);
+        throw new Error(`Windows build output is missing: ${exeFile}. Run "npm run build:win" or "npm run build:rust -- win" first.`);
 }
 
 function main() {

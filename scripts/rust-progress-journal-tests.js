@@ -18,6 +18,13 @@ async function verify(binary,directory) {
         await test();
         console.log('ok native',test.name);
     }
+    const upgrades = require('./upgrade-compatibility-tests');
+    for (const name of ['testUpgradeSnapshotPreservesUserDataSecretsAndCustomReader',
+        'testUpgradeRelocatesWorkingDirectoryWithoutLosingProfiles']) {
+        const test = upgrades.find(candidate=>candidate.name===name);
+        await test();
+        console.log('ok native',test.name);
+    }
     const file = join(directory,journal.fileName);
     const updates = [
         ['alpha','old',{generation:2},'one'],
@@ -39,7 +46,140 @@ async function verify(binary,directory) {
     assert(Object.hasOwn(native.users[0].readerProgress,'__proto__'));
     await verifyWrites(binary,directory);
     await verifySnapshots(binary,directory);
+    await verifyCredentialWrites(directory);
+    await verifyAdminBootstrap(directory);
     await verifyBackup(binary,directory);
+}
+
+async function verifyCredentialWrites(directory) {
+    const dataDir = join(directory,'profile-credentials');
+    await fs.mkdir(dataDir);
+    const file = join(dataDir,'reading-lists.json');
+    const progress = join(dataDir,journal.fileName);
+    const admin = {id:'admin',name:'Admin',login:'admin',isAdmin:true,passwordHash:'existing',opdsEnabled:false};
+    const reader = {id:'reader',name:'Reader',login:'reader',passwordHash:'existing',opdsEnabled:true,
+        profileTotp:{secret:'enc:v1:fixture',lastStep:123,recoveryHashes:[]},
+        profileTrustedDevices:[{hash:'a'.repeat(64),expiresAt:Date.now()+10000}],opdsAppPasswordHash:'b'.repeat(64),
+        readerProgress:{book:{percent:0.4}}};
+    const data = {version:4,users:[admin,reader],readerProgressCheckpoint:checkpoint,unrelated:{preserve:true}};
+    const original = JSON.stringify(data);
+    const journalBytes = checkpoint+'\n'+JSON.stringify(['reader','another',{generation:0,percent:0.7},'now'])+'\n';
+    await fs.writeFile(file,original);
+    await fs.writeFile(progress,journalBytes);
+    const close = journal.startRustJournal(progress);
+    try {
+        const clear = authorize=>journal.writeProfileCredentials(file,progress,'reader',{profileTotp:null},authorize);
+        await assert.rejects(clear(()=>{throw new Error('fixture authorization denied');}),/authorization denied/);
+        assert.equal(await fs.readFile(file,'utf8'),original);
+        let replacement;
+        await assert.rejects(clear(async()=>{
+            replacement = JSON.stringify({...data,newer:true});
+            await fs.writeFile(file,replacement);
+        }),/Файл профилей изменился/);
+        assert.equal(await fs.readFile(file,'utf8'),replacement);
+
+        assert.equal(await clear(()=>{}),true);
+        const updated = JSON.parse(await fs.readFile(file,'utf8'));
+        delete reader.profileTotp;
+        delete reader.profileTrustedDevices;
+        delete reader.opdsAppPasswordHash;
+        assert.deepEqual(updated,{...data,newer:true});
+        assert.equal(await fs.readFile(progress,'utf8'),journalBytes);
+        console.log('ok native credential mutation, authorization, stale snapshot and journal continuity');
+    } finally {await close();}
+}
+
+async function verifyAdminBootstrap(directory) {
+    const ReadingListStore = require('../server/core/ReadingListStore');
+    const password = require('../server/core/ProfilePassword');
+    const storeFor = config=>{
+        const store = new ReadingListStore(config);
+        store.applyAdminBootstrap = ()=>assert.fail('native bootstrap used the Node fallback');
+        return store;
+    };
+
+    const emptyDir = join(directory,'profile-bootstrap-empty');
+    const empty = storeFor({dataDir:emptyDir,adminLogin:'Office.Admin'});
+    const closeEmpty = journal.startRustJournal(empty.progressFile);
+    try {
+        let generated;
+        empty.reportGeneratedAdminPassword = value=>{generated=value;};
+        const snapshot = await empty.initialize();
+        assert.match(generated,/^[A-Za-z0-9_-]{16}$/);
+        assert.deepEqual(snapshot.users.map(user=>user.id),['admin','default']);
+        assert.equal(snapshot.users[0].login,'office.admin');
+        assert(await password.verify(snapshot.users[0].passwordHash,'office.admin',generated));
+        const raw = await fs.readFile(empty.file,'utf8');
+        assert.match(JSON.parse(raw).readerProgressCheckpoint,/^[a-f0-9]{32}$/);
+        assert(!raw.includes(generated));
+
+        const unchanged = storeFor({dataDir:emptyDir,adminLogin:'other-admin',adminPassword:'other-password'});
+        unchanged.reportGeneratedAdminPassword = ()=>assert.fail('healthy store generated a new password');
+        const stamp = await journal.stamp(empty.file);
+        assert.deepEqual(await unchanged.initialize(),snapshot);
+        assert.equal(await journal.stamp(empty.file),stamp);
+    } finally {await closeEmpty();}
+
+    const dataDir = join(directory,'profile-bootstrap-existing');
+    await fs.mkdir(dataDir);
+    const old = storeFor({dataDir,adminLogin:'old-admin',adminPassword:'fixture-old'});
+    const reader = {id:'reader-id',name:'Reader',login:'reader',passwordHash:'existing'};
+    const lists = [{id:'implicit',name:'Implicit owner'},{id:'unknown',name:'Unknown owner',userId:'admin'}];
+    const journalBytes = checkpoint+'\n'+JSON.stringify([reader.id,'book',{generation:0,percent:0.7},'now'])+'\n';
+    const raw = {version:4,users:[reader],lists,readerProgressCheckpoint:checkpoint,unrelated:{preserve:true}};
+    await fs.writeFile(old.file,JSON.stringify(raw));
+    await fs.writeFile(old.progressFile,journalBytes);
+    const close = journal.startRustJournal(old.progressFile);
+    try {
+        const added = await old.initialize();
+        assert.deepEqual(added.users.map(user=>user.id),['admin',reader.id]);
+        assert.deepEqual(added.lists.map(list=>list.userId),[reader.id,reader.id]);
+        assert.equal(added.users[1].readerProgress.book.percent,0.7);
+        let stored = JSON.parse(await fs.readFile(old.file,'utf8'));
+        assert.deepEqual(stored.lists,lists.map(list=>({...list,userId:reader.id})));
+        assert.deepEqual(stored.users[1],reader);
+        assert(await password.verify(stored.users[0].passwordHash,'old-admin','fixture-old'));
+
+        stored.users[0] = {...stored.users[0],id:'existing-admin',otpRequired:true,
+            profileTotp:{secret:'enc:v1:fixture',lastStep:123,recoveryHashes:[]},
+            profileTrustedDevices:[{hash:'a'.repeat(64),expiresAt:Date.now()+10000}],opdsAppPasswordHash:'b'.repeat(64)};
+        stored.profileAuthPolicy = {otpRequired:true,trustedBrowsersEnabled:false,trustedBrowserDays:10};
+        const beforeReset = JSON.stringify(stored);
+        await fs.writeFile(old.file,beforeReset);
+        const config = {dataDir,adminLogin:'reader',adminPassword:'fixture-new',resetAdminPassword:true};
+        await assert.rejects(storeFor(config).initialize(),/already used by another profile/);
+        assert.equal(await fs.readFile(old.file,'utf8'),beforeReset);
+
+        config.adminLogin = 'new-admin';
+        const reset = await storeFor(config).initialize();
+        const admin = reset.users[0];
+        assert.equal(admin.id,'existing-admin');
+        assert.equal(admin.login,'new-admin');
+        assert.equal(admin.opdsEnabled,false);
+        assert.equal(config.resetAdminPassword,false);
+        assert(await password.verify(admin.passwordHash,admin.login,'fixture-new'));
+        assert.equal(await password.verify(admin.passwordHash,admin.login,'fixture-old'),false);
+        const updated = JSON.parse(await fs.readFile(old.file,'utf8'));
+        for (const field of ['profileTotp','profileTrustedDevices','otpRequired','opdsAppPasswordHash'])
+            assert(!Object.hasOwn(updated.users[0],field));
+        assert.deepEqual(updated.profileAuthPolicy,{...stored.profileAuthPolicy,otpRequired:false});
+        assert.deepEqual(updated.users[1],reader);
+        assert.deepEqual(updated.unrelated,raw.unrelated);
+        assert.equal(updated.readerProgressCheckpoint,checkpoint);
+        assert.equal(await fs.readFile(old.progressFile,'utf8'),journalBytes);
+    } finally {await close();}
+
+    const brokenDir = join(directory,'profile-bootstrap-broken');
+    await fs.mkdir(brokenDir);
+    const broken = new ReadingListStore({dataDir:brokenDir,adminPassword:'fixture-recovery'});
+    const closeBroken = journal.startRustJournal(broken.progressFile);
+    try {
+        await fs.writeFile(broken.file,'{"broken":');
+        assert.deepEqual((await broken.initialize()).users.map(user=>user.id),['admin','default']);
+        const backup = (await fs.readdir(brokenDir)).find(name=>name.includes('.broken-')&&!name.endsWith('.error.txt'));
+        assert.equal(await fs.readFile(join(brokenDir,backup),'utf8'),'{"broken":');
+    } finally {await closeBroken();}
+    console.log('ok native administrator bootstrap, password reset, legacy list owners and journal continuity');
 }
 
 async function verifyWrites(binary,directory) {

@@ -84,7 +84,114 @@ async function verify(directory,binary) {
     } finally {await access.closeDb();}
     await verifyWriteFailures(WebAccess,config);
     await verifyExpiry(WebAccess,config);
+    await verifyPackedStorage(directory,binary,WebAccess,config);
+    await verifyPasswordLogin(directory,WebAccess,config);
     console.log('ok WebAccess migrates sessions, persists revocation and invalidates sessions after password rotation');
+}
+
+async function verifyPasswordLogin(directory,WebAccess,config) {
+    const Security = require('../server/core/Security');
+    const password = ' пароль 🙂 ';
+    const settings = {...config,dataDir:join(directory,'password'),accessPassword:password,
+        loginRateLimitEnabled:true,loginRateLimitWindowMs:60000,loginRateLimitMaxAttempts:2};
+    const security = new Security(settings);
+    const request = address=>({headers:{},socket:{remoteAddress:address}});
+    const req = request('192.0.2.17');
+    const access = new WebAccess(settings,security.nativeAuth);
+    let firstToken;
+    try {
+        await access.init();
+        assert.equal(await access.loginPassword(password.trim(),req,security),null);
+        security.recordSocketAccess(req,false);
+        await assert.rejects(access.loginPassword(password,req,security),{code:'INPX_LOGIN_RATE_LIMIT'});
+        const legacy = hash(password+access.newToken(security.clientIp(req)));
+        assert(await access.hasAccess(legacy));
+        security.recordSocketAccess(req,true);
+        firstToken = await access.loginPassword(password,req,security);
+        assert.match(firstToken,/^[a-f0-9]{64}$/);
+        assert(await access.hasAccess(firstToken));
+        assert.equal(access.pendingChallenges.size,0);
+
+        const persist = access.store.apply;
+        access.store.apply = async()=>{throw new Error('password grant write failed');};
+        try {
+            await assert.rejects(access.loginPassword(password,req,security),/password grant write failed/);
+        } finally {access.store.apply = persist;}
+        assert.equal((await access.store.init(hash(password))).sessions.length,2);
+        assert.equal(access.sessions.size,2);
+
+        const full = request('192.0.2.18');
+        for (let i=0;i<16;i++) access.newToken(security.clientIp(full));
+        await assert.rejects(access.loginPassword(password,full,security),{code:'INPX_LOGIN_RATE_LIMIT',retryAfter:300});
+        assert.equal(access.pendingChallenges.size,16);
+        if (security.nativeAuth?.api.library_password_login)
+            assert.equal(access.pendingChallenges.native,security.nativeAuth);
+    } finally {await access.closeDb();}
+
+    const freshSecurity = new Security(settings);
+    const reopened = new WebAccess(settings,freshSecurity.nativeAuth);
+    try {
+        await reopened.init();
+        assert(await reopened.hasAccess(firstToken));
+        await reopened.deleteAccess(firstToken);
+        assert.equal(await reopened.hasAccess(firstToken),false);
+    } finally {await reopened.closeDb();}
+    console.log('ok WebAccess password login, shared HTTP/WebSocket rate limits, challenge capacity and persisted token');
+}
+
+async function verifyPackedStorage(directory,binary,WebAccess,config) {
+    const scratch = join(directory,'packed');
+    const path = join(scratch,'web-access');
+    const token = hash('atomic-token');
+    const touch = {time:Date.now(),used:1};
+    const {store} = await openWebAccessStore(path,fingerprint,5,binary);
+    try {
+        // A bad row after the old 2048-row boundary must roll back the whole batch.
+        const count = 2048;
+        const bytes = Buffer.alloc(8+(count+1)*88);
+        bytes.writeUInt32LE(count+1);
+        for (let index=0;index<count;index++) {
+            const offset = 8+index*88;
+            bytes.write(hash(`atomic-fixture-${index}`),offset,64,'ascii');
+            bytes.writeDoubleLE(touch.time,offset+72);
+            bytes.writeDoubleLE(touch.used,offset+80);
+        }
+        await assert.rejects(store.applyPacked(bytes),/invalid session key/);
+        const {sessions} = await store.init(fingerprint);
+        assert.deepEqual(sessions,[]);
+        await store.apply([[token,touch]],[]);
+    } finally {await store.close();}
+
+    const access = new WebAccess({...config,dataDir:scratch});
+    try {
+        await access.init();
+        if (!access.pendingChallenges.native?.api.access_complete_batch) return;
+        assert.equal(typeof access.sessions.writePacked,'function');
+        assert(await access.hasAccess(token));
+        const persist = access.store.applyPacked.bind(access.store);
+        let failure = true;
+        let commits = 0;
+        access.store.applyPacked = async bytes=>{
+            if (failure) {
+                failure = false;
+                throw new Error('packed fixture write failure');
+            }
+            await persist(bytes);
+            commits++;
+        };
+        await assert.rejects(access.cleanAccess(),/packed fixture write failure/);
+        await access.cleanAccess();
+        const updated = await access.store.init(fingerprint);
+        assert.equal(updated.sessions[0][1].used,2);
+        failure = true;
+        await assert.rejects(access.deleteAccess(token),/packed fixture write failure/);
+        await access.cleanAccess();
+        await access.cleanAccess();
+        assert.equal(commits,2);
+        assert.deepEqual((await access.store.init(fingerprint)).sessions,[]);
+        assert.equal(await access.hasAccess(token),false);
+    } finally {await access.closeDb();}
+    console.log('ok WebAccess binary restore, transaction rollback, retry and packed revocation confirmation');
 }
 
 async function verifyExpiry(WebAccess,config) {

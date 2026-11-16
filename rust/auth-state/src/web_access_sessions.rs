@@ -99,18 +99,40 @@ impl WebAccessSessions {
         self.register(token, value, true);
     }
 
+    pub fn issue_verified(&mut self, token: &str, now: i64) -> Option<u64> {
+        if self.timeout.is_some_and(|timeout| timeout <= 0)
+            || self.sessions.contains_key(token)
+            || self.revoked.contains_key(token)
+        {
+            return None;
+        }
+        Some(self.register(token, SessionValue { time: now, used: 1 }, false))
+    }
+
     pub fn use_token(&mut self, token: &str, now: i64, challenge: impl FnOnce() -> bool) -> Access {
-        let Some(row) = self.sessions.get_mut(token) else {
-            if !challenge() || self.timeout.is_some_and(|timeout| timeout <= 0) {
-                return Access::Denied;
-            }
-            return Access::Save(self.register(token, SessionValue { time: now, used: 1 }, false));
-        };
+        if let Some(access) = self.touch(token, now, false) {
+            return access;
+        }
+        if !challenge() || self.timeout.is_some_and(|timeout| timeout <= 0) {
+            return Access::Denied;
+        }
+        Access::Save(self.register(token, SessionValue { time: now, used: 1 }, false))
+    }
+
+    pub fn use_durable(&mut self, token: &str, now: i64) -> bool {
+        matches!(self.touch(token, now, true), Some(Access::Allowed))
+    }
+
+    fn touch(&mut self, token: &str, now: i64, durable_only: bool) -> Option<Access> {
+        let row = self.sessions.get_mut(token)?;
+        if durable_only && !row.durable {
+            return Some(Access::Denied);
+        }
         if self
             .timeout
             .is_some_and(|timeout| now >= row.value.time.saturating_add(timeout))
         {
-            return Access::Denied;
+            return Some(Access::Denied);
         }
         let clock_reversed = now < row.value.time;
         row.value.time = now;
@@ -125,13 +147,13 @@ impl WebAccessSessions {
             }
         }
         if !row.durable {
-            return Access::Save(row.version);
+            return Some(Access::Save(row.version));
         }
         if !row.dirty {
             row.dirty = true;
             self.dirty.insert(token.into());
         }
-        Access::Allowed
+        Some(Access::Allowed)
     }
 
     pub fn grant(&self, token: &str, version: u64) -> Option<SessionValue> {

@@ -91,32 +91,32 @@ enum Request {
     },
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Descriptor {
-    book_uid: String,
-    lib_folder: String,
-    lib_file: String,
-    source_lib_dir: String,
-    down_file_name: String,
-    asset_version: String,
+pub(crate) struct Descriptor {
+    pub(crate) book_uid: String,
+    pub(crate) lib_folder: String,
+    pub(crate) lib_file: String,
+    pub(crate) source_lib_dir: String,
+    pub(crate) down_file_name: String,
+    pub(crate) asset_version: String,
     #[serde(default)]
-    size: u64,
+    pub(crate) size: u64,
 }
 
 #[derive(Serialize)]
-struct Published {
-    hash: String,
-    size: u64,
+pub(crate) struct Published {
+    pub(crate) hash: String,
+    pub(crate) size: u64,
 }
 
-struct Staging<'a> {
+pub(crate) struct Staging<'a> {
     directory: Cow<'a, Path>,
     token: &'a str,
 }
 
 impl<'a> Staging<'a> {
-    fn new(directory: &'a Path, token: &'a str) -> Result<Self> {
+    pub(crate) fn new(directory: &'a Path, token: &'a str) -> Result<Self> {
         if token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err("Некорректный идентификатор операции с кэшем книг".into());
         }
@@ -336,7 +336,7 @@ fn query(request: Request) -> Result<Value> {
     }
 }
 
-fn convert_epub(
+pub(crate) fn convert_epub(
     source: impl Read + Seek,
     output: &Path,
     token: &str,
@@ -367,25 +367,45 @@ fn paths(directory: &Path, hash: &str) -> Result<(PathBuf, PathBuf)> {
 }
 
 fn open_file(path: &Path, refresh: bool) -> io::Result<File> {
+    let mut options = File::options();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
     #[cfg(windows)]
-    if refresh {
+    {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Foundation::GENERIC_READ;
-        use windows_sys::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES;
-
-        return File::options()
-            .access_mode(GENERIC_READ | FILE_WRITE_ATTRIBUTES)
-            .open(path);
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_WRITE_ATTRIBUTES,
+        };
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        if refresh {
+            options.access_mode(GENERIC_READ | FILE_WRITE_ATTRIBUTES);
+        }
     }
     let _ = refresh;
-    File::open(path)
+    options.open(path)
 }
 
-fn regular_file(path: &Path, refresh: bool) -> io::Result<Option<File>> {
+pub(crate) fn regular_file(path: &Path, refresh: bool) -> io::Result<Option<File>> {
     match open_file(path, refresh) {
-        Ok(file) if file.metadata()?.is_file() => Ok(Some(file)),
-        Ok(_) => Ok(None),
+        Ok(file) => {
+            let metadata = file.metadata()?;
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x400 != 0 {
+                    return Ok(None);
+                }
+            }
+            Ok(metadata.is_file().then_some(file))
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        #[cfg(unix)]
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => Ok(None),
         Err(error) => Err(error),
     }
 }
@@ -394,7 +414,7 @@ fn touch(file: File, time: SystemTime) -> io::Result<()> {
     file.set_times(FileTimes::new().set_accessed(time).set_modified(time))
 }
 
-fn inspect(
+pub(crate) fn inspect(
     directory: &Path,
     hash: &str,
     asset_version: Option<&str>,
@@ -440,7 +460,7 @@ fn inspect(
     Ok(Value::Object(value))
 }
 
-fn publish(
+pub(crate) fn publish(
     source: &Path,
     stage: &Staging<'_>,
     mut descriptor: Descriptor,
@@ -473,7 +493,8 @@ fn publish(
     match temporary.persist_noclobber(&cache) {
         Ok(_) => {}
         Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
-            touch(open_file(&cache, true)?, SystemTime::now())?;
+            let file = regular_file(&cache, true)?.ok_or("Invalid existing book cache file")?;
+            touch(file, SystemTime::now())?;
         }
         Err(error) => return Err(error.into()),
     }
@@ -500,20 +521,23 @@ fn publish(
 }
 
 fn valid_raw(path: &Path, expected: u64) -> io::Result<bool> {
-    match fs::metadata(path) {
-        Ok(stat) => {
-            Ok(stat.is_file() && stat.len() != 0 && (expected == 0 || stat.len() == expected))
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
+    let Some(file) = regular_file(path, false)? else {
+        return Ok(false);
+    };
+    let len = file.metadata()?.len();
+    Ok(len != 0 && (expected == 0 || len == expected))
 }
 
-fn inflate(source: &Path, output: &Path, stage: &Staging<'_>, expected: u64) -> Result<bool> {
+pub(crate) fn inflate(
+    source: &Path,
+    output: &Path,
+    stage: &Staging<'_>,
+    expected: u64,
+) -> Result<bool> {
     if valid_raw(output, expected)? {
         return Ok(false);
     }
-    let reader = BufReader::with_capacity(BUFFER_BYTES, File::open(source)?);
+    let reader = BufReader::with_capacity(BUFFER_BYTES, open_cached(source)?);
     let mut temporary = stage.file("raw")?;
     let maximum = if expected == 0 {
         u64::MAX
@@ -531,14 +555,19 @@ fn inflate(source: &Path, output: &Path, stage: &Staging<'_>, expected: u64) -> 
     Ok(true)
 }
 
-fn zip_book(source: &Path, output: &Path, stage: &Staging<'_>, name: &str) -> Result<bool> {
+pub(crate) fn zip_book(
+    source: &Path,
+    output: &Path,
+    stage: &Staging<'_>,
+    name: &str,
+) -> Result<bool> {
     if valid_raw(output, 0)? {
         return Ok(false);
     }
     if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':', '\0']) {
         return Err("Недопустимое имя книги в ZIP".into());
     }
-    let mut source = File::open(source)?;
+    let mut source = open_cached(source)?;
     let stat = source.metadata()?;
     let mut temporary = stage.file("zip")?;
     let mut zip = ZipWriter::new(temporary.as_file_mut());
@@ -567,4 +596,9 @@ fn zip_book(source: &Path, output: &Path, stage: &Staging<'_>, name: &str) -> Re
     zip.finish()?;
     temporary.persist(output)?;
     Ok(true)
+}
+
+fn open_cached(path: &Path) -> io::Result<File> {
+    regular_file(path, false)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Book cache file not found"))
 }

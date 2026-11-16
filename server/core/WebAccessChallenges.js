@@ -12,18 +12,35 @@ function challengeLimitError() {
 }
 
 class WebAccessChallenges {
-    constructor() {
-        this.native = open();
+    constructor(native = open()) {
+        this.native = native;
         if (!this.native) {
             this.pending = new Map();
             this.clients = new Map();
         }
     }
 
+    configurePassword(password) {
+        if (!this.native?.api.library_password_configure) return;
+        if (this.fingerprint === undefined || this.password !== password) {
+            this.native.input(password);
+            this.fingerprint = this.native.output(this.native.api.library_password_configure());
+            this.password = password;
+        }
+        return this.fingerprint;
+    }
+
     issue(client, password, now, timeout) {
         if (this.native) {
-            const length = this.native.input(client,String(password));
-            const ptr = this.native.api.challenge_issue(length,now,timeout);
+            let ptr;
+            if (this.fingerprint !== undefined) {
+                this.configurePassword(password);
+                this.native.input(client);
+                ptr = this.native.api.library_challenge_issue(now,timeout);
+            } else {
+                const length = this.native.input(client,String(password));
+                ptr = this.native.api.challenge_issue(length,now,timeout);
+            }
             if (!ptr) throw challengeLimitError();
             if (ptr < 0) throw new Error('Не удалось получить случайные данные для токена доступа');
             return this.native.output(ptr);
@@ -77,4 +94,4 @@ class WebAccessChallenges {
     }
 }
 
-module.exports = {WebAccessChallenges,lifetime};
+module.exports = {WebAccessChallenges,lifetime,challengeLimitError};

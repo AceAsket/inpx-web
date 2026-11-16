@@ -1,8 +1,12 @@
 use std::collections::{BTreeSet, HashMap, hash_map::Entry};
+use std::fs;
 use std::io::{BufRead, Write};
 use std::ops::Bound::{Excluded, Unbounded};
 use std::path::{Path, PathBuf};
-use std::{borrow::Cow, cell::RefCell};
+use std::{
+    borrow::Cow,
+    cell::{OnceCell, RefCell},
+};
 
 use redb::{
     AccessGuard, Database, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction, ReadableDatabase,
@@ -31,6 +35,33 @@ const RECORDS: TableDefinition<u32, &[u8]> = TableDefinition::new("catalog_recor
 const UIDS: TableDefinition<&str, u32> = TableDefinition::new("catalog_book_uids_v1");
 const BASE: &str = "base";
 const READ_CACHE_BYTES: usize = 96 * 1024 * 1024;
+
+pub(crate) fn stage_patch(directory: &Path, previous: &Path) -> Result<bool> {
+    let base = previous.join(BASE_FILE);
+    let patch = previous.join(PATCH_FILE);
+    let patch_size = match fs::metadata(&patch) {
+        Ok(metadata) => Some(metadata.len()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(size) = patch_size
+        && size > fs::metadata(&base)?.len() / 4
+    {
+        return Ok(false);
+    }
+    let target = directory.join(BASE_FILE);
+    if fs::hard_link(&base, &target).is_err() {
+        fs::copy(&base, &target)?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&target)?
+            .sync_all()?;
+    }
+    if patch_size.is_some() {
+        fs::copy(patch, directory.join(PATCH_FILE))?;
+    }
+    Ok(true)
+}
 
 #[derive(Deserialize)]
 struct Header {
@@ -321,6 +352,7 @@ pub struct BookStore {
     patch: Option<ReadOnlyDatabase>,
     directory: PathBuf,
     facets: RefCell<HashMap<Facet, Option<Postings>>>,
+    active_books: OnceCell<SelectedBooks>,
     wide_order: RefCell<Option<(String, WideOrder)>>,
     lookup: RefCell<Option<LookupIndex>>,
 }
@@ -462,6 +494,18 @@ pub struct Match {
     copy: Option<String>,
 }
 
+impl Match {
+    fn catalogue_order(&self, right: &Self) -> std::cmp::Ordering {
+        self.author
+            .cmp(&right.author)
+            .then_with(|| self.series.is_empty().cmp(&right.series.is_empty()))
+            .then_with(|| self.series.cmp(&right.series))
+            .then_with(|| self.serno.total_cmp(&right.serno))
+            .then_with(|| self.title.cmp(&right.title))
+            .then_with(|| self.order.cmp(&right.order))
+    }
+}
+
 #[derive(Deserialize)]
 struct SearchRow {
     author: String,
@@ -484,6 +528,60 @@ fn project(record: &[u8], fields: Option<&[String]>) -> Result<Box<RawValue>> {
 }
 
 impl BookStore {
+    pub(crate) fn catalogue_rows(
+        &self,
+        generation: &str,
+        ids: Vec<u32>,
+    ) -> Result<Vec<inpx_reader::Record>> {
+        let StoreResponse::Rows(rows) = self.query(StoreRequest {
+            generation: generation.into(),
+            query: StoreQuery::Rows { ids, fields: None },
+        })?
+        else {
+            unreachable!("row lookup returns rows");
+        };
+        rows.into_iter()
+            .map(|row| Ok(serde_json::from_str(row.get())?))
+            .collect()
+    }
+
+    pub(crate) fn opds_ranked(
+        &self,
+        generation: &str,
+        ids: Vec<u32>,
+        field: &str,
+        term: &str,
+        limit: usize,
+    ) -> Result<Vec<u32>> {
+        if ids.is_empty() {
+            return Ok(ids);
+        }
+        let StoreResponse::Matches(mut matches) = self.query(StoreRequest {
+            generation: generation.into(),
+            query: StoreQuery::Search {
+                ids,
+                terms: [vec![], vec![], vec![]],
+                deleted: Some(0),
+                source: None,
+                filters: vec![Filter::Contains {
+                    field: field.into(),
+                    value: term.into(),
+                    special: false,
+                }],
+                copies: Copies::Physical,
+            },
+        })?
+        else {
+            unreachable!("search returns ranked candidates");
+        };
+        matches.sort_unstable_by(Match::catalogue_order);
+        Ok(matches
+            .into_iter()
+            .take(limit)
+            .map(|book| book.id)
+            .collect())
+    }
+
     pub fn open(directory: &Path) -> Result<Self> {
         Self::open_with_cache(directory, READ_CACHE_BYTES)
     }
@@ -503,6 +601,7 @@ impl BookStore {
             },
             directory: directory.into(),
             facets: RefCell::new(HashMap::new()),
+            active_books: OnceCell::new(),
             wide_order: RefCell::new(None),
             lookup: RefCell::new(None),
         })
@@ -583,6 +682,123 @@ impl BookStore {
         };
         let first = select(groups.next().ok_or("missing facet group")?, None)?;
         groups.try_fold(first, |selection, group| select(group, Some(&selection)))
+    }
+
+    pub(crate) fn opds_books(&self, genres: &[&str]) -> Result<Cow<'_, SelectedBooks>> {
+        if self.active_books.get().is_none() {
+            let active = self.facet(Facet::Del, |index| {
+                let index = index.ok_or("missing catalogue deletion index")?;
+                Ok(SelectedBooks::from_postings(
+                    index.matching(|label| label == &Label::Number(0)),
+                    None,
+                ))
+            })?;
+            let _ = self.active_books.set(active);
+        }
+        let active = self
+            .active_books
+            .get()
+            .expect("catalogue active book selection");
+        if genres.is_empty() {
+            return Ok(Cow::Borrowed(active));
+        }
+        self.facet(Facet::Genre, |index| {
+            let index = index.ok_or("missing catalogue genre index")?;
+            Ok(Cow::Owned(SelectedBooks::from_postings(
+                index.matching(
+                    |label| matches!(label, Label::Text(genre) if genres.contains(&genre.as_str())),
+                ),
+                Some(active),
+            )))
+        })
+    }
+
+    pub(crate) fn opds_genres(&self) -> Result<Vec<String>> {
+        self.facet_text(Facet::Genre)
+    }
+
+    pub(crate) fn facet_text(&self, facet: Facet) -> Result<Vec<String>> {
+        self.facet(facet, |index| {
+            let mut labels: Vec<_> = index
+                .ok_or("missing catalogue facet index")?
+                .labels()
+                .into_iter()
+                .flatten()
+                .filter_map(|(_, label)| match label {
+                    Label::Text(genre) if !genre.is_empty() && genre != "?" => Some(genre),
+                    _ => None,
+                })
+                .collect();
+            labels.sort();
+            labels.dedup();
+            Ok(labels)
+        })
+    }
+
+    pub(crate) fn browser_search(
+        &self,
+        generation: &str,
+        matches: impl FnMut(&inpx_reader::Record) -> bool,
+        merge: bool,
+        start: usize,
+        limit: usize,
+    ) -> Result<(Vec<inpx_reader::Record>, usize)> {
+        let ids = self.browser_search_order(generation, matches, merge)?;
+        let total = ids.len();
+        let page = ids.into_iter().skip(start).take(limit).collect();
+        Ok((self.catalogue_rows(generation, page)?, total))
+    }
+
+    pub(crate) fn browser_search_order(
+        &self,
+        generation: &str,
+        mut matches: impl FnMut(&inpx_reader::Record) -> bool,
+        merge: bool,
+    ) -> Result<Vec<u32>> {
+        let mut ids = Vec::new();
+        self.visit(|id, raw| {
+            let row = serde_json::from_slice(raw)?;
+            if matches(&row) {
+                ids.push(id);
+            }
+            Ok(())
+        })?;
+        let mut candidates = self.rank_shelf_ids(generation, ids, merge)?;
+        candidates.sort_unstable_by(Match::catalogue_order);
+        Ok(candidates.into_iter().map(|book| book.id).collect())
+    }
+
+    pub(crate) fn order_shelf_volumes(&self, generation: &str, ids: Vec<u32>) -> Result<Vec<u32>> {
+        let mut candidates = self.rank_shelf_ids(generation, ids, false)?;
+        candidates.sort_unstable_by(|left, right| {
+            left.serno
+                .total_cmp(&right.serno)
+                .then_with(|| left.title.cmp(&right.title))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(candidates.into_iter().map(|book| book.id).collect())
+    }
+
+    fn rank_shelf_ids(&self, generation: &str, ids: Vec<u32>, merge: bool) -> Result<Vec<Match>> {
+        let StoreResponse::Matches(candidates) = self.query(StoreRequest {
+            generation: generation.into(),
+            query: StoreQuery::Search {
+                ids,
+                terms: [vec![], vec![], vec![]],
+                deleted: None,
+                source: None,
+                filters: Vec::new(),
+                copies: if merge {
+                    Copies::Merge
+                } else {
+                    Copies::Physical
+                },
+            },
+        })?
+        else {
+            unreachable!("book ranking returns candidates");
+        };
+        Ok(candidates)
     }
 
     fn with_lookup<T>(&self, read: impl FnOnce(&LookupIndex) -> Result<T>) -> Result<T> {

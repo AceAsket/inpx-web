@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use inpx_catalog::access_runtime::{AccessSessions, now_ms};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -28,6 +29,57 @@ struct Envelope<'a> {
 const VALIDATE_IN_APP: u8 = 0;
 const WITHIN_LIMIT: u8 = 1;
 const TOO_LARGE: u8 = 2;
+const LIBRARY_AUTHORIZED: u8 = 4;
+
+#[derive(Deserialize)]
+struct AccessEnvelope<'a> {
+    #[serde(borrow, rename = "action")]
+    _action: Cow<'a, str>,
+    #[serde(borrow, rename = "accessToken")]
+    token: Option<Cow<'a, str>>,
+    #[serde(borrow, rename = "profileAccessToken")]
+    profile_token: Option<Cow<'a, str>>,
+}
+
+pub(super) fn access_metadata(
+    validation: u8,
+    body: &[u8],
+    sessions: Option<&AccessSessions>,
+    profiles: Option<&crate::profile_sessions::Shared>,
+) -> (u8, Option<crate::profile_sessions::Proof>) {
+    // Large imports already reach the application for parsing. Avoid a second
+    // scan of their data just to eliminate one private access lookup.
+    if validation != WITHIN_LIMIT
+        || body.len() > 64 * 1024
+        || (sessions.is_none() && profiles.is_none())
+    {
+        return (validation, None);
+    }
+    let Ok(request) = serde_json::from_slice::<AccessEnvelope<'_>>(body) else {
+        return (validation, None);
+    };
+    let now = now_ms();
+    let validation = if sessions
+        .zip(request.token)
+        .is_some_and(|(sessions, token)| sessions.check_durable(&token, now))
+    {
+        validation | LIBRARY_AUTHORIZED
+    } else {
+        validation
+    };
+    let profile = profiles
+        .zip(request.profile_token)
+        .and_then(|(profiles, token)| {
+            if !crate::profile_sessions::valid_token(&token) {
+                return None;
+            }
+            profiles
+                .lock()
+                .expect("profile sessions")
+                .prove(&token, now)
+        });
+    (validation, profile)
+}
 
 impl Limits {
     pub(super) fn check(self, text: &[u8]) -> (u8, Cow<'_, [u8]>) {

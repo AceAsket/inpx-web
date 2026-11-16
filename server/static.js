@@ -461,11 +461,11 @@ module.exports = (app, config, webWorker = null, security = null) => {
         const guard = new (require('./core/ProfileAccess'))(config, webWorker, security).httpGuard();
         app.use([config.bookPathStatic, `${webAppRoutePrefix}/cover`, `${webAppRoutePrefix}/reader-lab-source`, `${webAppRoutePrefix}/admin-backups`], guard);
     }
-    const recordDownload = (req, count = 1) => {
+    const recordDownload = async (req, count = 1) => {
         const activity = webWorker?.serverActivity;
         if (!activity || req.method !== 'GET') return;
         const userId = req.profileAccessIdentity?.user?.id
-            || webWorker.getProfileSessionUser(security?.getSession(req)?.profileAccessToken);
+            || await webWorker.getProfileSessionUser(security?.getSession(req)?.profileAccessToken);
         return () => activity.record(userId, 'downloads', count);
     };
     app.get(`${webAppRoutePrefix}/app-reset`, (req, res) => {
@@ -659,10 +659,9 @@ module.exports = (app, config, webWorker = null, security = null) => {
         const session = security && security.getSession(req);
         const identity = req.profileAccessIdentity;
         const token = identity ? identity.token : session && session.profileAccessToken;
-        const userId = token && webWorker && webWorker.getProfileSessionUser(token);
-        if (!userId)
-            return res.sendStatus(401);
         try {
+            const userId = token && webWorker && await webWorker.getProfileSessionUser(token);
+            if (!userId) return res.sendStatus(401);
             await webWorker.requireAdmin(userId, token);
         } catch (e) {
             return res.sendStatus(403);
@@ -797,7 +796,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
                             await webWorker.koSync.linkDownload(syncFile, desc.bookUid, path.extname(downFileName).slice(1).toLowerCase());
                         } catch (error) { log(LM_WARN, `KOSync: не удалось связать скачанный файл: ${error.message}`); }
                     }
-                    const record = recordDownload(req);
+                    const record = await recordDownload(req);
                     if (!deliverFile(req,res,'book',bookFile,record && (complete=>{if (complete) record();}))) {
                         if (record) countDownload(res,record);
                         res.sendFile(bookFile);

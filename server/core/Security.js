@@ -538,13 +538,14 @@ class Security {
     }
 
     clientIp(req) {
+        const peer = req.socket?.remoteAddress || '';
+        if (!this.isTrustedProxy(req) || !req.headers['x-forwarded-for']) return peer;
         // Proxies append the address they saw ($proxy_add_x_forwarded_for), so the first entries
         // are whatever the client sent. Take the rightmost one that is not a trusted proxy.
-        const chain = (this.isTrustedProxy(req) ? String(req.headers['x-forwarded-for'] || '') : '')
-            .split(',').map(item => item.trim()).filter(Boolean);
+        const chain = String(req.headers['x-forwarded-for']).split(',').map(item => item.trim()).filter(Boolean);
         while (chain.length > 1 && this.isTrustedProxyAddress(chain[chain.length - 1]))
             chain.pop();
-        return chain.pop() || (req.socket && req.socket.remoteAddress) || '';
+        return chain.pop() || peer;
     }
 
     normalizeLoginKind(kind = 'access') {
@@ -643,6 +644,19 @@ class Security {
         }
     }
 
+    recordSocketAccess(req, success) {
+        if (this.nativeAuth?.api.library_socket_attempt) {
+            const auth = this.nativeAuth;
+            auth.input(this.clientIp(req) || 'unknown');
+            const {enabled,window,maxAttempts} = auth.constructor.policy(this.config);
+            const retry = auth.api.library_socket_attempt(Date.now(),enabled,window,maxAttempts,success) >>> 0;
+            if (retry) throw loginLimitError(retry);
+            return;
+        }
+        if (!success) this.checkLoginRate(req);
+        this.recordLoginAttempt(req,success);
+    }
+
     recordLoginAttempt(req, success = false, kind = 'access') {
         if (this.nativeAuth) {
             this.nativeAuth.finish(this.normalizeLoginKind(kind),this.clientIp(req) || 'unknown',this.config,false,success);
@@ -715,3 +729,4 @@ class Security {
 }
 
 module.exports = Security;
+module.exports.loginLimitError = loginLimitError;

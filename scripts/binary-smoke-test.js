@@ -9,7 +9,7 @@ const {setTimeout: sleep} = require('timers/promises');
 const {createHash} = require('node:crypto');
 const WebSocket = require('ws');
 const yazl = require('yazl');
-const rust = require('../server/core/RustPrograms');
+const rustPrograms = require('../server/core/RustPrograms');
 
 async function isolateNativeJxl(binary, directory) {
     const bundledTools = path.join(path.dirname(binary), 'bin');
@@ -123,9 +123,9 @@ async function unusedPort() {
     return port;
 }
 
-async function checkWebSocket(url) {
+async function checkWebSocket(url, rust) {
     return new Promise((resolve, reject) => {
-        const socket = new WebSocket(url.replace(/^http/, 'ws'));
+        const socket = new WebSocket(url.replace(/^http/, 'ws'),rust ? {headers:{origin:url}} : {});
         let bookUid;
         let epubUid;
         const timer = setTimeout(() => finish(new Error('WebSocket response timed out')), 60000);
@@ -145,7 +145,9 @@ async function checkWebSocket(url) {
                 assert.ok(!response.error, response.error);
                 if (response.requestId === 'smoke') {
                     assert.match(response.message, /inpx-web/);
-                    socket.send(JSON.stringify({action:'search',from:'title',query:{ratingCount:'1'},requestId:'ratings'}));
+                    const next = rust ? {action:'bookSearch',query:{author:'Tester Smoke'},requestId:'native-books'}
+                        : {action:'search',from:'title',query:{ratingCount:'1'},requestId:'ratings'};
+                    socket.send(JSON.stringify(next));
                 } else if (response.requestId === 'ratings') {
                     assert.strictEqual(response.totalFound,1,'Packaged ratings search must load its streaming JSON dependency');
                     socket.send(JSON.stringify({action: 'catalog-suggest', options: {query: 'Packaged'}, requestId: 'suggestions'}));
@@ -159,14 +161,15 @@ async function checkWebSocket(url) {
                 } else if (response.requestId === 'authors') {
                     assert.strictEqual(response.total, 1);
                     socket.send(JSON.stringify({action: 'catalog-entity', options: {kind: 'author', name: response.items[0].name}, requestId: 'author-page'}));
-                } else if (response.requestId === 'author-page') {
-                    assert.strictEqual(response.total, process.env.INPX_SMOKE_EPUB === 'true' ? 2 : 1);
-                    assert(response.books.some(book => book.title === 'Packaged smoke book'));
+                } else if (response.requestId === 'author-page' || response.requestId === 'native-books') {
+                    const books = rust ? response.found : response.books;
+                    assert.strictEqual(rust ? response.totalFound : response.total, process.env.INPX_SMOKE_EPUB === 'true' ? 2 : 1);
+                    assert(books.some(book => book.title === 'Packaged smoke book'));
                     if (process.env.INPX_SMOKE_EPUB === 'true') {
-                        const epub = response.books.find(book => book.ext === 'epub'); assert(epub);
+                        const epub = books.find(book => book.ext === 'epub'); assert(epub);
                         epubUid = epub._uid;
                     }
-                    const book = response.books.find(book => book.ext === 'fb2'); assert(book);
+                    const book = books.find(book => book.ext === 'fb2'); assert(book);
                     bookUid = book._uid;
                     socket.send(JSON.stringify({action:'get-book-gallery', bookUid, requestId:'gallery'}));
                 } else if (response.requestId === 'gallery') {
@@ -283,13 +286,16 @@ async function checkEbookGuestDownload(url,html,format='fb2'){
 }
 
 async function main() {
-    const [target, argument] = process.argv.slice(2);
+    const options = process.argv.slice(2);
+    const rust = options.includes('--rust');
+    const [target, argument] = options.filter(value=>value!=='--rust');
     const binary = target && target !== '--image' ? path.resolve(target) : null;
     const imageName = target === '--image' ? argument : null;
     const allowMissingNativeJxl = argument === '--allow-missing-native-jxl';
-    const requireRustCatalogue = process.env.INPX_SMOKE_REQUIRE_RUST_CATALOG==='true';
+    const requireRustCatalogue = rust || process.env.INPX_SMOKE_REQUIRE_RUST_CATALOG==='true';
+    const requireRustHttp = rust || process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true';
     if (!target || (target === '--image' && !imageName))
-        throw new Error('Usage: node scripts/binary-smoke-test.js <binary> [--allow-missing-native-jxl] | --image <local-image>');
+        throw new Error('Usage: node scripts/binary-smoke-test.js <binary> [--allow-missing-native-jxl] | --image <local-image> [--rust]');
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-binary-smoke-'));
     const library = path.join(dir, 'library');
     const containerName = `inpx-smoke-${process.pid}-${Date.now()}`;
@@ -297,7 +303,7 @@ async function main() {
     let exited;
     let output = '';
     try {
-        const nativeJxlCover = binary !== null && (!allowMissingNativeJxl
+        const nativeJxlCover = !rust && binary !== null && (!allowMissingNativeJxl
             || await fs.pathExists(path.join(path.dirname(binary), 'bin', 'inpx-jxl.node')));
         await createFixture(library, {nativeJxlCover});
         const port = await unusedPort();
@@ -309,9 +315,14 @@ async function main() {
                 '-p', `127.0.0.1:${port}:12380`, '--tmpfs', '/data',
                 '-e', 'INPX_OPDS_FEEDS_FILE=/library/opds-feeds.json',
                 '-e', 'INPX_ADMIN_PASSWORD=local-smoke-fixture',
+                '-e', 'INPX_KOSYNC_ENABLED=true',
                 ...(process.env.INPX_SMOKE_EPUB === 'true' ? ['-e','INPX_CONVERSION_FORMATS=fb2,epub'] : []),
-                '--mount', `type=bind,source=${library},target=/library,readonly`, imageName,
-                'sh', '-c', 'cp /library/config.json /data/config.json && exec inpx-web --data-dir=/data --config=/data/config.json --lib-dir=/library --host=0.0.0.0 --port=12380'];
+                '--mount', `type=bind,source=${library},target=/library,readonly`];
+            if (rust) {
+                args.push('-e','DATA_DIR=/data','-e','LIBDIR=/library','-e','INPX=/library/smoke.inpx',imageName);
+            } else {
+                args.push(imageName,'sh','-c','cp /library/config.json /data/config.json && exec inpx-web --data-dir=/data --config=/data/config.json --lib-dir=/library --host=0.0.0.0 --port=12380');
+            }
         } else {
             command = binary;
             if (nativeJxlCover) {
@@ -323,13 +334,14 @@ async function main() {
         }
         const env = {...process.env, INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
             INPX_ADMIN_PASSWORD:'local-smoke-fixture',
+            INPX_KOSYNC_ENABLED:'true',
             INPX_OPDS_FEEDS_FILE:path.join(library, 'opds-feeds.json'),
             INPX_REQUIRE_AUTH: 'false', INPX_AUTH_MODE: 'local', INPX_ALLOW_ANONYMOUS_ACCESS:'true',
             INPX_ENABLE_CONVERSION: process.env.INPX_SMOKE_EPUB === 'true' ? 'true' : 'false'};
-        if (nativeJxlCover) {
+        if (nativeJxlCover || rust && binary) {
             for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
-            env.PATH = cwd;
-            env.INPX_JXL_DECODER = 'native';
+            env.PATH = rust ? '' : cwd;
+            if (nativeJxlCover) env.INPX_JXL_DECODER = 'native';
         }
         if (requireRustCatalogue) {
             delete env.INPX_RUST_READER_BINARY;
@@ -357,19 +369,24 @@ async function main() {
             await sleep(250);
         }
         assert.ok(ready, `Packaged application did not index the fixture and become ready:\n${output}`);
+        if (rust) {
+            assert.match(output,/^inpx-web v[^\s]+ listening on /m);
+            if (imageName) await promisify(execFile)('docker',['exec',containerName,'sh','-ec',
+                'if command -v node >/dev/null; then exit 1; fi; test -s /usr/local/bin/bin/public.json']);
+        }
         if (requireRustCatalogue) {
             if (target === '--image') {
                 await promisify(execFile)('docker',['exec',containerName,'sh','-c',
                     'test -x /usr/local/bin/bin/inpx-reader && test -x /usr/local/bin/bin/inpx-catalog && test -f /data/db/catalogue.json && test -f /data/db/lookup.redb && test ! -e /data/db/book']);
             } else {
-                for (const name of ['catalog','reader']) await fs.access(path.join(path.dirname(command),'bin',rust.fileName(name)));
+                for (const name of ['catalog','reader']) await fs.access(path.join(path.dirname(command),'bin',rustPrograms.fileName(name)));
                 const rows = await fs.readdir(path.join(dir,'data','db'));
                 assert(rows.includes('catalogue.json') && rows.includes('lookup.redb') && !rows.includes('book'),
                     'Packaged app must build the native catalogue with its bundled binaries');
             }
         }
         const health = await fetch(`${url}/health`);
-        if (process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true')
+        if (requireRustHttp)
             assert.equal(health.headers.get('x-powered-by'),null,'Packaged health route must be served by Rust');
         assert.strictEqual(health.status, 200);
         assert.strictEqual((await health.json()).version, require('../package.json').version);
@@ -378,7 +395,7 @@ async function main() {
         assert.strictEqual(home.headers.get('x-robots-tag'),'noindex, nofollow');
         const homeHtml = await home.text();
         assert.match(homeHtml, /<html/i);
-        if (process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true') {
+        if (requireRustHttp) {
             assert.strictEqual(home.headers.get('x-powered-by'),null,'Packaged home must be served by Rust');
             const scriptPath = homeHtml.match(/<script\b[^>]*\bsrc="(\/[^"?]+\.js)"/i)?.[1];
             assert(scriptPath,'Packaged web UI must have a JavaScript bundle');
@@ -390,10 +407,26 @@ async function main() {
             const revalidated = await fetch(new URL(scriptPath,url),{headers:{'If-None-Match':script.headers.get('etag'),'Cache-Control':'max-age=0'}});
             assert.equal(revalidated.status,304);
         }
-        const {bookUid,link} = await checkWebSocket(url);
+        const {bookUid,link} = await checkWebSocket(url,rust);
+        if (!rust && requireRustHttp)
+            await require('./profile-sessions-integration-test')(url,{adminPassword:'local-smoke-fixture'});
         try {await checkCachedBookDownload(url,link,dir);}
         catch (error) {throw new Error(`Packaged cached download failed: ${error.message}\n${output}`,{cause:error});}
-        if (nativeJxlCover || process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true') await checkCoverDownload(url, bookUid, nativeJxlCover);
+        if (nativeJxlCover || requireRustHttp) await checkCoverDownload(url, bookUid, nativeJxlCover);
+        if (rust) {
+            const opds = await fetch(`${url}/opds`);
+            assert.equal(opds.status,200);
+            assert.match(await opds.text(),/Shared smoke shelf/);
+            const shelf = await fetch(`${url}/opds/v2/catalog-shelves?id=smoke`);
+            assert.equal(shelf.status,200);
+            assert((await shelf.json()).publications.some(book=>book.metadata.title.includes('Packaged smoke book')));
+            await require('./kosync-integration-test')(url,dir,{
+                adminPassword:'local-smoke-fixture',
+                firstSnippet:'Smoke text',secondSnippet:'Second paragraph for reader synchronization.',
+            });
+            console.log('ok packaged Rust application and assets without a Node.js runtime');
+            return;
+        }
         const ebook=await fetch(`${url}/ebook?q=Packaged&lang=en`);
         assert.strictEqual(ebook.status,200);
         const ebookHtml=await ebook.text();

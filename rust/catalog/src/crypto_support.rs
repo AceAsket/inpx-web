@@ -7,6 +7,7 @@ use aws_lc_sys::{
     EVP_CTRL_GCM_GET_TAG, EVP_CTRL_GCM_SET_TAG, EVP_CipherFinal_ex, EVP_CipherInit_ex,
     EVP_CipherUpdate, EVP_aes_256_gcm, OPENSSL_cleanse, RAND_bytes,
 };
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub(crate) const KEY_BYTES: usize = 32;
 pub(crate) const NONCE_BYTES: usize = 12;
@@ -65,6 +66,34 @@ impl<T: AsMut<[u8]>> Drop for Sensitive<T> {
         let bytes = self.0.as_mut();
         // AWS-LC erases exactly this live, exclusively borrowed byte range.
         unsafe { OPENSSL_cleanse(bytes.as_mut_ptr().cast(), bytes.len()) };
+    }
+}
+
+pub(crate) struct Secret {
+    bytes: Sensitive<Vec<u8>>,
+}
+
+impl Secret {
+    pub(crate) fn new(value: String) -> Self {
+        Self {
+            bytes: Sensitive(value.into_bytes()),
+        }
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        std::str::from_utf8(&self.bytes.0).expect("created from a UTF-8 string")
+    }
+}
+
+impl<'de> Deserialize<'de> for Secret {
+    fn deserialize<D: Deserializer<'de>>(input: D) -> std::result::Result<Self, D::Error> {
+        String::deserialize(input).map(Self::new)
+    }
+}
+
+impl Serialize for Secret {
+    fn serialize<S: Serializer>(&self, output: S) -> std::result::Result<S::Ok, S::Error> {
+        output.serialize_str(self.text())
     }
 }
 

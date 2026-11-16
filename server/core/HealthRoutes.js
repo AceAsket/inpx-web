@@ -1,3 +1,6 @@
+const {wasServiceAuthorized} = require('./RustHttpServer');
+const directoryDiagnostics = require('./DirectoryDiagnostics');
+
 function noStore(res) {
     res.set('Cache-Control', 'no-store');
 }
@@ -52,9 +55,9 @@ async function buildMetrics(config, webWorker, security = null, webSocketControl
     const stats = index.stats || {};
     const memory = process.memoryUsage();
     const cpu = process.cpuUsage();
-    const dbSize = await webWorker.dirSize(`${config.dataDir}/db`);
-    const bookCacheSize = await webWorker.dirSize(config.bookDir);
-    const coverCacheSize = await webWorker.dirSize(config.coverDir || `${config.publicFilesDir}/cover`);
+    const [dbSize,bookCacheSize,coverCacheSize] = await directoryDiagnostics.sizes([
+        {path:`${config.dataDir}/db`},{path:config.bookDir},{path:config.coverDir || `${config.publicFilesDir}/cover`},
+    ]);
     const sources = Array.isArray(config.librarySources) ? config.librarySources : [];
     const enabledSources = sources.filter(source => source.enabled !== false);
     const loginMetrics = security && security.getLoginMetrics ? security.getLoginMetrics() : null;
@@ -110,7 +113,7 @@ function metricsAuthorized(req, config, security) {
     if (!security)
         return !config.metricsToken;
 
-    if (security.hasValidMetricsToken(req))
+    if (wasServiceAuthorized(req, 'metrics') || security.hasValidMetricsToken(req))
         return true;
 
     if (config.metricsToken)
@@ -159,7 +162,7 @@ module.exports = function initHealthRoutes(app, config, webWorker, security = nu
     });
 
     const metricsPath = config.metricsPath || '/metrics';
-    app.get(metricsPath, async(req, res) => {
+    app.get(metricsPath, async(req, res, next) => {
         noStore(res);
         if (!config.metricsEnabled) {
             res.sendStatus(404);
@@ -171,7 +174,10 @@ module.exports = function initHealthRoutes(app, config, webWorker, security = nu
             return;
         }
 
-        res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-        res.send(await buildMetrics(config, webWorker, security, webSocketController));
+        try {
+            const metrics = await buildMetrics(config, webWorker, security, webSocketController);
+            res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+            res.send(metrics);
+        } catch (error) {next(error);}
     });
 };

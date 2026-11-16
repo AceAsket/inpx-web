@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -52,9 +52,27 @@ pub(crate) enum Request {
 }
 
 #[derive(Serialize)]
-struct Accepted {
+pub(crate) struct Accepted {
+    pub(crate) state: totp::State,
+    pub(crate) grant: Option<trust::Grant>,
+}
+
+pub(crate) fn consume(
+    file: &Path,
+    user: &str,
     state: totp::State,
-    grant: Option<trust::Grant>,
+    code: &str,
+    now: i64,
+    remember: Option<trust::Remember>,
+) -> Result<Option<Accepted>> {
+    let Some(state) = totp::consume(file, user, state, code, now)? else {
+        return Ok(None);
+    };
+    let grant = remember
+        .filter(|_| totp::numeric_code(code).is_some())
+        .map(|remember| trust::issue(remember, now))
+        .transpose()?;
+    Ok(Some(Accepted { state, grant }))
 }
 
 pub(crate) fn execute(request: Request, output: impl Write) -> Result<()> {
@@ -89,16 +107,7 @@ pub(crate) fn execute(request: Request, output: impl Write) -> Result<()> {
             code,
             now,
             remember,
-        } => {
-            let Some(state) = totp::consume(&file, &user, state, &code, now)? else {
-                return write(output, &Option::<Accepted>::None);
-            };
-            let grant = remember
-                .filter(|_| totp::numeric_code(&code).is_some())
-                .map(|remember| trust::issue(remember, now))
-                .transpose()?;
-            write(output, &Accepted { state, grant })
-        }
+        } => write(output, &consume(&file, &user, state, &code, now, remember)?),
         Request::Recovery { user } => write(output, &totp::recovery(&user)?),
         Request::Recognizes {
             devices,

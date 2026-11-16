@@ -13,12 +13,50 @@ const PERIOD_MS: i64 = 30_000;
 const SECRET_BYTES: usize = 20;
 const RECOVERY_COUNT: usize = 8;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct State {
     secret: String,
     last_step: i64,
     recovery_hashes: Vec<String>,
+}
+
+impl State {
+    pub(crate) fn encrypted_secret(&self) -> &str {
+        &self.secret
+    }
+
+    pub(crate) fn from_stored(value: &serde_json::Value) -> Option<Self> {
+        if value.is_null() {
+            return None;
+        }
+        let secret = value["secret"]
+            .as_str()
+            .filter(|text| text.starts_with("enc:v1:"))
+            .unwrap_or_default();
+        let last_step = crate::profile_decode::safe_integer(&value["lastStep"])
+            .filter(|&step| step >= 0)
+            .unwrap_or(-1);
+        let mut recovery_hashes = Vec::new();
+        if let Some(stored) = value["recoveryHashes"].as_array() {
+            for hash in stored
+                .iter()
+                .take(RECOVERY_COUNT)
+                .filter_map(serde_json::Value::as_str)
+            {
+                if parse_hex::<KEY_BYTES>(hash).is_some()
+                    && !recovery_hashes.iter().any(|saved| saved == hash)
+                {
+                    recovery_hashes.push(hash.to_owned());
+                }
+            }
+        }
+        Some(Self {
+            secret: secret.into(),
+            last_step,
+            recovery_hashes,
+        })
+    }
 }
 
 #[derive(Serialize)]

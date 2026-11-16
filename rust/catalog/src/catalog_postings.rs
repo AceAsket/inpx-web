@@ -143,7 +143,7 @@ pub(crate) struct CountsSummary {
     no_author_book_count: usize,
     genre_count: usize,
     lang_count: usize,
-    name_counts: [usize; 4],
+    pub(crate) name_counts: [usize; 4],
 }
 
 impl Postings {

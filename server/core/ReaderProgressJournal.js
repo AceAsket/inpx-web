@@ -263,6 +263,41 @@ async function writeSnapshot(file, progressFile, text) {
     await writeFileAtomic(file,text,{syncDirectory:true});
 }
 
+async function writeProfileCredentials(file, progressFile, user, patch, authorize) {
+    if (path.resolve(file) !== path.join(path.dirname(path.resolve(progressFile)), 'reading-lists.json')) return false;
+    const entry = rustJournal(progressFile);
+    if (!entry) return false;
+    return runtime.withSignal(undefined,()=>withRustJournal(entry,async reader=>{
+        if (!(await journalCapabilities(entry))?.profileCredentials) return false;
+        const expected = await stamp(file);
+        await authorize();
+        const result = await reader.run(process=>process.query({op:'snapshot',action:'credentials',expected,user,patch}),
+            ()=>{throw new Error(reader.lastError || 'Не удалось сохранить учётные данные профиля');});
+        if (result?.state==='stored') return true;
+        if (result?.state==='legacy') return false;
+        if (result?.state==='changed') throw new Error('Файл профилей изменился, повторите операцию');
+        if (result?.state==='missing') throw new Error('Пользователь не найден');
+        throw new Error('Некорректный ответ хранилища профилей');
+    }));
+}
+
+async function bootstrapAdmin(file, progressFile, options) {
+    if (path.resolve(file) !== path.join(path.dirname(path.resolve(progressFile)), 'reading-lists.json')) return null;
+    const entry = rustJournal(progressFile);
+    if (!entry) return null;
+    return runtime.withSignal(undefined,()=>withRustJournal(entry,async reader=>{
+        if (!(await journalCapabilities(entry))?.profileBootstrap) return null;
+        const expected = await stamp(file);
+        const result = await reader.run(process=>process.query({op:'snapshot',action:'bootstrapAdmin',expected,options}),
+            ()=>{throw new Error(reader.lastError || 'Не удалось настроить профиль администратора');});
+        if (result?.state==='adminReady' && typeof result.stamp==='string') return result;
+        if (result?.state==='legacy') return null;
+        if (result?.state==='changed') throw new Error('Файл профилей изменился, повторите операцию');
+        if (result?.state==='adminLoginConflict') throw new Error(`Admin login "${options.login}" already used by another profile`);
+        throw new Error('Некорректный ответ настройки профиля администратора');
+    }));
+}
+
 // Pre-upgrade snapshots must also open in versions predating the journal.
 async function foldSnapshot(source, snapshot) {
     const journalFile = path.join(path.dirname(source), fileName);
@@ -281,5 +316,5 @@ async function foldSnapshot(source, snapshot) {
     }
 }
 
-module.exports = {fileName, checkpointField, maxBytes, stamp, replay, append, update, writeSnapshot, runRustBackup, applyProgress, clear, foldSnapshot,
+module.exports = {fileName, checkpointField, maxBytes, stamp, replay, append, update, writeSnapshot, writeProfileCredentials, bootstrapAdmin, runRustBackup, applyProgress, clear, foldSnapshot,
     startRustJournal};

@@ -45,7 +45,7 @@ pub struct DirectRoutes {
     serve_assets: bool,
     #[serde(default)]
     asset_gate: bool,
-    websocket_requests: Option<websocket::RequestLimits>,
+    pub(crate) websocket_requests: Option<websocket::RequestLimits>,
     request_access: Option<request_access::Settings>,
 }
 
@@ -74,7 +74,7 @@ impl Routes {
         assets: Assets,
         opds_path: Option<String>,
         files: Option<download::Config>,
-        websocket: Option<websocket::Config>,
+        websocket: Option<websocket::Endpoint>,
     ) -> Self {
         Self {
             direct: AtomicU8::new(direct.flags()),
@@ -84,8 +84,7 @@ impl Routes {
             assets,
             opds_path,
             files,
-            websocket: websocket
-                .map(|config| websocket::Endpoint::new(config, direct.websocket_requests)),
+            websocket,
             access: RwLock::new(direct.request_access.map(Policy::new)),
         }
     }
@@ -166,6 +165,7 @@ impl Routes {
                     proof,
                     secure,
                     needs_session,
+                    ..
                 } => {
                     request
                         .headers_mut()
@@ -355,7 +355,7 @@ pub(crate) fn forward(response: Response<Incoming>) -> Response<Body> {
     response.map(|incoming| incoming.map_err(Into::into).boxed_unsync())
 }
 
-fn is_websocket(headers: &HeaderMap) -> bool {
+pub(crate) fn is_websocket(headers: &HeaderMap) -> bool {
     headers
         .get(header::UPGRADE)
         .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"websocket"))

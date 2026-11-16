@@ -40,7 +40,15 @@ pub(crate) fn publish(
 
 pub(crate) fn sync_parent(path: &Path) -> Result<()> {
     #[cfg(unix)]
-    File::open(path.parent().ok_or("missing parent directory")?)?.sync_all()?;
+    sync_directory(path.parent().ok_or("missing parent directory")?)?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+pub(crate) fn sync_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    File::open(path)?.sync_all()?;
     #[cfg(not(unix))]
     let _ = path;
     Ok(())

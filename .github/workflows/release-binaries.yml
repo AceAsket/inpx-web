@@ -185,6 +185,19 @@ jobs:
           INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
         run: node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$ARCHIVE_PATH"
 
+      - name: Verify the standalone Rust archive on this target
+        shell: bash
+        env:
+          INPX_BUILD_DIST_DIR: ${{ runner.temp }}/inpx-rust-release
+          INPX_SMOKE_EPUB: 'true'
+        run: |
+          npm run build:rust -- ${{ matrix.target }}
+          node build/release.js ${{ matrix.target }}
+          version=$(node -p "require('./package.json').version")
+          archive="$INPX_BUILD_DIST_DIR/release/inpx-web-$version-${{ matrix.target }}.zip"
+          node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$archive" --application-only --rust
+          cp "$archive" "dist/release/inpx-web-$version-${{ matrix.target }}-rust.zip"
+
       - name: Build Windows installer
         if: matrix.target == 'win'
         shell: pwsh

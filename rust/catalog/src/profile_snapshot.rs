@@ -1,11 +1,14 @@
 use std::cell::RefCell;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use tempfile::{Builder, NamedTempFile};
 
+use crate::crypto_support::Secret;
+use crate::profile_bootstrap::{self, Options};
+use crate::profile_store::{CredentialPatch, CredentialUpdate, Store};
 use crate::{Result, atomic_file};
 
 const MAX_INLINE_BYTES: usize = 64 * 1024;
@@ -21,6 +24,15 @@ pub enum SnapshotRequest {
         expected: Option<String>,
         size: u64,
     },
+    Credentials {
+        expected: Option<String>,
+        user: String,
+        patch: CredentialPatch,
+    },
+    BootstrapAdmin {
+        expected: Option<String>,
+        options: Options,
+    },
     Finish,
     Cancel,
 }
@@ -28,10 +40,20 @@ pub enum SnapshotRequest {
 #[derive(Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub(crate) enum SnapshotResponse {
-    Staged { name: String },
+    Staged {
+        name: String,
+    },
     Stored,
     Changed,
     Canceled,
+    Legacy,
+    Missing,
+    AdminReady {
+        stamp: String,
+        #[serde(rename = "generatedPassword", skip_serializing_if = "Option::is_none")]
+        generated_password: Option<Secret>,
+    },
+    AdminLoginConflict,
 }
 
 struct PendingSnapshot {
@@ -43,6 +65,7 @@ struct PendingSnapshot {
 pub(crate) struct ProfileSnapshot {
     path: PathBuf,
     pending: RefCell<Option<PendingSnapshot>>,
+    profiles: RefCell<Store>,
 }
 
 impl ProfileSnapshot {
@@ -50,14 +73,12 @@ impl ProfileSnapshot {
         Self {
             path,
             pending: RefCell::new(None),
+            profiles: RefCell::default(),
         }
     }
 
     fn stage(&self) -> Result<NamedTempFile> {
-        let parent = self.path.parent().ok_or("missing profile directory")?;
-        Ok(Builder::new()
-            .prefix(".reading-lists.")
-            .tempfile_in(parent)?)
+        stage(&self.path)
     }
 
     fn publish(&self, file: NamedTempFile, expected: Option<&str>) -> Result<SnapshotResponse> {
@@ -105,6 +126,48 @@ impl ProfileSnapshot {
                 });
                 Ok(SnapshotResponse::Staged { name })
             }
+            SnapshotRequest::Credentials {
+                expected,
+                user,
+                patch,
+            } => {
+                if self.pending.borrow().is_some() {
+                    return Err("another profile snapshot is staged".into());
+                }
+                let result = self.profiles.borrow_mut().update_credentials(
+                    &self.path,
+                    expected.as_deref(),
+                    &user,
+                    patch,
+                )?;
+                Ok(match result {
+                    CredentialUpdate::Stored => SnapshotResponse::Stored,
+                    CredentialUpdate::Legacy => SnapshotResponse::Legacy,
+                    CredentialUpdate::Changed => SnapshotResponse::Changed,
+                    CredentialUpdate::Missing => SnapshotResponse::Missing,
+                })
+            }
+            SnapshotRequest::BootstrapAdmin { expected, options } => {
+                if self.pending.borrow().is_some() {
+                    return Err("another profile snapshot is staged".into());
+                }
+                Ok(
+                    match profile_bootstrap::run(&self.path, expected.as_deref(), options)? {
+                        profile_bootstrap::Outcome::Ready {
+                            stamp,
+                            generated_password,
+                        } => SnapshotResponse::AdminReady {
+                            stamp,
+                            generated_password,
+                        },
+                        profile_bootstrap::Outcome::Changed => SnapshotResponse::Changed,
+                        profile_bootstrap::Outcome::Legacy => SnapshotResponse::Legacy,
+                        profile_bootstrap::Outcome::LoginConflict => {
+                            SnapshotResponse::AdminLoginConflict
+                        }
+                    },
+                )
+            }
             SnapshotRequest::Finish => {
                 let snapshot = self
                     .pending
@@ -122,6 +185,13 @@ impl ProfileSnapshot {
             }
         }
     }
+}
+
+pub(crate) fn stage(path: &Path) -> Result<NamedTempFile> {
+    let parent = path.parent().ok_or("missing profile directory")?;
+    Ok(Builder::new()
+        .prefix(".reading-lists.")
+        .tempfile_in(parent)?)
 }
 
 fn decode(encoded: &str) -> Result<Vec<u8>> {

@@ -3,15 +3,15 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressPolicy {
-    generation: f64,
-    requested_generation: f64,
-    current_generation: Option<f64>,
-    revision: f64,
-    checks_revision: bool,
-    requested_revision: Option<f64>,
-    requested_time: Option<f64>,
-    current_time: Option<f64>,
-    force: bool,
+    pub(crate) generation: f64,
+    pub(crate) requested_generation: f64,
+    pub(crate) current_generation: Option<f64>,
+    pub(crate) revision: f64,
+    pub(crate) checks_revision: bool,
+    pub(crate) requested_revision: Option<f64>,
+    pub(crate) requested_time: Option<f64>,
+    pub(crate) current_time: Option<f64>,
+    pub(crate) force: bool,
 }
 
 pub(crate) enum ProgressDecision {

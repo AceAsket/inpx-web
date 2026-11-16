@@ -125,12 +125,25 @@ class ReadingListStore {
     // Without a configured password the admin gets a random one, printed once to the log:
     // a fixed default would let anyone who reaches the server in as admin.
     adminPassword() {
-        if (!this.config.adminPassword) {
-            this.config.adminPassword = crypto.randomBytes(12).toString('base64url');
-            logWarning(`Admin profile "${this.adminLogin()}" password: ${this.config.adminPassword} `
-                + '(generated; set INPX_ADMIN_PASSWORD or --admin-password to choose one)');
-        }
+        if (!this.config.adminPassword) this.reportGeneratedAdminPassword(crypto.randomBytes(12).toString('base64url'));
         return String(this.config.adminPassword);
+    }
+
+    reportGeneratedAdminPassword(password) {
+        this.config.adminPassword = password;
+        logWarning(`Admin profile "${this.adminLogin()}" password: ${password} `
+            + '(generated; set INPX_ADMIN_PASSWORD or --admin-password to choose one)');
+    }
+
+    async initialize() {
+        const native = await progressJournal.bootstrapAdmin(this.file,this.progressFile,{
+            login:this.adminLogin(),password:String(this.config.adminPassword || '').toWellFormed(),reset:!!this.config.resetAdminPassword,
+        });
+        if (native) {
+            if (native.generatedPassword) this.reportGeneratedAdminPassword(native.generatedPassword);
+            this.config.resetAdminPassword = false;
+        }
+        return this.loadSnapshot(native?.stamp);
     }
 
     // Installs made before the random default still have admin/admin.
@@ -890,7 +903,7 @@ class ReadingListStore {
 
     // Internal immutable snapshot. Public readers return copies; a single-user
     // read must not clone every other profile's reading history.
-    async loadSnapshot() {
+    async loadSnapshot(adminStamp) {
         await this.ensureData();
         const stat = await fs.stat(this.file);
         const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
@@ -920,7 +933,8 @@ class ReadingListStore {
         const journal = await progressJournal.replay(this.progressFile, checkpoint, raw, journalStamp);
         if (journalStamp && !journal.offset) journal.stamp = await this.clearObsoleteProgressJournal();
         const assetsChanged = await this.assets.externalize(raw);
-        const {data, changed} = await this.applyAdminBootstrap(raw);
+        const adminReady = !reset && adminStamp && adminStamp === await progressJournal.stamp(this.file);
+        const {data, changed} = adminReady ? {data:this.normalizeData(raw),changed:false} : await this.applyAdminBootstrap(raw);
         if (changed || assetsChanged)
             await this.writeData(data);
         this.updateCachedProfileAuthPolicy(data.profileAuthPolicy);
@@ -1226,7 +1240,7 @@ class ReadingListStore {
         }
         if (Object.hasOwn(patch, 'profileTrustedDevices')) user.profileTrustedDevices = patch.profileTrustedDevices;
         if (patch.passwordHash) user.passwordHash = patch.passwordHash;
-        authorize();
+        await authorize();
         await this.save(data);
     }
 
@@ -1248,7 +1262,7 @@ class ReadingListStore {
         delete target.profileTrustedDevices;
         delete target.opdsAppPasswordHash;
         target.updatedAt = this.nowIso();
-        authorize();
+        await authorize();
         await this.save(data);
         return {userId:target.id, otpEnabled:false, otpRequired:target.otpRequired === true, opdsAppPasswordSet:false,
             opdsEnabled:target.opdsEnabled, opdsAuthEnabled:target.opdsAuthEnabled};
@@ -1272,7 +1286,7 @@ class ReadingListStore {
             target.updatedAt = this.nowIso();
         }
         if (adminTotp) admin.profileTotp = adminTotp;
-        authorize();
+        await authorize();
         if (changed || adminTotp) await this.save(data);
         return {userId:target.id, otpRequired:required, otpEnabled:!!target.profileTotp, changed};
     }
@@ -1297,7 +1311,7 @@ class ReadingListStore {
         }
         data.profileAuthPolicy = policy;
         if (adminTotp) admin.profileTotp = adminTotp;
-        authorize();
+        await authorize();
         await this.save(data);
         return {profileAuthPolicy:policy, activatingOtp};
     }
@@ -1312,7 +1326,7 @@ class ReadingListStore {
         if (target.isAdmin || target.id === 'default' && !target.login && !target.passwordHash)
             throw new Error('Этот профиль нельзя заблокировать');
         const changed = (target.blocked === true) !== blocked;
-        authorize();
+        await authorize();
         if (changed) {
             if (blocked) {
                 target.blocked = true;

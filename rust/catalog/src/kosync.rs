@@ -14,6 +14,10 @@ use crate::framed_protocol::{Frames, header, reply};
 use crate::kosync_index::{Cache, Query};
 use crate::kosync_store::{Client, Store};
 
+#[path = "kosync_service.rs"]
+mod service;
+pub use service::{KoSync, ProgressRequest, Push, Session, valid_document};
+
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 enum Command {
@@ -96,7 +100,7 @@ fn run(request: Command, cache: &mut Cache, store: &mut Store) -> Result<Box<Raw
             ext,
             now,
         } => {
-            store.link(&file, &source, &book_uid, &ext, now)?;
+            store.link(&file, &book_uid, &ext, now, || Ok(source))?;
             Value::Null
         }
         Command::Lookup { file, query } => cache.lookup(&file, &query)?,
@@ -114,10 +118,8 @@ fn run(request: Command, cache: &mut Cache, store: &mut Store) -> Result<Box<Raw
             Value::Null
         }
         Command::Pair => {
-            let entropy = Sensitive(random::<24>()?);
-            let password = URL_SAFE_NO_PAD.encode(entropy.0);
-            let key = Sensitive(hex(&md5(password.as_bytes())?).into_bytes());
-            json!({"password":password,"verifier":hex(&Sha256::digest(&key.0))})
+            let (password, verifier) = pair()?;
+            json!({"password":password,"verifier":verifier})
         }
         Command::ClientKey { password } => json!(hex(&md5(password.as_bytes())?)),
         Command::Account { file, client, key } => store.account(&file, &client, key.as_deref())?,
@@ -159,6 +161,13 @@ fn run(request: Command, cache: &mut Cache, store: &mut Store) -> Result<Box<Raw
         }
     };
     Ok(serde_json::value::to_raw_value(&response)?)
+}
+
+fn pair() -> Result<(String, String)> {
+    let entropy = Sensitive(random::<24>()?);
+    let password = URL_SAFE_NO_PAD.encode(entropy.0);
+    let key = Sensitive(hex(&md5(password.as_bytes())?).into_bytes());
+    Ok((password, hex(&Sha256::digest(&key.0))))
 }
 
 pub(crate) fn fingerprint(file: &mut File) -> Result<String> {

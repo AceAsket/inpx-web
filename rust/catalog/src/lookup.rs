@@ -450,6 +450,33 @@ impl LookupIndex {
         }
     }
 
+    pub(crate) fn visit_names(
+        &self,
+        generation: &str,
+        table: Table,
+        matches: impl Fn(&str) -> bool,
+        mut visit: impl FnMut(u32, &str, &str, u32, &[[u8; 4]]) -> Result<()>,
+    ) -> Result<()> {
+        let transaction = self.db.begin_read()?;
+        check_generation(&transaction, generation)?;
+        let data = transaction.open_table(POSTINGS)?;
+        self.with_order(&transaction, table, |order| {
+            order.ok_or("missing catalogue name order")?.visit_selected(
+                NameSelection::All,
+                |(id, label)| {
+                    if !matches(label) {
+                        return Ok(());
+                    }
+                    if let Some(raw) = data.get(table.key(*id))? {
+                        let row = Entry::decode(raw.value())?;
+                        visit(*id, label, row.name, row.count, row.books)?;
+                    }
+                    Ok(())
+                },
+            )
+        })
+    }
+
     fn old_deleted(&self, table: Table, id: u32) -> Result<u32> {
         let mut counts = self.old_counts.borrow_mut();
         let counts = match counts.entry(table) {
