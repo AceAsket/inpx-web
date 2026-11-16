@@ -22,7 +22,7 @@ async function isolateNativeJxl(binary, directory) {
     const authState = require('../server/core/RustAuthState').fileName;
     await fs.copyFile(path.join(bundledTools,authState),path.join(binDir,authState));
     for (const program of ['server','catalog','reader']) {
-        const name = rust.fileName(program);
+        const name = rustPrograms.fileName(program);
         const input = path.join(bundledTools,name);
         if (!await fs.pathExists(input)) continue;
         const output = path.join(binDir,name);

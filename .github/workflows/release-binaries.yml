@@ -14,6 +14,10 @@ on:
         description: 'Publish the built artifacts as a GitHub Release'
         type: boolean
         default: true
+      refresh_smoke_test:
+        description: 'Use the package smoke-test script from the selected workflow revision'
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -177,6 +181,13 @@ jobs:
           node build/release.js ${{ matrix.target }}
           version=$(node -p "require('./package.json').version")
           echo "ARCHIVE_PATH=dist/release/inpx-web-$version-${{ matrix.target }}.zip" >> "$GITHUB_ENV"
+
+      - name: Load the corrected package smoke test for this rebuild
+        if: github.event_name == 'workflow_dispatch' && inputs.refresh_smoke_test
+        shell: bash
+        run: |
+          git fetch --no-tags origin "$GITHUB_WORKFLOW_SHA"
+          git show "$GITHUB_WORKFLOW_SHA:scripts/binary-smoke-test.js" > scripts/binary-smoke-test.js
 
       - name: Test extracted release permissions, application and converters
         shell: bash
