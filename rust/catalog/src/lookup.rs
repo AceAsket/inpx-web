@@ -12,7 +12,10 @@ use crate::Result;
 use crate::book_maps::BookIds;
 use crate::index::{check_generation, publish_with_cache};
 use crate::jemba_identity::BookRows;
-use crate::lookup_order::{LabelOrder, NameRunDirectory, NameSelection, load_order};
+use crate::lookup_discovery::{BrowseFilter, BrowseResult, BrowseResults, SelectedBooks};
+use crate::lookup_order::{
+    LabelOrder, NameRunDirectory, NameSelection, SuggestionWindows, load_order,
+};
 
 const POSTINGS: TableDefinition<(u8, u32), &[u8]> = TableDefinition::new("lookup_v1");
 const LABEL_ORDER: TableDefinition<u8, &[u8]> = TableDefinition::new("lookup_label_order_v1");
@@ -239,6 +242,19 @@ pub enum LookupQuery {
         table: Table,
         selections: Vec<NameSelection>,
     },
+    #[serde(rename = "browseNames")]
+    BrowseNames {
+        table: Table,
+        prefix: String,
+        selection: NameSelection,
+        selected: Option<BrowseFilter>,
+    },
+    #[serde(rename = "suggestSamples")]
+    SuggestSamples {
+        table: Table,
+        limit: usize,
+        queries: Vec<SuggestionWindows>,
+    },
     Books {
         table: Table,
         groups: Vec<Vec<u32>>,
@@ -282,16 +298,28 @@ pub struct Sample {
 }
 
 #[derive(Serialize)]
+pub struct SuggestionSamples {
+    rows: Vec<Sample>,
+    limited: bool,
+}
+
+#[derive(Serialize)]
 #[serde(untagged)]
 pub enum LookupResult {
     Probe(bool),
     Capabilities {
         #[serde(rename = "nameRanges")]
         name_ranges: bool,
+        #[serde(rename = "nameBrowse")]
+        name_browse: bool,
+        #[serde(rename = "nameSuggestions")]
+        name_suggestions: bool,
     },
     NameDirectory(Option<Vec<NameRunDirectory>>),
     NameSlices(Option<Vec<Vec<String>>>),
     NameIds(Option<Vec<u32>>),
+    Browse(Option<BrowseResult>),
+    SuggestionSamples(Option<SuggestionSamples>),
     Books(Vec<u32>),
     Samples(Vec<Sample>),
     Labels(Vec<String>),
@@ -394,6 +422,34 @@ impl LookupIndex {
         }
     }
 
+    pub(crate) fn entity_book_ids(
+        &self,
+        generation: &str,
+        table: Table,
+        names: Vec<u32>,
+        first_name_only: bool,
+    ) -> Result<Vec<u32>> {
+        let transaction = self.db.begin_read()?;
+        check_generation(&transaction, generation)?;
+        let data = transaction.open_table(POSTINGS)?;
+        if first_name_only {
+            let Some(&name) = names.first() else {
+                return Ok(Vec::new());
+            };
+            let Some(row) = data.get(table.key(name))? else {
+                return Ok(Vec::new());
+            };
+            Ok(Entry::decode(row.value())?
+                .books
+                .iter()
+                .copied()
+                .map(u32::from_le_bytes)
+                .collect())
+        } else {
+            book_ids(&data, table, vec![names])
+        }
+    }
+
     fn old_deleted(&self, table: Table, id: u32) -> Result<u32> {
         let mut counts = self.old_counts.borrow_mut();
         let counts = match counts.entry(table) {
@@ -420,9 +476,11 @@ impl LookupIndex {
         check_generation(&transaction, &request.generation)?;
         let data = transaction.open_table(POSTINGS)?;
         match request.query {
-            LookupQuery::Probe { capabilities: true } => {
-                Ok(LookupResult::Capabilities { name_ranges: true })
-            }
+            LookupQuery::Probe { capabilities: true } => Ok(LookupResult::Capabilities {
+                name_ranges: true,
+                name_browse: true,
+                name_suggestions: true,
+            }),
             LookupQuery::Probe {
                 capabilities: false,
             } => Ok(LookupResult::Probe(true)),
@@ -457,26 +515,76 @@ impl LookupIndex {
                     Ok(LookupResult::NameIds(Some(book_ids(&data, table, groups)?)))
                 })
             }
+            LookupQuery::BrowseNames {
+                table,
+                prefix,
+                selection,
+                selected,
+            } => {
+                if !matches!(table, Table::Author | Table::Series) {
+                    return Err("invalid catalogue browse table".into());
+                }
+                let selected = selected.map(BrowseFilter::decode).transpose()?;
+                if selected.as_ref().is_some_and(SelectedBooks::is_empty) {
+                    return Ok(LookupResult::Browse(Some(BrowseResult::default())));
+                }
+                self.with_order(&transaction, table, |order| {
+                    let Some(order) = order else {
+                        return Ok(LookupResult::Browse(None));
+                    };
+                    let mut results = BrowseResults::default();
+                    order.visit_selected(selection, |(id, label)| {
+                        if *id == 0 || label == "?" {
+                            return Ok(());
+                        }
+                        let Some(suffix) = label.strip_prefix(&prefix) else {
+                            return Ok(());
+                        };
+                        let Some(raw) = data.get(table.key(*id))? else {
+                            return Ok(());
+                        };
+                        let row = Entry::decode(raw.value())?;
+                        let count = match &selected {
+                            Some(selected) => row
+                                .books
+                                .iter()
+                                .filter(|bytes| selected.contains(u32::from_le_bytes(**bytes)))
+                                .count() as u64,
+                            None => u64::from(row.count),
+                        };
+                        results.add(suffix, row.name, count);
+                        Ok(())
+                    })?;
+                    Ok(LookupResult::Browse(Some(results.finish(&prefix))))
+                })
+            }
+            LookupQuery::SuggestSamples {
+                table,
+                limit,
+                queries,
+            } => {
+                if !(1..=32).contains(&limit) {
+                    return Err("invalid catalogue suggestion limit".into());
+                }
+                self.with_order(&transaction, table, |order| {
+                    let Some(order) = order else {
+                        return Ok(LookupResult::SuggestionSamples(None));
+                    };
+                    let Some((ids, limited)) = order.suggestions(queries, limit)? else {
+                        return Ok(LookupResult::SuggestionSamples(None));
+                    };
+                    let rows = sample_rows(&data, table, ids)?;
+                    Ok(LookupResult::SuggestionSamples(Some(SuggestionSamples {
+                        rows,
+                        limited,
+                    })))
+                })
+            }
             LookupQuery::Books { table, groups } => {
                 Ok(LookupResult::Books(book_ids(&data, table, groups)?))
             }
             LookupQuery::Sample { table, ids } => {
-                if ids.len() > 32 {
-                    return Err("lookup sample exceeds row limit".into());
-                }
-                let mut rows = Vec::with_capacity(ids.len());
-                for id in ids {
-                    let row = data.get(table.key(id))?.ok_or("missing lookup row")?;
-                    let entry = Entry::decode(row.value())?;
-                    rows.push(Sample {
-                        id,
-                        name: entry.name.to_owned(),
-                        count: entry.count,
-                        book_ids: entry.sample(),
-                        complete: entry.books.len() <= 4,
-                    });
-                }
-                Ok(LookupResult::Samples(rows))
+                Ok(LookupResult::Samples(sample_rows(&data, table, ids)?))
             }
             LookupQuery::Labels { table, ids } => {
                 if ids.len() > 32_768 {
@@ -549,6 +657,29 @@ impl LookupIndex {
             )),
         }
     }
+}
+
+fn sample_rows(
+    data: &impl ReadableTable<(u8, u32), &'static [u8]>,
+    table: Table,
+    ids: Vec<u32>,
+) -> Result<Vec<Sample>> {
+    if ids.len() > 32 {
+        return Err("lookup sample exceeds row limit".into());
+    }
+    ids.into_iter()
+        .map(|id| {
+            let row = data.get(table.key(id))?.ok_or("missing lookup row")?;
+            let entry = Entry::decode(row.value())?;
+            Ok(Sample {
+                id,
+                name: entry.name.to_owned(),
+                count: entry.count,
+                book_ids: entry.sample(),
+                complete: entry.books.len() <= 4,
+            })
+        })
+        .collect()
 }
 
 fn opds_groups(

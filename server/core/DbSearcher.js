@@ -978,6 +978,36 @@ class DbSearcher {
         return this.nativeFacetTables.get(table);
     }
 
+    async discoveryFacetGroups(process,scope,includeDeletionFacet) {
+        const values = includeDeletionFacet ? {del:[0]} : {};
+        if (scope.genre) values.genre = scope.genre.split(',');
+        if (scope.lang) values.lang = scope.lang.split(',').map(value=>value.trim().toLowerCase());
+        if (scope.ext) values.ext = scope.ext.split('|').map(value=>value.trim().toLowerCase());
+        if (scope.sourceId) values.source = [scope.sourceId.trim().toLowerCase()];
+        const groups = [];
+        for (const [table, keys] of Object.entries(values)) {
+            const labels = await this.nativeFacetLabels(process,table);
+            if (!labels) return null;
+            const rows = facetRows(labels, keys.map(key=>[key,key]));
+            if (!rows.length) return [{table,rows}];
+            groups.push({table,rows});
+        }
+        return groups;
+    }
+
+    async discoverySelection(scope) {
+        if (!this.db.bookStoreFacetSelection) return null;
+        return this.db.bookStore.run(async process => {
+            const groups = await this.discoveryFacetGroups(process,scope,true);
+            if (!groups) return null;
+            if (groups.some(group=>!group.rows.length)) return {format:'bitmap',data:''};
+            const selected = await process.query({op:'facetSelection',groups});
+            if (!['ids','bitmap'].includes(selected?.format) || typeof selected.data !== 'string')
+                throw new Error('Invalid Rust catalogue scope');
+            return selected;
+        }, () => null);
+    }
+
     async nativeBookVocabulary(process,field) {
         if (this.db.bookStoreFacets) {
             const runs = await this.nativeFacetLabels(process,field);

@@ -5,7 +5,9 @@ mod http;
 mod opds;
 mod receipts;
 mod report;
+mod request_access;
 mod upstream;
+mod websocket;
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
@@ -30,6 +32,7 @@ struct Config {
     assets: Option<assets::Config>,
     opds_path: Option<String>,
     files: Option<download::Config>,
+    websocket: Option<websocket::Config>,
     version: Option<String>,
     uptime: f64,
     header_bytes: usize,
@@ -80,6 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         assets::Assets::load(config.assets),
         config.opds_path,
         config.files,
+        config.websocket,
     ));
     let key: Arc<str> = config.key.into();
     let notices = report::start();

@@ -167,7 +167,7 @@ fn native_name_windows_keep_run_merge_order_and_book_intersection() {
     let contains = json!({"kind":"contains","text":"apple"});
     assert_eq!(
         get(json!({"generation":"test","op":"probe","capabilities":true})),
-        json!({"nameRanges":true})
+        json!({"nameRanges":true,"nameBrowse":true,"nameSuggestions":true})
     );
     assert_eq!(
         get(json!({"generation":"test","op":"nameSlices","table":"title","windows":[[1,0,2]]})),
@@ -189,4 +189,82 @@ fn native_name_windows_keep_run_merge_order_and_book_intersection() {
         ),
         json!([3])
     );
+    assert_eq!(
+        get(
+            json!({"generation":"test","op":"suggestSamples","table":"title","limit":2,"queries":[]})
+        ),
+        Value::Null
+    );
+}
+
+#[test]
+fn native_browse_counts_filtered_postings_and_limits_suggestions() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("lookup.redb");
+    let sparse_id = u32::MAX - 15;
+    let mut rows = vec![
+        json!({"id":1,"name":"?","value":"?","count":1,"bookIds":[1]}),
+        json!({"id":2,"name":"Имя","value":"имя","count":2,"bookIds":[1,1,sparse_id]}),
+    ];
+    for id in 3..=203 {
+        rows.push(json!({"id":id,"name":format!("Имя  🐈 {id:03}"),
+            "value":format!("имя  🐈 {id:03}"),"count":1,"bookIds":[2]}));
+    }
+    build_lookup(
+        &file,
+        "test",
+        rows.len() as u64,
+        false,
+        rows.into_iter().map(|mut row| {
+            row["table"] = json!("author");
+            Ok(serde_json::from_value(row)?)
+        }),
+    )
+    .unwrap();
+    let index = LookupIndex::open(&file).unwrap();
+    let get = |mut request: Value| {
+        request["generation"] = json!("test");
+        request["table"] = json!("author");
+        serde_json::to_value(
+            index
+                .query(serde_json::from_value(request).unwrap())
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let browse = |prefix, selection, selected| {
+        get(json!({"op":"browseNames","prefix":prefix,"selection":selection,"selected":selected}))
+    };
+    let all = json!({"kind":"all"});
+    let prefix = json!({"kind":"windows","ranges":[[[1,203]]]});
+    assert_eq!(
+        browse("имя", prefix, Value::Null),
+        json!({"total":202,"groups":[
+        {"prefix":"имя","name":"Имя","count":1,"books":2},
+        {"prefix":"имя  🐈","count":201,"books":201}
+    ],"items":[]})
+    );
+    assert_eq!(
+        browse("", all.clone(), json!({"format":"bitmap","data":"Ag=="})),
+        json!({"total":1,"groups":[],"items":[{"name":"Имя","count":2}]})
+    );
+    assert_eq!(
+        browse(
+            "",
+            all.clone(),
+            json!({"format":"ids","data":STANDARD.encode(sparse_id.to_le_bytes())})
+        ),
+        json!({"total":1,"groups":[],"items":[{"name":"Имя","count":1}]})
+    );
+    assert_eq!(
+        browse("", all, json!({"format":"bitmap","data":""})),
+        json!({"total":0,"groups":[],"items":[]})
+    );
+    let result = get(json!({"op":"suggestSamples","limit":2,"queries":[
+        {"exact":[[1,2]],"prefix":[[1,203]]},{"exact":[[3,4]]}
+    ]}));
+    assert_eq!(result["limited"], true);
+    assert_eq!(result["rows"], get(json!({"op":"sample","ids":[2,3]})));
 }

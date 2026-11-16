@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,6 +25,10 @@ impl Upstream {
             key,
             sender: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn client_ip(&self) -> IpAddr {
+        self.peer.ip()
     }
 
     async fn connect(

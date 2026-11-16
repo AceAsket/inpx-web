@@ -1,4 +1,5 @@
 use std::fmt::Write;
+use std::net::IpAddr;
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -7,6 +8,7 @@ pub(crate) enum Event {
     Listening(u16),
     Updated(u64),
     Delivered { id: u64, complete: bool },
+    WebSocketRejected { peer: IpAddr, reason: &'static str },
 }
 
 pub(crate) fn start() -> UnboundedSender<Event> {
@@ -23,6 +25,12 @@ pub(crate) fn start() -> UnboundedSender<Event> {
                     Event::Updated(id) => writeln!(lines, "{{\"updated\":{id}}}"),
                     Event::Delivered { id, complete } => {
                         writeln!(lines, "{{\"delivery\":{id},\"complete\":{complete}}}")
+                    }
+                    Event::WebSocketRejected { peer, reason } => {
+                        writeln!(
+                            lines,
+                            "{{\"websocketRejected\":\"{reason}\",\"peer\":\"{peer}\"}}"
+                        )
                     }
                 };
             }

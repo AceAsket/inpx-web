@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use inpx_catalog::{BookStore, build_store};
+use inpx_catalog::{BookStore, build_lookup, build_store};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -23,6 +23,154 @@ fn query(store: &BookStore, request: Value) -> Value {
         .query(serde_json::from_value(request).unwrap())
         .unwrap();
     serde_json::to_value(response).unwrap()
+}
+
+#[test]
+fn catalogue_entities_keep_scope_order_progress_and_volume_overrides() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let directory = tempdir().unwrap();
+    let path = directory.path();
+    let row = |id, uid, volume, del| {
+        let mut value: Value = serde_json::from_str(&book(id, uid, uid, "", 1.0, del)).unwrap();
+        value[0]["series"] = json!("Серия");
+        value[0]["serno"] = json!(volume);
+        value.to_string()
+    };
+    assert!(write(
+        path,
+        "base",
+        None,
+        &[
+            row(1, "first", 1.5, 0),
+            row(2, "deleted", 2.5, 1),
+            row(3, "target", 3.5, 0)
+        ]
+    ));
+    let groups = [
+        json!({"table":"series","id":10,"name":"Серия","bookIds":[2,1,3]}),
+        json!({"table":"series","id":20,"name":"Серия","bookIds":[3]}),
+    ];
+    build_lookup(
+        &path.join("lookup.redb"),
+        "lookup",
+        2,
+        false,
+        groups
+            .into_iter()
+            .map(|row| Ok(serde_json::from_value(row)?)),
+    )
+    .unwrap();
+    let facets = path.join("facets");
+    std::fs::create_dir(&facets).unwrap();
+    std::fs::write(
+        facets.join("lang"),
+        r#"[{"id":7,"value":"ru","bookIds":[2,3]}]"#,
+    )
+    .unwrap();
+    let store = BookStore::open(path).unwrap();
+    let rows = query(
+        &store,
+        json!({"generation":"base","op":"entityRows","lookupGeneration":"lookup",
+            "table":"series","nameIds":[10,20],"groups":[{"table":"lang","rows":[7]}]
+        }),
+    );
+    assert_eq!(
+        rows,
+        json!([{"id":3,"uid":"target","title":"target","series":"Серия","number":3.5}])
+    );
+    let order = STANDARD.encode(
+        [3_u32, 1, 2]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    let page = query(
+        &store,
+        json!({"generation":"base","op":"entityPage","order":order,"completed":"BQ==","page":1000,"limit":1}),
+    );
+    assert_eq!(page["page"], 3);
+    assert_eq!(page["pageCount"], 3);
+    assert_eq!(page["read"], 2);
+    assert_eq!(page["nextId"], 1);
+    assert_eq!(page["ids"], json!([2]));
+    assert_eq!(
+        page["books"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [2, 1]
+    );
+
+    let mark = |numbers| {
+        query(
+            &store,
+            json!({"generation":"base","op":"seriesVolumes","lookupGeneration":"lookup",
+                "nameIds":[10,20],"target":"target","numbers":numbers
+            }),
+        )
+    };
+    assert_eq!(
+        mark(json!({"first":4,"target":3})),
+        json!({"status":"found","uids":["deleted","target"]})
+    );
+    assert_eq!(
+        mark(json!({"target":null})),
+        json!({"status":"invalidVolume"})
+    );
+}
+
+#[test]
+fn facet_selection_intersects_unions_without_expanding_ids_into_json() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let dir = tempdir().unwrap();
+    let path = dir.path();
+    assert!(write(
+        path,
+        "base",
+        None,
+        &[book(1, "book", "Книга", "", 1.0, 0)]
+    ));
+    let facets = path.join("facets");
+    std::fs::create_dir(&facets).unwrap();
+    let sparse = u32::MAX - 15;
+    for (name, rows) in [
+        ("del", json!([{"id":1,"value":0,"bookIds":[1,2,3,4,5,5]}])),
+        (
+            "lang",
+            json!([{"id":1,"value":"ru","bookIds":[2,3,6]}, {"id":2,"value":"en","bookIds":[3,5]}]),
+        ),
+        (
+            "source",
+            json!([{"id":1,"value":"local","bookIds":[2,5,6]}, {"id":2,"value":"sparse","bookIds":[sparse]}]),
+        ),
+    ] {
+        std::fs::write(facets.join(name), rows.to_string()).unwrap();
+    }
+    let store = BookStore::open(path).unwrap();
+    let select = |groups| {
+        query(
+            &store,
+            json!({"generation":"base","op":"facetSelection","groups":groups}),
+        )
+    };
+    assert_eq!(
+        select(json!([
+            {"table":"del","rows":[1]}, {"table":"lang","rows":[1,2]}, {"table":"source","rows":[1]}
+        ])),
+        json!({"format":"bitmap","data":"JA=="})
+    );
+    assert_eq!(
+        select(json!([{"table":"del","rows":[1]},{"table":"lang","rows":[]}])),
+        json!({"format":"bitmap","data":""})
+    );
+    assert_eq!(
+        select(json!([{"table":"source","rows":[2]}])),
+        json!({"format":"ids","data":STANDARD.encode(sparse.to_le_bytes())})
+    );
 }
 
 #[test]

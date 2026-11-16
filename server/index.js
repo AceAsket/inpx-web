@@ -10,7 +10,6 @@ const os = require('os');
 
 const express = require('express');
 const http = require('http');
-const WebSocket = require ('ws');
 
 const utils = require('./core/utils');
 const {resolveLibrarySources} = require('./core/LibrarySources');
@@ -260,12 +259,10 @@ async function main() {
     app.use(security.requiredAuthMiddleware());
 
     const server = http.createServer(app);
-    const wss = new WebSocket.Server({
-        server,
-        maxPayload: require('./core/RequestLimits').transportLimit(config),
-        verifyClient: (info, done) => {
-            done(security.verifyWebSocket(info.req), 403, 'Forbidden');
-        },
+    const maxWebSocketPayload = require('./core/RequestLimits').transportLimit(config);
+    const wss = require('./core/WebSocketListener').attach(server,{
+        maxPayload:maxWebSocketPayload,
+        verify:req => security.verifyWebSocket(req),
     });
 
     let devModule = undefined;
@@ -320,6 +317,10 @@ async function main() {
     const transport = await require('./core/RustHttpServer').start(server,config,{
         health:!devModule,
         assets:!devModule,
+        websocket:{maxPayload:maxWebSocketPayload,textOnly:true},
+        websocketRequests:true,
+        requestAccess:()=>security.requestAccessPolicy(),
+        onWebSocketRejected:(reason,peer)=>security.logNativeWebSocketRejection(reason,peer),
         onFailure(error) {
             log(LM_FATAL,error.message);
             ayncExit.exit(1);

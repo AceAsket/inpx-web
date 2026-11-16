@@ -9,6 +9,7 @@ const runtimeMetrics = require('../core/RuntimeMetrics');
 const {getReaderSpeech} = require('../core/ReaderSpeech');
 const {withFileTransaction} = require('../core/FilePersistence');
 const clientProtocol = require('../core/ClientProtocol');
+const requestLimits = require('../core/RequestLimits');
 
 const cleanPeriod = 1*60*1000;//1 минута
 const closeSocketOnIdle = 5*60*1000;//5 минут
@@ -33,12 +34,13 @@ class WebSocketController {
 
         wss.on('connection', (ws, req) => {
             ws.req = req;
-            ws.on('message', (message, isBinary) => {
+            ws.on('message', (message, isBinary, admission) => {
                 if (isBinary) {
                     ws.close(1003, 'Text JSON required');
                     return;
                 }
-                this.onMessage(ws, message.toString());
+                const handled = this.onMessage(ws, message.toString(), admission);
+                if (admission) handled.finally(admission.complete).catch(error=>log(LM_ERR,error));
             });
 
             ws.on('error', (err) => {
@@ -68,17 +70,18 @@ class WebSocketController {
         }
     }
 
-    async onMessage(ws, message) {
-        const messageBytes = Buffer.byteLength(message);
-        const large = messageBytes > require('../core/RequestLimits').limits(this.config).message;
-        if ((ws.activeRequests || 0) >= 8 || (this.activeRequests || 0) >= 64 || (large && this.largeRequestActive)) {
-            ws.close(1013, 'Too many active requests');
-            return;
+    async onMessage(ws, message, admission) {
+        const messageBytes = admission?.validation ? 0 : Buffer.byteLength(message);
+        const large = !admission && messageBytes > requestLimits.limits(this.config).message;
+        if (!admission) {
+            if ((ws.activeRequests || 0) >= 8 || (this.activeRequests || 0) >= 64 || (large && this.largeRequestActive)) {
+                ws.close(1013, 'Too many active requests');
+                return;
+            }
+            ws.activeRequests = (ws.activeRequests || 0) + 1;
+            this.activeRequests = (this.activeRequests || 0) + 1;
+            if (large) this.largeRequestActive = true;
         }
-        ws.activeRequests = (ws.activeRequests || 0) + 1;
-        this.activeRequests = (this.activeRequests || 0) + 1;
-        if (large)
-            this.largeRequestActive = true;
         let req = {};
         let metricToken = null;
         let metricOk = false;
@@ -88,7 +91,7 @@ class WebSocketController {
             }
 
             req = JSON.parse(message);
-            require('../core/RequestLimits').checkRequest(req, messageBytes, this.config);
+            requestLimits.checkRequest(req, messageBytes, this.config, admission?.validation);
             req.__startTime = Date.now();
             metricToken = runtimeMetrics.beginAction(req.action, clientProtocol.client(req.client));
             if (!req.profileAccessToken && this.security && ws.req && ws.req.securitySession && ws.req.securitySession.profileAccessToken)
@@ -431,10 +434,11 @@ class WebSocketController {
             this.send({error: e.message, errorCode:e.code || e.message,
                 ...((e.retryAfterMs || e.retryAfter) ? {retryAfterMs:e.retryAfterMs || e.retryAfter * 1000} : {})}, req || {}, ws);
         } finally {
-            ws.activeRequests--;
-            this.activeRequests--;
-            if (large)
-                this.largeRequestActive = false;
+            if (!admission) {
+                ws.activeRequests--;
+                this.activeRequests--;
+                if (large) this.largeRequestActive = false;
+            }
             runtimeMetrics.endAction(metricToken, metricOk);
         }
     }

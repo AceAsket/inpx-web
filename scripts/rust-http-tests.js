@@ -10,6 +10,8 @@ const express = require('express');
 const Security = require('../server/core/Security');
 const initHealthRoutes = require('../server/core/HealthRoutes');
 const {start,pauseDirectRoutes,assetProbe} = require('../server/core/RustHttpServer');
+const {attach} = require('../server/core/WebSocketListener');
+const requestLimits = require('../server/core/RequestLimits');
 const appDirectory = require('../build/appdir');
 const chunkPath = `/${appDirectory}/fixture.1234abcd.js`;
 const assetBytes = Buffer.from('// Fixture bundle\n'.repeat(10_000));
@@ -39,7 +41,10 @@ async function listen(server) {
     return server.address().port;
 }
 
-async function fixture(binary,folder,protectedRoutes = false,rootPathStatic = '',{serveAssets = true,...overlap} = {}) {
+async function fixture(binary,folder,protectedRoutes = false,rootPathStatic = '',{
+    serveAssets = true,nativeWebSocket = true,textOnly = false,maxPayload = 6*1024*1024,
+    websocketRequests = false,nativeAccess = true,onRequest,...overlap
+} = {}) {
     const publicDir = join(folder,'public');
     const config = {
         server:{host:'127.0.0.1',port:0,ready:true},version:'http-fixture',
@@ -49,6 +54,9 @@ async function fixture(binary,folder,protectedRoutes = false,rootPathStatic = ''
     };
     const security=new Security(config);
     security.secret='http-security-fixture';
+    let authChecks=0;
+    const verifyRequiredAuth=security.verifyRequiredAuth.bind(security);
+    security.verifyRequiredAuth=req=>{authChecks++;return verifyRequiredAuth(req);};
     const app=express();
     let requests=0;
     const finish=Promise.withResolvers();
@@ -61,6 +69,8 @@ async function fixture(binary,folder,protectedRoutes = false,rootPathStatic = ''
     app.use((_req,_res,next)=>{requests++;next();});
     if (config.trustProxy) app.set('trust proxy',address=>security.isTrustedProxyAddress(address));
     app.use(security.middleware(),security.requiredAuthMiddleware());
+    if (config.metricsEnabled) app.get(config.metricsPath || '/metrics',(_req,res)=>res.send('fixture metrics'));
+    if (config.absEnabled) app.get('/api/audiobookshelf/cover',(_req,res)=>res.send('fixture cover'));
     initHealthRoutes(app,config,{getIndexStatus:async()=>({ready:true,progress:1})},security);
     app.get('/small',(_req,res)=>res.send('sample'));
     app.get('/peer',(req,res)=>res.json({
@@ -92,18 +102,34 @@ async function fixture(binary,folder,protectedRoutes = false,rootPathStatic = ''
         if (path.endsWith('fixture.1234abcd.js')) res.set('Cache-Control','public, max-age=2592000, immutable');
     }}));
     const server=http.createServer(app);
-    const wss=new WebSocket.Server({server,verifyClient:(info,done)=>done(security.verifyWebSocket(info.req),403,'Forbidden')});
-    wss.on('connection',socket=>socket.on('message',(message,isBinary)=>socket.send(message,{binary:isBinary})));
+    const wss=attach(server,{maxPayload,verify:req=>security.verifyWebSocket(req)});
+    let nativeConnections=0;
+    wss.on('connection',(socket,req)=>{
+        if (req.headers.upgrade==='inpx-websocket') nativeConnections++;
+        socket.on('message',(message,isBinary,admission)=>{
+            if (onRequest) {
+                Promise.resolve().then(()=>onRequest(socket,message,admission,config)).finally(()=>admission?.complete())
+                    .catch(error=>errors.push(error));
+            } else if (!isBinary && message.toString()==='server-close') socket.close(1013,'Too many active requests');
+            else socket.send(message,{binary:isBinary});
+        });
+    });
     const errors=[];
     let transport,port;
     try {
         if (binary) {
             process.env.INPX_RUST_SERVER_BINARY=binary;
-            transport=await start(server,config,{health:true,assets:serveAssets,onFailure:error=>errors.push(error)});
+            const websocket=nativeWebSocket ? {maxPayload,textOnly} : undefined;
+            transport=await start(server,config,{health:true,assets:serveAssets,websocket,websocketRequests,
+                requestAccess:nativeAccess ? ()=>security.requestAccessPolicy() : undefined,
+                onWebSocketRejected:(reason,peer)=>security.logNativeWebSocketRejection(reason,peer),onFailure:error=>errors.push(error)});
             port=transport.port;
         } else port=await listen(server);
         return {
             config,security,transport,port,finish,streamEntered,errors,bytes,requestCount:()=>requests,
+            authChecks:()=>authChecks,
+            nativeConnections:()=>nativeConnections,
+            sendToClients(payload) {for (const socket of wss.clients) socket.send(payload);},
             url:`http://127.0.0.1:${port}`,
             async close() {
                 finish.resolve();
@@ -135,8 +161,8 @@ function request(site,path,agent,headers={},method='GET') {
     });
 }
 
-async function openSocket(site,options={}) {
-    const socket=new WebSocket(site.url.replace('http:','ws:')+'/',{handshakeTimeout:4000,...options});
+async function openSocket(site,{protocols=[],...options}={}) {
+    const socket=new WebSocket(site.url.replace('http:','ws:')+'/',protocols,{handshakeTimeout:4000,...options});
     await once(socket,'open');
     return socket;
 }
@@ -182,6 +208,7 @@ async function verify(binary,folder) {
         });
         await assert.rejects(once(unauthorized,'open'),/403/);
         site.security.trustedProxyRanges=new Security({trustedProxyCidrs:['127.0.0.1/32']}).trustedProxyRanges;
+        await site.transport.applyDirectRoutes();
         const proxyHeaders={'Remote-User':'fixture','X-Forwarded-For':'192.0.2.15',
             'X-Forwarded-Host':'proxy.fixture','X-Forwarded-Proto':'https'};
         const peer=await request(site,'/peer?encoded=a%26b',agent,{
@@ -221,9 +248,24 @@ async function verify(binary,folder) {
         assert.equal(Buffer.from((await reader.read()).value).toString(),'second');
         assert((await reader.read()).done);
 
-        const socket=await openSocket(site,{headers:{...proxyHeaders,Origin:'https://proxy.fixture',Cookie:cookie}});
+        await assert.rejects(openSocket(site,{headers:{...proxyHeaders,Origin:'https://foreign.fixture',Cookie:cookie}}),/403/);
+        const socket=await openSocket(site,{headers:{...proxyHeaders,Origin:'https://proxy.fixture',Cookie:cookie},
+            protocolVersion:8,protocols:['inpx-v1','other']});
+        assert.equal(site.nativeConnections(),1);
+        assert.equal(socket.protocol,'inpx-v1');
         await echo(socket,'привет WebSocket');
         await echo(socket,site.bytes,true);
+        const fragmented=Buffer.from('разбитое сообщение\nследующая строка');
+        const combined=once(socket,'message',{signal:AbortSignal.timeout(5000)});
+        socket.send(fragmented.subarray(0,1),{binary:false,fin:false});
+        const pong=once(socket,'pong',{signal:AbortSignal.timeout(5000)});
+        socket.ping('ping');
+        assert.equal((await pong)[0].toString(),'ping');
+        socket.send(fragmented.subarray(1),{binary:false});
+        assert.deepEqual(await combined,[fragmented,false]);
+        const pushed=once(socket,'message',{signal:AbortSignal.timeout(5000)});
+        site.sendToClients('event while idle');
+        assert.deepEqual(await pushed,[Buffer.from('event while idle'),false]);
         const shutdown=once(socket,'close');
         socket.close(1000,'complete');
         assert.equal((await shutdown)[0],1000);
@@ -243,6 +285,217 @@ async function verify(binary,folder) {
         agent.destroy();
         await site.close();
     }
+}
+
+async function verifyWebSocketLimits(binary,folder) {
+    const site=await fixture(binary,folder,false,'',{maxPayload:1024,textOnly:true});
+    try {
+        const codes=async (send,expected) => {
+            const socket=await openSocket(site);
+            const ended=once(socket,'close',{signal:AbortSignal.timeout(5000)});
+            send(socket);
+            assert.equal((await ended)[0],expected);
+        };
+        await codes(socket=>socket.send(Buffer.from('only text')),1003);
+        await codes(socket=>socket.send(Buffer.from([0xc3,0x28]),{binary:false}),1007);
+        await codes(socket=>{
+            socket.send('a'.repeat(700),{fin:false});
+            socket.send('b'.repeat(700));
+        },1009);
+        const socket=await openSocket(site);
+        await echo(socket,' '.repeat(1024));
+        await echo(socket,'');
+        const ended=once(socket,'close',{signal:AbortSignal.timeout(5000)});
+        socket.send('server-close');
+        const [code,reason]=await ended;
+        assert.equal(code,1013);
+        assert.equal(reason.toString(),'Too many active requests');
+        assert.equal(site.nativeConnections(),4);
+        const forged=await request(site,'/',false,{upgrade:'inpx-websocket',connection:'upgrade'});
+        assert.notEqual(forged.status,101);
+        assert.equal(site.nativeConnections(),4);
+    } finally {await site.close();}
+    console.log('ok Rust WebSocket message bounds, UTF-8, application close and private upgrade isolation');
+}
+
+async function verifyAccess(binary,folder) {
+    const settings={trustedProxyCidrs:['127.0.0.1/32'],metricsEnabled:true,metricsToken:'fixture-metrics',
+        absEnabled:true,absToken:'fixture-abs'};
+    const node=await fixture(binary,join(folder,'node'),true,'',{...settings,nativeAccess:false});
+    let rust;
+    const proxy={'Remote-User':'fixture','X-Forwarded-Host':'proxy.fixture','X-Forwarded-Proto':'https'};
+    try {
+        rust=await fixture(binary,join(folder,'rust'),true,'',settings);
+        const denied=await request(node,'/small',false,{'X-Forwarded-Proto':'https'});
+        const {status,body,headers}=await request(rust,'/small',false,{'X-Forwarded-Proto':'https',
+            'x-inpx-request-access':`${rust.transport.approvedAccess}:http`});
+        assert.equal(status,401);
+        assert.deepEqual(body,denied.body);
+        for (const key of ['content-type','content-length','etag','strict-transport-security','content-security-policy','x-robots-tag'])
+            assert.equal(headers[key],denied.headers[key],key);
+        assert.equal(rust.requestCount(),0,'Public approval header must not reach the application');
+        const deniedHead=await request(rust,'/small',false,{},'HEAD');
+        assert.equal(deniedHead.status,401);
+        assert.equal(deniedHead.body.length,0);
+        assert.equal(deniedHead.headers['content-length'],denied.headers['content-length']);
+
+        const direct=await request(rust,chunkPath,false,proxy);
+        assert.deepEqual(direct.body,assetBytes);
+        assert.equal(direct.headers['strict-transport-security'],headers['strict-transport-security']);
+        assert.equal(rust.requestCount(),0,'Authorized static asset should avoid the application probe');
+        const session=await request(rust,'/',false,{...proxy,accept:'text/html'});
+        const cookie=session.headers['set-cookie'][0].split(';')[0];
+        assert.equal(rust.requestCount(),1,'A document must still go through session handling');
+        const oldChecks=rust.authChecks();
+        const ws=await openSocket(rust,{headers:{...proxy,cookie,Origin:'HTTPS://Proxy.Fixture:443'}});
+        await echo(ws,'authorized');
+        ws.terminate();
+        assert.equal(rust.authChecks(),oldChecks,'An approved WebSocket retains the session without repeating the gate');
+        await assert.rejects(openSocket(rust,{headers:{...proxy,Origin:'https://elsewhere.fixture'}}),/403/);
+        assert.equal(rust.authChecks(),oldChecks);
+        const legacyOrigin=await openSocket(rust,{headers:{...proxy,Origin:'blob:https://proxy.fixture/test'}});
+        legacyOrigin.terminate();
+        assert.equal(rust.authChecks(),oldChecks+1);
+
+        const metrics=await request(rust,'/metrics',false,{Authorization:'Bearer fixture-metrics'});
+        assert.equal(metrics.body.toString(),'fixture metrics');
+        assert.equal(rust.authChecks(),oldChecks+1,'Bearer token can be checked in Rust');
+        assert.equal((await request(rust,'/metrics?token=fixture-metrics',false)).status,200);
+        assert.equal((await request(rust,'/small',false,{Authorization:'Bearer fixture-metrics'})).status,401);
+        assert.equal((await request(rust,'/api/audiobookshelf/cover',false,{Authorization:'fixture-abs'})).status,200);
+        const expires=String(Date.now()+60000);
+        const signature=require('../server/core/AudiobookshelfProvider').coverSignature(rust.config,'fixture-book',expires);
+        assert.equal((await request(rust,`/api/audiobookshelf/cover?uid=fixture-book&expires=${expires}&signature=${signature}`,false)).status,200);
+        assert.equal((await request(rust,'/small',false,{Authorization:'fixture-abs'})).status,401);
+
+        assert.equal((await request(rust,'/small',false,{...proxy,Connection:'keep-alive, remote-user'})).status,401);
+        const update={proxyAuthHeader:'X-New-Proxy-User'};
+        const resume=await pauseDirectRoutes(rust.config,update);
+        Object.assign(rust.config,update);
+        assert.equal((await request(rust,'/small',false,proxy)).status,401);
+        await resume();
+        assert.equal((await request(rust,'/small',false,proxy)).status,401);
+        assert.equal((await request(rust,'/small',false,{'X-New-Proxy-User':'fixture'})).status,200);
+        const closeHeader={proxyAuthHeader:'Close'};
+        const resumeClose=await pauseDirectRoutes(rust.config,closeHeader);
+        Object.assign(rust.config,closeHeader);
+        await resumeClose();
+        assert.equal((await request(rust,'/small',false,{Close:'fixture',Connection:'close'})).status,401);
+        const closeUser={Close:'fixture',Connection:'keep-alive'};
+        assert.equal((await request(rust,'/small',false,closeUser)).status,200);
+        const revoke={trustedProxyCidrs:['192.0.2.0/24']};
+        const publish=await pauseDirectRoutes(rust.config,revoke);
+        Object.assign(rust.config,revoke);
+        assert.equal((await request(rust,'/small',false,closeUser)).status,403);
+        await publish();
+        assert.equal((await request(rust,'/small',false,closeUser)).status,403);
+        assert.deepEqual(rust.errors,[]);
+    } finally {await Promise.all([node.close(),rust?.close()]);}
+    console.log('ok Rust access policy, protected assets, WebSocket origins, service credentials and live policy updates');
+}
+
+function readRequest(message,admission,config) {
+    const text=message.toString();
+    let request={};
+    try {
+        request=JSON.parse(text);
+        requestLimits.checkRequest(request,admission?.validation ? 0 : Buffer.byteLength(text),config,admission?.validation);
+        return {request,reply:{requestId:request.requestId,ok:true}};
+    } catch (error) {
+        return {request,reply:{requestId:request?.requestId,error:error.message}};
+    }
+}
+
+async function jsonMessage(socket,payload) {
+    const response=once(socket,'message',{signal:AbortSignal.timeout(10000)});
+    socket.send(typeof payload==='string' ? payload : JSON.stringify(payload));
+    return JSON.parse((await response)[0]);
+}
+
+async function verifyRequestAdmission(binary,folder) {
+    let work, disconnected;
+    const held=(count)=>({count,seen:0,entered:Promise.withResolvers(),release:Promise.withResolvers()});
+    const awaitEntered=() => Promise.race([work.entered.promise,
+        require('node:timers/promises').setTimeout(10000,null,{ref:false}).then(()=>{throw new Error('Requests did not reach the handler');})]);
+    const site=await fixture(binary,folder,false,'',{websocketRequests:true,textOnly:true,
+        async onRequest(socket,message,admission,config) {
+            assert(admission);
+            const {request,reply}=readRequest(message,admission,config);
+            if (request?.hold && reply.ok) {
+                const current=work;
+                if (++current.seen===current.count) current.entered.resolve();
+                await current.release.promise;
+            }
+            socket.send(JSON.stringify({...reply,validation:admission.validation,forwarded:message.length}));
+        },
+    });
+    try {
+        const socket=await openSocket(site);
+        const tooLarge={action:'test',requestId:{id:7},payload:'Ж'.repeat(530000)};
+        const reduced=await jsonMessage(socket,tooLarge);
+        assert.deepEqual(reduced.requestId,{id:7});
+        assert.equal(reduced.error,'Превышен размер запроса');
+        assert.equal(reduced.validation,2);
+        assert(reduced.forwarded<128);
+        const malformed=JSON.stringify(tooLarge).slice(0,-1);
+        const rejected=await jsonMessage(socket,malformed);
+        assert.equal(rejected.validation,0);
+        assert.throws(()=>JSON.parse(malformed),error=>error.message===rejected.error);
+        const invalid=await jsonMessage(socket,{payload:'invalid envelope'});
+        assert.equal(invalid.error,'Некорректный запрос WebSocket');
+        const allowed=await jsonMessage(socket,{...tooLarge,action:'update-reader-preferences'});
+        assert.equal(allowed.ok,true);
+        assert(allowed.forwarded>1024*1024);
+        const update={wsMessageLimitMb:2};
+        const resume=await pauseDirectRoutes(site.config,update);
+        Object.assign(site.config,update);
+        await resume();
+        assert.equal((await jsonMessage(socket,tooLarge)).ok,true);
+
+        const closedForCapacity=async (peer,send)=>{
+            const closed=once(peer,'close',{signal:AbortSignal.timeout(10000)});
+            send();
+            assert.equal((await closed)[0],1013);
+        };
+        work=held(8);
+        const sendBlock=peer=>{for (let n=0;n<8;n++) peer.send(JSON.stringify({action:'test',hold:true,requestId:n}));};
+        const saturated=await openSocket(site);
+        sendBlock(saturated);
+        await awaitEntered();
+        await closedForCapacity(saturated,()=>saturated.send('{"action":"test"}'));
+        const remaining=await Promise.all(Array.from({length:7},()=>openSocket(site)));
+        disconnected=work;
+        work=held(56);
+        remaining.forEach(sendBlock);
+        await awaitEntered();
+        const another=await openSocket(site);
+        await closedForCapacity(another,()=>another.send('{"action":"test"}'));
+        assert.equal(disconnected.seen+work.seen,64);
+        disconnected.release.resolve();
+        work.release.resolve();
+    } finally {disconnected?.release.resolve();work?.release.resolve();await site.close();}
+
+    const largeSite=await fixture(binary,join(folder,'large'),false,'',{websocketRequests:true,textOnly:true,
+        async onRequest(socket,message,admission,config) {
+            const {reply}=readRequest(message,admission,config);
+            assert.equal(reply.ok,true);
+            work.entered.resolve();
+            await work.release.promise;
+            socket.send(JSON.stringify(reply));
+        },
+    });
+    try {
+        work=held(1);
+        const first=await openSocket(largeSite);
+        const payload=JSON.stringify({action:'update-reader-preferences',payload:'z'.repeat(1024*1024)});
+        first.send(payload);
+        await awaitEntered();
+        const second=await openSocket(largeSite);
+        const closed=once(second,'close',{signal:AbortSignal.timeout(10000)});
+        second.send(payload);
+        assert.equal((await closed)[0],1013);
+    } finally {work.release.resolve();await largeSite.close();}
+    console.log('ok Rust WebSocket request envelopes, live limits, concurrency and disconnect accounting');
 }
 
 async function verifyAssets(binary,folder) {
@@ -312,6 +565,89 @@ async function verifyAssets(binary,folder) {
     console.log('ok Rust managed app assets, prefix, ETag and range parity, session, live policy, route precedence');
 }
 
+async function timed(stage,rounds,operation,warmup=500) {
+    const samples=[[],[]];
+    for (let round=0;round<rounds+warmup;round++) {
+        for (const i of round%2 ? [1,0] : [0,1]) {
+            const start=performance.now();
+            const close=await operation(i);
+            if (round>=warmup) samples[i].push((performance.now()-start)*1000);
+            if (typeof close==='function') await close();
+        }
+    }
+    const stats=values=>{
+        values.sort((a,b)=>a-b);
+        return {medianUs:values[Math.floor(values.length*0.5)],p95Us:values[Math.ceil(values.length*0.95)-1]};
+    };
+    console.log(JSON.stringify({stage,before:stats(samples[0]),after:stats(samples[1])}));
+}
+
+async function websocketBenchmark(binary,folder,control) {
+    const before=await fixture(control,join(folder,'before'),false,'',{nativeWebSocket:false});
+    let after;
+    try {
+        after=await fixture(binary,join(folder,'after'));
+        const sites=[before,after];
+        const connections=await Promise.all(sites.map(site=>openSocket(site)));
+        assert.equal(before.nativeConnections(),0);
+        assert.equal(after.nativeConnections(),1);
+        await timed('websocket-handshake',180,async i=>{
+            const socket=await openSocket(sites[i]);
+            return async()=>{
+                const ended=once(socket,'close',{signal:AbortSignal.timeout(5000)});
+                socket.close();
+                await ended;
+            };
+        },30);
+        const small=JSON.stringify({action:'test',requestId:'r-12345',message:'тестовый запрос'});
+        await timed('websocket-echo-small',1500,i=>echo(connections[i],small),300);
+        const medium='a'.repeat(32*1024);
+        await timed('websocket-echo-32k',500,i=>echo(connections[i],medium),80);
+        const large='a'.repeat(1024*1024);
+        await timed('websocket-echo-1m',120,i=>echo(connections[i],large),20);
+    } finally {await Promise.all([before.close(),after?.close()]);}
+}
+
+async function requestBenchmark(binary,folder,control) {
+    const onRequest=(socket,message,admission,config)=>socket.send(JSON.stringify(readRequest(message,admission,config).reply));
+    const before=await fixture(control,join(folder,'before'),false,'',{onRequest,textOnly:true});
+    let after;
+    try {
+        after=await fixture(binary,join(folder,'after'),false,'',{onRequest,textOnly:true,websocketRequests:true});
+        const sockets=await Promise.all([before,after].map(site=>openSocket(site)));
+        const run=(payload,expected)=>async i=>assert.deepEqual(await jsonMessage(sockets[i],payload),expected);
+        const small={action:'test',requestId:'fixture',payload:'короткий запрос'};
+        await timed('websocket-request-small',1200,run(JSON.stringify(small),{requestId:'fixture',ok:true}),100);
+        const payload='я'.repeat(550000);
+        await timed('websocket-request-oversized',90,run(JSON.stringify({...small,payload}),
+            {requestId:'fixture',error:'Превышен размер запроса'}),15);
+        await timed('websocket-request-allowed-large',90,run(JSON.stringify({...small,action:'update-reader-preferences',payload}),
+            {requestId:'fixture',ok:true}),15);
+    } finally {await Promise.all([before.close(),after?.close()]);}
+}
+
+async function accessBenchmark(binary,folder,control) {
+    const config={trustedProxyCidrs:['127.0.0.1/32']};
+    const before=await fixture(control,join(folder,'before'),true,'',{...config,nativeAccess:false});
+    const agents=[new http.Agent({keepAlive:true,maxSockets:1}),new http.Agent({keepAlive:true,maxSockets:1})];
+    let after;
+    try {
+        after=await fixture(binary,join(folder,'after'),true,'',config);
+        const sites=[before,after];
+        const headers={'Remote-User':'fixture','X-Forwarded-Host':'proxy.fixture','X-Forwarded-Proto':'https'};
+        const get=(path,headers,status)=>async i=>assert.equal((await request(sites[i],path,agents[i],headers)).status,status);
+        await timed('access-denied-http',1500,get('/small',{},401),250);
+        await timed('access-authorized-http',1200,get('/small',headers,200),200);
+        await timed('access-protected-bundle-180k',600,get(chunkPath,headers,200),100);
+        await timed('access-websocket-wrong-origin',160,async i=>{
+            await assert.rejects(openSocket(sites[i],{headers:{...headers,Origin:'https://another.fixture'}}),/403/);
+        },30);
+    } finally {
+        for (const agent of agents) agent.destroy();
+        await Promise.all([before.close(),after?.close()]);
+    }
+}
+
 async function benchmark(binary,folder,assetsOnly) {
     const direct=await fixture(assetsOnly ? binary : null,folder,false,'',{serveAssets:false});
     let rust;
@@ -320,21 +656,6 @@ async function benchmark(binary,folder,assetsOnly) {
     try {
         rust=await fixture(binary,folder);
         const sites=[direct,rust];
-        async function timed(stage,rounds,operation,warmup=500) {
-            const samples=[[],[]];
-            for (let round=0;round<rounds+warmup;round++) {
-                for (const i of round%2 ? [1,0] : [0,1]) {
-                    const start=performance.now();
-                    await operation(i);
-                    if (round>=warmup) samples[i].push((performance.now()-start)*1000);
-                }
-            }
-            const stats=values=>{
-                values.sort((a,b)=>a-b);
-                return {medianUs:values[Math.floor(values.length*0.5)],p95Us:values[Math.ceil(values.length*0.95)-1]};
-            };
-            console.log(JSON.stringify({stage,before:stats(samples[0]),after:stats(samples[1])}));
-        }
         const get=path=>async index=>assert.equal((await request(sites[index],path,agents[index])).status,200);
         if (assetsOnly) {
             await timed('managed-bundle-180k',1000,get(chunkPath));
@@ -362,15 +683,23 @@ async function benchmark(binary,folder,assetsOnly) {
     }
 }
 
-async function main(binary,mode) {
-    if(!binary) throw new Error('Usage: node scripts/rust-http-tests.js <inpx-server> [benchmark]');
+async function main(binary,mode,control) {
+    const paired=['websocket-benchmark','requests-benchmark','access-benchmark'];
+    if(!binary || (paired.includes(mode) && !control))
+        throw new Error('Usage: node scripts/rust-http-tests.js <inpx-server> [benchmark | websocket-benchmark, requests-benchmark or access-benchmark <old-inpx-server>]');
     const root=resolve(tmpdir());
     const folder=await mkdtemp(join(root,'inpx-rust-http-'));
     try {
         await new (require('../server/core/AppLogger'))().init({dataDir:folder,loggingEnabled:false});
-        if (mode==='benchmark' || mode==='assets-benchmark') await benchmark(resolve(binary),folder,mode==='assets-benchmark');
+        if (mode==='access-benchmark') await accessBenchmark(resolve(binary),folder,resolve(control));
+        else if (mode==='requests-benchmark') await requestBenchmark(resolve(binary),folder,resolve(control));
+        else if (mode==='websocket-benchmark') await websocketBenchmark(resolve(binary),folder,resolve(control));
+        else if (mode==='benchmark' || mode==='assets-benchmark') await benchmark(resolve(binary),folder,mode==='assets-benchmark');
         else {
             await verify(resolve(binary),join(folder,'transport'));
+            await verifyAccess(resolve(binary),join(folder,'access'));
+            await verifyWebSocketLimits(resolve(binary),join(folder,'websocket'));
+            await verifyRequestAdmission(resolve(binary),join(folder,'requests'));
             await verifyAssets(resolve(binary),join(folder,'assets'));
         }
     } finally {

@@ -13,21 +13,27 @@ function limits(config = {}) {
         expanded: bounded(config.backupExpandedLimitMb, 64, 256)*MiB,
     };
 }
-function transportLimit(config) {
+function websocketLimits(config) {
     const value = limits(config);
-    return Math.max(preferencesLimit, value.message, value.import + 65536, Math.ceil(value.backup/3)*4 + 65536);
+    return {message:value.message,preferences:Math.max(value.message,preferencesLimit),
+        import:value.import+65536,backup:Math.ceil(value.backup/3)*4+65536};
 }
-function checkRequest(req, bytes, config) {
+function transportLimit(config) {
+    return Math.max(...Object.values(websocketLimits(config)));
+}
+function checkRequest(req, bytes, config, validation = 0) {
     if (!req || typeof req !== 'object' || Array.isArray(req) || typeof req.action !== 'string')
         throw new Error('Некорректный запрос WebSocket');
-    const value = limits(config);
+    if (validation === 1) return;
+    if (validation === 2) throw new Error('Превышен размер запроса');
+    const value = websocketLimits(config);
     let maximum = value.message;
     if (req.action === 'update-reader-preferences' || req.action === 'update-user-profile')
-        maximum = Math.max(maximum, preferencesLimit);
+        maximum = value.preferences;
     if (req.action === 'import-reading-lists' || req.action === 'import-admin-settings')
-        maximum = value.import + 65536;
+        maximum = value.import;
     if (req.action === 'import-admin-backup' || req.action === 'preview-admin-backup')
-        maximum = Math.ceil(value.backup/3)*4 + 65536;
+        maximum = value.backup;
     if (bytes > maximum)
         throw new Error('Превышен размер запроса');
 }
@@ -45,4 +51,4 @@ function checkImport(payload, config) {
         }
     }
 }
-module.exports = {limits, transportLimit, checkRequest, checkImport};
+module.exports = {limits, websocketLimits, transportLimit, checkRequest, checkImport};

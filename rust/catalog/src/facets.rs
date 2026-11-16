@@ -137,6 +137,17 @@ impl Postings {
         self.runs.clone()
     }
 
+    pub fn book_lists(&self, ids: &[u32]) -> Result<Vec<&[u32]>> {
+        ids.iter()
+            .map(|id| {
+                self.rows
+                    .get(id)
+                    .map(|row| row.book_ids.as_slice())
+                    .ok_or_else(|| "unknown facet row".into())
+            })
+            .collect()
+    }
+
     pub fn intersection(&self, rows: Vec<u32>, candidates: Option<Vec<u32>>) -> Result<Vec<u32>> {
         let mut candidates = candidates.map(|ids| ids.into_iter().collect::<HashSet<_>>());
         let mut seen = HashSet::new();

@@ -133,6 +133,8 @@ class DatabaseThread {
             this.nativeCatalogue = this.serviceCache = undefined;
             this.rustShelfIndex = this.rustWideOrder = this.rustWideStore = this.bookStore = undefined;
             this.bookStoreAdvanced = this.bookStoreScan = this.bookStoreFacets = this.bookStoreWide = undefined;
+            this.bookStoreFacetSelection = undefined;
+            this.bookStoreCatalogueEntities = undefined;
             this.legacyBookOptions = this.legacyBookOpen = undefined;
             this.legacyNameTables = this.legacyNameOpen = undefined;
             this._terminate();
@@ -166,6 +168,8 @@ class DatabaseThread {
                 this.bookStoreAdvanced = available?.advancedSearch === true;
                 this.bookStoreScan = available?.catalogScan === true;
                 this.bookStoreFacets = available?.facets === true;
+                this.bookStoreFacetSelection = available?.facetSelection === true;
+                this.bookStoreCatalogueEntities = available?.catalogueEntities === true;
                 this.bookStoreWide = available?.wideSearch === true;
                 if (this.bookStoreWide) this.rustWideStore = new RustLookupIndex(directory,null,{file:directory,generation,command:'store'});
                 return;

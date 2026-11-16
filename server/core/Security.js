@@ -4,6 +4,7 @@ const path = require('path');
 const sessionLifetime = require('./SessionLifetime');
 const rustAuthState = require('./RustAuthState');
 const RustBrowserSessions = require('./RustBrowserSessions');
+const {acceptAccess} = require('./RustHttpServer');
 
 const sessionCookieName = 'inpx_web_session';
 const secretFileName = 'session-secret';
@@ -72,6 +73,7 @@ function loginLimitError(retryAfter) {
 class Security {
     constructor(config) {
         this.config = config;
+        this.expressTrustProxy = !!config.trustProxy;
         this.nativeAuth = rustAuthState.open();
         this.sessions = this.nativeAuth ? new RustBrowserSessions(this.nativeAuth) : new Map();
         this.loginAttempts = new Map();
@@ -79,9 +81,20 @@ class Security {
         this.lastLoginAttemptSweep = 0;
         this.loginAttemptTotals = new Map();
         this.secret = '';
-        this.trustedProxyRanges = (config.trustedProxyCidrs || [])
-            .map(parseCidr)
-            .filter(Boolean);
+        this.trustedProxyRanges = (config.trustedProxyCidrs || []).map(parseCidr).filter(Boolean);
+    }
+
+    get trustedProxyRanges() {
+        const configured = this.config.trustedProxyCidrs;
+        if (this.proxyRangesSource !== configured) {
+            this.trustedProxyRanges = (configured || []).map(parseCidr).filter(Boolean);
+        }
+        return this.proxyRanges;
+    }
+
+    set trustedProxyRanges(ranges) {
+        this.proxyRangesSource = this.config.trustedProxyCidrs;
+        this.proxyRanges = ranges;
     }
 
     async init() {
@@ -259,6 +272,7 @@ class Security {
 
     requiredAuthMiddleware() {
         return (req, res, next) => {
+            if (acceptAccess(req,'http')) return next();
             const result = this.verifyRequiredAuth(req);
             if (result.ok) {
                 next();
@@ -266,6 +280,24 @@ class Security {
             }
 
             res.status(result.status || 401).send(result.message || 'Authentication required');
+        };
+    }
+
+    requestAccessPolicy() {
+        const config = this.config;
+        const root = String(config.rootPathStatic || '').replace(/\/$/,'');
+        const metricsPath = String(config.metricsPath || '/metrics').replace(/\/+$/,'') || '/';
+        return {
+            requireProxy:String(config.authMode || 'local').trim().toLowerCase()==='proxy'
+                && !!(config.requireAuth || config.proxyBindProfile),
+            proxyHeader:String(config.proxyAuthHeader || 'Remote-User').trim().toLowerCase(),
+            trustProxy:!!config.trustProxy,expressTrustProxy:this.expressTrustProxy,
+            trustedRanges:this.trustedProxyRanges.map(({base,mask})=>({base,mask})),
+            authExemptHealth:config.authExemptHealth!==false,root,
+            metrics:{path:metricsPath,exempt:!!config.metricsEnabled && config.metricsExemptAuth===true,
+                token:config.metricsEnabled ? String(config.metricsToken || '').trim() : ''},
+            metadataService:config.absEnabled && config.absToken
+                ? {path:require('./AudiobookshelfProvider').rootPath(config),token:config.absToken} : undefined,
         };
     }
 
@@ -462,6 +494,10 @@ class Security {
     }
 
     verifyWebSocket(req) {
+        if (acceptAccess(req,'websocket')) {
+            this.ensureSession(req);
+            return true;
+        }
         const auth = this.verifyRequiredAuth(req);
         if (!auth.ok) {
             logSecurityWarning(`WebSocket forbidden: auth failed, status=${auth.status || 401}, remote=${this.clientIp(req) || '-'}`);
@@ -478,6 +514,12 @@ class Security {
 
         this.ensureSession(req);
         return true;
+    }
+
+    logNativeWebSocketRejection(reason,peer) {
+        const detail = reason==='foreign-origin' ? 'origin mismatch'
+            : `auth failed, status=${reason==='missing-proxy-user' ? 401 : 403}`;
+        logSecurityWarning(`WebSocket forbidden: ${detail}, peer=${peer}`);
     }
 
     getCsrfToken(req) {

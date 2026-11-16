@@ -5,16 +5,20 @@ use std::path::{Path, PathBuf};
 use std::{borrow::Cow, cell::RefCell};
 
 use redb::{
-    Database, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction, ReadableDatabase, ReadableTable,
-    Table, TableDefinition, WriteTransaction,
+    AccessGuard, Database, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction, ReadableDatabase,
+    ReadableTable, Table, TableDefinition, WriteTransaction,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::value::RawValue;
 
+use crate::catalog_entity::{
+    EntityBook, EntityPage, EntityPageRequest, SeriesVolume, SeriesVolumes, series_through,
+};
 use crate::catalog_files::{FileCounter, FileTotals};
 use crate::catalog_query::{Copies, Filter, merged_key};
 use crate::facets::{Facet, Label, Postings};
 use crate::lookup::{LookupIndex, Table as LookupTable};
+use crate::lookup_discovery::{BrowseFilter, SelectedBooks};
 use crate::wide_search::{self, WideOrder, WideResult, WideSearch};
 use crate::{
     Result,
@@ -58,6 +62,19 @@ pub(crate) fn decode(data: &[u8]) -> Result<(&[u8], &[u8])> {
     let (length, data) = data.split_first_chunk::<4>().ok_or("invalid stored row")?;
     data.split_at_checked(u32::from_le_bytes(*length) as usize)
         .ok_or_else(|| "truncated stored row".into())
+}
+
+fn compact_row<T: DeserializeOwned>(
+    row: Option<AccessGuard<'_, &'static [u8]>>,
+) -> Result<Option<T>> {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let data = row.value();
+    if data.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_slice(decode(data)?.0)?))
 }
 
 pub(crate) struct BookStoreWriter<'a> {
@@ -348,6 +365,12 @@ enum StoreQuery {
         rows: Vec<u32>,
         candidates: Option<Vec<u32>>,
     },
+    FacetSelection {
+        groups: Vec<FacetRows>,
+    },
+    EntityRows(EntityRowsRequest),
+    EntityPage(EntityPageRequest),
+    SeriesVolumes(SeriesVolumesRequest),
     BookOrder,
     WideSearch(WideSearch),
     Search {
@@ -362,6 +385,30 @@ enum StoreQuery {
     },
 }
 
+#[derive(Deserialize)]
+struct FacetRows {
+    table: Facet,
+    rows: Vec<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EntityRowsRequest {
+    table: LookupTable,
+    name_ids: Vec<u32>,
+    lookup_generation: String,
+    groups: Vec<FacetRows>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SeriesVolumesRequest {
+    name_ids: Vec<u32>,
+    lookup_generation: String,
+    target: String,
+    numbers: HashMap<String, Option<f64>>,
+}
+
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum StoreResponse {
@@ -372,6 +419,10 @@ pub enum StoreResponse {
         #[serde(rename = "catalogScan")]
         catalog_scan: bool,
         facets: bool,
+        #[serde(rename = "facetSelection")]
+        facet_selection: bool,
+        #[serde(rename = "catalogueEntities")]
+        catalogue_entities: bool,
         #[serde(rename = "wideSearch")]
         wide_search: bool,
     },
@@ -382,6 +433,10 @@ pub enum StoreResponse {
         rows: Vec<Box<RawValue>>,
     },
     FacetLabels(Option<Vec<Vec<(u32, Label)>>>),
+    FacetSelection(BrowseFilter),
+    EntityRows(Vec<EntityBook>),
+    EntityPage(EntityPage),
+    SeriesVolumes(SeriesVolumes),
     Ids(Vec<u32>),
     Matches(Vec<Match>),
     Ranked(WideResult),
@@ -513,6 +568,82 @@ impl BookStore {
         read(index.as_ref())
     }
 
+    fn facet_selection(&self, groups: Vec<FacetRows>) -> Result<SelectedBooks> {
+        if !(1..=5).contains(&groups.len()) {
+            return Err("invalid catalogue facet selection".into());
+        }
+        let mut groups = groups.into_iter();
+        let select = |group: FacetRows, previous: Option<&SelectedBooks>| {
+            self.facet(group.table, |index| {
+                let rows = index
+                    .ok_or("facet index unavailable")?
+                    .book_lists(&group.rows)?;
+                Ok(SelectedBooks::from_postings(rows, previous))
+            })
+        };
+        let first = select(groups.next().ok_or("missing facet group")?, None)?;
+        groups.try_fold(first, |selection, group| select(group, Some(&selection)))
+    }
+
+    fn with_lookup<T>(&self, read: impl FnOnce(&LookupIndex) -> Result<T>) -> Result<T> {
+        let mut lookup = self.lookup.borrow_mut();
+        if lookup.is_none() {
+            *lookup = Some(LookupIndex::open(&self.directory.join("lookup.redb"))?);
+        }
+        read(lookup.as_ref().ok_or("missing catalogue lookup")?)
+    }
+
+    fn entity_rows(
+        &self,
+        query: EntityRowsRequest,
+        mut read: impl FnMut(u32) -> Result<Option<EntityBook>>,
+    ) -> Result<Vec<EntityBook>> {
+        if !matches!(query.table, LookupTable::Author | LookupTable::Series) {
+            return Err("invalid catalogue entity table".into());
+        }
+        let ids = self.with_lookup(|lookup| {
+            lookup.entity_book_ids(&query.lookup_generation, query.table, query.name_ids, false)
+        })?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let selected = (!query.groups.is_empty())
+            .then(|| self.facet_selection(query.groups))
+            .transpose()?;
+        let mut rows = Vec::new();
+        for id in ids {
+            if selected.as_ref().is_none_or(|scope| scope.contains(id))
+                && let Some(row) = read(id)?
+                && row.del.unwrap_or_default() == 0
+            {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
+    fn series_volumes(
+        &self,
+        query: SeriesVolumesRequest,
+        mut read: impl FnMut(u32) -> Result<Option<SeriesVolume>>,
+    ) -> Result<SeriesVolumes> {
+        let ids = self.with_lookup(|lookup| {
+            lookup.entity_book_ids(
+                &query.lookup_generation,
+                LookupTable::Series,
+                query.name_ids,
+                true,
+            )
+        })?;
+        let mut books = Vec::<SeriesVolume>::with_capacity(ids.len());
+        for id in ids {
+            if let Some(book) = read(id)? {
+                books.push(book);
+            }
+        }
+        Ok(series_through(books, &query.target, query.numbers))
+    }
+
     pub fn query(&self, request: StoreRequest) -> Result<StoreResponse> {
         let base = self.base.begin_read()?;
         let patch = self
@@ -541,6 +672,8 @@ impl BookStore {
                         advanced_search: true,
                         catalog_scan: true,
                         facets: true,
+                        facet_selection: true,
+                        catalogue_entities: true,
                         wide_search: true,
                     }
                 } else {
@@ -559,6 +692,25 @@ impl BookStore {
                     .ok_or("facet index unavailable")?
                     .intersection(rows, candidates)
             })?),
+            StoreQuery::FacetSelection { groups } => {
+                StoreResponse::FacetSelection(self.facet_selection(groups)?.encode())
+            }
+            StoreQuery::EntityRows(query) => {
+                StoreResponse::EntityRows(self.entity_rows(query, |id| compact_row(read(id)?))?)
+            }
+            StoreQuery::EntityPage(query) => StoreResponse::EntityPage(query.prepare(|id| {
+                let Some(row) = read(id)? else {
+                    return Ok(None);
+                };
+                let data = row.value();
+                if data.is_empty() {
+                    return Ok(None);
+                }
+                Ok(Some(project(decode(data)?.0, None)?))
+            })?),
+            StoreQuery::SeriesVolumes(query) => StoreResponse::SeriesVolumes(
+                self.series_volumes(query, |id| compact_row(read(id)?))?,
+            ),
             StoreQuery::BookOrder => StoreResponse::Ids(wide_search::source_order(
                 &self.directory,
                 &request.generation,
@@ -599,14 +751,8 @@ impl BookStore {
                 ids,
                 lookup_generation,
             } => {
-                let mut lookup = self.lookup.borrow_mut();
-                if lookup.is_none() {
-                    *lookup = Some(LookupIndex::open(&self.directory.join("lookup.redb"))?);
-                }
-                let postings = lookup
-                    .as_ref()
-                    .unwrap()
-                    .postings(lookup_generation, table, ids)?;
+                let postings =
+                    self.with_lookup(|lookup| lookup.postings(lookup_generation, table, ids))?;
                 let mut groups = Vec::with_capacity(postings.len());
                 for row in postings {
                     let mut books = Vec::with_capacity(row.book_ids.len());

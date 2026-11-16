@@ -456,6 +456,65 @@ async function checkDirectFolderCatalogue(binary,directory) {
         assert.equal(next.rows.find(row=>row.ext==='epub').title,'New EPUB');
         assert.equal(changed._legacyUid,undefined);
 
+        const {db,searcher} = await require('../server/core/WebWorker').prototype.openCatalogue.call({config},update);
+        const Discovery = require('../server/core/CatalogDiscovery');
+        let overrides = {[changed._uid]:{serno:'3.75'}};
+        const applyOverrides = rows => {for (const row of rows) Object.assign(row,overrides[row._uid]);};
+        const worker = {
+            db,dbSearcher:searcher,libraryAssetGeneration:1,checkMyState(){},
+            applyMetadataOverridesToSearchResult: async ({found}) => applyOverrides(found),
+            async getSeriesBookList(name,query) {
+                const result = await searcher.getSeriesBookList(name,query);
+                applyOverrides(result.books);
+                return result;
+            },
+            readingListStore:{getMetadataOverrides:async()=>overrides, setBooksRead:async(user,uids,read)=>({user,uids,read})},
+        };
+        const discovery = new Discovery(worker);
+        const selectBookIds = searcher.selectBookIds.bind(searcher);
+        try {
+            assert.equal(db.bookStoreFacetSelection,true);
+            const cases = [
+                {kind:'author',prefix:'archive',filters:{lang:' EN ',ext:'FB2|EPUB',genre:'prose',sourceId:' Archive '}},
+                {kind:'author',filters:{lang:'en',sourceId:'loose'}},
+            ];
+            db.bookStoreFacetSelection = false;
+            const expected = [];
+            for (const options of cases) expected.push(await discovery.browse(options));
+            assert.equal(expected[0].total,1);
+            assert.equal(expected[1].total,0);
+            discovery.close();
+            db.bookStoreFacetSelection = true;
+            searcher.selectBookIds = () => {throw new Error('Rust browse should intersect facet postings in the store');};
+            for (const [index,options] of cases.entries()) assert.deepEqual(await discovery.browse(options),expected[index]);
+
+            const entity = {kind:'author',name:changed.author,filters:{sourceId:'loose'},page:Infinity,limit:1};
+            const profile = {readerProgress:{[changed._uid]:{percent:1,hidden:true}}};
+            const mark = {name:changed.series,bookUid:changed._uid};
+            assert.equal(db.bookStoreCatalogueEntities,true);
+            db.bookStoreCatalogueEntities = false;
+            searcher.selectBookIds = selectBookIds;
+            const expectedEntity = await discovery.entity(entity,profile);
+            const expectedMark = await discovery.markSeriesUntil('reader',mark);
+            assert.equal(expectedEntity.total,2);
+            assert.equal(expectedEntity.page,2);
+            assert.equal(expectedEntity.read,0);
+            assert.equal(expectedEntity.next._uid,next.rows.find(row=>row.ext==='epub')._uid);
+            assert.deepEqual(expectedMark,{user:'reader',uids:[changed._uid],read:true});
+            discovery.close();
+            db.bookStoreCatalogueEntities = true;
+            searcher.selectBookIds = () => {throw new Error('Rust entity should resolve book postings and scope in the store');};
+            db.booksByIds = () => {throw new Error('Rust entity page should load its own books');};
+            worker.getSeriesBookList = () => {throw new Error('Rust series marking should only load volume numbers');};
+            assert.deepEqual(await discovery.entity(entity,profile),expectedEntity);
+            assert.deepEqual(await discovery.markSeriesUntil('reader',mark),expectedMark);
+            overrides = {[changed._uid]:{serno:'0'}};
+            await assert.rejects(discovery.markSeriesUntil('reader',mark),/не указан номер в серии/);
+        } finally {
+            discovery.close();
+            try {await searcher.close();} finally {await db.unlock();}
+        }
+
         await fs.writeFile(path.join(libDir,'legacy.fb2'),Buffer.from('<?xml version="1.0" encoding="ISO-8859-1"?>'+book('Café','0'),'latin1'));
         const fallback=path.join(dataDir,'fallback');
         const phases=[];

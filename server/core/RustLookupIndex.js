@@ -10,6 +10,7 @@ const fileName = 'lookup.redb';
 const maxPending = 16;
 const maxRequestBytes = 4 * 1024 * 1024;
 const retryMs = 30_000;
+const nameFeatures = {browseNames:'nameBrowse',suggestSamples:'nameSuggestions'};
 
 function executable() {
     return programs.executable('catalog');
@@ -56,14 +57,14 @@ class LookupProcess {
         return this.labelOrders.get(table);
     }
 
-    nameWindows(table,ranges) {
+    nameWindows(table,ranges,feature) {
         this.names ||= new NativeNameRanges(this);
-        return this.names.windows(table,ranges);
+        return this.names.windows(table,ranges,feature);
     }
 
     async nameQuery(op,table,params) {
         this.names ||= new NativeNameRanges(this);
-        return await this.names.available() ? this.query({op,table,...params}) : null;
+        return await this.names.available(nameFeatures[op]) ? this.query({op,table,...params}) : null;
     }
 
     receive(line) {

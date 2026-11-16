@@ -1,5 +1,6 @@
 const search = require('../../shared/CatalogSearch');
 const {suggestions} = require('./CatalogueNameRanges');
+const MAX_CHAR = String.fromCodePoint(0xfffff);
 const FAST_LIMITS = {names:32, wordRows:16, wordBooks:64, books:128, perName:4};
 const SUGGEST_BOOK_FIELDS = ['id','_uid','_recordHash','title','author','series','serno','folder','file','ext','size','inpxSize',
     'date','genre','lang','del','librate','libid','insno','sourcelib','sourceId','sourceName','sourceLibDir','sourceType','unavailable'];
@@ -58,23 +59,42 @@ function findCandidates(index, keys, limit, maxChar) {
     return {ids:[...ids], limited};
 }
 
+function validSample(row) {
+    return Number.isInteger(row?.id) && typeof row.name === 'string' && Number.isInteger(row.count)
+        && Array.isArray(row.bookIds) && row.bookIds.length <= FAST_LIMITS.perName && typeof row.complete === 'boolean';
+}
+
+async function nativeSamples(native, table, keys, limit, includePrefixes) {
+    const ranges = keys.flatMap(key => includePrefixes ? [[key,key],[key,key+MAX_CHAR]] : [[key,key]]);
+    const windows = await native.nameWindows?.(table,ranges,'nameSuggestions');
+    if (!windows) return null;
+    const queries = keys.map((_,index) => includePrefixes
+        ? {exact:windows[index*2],prefix:windows[index*2+1]} : {exact:windows[index]});
+    const result = await native.nameQuery('suggestSamples',table,{limit,queries});
+    if (result !== null && (typeof result?.limited !== 'boolean' || !Array.isArray(result.rows)
+        || result.rows.length > limit || result.rows.some(row => !validSample(row))))
+        throw new Error('Invalid Rust suggestion candidates');
+    return result;
+}
+
 async function lookupRows(db, table, keys, limit, includePrefixes, projection, native) {
     const selection = `
         const boundedRange = ${boundedRange.toString()}, find = ${findCandidates.toString()};
         const {ids, limited} = find(__tr._index?.get('value'), ${db.esc(keys)}, ${limit},
-            ${db.esc(includePrefixes ? String.fromCodePoint(0xFFFFF) : '')});
+            ${db.esc(includePrefixes ? MAX_CHAR : '')});
     `;
     if (native) {
+        const samples = await nativeSamples(native,table,keys,limit,includePrefixes);
+        if (samples !== null) return samples;
         const order = await native.labelOrder?.(table);
-        const {ids, limited} = order ? suggestions(order,keys,limit,includePrefixes ? String.fromCodePoint(0xfffff) : '')
+        const {ids, limited} = order ? suggestions(order,keys,limit,includePrefixes ? MAX_CHAR : '')
             : (await db.select({table,rawResult:true,where:`${selection} return {ids, limited};`}))[0].rawResult;
         if (!ids.length) return {rows:[], limited};
         if (ids.length <= limit || db.nativeCatalogue) {
             const selected = ids.slice(0,limit);
             const rows = await native.query({op:'sample', table, ids:selected});
             if (!Array.isArray(rows) || rows.length !== selected.length || rows.some((row, index) =>
-                row?.id !== selected[index] || typeof row.name !== 'string' || !Number.isInteger(row.count)
-                || !Array.isArray(row.bookIds) || row.bookIds.length > 4 || typeof row.complete !== 'boolean'))
+                !validSample(row) || row.id !== selected[index]))
                 throw new Error('Invalid Rust suggestion candidates');
             return {rows, limited:limited || ids.length>selected.length};
         }

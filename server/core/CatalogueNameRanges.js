@@ -67,10 +67,10 @@ class NativeNameRanges {
         this.cache=new MemoryCache({bytes:4*1024*1024,entries:256});
     }
 
-    async available() {
-        this.capabilities ||= this.process.query({op:'probe',capabilities:true}).then(result=>result?.nameRanges===true)
+    async available(feature = 'nameRanges') {
+        this.capabilities ||= this.process.query({op:'probe',capabilities:true})
             .catch(error=>{this.capabilities=null;throw error;});
-        return this.capabilities;
+        return (await this.capabilities)?.[feature] === true;
     }
 
     directory(table) {
@@ -86,9 +86,9 @@ class NativeNameRanges {
         return this.directories.get(table);
     }
 
-    async windows(table,ranges) {
+    async windows(table,ranges,feature) {
         if (ranges.some(([from,to])=>from.length>1000000 || to.length>1000000 || !from.isWellFormed() || !to.isWellFormed())) return null;
-        if (!await this.available()) return null;
+        if (!await this.available(feature)) return null;
         const requestKey=JSON.stringify([table,ranges]);
         const resolved=this.cache.get(requestKey);
         if (resolved) return resolved;

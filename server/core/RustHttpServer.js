@@ -4,6 +4,7 @@ const {maxHeaderSize} = require('node:http');
 const {createServer,isIP} = require('node:net');
 const {relative,resolve} = require('node:path');
 const {createInterface} = require('node:readline');
+const {isDeepStrictEqual} = require('node:util');
 const appDirectory = require('../../build/appdir');
 const programs = require('./RustPrograms');
 
@@ -13,6 +14,7 @@ const transports = new WeakMap();
 const nativePeer = Symbol('native HTTP peer');
 const assetProbeHeader = 'x-inpx-managed-asset';
 const fileHeader = 'x-inpx-file';
+const accessHeader = 'x-inpx-request-access';
 
 class RustHttpServer {
     constructor(http, onFailure) {
@@ -35,6 +37,7 @@ class RustHttpServer {
         this.config = config;
         this.options = options;
         this.direct = this.directRoutes();
+        const routes = this.wireRoutes(this.direct,++this.sequence);
         this.files = config.bookPathStatic && config.bookDir ? {
             bookRoute:config.bookPathStatic,
             coverRoute:`${config.rootPathStatic || ''}/cover`,
@@ -60,13 +63,15 @@ class RustHttpServer {
         const lines = createInterface({input:child.stdout});
         lines.on('line',line=>{
             try {
-                const {port,updated,delivery,complete} = JSON.parse(line);
+                const {port,updated,delivery,complete,websocketRejected,peer} = JSON.parse(line);
                 if (updated !== undefined && this.control.has(updated)) {
                     this.control.get(updated).resolve();
                 } else if (!this.ready && Number.isInteger(port) && port>=1 && port<=65535) {
                     ready.resolve(port);
                 } else if (Number.isSafeInteger(delivery) && typeof complete==='boolean') {
                     this.finishDelivery(delivery,complete);
+                } else if (['missing-proxy-user','untrusted-peer','foreign-origin'].includes(websocketRejected) && isIP(peer)) {
+                    this.options.onWebSocketRejected?.(websocketRejected,peer);
                 } else {
                     throw new Error('Некорректный ответ управления Rust HTTP');
                 }
@@ -90,7 +95,8 @@ class RustHttpServer {
         child.stdin.on('error',ready.reject);
         child.stdin.write(JSON.stringify({
             host:config.server.host,port:Number(config.server.port),upstreamPort:this.listener.address().port,
-            key:this.key,...this.direct,version:config.version,uptime:process.uptime(),opdsPath:config.opdsRoot,files:this.files,
+            key:this.key,...routes,version:config.version,uptime:process.uptime(),opdsPath:config.opdsRoot,files:this.files,
+            websocket:options.websocket,
             assets:options.assets && config.publicDir ? {
                 directory:resolve(config.publicDir),prefix:config.rootPathStatic || '',appDirectory,
                 metricsPath:config.metricsPath || '/metrics',
@@ -102,6 +108,7 @@ class RustHttpServer {
         const timeout = setTimeout(()=>ready.reject(new Error('Истекло время запуска Rust HTTP')),10_000);
         try {
             this.port = await ready.promise;
+            this.approvedAccess = routes.requestAccess?.revision;
             this.ready = true;
             this.http.emit('listening');
         } finally {clearTimeout(timeout);}
@@ -122,7 +129,13 @@ class RustHttpServer {
                 && (opdsRoot===undefined || opdsRoot!=='' && opdsRoot!=='/health')),
             serveAssets:!!(active && this.options.assets),
             assetGate:proxy && !!(this.config.requireAuth || this.config.proxyBindProfile),
+            websocketRequests:this.options.websocketRequests ? require('./RequestLimits').websocketLimits(this.config) : undefined,
+            requestAccess:active ? this.options.requestAccess?.() : undefined,
         };
+    }
+
+    wireRoutes(direct,revision) {
+        return {...direct,requestAccess:direct.requestAccess ? {...direct.requestAccess,revision} : undefined};
     }
 
     applyDirectRoutes() {
@@ -131,15 +144,20 @@ class RustHttpServer {
     }
 
     async setDirectRoutes(direct) {
-        if (this.closing || Object.keys(direct).every(key=>direct[key]===this.direct[key])) return;
+        if (this.closing || isDeepStrictEqual(direct,this.direct)) return;
         const id = ++this.sequence;
+        const routes = this.wireRoutes(direct,id);
+        // Approvals already on the private connection must be checked against
+        // the current application settings once a policy transition begins.
+        this.approvedAccess = undefined;
         const pending = Promise.withResolvers();
         const timeout = setTimeout(()=>pending.reject(new Error('Истекло время применения настройки Rust HTTP')),5000);
         this.control.set(id,pending);
-        this.child.stdin.write(JSON.stringify({id,...direct})+'\n',error=>{if (error) pending.reject(error);});
+        this.child.stdin.write(JSON.stringify({id,...routes})+'\n',error=>{if (error) pending.reject(error);});
         try {
             await pending.promise;
             this.direct = direct;
+            this.approvedAccess = routes.requestAccess?.revision;
         } catch (error) {
             if (!this.closing) this.onFailure(error);
             throw error;
@@ -220,7 +238,9 @@ async function start(http,config,options) {
 
 async function pauseDirectRoutes(config,patch) {
     const transport = transports.get(config);
-    if (!transport || !patch || !['authExemptHealth','authMode','requireAuth','proxyBindProfile','logQueries'].some(key=>Object.hasOwn(patch,key))) return;
+    if (!transport || !patch || !['authExemptHealth','authMode','requireAuth','proxyBindProfile','logQueries',
+        'wsMessageLimitMb','importLimitMb','backupUploadLimitMb','trustProxy','trustedProxyCidrs','proxyAuthHeader',
+        'metricsEnabled','metricsPath','metricsExemptAuth','metricsToken','absEnabled','absToken','rootPathStatic'].some(key=>Object.hasOwn(patch,key))) return;
     transport.pauses = (transport.pauses || 0) + 1;
     try {
         await transport.applyDirectRoutes();
@@ -245,6 +265,18 @@ function opdsModelRequested(req) {
     return !!req.socket?.[nativePeer] && req.headers['x-inpx-opds-model']==='1';
 }
 
+function isWebSocketBridge(req) {
+    return !!req.socket?.[nativePeer] && req.headers.upgrade === 'inpx-websocket';
+}
+
+function acceptAccess(req,protocol) {
+    const marker = req.headers?.[accessHeader];
+    if (marker === undefined) return false;
+    delete req.headers[accessHeader];
+    const revision = req.socket?.[nativePeer]?.approvedAccess;
+    return revision !== undefined && marker === `${revision}:${protocol}`;
+}
+
 function deliverFile(req,res,kind,file,complete) {
     const transport = req.socket?.[nativePeer];
     const directory = transport?.files?.[kind];
@@ -267,4 +299,4 @@ function deliverFile(req,res,kind,file,complete) {
     return true;
 }
 
-module.exports = {start,pauseDirectRoutes,assetProbe,opdsModelRequested,deliverFile,binaryName};
+module.exports = {start,pauseDirectRoutes,assetProbe,opdsModelRequested,deliverFile,isWebSocketBridge,acceptAccess,binaryName};

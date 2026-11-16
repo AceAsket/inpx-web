@@ -2,6 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, jemba_identity::snapshot};
@@ -33,6 +34,12 @@ pub enum NameSelection {
         #[serde(default)]
         symbol: bool,
     },
+}
+
+#[derive(Deserialize)]
+pub struct SuggestionWindows {
+    exact: Vec<[usize; 2]>,
+    prefix: Option<Vec<[usize; 2]>>,
 }
 
 const NAME_PAGE: usize = 128;
@@ -100,30 +107,45 @@ impl LabelOrder {
     }
 
     pub(crate) fn select(&self, selection: NameSelection) -> Result<Vec<u32>> {
+        let mut ids = Vec::with_capacity(if matches!(selection, NameSelection::All) {
+            self.labels.len()
+        } else {
+            0
+        });
+        self.visit_selected(selection, |(id, _)| {
+            ids.push(*id);
+            Ok(())
+        })?;
+        Ok(ids)
+    }
+
+    pub(crate) fn visit_selected(
+        &self,
+        selection: NameSelection,
+        mut visit: impl FnMut(&(u32, String)) -> Result<()>,
+    ) -> Result<()> {
         match selection {
-            NameSelection::All => Ok(self.labels.iter().map(|(id, _)| *id).collect()),
-            NameSelection::Contains { text, symbol } => Ok(self
+            NameSelection::All => self.labels.iter().try_for_each(visit),
+            NameSelection::Contains { text, symbol } => self
                 .labels
                 .iter()
-                .filter_map(|(id, label)| {
-                    (label != "?"
+                .filter(|(_, label)| {
+                    label != "?"
                         && (!symbol
                             || label
                                 .chars()
                                 .next()
                                 .is_some_and(|ch| !ORDINARY_INITIALS.contains(ch)))
-                        && label.contains(&text))
-                    .then_some(*id)
+                        && label.contains(&text)
                 })
-                .collect()),
+                .try_for_each(visit),
             NameSelection::Windows { ranges } => {
-                let mut ids = Vec::new();
                 let mut seen = HashSet::new();
                 for range in ranges {
                     if range.len() != self.runs.len() {
                         return Err("name run count differs".into());
                     }
-                    let mut groups: Vec<Vec<u32>> = Vec::with_capacity(range.len());
+                    let mut groups: Vec<Vec<&(u32, String)>> = Vec::with_capacity(range.len());
                     let mut largest = 0;
                     for (run, [start, end]) in self.runs.iter().zip(range) {
                         if start > run.len() || end > run.len() {
@@ -132,9 +154,9 @@ impl LabelOrder {
                         let mut group = Vec::new();
                         let mut unique = HashSet::new();
                         for &position in &run[start..end.max(start)] {
-                            let id = self.label(position)?.0;
-                            if unique.insert(id) {
-                                group.push(id);
+                            let row = self.label(position)?;
+                            if unique.insert(row.0) {
+                                group.push(row);
                             }
                         }
                         if !groups.is_empty() && group.len() > groups[largest].len() {
@@ -149,12 +171,71 @@ impl LabelOrder {
                             .enumerate()
                             .filter_map(|(index, group)| (index != largest).then_some(group)),
                     ) {
-                        ids.extend(group.iter().copied().filter(|id| seen.insert(*id)));
+                        for row in group.iter().copied().filter(|row| seen.insert(row.0)) {
+                            visit(row)?;
+                        }
                     }
                 }
-                Ok(ids)
+                Ok(())
             }
         }
+    }
+
+    pub(crate) fn suggestions(
+        &self,
+        queries: Vec<SuggestionWindows>,
+        limit: usize,
+    ) -> Result<Option<(Vec<u32>, bool)>> {
+        // Multiple legacy runs need ICU comparisons to interleave equal-range labels.
+        let [run] = self.runs.as_slice() else {
+            return Ok(None);
+        };
+        let mut ids = IndexSet::new();
+        let mut limited = false;
+        for query in queries {
+            let (exact, truncated) = self.suggestion_range(run, &query.exact, limit)?;
+            ids.extend(exact);
+            limited |= truncated;
+            if let Some(prefix) = query.prefix {
+                let (matches, truncated) = self.suggestion_range(run, &prefix, limit)?;
+                limited |= truncated;
+                for id in matches {
+                    if ids.len() < limit {
+                        ids.insert(id);
+                    } else {
+                        limited = true;
+                    }
+                }
+            }
+        }
+        Ok(Some((
+            ids.iter().copied().take(limit).collect(),
+            limited || ids.len() > limit,
+        )))
+    }
+
+    fn suggestion_range(
+        &self,
+        run: &[u32],
+        windows: &[[usize; 2]],
+        limit: usize,
+    ) -> Result<(IndexSet<u32>, bool)> {
+        let &[[start, end]] = windows else {
+            return Err("name run count differs".into());
+        };
+        let window = run.get(start..end.max(start)).ok_or("invalid name range")?;
+        let mut ids = IndexSet::with_capacity(limit);
+        let mut positions = window.iter();
+        for _ in 0..limit * 4 + 128 {
+            if ids.len() == limit {
+                break;
+            }
+            let Some(&position) = positions.next() else {
+                break;
+            };
+            ids.insert(self.label(position)?.0);
+        }
+        Ok((ids, !positions.as_slice().is_empty()))
     }
 }
 

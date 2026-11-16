@@ -1,4 +1,5 @@
 use std::io::{self, IoSlice};
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -45,6 +46,10 @@ impl Receipts {
             count_on_flush: false,
             flushed: false,
         }
+    }
+
+    pub(crate) fn websocket_rejected(&self, peer: IpAddr, reason: &'static str) {
+        let _ = self.channel.send(Event::WebSocketRejected { peer, reason });
     }
 
     pub fn ready(&self, mut receipt: Receipt, whole: bool) {

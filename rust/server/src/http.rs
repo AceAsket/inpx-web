@@ -1,6 +1,6 @@
 use std::convert::Infallible;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use http_body_util::{BodyExt, Full, combinators::UnsyncBoxBody};
@@ -14,7 +14,9 @@ use crate::assets::{Assets, PROBE};
 use crate::download;
 use crate::opds::response as opds;
 use crate::receipts::Receipts;
+use crate::request_access::{self, Decision, Policy, Protocol};
 use crate::upstream::Upstream;
+use crate::websocket;
 
 pub(crate) type BodyError = Box<dyn std::error::Error + Send + Sync>;
 pub type Body = UnsyncBoxBody<Bytes, BodyError>;
@@ -27,6 +29,8 @@ pub struct Routes {
     assets: Assets,
     opds_path: Option<String>,
     files: Option<download::Config>,
+    websocket: Option<websocket::Endpoint>,
+    access: RwLock<Option<Policy>>,
 }
 
 const HEALTH: u8 = 1;
@@ -41,6 +45,8 @@ pub struct DirectRoutes {
     serve_assets: bool,
     #[serde(default)]
     asset_gate: bool,
+    websocket_requests: Option<websocket::RequestLimits>,
+    request_access: Option<request_access::Settings>,
 }
 
 impl DirectRoutes {
@@ -68,6 +74,7 @@ impl Routes {
         assets: Assets,
         opds_path: Option<String>,
         files: Option<download::Config>,
+        websocket: Option<websocket::Config>,
     ) -> Self {
         Self {
             direct: AtomicU8::new(direct.flags()),
@@ -77,11 +84,33 @@ impl Routes {
             assets,
             opds_path,
             files,
+            websocket: websocket
+                .map(|config| websocket::Endpoint::new(config, direct.websocket_requests)),
+            access: RwLock::new(direct.request_access.map(Policy::new)),
         }
     }
 
     pub fn update(&self, direct: DirectRoutes) {
         self.direct.store(direct.flags(), Ordering::Release);
+        if let Some(websocket) = &self.websocket {
+            websocket.configure(direct.websocket_requests);
+        }
+        *self.access.write().expect("HTTP access policy") = direct.request_access.map(Policy::new);
+    }
+
+    fn authorize(
+        &self,
+        request: &Request<Incoming>,
+        upstream: &Upstream,
+        protocol: Protocol,
+    ) -> Decision {
+        self.access
+            .read()
+            .expect("HTTP access policy")
+            .as_ref()
+            .map_or(Decision::Forward, |policy| {
+                policy.authorize(request, upstream.client_ip(), protocol)
+            })
     }
 
     fn health_response(&self, head: bool) -> Response<Body> {
@@ -128,11 +157,35 @@ impl Routes {
         request.headers_mut().remove(&PROBE);
         request.headers_mut().remove(&opds::MODEL);
         request.headers_mut().remove(&download::MODEL);
+        request.headers_mut().remove(&request_access::APPROVAL);
+        let approved = if is_websocket(request.headers()) {
+            None
+        } else {
+            match self.authorize(&request, upstream, Protocol::Http) {
+                Decision::Allow {
+                    proof,
+                    secure,
+                    needs_session,
+                } => {
+                    request
+                        .headers_mut()
+                        .insert(&request_access::APPROVAL, proof);
+                    Some((secure, needs_session))
+                }
+                Decision::Deny { reason, secure } => {
+                    return Ok(reason.http(request.method() == Method::HEAD, secure));
+                }
+                Decision::Forward => None,
+            }
+        };
         if direct & ASSETS != 0
             && let Some(delivery) = self.assets.select(&request, direct & ASSET_GATE != 0)
         {
             if !delivery.needs_probe {
                 return Ok(delivery.response(None));
+            }
+            if let Some((secure, false)) = approved {
+                return Ok(delivery.response(Some(&request_access::security_headers(secure))));
             }
             strip_hop_headers(request.headers_mut(), false);
             request
@@ -225,6 +278,15 @@ impl Routes {
         if head && opds_request {
             *request.method_mut() = Method::GET;
         }
+        if let Some(endpoint) = self.websocket.as_ref()
+            && is_websocket(request.headers())
+        {
+            strip_hop_headers(request.headers_mut(), true);
+            let access = self.authorize(&request, upstream, Protocol::WebSocket);
+            return Ok(
+                websocket::upgrade(request, upstream, endpoint.clone(), access, receipts).await,
+            );
+        }
         let upgrade = is_websocket(request.headers()).then(|| hyper::upgrade::on(&mut request));
         strip_hop_headers(request.headers_mut(), upgrade.is_some());
         let Ok(mut response) = upstream.send(request).await else {
@@ -289,7 +351,7 @@ fn selected_headers(headers: &HeaderMap, names: impl IntoIterator<Item = HeaderN
     selected
 }
 
-fn forward(response: Response<Incoming>) -> Response<Body> {
+pub(crate) fn forward(response: Response<Incoming>) -> Response<Body> {
     response.map(|incoming| incoming.map_err(Into::into).boxed_unsync())
 }
 
@@ -306,7 +368,7 @@ fn is_websocket(headers: &HeaderMap) -> bool {
         })
 }
 
-fn strip_hop_headers(headers: &mut HeaderMap, switching: bool) {
+pub(crate) fn strip_hop_headers(headers: &mut HeaderMap, switching: bool) {
     let nominated: Vec<_> = headers
         .get_all(header::CONNECTION)
         .iter()
