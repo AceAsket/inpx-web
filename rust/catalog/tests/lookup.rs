@@ -1,4 +1,4 @@
-use inpx_catalog::{LookupIndex, build_lookup};
+use inpx_catalog::{LookupIndex, build_lookup, seal_lookup};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -94,4 +94,40 @@ fn builds_compatible_book_maps_from_the_same_postings() {
         json!({"arr":[null,null,null,5],"map":[]})
     );
     assert_eq!(load("title_id.map"), json!({"arr":[],"map":[]}));
+}
+#[test]
+fn label_order_and_counts_can_be_read_without_compatibility_files() {
+    let dir = tempdir().unwrap();
+    let old = dir.path().join("author");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::write(old.join("meta.0"),r#"1{"index":[{"field":"value","type":"string","unique":true,"depth":1000000,"fileName":"index1"}]}"#).unwrap();
+    std::fs::write(
+        old.join("index1.0"),
+        r#"1{"hash":[["é",2],["e",1]],"sorted":[["e","é"]],"delCount":0}"#,
+    )
+    .unwrap();
+    let file = dir.path().join("lookup.redb");
+    let rows = [json!({"table":"author","id":1,"name":"E","count":3,"deleted":2,"bookIds":[7]})];
+    build_lookup(
+        &file,
+        "current",
+        1,
+        false,
+        rows.into_iter().map(|row| Ok(serde_json::from_value(row)?)),
+    )
+    .unwrap();
+    assert_eq!(seal_lookup(&file, "current").unwrap(), 1);
+    std::fs::rename(old, dir.path().join("backup")).unwrap();
+    let index = LookupIndex::open(&file).unwrap();
+    let get = |op| {
+        serde_json::to_value(index.query(serde_json::from_value(op).unwrap()).unwrap()).unwrap()
+    };
+    assert_eq!(
+        get(json!({"generation":"current","op":"order","table":"author"})),
+        json!({"labels":[[2,"é"],[1,"e"]],"runs":[[1,0]]})
+    );
+    assert_eq!(
+        get(json!({"generation":"current","op":"nameRows","table":"author","ids":[1]})),
+        json!([{"id":1,"name":"E","bookCount":3,"bookDelCount":2}])
+    );
 }

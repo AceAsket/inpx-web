@@ -128,6 +128,7 @@ pub(crate) struct Postings {
     book_count: usize,
     deleted_count: usize,
     no_author_count: usize,
+    low_memory: bool,
 }
 
 #[derive(Serialize)]
@@ -139,9 +140,19 @@ pub(crate) struct CountsSummary {
     book_count: usize,
     book_del_count: usize,
     no_author_book_count: usize,
+    genre_count: usize,
+    lang_count: usize,
+    name_counts: [usize; 4],
 }
 
 impl Postings {
+    pub fn new(low_memory: bool) -> Self {
+        Self {
+            low_memory,
+            ..Default::default()
+        }
+    }
+
     fn add_words(&mut self, field: &str, value: &str, id: u32, cache: Option<usize>) {
         if let Some(saved) = cache.and_then(|index| self.word_cache[index].get(value)) {
             for &position in saved {
@@ -166,7 +177,8 @@ impl Postings {
             && value.encode_utf16().take(513).count() <= 512
         {
             let cache = &mut self.word_cache[index];
-            if cache.len() >= 32768 {
+            let limit = if self.low_memory { 4096 } else { 32768 };
+            if cache.len() >= limit {
                 cache.clear();
             }
             cache.insert(value.into(), positions);
@@ -221,7 +233,15 @@ impl Postings {
         self.source.add_text(field(row, "sourceId"), id);
     }
 
-    pub fn save(self, directory: &Path) -> Result<CountsSummary> {
+    pub fn save(self, directory: &Path, facets: &Path) -> Result<CountsSummary> {
+        let genre_count = self.genre.rows.len();
+        let lang_count = self.lang.rows.len();
+        let name_counts = [
+            self.author.rows.len(),
+            self.series.rows.len(),
+            self.title.rows.len(),
+            self.word.rows.len(),
+        ];
         fn write<K: Serialize>(directory: &Path, name: &str, rows: &[Posting<K>]) -> Result<()> {
             let mut output =
                 BufWriter::with_capacity(128 * 1024, File::create_new(directory.join(name))?);
@@ -234,16 +254,20 @@ impl Postings {
             ("series", self.series),
             ("title", self.title),
             ("word", self.word),
+        ] {
+            write(directory, name, &table.rows)?;
+        }
+        for (name, table) in [
             ("genre", self.genre),
             ("lang", self.lang),
             ("date", self.date),
             ("ext", self.ext),
             ("source", self.source),
         ] {
-            write(directory, name, &table.rows)?;
+            write(facets, name, &table.rows)?;
         }
-        write(directory, "del", &self.del.rows)?;
-        write(directory, "librate", &self.librate.rows)?;
+        write(facets, "del", &self.del.rows)?;
+        write(facets, "librate", &self.librate.rows)?;
         Ok(CountsSummary {
             files_count: self.files.len(),
             files_del_count: self.deleted_files.difference(&self.files).count(),
@@ -251,6 +275,9 @@ impl Postings {
             book_count: self.book_count,
             book_del_count: self.deleted_count,
             no_author_book_count: self.no_author_count,
+            genre_count,
+            lang_count,
+            name_counts,
         })
     }
 }

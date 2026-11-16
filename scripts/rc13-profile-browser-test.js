@@ -57,29 +57,29 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
             try {csrfToken = (await request({action: 'get-config'})).csrfToken; return await request(payload);} finally {socket.close();}
         }, payload);
         const login = async(login, secret) => {
-            await page.locator('.profile-login-action,.profile-status-chip').first().click();
+            await page.getByRole('region', {name:'Текущий профиль'}).getByRole('button', {name:'Войти', exact:true}).click();
             await page.getByRole('textbox', {name: 'Логин', exact: true}).fill(login);
             await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill(secret);
             await page.getByRole('button', {name: 'OK', exact: true}).click();
-            await page.locator('.profile-controls .profile-logout').waitFor();
+            await page.locator('.profile-bottom .profile-logout').waitFor();
         };
         const logout = async() => {
-            await page.goto(base + '/#/books');
-            await page.locator('.profile-controls .profile-logout').waitFor();
-            await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), page.locator('.profile-controls .profile-logout').click()]);
-            await page.locator('.profile-controls').waitFor();
+            await page.goto(base + '/#/profile');
+            await page.locator('.profile-bottom .profile-logout').waitFor();
+            await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), page.locator('.profile-bottom .profile-logout').click()]);
+            await page.locator('.profile-page').waitFor();
         };
         const openReader = async uid => {
             await page.goto(base + '/#/reader?bookUid=' + encodeURIComponent(uid));
             await page.locator('.reader-body').waitFor();
             await page.waitForFunction(() => !document.querySelector('.reader-loading') && document.querySelector('.reader-html')?.textContent.trim());
         };
-        await page.goto(base + '/#/books'); await page.locator('.profile-controls').waitFor();
+        await page.goto(base + '/#/profile'); await page.locator('.profile-page').waitFor();
         // The app reloads on the first controllerchange. Poll in a rerunnable
         // Playwright task and wait for that new document before starting login.
         await page.waitForFunction(() => !!navigator.serviceWorker.controller
             && performance.getEntriesByType('navigation').some(entry => entry.type === 'reload'));
-        await page.locator('.profile-controls').waitFor();
+        await page.locator('.profile-page').waitFor();
         await login('admin', password);
         await api({action: 'create-user-profile', profile: {name: 'Bob', login: 'bob', password: 'bob-browser-password'}});
         const catalog = await api({action: 'bookSearch', query: {lang: 'ru', limit: 1}}), uid = catalog.found[0]._uid;

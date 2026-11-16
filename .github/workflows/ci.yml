@@ -35,11 +35,31 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-catalog
+      - run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-catalog -p inpx-server
+      - run: node scripts/rust-http-tests.js rust/target/release/inpx-server
+      - run: node scripts/rust-opds-http-tests.js rust/target/release/inpx-server
+      - run: node scripts/rust-download-http-tests.js rust/target/release/inpx-server
+      - run: |
+          if ! command -v 7z && ! command -v 7zz; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends p7zip-full
+          fi
+          node scripts/rust-book-archive-tests.js rust/target/release/inpx-catalog
+          node scripts/rust-book-prepare-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-book-cache-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-book-export-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-book-metadata-tests.js rust/target/release/inpx-catalog
+      - run: rustup target add wasm32-unknown-unknown --toolchain 1.100.0
+      - run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
+      - run: node scripts/rust-auth-state-tests.js rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm
       - run: node scripts/rust-jemba-compat-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-web-access-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-progress-journal-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-backup-archive-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-credentials-tests.js rust/target/release/inpx-catalog
 
   browser-ui:
-    name: Classic and shelves UI
+    name: Library and reader UI
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -138,8 +158,16 @@ jobs:
       - run: npm audit --omit=dev --audit-level=moderate
       - run: npm run test:release
       - run: npm run test:tts
+      - name: Build Rust HTTP server and authentication state
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal --target wasm32-unknown-unknown
+          cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
+          cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
       - run: npm run build:${{ matrix.target }}
       - name: Test extracted release application and permissions
+        env:
+          INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
+          INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
         shell: bash
         run: |
           node build/release.js ${{ matrix.target }}
@@ -149,6 +177,9 @@ jobs:
         run: docker build --target runtime-lite -t inpx-web:ci .
       - if: matrix.target == 'linux'
         run: node scripts/binary-smoke-test.js --image inpx-web:ci
+        env:
+          INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
+          INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
       - name: Build full image with static MOBI converter
         if: matrix.target == 'linux'
         run: docker build --target runtime -t inpx-web:ci-full .

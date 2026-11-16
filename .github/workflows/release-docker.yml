@@ -83,6 +83,8 @@ jobs:
         if: matrix.component == 'web'
         env:
           IMAGE: ${{ steps.version.outputs.image }}
+          INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
+          INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
         run: node scripts/binary-smoke-test.js --image "$IMAGE"
       - name: Test image fb2cng and MOBI conversion
         if: matrix.component == 'web'

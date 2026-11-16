@@ -10,7 +10,7 @@ class SearchPage extends BasePage {
         this.title = 'Поиск';
     }
 
-    async searchBooks(term = '', genre = '') {
+    async searchBooks(term = '', genre = '', needed = Infinity) {
         const normalized = String(term || '').trim();
         if (!normalized)
             return [];
@@ -33,6 +33,8 @@ class SearchPage extends BasePage {
                 seen.add(book._uid);
                 result.push(book);
             }
+            // The next link only needs one match beyond the requested window.
+            if (result.length >= needed) break;
         }
 
         return result;
@@ -52,16 +54,18 @@ class SearchPage extends BasePage {
         if (query.type) {
             if (query.type == 'title') {
                 try {
-                    let found = await this.searchBooks(query.term, query.genre);
-
-                    if (!found.length) {
-                        const fallbackTerm = iconv.encode(query.term, 'ISO-8859-1').toString();
-                        found = await this.searchBooks(fallbackTerm, query.genre);
-                    }
-
                     const page = query.page;
                     const limit = 100;
                     const offset = (page - 1)*limit;
+                    const end = offset + limit + 1;
+                    const needed = offset >= 0 && Number.isSafeInteger(end) ? end : Infinity;
+                    let found = await this.searchBooks(query.term, query.genre, needed);
+
+                    if (!found.length) {
+                        const fallbackTerm = iconv.encode(query.term, 'ISO-8859-1').toString();
+                        found = await this.searchBooks(fallbackTerm, query.genre, needed);
+                    }
+
                     const pageItems = found.slice(offset, offset + limit);
 
                     for (const book of pageItems) {

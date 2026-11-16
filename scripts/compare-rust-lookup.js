@@ -19,6 +19,7 @@ async function build(index, destination, binary, reader, previous = null, option
     if (reader) process.env.INPX_RUST_READER_BINARY = reader;
     else delete process.env.INPX_RUST_READER_BINARY;
     const config = {...base, dataDir:dirname(destination), inpxFilterFile:join(dirname(destination), 'inpx-filter.json'), ...options,
+        rustCompatibilityTables:true,
         librarySources:[{id:'benchmark', name:'Benchmark', type:'inpx', enabled:true, inpxFile:index, libDir:dirname(index)}]};
     let phase, phaseStart, records = 0;
     let usedRustReader = false, nativeBookMaps = false, nativeBook = false, nativeIdentities = false, reusedUidIndex = false;

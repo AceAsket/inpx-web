@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs-extra');
+const native = require('./RustCredentials');
 
 const encryptedPrefix = 'enc:v1:';
 const secretFields = [
@@ -44,6 +45,7 @@ class SecretStore {
     }
 
     async getKey(create = true) {
+        if (native.executable()) return native.key(this.keyFile,create);
         let raw;
         try {
             raw = await fs.readFile(this.keyFile, 'utf8');
@@ -86,10 +88,13 @@ class SecretStore {
         const text = String(value || '');
         if (!text || SecretStore.isEncrypted(text))
             return text;
+        if (native.executable()) return (await native.secrets(this.keyFile,[text],true))[0];
 
         const key = await this.getKey();
         const iv = crypto.randomBytes(12);
-        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+        let cipher;
+        try {cipher = crypto.createCipheriv('aes-256-gcm', key, iv);}
+        finally {key.fill(0);}
         const encrypted = Buffer.concat([
             cipher.update(text, 'utf8'),
             cipher.final(),
@@ -108,13 +113,16 @@ class SecretStore {
         const text = String(value || '');
         if (!SecretStore.isEncrypted(text))
             return text;
+        if (native.executable()) return (await native.secrets(this.keyFile,[text],false))[0];
 
         const [, , ivRaw, tagRaw, dataRaw] = text.split(':');
         if (!ivRaw || !tagRaw || !dataRaw)
             throw new Error('Invalid encrypted secret format');
 
         const key = await this.getKey(false);
-        const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivRaw, 'base64'));
+        let decipher;
+        try {decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivRaw, 'base64'));}
+        finally {key.fill(0);}
         decipher.setAuthTag(Buffer.from(tagRaw, 'base64'));
 
         return Buffer.concat([
@@ -126,6 +134,7 @@ class SecretStore {
     async unprotectConfig(config = {}) {
         const result = clonePlain(config);
         let needsSave = false;
+        const pending = [];
 
         for (const field of secretFields) {
             const valueRaw = getPath(result, field);
@@ -134,25 +143,41 @@ class SecretStore {
 
             const value = String(valueRaw || '');
             if (SecretStore.isEncrypted(value)) {
-                setPath(result, field, await this.decrypt(value));
+                pending.push([field,value]);
             } else if (value) {
                 needsSave = true;
             }
         }
 
+        await this.applySecrets(result,pending,false);
         return {config: result, needsSave};
     }
 
     async protectConfig(config = {}) {
         const result = clonePlain(config);
+        const pending = [];
 
         for (const field of secretFields) {
             const value = getPath(result, field);
-            if (value !== undefined)
-                setPath(result, field, await this.encrypt(value));
+            if (value === undefined) continue;
+            const text = String(value || '');
+            if (!text || SecretStore.isEncrypted(text)) setPath(result,field,text);
+            else pending.push([field,text]);
         }
 
+        await this.applySecrets(result,pending,true);
         return result;
+    }
+
+    async applySecrets(config, pending, encrypt) {
+        if (!pending.length) return;
+        if (native.executable()) {
+            const values = await native.secrets(this.keyFile,pending.map(([,text])=>text),encrypt);
+            pending.forEach(([field],index)=>setPath(config,field,values[index]));
+            return;
+        }
+        for (const [field,text] of pending)
+            setPath(config,field,await (encrypt ? this.encrypt(text) : this.decrypt(text)));
     }
 }
 

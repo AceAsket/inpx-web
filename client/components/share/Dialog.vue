@@ -41,7 +41,7 @@ class Dialog {
     created() {this.titleId = `library-dialog-${++nextDialogId}`;}
 
     get shelvesAppearance() {
-        return this.$store?.state.settings.catalogAppearance === 'shelves' && !String(this.$route?.path || '').startsWith('/reader');
+        return !String(this.$route?.path || '').startsWith('/reader');
     }
 
     get active() {

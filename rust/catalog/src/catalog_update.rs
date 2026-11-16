@@ -16,7 +16,8 @@ use crate::catalog_postings::{CountsSummary, Postings};
 use crate::catalog_text::{SearchProjection, field, lower, number, supported_text};
 use crate::jemba::write_updated_books;
 use crate::jemba_identity::{BookRows, Identity, physical_identity};
-use crate::store::{BookStoreWriter, write_store};
+use crate::store::{BookStore, BookStoreWriter, write_store};
+use crate::wide_search::{source_order, write_book_order};
 
 const TEXT_FIELDS: &[&str] = &[
     "author", "series", "title", "file", "genre", "ext", "date", "lang",
@@ -25,7 +26,13 @@ const TEXT_FIELDS: &[&str] = &[
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateRequest {
-    previous_book: PathBuf,
+    previous_book: Option<PathBuf>,
+    previous_catalogue: Option<PathBuf>,
+    previous_catalogue_generation: Option<String>,
+    #[serde(default)]
+    native_catalogue: bool,
+    #[serde(default)]
+    low_memory: bool,
     previous_generation: Option<String>,
     generation: String,
     sources: Vec<Source>,
@@ -70,6 +77,7 @@ struct OldBook {
     legacy_uid: Option<String>,
     hash: Option<String>,
     retained: bool,
+    changed: bool,
 }
 
 enum ByIdentity {
@@ -85,78 +93,79 @@ struct Previous {
 }
 
 impl Previous {
-    fn read(rows: &BookRows) -> Result<Self> {
-        let mut previous = Self {
-            books: Vec::with_capacity(rows.count),
-            by_uid: HashMap::with_capacity(rows.count),
-            physical: HashMap::with_capacity(rows.count),
+    fn new(count: usize) -> Self {
+        Self {
+            books: Vec::with_capacity(count),
+            by_uid: HashMap::with_capacity(count),
+            physical: HashMap::with_capacity(count),
             max_id: 0,
-        };
-        rows.visit(|id, row: &Identity| {
-            if id != row.id || row.uid.is_empty() || row.uid.encode_utf16().count() > 100 {
-                return Err("unsupported book ID or UID in previous catalog".into());
-            }
-            let uid: Rc<str> = row.uid.as_str().into();
-            let identity: Rc<str> = row
-                .physical_identity()
-                .ok_or("unsupported physical book identity")?
-                .into();
-            let index = previous.books.len();
-            let legacy_uid = row
-                .legacy_uid
-                .as_ref()
-                .and_then(serde_json::Value::as_str)
-                .filter(|uid| !uid.is_empty())
-                .map(str::to_owned);
-            if previous.by_uid.insert(uid.clone(), index).is_some() {
-                return Err("duplicate book UID in previous catalog".into());
-            }
-            if !identity.is_empty() {
-                use std::collections::hash_map::Entry;
-                let remember =
-                    |map: &mut HashMap<String, Option<usize>>, uid: Option<&str>, index| {
-                        if let Some(uid) = uid {
-                            map.entry(uid.into())
-                                .and_modify(|value| *value = None)
-                                .or_insert(Some(index));
-                        }
-                    };
-                match previous.physical.entry(identity.clone()) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(ByIdentity::Unique(index));
-                    }
-                    Entry::Occupied(mut entry) => match entry.get_mut() {
-                        ByIdentity::Unique(owner) => {
-                            let mut map = HashMap::new();
-                            remember(
-                                &mut map,
-                                previous.books[*owner].legacy_uid.as_deref(),
-                                *owner,
-                            );
-                            remember(&mut map, legacy_uid.as_deref(), index);
-                            entry.insert(ByIdentity::Ambiguous(map));
-                        }
-                        ByIdentity::Ambiguous(map) => remember(map, legacy_uid.as_deref(), index),
-                    },
+        }
+    }
+
+    fn add(&mut self, id: u32, row: &Identity) -> Result<()> {
+        let previous = self;
+        if id != row.id || row.uid.is_empty() || row.uid.encode_utf16().count() > 100 {
+            return Err("unsupported book ID or UID in previous catalog".into());
+        }
+        let uid: Rc<str> = row.uid.as_str().into();
+        let identity: Rc<str> = row
+            .physical_identity()
+            .ok_or("unsupported physical book identity")?
+            .into();
+        let index = previous.books.len();
+        let legacy_uid = row
+            .legacy_uid
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .filter(|uid| !uid.is_empty())
+            .map(str::to_owned);
+        if previous.by_uid.insert(uid.clone(), index).is_some() {
+            return Err("duplicate book UID in previous catalog".into());
+        }
+        if !identity.is_empty() {
+            use std::collections::hash_map::Entry;
+            let remember = |map: &mut HashMap<String, Option<usize>>, uid: Option<&str>, index| {
+                if let Some(uid) = uid {
+                    map.entry(uid.into())
+                        .and_modify(|value| *value = None)
+                        .or_insert(Some(index));
                 }
+            };
+            match previous.physical.entry(identity.clone()) {
+                Entry::Vacant(entry) => {
+                    entry.insert(ByIdentity::Unique(index));
+                }
+                Entry::Occupied(mut entry) => match entry.get_mut() {
+                    ByIdentity::Unique(owner) => {
+                        let mut map = HashMap::new();
+                        remember(
+                            &mut map,
+                            previous.books[*owner].legacy_uid.as_deref(),
+                            *owner,
+                        );
+                        remember(&mut map, legacy_uid.as_deref(), index);
+                        entry.insert(ByIdentity::Ambiguous(map));
+                    }
+                    ByIdentity::Ambiguous(map) => remember(map, legacy_uid.as_deref(), index),
+                },
             }
-            let hash = row
-                .hash
-                .as_ref()
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned);
-            previous.max_id = previous.max_id.max(id);
-            previous.books.push(OldBook {
-                id,
-                uid,
-                identity,
-                legacy_uid,
-                hash,
-                retained: false,
-            });
-            Ok(())
-        })?;
-        Ok(previous)
+        }
+        let hash = row
+            .hash
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        previous.max_id = previous.max_id.max(id);
+        previous.books.push(OldBook {
+            id,
+            uid,
+            identity,
+            legacy_uid,
+            hash,
+            retained: false,
+            changed: false,
+        });
+        Ok(())
     }
 
     fn identify(
@@ -312,15 +321,20 @@ impl Import<'_> {
         let hash = format!("{:x}", Sha256::digest(serialized.as_bytes()));
         let changed =
             prior.is_none_or(|i| self.previous.books[i].hash.as_deref() != Some(hash.as_str()));
+        if changed {
+            if let Some(position) = prior {
+                self.previous.books[position].changed = true;
+            }
+            self.changed_ids.push(id);
+        }
         if changed || !store.is_patch() {
             let projection = SearchProjection::from_book(&row);
             serialized.pop();
             write_json_suffix(&mut serialized, &hash, id)?;
             let raw = RawValue::from_string(serialized)?;
             store.add(id, &uid, &raw, &projection)?;
-            if changed {
+            if changed && !self.request.native_catalogue {
                 self.changes.insert(id, ChangedBook { uid, raw });
-                self.changed_ids.push(id);
             }
         }
         self.postings.add(&row, id);
@@ -352,8 +366,30 @@ pub fn prepare_update<'a>(
         &mut output,
         json!({"job":"previous identities","jobMessage":"Чтение идентификаторов Rust","jobStep":1,"progress":0}),
     )?;
-    let rows = BookRows::open(&request.previous_book)?;
-    let previous = Previous::read(&rows)?;
+    let rows = request
+        .previous_book
+        .as_deref()
+        .map(BookRows::open)
+        .transpose()?;
+    let mut previous = Previous::new(rows.as_ref().map_or(0, |rows| rows.count));
+    let native_order = if let Some(path) = &request.previous_catalogue {
+        let generation = request
+            .previous_catalogue_generation
+            .as_deref()
+            .ok_or("missing previous catalogue generation")?;
+        let order = source_order(path, generation)?;
+        previous = Previous::new(order.len());
+        BookStore::open(path)?.visit(|id, raw| previous.add(id, &serde_json::from_slice(raw)?))?;
+        if previous.books.len() != order.len() {
+            return Err("previous catalogue order count differs".into());
+        }
+        Some(order)
+    } else {
+        if let Some(rows) = &rows {
+            rows.visit(|id, row: &Identity| previous.add(id, row))?;
+        }
+        None
+    };
     let previous_count = previous.books.len();
     let mut import = Import {
         request,
@@ -362,12 +398,13 @@ pub fn prepare_update<'a>(
         changed_ids: Vec::new(),
         seen: HashSet::with_capacity(previous_count),
         changes: HashMap::new(),
-        postings: Postings::default(),
+        postings: Postings::new(request.low_memory),
     };
     let (parser_infos, recs_loaded, records_removed) = write_store(
         directory,
         &request.generation,
         request.previous_generation.as_deref(),
+        request.low_memory,
         |store| {
             let mut parser_infos = Vec::new();
             let mut recs_loaded = 0;
@@ -419,7 +456,7 @@ pub fn prepare_update<'a>(
             report(
                 &mut output,
                 json!({"job":"book save","jobMessage":"Сохранение обновлённых книг Rust","jobStep":1,
-        "recsLoaded":recs_loaded,"recordsChanged":import.changes.len(),"progress":0}),
+        "recsLoaded":recs_loaded,"recordsChanged":import.changed_ids.len(),"progress":0}),
             )?;
             let mut records_removed = 0;
             for row in import.previous.books.iter().filter(|row| !row.retained) {
@@ -441,7 +478,7 @@ pub fn prepare_update<'a>(
         ..
     } = import;
     drop(seen);
-    let records_changed = changes.len();
+    let records_changed = changed_ids.len();
     let Previous {
         books,
         by_uid,
@@ -450,33 +487,61 @@ pub fn prepare_update<'a>(
     } = previous;
     drop((by_uid, physical));
     let expected = previous_count - records_removed + new_count;
-    let updated = write_updated_books(&directory.join("book"), |writer| {
-        let mut previous = books.iter();
-        rows.visit::<Box<RawValue>>(|id, raw| {
-            let row = previous.next().ok_or("previous book count changed")?;
-            if id != row.id {
-                return Err("previous book order changed".into());
+    if request.native_catalogue {
+        let unchanged = |row: &&OldBook| row.retained && !row.changed;
+        let mut kept: Vec<u32> = match native_order {
+            Some(order) => {
+                let existing: HashSet<_> =
+                    books.iter().filter(unchanged).map(|row| row.id).collect();
+                order
+                    .into_iter()
+                    .filter(|id| existing.contains(id))
+                    .collect()
             }
-            if row.retained && !changes.contains_key(&id) {
-                writer.add(id, &row.uid.as_ref(), raw, false)?;
+            None => books.iter().filter(unchanged).map(|row| row.id).collect(),
+        };
+        kept.extend(changed_ids);
+        if kept.len() != expected {
+            return Err("book sequence differs from the native snapshot".into());
+        }
+        write_book_order(directory, &request.generation, kept)?;
+    } else {
+        let rows = rows.ok_or("missing catalogue compatibility source")?;
+        let updated = write_updated_books(&directory.join("book"), |writer| {
+            let mut previous = books.iter();
+            rows.visit::<Box<RawValue>>(|id, raw| {
+                let row = previous.next().ok_or("previous book count changed")?;
+                if id != row.id {
+                    return Err("previous book order changed".into());
+                }
+                if row.retained && !changes.contains_key(&id) {
+                    writer.add(id, &row.uid.as_ref(), raw, false)?;
+                }
+                Ok(())
+            })?;
+            // JembaDB moves replaced IDs to the end in the same order as new IDs.
+            for id in changed_ids {
+                let book = changes
+                    .remove(&id)
+                    .ok_or("changed book missing from the update")?;
+                writer.add(id, &book.uid, &book.raw, false)?;
             }
             Ok(())
         })?;
-        // JembaDB moves replaced IDs to the end in the same order as new IDs.
-        for id in changed_ids {
-            let book = changes
-                .remove(&id)
-                .ok_or("changed book missing from the update")?;
-            writer.add(id, &book.uid, &book.raw, false)?;
+        if !changes.is_empty() || updated as usize != expected {
+            return Err("book change count or row count differs from prepared snapshot".into());
         }
-        Ok(())
-    })?;
-    if !changes.is_empty() || updated as usize != expected {
-        return Err("book change count or row count differs from prepared snapshot".into());
     }
     let posting_path = directory.join(".postings");
     fs::create_dir(&posting_path)?;
-    let counts = postings.save(&posting_path)?;
+    let facet_path = if request.native_catalogue {
+        let path = directory.join("facets");
+        fs::create_dir(&path)?;
+        path
+    } else {
+        posting_path.clone()
+    };
+    let counts = postings.save(&posting_path, &facet_path)?;
     Ok(UpdateSummary {
         parser_infos,
         counts,

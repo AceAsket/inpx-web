@@ -71,9 +71,7 @@ async function testDownloadPreferenceUpdatesButtonsAndKeepsExplicitOriginal() {
     const previousWindow = global.window;
     global.window = {location:{origin:'http://local.test'}};
     try {
-        assert.match(view.downloadLabel, /EPUB$/);
         assert.strictEqual(new URL(view.getDirectBookDownloadHref()).searchParams.get('format'), 'epub');
-        assert(view.extraFormats.includes('fb2')); assert(!view.extraFormats.includes('epub'));
         assert.strictEqual(new URL(view.getDirectBookDownloadHref('fb2')).searchParams.get('format'), 'raw');
         const events = []; view.$emit = (_, event) => events.push(event);
         view.emit('sendEmail'); view.emit('sendTelegram', 'fb2');

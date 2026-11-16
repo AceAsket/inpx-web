@@ -232,6 +232,17 @@ function logQueries(app) {
 
 async function main() {
     const log = new (require('./core/AppLogger'))().log;//singleton
+    const journal = require('./core/ReaderProgressJournal');
+    const closeJournal = journal.startRustJournal(require('node:path').join(config.dataDir,journal.fileName));
+    if (closeJournal) ayncExit.addAfter(closeJournal);
+    const closeArchive = require('./core/RustBackupZip').start();
+    if (closeArchive) ayncExit.addAfter(closeArchive);
+    const closeBookArchive = require('./core/RustBookArchive').start();
+    if (closeBookArchive) ayncExit.addAfter(closeBookArchive);
+    const closeBookCache = require('./core/RustBookCache').start();
+    if (closeBookCache) ayncExit.addAfter(closeBookCache);
+    const closeBatchArchive = require('./core/RustBatchArchive').start();
+    if (closeBatchArchive) ayncExit.addAfter(closeBatchArchive);
 
     //server
     const app = express();
@@ -300,14 +311,30 @@ async function main() {
         });
     }
 
-    server.listen(config.server.port, config.server.host, () => {
+    const ready = port => {
         config.server.ready = true;
-        log(`Server accessible at http://127.0.0.1:${config.server.port} (listening on ${config.server.host}:${config.server.port})`);
+        log(`Server accessible at http://127.0.0.1:${port} (listening on ${config.server.host}:${port})`);
+    };
+    const transport = await require('./core/RustHttpServer').start(server,config,{
+        health:!devModule,
+        assets:!devModule,
+        onFailure(error) {
+            log(LM_FATAL,error.message);
+            ayncExit.exit(1);
+        },
     });
+    if (transport) {
+        ayncExit.add(()=>transport.stop());
+        ready(transport.port);
+    } else {
+        server.listen(config.server.port,config.server.host,()=>ready(server.address().port));
+    }
 }
 
 (async() => {
     try {
+        const closeCredentials = require('./core/RustCredentials').start();
+        if (closeCredentials) ayncExit.addAfter(closeCredentials);
         await init();
         await main();
     } catch (e) {

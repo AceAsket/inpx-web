@@ -3,6 +3,7 @@ const path = require('node:path');
 const {Worker, isMainThread, parentPort, workerData} = require('node:worker_threads');
 const DbCreator = require('./DbCreator');
 const {prepareRustCatalogueUpdate} = require('./RustCatalogUpdate');
+const {executable} = require('./RustLookupIndex');
 
 async function buildIndex(config, dbPath, previousPath, report, signal) {
     if (await fs.pathExists(dbPath))
@@ -10,11 +11,22 @@ async function buildIndex(config, dbPath, previousPath, report, signal) {
 
     const creator = new DbCreator({...config,indexDbPath:dbPath,previousIndexPath:previousPath});
     const prepared = await prepareRustCatalogueUpdate(creator,previousPath,dbPath,report,signal);
+    if (prepared?.nativeCatalogue) {
+        await creator.finishNativeCatalogue(prepared,report);
+        return;
+    }
+    if (!prepared && executable() && config.rustCompatibilityTables!==true && config.rustBookStoreEnabled!==false
+        && config.rustCatalogUpdateEnabled!==false && !config.lowMemoryMode) {
+        await creator.buildStandaloneCatalogue(report);
+        return;
+    }
     const previousBook = !prepared && previousPath && path.join(previousPath, 'book');
     if (previousBook && await fs.pathExists(previousBook)) {
         // The serving catalogue only reads its book table. Copy it to retain
         // record IDs; query caches in the live database may still be changing.
         await fs.copy(previousBook, path.join(dbPath, 'book'));
+    } else if (!prepared && previousPath && await fs.pathExists(path.join(previousPath,'catalogue.json'))) {
+        creator.config.identityDbPath = previousPath;
     }
 
     const db = new (require('jembadb/src/JembaDb'))();

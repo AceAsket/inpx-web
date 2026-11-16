@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const fs = require('fs-extra');
 const path = require('path');
 const sessionLifetime = require('./SessionLifetime');
+const rustAuthState = require('./RustAuthState');
+const RustBrowserSessions = require('./RustBrowserSessions');
 
 const sessionCookieName = 'inpx_web_session';
 const secretFileName = 'session-secret';
@@ -61,10 +63,17 @@ function logSecurityWarning(message = '') {
     }
 }
 
+function loginLimitError(retryAfter) {
+    return Object.assign(new Error('Too many login attempts. Try again later.'), {
+        code: 'INPX_LOGIN_RATE_LIMIT', retryAfter,
+    });
+}
+
 class Security {
     constructor(config) {
         this.config = config;
-        this.sessions = new Map();
+        this.nativeAuth = rustAuthState.open();
+        this.sessions = this.nativeAuth ? new RustBrowserSessions(this.nativeAuth) : new Map();
         this.loginAttempts = new Map();
         this.activeLoginAttempts = new Map();
         this.lastLoginAttemptSweep = 0;
@@ -88,7 +97,18 @@ class Security {
     }
 
     sign(value) {
+        if (this.nativeAuth) return this.sessions.sign(value);
         return crypto.createHmac('sha256', this.secret).update(value).digest('hex');
+    }
+
+    get secret() {
+        return this.sessionSecret;
+    }
+
+    set secret(value) {
+        if (this.sessionSecret === value) return;
+        this.sessionSecret = value;
+        if (this.nativeAuth) this.sessions.setKey(value);
     }
 
     randomToken(bytes = 32) {
@@ -136,15 +156,23 @@ class Security {
         if (!sessionId || !signature)
             return '';
 
-        const expected = this.sign(sessionId);
-        if (!timingSafeStringEqual(signature, expected)) {
-            return '';
-        }
+        return this.verifyCookieSignature(sessionId,signature) ? sessionId : '';
+    }
 
-        return sessionId;
+    verifyCookieSignature(value, signature) {
+        return this.nativeAuth ? this.sessions.verifySignature(value,signature)
+            : timingSafeStringEqual(signature,this.sign(value));
     }
 
     getSession(req) {
+        if (this.nativeAuth) {
+            const current = req.securitySession;
+            const session = current ? this.sessions.load(current.id,Date.now(),current)
+                : this.sessions.fromCookie(this.parseCookies(req.headers.cookie)[sessionCookieName] || '',Date.now());
+            if (session) req.securitySession = session;
+            else delete req.securitySession;
+            return session;
+        }
         const cookies = this.parseCookies(req.headers.cookie || '');
         const sessionId = req.securitySession ? req.securitySession.id
             : this.unpackSessionId(cookies[sessionCookieName] || '');
@@ -163,17 +191,15 @@ class Security {
         let session = this.getSession(req);
 
         if (!session) {
-            sessionLifetime.makeRoom(this.sessions);
             const sessionId = this.randomToken(24);
-            session = {
-                id: sessionId,
-                csrfToken: this.randomToken(32),
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-            };
-            this.sessions.set(sessionId, session);
-        } else {
-            session.updatedAt = Date.now();
+            const csrfToken = this.randomToken(32);
+            const now = Date.now();
+            if (this.nativeAuth) session = this.sessions.create(sessionId,csrfToken,now);
+            else {
+                sessionLifetime.makeRoom(this.sessions,now);
+                session = {id:sessionId,csrfToken,createdAt:now,updatedAt:now};
+                this.sessions.set(sessionId,session);
+            }
         }
 
         req.securitySession = session;
@@ -196,6 +222,11 @@ class Security {
         if (!req || !this.isSecureRequest(req) || !this.normalizeOrigin(req.headers.origin).startsWith('https://')
             || !this.isSameOrigin(req)) return null;
         const cookies = this.parseCookies(req.headers.cookie);
+        if (this.nativeAuth) {
+            const session = this.sessions.fromCookie(cookies[sessionCookieName] || '',Date.now(),req.securitySession);
+            if (session) req.securitySession = session;
+            return session;
+        }
         const id = this.unpackSessionId(cookies[sessionCookieName]);
         const session = id && this.getSession(req);
         return session && session.id === id ? session : null;
@@ -321,8 +352,7 @@ class Security {
         if (!Number.isSafeInteger(issuedAt) || issuedAt > Date.now() || Date.now() - issuedAt >= sessionLifetime.maxAgeMs)
             return '';
         const signature = value.slice(splitAt + 1);
-        const expected = this.sign(`proxy:${user}:${issuedAt}`);
-        return timingSafeStringEqual(signature, expected) ? user : '';
+        return this.verifyCookieSignature(`proxy:${user}:${issuedAt}`,signature) ? user : '';
     }
 
     setProxyAuthCookie(req, res, user = '') {
@@ -461,6 +491,7 @@ class Security {
         if (!supplied || supplied.length !== session.csrfToken.length)
             return false;
 
+        if (this.nativeAuth) return this.sessions.verifyCsrf(session.id,supplied);
         return timingSafeStringEqual(supplied, session.csrfToken);
     }
 
@@ -503,6 +534,12 @@ class Security {
         if (this.config.loginRateLimitEnabled === false)
             return;
 
+        if (this.nativeAuth) {
+            const retry = this.nativeAuth.check(this.normalizeLoginKind(kind),this.clientIp(req) || 'unknown',this.config);
+            if (retry) throw loginLimitError(retry);
+            return;
+        }
+
         const ip = this.loginAttemptKey(req, kind);
         const now = Date.now();
         this.pruneLoginAttempts(now);
@@ -519,13 +556,30 @@ class Security {
         if (exhausted || rec.count + (this.activeLoginAttempts.get(ip) || 0) >= maxAttempts
             || (!this.activeLoginAttempts.has(ip) && this.activeLoginAttempts.size >= 10000)) {
             this.incrementLoginMetric(kind, 'blocked');
-            throw Object.assign(new Error('Too many login attempts. Try again later.'), {
-                code: 'INPX_LOGIN_RATE_LIMIT', retryAfter: exhausted ? Math.max(1, Math.ceil((rec.resetAt - now)/1000)) : 1,
-            });
+            throw loginLimitError(exhausted ? Math.max(1, Math.ceil((rec.resetAt - now)/1000)) : 1);
         }
     }
 
     async withLoginAttempt(req, kind, verify, isSuccess = Boolean) {
+        if (this.nativeAuth) {
+            const type = this.normalizeLoginKind(kind);
+            const ip = this.clientIp(req) || 'unknown';
+            const limited = this.config.loginRateLimitEnabled !== false;
+            const retry = this.nativeAuth.check(type,ip,this.config,limited);
+            if (retry) throw loginLimitError(retry);
+            let success;
+            try {
+                const result = await verify();
+                success = isSuccess(result);
+                return result;
+            } catch (error) {
+                if (error.code === 'INPX_INVALID_PROFILE_CREDENTIALS') success = false;
+                throw error;
+            } finally {
+                this.nativeAuth.finish(type,ip,this.config,limited,success);
+            }
+        }
+
         const key = this.loginAttemptKey(req, kind);
         this.checkLoginRate(req, kind);
         const limited = this.config.loginRateLimitEnabled !== false;
@@ -548,6 +602,11 @@ class Security {
     }
 
     recordLoginAttempt(req, success = false, kind = 'access') {
+        if (this.nativeAuth) {
+            this.nativeAuth.finish(this.normalizeLoginKind(kind),this.clientIp(req) || 'unknown',this.config,false,success);
+            return;
+        }
+
         const ip = this.loginAttemptKey(req, kind);
         this.incrementLoginMetric(kind, success ? 'success' : 'failure');
         if (this.config.loginRateLimitEnabled === false)
@@ -576,6 +635,8 @@ class Security {
     }
 
     getLoginMetrics() {
+        if (this.nativeAuth) return this.nativeAuth.metrics(this.config);
+
         const now = Date.now();
         let activeFailedAttempts = 0;
         let rateLimitedIps = 0;

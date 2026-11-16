@@ -48,13 +48,18 @@ async function prepare(binary, directory, request, report, signal) {
 async function prepareRustCatalogueUpdate(creator, previousPath, destination, report, signal) {
     const config = creator.config;
     const binary = executable();
-    if (!binary || !previousPath || config.identityDbPath || config.lowMemoryMode || config.fullOptimization
-        || config.rustBookStoreEnabled === false || config.rustCatalogUpdateEnabled === false
-        || require('jembadb/package.json').version !== '5.1.7') return null;
+    const nativeCatalogue = config.rustCompatibilityTables !== true;
+    if (!binary || config.rustBookStoreEnabled === false
+        || config.rustCatalogUpdateEnabled === false) return null;
+    if (!nativeCatalogue && (config.lowMemoryMode || config.fullOptimization || !previousPath || config.identityDbPath
+        || require('jembadb/package.json').version !== '5.1.7')) return null;
     const sources = getEnabledLibrarySources(config);
     if (!sources.length || sources.some(source => source.type === 'folder')) return null;
-    const previousBook = path.join(previousPath,'book');
-    if (!await fs.pathExists(previousBook)) return null;
+    const identityPath = previousPath || config.identityDbPath;
+    const previousNative = nativeCatalogue && identityPath && await fs.pathExists(path.join(identityPath,'catalogue.json'));
+    const previousBook = !previousNative && identityPath && path.join(identityPath,'book');
+    const legacyBook = previousBook && await fs.pathExists(previousBook) ? previousBook : undefined;
+    if (identityPath && !legacyBook && !previousNative) return null;
     const filter = await creator.loadInpxFilter();
     if (filter?.filter) return null;
 
@@ -65,7 +70,10 @@ async function prepareRustCatalogueUpdate(creator, previousPath, destination, re
         const previousGeneration = await preparePatch(stage,previousPath);
         const sourceHash = await new InpxHashCreator(config).getHash();
         const generation = lookupGeneration({inpxHash:sourceHash,dbVersion:config.dbVersion,rustLookupBuiltAt:new Date().toISOString()});
-        const request = {previousBook,previousGeneration,generation,
+        const previousCatalogueGeneration = previousNative
+            ? (await fs.readJson(path.join(identityPath,'catalogue.json'))).rustBookStoreGeneration : undefined;
+        const request = {previousBook:legacyBook,previousCatalogue:previousNative ? identityPath : undefined,
+            previousCatalogueGeneration,previousGeneration,generation,nativeCatalogue,lowMemory:!!config.lowMemoryMode,
             sources:sources.map(({id,name,inpx,inpxFile,libDir}) => ({id,name,inpx:inpxFile || inpx,libDir})),
             includeAuthors:filter?.includeAuthors,excludeAuthors:filter?.excludeAuthors};
         report({jobStepCount:9});
@@ -74,8 +82,10 @@ async function prepareRustCatalogueUpdate(creator, previousPath, destination, re
         signal?.throwIfAborted();
         publishing = true;
         for (const name of await fs.readdir(stage)) await fs.rename(path.join(stage,name),path.join(destination,name));
-        report({nativeUpdate:true,nativeIdentities:true,rustReader:true,bookStoreMode:previousGeneration ? 'patch' : 'base',incremental:true});
-        return {...summary,sourceHash,generation,filter};
+        const incremental = !!previousPath;
+        report({nativeUpdate:incremental,nativeIdentities:!!identityPath,rustReader:true,
+            bookStoreMode:previousGeneration ? 'patch' : 'base',incremental});
+        return {...summary,sourceHash,generation,filter,nativeCatalogue,incremental};
     } catch (error) {
         signal?.throwIfAborted();
         if (publishing) throw error;
@@ -86,10 +96,11 @@ async function prepareRustCatalogueUpdate(creator, previousPath, destination, re
     }
 }
 
-async function readPostings(directory) {
+async function readPostings(directory, namesOnly = false) {
     const temporary = path.join(directory,'.postings');
     const result = {};
-    for (const table of postingTables) result[`${table}Arr`] = await fs.readJson(path.join(temporary,table));
+    for (const table of namesOnly ? postingTables.slice(0,4) : postingTables)
+        result[`${table}Arr`] = await fs.readJson(path.join(temporary,table));
     await fs.remove(temporary);
     return result;
 }

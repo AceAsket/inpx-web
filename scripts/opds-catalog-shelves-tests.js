@@ -34,7 +34,7 @@ async function fixture(task) {
             await new (require('../server/core/DbCreator'))(config).run(db, () => {}); await db.openAll();
             searcher = new (require('../server/core/DbSearcher'))(config, db); await searcher.init();
             const Worker = require('../server/core/WebWorker'), worker = Object.create(Worker.prototype);
-            Object.assign(worker, {config, db, dbSearcher:searcher, libraryAssetGeneration:1, profileSessions:new Map(), checkMyState:() => {},
+            Object.assign(worker, {config, db, dbSearcher:searcher, libraryAssetGeneration:1, checkMyState:() => {},
                 applyMetadataOverridesToSearchResult:async() => {}});
             const rows = await db.select({table:'book'});
             await db.insert({table:'book', rows:[{...rows[0], id:100000, _uid:'deleted', file:'deleted', del:1}]});

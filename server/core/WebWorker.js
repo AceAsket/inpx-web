@@ -9,9 +9,10 @@ const FormData = require('form-data');
 const telegramNetwork = require('../../shared/TelegramNetwork');
 const telegramTransport = require('./TelegramTransport');
 const nodemailer = require('nodemailer');
-const yazl = require('yazl');
 
 const ZipReader = require('./ZipReader');
+const RustBookArchive = require('./RustBookArchive');
+const bookFileCache = require('./BookFileCache');
 const LockQueue = require('./LockQueue');
 const WorkerState = require('./WorkerState');//singleton
 const { JembaDb } = require('jembadb');
@@ -26,7 +27,9 @@ const profileTotp = require('./ProfileTotp');
 const profileAuthPolicy = require('./ProfileAuthPolicy');
 const trustedDevices = require('./ProfileTrustedDevices');
 const SecretStore = require('./SecretStore');
-const sessionLifetime = require('./SessionLifetime');
+const ProfileSessions = require('./ProfileSessions');
+const {ProfileTotpAttempts} = require('./ProfileTotpAttempts');
+const ProfileTotpEnrollments = require('./ProfileTotpEnrollments');
 const imageUtils = require('./ImageUtils');
 const imageRuntime = require('./ImageRuntime');
 const epubRestorer = require('./EpubRestorer');
@@ -57,11 +60,7 @@ const {relativeName, relativeToRoot, realPathWithin} = require('./LibraryPaths')
 const ssNormal = 'normal';
 const ssDbLoading = 'db_loading';
 const ssDbCreating = 'db_creating';
-const profileTotpSetupLifetimeMs = 5 * 60 * 1000;
-const profileTotpSetupLimit = 128;
-const profileTotpAttemptLimit = 8;
-const profileTotpAttemptsLifetimeMs = 5 * 60 * 1000;
-const profileTotpAttemptProfiles = 4096;
+const profileSessionTokenBytes = 24;
 
 function invalidProfileCredentials() {
     return Object.assign(new Error('Неверный логин, пароль или код'), {code:'INPX_INVALID_PROFILE_CREDENTIALS'});
@@ -691,7 +690,6 @@ class WebWorker {
             this.inpxHashCreator = new InpxHashCreator(config);
             this.readingListStore = new ReadingListStore(config);
             this.fb2Helper = new Fb2Helper();
-            this.profileSessions = new Map();
             this.inpxFileHash = '';
             this.discoveryCache = new Map();
             this.sharedDiscoveryConfig = null;
@@ -865,9 +863,14 @@ class WebWorker {
                 if (hasDb && iteration === 0) {
                     // A second server sharing the data directory must not move
                     // another process's active catalogue during --recreate.
-                    const guard = new JembaDb();
-                    await guard.lock({dbPath, softLock:true});
-                    await guard.unlock();
+                    if (await fs.pathExists(path.join(dbPath,'catalogue.json'))) {
+                        const release = await require('./CatalogueLock').lock(dbPath);
+                        await release();
+                    } else {
+                        const guard = new JembaDb();
+                        await guard.lock({dbPath,softLock:true});
+                        await guard.unlock();
+                    }
                 }
                 const staging = `${dbPath}.building-${utils.randomHexString(8)}`;
                 const previous = `${dbPath}.previous`;
@@ -951,10 +954,26 @@ class WebWorker {
     async openCatalogue(dbPath) {
         const config = this.config;
         const db = new (require('./DatabaseThread'))(config);
+        if (config.rustServiceCacheEnabled!==false) require('./CatalogueServiceCache').CatalogueServiceCache.attach(db,dbPath);
         let searcher;
         try {
+            const nativeConfig = path.join(dbPath,'catalogue.json');
+            if (await fs.pathExists(nativeConfig)) {
+                const metadata = await fs.readJson(nativeConfig);
+                if (metadata?.format!==1 || !metadata.rustBookStoreGeneration || !metadata.rustLookupGeneration)
+                    throw new Error('Invalid Rust catalogue header');
+                await db.openNative(dbPath,metadata,config.dbCacheSize);
+                searcher = new DbSearcher(config,db,dbPath);
+                await searcher.init();
+                await searcher.rustLookup.run(process=>process.query({op:'probe'}),()=>{throw new Error('Rust lookup is unavailable');});
+                db.wwCache = {config:searcher.dbConfig};
+                return {db,searcher};
+            }
             await db.lock({dbPath, softLock:true, tableDefaults:{cacheSize:config.dbCacheSize}});
-            await db.openAll({exclude:['author_id', 'series_id', 'title_id', 'book', 'catalog_lookup']});
+            const {executable,fileName}=require('./RustLookupIndex');
+            const names=executable() && await fs.pathExists(path.join(dbPath,fileName)) ? ['author','series','title','word'] : [];
+            if (names.length) db.deferNameTables(names,config.dbCacheSize);
+            await db.openAll({exclude:['author_id','series_id','title_id','book','catalog_lookup',...names]});
             searcher = new DbSearcher(config, db, dbPath);
             await searcher.init();
             await db.configureBookStore(dbPath,searcher.dbConfig.rustBookStoreGeneration,config.dbCacheSize);
@@ -1211,12 +1230,12 @@ class WebWorker {
 
             //добавим к жанрам те, что нашлись при парсинге
             const genreParsed = new Set();
-            let rows = await db.select({table: 'genre', map: `(r) => ({value: r.value})`});
-            for (const row of rows) {
-                genreParsed.add(row.value);
+            const values = await this.dbSearcher.facetValues('genre');
+            for (const value of values) {
+                genreParsed.add(value);
 
-                if (!genreValues.has(row.value))
-                    last.value.push({name: row.value, value: row.value});
+                if (!genreValues.has(value))
+                    last.value.push({name:value,value});
             }
 
             //уберем те, которые не нашлись при парсинге
@@ -1233,12 +1252,10 @@ class WebWorker {
             }
 
             // langs
-            rows = await db.select({table: 'lang', map: `(r) => ({value: r.value})`});
-            const langs = rows.map(r => r.value);            
+            const langs = await this.dbSearcher.facetValues('lang');
 
             // exts
-            rows = await db.select({table: 'ext', map: `(r) => ({value: r.value})`});
-            const exts = rows.map(r => r.value);            
+            const exts = await this.dbSearcher.facetValues('ext');
 
             result = {
                 genreTree: genres,
@@ -1608,7 +1625,7 @@ class WebWorker {
             try {
                 indexed = await require('./RustShelfIndex').selectShelfBooks(db, this.dbSearcher?.dbConfig, {
                     nowMs:now, daysWindows, newestLimit:limit, popularLimit, scores,
-                });
+                },{directory:this.dbSearcher?.dbPath});
             } catch (error) {
                 if (resourceRuntime.signal()?.aborted) throw error;
                 this.checkLibraryAssetState(generation, db);
@@ -1621,10 +1638,7 @@ class WebWorker {
                 return indexed;
             }
         }
-        const rows = await db.select({
-            table: 'book',
-            rawResult: true,
-            where: `
+        const rows = await require('./CatalogueScan').scanBooks(db, (scanLoop,loadSelected) => `
                 const mode = ${db.esc(mode)};
                 const limit = ${db.esc(limit)};
                 const daysWindows = ${db.esc(daysWindows)};
@@ -1642,9 +1656,7 @@ class WebWorker {
                     date:row.date, librate:row.librate, quality:rowQuality(row),
                 });
                 const loadSelected = async (selected) => {
-                    const books = [];
-                    for (const row of selected) books.push(@unsafeRow(row.id));
-                    return books;
+                    ${loadSelected}
                 };
 
                 const deduped = new Map();
@@ -1667,10 +1679,9 @@ class WebWorker {
                 const popularLimit = ${db.esc(popularLimit)};
                 const popular = popularLimit ? new Map() : null;
                 let visited = 0;
-                for (const id of @all()) {
+                ${scanLoop}
                     if (++visited % 1024 === 0)
                         await new Promise(resolve => setImmediate(resolve));
-                    const row = @unsafeRow(id);
                     if (!row || row.del || !row.title)
                         continue;
                     const isPopular = row.librate > 0 || scores[row._uid] > 0;
@@ -1743,43 +1754,10 @@ class WebWorker {
                 if (popular)
                     windows.push(await loadSelected(selectBest(popular, compare.bind(null, 'popular'), popularLimit)));
                 return windows;
-            `
-        });
+            `,{fields:['id','_uid','author','title','series','serno','date','librate','del','sourceId','libid','folder','file','ext','insno','size']});
 
         this.checkLibraryAssetState(generation, db);
         return rows[0].rawResult;
-    }
-
-    async buildLocalDiscoveryShelf(kind = 'newest', limit = 8, options = {}) {
-        const shelfConfig = {
-            newest: {
-                id: `newest-${options.daysWindow || 0}d`,
-                title: 'Новинки библиотеки',
-                subtitle: 'Последние поступления в индекс',
-                mode: 'newest',
-            },
-            popular: {
-                id: 'popular',
-                title: 'Популярное в библиотеке',
-                subtitle: 'Пилот по локальной оценке библиотеки',
-                mode: 'popular',
-            },
-        }[kind];
-
-        if (!shelfConfig)
-            return null;
-
-        const [items] = await this.selectDiscoveryBookWindows(shelfConfig.mode, limit);
-        if (!items.length)
-            return null;
-
-        return {
-            id: shelfConfig.id,
-            title: shelfConfig.title,
-            subtitle: shelfConfig.subtitle,
-            source: 'local',
-            items,
-        };
     }
 
     parseExternalFeedItemsFromNextData(html = '', sourceUrl = '', limit = 8) {
@@ -2136,57 +2114,6 @@ class WebWorker {
         return {sourceUrl, items, hasMore, genreOptions};
     }
 
-    pickDiscoveryBookMatch(item, books = []) {
-        const title = normalizeDiscoveryText(item.title || '');
-        if (!title)
-            return null;
-
-        const authorTokens = extractDiscoveryAuthorTokens(item.author || '');
-        let best = null;
-        let bestScore = -Infinity;
-
-        for (const book of books) {
-            const bookTitle = normalizeDiscoveryText(book.title || '');
-            if (!bookTitle)
-                continue;
-
-            let score = -Infinity;
-            if (bookTitle === title) {
-                score = 1000;
-            } else if (bookTitle.startsWith(title) || title.startsWith(bookTitle)) {
-                score = 700;
-            } else if (bookTitle.includes(title) || title.includes(bookTitle)) {
-                score = 450;
-            } else {
-                continue;
-            }
-
-            const bookAuthor = normalizeDiscoveryText(book.author || '');
-            let authorScore = 0;
-            for (const token of authorTokens) {
-                if (bookAuthor.includes(token))
-                    authorScore += 90;
-            }
-
-            if (authorTokens.length && !authorScore)
-                score -= 180;
-
-            score += authorScore;
-            if (!book.del)
-                score += 15;
-            if (String(book.ext || '').toLowerCase() === 'fb2')
-                score += 12;
-            score += parseInt(book.librate || '0', 10) || 0;
-
-            if (score > bestScore) {
-                bestScore = score;
-                best = book;
-            }
-        }
-
-        return (bestScore >= 450 ? best : null);
-    }
-
     externalDiscoverySearchQueries(item = {}, limit = 32) {
         const title = String(item.title || '').trim();
         if (!title)
@@ -2223,120 +2150,6 @@ class WebWorker {
         }
 
         return found;
-    }
-
-    async matchExternalItemsToLocalBooks(items = [], limit = 8) {
-        const result = [];
-        const seenBookUids = new Set();
-        const seenExternalItems = new Set();
-
-        for (const item of items) {
-            const externalKey = buildExternalFeedIdentity(item);
-            if (externalKey && seenExternalItems.has(externalKey))
-                continue;
-            if (externalKey)
-                seenExternalItems.add(externalKey);
-
-            const candidates = await this.findExternalDiscoveryCandidates(item, 32);
-            const match = this.pickDiscoveryBookMatch(item, candidates);
-
-            if (match && !seenBookUids.has(match._uid)) {
-                seenBookUids.add(match._uid);
-                result.push(Object.assign({}, match, {
-                    discoveryUrl: item.url,
-                    discoveryRating: item.rating,
-                    discoveryFlags: {
-                        bestseller: !!item.isBestseller,
-                        isNew: !!item.isNew,
-                    },
-                }));
-            }
-
-            if (result.length >= limit)
-                break;
-
-            await utils.processLoop();
-        }
-
-        return result;
-    }
-
-    async buildExternalDiscoveryShelf(limit = 8) {
-        const discovery = this.getDiscoveryConfig();
-        if (discovery.externalSource === 'none')
-            return null;
-
-        if (discovery.externalSource !== 'web-page')
-            throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
-
-        const feed = await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
-        const items = await this.matchExternalItemsToLocalBooks(feed.items || [], limit);
-        const sourceName = (discovery.externalName || 'Внешний источник');
-
-        return {
-            id: 'external-source',
-            title: sourceName,
-            subtitle: `Совпадений ${items.length} из ${feed.items.length}`,
-            source: 'external',
-            sourceName,
-            sourceUrl: feed.sourceUrl,
-            items,
-            emptyMessage: 'Совпадений с локальной библиотекой пока не нашлось.',
-        };
-    }
-
-    async getDiscoveryShelves(options = {}) {
-        this.checkMyState();
-
-        const discovery = this.getDiscoveryConfig();
-        if (!discovery.enabled)
-            return {shelves: []};
-
-        const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
-        const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
-        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 120));
-
-        const dbConfig = await this.dbConfig();
-        const inpxHash = String(dbConfig.inpxHash || '').trim();
-        const shelves = [];
-
-        const newestShelf = await this.rememberDiscovery(
-            `discovery:${inpxHash}:newest:${newestLimit}`,
-            () => this.buildLocalDiscoveryShelf('newest', newestLimit),
-        );
-        if (newestShelf)
-            shelves.push(newestShelf);
-
-        const popularShelf = await this.rememberDiscovery(
-            `discovery:${inpxHash}:popular:${popularLimit}`,
-            () => this.buildLocalDiscoveryShelf('popular', popularLimit),
-        );
-        if (popularShelf)
-            shelves.push(popularShelf);
-
-        if (discovery.externalSource !== 'none') {
-            try {
-                const externalShelf = await this.rememberDiscovery(
-                    `discovery:${inpxHash}:external:${discovery.externalSource}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}`,
-                    () => this.buildExternalDiscoveryShelf(externalShelfLimit),
-                );
-                if (externalShelf)
-                    shelves.push(externalShelf);
-            } catch (e) {
-                shelves.push({
-                    id: 'external-error',
-                    title: (discovery.externalName || 'Внешний источник'),
-                    subtitle: 'Внешний источник временно недоступен',
-                    source: 'external',
-                    sourceName: (discovery.externalName || 'Внешний источник'),
-                    sourceUrl: (discovery.externalUrl || ''),
-                    items: [],
-                    emptyMessage: e.message,
-                });
-            }
-        }
-
-        return {shelves};
     }
 
     buildLocalDiscoveryShelfV2(kind, books, {daysWindow = 0, popularityMap = {}} = {}) {
@@ -3354,10 +3167,7 @@ class WebWorker {
             .split('')
             .reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) % 9973, Math.floor(Date.now() / 86400000));
 
-        const rows = await this.db.select({
-            table: 'book',
-            rawResult: true,
-            where: `
+        const rows = await require('./CatalogueScan').scanBooks(this.db, scanLoop => `
                 const knownBookUids = new Set(${this.db.esc(Array.from(profile.knownBookUids))});
                 const preferredAuthors = ${this.db.esc(preferredAuthors)};
                 const preferredSeries = ${this.db.esc(preferredSeries)};
@@ -3380,10 +3190,9 @@ class WebWorker {
                 let order = 0;
                 let readCount = 0;
                 const now = Date.now();
-                for (const id of @all()) {
+                ${scanLoop}
                     if (++readCount % 1024 === 0)
                         await new Promise(resolve => setImmediate(resolve));
-                    const row = @unsafeRow(id);
                     if (!row || row.del || !row.title || !row._uid || knownBookUids.has(row._uid))
                         continue;
 
@@ -3451,8 +3260,7 @@ class WebWorker {
                 const ranked = (top, explore) => top.ranked().map(({row, score}) =>
                     ({...row, _similarityScore: score, _discoveryExplore: explore}));
                 return ranked(affinity, false).concat(ranked(exploration, true));
-            `
-        });
+            `);
 
         const rawItems = ((rows[0] && rows[0].rawResult) ? rows[0].rawResult : [])
             .map(book => Object.assign({}, book, {
@@ -3829,32 +3637,27 @@ class WebWorker {
         return require('./ProfilePassword').hash(password);
     }
 
+    get profileSessions() {
+        return this.profileSessionStore ||= new ProfileSessions();
+    }
+
     createProfileSession(userId) {
-        sessionLifetime.makeRoom(this.profileSessions);
-        const token = utils.randomHexString(24);
-        this.profileSessions.set(token, {
-            userId,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-        });
+        const token = utils.randomHexString(profileSessionTokenBytes);
+        this.profileSessions.create(token,userId);
         this.serverActivity?.record(userId, 'logins');
         return token;
     }
 
     getProfileSessionUser(token = '') {
-        const rec = this.profileSessions.get(String(token || '').trim());
-        if (sessionLifetime.expired(rec)) {
-            this.closeProfileSession(token);
-            return '';
-        }
-
-        rec.updatedAt = Date.now();
-        return rec.userId || '';
+        const key = String(token || '').trim();
+        const user = key.length === profileSessionTokenBytes*2 ? this.profileSessions.user(key) : '';
+        if (!user) this.pendingProfileTotp?.delete(key);
+        return user;
     }
 
     closeProfileSession(token = '') {
         const key = String(token || '').trim();
-        this.profileSessions.delete(key);
+        if (key.length === profileSessionTokenBytes*2) this.profileSessions.delete(key);
         this.pendingProfileTotp?.delete(key);
         return {success: true};
     }
@@ -4001,17 +3804,20 @@ class WebWorker {
                 throw Object.assign(new Error('Настройте обязательный OTP в веб-интерфейсе INPX Web'), {code:'need_profile_otp_setup'});
             const patch = {};
             const canUseTrust = trustedDevices.available(user.profileAuthPolicy);
-            const trusted = canUseTrust && trustedDevices.recognizes(user.profileTrustedDevices, trustedDeviceToken);
             let deviceGrant;
-            if (user.profileTotp && (otp !== '' || !trusted)) {
-                if (otp === '')
+            if (user.profileTotp && otp === '') {
+                const trusted = canUseTrust && await trustedDevices.recognizes(user.profileTrustedDevices,trustedDeviceToken);
+                if (!trusted)
                     throw Object.assign(new Error('Введите код двухфакторной защиты'), {code:'need_profile_otp'});
-                patch.profileTotp = await this.verifyProfileTotp(user, otp);
+            } else if (user.profileTotp) {
                 // Recovery codes are for signing back in after a lost authenticator.
-                if (canUseTrust && rememberDevice && /^\d{6}$/.test(otp)) {
-                    deviceGrant = trustedDevices.issue(user.profileTrustedDevices, trustedDeviceToken, user.profileAuthPolicy.trustedBrowserDays);
-                    patch.profileTrustedDevices = deviceGrant.devices;
-                }
+                const remember = canUseTrust && rememberDevice && /^\d{6}$/.test(otp)
+                    ? trustedDevices.remember(user.profileTrustedDevices,trustedDeviceToken,user.profileAuthPolicy.trustedBrowserDays)
+                    : undefined;
+                const result = await this.verifyProfileSecondFactor(user,otp,remember);
+                patch.profileTotp = result.state;
+                deviceGrant = result.grant;
+                if (deviceGrant) patch.profileTrustedDevices = deviceGrant.devices;
             }
             if (profilePassword.isLegacy(user.passwordHash)) patch.passwordHash = await profilePassword.hash(password);
             if (Object.keys(patch).length) await store.updateProfileCredentials(user.id, patch);
@@ -4032,15 +3838,13 @@ class WebWorker {
                 throw invalidProfileCredentials();
             if (!user.otpRequired || user.profileTotp)
                 throw new Error('Войдите в профиль заново');
-            const pending = this.pendingRequiredProfileTotp ??= new Map();
+            const pending = this.pendingRequiredProfileTotp ??= new ProfileTotpEnrollments(this.profileSessions,true);
             if (operation === 'start') {
                 const now = Date.now();
-                for (const [key, setup] of pending)
-                    if (setup.expiresAt <= now || setup.userId === user.id) pending.delete(key);
-                if (pending.size >= profileTotpSetupLimit) throw new Error('Повторите настройку позже');
+                if (!pending.prepare(user.id,now)) throw new Error('Повторите настройку позже');
                 const id = utils.randomHexString(24);
-                const params = profileTotp.start(user.login);
-                pending.set(id, {userId:user.id, secret:params.secret, expiresAt:now + profileTotpSetupLifetimeMs, attempts:0});
+                const params = await profileTotp.start(user.login);
+                pending.create(id,user.id,params.secret,now);
                 return {...params, enrollmentId:id};
             }
             if (operation !== 'enable') throw new Error('Неизвестное действие с двухфакторной защитой');
@@ -4054,42 +3858,33 @@ class WebWorker {
     }
 
     async confirmProfileTotpSetup(pending, key, userId, code) {
-        const setup = pending.get(key);
-        if (!setup || setup.userId !== userId || setup.expiresAt <= Date.now() || setup.attempts >= profileTotpAttemptLimit) {
-            if (setup?.userId === userId) pending.delete(key);
+        const secret = typeof key === 'string' && key.length === profileSessionTokenBytes*2
+            ? pending.secret(key,userId,Date.now()) : undefined;
+        if (!secret)
             throw new Error('Начните настройку двухфакторной защиты заново');
-        }
-        const lastStep = profileTotp.verify(setup.secret, code);
-        if (lastStep === null) {
-            setup.attempts++;
+        const accepted = await profileTotp.confirm(new SecretStore(this.readingListStore.config),userId,secret,code);
+        if (!accepted) {
+            pending.failed(key,userId);
             throw invalidProfileCredentials();
         }
-        return profileTotp.enable(new SecretStore(this.readingListStore.config), userId, setup.secret, lastStep);
+        return accepted;
     }
 
     async verifyProfileTotp(user, code) {
-        if (!this.profileTotpAttempts) this.profileTotpAttempts = new Map();
-        const attempts = this.profileTotpAttempts;
+        return (await this.verifyProfileSecondFactor(user,code)).state;
+    }
+
+    async verifyProfileSecondFactor(user, code, remember) {
+        const attempts = this.profileTotpAttempts ||= new ProfileTotpAttempts(this.profileSessions.native);
         const now = Date.now();
-        let record = attempts.get(user.id);
-        if (record?.expiresAt > now && record.count >= profileTotpAttemptLimit)
-            throw invalidProfileCredentials();
-        if (!record || record.expiresAt <= now) {
-            if (attempts.size >= profileTotpAttemptProfiles) {
-                for (const [id, value] of attempts)
-                    if (value.expiresAt <= now) attempts.delete(id);
-                if (attempts.size >= profileTotpAttemptProfiles) throw invalidProfileCredentials();
-            }
-            record = {count:0, expiresAt:now + profileTotpAttemptsLifetimeMs};
-        }
-        const state = await profileTotp.consume(new SecretStore(this.readingListStore.config), user.id, user.profileTotp, code, now);
-        if (!state) {
-            record.count++;
-            attempts.set(user.id, record);
+        if (!attempts.allows(user.id,now)) throw invalidProfileCredentials();
+        const accepted = await profileTotp.consumeWithTrust(new SecretStore(this.readingListStore.config),user.id,user.profileTotp,code,now,remember);
+        if (!accepted) {
+            attempts.failed(user.id,now);
             throw invalidProfileCredentials();
         }
         attempts.delete(user.id);
-        return state;
+        return accepted;
     }
 
     async profileTotpAction(userId, profileAccessToken, operation, payload = {}) {
@@ -4121,14 +3916,12 @@ class WebWorker {
             authorize();
             if (operation === 'start' || operation === 'enable') {
                 if (status.otpEnabled) throw new Error('Двухфакторная защита уже включена');
-                if (!this.pendingProfileTotp) this.pendingProfileTotp = new Map();
-                const pending = this.pendingProfileTotp;
+                const pending = this.pendingProfileTotp ??= new ProfileTotpEnrollments(this.profileSessions,false);
                 if (operation === 'start') {
-                    for (const [key, item] of pending)
-                        if (item.expiresAt <= Date.now() || !this.profileSessions.has(key)) pending.delete(key);
-                    if (pending.size >= profileTotpSetupLimit && !pending.has(token)) throw new Error('Повторите настройку позже');
-                    const params = profileTotp.start(user.login);
-                    pending.set(token, {userId, secret:params.secret, expiresAt:Date.now() + profileTotpSetupLifetimeMs, attempts:0});
+                    if (!pending.prepare(token,Date.now())) throw new Error('Повторите настройку позже');
+                    const params = await profileTotp.start(user.login);
+                    authorize();
+                    pending.create(token,userId,params.secret,Date.now());
                     return params;
                 }
                 const {state, recoveryCodes} = await this.confirmProfileTotpSetup(pending, token, userId, payload?.code);
@@ -4161,7 +3954,7 @@ class WebWorker {
                 authorize();
                 return {...status, otpEnabled:false, recoveryCodesRemaining:0, trustedDeviceCount:0};
             }
-            const {recoveryCodes, recoveryHashes} = profileTotp.newRecoveryCodes(userId);
+            const {recoveryCodes, recoveryHashes} = await profileTotp.newRecoveryCodes(userId);
             await store.updateProfileCredentials(userId, {profileTotp:{...state, recoveryHashes}, profileTrustedDevices:[]}, authorize);
             this.revokeUserSessions(userId, token);
             authorize();
@@ -4195,10 +3988,6 @@ class WebWorker {
             const result = await store.resetProfileTotp(admin.id, targetUserId, adminTotp, authorize);
             this.revokeUserSessions(result.userId);
             this.profileTotpAttempts?.delete(result.userId);
-            if (this.pendingProfileTotp) {
-                for (const [token, setup] of this.pendingProfileTotp)
-                    if (setup.userId === result.userId) this.pendingProfileTotp.delete(token);
-            }
             this.addAdminEvent('warn', 'security', 'Сброшена двухфакторная защита профиля',
                 {adminId:admin.id, userId:result.userId});
             return result;
@@ -4225,9 +4014,8 @@ class WebWorker {
             const {activatingOtp, ...result} = await store.setProfileAuthPolicy(admin.id, policy, adminTotp, authorize, isAnonymousDefaultUser);
             if (activatingOtp) {
                 const keep = String(adminToken || '').trim();
-                for (const token of this.profileSessions.keys()) {
-                    if (token !== keep) this.closeProfileSession(token);
-                }
+                this.profileSessions.clear(keep);
+                this.pendingProfileTotp?.clear(keep);
             }
             if (!policy.otpRequired) this.pendingRequiredProfileTotp?.clear();
             this.addAdminEvent('warn', 'security', 'Изменены правила входа в профили', {adminId:admin.id, ...result.profileAuthPolicy});
@@ -4286,17 +4074,13 @@ class WebWorker {
     }
 
     revokeUserSessions(userId, keepToken = '') {
-        for (const [token, session] of this.profileSessions) {
-            if (session.userId === userId && token !== keepToken)
-                this.closeProfileSession(token);
-        }
+        this.profileSessions.revoke(userId,keepToken);
+        this.pendingProfileTotp?.revoke(userId,keepToken);
         this.clearRequiredProfileTotpEnrollment(userId);
     }
 
     clearRequiredProfileTotpEnrollment(userId) {
-        if (!this.pendingRequiredProfileTotp) return;
-        for (const [key, setup] of this.pendingRequiredProfileTotp)
-            if (setup.userId === userId) this.pendingRequiredProfileTotp.delete(key);
+        this.pendingRequiredProfileTotp?.revoke(userId);
     }
 
     async getOpdsUsers() {
@@ -4722,7 +4506,7 @@ class WebWorker {
             // Jemba applies limit after reading/mapping the selected rows. A
             // limit-only probe materializes the entire library. An ID lookup
             // bounds the work even if that ID was removed from the catalogue.
-            probe:async() => {this.checkMyState(); await this.db.select({table:'book', where:'@@id(1)', limit:1});},
+            probe:async() => {this.checkMyState(); await require('./CatalogueRows').byIds(this.db,1);},
         });
         this.resourceBenchmark.config = this.config;
         return this.resourceBenchmark;
@@ -5093,6 +4877,7 @@ class WebWorker {
         return withFileTransaction(this.config.configFile, async() => {
             const configManager = new ConfigManager();
             const previous = _.cloneDeep(this.config);
+            const resumeRoutes = await require('./RustHttpServer').pauseDirectRoutes(this.config,patch);
             try {
                 Object.assign(this.config, patch);
                 configManager.config = this.config;
@@ -5103,6 +4888,8 @@ class WebWorker {
                 Object.assign(this.config, previous);
                 configManager.config = this.config;
                 throw error;
+            } finally {
+                await resumeRoutes?.();
             }
         });
     }
@@ -5397,21 +5184,6 @@ class WebWorker {
         };
     }
 
-    async addBackupPath(zipFile, sourcePath, zipPath) {
-        if (!sourcePath || !await fs.pathExists(sourcePath))
-            return;
-
-        const stat = await fs.stat(sourcePath);
-        if (stat.isDirectory()) {
-            const entries = await fs.readdir(sourcePath);
-            for (const entry of entries)
-                await this.addBackupPath(zipFile, path.join(sourcePath, entry), `${zipPath}/${entry}`);
-            return;
-        }
-
-        zipFile.addFile(sourcePath, zipPath);
-    }
-
     async createAdminBackup(userId = '', profileAccessToken = '') {
         this.checkMyState();
         await this.requireAdmin(userId, profileAccessToken);
@@ -5432,7 +5204,7 @@ class WebWorker {
         if (operation === 'preview' || operation === 'restore') {
             return withFileTransaction(path.join(this.config.dataDir, '.backup-import-queue'), async() => {
                 await this.requireAdmin(userId, token);
-                const data = await vault.payload(options.name, options.password);
+                const data = await vault.restoreSource(options.name, options.password);
                 return this.importAdminBackup(userId, token, {...data, preview: operation === 'preview', fingerprint: options.fingerprint});
             });
         }
@@ -5454,42 +5226,29 @@ class WebWorker {
         const stamp = createdAt.toISOString().replace(/[:.]/g, '-');
         const fileName = `inpx-web-${options.scheduled ? 'auto-' : ''}backup-${stamp}-${utils.randomHexString(4)}.zip${options.encryption ? '.enc' : ''}`;
         const outFile = path.join(backupDir, fileName);
-        const temporary = outFile + '.tmp';
-        const zipFile = new yazl.ZipFile();
-        const done = options.encryption
-            ? require('./BackupCrypto').encryptStream(zipFile.outputStream, outFile, options.encryption.key, options.encryption.salt)
-            : require('stream/promises').pipeline(zipFile.outputStream, fs.createWriteStream(temporary, {flags: 'wx', mode: 0o600}));
-        // Attach immediately: a missing source file can fail while the ZIP is still being assembled.
-        done.catch(() => {});
-        try {
-        zipFile.addBuffer(Buffer.from(JSON.stringify({
+        const info = Buffer.from(JSON.stringify({
             app: this.config.name,
             version: this.config.version,
             createdAt: createdAt.toISOString(),
             note: 'Backup includes runtime config, secrets, user profiles, reading lists, reader progress and bookmarks. It does not include source book archives, generated search DB or caches.',
-        }, null, 4)), 'backup-info.json');
-
-        await this.addBackupPath(zipFile, this.config.configFile, 'config.json');
+        }, null, 4));
+        const files = [
+            {name:'backup-info.json', data:info},
+            {name:'config.json', path:this.config.configFile},
+        ];
         // Portable backups embed image bytes; normal profile reads keep only URLs.
         await withFileTransaction(this.readingListStore.file, async() => {
             if (await fs.pathExists(this.readingListStore.file))
-                zipFile.addBuffer(Buffer.from(JSON.stringify(await this.readingListStore.exportSnapshot(), null, 2)), 'reading-lists.json');
+                files.push({name:'reading-lists.json', data:Buffer.from(JSON.stringify(await this.readingListStore.exportSnapshot(), null, 2))});
             const key = await fs.readFile(path.join(this.config.dataDir, 'secret.key')).catch(error => {
                 if (error.code !== 'ENOENT') throw error;
                 return null;
             });
-            if (key) zipFile.addBuffer(key, 'secret.key');
+            if (key) files.push({name:'secret.key', data:key});
         });
-        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'discovery-cache.json'), 'discovery-cache.json');
-        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'backup-vault.json'), 'backup-vault.json');
-
-        zipFile.end();
-        await done;
-        if (!options.encryption) await fs.rename(temporary, outFile);
-        } catch (error) {
-            zipFile.outputStream.destroy(error); await done.catch(() => {});
-            await fs.remove(temporary).catch(() => {}); await fs.remove(outFile).catch(() => {}); throw error;
-        }
+        for (const name of ['discovery-cache.json', 'backup-vault.json'])
+            files.push({name, path:path.join(this.config.dataDir, name)});
+        await require('./BackupArchive').write(outFile, files, createdAt, options.encryption);
 
         return {
             success: true,
@@ -5574,10 +5333,15 @@ class WebWorker {
                         sources: (archive['config.json']?.librarySources || []).map(source => ({name: String(source.name || source.id || '').slice(0, 200)})),
                         restartRecommended: true};
                 }
-                await transaction.commit(this.config, content);
-                if (normalized) this.readingListStore.updateCachedProfileAuthPolicy(normalized.profileAuthPolicy, {invalidateSnapshot:true});
-                if (runtimePatch)
-                    Object.assign(this.config, runtimePatch);
+                const resumeRoutes = await require('./RustHttpServer').pauseDirectRoutes(this.config,runtimePatch);
+                try {
+                    await transaction.commit(this.config, content);
+                    if (normalized) this.readingListStore.updateCachedProfileAuthPolicy(normalized.profileAuthPolicy, {invalidateSnapshot:true});
+                    if (runtimePatch)
+                        Object.assign(this.config, runtimePatch);
+                } finally {
+                    await resumeRoutes?.();
+                }
                 this.profileSessions.clear();
                 this.pendingProfileTotp?.clear();
                 this.pendingRequiredProfileTotp?.clear();
@@ -5900,11 +5664,32 @@ class WebWorker {
         };
     }
 
+    async resolveBookInput(libFolder, libFile, sourceLibDir = '') {
+        const name = relativeName(libFile);
+        const folderName = relativeName(libFolder);
+        const libDir = path.resolve(sourceLibDir || this.config.libDir);
+        const root = await fs.realpath(libDir);
+        const candidate = await this.resolveLibraryArchivePath(path.join(libDir, folderName), libDir, root);
+        const folder = await realPathWithin(root, candidate);
+        const folderStat = await fs.stat(folder);
+        if (folderStat.isDirectory()) {
+            const fullPath = path.join(folder, name);
+            const resolved = name && await this.resolveExistingPath(fullPath, root);
+            if (!resolved) throw new Error(`file not found: ${fullPath}`);
+            if (!(await fs.stat(resolved)).isFile()) throw new Error('Недопустимый тип файла книги');
+            return {source:resolved,name:null};
+        }
+        if (!folderStat.isFile()) throw new Error('Недопустимый тип архива книги');
+        return {source:folder,name:name || null};
+    }
+
     async extractBook(libFolder, libFile, sourceLibDir = '', {maxOutputBytes = 0, prefixBytes = 0, signal, timeoutMs} = {}) {
         if (prefixBytes && (!Number.isSafeInteger(prefixBytes) || prefixBytes < 1)) throw new Error('Invalid book prefix limit');
         if (prefixBytes && maxOutputBytes && prefixBytes > maxOutputBytes) throw new Error('Book prefix exceeds maxOutputBytes');
         const outFile = `${this.config.tempDir}/${utils.randomHexString(30)}`;
+        const nativeOptions = {maxOutputBytes,prefixBytes,signal,timeoutMs};
         const copy = async file => {
+            if (await RustBookArchive.extract(file,null,outFile,nativeOptions)) return;
             if (prefixBytes) {
                 const {pipeline}=require('stream/promises');
                 try {await pipeline(fs.createReadStream(file,{start:0,end:prefixBytes-1,signal}),fs.createWriteStream(outFile),{signal});}
@@ -5922,27 +5707,12 @@ class WebWorker {
             } catch (error) {await fs.remove(outFile); throw error;}
         };
 
-        const name = relativeName(libFile);
-        const folderName = relativeName(libFolder);
-        const libDir = path.resolve(sourceLibDir || this.config.libDir);
-        const root = await fs.realpath(libDir);
-        const candidate = await this.resolveLibraryArchivePath(path.join(libDir, folderName), libDir, root);
-        const folder = await realPathWithin(root, candidate);
-        const folderStat = await fs.stat(folder);
-        if (folderStat.isDirectory()) {
-            const fullPath = path.join(folder, name);
-            const resolved = name && await this.resolveExistingPath(fullPath, root);
-            if (!resolved) throw new Error(`file not found: ${fullPath}`);
-            if (!(await fs.stat(resolved)).isFile()) throw new Error('Недопустимый тип файла книги');
-            await copy(resolved);
-            return outFile;
-        }
-
-        if (!folderStat.isFile()) throw new Error('Недопустимый тип архива книги');
+        const {source:folder,name} = await this.resolveBookInput(libFolder,libFile,sourceLibDir);
         if (!name) {
             await copy(folder);
             return outFile;
         } else {// файл в zip-архиве
+            if (await RustBookArchive.extract(folder,name,outFile,nativeOptions)) return outFile;
             const zipReader = new ZipReader({resourceMaxOutputBytes:maxOutputBytes || (prefixBytes ? 32*1024**2:0),
                 ...(prefixBytes || signal || timeoutMs ? {resourceSignal:signal,converterPaths:this.config.converterPaths,resourceTimeoutMs:timeoutMs}:{})});
             await zipReader.open(folder, false);
@@ -6596,9 +6366,9 @@ class WebWorker {
     async getAuthorInfo(authorId, author) {
         let authorName = author || '';
         if (!authorName && authorId) {
-            const rows = await this.db.select({table: 'author', where: `@@id(${this.db.esc(authorId)})`});
-            if (rows.length)
-                authorName = rows[0].value;
+            const rows = this.db.nativeCatalogue ? await this.dbSearcher.readNameRows('author',[authorId])
+                : await this.db.select({table:'author',where:`@@id(${this.db.esc(authorId)})`});
+            if (rows.length) authorName = rows[0].value ?? rows[0].name.toLowerCase();
         }
 
         const normalized = normalizeAuthorText(authorName);
@@ -6688,9 +6458,10 @@ class WebWorker {
         return (binaries.length > 0 || coverLinked);
     }
 
-    async shouldInjectFblibraryImages(bookFile, libFolder = '') {
+    async shouldInjectFblibraryImages(bookFile, libFolder = '', hasBinary) {
         if (path.extname(String(libFolder || '')).toLowerCase() === '.7z')
             return true;
+        if (typeof hasBinary==='boolean') return !hasBinary;
 
         let data = await fs.readFile(bookFile);
         data = this.fb2Helper.checkEncoding(data);
@@ -6704,20 +6475,25 @@ class WebWorker {
         const epub = path.extname(libFile).toLowerCase() === '.epub';
 
         let extractedFile = '';
-        let hash = '';
+        let cached;
+        const assetVersion = assetVersionFor(path.extname(libFile).slice(1));
+        const descriptor = {bookUid, libFolder, libFile, sourceLibDir, downFileName, assetVersion};
 
         if (!this.remoteLib) {
             extractedFile = await this.extractBook(libFolder, libFile, sourceLibDir);
             if (path.extname(libFile).toLowerCase() === '.fb2') {
                 try {
-                    const data = await fs.readFile(extractedFile);
-                    const normalized = this.fb2Helper.checkEncoding(await this.fb2Helper.decompressIfNeeded(data));
-                    if (!normalized.equals(data))
-                        await fs.writeFile(extractedFile, normalized);
+                    const native = await require('./RustBookCache').normalizeFb2(extractedFile);
+                    if (!native) {
+                        const data = await fs.readFile(extractedFile);
+                        const normalized = this.fb2Helper.checkEncoding(await this.fb2Helper.decompressIfNeeded(data));
+                        if (!normalized.equals(data)) await fs.writeFile(extractedFile, normalized);
+                    }
                     const libid = parseInt(path.basename(libFile, path.extname(libFile)), 10);
-                    if (libid && await this.shouldInjectFblibraryImages(extractedFile, libFolder))
-                        await this.injectFblibraryImages(extractedFile, libid, sourceLibDir, libFolder);
-                    await require('./Fb2Images').normalizeEmbeddedImages(extractedFile, this.config, this.libraryToolDirs(sourceLibDir));
+                    const injected = libid && await this.shouldInjectFblibraryImages(extractedFile,libFolder,native?.hasBinary)
+                        && await this.injectFblibraryImages(extractedFile,libid,sourceLibDir,libFolder);
+                    if (native?.hasBinary!==false || injected)
+                        await require('./Fb2Images').normalizeEmbeddedImages(extractedFile, this.config, this.libraryToolDirs(sourceLibDir));
                 } catch (error) {
                     await fs.remove(extractedFile);
                     throw error;
@@ -6737,53 +6513,19 @@ class WebWorker {
                     await Promise.all([...readerCache.values()].map(reader => reader.close()));
                 }
             }
-            hash = await utils.getFileHash(extractedFile, 'sha256', 'hex');
+            try {
+                cached = await bookFileCache.publish(this.config.bookDir,this.config.tempDir,extractedFile,descriptor,epub);
+            } finally {await fs.remove(extractedFile);}
         } else {
-            hash = await this.remoteLib.downloadBook(bookUid);
+            const hash = await this.remoteLib.downloadBook(bookUid);
+            await bookFileCache.registerRemote(this.config.bookDir,hash,descriptor);
+            cached = {hash,size:0};
         }
 
-        const link = `${this.config.bookPathStatic}/${hash}`;
-        const bookFile = `${this.config.bookDir}/${hash}`;
-        const bookFileDesc = `${bookFile}.d.json`;
-        const size = extractedFile ? (await fs.stat(extractedFile)).size : 0;
-
-        try {
-            if (!await fs.pathExists(bookFile) || !await fs.pathExists(bookFileDesc)) {
-                if (!await fs.pathExists(bookFile) && extractedFile) {
-                    const tmpFile = `${this.config.tempDir}/${utils.randomHexString(30)}`;
-                    try {
-                        await utils.gzipFile(extractedFile, tmpFile, 4);
-                        await fs.move(tmpFile, bookFile, {overwrite: true});
-                    } finally { await fs.remove(tmpFile); }
-                } else {
-                    await utils.touchFile(bookFile);
-                }
-            } else {
-                await utils.touchFile(bookFile);
-                await utils.touchFile(bookFileDesc);
-            }
-            // Converters and uncompressed downloads need the local EPUB that
-            // we just prepared. Publish the existing bytes before exposing the
-            // descriptor, so they need not immediately read and inflate gzip.
-            if (epub && extractedFile && size)
-                await utils.prepareCachedFile(`${bookFile}.raw`, temporary => fs.move(extractedFile, temporary), size);
-        } finally {
-            if (extractedFile) await fs.remove(extractedFile);
-        }
-
-        const assetVersion = assetVersionFor(path.extname(libFile).slice(1));
-        await writeFileAtomic(bookFileDesc, JSON.stringify({bookUid, libFolder, libFile, sourceLibDir, downFileName, size, assetVersion}));
         this.scheduleCacheClean('после подготовки книги');
-
-        await db.insert({
-            table: 'file_hash',
-            replace: true,
-            rows: [
-                {id: bookUid, hash, size, assetVersion},
-            ]
-        });
-
-        return link;
+        const {hash,size} = cached;
+        await require('./CatalogueServiceCache').saveFileHash(db,{id:bookUid,hash,size,assetVersion});
+        return `${this.config.bookPathStatic}/${hash}`;
     }
 
     //одновременные запросы одной книги (карточка в фоне, «Читать», «Скачать»)
@@ -6825,7 +6567,7 @@ class WebWorker {
             let size = 0;
 
             //найдем downFileName, libFolder, libFile
-            let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
+            let rows = await require('./CatalogueRows').byUids(db,bookUid);
             if (!rows.length)
                 throw new Error('404 Файл не найден');
 
@@ -6858,22 +6600,13 @@ class WebWorker {
             const sourceLibDir = book.sourceLibDir || this.config.libDir;
 
             //найдем хеш
-            rows = await db.select({table: 'file_hash', where: `@@id(${db.esc(bookUid)})`});
+            rows = await require('./CatalogueServiceCache').fileHashesByIds(db,bookUid);
             if (rows.length) {//хеш найден по bookUid
                 const hash = rows[0].hash;
-                const bookFile = `${this.config.bookDir}/${hash}`;
-                const bookFileDesc = `${bookFile}.d.json`;
-
-                if (await fs.pathExists(bookFile) && await fs.pathExists(bookFileDesc)) {
-                    try {
-                        const desc = JSON.parse(await fs.readFile(bookFileDesc, 'utf8'));
-                        if (desc.assetVersion === assetVersionFor(book.ext)) {
-                            link = `${this.config.bookPathStatic}/${hash}`;
-                            size = desc.size || 0;
-                        }
-                    } catch(e) {
-                        link = '';
-                    }
+                const desc = await bookFileCache.inspect(this.config.bookDir,hash,{assetVersion:assetVersionFor(book.ext)});
+                if (desc) {
+                    link = `${this.config.bookPathStatic}/${hash}`;
+                    size = desc.size || 0;
                 }
             }
 
@@ -6905,7 +6638,7 @@ class WebWorker {
 
     async getPreparedBookFile(bookUid, format = '', preference = 'original') {
         const bookLink = await this.getBookLink(bookUid);
-        const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
+        const rows = await require('./CatalogueRows').byUids(this.db,bookUid);
         if (!rows.length)
             throw new Error('404 Файл не найден');
         return await this.prepareBookFile(bookLink, rows[0], format, preference);
@@ -7261,7 +6994,7 @@ class WebWorker {
             return;
         const ids = Array.from(new Set(books.map(book => this.metadataBookUid(book))));
         const versions = new Map(books.map(book => [this.metadataBookUid(book), assetVersionFor(book.ext)]));
-        const hashes = await this.db.select({table: 'file_hash', where: `@@id(${this.db.esc(ids)})`});
+        const hashes = await require('./CatalogueServiceCache').fileHashesByIds(this.db,ids);
         const sizes = new Map();
         if (!this.preparedBookSizes)
             this.preparedBookSizes = new Map();
@@ -7512,7 +7245,7 @@ class WebWorker {
             const bookFile = `${this.config.bookDir}/${hash}`;
             const bookFileInfo = `${bookFile}.i.json`;
 
-            let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
+            let rows = await require('./CatalogueRows').byUids(db,bookUid);
             if (!rows.length)
                 throw new Error('404 Файл не найден');
             const book = {...rows[0]};
@@ -7656,7 +7389,7 @@ class WebWorker {
 
         const db = this.db;
         const generation = this.libraryAssetGeneration;
-        const rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
+        const rows = await require('./CatalogueRows').byUids(db,bookUid);
         if (!rows.length)
             throw new Error('404 Файл не найден');
         const book = {...rows[0]};
@@ -7740,7 +7473,7 @@ class WebWorker {
         const result = await this.runForeground(() => this.shareBookJob('reviews', [bookUid], async() => {
             const db = this.db, generation = this.libraryAssetGeneration;
             load.progress.update('reviews',{phase:'Проверка кэша отзывов',done:0,total:null});
-            const rows = await db.select({table:'book', where:`@@hash('_uid', ${db.esc(bookUid)})`});
+            const rows = await require('./CatalogueRows').byUids(db,bookUid);
             if (!rows.length) throw new Error('404 Файл не найден');
             const book = rows[0], state = await this.getReviewArchiveState(book.sourceLibDir,
                 progress => load.progress.update('ratings',progress));

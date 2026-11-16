@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const {defaults} = require('./ProfileAuthPolicy');
+const native = require('./RustCredentials');
 
 const secondsPerDay = 24 * 60 * 60;
 const maxDevices = 10;
@@ -20,10 +21,18 @@ function active(devices, now = Date.now()) {
         .map(({hash, expiresAt}) => ({hash, expiresAt}));
 }
 
-function recognizes(devices, token) {
+async function recognizes(devices, token) {
     if (typeof token !== 'string' || !keyPattern.test(token)) return false;
+    const now = Date.now();
+    const candidates = active(devices,now);
+    if (!candidates.length) return false;
+    if (native.executable()) return native.secondFactor({action:'recognizes',devices:candidates,token,now});
     const hash = Buffer.from(digest(token), 'hex');
-    return active(devices).some(device => crypto.timingSafeEqual(hash, Buffer.from(device.hash, 'hex')));
+    return candidates.some(device => crypto.timingSafeEqual(hash, Buffer.from(device.hash, 'hex')));
+}
+
+function remember(devices, replaced, days) {
+    return {devices, replaced:typeof replaced === 'string' && keyPattern.test(replaced) ? replaced : '', days};
 }
 
 function issue(devices, replacedToken, days = defaults.trustedBrowserDays) {
@@ -36,4 +45,4 @@ function issue(devices, replacedToken, days = defaults.trustedBrowserDays) {
     return {token, maxAgeSeconds, devices:next.slice(-maxDevices)};
 }
 
-module.exports = {active, available, recognizes, issue};
+module.exports = {active, available, recognizes, remember, issue};

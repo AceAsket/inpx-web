@@ -1,3 +1,5 @@
+const {fileHashesByIds,fileHashesByHash} = require('./CatalogueServiceCache');
+
 function render(template, book = {}, ext = '') {
     const number = Number(book.serno);
     const numbered = Number.isFinite(number) && number > 0;
@@ -47,16 +49,17 @@ async function cachedBook(worker, desc, hash, requestedUid = '') {
     const db = worker.db;
     let uid = desc.bookUid;
     if (requestedUid) {
-        const rows = await db.select({table: 'file_hash', where: `@@id(${db.esc(requestedUid)})`});
+        const rows = await fileHashesByIds(db,requestedUid);
         if (!rows.some(row => row.hash === hash)) throw new Error('404 Книга не соответствует файлу кэша');
         uid = requestedUid;
     }
     if (!uid) {
-        const rows = await db.select({table: 'file_hash', where: `@@filter($r.hash === ${db.esc(hash)})`, limit: 1});
+        const rows = await fileHashesByHash(db,hash);
         uid = rows.length ? rows[0].id : '';
     }
     if (!uid) return {};
-    const rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(uid)})`});
+    const rows = db.booksByUids ? await db.booksByUids([uid])
+        : await db.select({table:'book',where:`@@hash('_uid', ${db.esc(uid)})`});
     return rows[0] || {};
 }
 

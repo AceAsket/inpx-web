@@ -42,16 +42,18 @@ async function testScryptMigrationAndOpds() {
     assert.strictEqual(await passwords.verify('scrypt:v999:9999999999999999:bad', '', ''), false);
     await assert.rejects(passwords.hash('x'.repeat(4097)), /длинный/);
     await temporary(async(dataDir) => {
-        const store = new ReadingListStore({dataDir});
+        const config = {dataDir,adminPassword:'credential-migration-fixture'};
+        const store = new ReadingListStore(config);
         const user = await store.createUser({name: 'Legacy OPDS', login: 'legacy', opdsEnabled: true,
             opdsAuthEnabled: true, passwordHash: passwords.legacy('legacy', 'secret')});
         assert.strictEqual((await store.verifyOpdsPassword(user.id, 'legacy', 'wrong')).authorized, false);
         assert.strictEqual((await store.getUser(user.id)).passwordHash, user.passwordHash);
-        assert.strictEqual((await store.verifyOpdsPassword(user.id, 'legacy', 'secret')).authorized, true);
+        const parallel = await Promise.all(Array.from({length:2},()=>store.verifyOpdsPassword(user.id, 'legacy', 'secret')));
+        assert.deepStrictEqual(parallel.map(result=>result.authorized),[true,true]);
         const migrated = await store.getUser(user.id);
         assert.match(migrated.passwordHash, /^scrypt:v1:/);
         await store.updateUser(user.id, {login: 'renamed'});
-        const restarted = new ReadingListStore({dataDir});
+        const restarted = new ReadingListStore(config);
         assert.strictEqual((await restarted.verifyOpdsPassword(user.id, 'renamed', 'secret')).authorized, true);
         assert.strictEqual((await restarted.getUser(user.id)).passwordHash, migrated.passwordHash);
         assert.match((await restarted.getUser('admin')).passwordHash, /^scrypt:v1:/);
@@ -124,7 +126,7 @@ async function testBackupValidationBeforeMutation() {
         worker.checkMyState = () => {};
         worker.requireAdmin = async() => {};
         worker.addAdminEvent = () => {};
-        worker.profileSessions = new Map([['old', {userId: 'admin'}]]);
+        worker.profileSessions.create('old','admin');
         worker.readingListStore = new ReadingListStore(worker.config);
         await worker.readingListStore.load();
         await fs.writeJson(worker.config.configFile, {opds: {password: 'old'}});

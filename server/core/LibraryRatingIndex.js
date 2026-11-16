@@ -60,12 +60,12 @@ class LibraryRatingIndex {
                 if (remote ? !remote.counts.size : ratings.every(map => !map.size)) return this.retain({signature, entries});
                 // JembaDb applies offset/limit after loading and cloning every matching row.
                 // Enumerate lightweight IDs once, then restrict each read before materialization.
-                const [{rawResult:ids}] = await db.select({table:'book', rawResult:true, where:'return Array.from(@all());'});
+                const {byIds,orderedIds} = require('./CatalogueRows');
+                const ids = await orderedIds(db);
                 tasks.update(task, {phase:'Обработка книг', total:ids.length});
                 for (let offset = 0; offset < ids.length; offset += 5000) {
                     if (worker.db !== db || worker.libraryAssetGeneration !== generation) throw new Error('Библиотека обновилась. Повторите поиск');
-                    const rows = await db.select({table:'book', where:`@@id(${db.esc(ids.slice(offset, offset + 5000))})`,
-                        map:'row => ({id:row.id, _uid:row._uid, folder:row.folder, file:row.file, ext:row.ext, del:row.del, sourceLibDir:row.sourceLibDir})'});
+                    const rows = await byIds(db,ids.slice(offset,offset+5000),['id','_uid','folder','file','ext','del','sourceLibDir']);
                     for (const book of rows) {
                         const rating = remote ? (remote.counts.has(book._uid) ? {count:remote.counts.get(book._uid)} : null)
                             : sources.get(path.resolve(book.sourceLibDir || worker.config.libDir))?.get(entryKey(book.folder, `${book.file}.${book.ext}`));

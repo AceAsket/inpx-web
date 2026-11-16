@@ -33,20 +33,24 @@ class RustBookStoreBuild {
         const writer = await RustTableBuilder.open(binary,directory,'build-store');
         try {
             await writer.append([JSON.stringify({generation,previous}) + '\n']);
-            return new RustBookStoreBuild(writer,directory,generation);
+            return new RustBookStoreBuild(writer,directory,generation,previous);
         } catch (error) {
             await writer.close();
             throw error;
         }
     }
 
-    constructor(writer,directory,generation) {
-        Object.assign(this,{writer,directory,generation,count:0});
+    constructor(writer,directory,generation,previous) {
+        Object.assign(this,{writer,directory,generation,previous,count:0});
     }
 
     async add(rows) {
-        await this.writer.append(rows.map(encodeBook));
-        this.count += rows.length;
+        await this.addEncoded(rows.map(row=>encodeBook(row)));
+    }
+
+    async addEncoded(records) {
+        await this.writer.append(records);
+        this.count += records.length;
     }
 
     async remove(ids) {

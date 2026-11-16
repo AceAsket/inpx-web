@@ -1,5 +1,6 @@
 const BasePage = require('./BasePage');
 const XmlParser = require('../xml/XmlParser');
+const {requested} = require('./RustFeed');
 
 class OpensearchPage extends BasePage {
     constructor(config) {
@@ -10,10 +11,16 @@ class OpensearchPage extends BasePage {
     }
 
     async body(req) {
+        const scope = this.getScopeUserId(req);
+        if (req[requested])
+            return require('./RustAtom').opensearch(this.opdsRoot,scope,()=>this.legacyBody(scope));
+        return this.legacyBody(scope);
+    }
+
+    legacyBody(scopeUser) {
         const xml = new XmlParser();
         const xmlObject = {};        
-        const scopeUser = this.getScopeUserId(req);
-        const scopedTemplate = (type) => `${this.opdsRoot}/search?type=${type}&term={searchTerms}${scopeUser ? `&user=${encodeURIComponent(scopeUser)}` : ''}`;
+        const scopedTemplate = (type) => this.escape(`${this.opdsRoot}/search?type=${type}&term={searchTerms}${scopeUser ? `&user=${encodeURIComponent(scopeUser)}` : ''}`);
 /*
 <?xml version="1.0" encoding="utf-8"?>
 <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">

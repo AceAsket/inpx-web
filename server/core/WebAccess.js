@@ -1,12 +1,13 @@
-const { JembaDbThread } = require('jembadb');
+const {join} = require('node:path');
 const utils = require('../core/utils');
 const log = new (require('../core/AppLogger'))().log;//singleton
 const asyncExit = new (require('./AsyncExit'))();
+const {openWebAccessStore} = require('./WebAccessStore');
+const {WebAccessChallenges} = require('./WebAccessChallenges');
+const LegacyWebAccessSessions = require('./LegacyWebAccessSessions');
+const RustWebAccessSessions = require('./RustWebAccessSessions');
 
 const cleanPeriod = 1*60*1000;//1 минута
-const cleanUnusedTokenTimeout = 5*60*1000;//5 минут
-const maxPendingChallenges = 4096;
-const maxPendingChallengesPerClient = 16;
 
 class WebAccess {
     constructor(config) {
@@ -14,182 +15,89 @@ class WebAccess {
 
         this.freeAccess = (config.accessPassword === '');
         this.accessTimeout = config.accessTimeout*60*1000;
-        this.accessMap = new Map();
-        this.pendingChallenges = new Map();
-        this.challengeCounts = new Map();
+        this.pendingChallenges = new WebAccessChallenges();
+        const write = this.writeChanges.bind(this);
+        this.sessions = this.pendingChallenges.native
+            ? new RustWebAccessSessions(this.pendingChallenges.native,this.accessTimeout,write)
+            : new LegacyWebAccessSessions(this.pendingChallenges,this.accessTimeout,write);
 
-        asyncExit.add(this.closeDb.bind(this));
-
-        setTimeout(() => { this.periodicClean(); }, cleanPeriod);
+        this.onExit = this.closeDb.bind(this);
+        asyncExit.add(this.onExit);
     }
 
     async init() {
         const config = this.config;
-        const dbPath = `${config.dataDir}/web-access`;
-        const db = new JembaDbThread();//в отдельном потоке
-        await db.lock({
-            dbPath,
-            create: true,
-            softLock: true,
-
-            tableDefaults: {
-                cacheSize: config.dbCacheSize,
-            },
-        });
-
+        const fingerprint = utils.getBufHash(config.accessPassword,'sha256','hex');
+        const {store,sessions} = await openWebAccessStore(join(config.dataDir,'web-access'),fingerprint,config.dbCacheSize);
         try {
-            //открываем таблицы
-            await db.openAll();
-        } catch(e) {
-            if (
-                e.message.indexOf('corrupted') >= 0 
-                || e.message.indexOf('Unexpected token') >= 0
-                || e.message.indexOf('invalid stored block lengths') >= 0
-            ) {
-                log(LM_ERR, `DB ${dbPath} corrupted`);
-                log(`Open "${dbPath}" with auto repair`);
-                await db.openAll({autoRepair: true});
-            } else {
-                throw e;
-            }
+            this.sessions.restore(sessions);
+        } catch (error) {
+            await store.close();
+            throw error;
         }
-
-        await db.create({table: 'access', quietIfExists: true});
-        //проверим, нужно ли обнулить таблицу access
-        const pass = utils.getBufHash(this.config.accessPassword, 'sha256', 'hex');
-        await db.create({table: 'config', quietIfExists: true});
-        let rows = await db.select({table: 'config', where: `@@id('pass')`});
-
-        if (!rows.length || rows[0].value !== pass) {
-            //пароль сменился в конфиге, обнуляем токены
-            await db.truncate({table: 'access'});
-            await db.insert({table: 'config', replace: true, rows: [{id: 'pass', value: pass}]});
-        }
-
-        //загрузим токены сессий
-        rows = await db.select({table: 'access'});
-        for (const row of rows)
-            this.accessMap.set(row.id, row.value);
-
-        this.db = db;
+        this.store = store;
+        this.scheduleClean();
     }
 
-    async closeDb() {
-        if (this.db) {
-            await this.db.unlock();
-            this.db = null;
-        }
+    closeDb() {
+        this.closed = true;
+        clearTimeout(this.cleanTimer);
+        asyncExit.remove(this.onExit);
+        this.closing ||= (async()=>{
+            await this.writeQueue?.catch(()=>{});
+            try {if (this.store && !this.freeAccess) await this.cleanAccess();}
+            finally {
+                await this.store?.close();
+                this.store = null;
+            }
+        })();
+        return this.closing;
     }
 
-    async periodicClean() {
-        while (1) {//eslint-disable-line no-constant-condition
-            try {
-                const now = Date.now();
+    scheduleClean() {
+        if (this.closed || this.freeAccess) return;
+        this.cleanTimer = setTimeout(async()=>{
+            try {await this.cleanAccess();}
+            catch (error) {log(LM_ERR,`WebAccess.periodicClean error: ${error.message}`);}
+            finally {this.scheduleClean();}
+        },cleanPeriod);
+        this.cleanTimer.unref();
+    }
 
-                //почистим accessMap
-                if (!this.freeAccess) {
-                    this.pruneChallenges(now);
-                    for (const [accessToken, accessRec] of this.accessMap) {
-                        if (   !(accessRec.used > 0 || now - accessRec.time < cleanUnusedTokenTimeout)
-                            || !(this.accessTimeout === 0 || now - accessRec.time < this.accessTimeout)
-                            ) {
-                            await this.deleteAccess(accessToken);
-                        } else if (!accessRec.saved) {
-                            await this.saveAccess(accessToken);
-                        }
-                    }
-                }
+    async cleanAccess(now = Date.now()) {
+        await this.sessions.flush(now);
+    }
 
-            } catch(e) {
-                log(LM_ERR, `WebAccess.periodicClean error: ${e.message}`);
-            }
-            
-            await utils.sleep(cleanPeriod);
-        }
+    writeChanges(updates,removals,complete) {
+        if (!updates.length && !removals.length) return Promise.resolve();
+        const writing = (this.writeQueue || Promise.resolve()).catch(()=>{})
+            .then(()=>this.store.apply(updates,removals))
+            .then(()=>complete(true),error=>{
+                complete(false);
+                throw error;
+            });
+        this.writeQueue = writing;
+        return writing;
     }
 
     async hasAccess(accessToken) {
         if (this.freeAccess)
             return true;
+        if (this.closed) return false;
 
-        let accessRec = this.accessMap.get(accessToken);
-        if (!accessRec) {
-            const challenge = this.pendingChallenges.get(accessToken);
-            if (challenge) {
-                this.deleteChallenge(accessToken, challenge);
-                if (challenge.expiresAt > Date.now()) {
-                    accessRec = {time:Date.now(), used:0};
-                    this.accessMap.set(accessToken, accessRec);
-                }
-            }
-        }
-        if (accessRec) {
-            const now = Date.now();
-
-            if (this.accessTimeout === 0 || now - accessRec.time < this.accessTimeout) {
-                accessRec.used++;
-                accessRec.time = now;
-                accessRec.saved = false;
-                if (accessRec.used === 1)
-                    await this.saveAccess(accessToken);
-                return true;
-            }
-        }
-
-        return false;
+        const result = this.sessions.use(accessToken,Date.now());
+        if (typeof result === 'boolean') return result;
+        await result.saved;
+        return !this.closed && result.current();
     }
 
     async deleteAccess(accessToken) {
-        const challenge = this.pendingChallenges.get(accessToken);
-        if (challenge) this.deleteChallenge(accessToken, challenge);
-        await this.db.delete({table: 'access', where: `@@id(${this.db.esc(accessToken)})`});
-        this.accessMap.delete(accessToken);
-    }
-
-    async saveAccess(accessToken) {
-        const value = this.accessMap.get(accessToken);
-        if (!value || value.saved)
-            return;
-
-        value.saved = true;
-        await this.db.insert({
-            table: 'access',
-            replace: true,
-            rows: [{id: accessToken, value}]
-        });
-    }
-
-    deleteChallenge(token, challenge) {
-        this.pendingChallenges.delete(token);
-        const remaining = this.challengeCounts.get(challenge.client) - 1;
-        if (remaining) this.challengeCounts.set(challenge.client, remaining);
-        else this.challengeCounts.delete(challenge.client);
-    }
-
-    pruneChallenges(now) {
-        // Insertion order is also expiry order; every challenge has the same TTL.
-        for (const [token, challenge] of this.pendingChallenges) {
-            if (challenge.expiresAt > now) break;
-            this.deleteChallenge(token, challenge);
-        }
+        if (this.closed) return;
+        await this.sessions.revoke(accessToken);
     }
 
     newToken(client = '') {
-        const now = Date.now();
-        this.pruneChallenges(now);
-        const count = this.challengeCounts.get(client) || 0;
-        if (this.pendingChallenges.size >= maxPendingChallenges || count >= maxPendingChallengesPerClient) {
-            throw Object.assign(new Error('Too many pending access challenges. Try again later.'), {
-                code:'INPX_LOGIN_RATE_LIMIT', retryAfter:Math.ceil(cleanUnusedTokenTimeout / 1000),
-            });
-        }
-        const salt = utils.randomHexString(32);
-        const accessToken = utils.getBufHash(this.config.accessPassword + salt, 'sha256', 'hex');
-        const lifetime = this.accessTimeout > 0 ? Math.min(this.accessTimeout, cleanUnusedTokenTimeout) : cleanUnusedTokenTimeout;
-        this.pendingChallenges.set(accessToken, {client, expiresAt:now + lifetime});
-        this.challengeCounts.set(client, count + 1);
-
-        return salt;
+        return this.pendingChallenges.issue(String(client),this.config.accessPassword,Date.now(),this.accessTimeout);
     }
 }
 

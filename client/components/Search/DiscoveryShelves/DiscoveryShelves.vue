@@ -1,5 +1,5 @@
 <template>
-    <div class="discovery-wrap q-mx-md q-mt-md q-mb-lg" :class="{'discovery-wrap--modern': shelvesAppearance}">
+    <div class="discovery-wrap discovery-wrap--modern q-mx-md q-mt-md q-mb-lg">
         <div class="discovery-page-head">
             <div class="discovery-page-copy">
                 <div class="discovery-page-title">
@@ -24,21 +24,9 @@
         </div>
 
         <div class="discovery-toolbar">
-            <button v-if="shelvesAppearance" type="button" class="discovery-view-toggle" :aria-pressed="compactMode" @click.stop.prevent="$emit('toggle-compact')">
+            <button type="button" class="discovery-view-toggle" :aria-pressed="compactMode" @click.stop.prevent="$emit('toggle-compact')">
                 <q-icon :name="compactMode ? 'la la-check' : 'la la-compress-arrows-alt'" size="18px" /><span>Компактные карточки</span>
             </button>
-            <q-btn
-                v-else
-                unelevated
-                no-caps
-                class="discovery-toolbar-btn"
-                :class="{'discovery-toolbar-btn--active': compactMode}"
-                :icon="compactMode ? 'la la-compress-arrows-alt' : 'la la-expand-arrows-alt'"
-                @click.stop.prevent="$emit('toggle-compact')"
-            >
-                {{ compactMode ? 'Обычные карточки' : 'Компактные карточки' }}
-            </q-btn>
-
             <q-btn
                 v-if="personalMode"
                 unelevated
@@ -81,27 +69,12 @@
             />
 
             <div v-if="showExternalPagination && externalPagination" class="discovery-filter-group">
-                <template v-if="shelvesAppearance">
-                    <span class="discovery-limit-label">Книг на странице</span>
-                    <div class="discovery-limit-buttons" role="group" aria-label="Книг на странице">
-                        <button v-for="pageSize in [12, 24, 48]" :key="pageSize" type="button" :aria-pressed="externalPagination.perPage === pageSize" @click.stop.prevent="$emit('set-external-limit', pageSize)">
-                            {{ pageSize }}
-                        </button>
-                    </div>
-                </template>
-                <template v-else>
-                    <q-btn
-                        v-for="pageSize in [12, 24, 48]"
-                        :key="pageSize"
-                        unelevated
-                        no-caps
-                        class="discovery-toolbar-btn"
-                        :class="{'discovery-toolbar-btn--active': externalPagination.perPage === pageSize}"
-                        @click.stop.prevent="$emit('set-external-limit', pageSize)"
-                    >
+                <span class="discovery-limit-label">Книг на странице</span>
+                <div class="discovery-limit-buttons" role="group" aria-label="Книг на странице">
+                    <button v-for="pageSize in [12, 24, 48]" :key="pageSize" type="button" :aria-pressed="externalPagination.perPage === pageSize" @click.stop.prevent="$emit('set-external-limit', pageSize)">
                         {{ pageSize }}
-                    </q-btn>
-                </template>
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -207,11 +180,7 @@
             </div>
         </section>
 
-        <LoadingState v-if="loading && shelvesAppearance" label="Загружаем подборки" />
-        <div v-else-if="loading" class="discovery-loading-line">
-            <q-icon class="la la-spinner icon-rotate" size="20px" />
-            <span>Собираю витрину...</span>
-        </div>
+        <LoadingState v-if="loading" label="Загружаем подборки" />
 
         <div v-if="errorMessage" class="discovery-error">
             {{ errorMessage }}
@@ -224,10 +193,10 @@
         >
             <div class="discovery-head">
                 <div class="discovery-head-copy">
-                    <div v-if="!shelvesAppearance || (shelfSourceLabel(shelf) !== shelf.title && shelfSourceLabel(shelf) !== sectionTitle)" class="discovery-kicker">
+                    <div v-if="shelfSourceLabel(shelf) !== shelf.title && shelfSourceLabel(shelf) !== sectionTitle" class="discovery-kicker">
                         {{ shelfSourceLabel(shelf) }}
                     </div>
-                    <div v-if="!shelvesAppearance || shelf.title !== sectionTitle" class="discovery-title">
+                    <div v-if="shelf.title !== sectionTitle" class="discovery-title">
                         {{ shelf.title }}
                     </div>
                     <div v-if="shelf.subtitle" class="discovery-subtitle">
@@ -272,13 +241,9 @@
                     v-for="book in shelf.items"
                     :key="book._uid || `${shelf.id}-${book.id}`"
                     :book="book"
-                    mode="extended"
                     :genre-map="genreMap"
-                    :show-read-link="showReadLink"
                     :show-discovery-dismiss="!!book.discoveryDismissible"
-                    :discovery-dismiss-label="book.discoveryDismissLabel || 'Неинтересно'"
                     :show-discovery-restore="!!book.discoveryRestoreable"
-                    :discovery-restore-label="book.discoveryRestoreLabel || 'Вернуть'"
                     :compact-discovery="compactMode"
                     @book-event="bookEvent"
                 />
@@ -804,15 +769,6 @@ export default vueComponent(DiscoveryShelves);
     flex-wrap: wrap;
     gap: 8px;
     margin-top: 14px;
-}
-
-.discovery-loading-line {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 14px;
-    color: var(--app-muted);
-    font-weight: 700;
 }
 
 .discovery-shelf + .discovery-shelf {

@@ -22,6 +22,14 @@ RUN tar -xzf /tmp/kindling.tar.gz --strip-components=1 \
 FROM scratch AS kindling-tools
 COPY --from=kindling-build /out/ /
 
+FROM rust:1.99.1-alpine3.23 AS rust-build
+RUN apk add --no-cache build-base cmake nasm
+WORKDIR /src
+COPY rust/ ./rust/
+RUN rustup target add wasm32-unknown-unknown \
+    && cargo build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
+RUN cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
+
 FROM ${NODE_IMAGE} AS build-deps
 
 WORKDIR /app
@@ -35,6 +43,8 @@ RUN node -e "require('@yao-pkg/pkg-fetch').need({nodeRange:'node24',platform:'li
 FROM build-deps AS build
 
 COPY . .
+COPY --from=rust-build /src/rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm /app/rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm
+COPY --from=rust-build /src/rust/target/release/inpx-server /src/rust/target/release/inpx-catalog /src/rust/target/release/inpx-reader /app/rust/target/release/
 RUN npm run build:linux
 
 FROM ${NODE_IMAGE} AS webp-tools

@@ -1,16 +1,23 @@
-use std::collections::HashSet;
-use std::path::Path;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet, hash_map::Entry as MapEntry};
+use std::path::{Path, PathBuf};
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use redb::{Database, ReadOnlyDatabase, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::book_maps::BookIds;
-use crate::index::{check_generation, publish};
+use crate::index::{check_generation, publish_with_cache};
+use crate::jemba_identity::BookRows;
+use crate::lookup_order::{LabelOrder, load_order};
 
 const POSTINGS: TableDefinition<(u8, u32), &[u8]> = TableDefinition::new("lookup_v1");
+const LABEL_ORDER: TableDefinition<u8, &[u8]> = TableDefinition::new("lookup_label_order_v1");
+const LABEL_DELETIONS: TableDefinition<(u8, u32), u32> =
+    TableDefinition::new("lookup_deleted_count_v1");
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Eq, Hash, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Table {
     Author,
@@ -20,6 +27,16 @@ pub enum Table {
 }
 
 impl Table {
+    const ALL: [Self; 4] = [Self::Author, Self::Series, Self::Title, Self::Word];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Author => "author",
+            Self::Series => "series",
+            Self::Title => "title",
+            Self::Word => "word",
+        }
+    }
     fn key(self, id: u32) -> (u8, u32) {
         let table = match self {
             Self::Author => 0,
@@ -31,6 +48,26 @@ impl Table {
     }
 }
 
+pub fn seal_lookup(path: &Path, generation: &str) -> Result<usize> {
+    let parent = path.parent().ok_or("missing catalogue directory")?;
+    let database = Database::builder().open(path)?;
+    check_generation(&database.begin_read()?, generation)?;
+    let tx = database.begin_write()?;
+    let mut count = 0;
+    {
+        let mut orders = tx.open_table(LABEL_ORDER)?;
+        for table in Table::ALL {
+            if let Ok(order) = load_order(&parent.join(table.name())) {
+                let data = serde_json::to_vec(&order)?;
+                orders.insert(table.key(0).0, data.as_slice())?;
+                count += 1;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(count)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Posting {
@@ -38,7 +75,11 @@ pub struct Posting {
     id: u32,
     name: String,
     #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
     count: u32,
+    #[serde(default)]
+    deleted: Option<u32>,
     #[serde(default)]
     omit_from_book_map: bool,
     book_ids: Vec<u32>,
@@ -51,18 +92,43 @@ pub fn build_lookup(
     book_maps: bool,
     rows: impl IntoIterator<Item = Result<Posting>>,
 ) -> Result<u64> {
-    publish(path, generation, |transaction| {
+    build_lookup_with_cache(path, generation, expected, book_maps, false, rows)
+}
+
+pub fn build_lookup_with_cache(
+    path: &Path,
+    generation: &str,
+    expected: u64,
+    book_maps: bool,
+    low_memory: bool,
+    rows: impl IntoIterator<Item = Result<Posting>>,
+) -> Result<u64> {
+    publish_with_cache(path, generation, low_memory, |transaction| {
         let mut data = transaction.open_table(POSTINGS)?;
+        let mut deletions = transaction.open_table(LABEL_DELETIONS)?;
         let mut maps: Option<[BookIds; 3]> = book_maps.then(Default::default);
+        let mut labels: [Vec<(u32, String)>; 4] = Default::default();
         let mut count = 0;
         let mut bytes = Vec::new();
         for row in rows {
             let row = row?;
+            count += 1;
+            if row.value.is_some() && row.omit_from_book_map {
+                continue;
+            }
             bytes.clear();
             bytes.extend_from_slice(&row.count.to_le_bytes());
             bytes.extend_from_slice(&u32::try_from(row.name.len())?.to_le_bytes());
             bytes.extend_from_slice(row.name.as_bytes());
             let key = row.table.key(row.id);
+            if let Some(value) = row.value
+                && !row.omit_from_book_map
+            {
+                labels[key.0 as usize].push((row.id, value));
+            }
+            if let Some(deleted) = row.deleted {
+                deletions.insert(key, deleted)?;
+            }
             if let Some(maps) = &mut maps
                 && !row.omit_from_book_map
                 && let Some(map) = maps.get_mut(key.0 as usize)
@@ -75,12 +141,19 @@ pub fn build_lookup(
             if data.insert(key, bytes.as_slice())?.is_some() {
                 return Err(format!("duplicate lookup row {}", row.id).into());
             }
-            count += 1;
         }
         if count != expected {
             return Err(
                 format!("incomplete lookup: expected {expected} rows, read {count}").into(),
             );
+        }
+        let mut orders = transaction.open_table(LABEL_ORDER)?;
+        let ordered = expected == 0 || labels.iter().any(|labels| !labels.is_empty());
+        for (table, labels) in labels.into_iter().enumerate() {
+            if ordered {
+                let data = serde_json::to_vec(&LabelOrder::sorted(labels))?;
+                orders.insert(table as u8, data.as_slice())?;
+            }
         }
         if let Some(maps) = maps {
             for (map, name) in maps
@@ -141,9 +214,37 @@ pub struct LookupRequest {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum LookupQuery {
-    Books { table: Table, groups: Vec<Vec<u32>> },
-    Sample { table: Table, ids: Vec<u32> },
-    Labels { table: Table, ids: Vec<u32> },
+    Probe,
+    Books {
+        table: Table,
+        groups: Vec<Vec<u32>>,
+    },
+    Sample {
+        table: Table,
+        ids: Vec<u32>,
+    },
+    Labels {
+        table: Table,
+        ids: Vec<u32>,
+    },
+    Order {
+        table: Table,
+    },
+    Postings {
+        table: Table,
+        ids: Vec<u32>,
+    },
+    #[serde(rename = "nameRows")]
+    NameRows {
+        table: Table,
+        ids: Vec<u32>,
+    },
+    #[serde(rename = "opdsGroups")]
+    OpdsGroups {
+        table: Table,
+        ids: String,
+        depth: u32,
+    },
 }
 
 #[derive(Serialize)]
@@ -159,13 +260,53 @@ pub struct Sample {
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum LookupResult {
+    Probe(bool),
     Books(Vec<u32>),
     Samples(Vec<Sample>),
     Labels(Vec<String>),
+    Order(Option<LabelOrder>),
+    Postings(Vec<PostingRow>),
+    NameRows(Vec<NameRow>),
+    OpdsGroups(Vec<OpdsGroup>),
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpdsGroup {
+    id: u32,
+    name: String,
+    value: Vec<u16>,
+    count: u64,
+    book_count: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostingRow {
+    pub(crate) id: u32,
+    pub(crate) name: String,
+    pub(crate) book_ids: Vec<u32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NameRow {
+    id: u32,
+    name: String,
+    book_count: u32,
+    book_del_count: u32,
+}
+
+#[derive(Deserialize)]
+struct OldNameCount {
+    #[serde(rename = "bookDelCount")]
+    deleted: u32,
 }
 
 pub struct LookupIndex {
     db: ReadOnlyDatabase,
+    directory: PathBuf,
+    old_counts: RefCell<HashMap<Table, HashMap<u32, u32>>>,
 }
 
 impl LookupIndex {
@@ -174,7 +315,45 @@ impl LookupIndex {
             db: Database::builder()
                 .set_cache_size(32 * 1024 * 1024)
                 .open_read_only(path)?,
+            directory: path.parent().unwrap_or_else(|| Path::new(".")).into(),
+            old_counts: RefCell::new(HashMap::new()),
         })
+    }
+
+    pub(crate) fn postings(
+        &self,
+        generation: String,
+        table: Table,
+        ids: Vec<u32>,
+    ) -> Result<Vec<PostingRow>> {
+        match self.query(LookupRequest {
+            generation,
+            query: LookupQuery::Postings { table, ids },
+        })? {
+            LookupResult::Postings(rows) => Ok(rows),
+            _ => unreachable!("posting query yields posting rows"),
+        }
+    }
+
+    fn old_deleted(&self, table: Table, id: u32) -> Result<u32> {
+        let mut counts = self.old_counts.borrow_mut();
+        let counts = match counts.entry(table) {
+            MapEntry::Occupied(entry) => entry.into_mut(),
+            MapEntry::Vacant(entry) => {
+                let directory = self.directory.join(table.name());
+                let rows = BookRows::open(&directory)?;
+                let mut counts = HashMap::with_capacity(rows.count);
+                rows.visit::<OldNameCount>(|id, row| {
+                    counts.insert(id, row.deleted);
+                    Ok(())
+                })?;
+                entry.insert(counts)
+            }
+        };
+        counts
+            .get(&id)
+            .copied()
+            .ok_or_else(|| "missing name row count".into())
     }
 
     pub fn query(&self, request: LookupRequest) -> Result<LookupResult> {
@@ -182,6 +361,7 @@ impl LookupIndex {
         check_generation(&transaction, &request.generation)?;
         let data = transaction.open_table(POSTINGS)?;
         match request.query {
+            LookupQuery::Probe => Ok(LookupResult::Probe(true)),
             LookupQuery::Books { table, groups } => {
                 Ok(LookupResult::Books(book_ids(&data, table, groups)?))
             }
@@ -214,8 +394,128 @@ impl LookupIndex {
                 }
                 Ok(LookupResult::Labels(labels))
             }
+            LookupQuery::Order { table } => {
+                let persisted = match transaction.open_table(LABEL_ORDER) {
+                    Ok(data) => data
+                        .get(table.key(0).0)?
+                        .map(|row| serde_json::from_slice(row.value()))
+                        .transpose()?,
+                    Err(redb::TableError::TableDoesNotExist(_)) => None,
+                    Err(error) => return Err(error.into()),
+                };
+                Ok(LookupResult::Order(persisted.or_else(|| {
+                    load_order(&self.directory.join(table.name())).ok()
+                })))
+            }
+            LookupQuery::Postings { table, ids } => {
+                if ids.len() > 1024 {
+                    return Err("lookup postings exceed row limit".into());
+                }
+                let mut rows = Vec::with_capacity(ids.len());
+                for id in ids {
+                    let Some(raw) = data.get(table.key(id))? else {
+                        continue;
+                    };
+                    let row = Entry::decode(raw.value())?;
+                    rows.push(PostingRow {
+                        id,
+                        name: row.name.into(),
+                        book_ids: row.books.iter().copied().map(u32::from_le_bytes).collect(),
+                    });
+                }
+                Ok(LookupResult::Postings(rows))
+            }
+            LookupQuery::NameRows { table, ids } => {
+                if ids.len() > 1024 || table == Table::Word {
+                    return Err("invalid catalogue name rows request".into());
+                }
+                let deletions = match transaction.open_table(LABEL_DELETIONS) {
+                    Ok(table) => Some(table),
+                    Err(redb::TableError::TableDoesNotExist(_)) => None,
+                    Err(error) => return Err(error.into()),
+                };
+                let mut rows = Vec::with_capacity(ids.len());
+                for id in ids {
+                    let key = table.key(id);
+                    let Some(record) = data.get(key)? else {
+                        continue;
+                    };
+                    let row = Entry::decode(record.value())?;
+                    let stored = deletions
+                        .as_ref()
+                        .map(|table| table.get(key))
+                        .transpose()?
+                        .flatten();
+                    let book_del_count = match stored {
+                        Some(value) => value.value(),
+                        None => self.old_deleted(table, id)?,
+                    };
+                    rows.push(NameRow {
+                        id,
+                        name: row.name.into(),
+                        book_count: row.count,
+                        book_del_count,
+                    });
+                }
+                Ok(LookupResult::NameRows(rows))
+            }
+            LookupQuery::OpdsGroups { table, ids, depth } => Ok(LookupResult::OpdsGroups(
+                opds_groups(&data, table, &ids, depth as usize)?,
+            )),
         }
     }
+}
+
+fn opds_groups(
+    data: &impl ReadableTable<(u8, u32), &'static [u8]>,
+    table: Table,
+    encoded: &str,
+    depth: usize,
+) -> Result<Vec<OpdsGroup>> {
+    let bytes = STANDARD.decode(encoded)?;
+    let (keys, tail) = bytes.as_chunks::<4>();
+    if table == Table::Word || !tail.is_empty() || keys.len() > 262_144 {
+        return Err("invalid OPDS group request".into());
+    }
+    let mut groups = HashMap::<Vec<u16>, OpdsGroup>::new();
+    let mut prefix = Vec::new();
+    for &key in keys {
+        let id = u32::from_le_bytes(key);
+        let Some(row) = data.get(table.key(id))? else {
+            continue;
+        };
+        let row = Entry::decode(row.value())?;
+        prefix.clear();
+        prefix.extend(
+            crate::catalog_text::lower(row.name)
+                .encode_utf16()
+                .take(depth),
+        );
+        if let Some(group) = groups.get_mut(prefix.as_slice()) {
+            group.count += 1;
+            group.book_count += u64::from(row.count);
+        } else {
+            groups.insert(
+                prefix.clone(),
+                OpdsGroup {
+                    id,
+                    name: row.name.into(),
+                    value: Vec::new(),
+                    count: 1,
+                    book_count: u64::from(row.count),
+                },
+            );
+        }
+    }
+    let mut rows: Vec<_> = groups
+        .into_iter()
+        .map(|(value, mut group)| {
+            group.value = value;
+            group
+        })
+        .collect();
+    rows.sort_unstable_by_key(|group| group.id);
+    Ok(rows)
 }
 
 // Preserve the first group's insertion order while intersecting the union for

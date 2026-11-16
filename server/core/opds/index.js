@@ -13,6 +13,8 @@ const ReadingProgressPage = require('./ReadingProgressPage');
 const OpensearchPage = require('./OpensearchPage');
 const SearchPage = require('./SearchPage');
 const SearchHelpPage = require('./SearchHelpPage');
+const rustFeed = require('./RustFeed');
+const {opdsModelRequested} = require('../RustHttpServer');
 
 const log = new (require('../AppLogger'))().log;//singleton
 
@@ -117,10 +119,12 @@ function mountCatalog(app, config, security, catalogRoot, version) {
                     req.query.term = String(req.query.query || '');
                     if (!req.query.type) req.query.type = 'title';
                 }
+                if (opdsModelRequested(req)) req[rustFeed.requested] = true;
 
                 const result = await page.body(req, res);
 
-                if (result !== false)
+                if (result?.[rustFeed.prepared]) rustFeed.send(result,res);
+                else if (result !== false)
                     res.send(result);
             } else {
                 if (version === 2) res.status(404).json({error:'Каталог не найден'});

@@ -55,9 +55,15 @@ class DatabaseThread extends JembaDbThread {
     }
 
     async _action(action, query) {
+        if (this.nativeCatalogue && action==='tableExists')
+            return ['book','config','author','series','title','word','genre','lang','del','date','librate','ext','source'].includes(query.table);
         if (this.legacyBookOptions && action === 'select' && (query?.table === 'book'
             || query?.joinById && [query.joinById].flat().some(join => join?.table === 'book')))
             await this.openLegacyBooks();
+        if (this.legacyNameTables && (action === 'select' || action === 'getDbInfo')) {
+            await this.openLegacyNameTable(query?.table);
+            if (query?.joinById) for (const join of [query.joinById].flat()) await this.openLegacyNameTable(join?.table);
+        }
         const worker = this.worker;
         if (!worker || !this.available) throw this.unavailableError();
         return new Promise((resolve,reject) => {
@@ -82,25 +88,64 @@ class DatabaseThread extends JembaDbThread {
         return super.lock(query);
     }
 
+    async openNative(directory,config,cacheSize) {
+        this.nativeCatalogue = config;
+        this.releaseCatalogue = await require('./CatalogueLock').lock(directory);
+        await this.configureBookStore(directory,config.rustBookStoreGeneration,cacheSize);
+        this.available = true;
+    }
+
+
     async unlock() {
         try {
+            await this.serviceCache?.close();
+            await this.rustShelfIndex?.close();
+            await this.rustWideOrder?.close();
+            await this.rustWideStore?.close();
             await this.bookStore?.close();
             if (this.worker) await this._action('unlock');
         }
         finally {
-            this.bookStore = this.legacyBookOptions = this.legacyBookOpen = undefined;
+            const release = this.releaseCatalogue;
+            this.releaseCatalogue = undefined;
+            this.nativeCatalogue = this.serviceCache = undefined;
+            this.rustShelfIndex = this.rustWideOrder = this.rustWideStore = this.bookStore = undefined;
+            this.bookStoreAdvanced = this.bookStoreScan = this.bookStoreFacets = this.bookStoreWide = undefined;
+            this.legacyBookOptions = this.legacyBookOpen = undefined;
+            this.legacyNameTables = this.legacyNameOpen = undefined;
             this._terminate();
-            await this.termination;
+            try {await release?.();}
+            finally {await this.termination;}
         }
+    }
+
+    deferNameTables(tables,cacheSize) {
+        this.legacyNameTables = new Map(tables.map(table=>[table,{table,cacheSize}]));
+        this.legacyNameOpen = new Map();
+    }
+
+    async openLegacyNameTable(table) {
+        const options=this.legacyNameTables.get(table);
+        if (!options) return;
+        if (!this.legacyNameOpen.has(table)) {
+            const pending=this.open(options).catch(error=>{this.legacyNameOpen.delete(table);throw error;});
+            this.legacyNameOpen.set(table,pending);
+        }
+        await this.legacyNameOpen.get(table);
     }
 
     async configureBookStore(directory, generation, cacheSize) {
         this.legacyBookOptions = {table:'book',cacheSize};
         if (generation) {
-            const store = new RustLookupIndex(directory,null,{directory,generation});
-            const available = await store.run(process => process.query({op:'probe'}),() => false);
-            if (available === true) {
+            const store = new RustLookupIndex(directory,null,{file:directory,generation,command:'store'});
+            const available = await store.run(process => process.query({op:'probe',capabilities:true}),() => false);
+            if (available === true || available?.advancedSearch === true) {
                 this.bookStore = store;
+                this.bookStoreAdvanced = available?.advancedSearch === true;
+                this.bookStoreScan = available?.catalogScan === true;
+                this.bookStoreFacets = available?.facets === true;
+                this.bookStoreWide = available?.wideSearch === true;
+                if (this.bookStoreWide) this.rustWideStore = new RustLookupIndex(directory,null,{file:directory,generation,command:'store'});
                 return;
             }
             await store.close();
@@ -109,6 +154,7 @@ class DatabaseThread extends JembaDbThread {
     }
 
     async openLegacyBooks() {
+        if (this.nativeCatalogue) throw new Error('Rust catalogue book store is unavailable');
         if (!this.legacyBookOptions) return;
         if (!this.legacyBookOpen) {
             this.legacyBookOpen = this.open(this.legacyBookOptions).catch(error => {
@@ -120,7 +166,8 @@ class DatabaseThread extends JembaDbThread {
     }
 
     async booksByIds(ids, fields) {
-        const keys = [...new Set(ids)];
+        const keys = [...new Set(this.nativeCatalogue
+            ? Array.from(ids,Number).filter(id=>Number.isInteger(id) && id>0 && id<=0xffffffff) : ids)];
         const fallback = () => this.select({table:'book',where:`@@id(${this.esc(keys)})`,
             ...(fields ? {map:`row => Object.fromEntries(${this.esc(fields)}.filter(key => row[key] !== undefined).map(key => [key,row[key]]))`} : {})});
         if (!keys.length) return [];
@@ -129,11 +176,20 @@ class DatabaseThread extends JembaDbThread {
     }
 
     async booksByUids(uids) {
-        const keys = [...new Set(uids)];
+        const keys = [...new Set(this.nativeCatalogue
+            ? uids.filter(uid=>typeof uid==='string' && uid.length>0 && uid.length<=100) : uids)];
         const fallback = () => this.select({table:'book',where:`@@hash('_uid',${this.esc(keys)})`});
         if (!keys.length) return [];
         if (!this.bookStore || keys.some(uid => typeof uid !== 'string' || uid.length > 100)) return fallback();
         return this.bookStore.run(process => readBookBatches(process,{op:'uids'},'uids',keys,512),fallback);
+    }
+
+    async catalogueBookIds() {
+        if (this.bookStoreScan) {
+            const ids = await this.bookStore.run(process=>process.query({op:'bookOrder'}),()=>null);
+            if (Array.isArray(ids)) return ids;
+        }
+        return (await this.select({table:'book',rawResult:true,where:'return Array.from(@all());'}))[0].rawResult;
     }
 
     _runWoker() {
@@ -143,6 +199,6 @@ class DatabaseThread extends JembaDbThread {
         worker.on('error', error => this.failed(worker,error));
         worker.on('exit', code => this.failed(worker,null,code));
     }
-    cacheStats() {return this._action('cacheStats');}
+    cacheStats() {return this.nativeCatalogue ? {engine:'rust',available:this.available} : this._action('cacheStats');}
 }
 module.exports = DatabaseThread;

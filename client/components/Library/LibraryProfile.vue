@@ -9,8 +9,8 @@
                 <q-btn flat no-caps :label="config.profileAuthorized ? 'Сменить' : 'Войти'" @click="config.profileAuthorized ? library.openProfiles() : library.login()" />
             </section>
             <section class="profile-section" aria-label="Оформление">
-                <AppearanceControl />
                 <q-toggle :model-value="!!settings.darkTheme" label="Ночная тема" color="primary" @update:model-value="store.commit('setSettings', {darkTheme: $event})" />
+                <AppConnectionSettings />
             </section>
             <section class="profile-section profile-links" aria-label="Настройки профиля и библиотеки">
                 <button type="button" @click="library.openProfiles()"><q-icon name="la la-users-cog" size="25px" /><span>Профили и личные настройки<small>Вход, синхронизация и получатели книг</small></span><q-icon name="la la-angle-right" /></button>
@@ -28,8 +28,8 @@
 <script setup>
 import {computed, defineAsyncComponent} from 'vue';
 import {useStore} from 'vuex';
-import AppearanceControl from './AppearanceControl.vue';
 import TelegramAccountPanel from './TelegramAccountPanel.vue';
+import AppConnectionSettings from './AppConnectionSettings.vue';
 import ProfileLogout from '../share/ProfileLogout.vue';
 import {useLibraryPage} from './useLibraryPage';
 

@@ -8,7 +8,7 @@
             </div>
         </template>
 
-        <div class="dialog-box profiles-dialog" :class="{'profiles-dialog--new': shelvesAppearance}">
+        <div class="dialog-box profiles-dialog profiles-dialog--new">
             <template v-if="canManageProfiles && showCreateProfileForm">
                 <p class="profile-form-intro">У каждого профиля свои книги, прогресс и настройки. Логин и пароль нужны для входа с другого устройства.</p>
                 <form class="profile-grid create-grid" @submit.prevent="createProfile">
@@ -556,7 +556,6 @@ class UserProfilesDialog {
         return this.otpAdminAction === 'reset' ? 'Сбросить OTP' : this.otpPolicyLabel(this.otpAdminTarget);
     }
 
-    get shelvesAppearance() {return this.$store.state.settings.catalogAppearance === 'shelves';}
 
     get displayProfiles() {
         return [...this.profiles].sort((a, b) => Number(b.id === this.currentUserId) - Number(a.id === this.currentUserId));

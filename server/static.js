@@ -1,7 +1,5 @@
 const fs = require('fs-extra');
 const path = require('path');
-const yazl = require('yazl');
-const {pipeline} = require('stream/promises');
 
 const express = require('express');
 const utils = require('./core/utils');
@@ -11,6 +9,7 @@ const bookConverter = require('./core/BookConverter');
 const bookNaming = require('./core/BookNaming');
 const bookDownloadHeaders = require('./core/BookDownloadHeaders');
 const {countDownload} = require('./core/ServerActivity');
+const {deliverFile} = require('./core/RustHttpServer');
 const crypto = require('crypto');
 const webAppDir = require('../build/appdir');
 const externalTools = require('./core/ExternalTools');
@@ -63,15 +62,6 @@ function getBookDownloadMimeType(fileName) {
     default:
         return null;
     }
-}
-
-function generateZip(zipFile, dataFile, dataFileInZip) {
-    const zip = new yazl.ZipFile();
-    const complete = pipeline(zip.outputStream, fs.createWriteStream(zipFile));
-    zip.on('error', error => zip.outputStream.destroy(error));
-    zip.addFile(dataFile, dataFileInZip);
-    zip.end();
-    return complete;
 }
 
 function normalizeLibraryDir(dir = '') {
@@ -235,7 +225,7 @@ async function sendCachedCover(res, cacheDir, cacheKey, checkState = () => {}) {
         checkState();
         res.set('Cache-Control', 'private, no-cache');
         res.type(item.type);
-        res.sendFile(cacheFile);
+        if (!deliverFile(res.req,res,'cover',cacheFile)) res.sendFile(cacheFile);
         return true;
     }
 
@@ -471,12 +461,12 @@ module.exports = (app, config, webWorker = null, security = null) => {
         const guard = new (require('./core/ProfileAccess'))(config, webWorker, security).httpGuard();
         app.use([config.bookPathStatic, `${webAppRoutePrefix}/cover`, `${webAppRoutePrefix}/reader-lab-source`, `${webAppRoutePrefix}/admin-backups`], guard);
     }
-    const trackDownload = (req, res, count = 1) => {
+    const recordDownload = (req, count = 1) => {
         const activity = webWorker?.serverActivity;
         if (!activity || req.method !== 'GET') return;
         const userId = req.profileAccessIdentity?.user?.id
             || webWorker.getProfileSessionUser(security?.getSession(req)?.profileAccessToken);
-        countDownload(res, () => activity.record(userId, 'downloads', count));
+        return () => activity.record(userId, 'downloads', count);
     };
     app.get(`${webAppRoutePrefix}/app-reset`, (req, res) => {
         res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -693,7 +683,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
         }
     });
 
-    require('./core/BatchDownload').register(app, config, trackDownload);
+    require('./core/BatchDownload').register(app, config, recordDownload);
     app.get([`${config.bookPathStatic}/by-uid`, `${config.bookPathStatic}/by-uid/:downloadName`], async(req, res) => {
         if (!webWorker) {
             res.sendStatus(404);
@@ -749,24 +739,19 @@ module.exports = (app, config, webWorker = null, security = null) => {
             // Cache names are hex hashes; anything else (an encoded "..") must never reach fs.remove below.
             if (/^[0-9a-f]+$/i.test(fileName)) {//восстановление файлов {hash}.raw, {hash}.zip
                 let bookFile = `${config.bookDir}/${fileName}`;
-                const bookFileDesc = `${bookFile}.d.json`;
-
-                //восстановим из json-файла описания
-                if (await fs.pathExists(bookFile) && await fs.pathExists(bookFileDesc)) {
-                    await utils.touchFile(bookFile);
-                    await utils.touchFile(bookFileDesc);
-
-                    const desc = await fs.readJson(bookFileDesc);
+                const needsRaw = !req.acceptsEncodings('gzip') || !!fileType;
+                const desc = await require('./core/BookFileCache').inspect(config.bookDir,fileName,{touch:true,probeRaw:needsRaw});
+                if (desc) {
                     let downFileName = desc.downFileName;
                     const book = (config.bookFilenameTemplate || config.bookTitleTemplate)
                         ? await bookNaming.cachedBook(webWorker, desc, fileName, String(req.query.uid || '').trim()) : {};
                     downFileName = bookNaming.filename(book, downFileName, book.ext || path.extname(downFileName).slice(1), config);
                     let gzipped = true;
 
-                    if (!req.acceptsEncodings('gzip') || fileType) {
+                    if (needsRaw) {
                         const rawFile = `${bookFile}.raw`;
                         //не принимает gzip, тогда распакуем
-                        await utils.ensureGunzipFile(bookFile, rawFile, desc.size);
+                        if (!desc.rawReady) await utils.ensureGunzipFile(bookFile, rawFile, desc.size);
 
                         gzipped = false;
 
@@ -777,7 +762,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
                             // Older ZIP caches may contain an incomplete download.
                             const nameHash = crypto.createHash('sha256').update(downFileName).digest('hex').slice(0, 16);
                             bookFile += `.download-v3-${nameHash}.zip`;
-                            await utils.prepareCachedFile(bookFile, outputFile => generateZip(outputFile, rawFile, downFileName));
+                            await utils.ensureBookZipFile(rawFile,bookFile,downFileName);
                             downFileName += '.zip';
                         } else if (bookConverter.canConvertTo(fileType)) {
                             const prepared = await bookConverter.prepareConvertedFile({
@@ -812,13 +797,13 @@ module.exports = (app, config, webWorker = null, security = null) => {
                             await webWorker.koSync.linkDownload(syncFile, desc.bookUid, path.extname(downFileName).slice(1).toLowerCase());
                         } catch (error) { log(LM_WARN, `KOSync: не удалось связать скачанный файл: ${error.message}`); }
                     }
-                    trackDownload(req, res);
-                    res.sendFile(bookFile);
+                    const record = recordDownload(req);
+                    if (!deliverFile(req,res,'book',bookFile,record && (complete=>{if (complete) record();}))) {
+                        if (record) countDownload(res,record);
+                        res.sendFile(bookFile);
+                    }
                     return;
-                } else {
-                    await fs.remove(bookFile);
-                    await fs.remove(bookFileDesc);
-                }
+                } else return res.sendStatus(404);
             }
         } catch(e) {
             log(LM_ERR, e.message);
@@ -834,6 +819,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
     //иначе просто отдаем запрошенный файл из /public-files
     app.use(config.bookPathStatic, express.static(config.bookDir));
 
+    app.use(require('./core/RustHttpServer').assetProbe);
     if (config.rootPathStatic) {
         //подмена rootPath в файлах статики WebApp при необходимости
         app.use(config.rootPathStatic, async(req, res, next) => {

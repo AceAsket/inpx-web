@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const ZipReader = require('./ZipReader');
 const {writeFileAtomic} = require('./FilePersistence');
+const appDirectory = require('../../build/appdir');
 
 const marker = '.inpx-web-managed.json';
 function safeName(value) {
@@ -23,7 +24,9 @@ async function destination(root, name) {
 }
 
 async function install(config, bundle) {
-    const version = [config.version, config.rootPathStatic || '', crypto.createHash('sha256').update(bundle.data).digest('hex')].join(':');
+    const prefix = config.rootPathStatic || '';
+    const digest = crypto.createHash('sha256').update(bundle.data).digest('hex');
+    const version = [config.version, prefix, digest].join(':') + (prefix ? ':prefixed-v1' : '');
     const markerFile = path.join(config.publicDir, marker);
     let previous;
     try {previous = await fs.readJson(markerFile);} catch (error) {if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;}
@@ -43,12 +46,24 @@ async function install(config, bundle) {
         await reader.extractAllToDir(extracted);
         await fs.ensureDir(config.publicDir);
         // Validate every target before replacing any managed file.
-        for (const name of [...files, marker, 'version.txt']) await destination(config.publicDir, name);
+        for (const name of [...files, marker, 'version.txt']) {
+            await destination(config.publicDir, name);
+            if (prefix && ['.html', '.css', '.js'].includes(path.extname(name)))
+                await destination(config.publicDir, `${name}.replaced`);
+        }
         for (const name of files) {
             const target = await destination(config.publicDir, name);
             await fs.ensureDir(path.dirname(target));
-            await writeFileAtomic(target, await fs.readFile(path.join(extracted, name)));
-            await fs.remove(target + '.replaced');
+            const flag = target + '.replaced';
+            const bytes = await fs.readFile(path.join(extracted, name));
+            if (prefix && ['.html', '.css', '.js'].includes(path.extname(name))) {
+                const content = bytes.toString('utf8').replaceAll(`/${appDirectory}`, () => `${prefix}/${appDirectory}`);
+                await writeFileAtomic(target, content);
+                await writeFileAtomic(flag, '');
+            } else {
+                await writeFileAtomic(target, bytes);
+                await fs.remove(flag);
+            }
         }
         for (const name of Array.isArray(previous?.files) ? previous.files : []) {
             if (!safeName(name) || files.includes(name)) continue;

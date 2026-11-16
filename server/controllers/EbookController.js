@@ -362,7 +362,7 @@ class EbookController {
                     }else if(path==='/logout') {
                         if(!this.security.hasValidCsrf(req,scalar(req.body,'csrf',128)))throw bad('Обновите страницу и повторите действие.',403);
                         const token=req.securitySession.profileAccessToken;
-                        try{if(token)await this.worker.closeProfileSession(token);}finally{delete req.securitySession.profileAccessToken;delete req.securitySession.ebookAccessToken;}
+                        try{if(token)await this.worker.closeProfileSession(token);}finally{req.securitySession.profileAccessToken=undefined;req.securitySession.ebookAccessToken=undefined;}
                     }
                     else if(path==='/access')await this.authBudget.run(this.security.clientIp(req),'access:'+req.securitySession.id+':'+require('crypto').randomUUID(),()=>this.authenticate(req,'access'));
                     else if(!await this.libraryAllowed(req))return res.status(401).type('html').send(this.form(req,'access'));

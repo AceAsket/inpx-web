@@ -6,8 +6,10 @@ const net = require('net');
 const {spawn, execFile} = require('child_process');
 const {promisify} = require('util');
 const {setTimeout: sleep} = require('timers/promises');
+const {createHash} = require('node:crypto');
 const WebSocket = require('ws');
 const yazl = require('yazl');
+const rust = require('../server/core/RustPrograms');
 
 async function isolateNativeJxl(binary, directory) {
     const bundledTools = path.join(path.dirname(binary), 'bin');
@@ -17,6 +19,16 @@ async function isolateNativeJxl(binary, directory) {
     await fs.copyFile(binary, executable);
     if (process.platform !== 'win32') await fs.chmod(executable, 0o755);
     await fs.copyFile(path.join(bundledTools, 'inpx-jxl.node'), path.join(binDir, 'inpx-jxl.node'));
+    const authState = require('../server/core/RustAuthState').fileName;
+    await fs.copyFile(path.join(bundledTools,authState),path.join(binDir,authState));
+    for (const program of ['server','catalog','reader']) {
+        const name = rust.fileName(program);
+        const input = path.join(bundledTools,name);
+        if (!await fs.pathExists(input)) continue;
+        const output = path.join(binDir,name);
+        await fs.copyFile(input,output);
+        if (process.platform!=='win32') await fs.chmod(output,0o755);
+    }
     if (process.env.INPX_SMOKE_EPUB === 'true') {
         const suffix = process.platform === 'win32' ? '.exe' : '';
         for (const tool of [`fbc${suffix}`, `kindling${suffix}`]) {
@@ -27,16 +39,24 @@ async function isolateNativeJxl(binary, directory) {
     return executable;
 }
 
-async function checkNativeJxlCover(url, uid) {
-    const response = await fetch(`${url}/cover/by-uid?${new URLSearchParams({uid})}`, {signal: AbortSignal.timeout(30000)});
+async function checkCoverDownload(url, uid, nativeJxlCover) {
+    const location = `${url}/cover/by-uid?${new URLSearchParams({uid})}`;
+    const response = await fetch(location, {signal: AbortSignal.timeout(30000)});
     if (response.status !== 200)
-        throw new Error(`Packaged native JXL cover returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
+        throw new Error(`Packaged cover returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
     assert.match(response.headers.get('content-type'), /^image\/png$/);
     const png = Buffer.from(await response.arrayBuffer());
     assert.deepStrictEqual(png.subarray(0, 16), Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'));
-    assert.equal(png.readUInt32BE(16), 192);
-    assert.equal(png.readUInt32BE(20), 192);
-    console.log('ok packaged native JXL cover over HTTP without djxl');
+    const size = nativeJxlCover ? 192 : 1;
+    assert.equal(png.readUInt32BE(16), size);
+    assert.equal(png.readUInt32BE(20), size);
+    if (process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true') {
+        const cached = await fetch(location,{signal:AbortSignal.timeout(30000)});
+        assert.equal(cached.status,200);
+        assert.equal(cached.headers.get('x-powered-by'),null,'Rust serves the cached cover');
+        assert.deepEqual(Buffer.from(await cached.arrayBuffer()),png);
+    }
+    console.log(nativeJxlCover ? 'ok packaged native JXL cover over HTTP without djxl' : 'ok packaged embedded PNG cover over HTTP');
 }
 
 async function createFixture(dir, {nativeJxlCover = false} = {}) {
@@ -56,7 +76,7 @@ async function createFixture(dir, {nativeJxlCover = false} = {}) {
     const books = new yazl.ZipFile();
     const bookDone = require('stream/promises').pipeline(books.outputStream, fs.createWriteStream(path.join(dir, 'smoke.zip')));
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZcQAAAAASUVORK5CYII=';
-    books.addBuffer(Buffer.from('<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>Packaged smoke book</book-title><lang>en</lang></title-info></description><body><section><p>Smoke text</p><image l:href="#illustration"/></section></body><binary id="illustration" content-type="image/png">'+png+'</binary></FictionBook>'), '1.fb2');
+    books.addBuffer(Buffer.from('<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>Packaged smoke book</book-title><coverpage><image l:href="#cover"/></coverpage><lang>en</lang></title-info></description><body><section><p>Smoke text</p><image l:href="#illustration"/></section></body><binary id="illustration" content-type="image/png">'+png+'</binary><binary id="cover" content-type="image/png">'+png+'</binary></FictionBook>'), '1.fb2');
     if (process.env.INPX_SMOKE_EPUB === 'true') {
         const epubFile = path.join(dir, 'original.epub'); await require('./epub-fb2-tests').fixture(epubFile);
         const epubData = await fs.readFile(epubFile);
@@ -113,8 +133,9 @@ async function checkWebSocket(url) {
             clearTimeout(timer);
             socket.terminate();
             if (error) reject(error);
-            else resolve(bookUid);
+            else resolve({bookUid,link});
         };
+        let link;
         socket.once('error', finish);
         socket.once('open', () => socket.send(JSON.stringify({action: 'test', requestId: 'smoke'})));
         socket.on('message', raw => {
@@ -154,19 +175,55 @@ async function checkWebSocket(url) {
                     assert.strictEqual(response.images[0].contentType, 'image/png');
                     assert(Buffer.from(response.images[0].data, 'base64').length > 0);
                     if (epubUid) socket.send(JSON.stringify({action:'get-book-info', bookUid:epubUid, readerOnly:true, requestId:'epub-reader'}));
-                    else finish();
+                    else socket.send(JSON.stringify({action:'get-book-link',bookUid,requestId:'book-link'}));
                 } else if (response.requestId === 'epub-reader') {
                     const document = JSON.stringify(response.bookInfo.fb2);
                     assert.match(document, /Текст второй главы/);
                     assert.match(document, /fictionbook/i);
                     assert.equal(response.bookInfo.book.ext, 'epub');
-                    console.log('ok packaged EPUB original → FB2 reader with image default formats'); finish();
+                    console.log('ok packaged EPUB original → FB2 reader with image default formats');
+                    socket.send(JSON.stringify({action:'get-book-link',bookUid,requestId:'book-link'}));
+                } else if (response.requestId === 'book-link') {
+                    assert.match(response.link,/^\/book\/[0-9a-f]{64}$/);
+                    link = response.link;
+                    finish();
                 }
             } catch (error) {
                 finish(error);
             }
         });
     });
+}
+
+async function checkCachedBookDownload(url,link,directory) {
+    const compressed = await fetch(url+link,{headers:{'Accept-Encoding':'gzip'}});
+    assert.equal(compressed.status,200);
+    assert.equal(compressed.headers.get('content-encoding'),'gzip');
+    const bytes = Buffer.from(await compressed.arrayBuffer());
+    assert.match(bytes.toString('utf8'),/FictionBook/);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'),path.posix.basename(link));
+    const range = await fetch(url+link,{headers:{'Accept-Encoding':'identity',Range:'bytes=0-15'}});
+    assert.equal(range.status,206);
+    assert.deepEqual(Buffer.from(await range.arrayBuffer()),bytes.subarray(0,16));
+    const zipped = await fetch(url+link+'/zip');
+    assert.equal(zipped.status,200);
+    assert.equal(zipped.headers.get('content-type'),'application/zip');
+    if (process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true') {
+        for (const response of [compressed,range,zipped]) {
+            assert.equal(response.headers.get('x-powered-by'),null,'Rust serves the cached book representation');
+        }
+    }
+    const file = path.join(directory,'cached-download.zip');
+    await fs.writeFile(file,Buffer.from(await zipped.arrayBuffer()));
+    const StreamZip = require('node-stream-zip');
+    const zip = new StreamZip.async({file});
+    try {
+        const names = Object.keys(await zip.entries());
+        assert.equal(names.length,1);
+        assert.match(names[0],/\.fb2$/i);
+        assert.deepEqual(await zip.entryData(names[0]),bytes);
+    } finally {await zip.close();}
+    console.log('ok packaged cached GZIP, raw range and ZIP contain identical FB2');
 }
 
 async function checkEbookProfileDownload(url,html,password='local-smoke-fixture',format=process.env.INPX_SMOKE_EPUB==='true'?'epub':'fb2'){
@@ -230,6 +287,7 @@ async function main() {
     const binary = target && target !== '--image' ? path.resolve(target) : null;
     const imageName = target === '--image' ? argument : null;
     const allowMissingNativeJxl = argument === '--allow-missing-native-jxl';
+    const requireRustCatalogue = process.env.INPX_SMOKE_REQUIRE_RUST_CATALOG==='true';
     if (!target || (target === '--image' && !imageName))
         throw new Error('Usage: node scripts/binary-smoke-test.js <binary> [--allow-missing-native-jxl] | --image <local-image>');
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-binary-smoke-'));
@@ -273,6 +331,10 @@ async function main() {
             env.PATH = cwd;
             env.INPX_JXL_DECODER = 'native';
         }
+        if (requireRustCatalogue) {
+            delete env.INPX_RUST_READER_BINARY;
+            delete env.INPX_RUST_CATALOG_BINARY;
+        }
         if(process.env.INPX_SMOKE_EPUB==='true'){delete env.INPX_MOBI_ENABLED;env.INPX_CONVERSION_FORMATS='fb2,epub';}
         child = spawn(command, args, {cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
         exited = new Promise(resolve => {
@@ -295,15 +357,43 @@ async function main() {
             await sleep(250);
         }
         assert.ok(ready, `Packaged application did not index the fixture and become ready:\n${output}`);
+        if (requireRustCatalogue) {
+            if (target === '--image') {
+                await promisify(execFile)('docker',['exec',containerName,'sh','-c',
+                    'test -x /usr/local/bin/bin/inpx-reader && test -x /usr/local/bin/bin/inpx-catalog && test -f /data/db/catalogue.json && test -f /data/db/lookup.redb && test ! -e /data/db/book']);
+            } else {
+                for (const name of ['catalog','reader']) await fs.access(path.join(path.dirname(command),'bin',rust.fileName(name)));
+                const rows = await fs.readdir(path.join(dir,'data','db'));
+                assert(rows.includes('catalogue.json') && rows.includes('lookup.redb') && !rows.includes('book'),
+                    'Packaged app must build the native catalogue with its bundled binaries');
+            }
+        }
         const health = await fetch(`${url}/health`);
+        if (process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true')
+            assert.equal(health.headers.get('x-powered-by'),null,'Packaged health route must be served by Rust');
         assert.strictEqual(health.status, 200);
         assert.strictEqual((await health.json()).version, require('../package.json').version);
         const home = await fetch(url);
         assert.strictEqual(home.status, 200);
         assert.strictEqual(home.headers.get('x-robots-tag'),'noindex, nofollow');
-        assert.match(await home.text(), /<html/i);
-        const bookUid = await checkWebSocket(url);
-        if (nativeJxlCover) await checkNativeJxlCover(url, bookUid);
+        const homeHtml = await home.text();
+        assert.match(homeHtml, /<html/i);
+        if (process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true') {
+            assert.strictEqual(home.headers.get('x-powered-by'),null,'Packaged home must be served by Rust');
+            const scriptPath = homeHtml.match(/<script\b[^>]*\bsrc="(\/[^"?]+\.js)"/i)?.[1];
+            assert(scriptPath,'Packaged web UI must have a JavaScript bundle');
+            const script = await fetch(new URL(scriptPath,url));
+            assert.equal(script.status,200);
+            assert.equal(script.headers.get('x-powered-by'),null,'Packaged JavaScript must be served by Rust');
+            assert.match(script.headers.get('cache-control'),/immutable/);
+            assert((await script.arrayBuffer()).byteLength>0);
+            const revalidated = await fetch(new URL(scriptPath,url),{headers:{'If-None-Match':script.headers.get('etag'),'Cache-Control':'max-age=0'}});
+            assert.equal(revalidated.status,304);
+        }
+        const {bookUid,link} = await checkWebSocket(url);
+        try {await checkCachedBookDownload(url,link,dir);}
+        catch (error) {throw new Error(`Packaged cached download failed: ${error.message}\n${output}`,{cause:error});}
+        if (nativeJxlCover || process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true') await checkCoverDownload(url, bookUid, nativeJxlCover);
         const ebook=await fetch(`${url}/ebook?q=Packaged&lang=en`);
         assert.strictEqual(ebook.status,200);
         const ebookHtml=await ebook.text();

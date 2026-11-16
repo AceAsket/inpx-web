@@ -66,6 +66,8 @@ async function testConverterProcessTimeoutAndBoundedErrors() {
 }
 
 async function testOpdsAuthenticationRateLimit() {
+    const realNow = Date.now;
+    let now = Date.now();
     const express = require('express');
     const app = express();
     const config = {loginRateLimitMaxAttempts: 2, opds: {user: 'global', password: 'secret'}};
@@ -80,10 +82,11 @@ async function testOpdsAuthenticationRateLimit() {
     const url = `http://127.0.0.1:${server.address().port}`;
     const auth = (user, password) => ({authorization: 'Basic ' + Buffer.from(`${user}:${password}`).toString('base64')});
     const request = (route, headers = {}) => fetch(url + route, {headers});
+    Date.now = () => now;
     try {
         for (let i = 0; i < 4; i++)
             assert.strictEqual((await request('/global')).status, 401);
-        assert.strictEqual(security.loginAttempts.size, 0);
+        assert.strictEqual(security.getLoginMetrics().activeFailedAttempts, 0);
         assert.strictEqual((await request('/global', auth('global', 'secret'))).status, 200);
         assert.strictEqual((await request('/global', auth('global', 'wrong'))).status, 401);
         assert.strictEqual((await request('/scoped?user=reader', auth('reader', 'secret'))).status, 200);
@@ -92,18 +95,18 @@ async function testOpdsAuthenticationRateLimit() {
         assert.strictEqual(blocked.status, 429);
         assert.ok(Number(blocked.headers.get('retry-after')) > 0);
         assert.doesNotThrow(() => security.checkLoginRate({headers: {}, socket: {remoteAddress: '127.0.0.1'}}, 'profile'));
-        for (const rec of security.loginAttempts.values()) rec.resetAt = Date.now() - 1;
+        now += 15*60*1000+1;
         assert.strictEqual((await request('/scoped?user=reader', auth('reader', 'secret'))).status, 200);
         config.loginRateLimitEnabled = false;
         for (let i = 0; i < 3; i++)
             assert.strictEqual((await request('/global', auth('global', 'wrong'))).status, 401);
         assert.ok(security.getLoginMetrics().attempts.some(row => row.labels.kind === 'opds' && row.labels.result === 'blocked' && row.value === 1));
         config.loginRateLimitEnabled = true;
-        security.loginAttempts.clear();
         const burst = await Promise.all(Array.from({length: 12}, () => request('/scoped?user=reader', auth('reader', 'wrong'))));
         assert.strictEqual(burst.filter(response => response.status === 401).length, 2);
         assert.strictEqual(burst.filter(response => response.status === 429).length, 10);
     } finally {
+        Date.now = realNow;
         server.closeAllConnections();
         await new Promise(resolve => server.close(resolve));
     }

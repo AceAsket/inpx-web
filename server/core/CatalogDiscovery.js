@@ -136,6 +136,36 @@ class CatalogDiscovery {
         return this.cached(JSON.stringify(['browse', kind, prefix, filters]), async db => {
             const scoped = Object.keys(filters).length > 1;
             const selected = scoped ? Array.from(await this.worker.dbSearcher.selectBookIds(filters)) : null;
+            if (db.nativeCatalogue) {
+                const searcher = this.worker.dbSearcher;
+                const {order,ids} = await searcher.nameKeys(kind,prefix || undefined,prefix ? prefix+MAX_CHAR : undefined);
+                const labels = order.labelById ||= new Map(order.labels);
+                const groups = new Map(), items = [];
+                const allowed = selected ? new Set(selected) : null;
+                const matching = ids.filter(id=>labels.get(id)!=='?' && labels.get(id).startsWith(prefix));
+                let total = 0;
+                for (let offset=0;offset<matching.length;offset+=1024) {
+                    const keys = matching.slice(offset,offset+1024);
+                    for (const row of await searcher.readNameRows(kind,keys,allowed ? 'postings' : 'nameRows')) {
+                        const count = allowed ? row.bookIds.reduce((sum,id)=>sum+Number(allowed.has(id)),0) : row.bookCount;
+                        if (!count) continue;
+                        total++;
+                        if (items.length<201) items.push({name:row.name,count});
+                        const remaining = labels.get(row.id).slice(prefix.length);
+                        let next = '';
+                        for (const char of remaining) {next+=char;if (char.trim()) break;}
+                        const value = prefix+next;
+                        const group = groups.get(value) || {prefix:value,count:0,books:0};
+                        if (!remaining) group.name = row.name;
+                        group.count++;
+                        group.books+=count;
+                        groups.set(value,group);
+                    }
+                }
+                return {kind,prefix,total,
+                    groups:total>200 ? [...groups.values()].sort((a,b)=>a.prefix.localeCompare(b.prefix)) : [],
+                    items:total<=200 ? items.sort((a,b)=>a.name.localeCompare(b.name)) : []};
+            }
             const result = await db.select({table: kind, rawResult: true, where: `
                 const selected = ${selected ? `new Set(${db.esc(selected)})` : 'null'};
                 const prefix = ${db.esc(prefix)}, groups = new Map(), items = [];
@@ -173,6 +203,14 @@ class CatalogDiscovery {
             if (activeDb !== db) throw new Error('Библиотека обновилась. Повторите запрос');
             const ids = await this.worker.dbSearcher.selectBookIds({...filters, [kind]: '=' + name});
             if (db !== this.worker.db || generation !== this.worker.libraryAssetGeneration) throw new Error('Библиотека обновилась. Повторите запрос');
+            if (db.nativeCatalogue) {
+                const rows = (await db.booksByIds(ids || [],['id','_uid','title','series','serno'])).map(row=>({
+                    id:row.id,uid:row._uid,title:row.title,series:row.series || '',number:Number(row.serno) || 0,
+                }));
+                rows.sort((a,b)=>(kind==='author' ? a.series.localeCompare(b.series,'ru') : 0)
+                    || a.number-b.number || a.title.localeCompare(b.title,'ru') || a.uid.localeCompare(b.uid));
+                return rows;
+            }
             const result = await db.select({table: 'book', rawResult: true, where: `
                 const rows = [];
                 for (const id of ${db.esc(Array.from(ids || []))}) {

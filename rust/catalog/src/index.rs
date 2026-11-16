@@ -17,10 +17,20 @@ pub(crate) const DATES: TableDefinition<(i64, u64), ()> = TableDefinition::new("
 pub(crate) const RATED: TableDefinition<(i64, u32, u32, u32, u64), ()> =
     TableDefinition::new("rated");
 pub(crate) const METADATA: TableDefinition<&str, &str> = TableDefinition::new("catalog_v1");
+pub(crate) const REDUCED_CACHE_BYTES: usize = 32 * 1024 * 1024;
 
 pub(crate) fn publish<T>(
     path: &Path,
     generation: &str,
+    populate: impl FnOnce(&redb::WriteTransaction) -> Result<T>,
+) -> Result<T> {
+    publish_with_cache(path, generation, false, populate)
+}
+
+pub(crate) fn publish_with_cache<T>(
+    path: &Path,
+    generation: &str,
+    low_memory: bool,
     populate: impl FnOnce(&redb::WriteTransaction) -> Result<T>,
 ) -> Result<T> {
     if generation.is_empty() {
@@ -31,7 +41,11 @@ pub(crate) fn publish<T>(
         .filter(|dir| !dir.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let staging = NamedTempFile::new_in(parent)?;
-    let db = Database::builder().create_with_backend(FileBackend::new(staging.reopen()?)?)?;
+    let mut builder = Database::builder();
+    if low_memory {
+        builder.set_cache_size(REDUCED_CACHE_BYTES);
+    }
+    let db = builder.create_with_backend(FileBackend::new(staging.reopen()?)?)?;
     let transaction = db.begin_write()?;
     transaction
         .open_table(METADATA)?
@@ -130,7 +144,9 @@ pub struct Catalog {
 impl Catalog {
     pub fn open(path: &Path) -> Result<Self> {
         Ok(Self {
-            db: Database::builder().open_read_only(path)?,
+            db: Database::builder()
+                .set_cache_size(64 * 1024 * 1024)
+                .open_read_only(path)?,
         })
     }
 

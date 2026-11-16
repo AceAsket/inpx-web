@@ -14,6 +14,8 @@ module.exports = async function checkOpds2(url, {adminPassword='browser-speech-t
         socket.on('message',listener);socket.send(JSON.stringify({...common,...data,requestId}));
     });
     const read = async(href,headers={}) => {const result=await fetch(new URL(href,url),{headers});assert.equal(result.status,200,href);
+        if(process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true') assert(!result.headers.has('x-powered-by'),'Packaged OPDS 2 is rendered by Rust');
+        assert(!result.headers.has('x-inpx-opds-model'));
         assert.match(result.headers.get('content-type'),/^application\/opds(?:-publication)?\+json\b/);const body=await result.json();samples.push({href,type:result.headers.get('content-type'),body});return {response:result,body};};
     try {
         const root=await read('/opds/v2'),slash=await read('/opds/v2/');
@@ -21,6 +23,19 @@ module.exports = async function checkOpds2(url, {adminPassword='browser-speech-t
         assert(root.body.links.some(link=>link.rel==='self'&&link.type==='application/opds+json'));
         for(const link of root.body.navigation)assert(link.href.startsWith('/opds/v2/'));
         const atom=await fetch(url+'/opds');assert.match(atom.headers.get('content-type'),/^application\/atom\+xml/);assert((await atom.text()).includes('http://www.w3.org/2005/Atom'));
+        const opensearch=await fetch(url+'/opds/opensearch');
+        assert.match(opensearch.headers.get('content-type'),/^application\/opensearchdescription\+xml/);
+        if(process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true') {
+            for(const response of [atom,opensearch]) {
+                assert(!response.headers.has('x-powered-by'),'Packaged XML feed is rendered by Rust');
+                assert(!response.headers.has('x-inpx-opds-model'));
+            }
+        }
+        const parser=require('sax').parser(true),templates=[];
+        parser.onerror=error=>{throw error;};
+        parser.onopentag=node=>{if(node.name==='Url')templates.push(node.attributes.template);};
+        parser.write(await opensearch.text()).close();
+        assert.deepEqual(templates,['title','author','series'].map(kind=>'/opds/search?type='+kind+'&term={searchTerms}'));
         const search=root.body.links.find(link=>link.rel==='search');assert(search.templated);assert(search.href.includes('{?query}'));
         const found=await read(search.href.replace('{?query}','?query=Packaged'));
         const book=found.body.publications.find(book=>book.links.some(link=>link.type==='application/fb2+xml'
@@ -47,6 +62,8 @@ module.exports = async function checkOpds2(url, {adminPassword='browser-speech-t
         common={csrfToken:common.csrfToken,...userLogin};delete common.requestId;
         await request({action:'update-reader-progress',bookUid:uid,progress:{percent:.4,textSnippet:'Smoke text'}});
         const progress=await read('/opds/v2/reading-progress?user='+userId,headers);assert(progress.body.publications[0].metadata.title.startsWith('◑ '));
+        const atomProgress=await fetch(url+'/opds/reading-progress?user='+userId,{headers});
+        assert.equal(atomProgress.status,200);assert((await atomProgress.text()).includes('<title>◑ '));
         const list=await request({action:'create-reading-list',name:'Полка JSON',visibility:'opds'});
         await request({action:'update-reading-list-book',listId:list.list.id,bookUid:uid,enabled:true});
         const shelf=await read('/opds/v2/reading-lists/list?'+new URLSearchParams({user:userId,id:list.list.id}),headers);
@@ -67,7 +84,7 @@ module.exports = async function checkOpds2(url, {adminPassword='browser-speech-t
         await request({action:'update-admin-opds',opds:{enabled:false}});
         for(const endpoint of ['/opds','/opds/v2'])assert.equal((await fetch(url+endpoint,{headers:credentials('second-fixture')})).status,404);
         await request({action:'update-admin-opds',opds:{enabled:true,user:'',password:''}});changedOpds=false;
-        console.log('OPDS 2 integration: JSON/search/publication/download, private shelves/progress, live credential changes and disable/enable, Basic Auth, pagination links and unchanged Atom passed');
+        console.log('OPDS integration: JSON, Atom, OpenSearch, catalogue and private scopes, live credentials and pagination passed');
         return samples;
     } finally {
         if(changedOpds&&admin){common=admin;await request({action:'update-admin-opds',opds:{enabled:true,user:'',password:''}}).catch(()=>{});}

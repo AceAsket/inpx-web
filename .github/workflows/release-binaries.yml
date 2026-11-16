@@ -107,6 +107,13 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
+      - name: Build Rust server, catalog, reader and authentication state
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal --target wasm32-unknown-unknown
+          cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
+          cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
+          node scripts/rust-auth-state-tests.js rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm
+
       - name: Build binary
         run: npm run ${{ matrix.build_script }}
 
@@ -173,6 +180,9 @@ jobs:
 
       - name: Test extracted release permissions, application and converters
         shell: bash
+        env:
+          INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
+          INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
         run: node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$ARCHIVE_PATH"
 
       - name: Build Windows installer

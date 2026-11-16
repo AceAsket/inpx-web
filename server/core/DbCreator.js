@@ -11,7 +11,9 @@ const {readPostings} = require('./RustCatalogUpdate');
 const InpxHashCreator = require('./InpxHashCreator');
 const {getEnabledLibrarySources} = require('./LibrarySources');
 const ImportWriteBudget = require('./ImportWriteBudget');
-const {buildLookup} = require('./RustLookupBuilder');
+const {buildLookup,sealLookup} = require('./RustLookupBuilder');
+const {readBookSequence,writeBookSequence,writeFacets} = require('./CataloguePublication');
+const {encodeBook} = require('./BookSearchProjection');
 const {executable, fileName:lookupFileName, lookupGeneration} = require('./RustLookupIndex');
 const utils = require('./utils');
 const search = require('../../shared/CatalogSearch');
@@ -125,14 +127,15 @@ class DbCreator {
         callback({job: 'load inpx', jobMessage: 'Загрузка INPX', jobStep: 1, progress: 0});
 
         //временная таблица
-        const incremental = await db.tableExists({table: 'book'});
+        const standalone = !db;
+        const incremental = standalone ? !!config.previousIndexPath : await db.tableExists({table: 'book'});
         const bookCacheSize = config.lowMemoryMode ? 5 : config.dbCacheSize;
         const binary = executable();
-        const useBulkIndexes = !!(binary && config.indexDbPath && !config.lowMemoryMode && !config.fullOptimization
+        const useBulkIndexes = !!(!standalone && binary && config.indexDbPath && !config.lowMemoryMode && !config.fullOptimization
             && require('jembadb/package.json').version === '5.1.7');
-        if (incremental) await db.open({table: 'book', cacheSize:bookCacheSize});
+        if (!standalone && incremental) await db.open({table: 'book', cacheSize:bookCacheSize});
         let bookWrites, nativeBook;
-        const uidIndex = incremental && (await db.getDbInfo({table:'book'})).book.hash.find(index => index.field === '_uid');
+        const uidIndex = !standalone && incremental && (await db.getDbInfo({table:'book'})).book.hash.find(index => index.field === '_uid');
         let keepUidIndex = !!(useBulkIndexes && uidIndex?.unique && uidIndex.type === 'string' && uidIndex.depth === 100);
         const dropUidIndex = async (flushWrites = false) => {
             if (flushWrites) {
@@ -171,7 +174,19 @@ class DbCreator {
                 }
             }
         };
-        if (incremental) {
+        let previousOrder;
+        if (standalone) {
+            const priorDirectory = config.previousIndexPath || config.identityDbPath;
+            if (priorDirectory) {
+                callback({job:'previous identities',jobMessage:'Чтение идентификаторов Rust',jobStep:1,progress:0});
+                const metadata = path.join(priorDirectory,'catalogue.json');
+                const published = await fs.pathExists(metadata) ? await fs.readJson(metadata) : null;
+                const directory = published ? priorDirectory : path.join(priorDirectory,'book');
+                await readBookIdentities(binary,directory,published?.stats.bookCountAll,row=>this.physicalIdentity(row),rememberPrevious);
+                if (incremental && published) previousOrder=await readBookSequence(priorDirectory,published.rustBookStoreGeneration);
+                callback({nativeIdentities:true});
+            }
+        } else if (incremental) {
             let nativeIdentities = false;
             callback({job:'previous identities', jobMessage:'Чтение идентификаторов действующего каталога', jobStep:1, progress:0});
             if (useBulkIndexes) {
@@ -191,14 +206,21 @@ class DbCreator {
             if (keepUidIndex && hasLongUid) await dropUidIndex();
             callback({nativeIdentities});
         } else if (config.identityDbPath) {
-            const compatibility = new (require('jembadb/src/JembaDb'))();
-            try {
-                await compatibility.lock({dbPath:config.identityDbPath,softLock:true});
-                await compatibility.open({table:'book',cacheSize:5});
-                await this.previousIdentities(compatibility,rememberPrevious);
-            } catch (error) {
-                throw new Error(`Не удалось сохранить идентификаторы прежней библиотеки: ${error.message}`);
-            } finally {await compatibility.unlock();}
+            const metadata = path.join(config.identityDbPath,'catalogue.json');
+            if (await fs.pathExists(metadata)) {
+                const {stats} = await fs.readJson(metadata);
+                if (!binary) throw new Error('Для чтения идентификаторов прежнего каталога нужен Rust-бинарник');
+                await readBookIdentities(binary,config.identityDbPath,stats.bookCountAll,row=>this.physicalIdentity(row),rememberPrevious);
+            } else {
+                const compatibility = new (require('jembadb/src/JembaDb'))();
+                try {
+                    await compatibility.lock({dbPath:config.identityDbPath,softLock:true});
+                    await compatibility.open({table:'book',cacheSize:5});
+                    await this.previousIdentities(compatibility,rememberPrevious);
+                } catch (error) {
+                    throw new Error(`Не удалось сохранить идентификаторы прежней библиотеки: ${error.message}`);
+                } finally {await compatibility.unlock();}
+            }
         }
         let recordsChanged = 0;
 
@@ -339,13 +361,20 @@ class DbCreator {
             const cache = wordCache[field];
             const saved = cache?.get(value);
             if (saved) return saved;
-            const keys = new Set(search.words(value).map(word => `${field}:${search.root(word)}`));
+            const keys = new Set();
+            const terms = standalone ? [] : null;
+            for (const word of search.words(value)) {
+                const root=search.root(word);
+                keys.add(`${field}:${root}`);
+                if (terms) terms.push(word,root);
+            }
             const rows = Array.from(keys, key => getPosting(wordMap, wordArr, key.toLowerCase()));
+            const result = {rows,terms};
             if (cache && (!value || value.length <= 512)) {
                 if (cache.size >= wordCacheLimit) cache.clear();
-                cache.set(value, rows);
+                cache.set(value, result);
             }
-            return rows;
+            return result;
         };
 
         const genrePostings = value => {
@@ -361,8 +390,11 @@ class DbCreator {
 
         const parseBookRec = (rec) => {
             parseField(rec.sourceId, sourceMap, sourceArr, rec.id);
+            const terms = standalone ? [] : null;
             for (const field of ['title', 'author', 'series']) {
-                for (const entry of wordPostings(field, rec[field])) appendBook(entry, rec.id);
+                const indexed = wordPostings(field,rec[field]);
+                if (terms) terms[field==='title' ? 2 : field==='series' ? 1 : 0]=indexed.terms;
+                for (const entry of indexed.rows) appendBook(entry,rec.id);
             }
             //авторы
             const author = splitAuthor(rec.author);
@@ -400,17 +432,19 @@ class DbCreator {
 
             //тип файла
             parseField(rec.ext, extMap, extArr, rec.id);
+            return terms;
         };
 
         //основная процедура парсинга
         let id = lastBookId;
         let bookStore = null, storeFailed = false, rustBookStoreGeneration;
-        const buildStore = useBulkIndexes && !inpxFilter?.filter && config.rustBookStoreEnabled !== false;
+        const buildStore = standalone || useBulkIndexes && !inpxFilter?.filter && config.rustBookStoreEnabled !== false;
         const storeGeneration = buildStore && lookupGeneration({inpxHash:sourceHash,dbVersion:config.dbVersion,
             rustLookupBuiltAt:new Date().toISOString()});
         const storeWork = async work => {
             try {await work();}
             catch (error) {
+                if (standalone) throw error;
                 storeFailed = true;
                 await bookStore?.close();
                 bookStore = null;
@@ -422,8 +456,12 @@ class DbCreator {
                 bookStore = await RustBookStoreBuild.openPatch(binary,config.indexDbPath,storeGeneration,config.previousIndexPath);
             });
         }
+        if (standalone && !bookStore) bookStore = await RustBookStoreBuild.open(binary,config.indexDbPath,storeGeneration);
+        const patch = standalone && !!bookStore.previous;
+        const changedIds = standalone ? [] : null;
         const parsedCallback = async(chunk) => {
             const encodedBooks = nativeBook ? [] : null;
+            const encodedStore = standalone ? [] : null;
             const saveChunk = [];
             for (const rec of chunk) {
                 rec.sourceId = currentSource.id;
@@ -459,11 +497,21 @@ class DbCreator {
                 const reuseEncoding = encodedBooks && !Object.hasOwn(rec, 'id') && !Object.hasOwn(rec, '_recordHash');
                 if (!reuseEncoding) rec._recordHash = hash('sha256', serialized, 'hex');
                 rec.id = prior ? prior.id : ++id;
+                let updateStore = false;
                 if (encodedBooks) {
                     const uidKey = JSON.stringify(rec._uid.slice(0, 100));
                     const row = reuseEncoding ? serialized + ',true' : JSON.stringify(rec);
                     encodedBooks.push(`[${rec.id},${uidKey},${row}]\n`);
-                } else if (!incremental || !prior || prior.hash !== rec._recordHash) saveChunk.push(rec);
+                } else {
+                    const changed = !incremental || !prior || prior.hash!==rec._recordHash;
+                    if (standalone) {
+                        if (changed) {
+                            changedIds.push(rec.id);
+                            if (prior) prior.changed=true;
+                        }
+                        updateStore = !patch || changed;
+                    } else if (changed) saveChunk.push(rec);
+                }
                 if (prior) prior.retained = true;
                 uidSet.add(rec._uid);
 
@@ -475,12 +523,15 @@ class DbCreator {
                     bookDelCount++;
                 }
 
-                parseBookRec(rec);
+                const terms = parseBookRec(rec);
+                if (updateStore) encodedStore.push(encodeBook(rec,terms));
                 importFiles?.add(rec);
             }
 
             if (encodedBooks?.length) await nativeBook.append(encodedBooks);
-            if (saveChunk.length) {
+            if (standalone) {
+                if (encodedStore.length) await bookStore.addEncoded(encodedStore);
+            } else if (saveChunk.length) {
                 if (keepUidIndex && saveChunk.some(rec => {
                     const old = previous.get(rec._uid);
                     return typeof rec._uid !== 'string' || rec._uid.length > 100 || old && old.id !== rec.id;
@@ -489,7 +540,8 @@ class DbCreator {
                 await bookWrites.wait();
                 if (bookStore) await storeWork(() => bookStore.add(saveChunk));
             }
-            recordsChanged += encodedBooks?.length ?? saveChunk.length;
+            if (standalone) recordsChanged=changedIds.length;
+            else recordsChanged += encodedBooks?.length ?? saveChunk.length;
             callback({recordsChanged, incremental});
 
             recsLoaded += chunk.length;
@@ -507,7 +559,7 @@ class DbCreator {
                 callback({rustBookWarning:error.message});
             }
         }
-        if (!nativeBook) {
+        if (!standalone && !nativeBook) {
             if (!incremental) await db.create({table:'book', cacheSize:bookCacheSize});
             bookWrites = new ImportWriteBudget(db, 'book', config.lowMemoryMode);
         }
@@ -522,7 +574,7 @@ class DbCreator {
                     sourceId:source.id, sourceName:source.name,
                 });
 
-                const rustReader = process.env.INPX_RUST_READER_BINARY;
+                const rustReader = require('./RustPrograms').executable('reader');
                 const parser = source.type === 'folder' ? new (require('./FolderIndexer').FolderIndexer)(source, config)
                     : rustReader ? new RustInpxParser(rustReader) : new InpxParser();
                 await parser.parse(source.inpxFile || source.inpx, readFileCallback, parsedCallback);
@@ -550,14 +602,16 @@ class DbCreator {
         try {
             for (let offset = 0; offset < removed.length; offset += 10000) {
                 const ids = removed.slice(offset,offset+10000);
-                await db.delete({table:'book',where:`@@id(${db.esc(ids)})`});
-                await bookWrites.wait();
-                if (bookStore) await storeWork(() => bookStore.remove(ids));
+                if (!standalone) {
+                    await db.delete({table:'book',where:`@@id(${db.esc(ids)})`});
+                    await bookWrites.wait();
+                }
+                if (bookStore && (!standalone || patch)) await storeWork(() => bookStore.remove(ids));
             }
             if (bookStore) await storeWork(async () => {
                 await bookStore.finish();
                 rustBookStoreGeneration = storeGeneration;
-                callback({bookStoreMode:'patch'});
+                callback({bookStoreMode:standalone && !patch ? 'base' : 'patch'});
             });
         } finally {
             await bookStore?.close();
@@ -581,21 +635,92 @@ class DbCreator {
         genreCache.clear();
         const fileCounts = importFiles?.totals();
         importFiles = null;
+        if (standalone) {
+            const retained = new Set();
+            if (incremental) for (const row of previous.values()) if (row.retained && !row.changed) retained.add(row.id);
+            const unchanged = previousOrder ? previousOrder.filter(id=>retained.has(id)) : retained;
+            await writeBookSequence(config.indexDbPath,storeGeneration,unchanged,changedIds,bookCount+bookDelCount);
+        }
         physical.clear(); previous.clear(); legacy.clear();
 
         uidSet = null;
 
-        if (!nativeBook) {
+        if (!standalone && !nativeBook) {
             await db.close({table: 'book'});
             bookWrites.check();
         }
-        await db.freeMemory();
+        if (!standalone) await db.freeMemory();
         utils.freeMemory();
 
         return {authorArr, seriesArr, titleArr, genreArr, langArr, delArr, dateArr, librateArr, extArr, sourceArr, wordArr,
             authorCount, bookCount, bookDelCount, noAuthorBookCount, fileCounts, parserInfos, recsLoaded,
             incremental, recordsChanged, recordsRemoved:removed.length, bookCacheSize, nativeBook:!!nativeBook,
             useBulkIndexes, keepUidIndex, buildStore, storeFailed, storeGeneration, rustBookStoreGeneration};
+    }
+
+    async buildStandaloneCatalogue(report) {
+        const {indexDbPath}=this.config;
+        const sourceHash=await new InpxHashCreator(this.config).getHash();
+        const filter=await this.loadInpxFilter();
+        await fs.ensureDir(indexDbPath);
+        const records=await this.loadBooks(null,report,sourceHash,filter);
+        await writeFacets(indexDbPath,records);
+        const {authorCount,bookCount,bookDelCount,noAuthorBookCount}=records;
+        const counts={...records.fileCounts,authorCount,bookCount,bookDelCount,noAuthorBookCount,
+            genreCount:records.genreArr.length,langCount:records.langArr.length};
+        return this.finishNativeCatalogue({...records,counts,sourceHash,filter,generation:records.storeGeneration},report,records);
+    }
+
+    async finishNativeCatalogue(prepared, report, names) {
+        const config = this.config;
+        const directory = config.indexDbPath;
+        const {sourceHash,generation,parserInfos,counts,filter,recsLoaded,incremental,recordsChanged,recordsRemoved} = prepared;
+        const {nameCounts,...totals}=counts;
+        const tables=['author','series','title','word'];
+        const fromDisk=!names && Array.isArray(nameCounts);
+        const loaded=fromDisk ? null : names || await readPostings(directory,true);
+        const realSeries=row=>row.value.localeCompare(emptyFieldValue,'en')!==0;
+        const sizes=fromDisk ? nameCounts : tables.map(table=>loaded[`${table}Arr`].length);
+        const stats = {...totals,recsLoaded,filesCountAll:counts.filesCount+counts.filesDelCount,
+            bookCountAll:counts.bookCount+counts.bookDelCount,authorCountAll:sizes[0],titleCount:sizes[2],
+            seriesCount:fromDisk ? 0 : loaded.seriesArr.filter(realSeries).length};
+        if (!fromDisk) sizes[1]=stats.seriesCount;
+        report({job:'rust lookup',jobMessage:'Построение Rust-индекса поиска',jobStep:2,progress:0});
+        async function* postings() {
+            for (const [position,table] of tables.entries()) {
+                const rows=fromDisk ? await fs.readJson(path.join(directory,'.postings',table)) : loaded[`${table}Arr`];
+                if (fromDisk && rows.length!==sizes[position]) throw new Error('Rust catalogue posting count differs');
+                rows.sort(compareIndexRows);
+                for (const [index,row] of rows.entries()) {
+                    if (table!=='word') row.id=index+1;
+                    if (table==='series') {
+                        if (!fromDisk && !realSeries(row)) continue;
+                        if (fromDisk && realSeries(row)) stats.seriesCount++;
+                    }
+                    yield [table,row];
+                }
+            }
+        }
+        const count=sizes.reduce((sum,size)=>sum+size,0);
+        await buildLookup(executable(),path.join(directory,lookupFileName),{generation,count,bookMaps:true,ordered:true,
+            lowMemory:config.lowMemoryMode,rows:postings()});
+        if (fromDisk) await fs.remove(path.join(directory,'.postings'));
+        if (config.fullOptimization) {
+            report({job:'rust wide order',jobMessage:'Подготовка сортировки широких запросов',jobStep:3,progress:0});
+            const WideOrder = require('./RustWideOrder');
+            const order = new WideOrder(directory,{generation,binary:executable()});
+            try {await order.prepare();}
+            catch (error) {report({rustStoreWarning:error.message});}
+            finally {await order.close();}
+        }
+        if (sourceHash !== await new InpxHashCreator(config).getHash())
+            throw new Error('Источники изменились во время индексации. Повторите обновление.');
+        await fs.writeJson(path.join(directory,'catalogue.json'),{
+            format:1,inpxInfo:this.catalogueInfo(parserInfos,filter),stats,inpxHash:sourceHash,dbVersion:config.dbVersion,
+            indexUpdate:{incremental,recordsChanged,recordsRemoved,updatedAt:new Date().toISOString()},
+            rustLookupGeneration:generation,rustBookStoreGeneration:generation,
+        });
+        report({job:'done',jobMessage:'',progress:1,nativeCatalogue:true,nativeBookMaps:true});
     }
 
     async run(db, callback, prepared = null) {
@@ -823,6 +948,13 @@ class DbCreator {
             }
         }
 
+        if (rustLookupBuiltAt) {
+            const lookupPath = path.join(config.indexDbPath || path.join(config.dataDir,'db'),lookupFileName);
+            const generation=lookupGeneration({inpxHash:sourceHash,rustLookupBuiltAt,dbVersion:config.dbVersion});
+            try {await sealLookup(binary,lookupPath,generation,rustBookStoreGeneration);}
+            catch (error) {callback({rustTableWarning:`lookup: ${error.message}`});}
+        }
+
         //config сохраняем в самом конце, нет конфига - с базой что-то не так
         if (sourceHash !== await inpxHashCreator.getHash())
             throw new Error('Источники изменились во время индексации. Повторите обновление.');
@@ -831,6 +963,21 @@ class DbCreator {
             table: 'config'
         });
 
+        const inpxInfo = this.catalogueInfo(parserInfos,inpxFilter);
+        await db.insert({table: 'config', rows: [
+            {id: 'inpxInfo', value: inpxInfo},
+            {id: 'stats', value: stats},
+            {id: 'inpxHash', value: sourceHash},
+            {id: 'dbVersion', value: config.dbVersion},
+            {id: 'indexUpdate', value: {incremental, recordsChanged, recordsRemoved, updatedAt: new Date().toISOString()}},
+            ...(rustLookupBuiltAt ? [{id:'rustLookupBuiltAt', value:rustLookupBuiltAt}] : []),
+            ...(rustBookStoreGeneration ? [{id:'rustBookStoreGeneration',value:rustBookStoreGeneration}] : []),
+        ]});
+
+        callback({job:'done', jobMessage:'', reusedUidIndex:keepUidIndex});
+    }
+
+    catalogueInfo(parserInfos,inpxFilter) {
         const inpxInfo = parserInfos.length === 1
             ? parserInfos[0].info
             : {
@@ -854,17 +1001,7 @@ class DbCreator {
                 inpxInfo.version = inpxFilter.info.version;
         }
 
-        await db.insert({table: 'config', rows: [
-            {id: 'inpxInfo', value: inpxInfo},
-            {id: 'stats', value: stats},
-            {id: 'inpxHash', value: sourceHash},
-            {id: 'dbVersion', value: config.dbVersion},
-            {id: 'indexUpdate', value: {incremental, recordsChanged, recordsRemoved, updatedAt: new Date().toISOString()}},
-            ...(rustLookupBuiltAt ? [{id:'rustLookupBuiltAt', value:rustLookupBuiltAt}] : []),
-            ...(rustBookStoreGeneration ? [{id:'rustBookStoreGeneration',value:rustBookStoreGeneration}] : []),
-        ]});
-
-        callback({job:'done', jobMessage:'', reusedUidIndex:keepUidIndex});
+        return inpxInfo;
     }
 
     async optimizeTable(from, db, callback) {

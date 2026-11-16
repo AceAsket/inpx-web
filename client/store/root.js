@@ -5,7 +5,6 @@ const state = {
         accessToken: '',
         currentUserId: '',
         profileAccessToken: '',
-        extendedParams: false,
         expandedAuthor: [],
         expandedSeries: [],
 
@@ -28,8 +27,6 @@ const state = {
         showJson: false,
         showNewReleaseAvailable: true,
         darkTheme: false,
-        catalogAppearance: 'classic',
-        shelvesHintDismissed: false,
         showAppPromo: true,
         showDiscoveryNewest: true,
         showDiscoveryPopular: true,

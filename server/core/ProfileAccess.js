@@ -31,9 +31,9 @@ class ProfileAccess {
         if (!session || !session.proxyProfileUserId)
             return;
         this.worker.closeProfileSession(session.profileAccessToken);
-        delete session.profileAccessToken;
-        delete session.proxyProfileUserId;
-        delete session.proxyProfileLogin;
+        session.profileAccessToken = undefined;
+        session.proxyProfileUserId = undefined;
+        session.proxyProfileLogin = undefined;
     }
 
     async resolve(req, token = '', {identityOnly = false} = {}) {

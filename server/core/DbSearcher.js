@@ -4,6 +4,7 @@ const utils = require('./utils');
 const {RustLookupIndex} = require('./RustLookupIndex');
 const {compareBooks, compareBookFields, bookScore, normalizeKeyPart, physicalBookKey} = require('./BookSearchProjection');
 const {words, root} = require('../../shared/CatalogSearch');
+const nameRanges = require('./CatalogueNameRanges');
 
 const maxLimit = 1000;
 
@@ -18,6 +19,33 @@ const ratingSelection = Symbol('ratingSelection');
 const orderedScanThreshold = 8192;
 const reorderedIndexFields = ['author', 'series', 'title', 'genre', 'date', 'librate'];
 const earlyPageSize = 256;
+const maxNativeSearchCandidates = 65536;
+const nativeTextFields = ['author','series','title'];
+const facetCollation = new Intl.Collator('en');
+
+function facetRows(runs, ranges) {
+    const result = new Set();
+    for (const [from,to] of ranges) {
+        const compare = typeof (from ?? to) === 'number' ? (a,b) => a-b : facetCollation.compare;
+        const groups = runs.map(run => new Set(run.filter(([,value]) => (from == null || compare(value,from) >= 0)
+            && (to == null || compare(value,to) <= 0)).map(([id]) => id)));
+        const largest = groups.reduce((best,group) => group.size > best.size ? group : best,new Set());
+        for (const id of largest) result.add(id);
+        for (const group of groups) if (group !== largest) for (const id of group) result.add(id);
+    }
+    return [...result];
+}
+
+function rankMergedBooks(matches) {
+    matches.sort(compareBooks);
+    const groups = new Map();
+    for (const [rank,row] of matches.entries()) {
+        const current = groups.get(row.copy);
+        if (!current) groups.set(row.copy,{row,rank});
+        else if (row.score > current.row.score || row.score === current.row.score && row.id < current.row.id) current.row = row;
+    }
+    return [...groups.values()].sort((a,b) => compareBookFields(a.row,b.row) || a.rank - b.rank).map(group => group.row);
+}
 
 class DbSearcher {
     constructor(config, db, dbPath = `${config.dataDir}/db`) {
@@ -173,7 +201,10 @@ class DbSearcher {
         if (!lookup) return fallback();
         const db = this.db;
         return lookup.run(async process => {
-            const [result] = await db.select({table, rawResult:true, where:`
+            const order = await process.labelOrder?.(table);
+            const groups = order && ranges.every(([from,to]) => from.length<=1000000 && to.length<=1000000)
+                ? ranges.map(([from,to])=>nameRanges.range(order,from,to))
+                : (await db.select({table, rawResult:true, where:`
                 const ranges = ${db.esc(ranges)}, groups = [];
                 const index = __tr._index?.get('value');
                 for (const [start, end] of ranges) {
@@ -182,9 +213,9 @@ class DbSearcher {
                     groups.push(Array.from(@dirtyIndexLR('value', start, end)));
                 }
                 return groups;
-            `});
-            if (!result.rawResult) return fallback();
-            const ids = await process.query({op:'books', table, groups:result.rawResult});
+            `}))[0].rawResult;
+            if (!groups) return fallback();
+            const ids = await process.query({op:'books', table, groups});
             if (!Array.isArray(ids) || ids.some(id => !Number.isInteger(id) || id < 0 || id > 0xffffffff))
                 throw new Error('Invalid Rust book lookup response');
             return new Uint32Array(ids);
@@ -212,6 +243,25 @@ class DbSearcher {
         }, 'word', ranges);
     }
 
+    async namedIds(order,value,{looseTitlePrefix=false} = {}) {
+        if (value[0] !== '~') value = value.toLowerCase();
+        if (value[0]==='=') return nameRanges.range(order,value.slice(1),value.slice(1));
+        if (!['*','#','~'].includes(value[0])) {
+            const prefixes = looseTitlePrefix ? this.getTitleSearchPrefixCandidates(value) : [value];
+            return [...new Set(prefixes.flatMap(prefix=>nameRanges.range(order,prefix,prefix+maxUtf8Char)))];
+        }
+        const expression = value[0]==='~' ? new RegExp(value.slice(1),'i') : null;
+        const terms = value.slice(1), special = value[0]==='#';
+        const allowed = special ? new Set(enruArr) : null;
+        const result=[];
+        for (const [index,[id,label]] of order.labels.entries()) {
+            if (index && index%16384===0) await utils.processLoop();
+            if (expression ? expression.test(label) : label!=='?' && (!special || label && !allowed.has(label[0])) && label.includes(terms))
+                result.push(id);
+        }
+        return result;
+    }
+
     async selectBookIds(query, {bookPredicates = false} = {}) {
         query = await this.prepareRatingQuery(query);
         const db = this.db;
@@ -231,12 +281,45 @@ class DbSearcher {
             return result.rawResult;
         };
 
+        const facetBookIds = async (table,key,ranges) => {
+            const cached = await this.getCached(key);
+            if (cached !== null) return cached;
+            if ((bookPredicates || db.nativeCatalogue) && db.bookStoreAdvanced && db.bookStoreFacets) {
+                const smallest = idsArr.length ? idsArr.reduce((a,b) => a.length <= b.length ? a : b) : null;
+                if (smallest?.length===0) return smallest;
+                const found = await db.bookStore.run(async process => {
+                    const labels = await this.nativeFacetLabels(process,table);
+                    if (!labels) return null;
+                    const rows = facetRows(labels,ranges);
+                    if (!rows.length) return new Uint32Array();
+                    const candidates = smallest?.length<=maxNativeSearchCandidates ? Array.from(smallest) : null;
+                    const ids = await process.query({op:'facetBooks',table,rows,candidates});
+                    if (!Array.isArray(ids)) throw new Error('Invalid Rust facet response');
+                    return new Uint32Array(ids);
+                },() => null);
+                if (found !== null) return found;
+            }
+            const ids = await tableBookIds(table,`await (async () => {
+                const ids = new Set();
+                for (const [from,to] of ${db.esc(ranges)}) {
+                    for (const id of @indexLR('value',from ?? undefined,to ?? undefined)) ids.add(id);
+                }
+                return ids;
+            })()`);
+            await this.putCached(key,ids);
+            return ids;
+        };
+
         const nameBookIds = (table, value, options) => {
             const where = this.getWhere(value, options);
             const fallback = () => tableBookIds(table, where);
-            if (!value.startsWith('=')) return fallback();
-            const exact = value.toLowerCase().slice(1);
-            return this.lookupBookIds(fallback, table, [[exact, exact]]);
+            if (!this.rustLookup) return fallback();
+            return this.rustLookup.run(async process=>{
+                const order = await process.labelOrder?.(table);
+                if (!order || value.length>1000000) return fallback();
+                const ids = await this.namedIds(order,value,options);
+                return new Uint32Array(await process.query({op:'books',table,groups:[ids]}));
+            },fallback);
         };
 
         //авторы
@@ -284,209 +367,70 @@ class DbSearcher {
         //жанры
         if (query.genre) {
             const key = `book-ids-genre-${query.genre}`;
-            let ids = await this.getCached(key);
-
-            if (ids === null) {
-                const genreRows = await db.select({
-                    table: 'genre',
-                    rawResult: true,
-                    where: `
-                        const genres = ${db.esc(query.genre.split(','))};
-
-                        const ids = new Set();
-                        for (const g of genres) {
-                            for (const id of @indexLR('value', g, g))
-                                ids.add(id);
-                        }
-                        
-                        const result = new Set();
-                        for (const id of ids) {
-                            const row = @unsafeRow(id);
-                            for (const bookId of row.bookIds)
-                                result.add(bookId);
-                        }
-
-                        return new Uint32Array(result);
-                    `
-                });
-
-                ids = genreRows[0].rawResult;
-                await this.putCached(key, ids);
-            }
-
-            idsArr.push(ids);
+            idsArr.push(await facetBookIds('genre',key,query.genre.split(',').map(value => [value,value])));
         }
 
         //языки
         if (query.lang) {
             const key = `book-ids-lang-${bookPredicates ? 'prefix-' : ''}${query.lang}`;
-            let ids = await this.getCached(key);
-
-            if (ids === null) {
-                const langRows = await db.select({
-                    table: 'lang',
-                    rawResult: true,
-                    where: `
-                    const langs = ${db.esc(query.lang.split(',').map(value => value.trim().toLowerCase()))};
-
-                        const ids = new Set();
-                        for (const l of langs) {
-                            for (const id of @indexLR('value', l, l + ${db.esc(bookPredicates && !query.lang.includes(',') && query.lang !== '?' ? maxUtf8Char : '')}))
-                                ids.add(id);
-                        }
-                        
-                        const result = new Set();
-                        for (const id of ids) {
-                            const row = @unsafeRow(id);
-                            for (const bookId of row.bookIds)
-                                result.add(bookId);
-                        }
-
-                        return new Uint32Array(result);
-                    `
-                });
-
-                ids = langRows[0].rawResult;
-                await this.putCached(key, ids);
-            }
-
-            idsArr.push(ids);
+            const suffix = bookPredicates && !query.lang.includes(',') && query.lang !== '?' ? maxUtf8Char : '';
+            const values = query.lang.split(',').map(value => value.trim().toLowerCase());
+            idsArr.push(await facetBookIds('lang',key,values.map(value => [value,value+suffix])));
         }
 
         //удаленные
         if (query.del) {
             const del = parseInt(query.del, 10) || 0;
             const key = `book-ids-del-${del}`;
-            let ids = await this.getCached(key);
-
-            if (ids === null) {
-                ids = await tableBookIds('del', `@indexLR('value', ${db.esc(del)}, ${db.esc(del)})`);
-
-                await this.putCached(key, ids);
-            }
-
-            idsArr.push(ids);
+            idsArr.push(await facetBookIds('del',key,[[del,del]]));
         }
 
         //дата поступления
         if (query.date) {
             const key = `book-ids-date-${query.date}`;
-            let ids = await this.getCached(key);
-
-            if (ids === null) {
-                let [from = '', to = ''] = query.date.split(',');
-                ids = await tableBookIds('date', `@indexLR('value', ${db.esc(from)} || undefined, ${db.esc(to)} || undefined)`);
-
-                await this.putCached(key, ids);
-            }
-
-            idsArr.push(ids);
+            const [from,to] = query.date.split(',');
+            idsArr.push(await facetBookIds('date',key,[[from || null,to || null]]));
         }
 
         //оценка
         if (query.librate) {
             const key = `book-ids-librate-${query.librate}`;
-            let ids = await this.getCached(key);
-
-            if (ids === null) {
-                const dateRows = await db.select({
-                    table: 'librate',
-                    rawResult: true,
-                    where: `
-                        const rates = ${db.esc(query.librate.split(',').map(n => parseInt(n, 10)).filter(n => !isNaN(n)))};
-
-                        const ids = new Set();
-                        for (const rate of rates) {
-                            for (const id of @indexLR('value', rate, rate))
-                                ids.add(id);
-                        }
-                        
-                        const result = new Set();
-                        for (const id of ids) {
-                            const row = @unsafeRow(id);
-                            for (const bookId of row.bookIds)
-                                result.add(bookId);
-                        }
-
-                        return new Uint32Array(result);
-                    `
-                });
-
-                ids = dateRows[0].rawResult;
-                await this.putCached(key, ids);
-            }
-
-            idsArr.push(ids);
+            const rates = query.librate.split(',').map(value => parseInt(value,10)).filter(value => !isNaN(value));
+            idsArr.push(await facetBookIds('librate',key,rates.map(value => [value,value])));
         }
 
         //тип файла
         if (query.ext) {
             const key = `book-ids-ext-${bookPredicates ? 'prefix-' : ''}${query.ext}`;
-            let ids = await this.getCached(key);
-
-            if (ids === null) {
-                const extRows = await db.select({
-                    table: 'ext',
-                    rawResult: true,
-                    where: `
-                        const exts = ${db.esc(query.ext.split('|').map(value => value.trim().toLowerCase()))};
-
-                        const ids = new Set();
-                        for (const l of exts) {
-                            for (const id of @indexLR('value', l, l + ${db.esc(bookPredicates && !query.ext.includes('|') && query.ext !== '?' ? maxUtf8Char : '')}))
-                                ids.add(id);
-                        }
-                        
-                        const result = new Set();
-                        for (const id of ids) {
-                            const row = @unsafeRow(id);
-                            for (const bookId of row.bookIds)
-                                result.add(bookId);
-                        }
-
-                        return new Uint32Array(result);
-                    `
-                });
-
-                ids = extRows[0].rawResult;
-                await this.putCached(key, ids);
-            }
-
-            idsArr.push(ids);
+            const suffix = bookPredicates && !query.ext.includes('|') && query.ext !== '?' ? maxUtf8Char : '';
+            const values = query.ext.split('|').map(value => value.trim().toLowerCase());
+            idsArr.push(await facetBookIds('ext',key,values.map(value => [value,value+suffix])));
         }
 
         //источник библиотеки
         if (query.sourceId) {
             const sourceId = String(query.sourceId || '').trim();
             const key = `book-ids-source-${sourceId}`;
-            let ids = await this.getCached(key);
-
-            if (ids === null) {
-                if (await this.db.tableExists({table:'source'})) {
-                    ids = await tableBookIds('source', `@indexLR('value', ${db.esc(sourceId.toLowerCase())}, ${db.esc(sourceId.toLowerCase())})`);
-                } else {
-                const sourceRows = await db.select({
-                    table: 'book',
-                    rawResult: true,
-                    where: `
-                        const sourceId = ${db.esc(sourceId)};
-                        const result = [];
-                        for (const id of @all()) {
-                            const row = @unsafeRow(id);
-                            if ((row.sourceId || '') === sourceId)
-                                result.push(id);
-                        }
-
-                        return new Uint32Array(result);
-                    `
-                });
-
-                ids = sourceRows[0].rawResult;
+            if (await this.db.tableExists({table:'source'})) {
+                const value = sourceId.toLowerCase();
+                idsArr.push(await facetBookIds('source',key,[[value,value]]));
+            } else {
+                let ids = await this.getCached(key);
+                if (ids === null) {
+                    const [{rawResult}] = await db.select({table:'book',rawResult:true,where:`
+                            const sourceId = ${db.esc(sourceId)};
+                            const result = [];
+                            for (const id of @all()) {
+                                const row = @unsafeRow(id);
+                                if ((row.sourceId || '') === sourceId) result.push(id);
+                            }
+                            return new Uint32Array(result);
+                    `});
+                    ids = rawResult;
+                    await this.putCached(key,ids);
                 }
-                await this.putCached(key, ids);
+                idsArr.push(ids);
             }
-
-            idsArr.push(ids);
         }
 
         if (query[ratingSelection]) idsArr.push(query[ratingSelection].ids);
@@ -521,6 +465,11 @@ class DbSearcher {
     }
 
     async fillDbConfig() {
+        if (this.db.nativeCatalogue) {
+            this.dbConfig = this.db.nativeCatalogue;
+            this.recStruct = this.dbConfig.inpxInfo.recStruct;
+            return;
+        }
         if (!this.dbConfig) {
             const rows = await this.db.select({table: 'config'});
             const config = {};
@@ -571,7 +520,18 @@ class DbSearcher {
 
             return new Set(authorIds);
         };
-        if (explicit || !this.rustLookup || !(candidates?.size <= 32768)) return fallback();
+        if (!this.rustLookup) return fallback();
+        if (explicit || !(candidates?.size <= 32768)) return this.rustLookup.run(async process=>{
+            const order = await process.labelOrder?.(from);
+            if (!order) return fallback();
+            if (explicit) {this.getWhere(query.author);return new Set(await this.namedIds(order,query.author));}
+            const match = search.createMatcher(query.author), selected = new Set();
+            for (const [index,[id,label]] of order.labels.entries()) {
+                if (index && index%16384===0) await utils.processLoop();
+                if ((!candidates || candidates.has(id)) && match(label)) selected.add(id);
+            }
+            return selected;
+        },fallback);
         if (!candidates.size) return candidates;
         return this.rustLookup.run(async process => {
             const ids = [...candidates].sort((a,b) => a-b);
@@ -633,13 +593,15 @@ class DbSearcher {
                 }
                 tableIds = new Uint32Array(tableIdsSet);
             } else {//bookIds пустой - критерии не заданы, значит берем все id из from
-                const rows = await db.select({
+                const fallback = async()=> (await db.select({
                     table: from,
                     rawResult: true,
                     where: `return new Uint32Array(@all())`
-                });
-
-                tableIds = rows[0].rawResult;
+                }))[0].rawResult;
+                tableIds = this.rustLookup ? await this.rustLookup.run(async process=>{
+                    const order = await process.labelOrder?.(from);
+                    return order ? new Uint32Array(order.labels.map(([id])=>id)) : fallback();
+                },fallback) : await fallback();
             }
 
             //сортируем по id
@@ -714,12 +676,37 @@ class DbSearcher {
         });
     }
 
+    async readNameRows(table, ids, op = 'nameRows') {
+        const db = this.db;
+        const keys = Array.from(ids).map(Number).filter(id=>Number.isInteger(id) && id>0 && id<=0xffffffff);
+        if (!keys.length) return [];
+        const fallback = () => db.select({table,where:`@@id(${db.esc(keys)})`});
+        if (!db.nativeCatalogue) return fallback();
+        return this.rustLookup.run(async process=>{
+            const rows = [];
+            for (let offset=0;offset<keys.length;offset+=1024)
+                rows.push(...await process.query({op,table,ids:keys.slice(offset,offset+1024)}));
+            return rows;
+        },fallback);
+    }
+
+    async nameKeys(table,from,to=from) {
+        const db = this.db;
+        return this.rustLookup.run(async process=>{
+            const order = await process.labelOrder(table);
+            if (!order) throw new Error(`Rust catalogue names for ${table} are unavailable`);
+            return {order,ids:from===undefined ? order.labels.map(([id])=>id) : nameRanges.range(order,from,to)};
+        },()=>{throw new Error(`Rust catalogue names for ${table} are unavailable`);});
+    }
+
     async restoreBooks(from, ids, query = {}) {
         query = await this.prepareRatingQuery(query);
         const db = this.db;
         const bookTable = `${from}_book`;
 
-        const rows = await db.select({
+        const rows = db.nativeCatalogue
+            ? (await Promise.all(ids.map(id=>this.getCached(`group-${from}-${id}`)))).filter(Boolean)
+            : await db.select({
             table: bookTable,
             where: `@@id(${db.esc(ids)})`
         });
@@ -737,10 +724,30 @@ class DbSearcher {
                 tableIds.push(id);
         }
 
-        const tableRows = await db.select({
+        if (db.nativeCatalogue && this.config.rustBookGroups!==false) {
+            const lookupGeneration=this.dbConfig.rustLookupGeneration;
+            const native = await db.bookStore.run(async process=>{
+                try {return await process.query({op:'bookGroups',table:from,ids:tableIds.map(Number),lookupGeneration});}
+                catch (error) {
+                    if (error.message.includes('unknown variant `bookGroups`')) return null;
+                    throw error;
+                }
+            },()=>null);
+            if (native) {
+                rows.push(...native);
+                for (const row of native) await this.putCached(`group-${from}-${row.id}`,row);
+                return this.filterRestoredRows(rows,query);
+            }
+        }
+
+        const findRows = () => db.select({
             table: from,
             where: `@@id(${db.esc(tableIds)})`
         });
+        const tableRows = db.nativeCatalogue ? await this.readNameRows(from,tableIds,'postings') : this.rustLookup ? await this.rustLookup.run(async process=>{
+            const order = await process.labelOrder?.(from);
+            return order ? process.query({op:'postings',table:from,ids:tableIds}) : findRows();
+        },findRows) : await findRows();
 
         //список недостающих bookId
         const bookIds = [];
@@ -768,10 +775,12 @@ class DbSearcher {
                     books.push(book);
             }
 
-            rows.push({id: row.id, name: row.name, books});
+            const group = {id:row.id,name:row.name,books};
+            rows.push(group);
+            if (db.nativeCatalogue) await this.putCached(`group-${from}-${row.id}`,group);
         }
 
-        await db.insert({table: bookTable, ignore: true, rows});
+        if (!db.nativeCatalogue) await db.insert({table: bookTable, ignore: true, rows});
 
         return this.filterRestoredRows(rows, query);
     }
@@ -799,11 +808,17 @@ class DbSearcher {
             const slice = ids.slice(offset, offset + limit);
 
             //выборка найденных значений
-            const found = await db.select({
+            const findNames = () => db.select({
                 table: from,
                 map: `(r) => ({id: r.id, ${from}: r.name, bookCount: r.bookCount, bookDelCount: r.bookDelCount})`,
                 where: `@@id(${db.esc(Array.from(slice))})`
             });
+            const found = this.rustLookup ? await this.rustLookup.run(async process=>{
+                const order = await process.labelOrder?.(from);
+                if (!order) return findNames();
+                const rows = await process.query({op:'nameRows',table:from,ids:Array.from(slice)});
+                return rows.map(({name,...row})=>({...row,[from]:name}));
+            },findNames) : await findNames();
 
             if (query[ratingSelection]) {
                 const counts = new Map(found.map(row => [row.id, {bookCount:0, bookDelCount:0}]));
@@ -903,38 +918,134 @@ class DbSearcher {
         return result;
     }
 
+    async nativeFacetLabels(process,table) {
+        this.nativeFacetTables ||= new Map();
+        if (!this.nativeFacetTables.has(table)) {
+            const labels = await process.query({op:'facetLabels',table});
+            if (labels !== null && !Array.isArray(labels)) throw new Error('Invalid Rust facet labels');
+            if (labels && this.db.nativeCatalogue)
+                for (const run of labels) run.sort(([,a],[,b])=>typeof a==='number' ? a-b : facetCollation.compare(a,b));
+            this.nativeFacetTables.set(table,labels);
+        }
+        return this.nativeFacetTables.get(table);
+    }
+
+    async nativeBookVocabulary(process,field) {
+        if (this.db.bookStoreFacets) {
+            const runs = await this.nativeFacetLabels(process,field);
+            if (runs) return ['',...runs.flat().map(([,value]) => value)];
+        }
+        this.nativeBookVocabularies ||= new Map();
+        if (!this.nativeBookVocabularies.has(field)) {
+            const loaded = this.db.select({table:field,rawResult:true,where:`
+                const values=[''];
+                for (const id of @all()) {
+                    const row = @unsafeRow(id);
+                    const value = row?.value;
+                    if (typeof value === 'string') values.push(value);
+                }
+                return values;
+            `}).then(([{rawResult}]) => rawResult).catch(error => {
+                this.nativeBookVocabularies.delete(field);
+                throw error;
+            });
+            this.nativeBookVocabularies.set(field,loaded);
+        }
+        return this.nativeBookVocabularies.get(field);
+    }
+
+    async facetValues(table) {
+        if (this.db.nativeCatalogue) {
+            const runs = await this.db.bookStore.run(process=>this.nativeFacetLabels(process,table),()=>null);
+            if (!runs) throw new Error(`Rust catalogue facet ${table} is unavailable`);
+            return runs.flat().map(([,value])=>value);
+        }
+        return (await this.db.select({table,map:'row => ({value:row.value})'})).map(row=>row.value);
+    }
+
+    async nativeBookSearch(query, ids, prefixLimit, plan, copies) {
+        const db = this.db;
+        const wide = !ids || ids.length>maxNativeSearchCandidates;
+        let orderKey;
+        if (wide) {
+            if (!db.bookStoreWide || ids?.length>2_000_000) return null;
+            const RustWideOrder = require('./RustWideOrder');
+            db.rustWideOrder ||= new RustWideOrder(this.dbPath,db.bookStore);
+            orderKey = await db.rustWideOrder.available();
+            if (!orderKey) return null;
+        }
+        return (wide ? db.rustWideStore : db.bookStore).run(async process => {
+            const filters = [...plan.filters];
+            for (const {field,exact,value} of plan.localeFilters) {
+                if (!await db.tableExists({table:field})) return null;
+                const vocabulary = await this.nativeBookVocabulary(process,field);
+                const values = vocabulary.filter(label => exact ? label.localeCompare(value) === 0
+                    : label.localeCompare(value) >= 0 && label.localeCompare(value + maxUtf8Char) <= 0);
+                filters.push({kind:'textValues',field,values});
+            }
+            const source = query.sourceId ? String(query.sourceId).trim() : null;
+            if (wide) {
+                const keys = ids instanceof Uint32Array ? ids : ids ? Uint32Array.from(ids) : null;
+                const packed = keys && Buffer.from(keys.buffer,keys.byteOffset,keys.byteLength).toString('base64');
+                const result = await process.query({op:'wideSearch',orderKey,ids:packed,limit:prefixLimit,terms:plan.terms,filters,copies,source});
+                if (!Array.isArray(result?.ids) || !Number.isSafeInteger(result.totalFound)) throw new Error('Invalid Rust wide search result');
+                return {ids:new Uint32Array(result.ids),totalFound:result.totalFound};
+            }
+            const result = await process.query({op:'search',ids:Array.from(ids),terms:plan.terms,filters,copies,
+                source});
+            if (!Array.isArray(result)) throw new Error('Invalid Rust book search result');
+            const ranked = copies === 'ranked' ? rankMergedBooks(result) : result.sort(compareBooks);
+            return {ids:Uint32Array.from(prefixLimit ? ranked.slice(0,prefixLimit) : ranked,row => row.id),totalFound:ranked.length};
+        },() => null);
+    }
+
     async scanBookSearch(query, prefixLimit) {
         const db = this.db;
         const predicates = [];
+        const native = db.bookStoreAdvanced ? {filters:[],localeFilters:[],terms:[[],[],[]],supported:true} : null;
         const filterBySearch = (bookField, searchValue) => {
             if (searchValue[0] !== '~') searchValue = searchValue.toLowerCase();
             //особая обработка префиксов
             if (searchValue == emptyFieldValue) {
+                native?.filters.push({kind:'empty',field:bookField});
                 return `(row.${bookField} === '' || row.${bookField}.indexOf(${db.esc(emptyFieldValue)}) === 0)`;
             } else if (searchValue[0] == '=') {
 
                 searchValue = searchValue.substring(1);
+                if (native && ['lang','ext'].includes(bookField)) native.localeFilters.push({field:bookField,exact:true,value:searchValue});
+                else if (native) native.supported = false;
                 return `(row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)}) === 0)`;
             } else if (searchValue[0] == '*') {
 
                 searchValue = searchValue.substring(1);
+                native?.filters.push({kind:'contains',field:bookField,value:searchValue,special:false});
                 return `(row.${bookField} && row.${bookField}.toLowerCase().indexOf(${db.esc(searchValue)}) >= 0)`;
             } else if (searchValue[0] == '#') {
 
                 searchValue = searchValue.substring(1);
+                native?.filters.push({kind:'contains',field:bookField,value:searchValue,special:true});
                 return `(row.${bookField} === '' || (!enru.has(row.${bookField}.toLowerCase()[0]) && row.${bookField}.toLowerCase().indexOf(${db.esc(searchValue)}) >= 0))`;
             } else if (searchValue[0] == '~') {//RegExp
                 searchValue = searchValue.substring(1);
                 utils.checkSearchRegExp(searchValue);
+                if (native) native.supported = false;
 
                 const name = `predicate${predicates.length}`;
                 predicates.push(`const ${name} = new RegExp(${db.esc(searchValue)}, 'i');`);
                 return `${name}.test(row.${bookField})`;
             } else if (['title', 'author', 'series', 'keywords'].includes(bookField)) {
+                if (native) {
+                    const terms = words(searchValue).map(word => [word,root(word)]);
+                    const position = nativeTextFields.indexOf(bookField);
+                    if (position >= 0 && terms.length) native.terms[position] = terms;
+                    else native.filters.push({kind:'terms',field:bookField,terms});
+                }
                 const name = `predicate${predicates.length}`;
                 predicates.push(`const ${name} = ${require('../../shared/CatalogSearch').matcherSource(db.esc(searchValue))};`);
                 return `${name}(row.${bookField})`;
             } else {
+                if (native && ['lang','ext'].includes(bookField)) native.localeFilters.push({field:bookField,value:searchValue});
+                else if (native) native.supported = false;
                 return `(row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)}) >= 0 ` +
                     `&& row.${bookField}.toLowerCase().localeCompare(${db.esc(searchValue)} + ${db.esc(maxUtf8Char)}) <= 0)`;
             }
@@ -950,12 +1061,14 @@ class DbSearcher {
                 let searchValue = query[f.field];
                 if (f.field === 'date' && !/^[=*#~]/.test(searchValue)) {
                     const [from, to] = searchValue.split(',');
+                    native?.filters.push({kind:'date',from:from || '',to:to || ''});
                     if (from) checks.push(`row.date >= ${db.esc(from)}`);
                     if (to) checks.push(`row.date <= ${db.esc(to)}`);
                     continue;
                 }
                 if (f.field === 'genre' && !/^[=*#~]/.test(searchValue)) {
                     const genres = searchValue.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+                    native?.filters.push({kind:'genre',values:genres});
                     const name = `predicate${predicates.length}`;
                     predicates.push(`const ${name} = new Set(${db.esc(genres)});`);
                     checks.push(`String(row.genre || '').toLowerCase().split(',').some(value => ${name}.has(value.trim()) || (value === '' && ${genres.includes(emptyFieldValue)}))`);
@@ -964,12 +1077,14 @@ class DbSearcher {
                 if (f.field === 'librate' && searchValue.includes(',')) {
                     const rates = searchValue.split(',').map(Number);
                     if (rates.some(value => !Number.isFinite(value))) throw new Error('Некорректный фильтр оценки');
+                    native?.filters.push({kind:'numberValues',field:f.field,values:rates});
                     checks.push(`${db.esc(rates)}.includes(row.librate)`);
                     continue;
                 }
                 if (f.type === 'S') {
                     if (['lang', 'ext'].includes(f.field) && (searchValue.includes(',') || f.field === 'ext' && searchValue.includes('|')) && !/^[=*#~]/.test(searchValue)) {
                         const values = searchValue.split(f.field === 'ext' ? /[,|]/ : ',').map(value => value.trim().toLowerCase()).filter(Boolean);
+                        native?.filters.push({kind:'textValues',field:f.field,values,emptyAlias:true});
                         checks.push(`(${db.esc(values)}.includes(String(row.${f.field} || '').toLowerCase())
                             || (${values.includes(emptyFieldValue)} && !row.${f.field}))`);
                     } else {
@@ -983,6 +1098,7 @@ class DbSearcher {
                         if (isNaN(searchValue))
                             throw new Error(`Wrong query param, ${f.field}=${searchValue}`);
 
+                        native?.filters.push({kind:'numberValues',field:f.field,values:[searchValue]});
                         checks.push(`row.${f.field} === ${searchValue}`);
                     } else {
                         const from = parseInt(v[0] || '0', 10);
@@ -990,6 +1106,7 @@ class DbSearcher {
                         if (isNaN(from) || isNaN(to))
                             throw new Error(`Wrong query param, ${f.field}=${searchValue}`);
 
+                        native?.filters.push({kind:'numberRange',field:f.field,from,to});
                         checks.push(`row.${f.field} >= ${from} && row.${f.field} <= ${to}`);
                     }
                 }
@@ -1038,7 +1155,11 @@ class DbSearcher {
             const selected = new Set(query[ratingSelection].ids);
             candidateIds = candidateIds ? candidateIds.filter(id => selected.has(id)) : query[ratingSelection].ids;
         }
-        if (db.bookStore && candidateIds && !hideCopies && !query[ratingSelection]
+        if (db.bookStore && native?.supported && (db.bookStoreWide || candidateIds && candidateIds.length<=maxNativeSearchCandidates)) {
+            const copies = hideCopies ? rankPhysicalCopiesFirst && !cachedPhysicalIds ? 'ranked' : 'merge' : 'physical';
+            const result = await this.nativeBookSearch(query,candidateIds,prefixLimit,native,copies);
+            if (result) return result;
+        } else if (db.bookStore && candidateIds && !hideCopies && !query[ratingSelection]
             && candidateIds.length <= 16384
             && ['author','series','title'].some(field => fields.has(field) && query[field])
             && this.recStruct.every(({field}) => !query[field] || ['author','series','title','del'].includes(field))) {
@@ -1061,11 +1182,7 @@ class DbSearcher {
         const scanInTableOrder = candidateIds && candidateIds.length >= orderedScanThreshold
             && (cachedPhysicalIds || query[ratingSelection] || reorderedIndexFields.some(field => indexedQuery[field]));
         const idsExpression = candidateIds ? db.esc(Array.from(candidateIds)) : '';
-        const iterator = scanInTableOrder || !candidateIds ? '@all()' : idsExpression;
-        const rows = await db.select({
-            table: 'book',
-            rawResult: true,
-            where: `
+        const rows = await require('./CatalogueScan').scanBooks(db, scanLoop => `
                 const enru = new Set(${db.esc(enruArr)});
                 const hideCopies = ${hideCopies ? 'true' : 'false'};
                 const rankPhysicalCopiesFirst = ${rankPhysicalCopiesFirst && !cachedPhysicalIds};
@@ -1121,12 +1238,12 @@ class DbSearcher {
 
                 let deduped = new Map();
                 let position = 0;
-                for (const id of ${iterator}) {
+                ${scanLoop}
+                    if (!row) continue;
                     if (++position % 1024 === 0)
                         await new Promise(resolve => setImmediate(resolve));
-                    const order = ${scanInTableOrder ? 'candidateOrder.get(id)' : 'position'};
+                    const order = ${scanInTableOrder ? 'candidateOrder.get(row.id)' : 'position'};
                     if (order === undefined) continue;
-                    const row = @unsafeRow(id);
                     if (!checkBook(row))
                         continue;
 
@@ -1186,8 +1303,7 @@ class DbSearcher {
                 }
                 const ids = Uint32Array.from(ranked, row => row.id);
                 return {ids, totalFound:deduped.size};
-            `
-        });
+            `,{ids:scanInTableOrder ? null : candidateIds});
         return rows[0].rawResult;
     }
 
@@ -1222,6 +1338,50 @@ class DbSearcher {
         }
     }
 
+    async groupOpdsNames(from,ids,depth) {
+        const groups = new Map();
+        const width = Math.min(0xffffffff,Math.max(0,Math.trunc(Number(depth)) || 0));
+        if (this.config.rustOpdsGrouping!==false) {
+            const count = 262144;
+            const reader = ids.length>maxNativeSearchCandidates
+                ? (this.rustOpdsLookup ||= new RustLookupIndex(this.dbPath,this.dbConfig)) : this.rustLookup;
+            const native = await reader.run(async process=>{
+                for (let offset=0;offset<ids.length;offset+=count) {
+                    const buffer=ids.subarray(offset,offset+count);
+                    const keys=Buffer.from(buffer.buffer,buffer.byteOffset,buffer.byteLength).toString('base64');
+                    const rows=await process.query({op:'opdsGroups',table:from,ids:keys,depth:width}).catch(error=>{
+                        if (error.message.includes('unknown variant `opdsGroups`')) return null;
+                        throw error;
+                    });
+                    if (!rows) return false;
+                    for (const row of rows) {
+                        let value='';
+                        for (let offset=0;offset<row.value.length;offset+=8192)
+                            value+=String.fromCharCode(...row.value.slice(offset,offset+8192));
+                        const existing=groups.get(value);
+                        if (existing) {existing.count+=row.count;existing.bookCount+=row.bookCount;}
+                        else groups.set(value,{...row,value});
+                    }
+                }
+                return true;
+            },()=>false);
+            if (native) return [...groups.values()].sort((a,b)=>a.value.localeCompare(b.value));
+            groups.clear();
+        }
+        const {order} = await this.nameKeys(from);
+        const values = order.labelById ||= new Map(order.labels);
+        for (let offset=0;offset<ids.length;offset+=1024) {
+            for (const row of await this.readNameRows(from,ids.slice(offset,offset+1024))) {
+                const value = values.get(row.id).substring(0,depth);
+                const group = groups.get(value);
+                if (group) {group.count++;group.bookCount+=row.bookCount;}
+                else groups.set(value,{id:row.id,name:row.name,value,count:1,bookCount:row.bookCount});
+            }
+            await utils.processLoop();
+        }
+        return [...groups.values()].sort((a,b)=>a.value.localeCompare(b.value));
+    }
+
     async opdsQuery(from, query) {
         query = await this.prepareRatingQuery(query);
         if (this.closed)
@@ -1246,6 +1406,11 @@ class DbSearcher {
                 const totalFound = ids.length;
 
                 //группировка по name длиной depth
+                if (db.nativeCatalogue) {
+                    result = {found:await this.groupOpdsNames(from,ids,depth),totalFound};
+                    await this.putCached(opdsKey,result);
+                    return result;
+                }
                 const found = await db.select({
                     table: from,
                     rawResult: true,
@@ -1301,7 +1466,7 @@ class DbSearcher {
                 authorId = 0;
                 author = author.toLowerCase();
 
-                const rows = await db.select({
+                const rows = db.nativeCatalogue ? [{rawResult:(await this.nameKeys('author',author)).ids}] : await db.select({
                     table: 'author',
                     rawResult: true,
                     where: `return Array.from(@dirtyIndexLR('value', ${db.esc(author)}, ${db.esc(author)}))`
@@ -1352,7 +1517,12 @@ class DbSearcher {
             let series = [];
             if (seriesSet.size) {
                 //выборка серий по названиям
-                series = await db.select({
+                if (db.nativeCatalogue) {
+                    const {order} = await this.nameKeys('series');
+                    const ids = new Set();
+                    for (const value of seriesSet) for (const id of nameRanges.range(order,value,value)) ids.add(id);
+                    series = (await this.readNameRows('series',ids)).map(({name,...row})=>({...row,series:name}));
+                } else series = await db.select({
                     table: 'series',
                     map: `(r) => ({id: r.id, series: r.name, bookCount: r.bookCount, bookDelCount: r.bookDelCount})`,
                     where: `
@@ -1389,7 +1559,7 @@ class DbSearcher {
             series = series.toLowerCase();
 
             //выборка серии по названию серии
-            let rows = await db.select({
+            let rows = db.nativeCatalogue ? [{rawResult:(await this.nameKeys('series',series)).ids}] : await db.select({
                 table: 'series',
                 rawResult: true,
                 where: `return Array.from(@dirtyIndexLR('value', ${db.esc(series)}, ${db.esc(series)}))`
@@ -1422,6 +1592,11 @@ class DbSearcher {
         if (this.queryCacheMemSize > 0 && memCache.has(key)) {//есть в недавних
             result = memCache.get(key);
         } else if (this.queryCacheDiskSize > 0 && this.queryCacheDiskBytes > 0) {//смотрим в таблице
+            if (db.serviceCache) {
+                result = await db.serviceCache.get(key);
+                if (result !== null && this.queryCacheMemSize > 0) memCache.set(key,result);
+                return result;
+            }
             return this.withDiskCache(async() => {
                 await this.initDiskCache();
                 const rows = await db.select({table: 'query_cache', where: `@@id(${db.esc(key)})`});
@@ -1461,6 +1636,10 @@ class DbSearcher {
         }
 
         if (this.queryCacheDiskSize > 0 && this.queryCacheDiskBytes > 0) {
+            if (db.serviceCache) {
+                await db.serviceCache.put(key,value,this.queryCacheDiskSize,this.queryCacheDiskBytes);
+                return;
+            }
             await this.withDiskCache(async() => {
                 try {
                     await this.initDiskCache();
@@ -1545,7 +1724,8 @@ class DbSearcher {
             if (!this.queryCacheEnabled || this.queryCacheDiskSize <= 0)
                 return;
 
-            await this.withDiskCache(async() => {await this.initDiskCache(); await this.trimDiskCache();});
+            if (this.db.serviceCache) await this.db.serviceCache.trim(this.queryCacheDiskSize,this.queryCacheDiskBytes);
+            else await this.withDiskCache(async() => {await this.initDiskCache(); await this.trimDiskCache();});
         } catch(e) {
             console.error(e.message);
         } finally {
@@ -1569,6 +1749,7 @@ class DbSearcher {
         }
 
         await this.ratingIndex?.close?.();
+        await this.rustOpdsLookup?.close();
         await this.rustLookup?.close();
         await this.diskCacheQueue?.catch(() => {});
         this.diskCacheItems?.clear();

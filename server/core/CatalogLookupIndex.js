@@ -1,4 +1,5 @@
 const search = require('../../shared/CatalogSearch');
+const {suggestions} = require('./CatalogueNameRanges');
 const FAST_LIMITS = {names:32, wordRows:16, wordBooks:64, books:128, perName:4};
 const SUGGEST_BOOK_FIELDS = ['id','_uid','_recordHash','title','author','series','serno','folder','file','ext','size','inpxSize',
     'date','genre','lang','del','librate','libid','insno','sourcelib','sourceId','sourceName','sourceLibDir','sourceType','unavailable'];
@@ -64,16 +65,18 @@ async function lookupRows(db, table, keys, limit, includePrefixes, projection, n
             ${db.esc(includePrefixes ? String.fromCodePoint(0xFFFFF) : '')});
     `;
     if (native) {
-        const [result] = await db.select({table, rawResult:true, where:`${selection} return {ids, limited};`});
-        const {ids, limited} = result.rawResult;
+        const order = await native.labelOrder?.(table);
+        const {ids, limited} = order ? suggestions(order,keys,limit,includePrefixes ? String.fromCodePoint(0xfffff) : '')
+            : (await db.select({table,rawResult:true,where:`${selection} return {ids, limited};`}))[0].rawResult;
         if (!ids.length) return {rows:[], limited};
-        if (ids.length <= limit) {
-            const rows = await native.query({op:'sample', table, ids});
-            if (!Array.isArray(rows) || rows.length !== ids.length || rows.some((row, index) =>
-                row?.id !== ids[index] || typeof row.name !== 'string' || !Number.isInteger(row.count)
+        if (ids.length <= limit || db.nativeCatalogue) {
+            const selected = ids.slice(0,limit);
+            const rows = await native.query({op:'sample', table, ids:selected});
+            if (!Array.isArray(rows) || rows.length !== selected.length || rows.some((row, index) =>
+                row?.id !== selected[index] || typeof row.name !== 'string' || !Number.isInteger(row.count)
                 || !Array.isArray(row.bookIds) || row.bookIds.length > 4 || typeof row.complete !== 'boolean'))
                 throw new Error('Invalid Rust suggestion candidates');
-            return {rows, limited};
+            return {rows, limited:limited || ids.length>selected.length};
         }
     }
     const [result] = await db.select({table, rawResult:true, where:`

@@ -109,7 +109,7 @@ fn root(word: &str) -> &str {
         .unwrap_or(word)
 }
 
-fn normalize_key(value: &str) -> String {
+pub(crate) fn normalize_key(value: &str) -> String {
     lower(value.trim_matches(js_whitespace))
         .split(js_whitespace)
         .filter(|part| !part.is_empty())

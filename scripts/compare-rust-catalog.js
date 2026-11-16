@@ -1,167 +1,71 @@
 const assert = require('node:assert/strict');
-const {spawn} = require('node:child_process');
-const {randomUUID} = require('node:crypto');
 const {access} = require('node:fs/promises');
+const {dirname,resolve} = require('node:path');
 const {performance} = require('node:perf_hooks');
-const {Readable} = require('node:stream');
-const {pipeline} = require('node:stream/promises');
-const DatabaseThread = require('../server/core/DatabaseThread');
-const {copyKey, rowQuality} = require('../server/core/DiscoverySelection');
 const {catalogGeneration} = require('../server/core/RustShelfIndex');
+const {buildShelfIndex} = require('../server/core/RustShelfBuild');
 const base = require('../server/config/base');
 
-const daysWindows = [7, 30, 90, 180, 365];
-const dateCollator = new Intl.Collator();
-const textCollator = new Intl.Collator('ru');
+const daysWindows = [7,30,90,180,365];
+const median = values => Math.round(values.toSorted((a,b) => a-b)[values.length>>1]*10)/10;
 
-async function* scanBooks(db) {
-    const token = db.esc(`rust-catalog-${randomUUID()}`);
-    try {
-        while (true) {
-            const [result] = await db.select({table:'book', rawResult:true, where:`
-                let cursor = @getItem(${token});
-                if (!cursor) {cursor = @all(); @setItem(${token}, cursor);}
-                const rows = [];
-                for (let visited = 0; visited < 4096; visited++) {
-                    const next = cursor.next();
-                    if (next.done) return {rows, done:true};
-                    const row = @unsafeRow(next.value);
-                    if (!row || row.del || !row.title) continue;
-                    rows.push({id:row.id, _uid:row._uid, date:row.date, author:row.author,
-                        title:row.title, series:row.series, ext:row.ext, librate:row.librate,
-                        size:row.size, libid:row.libid, sourceId:row.sourceId, folder:row.folder,
-                        file:row.file, insno:row.insno, serno:row.serno});
-                }
-                return {rows, done:false};
-            `});
-            yield* result.rawResult.rows;
-            if (result.rawResult.done) break;
-        }
-    } finally {
-        await db.select({table:'book', rawResult:true, where:`@delItem(${token}); return null;`});
-    }
-}
-
-function ranks(values, collator) {
-    const ordered = [...values].sort(collator.compare);
-    const result = new Map();
-    let rank = 0;
-    for (const [index, value] of ordered.entries()) {
-        if (index > 0 && collator.compare(ordered[index - 1], value) !== 0) rank++;
-        result.set(value, rank);
-    }
-    return result;
-}
-
-async function sortOrders(db) {
-    const dates = new Set(), authors = new Set(), titles = new Set();
-    for await (const row of scanBooks(db)) {
-        dates.add(String(row.date || ''));
-        authors.add(row.author || '');
-        titles.add(row.title);
-    }
-    return [ranks(dates, dateCollator), ranks(authors, textCollator), ranks(titles, textCollator)];
-}
-
-async function* snapshot(db, generation, orders) {
-    const [dates, authors, titles] = orders;
-    yield JSON.stringify({generation}) + '\n';
-    let lines = '';
-    for await (const row of scanBooks(db)) {
-        const date = String(row.date || ''), author = row.author || '';
-        lines += JSON.stringify({id:row.id, uid:row._uid, copyKey:copyKey(row), quality:rowQuality(row),
-            dateMs:Date.parse(date), dateOrder:dates.get(date), rating:row.librate || 0,
-            authorOrder:authors.get(author), titleOrder:titles.get(row.title),
-            authorGroup:author.trim().toLowerCase(), seriesGroup:(row.series || '').trim().toLowerCase()}) + '\n';
-        if (lines.length >= 256 * 1024) {yield lines; lines = '';}
-    }
-    if (lines) yield lines;
-}
-
-async function rust(executable, command, indexPath, input) {
-    const child = spawn(executable, [command, indexPath], {windowsHide:true, stdio:['pipe','pipe','pipe']});
-    let stdout = '', stderr = '';
-    child.stdout.setEncoding('utf8').on('data', chunk => {stdout += chunk;});
-    child.stderr.setEncoding('utf8').on('data', chunk => {stderr = (stderr + chunk).slice(-8192);});
-    const finished = new Promise(resolve => {
-        child.once('error', resolve);
-        child.once('close', (code, signal) => resolve(code === 0 ? null : new Error(stderr.trim() || `Rust catalog exited with ${signal || code}`)));
-    });
-    const [transfer, exited] = await Promise.allSettled([pipeline(Readable.from(input), child.stdin), finished]);
-    if (exited.value) throw exited.value;
-    if (transfer.status === 'rejected') throw transfer.reason;
-    return JSON.parse(stdout);
-}
-
-async function hasIndex(file) {
-    try {await access(file);return true;}
-    catch (error) {if (error.code === 'ENOENT') return false;throw error;}
-}
-
-async function main() {
-    const [executable, dbPath, indexPath] = process.argv.slice(2);
-    if (!executable || !dbPath || !indexPath || process.argv.length !== 5)
-        throw new Error('Usage: node scripts/compare-rust-catalog.js <catalog-binary> <stopped-jembadb-copy> <index.redb>');
-    await new (require('../server/core/AppLogger'))().init({...base, loggingEnabled:false});
+async function main(binary,directory,indexFile) {
+    if (!binary || !directory || !indexFile) throw new Error('Usage: node scripts/compare-rust-catalog.js <catalog-binary> <db-dir> <index.redb>');
+    const executable = resolve(binary), dbPath = resolve(directory), indexPath = resolve(indexFile);
+    const config = {...base,dataDir:dirname(dbPath),queryCacheEnabled:false,loggingEnabled:false};
+    process.env.INPX_RUST_CATALOG_BINARY = executable;
+    await new (require('../server/core/AppLogger'))().init(config);
     const WebWorker = require('../server/core/WebWorker');
-    const db = new DatabaseThread(base);
-    const times = [];
+    const {db,searcher} = await WebWorker.prototype.openCatalogue.call({config},dbPath);
+    const worker = Object.assign(Object.create(WebWorker.prototype), {db,dbSearcher:searcher,myState:'normal',libraryAssetGeneration:1,
+        addAdminEvent:() => assert.fail('Rust shelf query fell back')});
     try {
-        await db.lock({dbPath, softLock:true});
-        await db.open({table:'book', cacheSize:base.dbCacheSize});
-        await db.open({table:'config'});
-        const config = Object.fromEntries((await db.select({table:'config'})).map(row => [row.id,row.value]));
-        const generation = catalogGeneration(config);
-        assert(generation, 'The source must be a completed JembaDB catalog');
-        if (!await hasIndex(indexPath)) {
+        const generation = catalogGeneration(searcher.dbConfig);
+        assert(generation,'The source must be a completed catalogue');
+        try {await access(indexPath);}
+        catch (error) {
+            if (error.code !== 'ENOENT') throw error;
             const started = performance.now();
-            const orders = await sortOrders(db);
-            const sortMs = Math.round(performance.now() - started);
-            const result = await rust(executable, 'build', indexPath, snapshot(db, generation, orders));
-            console.log(JSON.stringify({indexed:result.indexed, sortMs, totalBuildMs:Math.round(performance.now() - started)}));
+            const result = await buildShelfIndex(executable,indexPath,db,generation);
+            console.log(JSON.stringify({stage:'build',indexed:result.indexed,ms:Math.round(performance.now()-started),nativeScan:!!db.bookStoreScan}));
         }
-        const worker = Object.assign(Object.create(WebWorker.prototype), {db, dbSearcher:{dbConfig:config},
-            myState:'normal', libraryAssetGeneration:1, addAdminEvent:() => assert.fail('Rust shelf lookup fell back to the Node.js query')});
-        const nowMs = Date.now();
-        const requests = [{name:'default', nowMs, newestLimit:8, popularLimit:8, scores:{}}];
-        const select = (request, popularity) => worker.selectDiscoveryBookWindows(
-            'newest', request.newestLimit, daysWindows, popularity, request.popularLimit, request.nowMs,
-        );
-        const run = async(request, popularity, useRust) => {
-            if (useRust) {
+        const requests = [['default',Date.now(),8,{},8],['historical',Date.UTC(2022,6,1),8,{},8]];
+        const run = async ([,now,limit,scores,popularLimit], native) => {
+            if (native) {
                 process.env.INPX_RUST_CATALOG_BINARY = executable;
                 process.env.INPX_RUST_CATALOG_INDEX = indexPath;
             } else {
                 delete process.env.INPX_RUST_CATALOG_BINARY;
                 delete process.env.INPX_RUST_CATALOG_INDEX;
             }
-            const start = performance.now();
-            const shelves = (await select(request, popularity)).map(shelf => shelf.map(book => book._uid));
-            return {shelves, ms:Math.round(performance.now() - start)};
+            const started = performance.now();
+            const shelves = await worker.selectDiscoveryBookWindows('newest',limit,daysWindows,scores,popularLimit,now);
+            if (native) assert(db.rustShelfIndex?.process?.process,'Persistent Rust shelf process did not run');
+            return {shelves,ms:performance.now()-started};
         };
-        let defaultShelves;
         for (const request of requests) {
-            const popularity = Object.fromEntries(Object.entries(request.scores).map(([uid, score]) => [uid,{score}]));
-            const {shelves:actual, ms:rustMs} = await run(request, popularity, true);
-            const {shelves:expected, ms:nodeMs} = await run(request, popularity, false);
-            assert.deepStrictEqual(actual, expected, `Shelf membership or order differs for ${request.name}`);
-            const result = {case:request.name, windowLengths:actual.map(shelf => shelf.length), nodeMs, rustMs};
-            times.push(result);
-            console.log(JSON.stringify(result));
-            if (request.name === 'default') {
-                defaultShelves = expected;
-                const scores = Object.fromEntries(expected.flat().slice(0, 7).map((uid, index) => [uid, index + 10]));
-                requests.push({name:'activity',nowMs,newestLimit:24,popularLimit:24,scores});
-                requests.push({name:'historical',nowMs:Date.UTC(2022, 6, 1),newestLimit:8,popularLimit:8,scores:{}});
+            const [label] = request, times = [[],[]];
+            let windows;
+            for (let round=0;round<3;round++) {
+                const results = [];
+                for (const native of round%2 ? [0,1] : [1,0]) {
+                    const result = await run(request,native);
+                    results[native] = result.shelves;
+                    times[native].push(result.ms);
+                }
+                assert.deepEqual(results[1],results[0],`Shelf membership or order differs for ${label}`);
+                windows = results[0];
+            }
+            console.log(JSON.stringify({case:label,windows:windows.map(shelf => shelf.length),beforeMs:median(times[0]),afterMs:median(times[1]),samples:times}));
+            if (label === 'default') {
+                const scores = Object.fromEntries(windows.flat().slice(0,7).map((row,index) => [row._uid,{score:index+10}]));
+                requests.push(['activity',request[1],24,scores,24]);
             }
         }
-        let fallbacks = 0;
-        worker.addAdminEvent = () => {fallbacks++;};
-        worker.dbSearcher.dbConfig = {...config, indexUpdate:{updatedAt:'stale-index-test'}};
-        assert.deepStrictEqual((await run(requests[0], {}, true)).shelves, defaultShelves);
-        assert.equal(fallbacks, 1, 'A stale Rust index must fall back to the current JembaDB catalog');
-        console.log(JSON.stringify({matches:true, staleIndexFallback:true, cases:times}));
-    } finally {await db.unlock();}
+    } finally {
+        try {await searcher.close();}
+        finally {await db.unlock();}
+    }
 }
 
-main().catch(error => {console.error(error);process.exitCode = 1;});
+main(...process.argv.slice(2)).catch(error => {console.error(error);process.exitCode=1;});

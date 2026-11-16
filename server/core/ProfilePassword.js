@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const {promisify} = require('util');
+const native = require('./RustCredentials');
 const scrypt = promisify(crypto.scrypt);
 
 // OWASP's 16 MiB scrypt configuration; version fixes costs independently of input.
@@ -12,23 +13,27 @@ function legacy(login, password) {
     return crypto.createHash('sha256').update(`${String(login || '').trim().toLowerCase()}::${String(password || '')}`).digest('hex');
 }
 
-async function derive(password, salt) {
-    if (Buffer.byteLength(String(password || '')) > maxPasswordBytes)
-        throw new Error('Пароль слишком длинный');
+async function withScrypt(task) {
     if (active >= 4)
         throw new Error('Проверка паролей занята, повторите позже');
     active++;
     try {
-        return await scrypt(String(password || ''), salt, 32, options);
+        return await task();
     } finally {
         active--;
     }
 }
 
 async function hash(password) {
-    const salt = crypto.randomBytes(16);
-    const key = await derive(password, salt);
-    return `${prefix}${salt.toString('hex')}:${key.toString('hex')}`;
+    const text = String(password || '');
+    if (Buffer.byteLength(text) > maxPasswordBytes) throw new Error('Пароль слишком длинный');
+    return withScrypt(async () => {
+        if (native.executable()) return native.hash(text);
+        const salt = crypto.randomBytes(16);
+        const key = await scrypt(text, salt, 32, options);
+        try {return `${prefix}${salt.toString('hex')}:${key.toString('hex')}`;}
+        finally {key.fill(0);}
+    });
 }
 
 function isLegacy(value) {
@@ -36,15 +41,22 @@ function isLegacy(value) {
 }
 
 async function verify(stored, login, password) {
-    if (Buffer.byteLength(String(password || '')) > maxPasswordBytes)
+    const text = String(password || '');
+    if (Buffer.byteLength(text) > maxPasswordBytes)
         return false;
-    if (isLegacy(stored))
+    if (isLegacy(stored)) {
+        if (native.executable()) return native.verify(String(stored),String(login || '').trim().toLowerCase(),text,true);
         return crypto.timingSafeEqual(Buffer.from(stored, 'hex'), Buffer.from(legacy(login, password), 'hex'));
+    }
     const match = /^scrypt:v1:([a-f0-9]{32}):([a-f0-9]{64})$/.exec(stored);
     if (!match)
         return false;
-    const key = await derive(password, Buffer.from(match[1], 'hex'));
-    return crypto.timingSafeEqual(key, Buffer.from(match[2], 'hex'));
+    return withScrypt(async () => {
+        if (native.executable()) return native.verify(String(stored),'',text,false);
+        const key = await scrypt(text, Buffer.from(match[1], 'hex'), 32, options);
+        try {return crypto.timingSafeEqual(key, Buffer.from(match[2], 'hex'));}
+        finally {key.fill(0);}
+    });
 }
 
 module.exports = {hash, verify, isLegacy, legacy};

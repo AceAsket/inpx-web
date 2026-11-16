@@ -123,7 +123,7 @@ class BookGallery {
     async build(uid, db, generation) {
         const worker=this.worker, guard=()=>worker.checkLibraryAssetState(generation,db);
         guard();
-        const rows=await db.select({table:'book',where:`@@hash('_uid', ${db.esc(uid)})`});
+        const rows=await require('./CatalogueRows').byUids(db,uid);
         guard();
         if (!rows.length) throw new Error('404 Файл не найден');
         const book=rows[0];

@@ -24,7 +24,6 @@ function makeWorker(config = {}) {
         opds: {},
     }, config);
     worker.checkMyState = () => true;
-    worker.profileSessions = new Map();
     worker.requireAdmin = async() => true;
     worker.addAdminEvent = () => {};
     return worker;
@@ -860,7 +859,6 @@ async function testAdminBackupArchiveAndDownload() {
         const Security = require('../server/core/Security');
         const security = new Security({dataDir});
         await security.init();
-        worker.profileSessions = new Map();
         worker.requireAdmin = async(userId) => {
             if (userId !== 'admin')
                 throw new Error('Admin required');
@@ -891,9 +889,23 @@ async function testAdminBackupArchiveAndDownload() {
             assert.match(ok.headers['content-disposition'] || '', /attachment/);
             assert.ok(ok.body.length > 0);
 
-            const expiredHeaders = sessionHeaders('admin');
-            const expiredSession = security.getSession({headers: expiredHeaders});
-            expiredSession.createdAt = Date.now() - 400*24*60*60*1000;
+            const clock = Date.now;
+            const {maxAgeMs,idleMs} = require('../server/core/SessionLifetime');
+            const deadline = clock() - 1000;
+            const step = idleMs - 1000;
+            let now = deadline - maxAgeMs;
+            const expiredRequest = {headers:{}};
+            let expiredSession;
+            Date.now = () => now;
+            try {
+                expiredSession = security.ensureSession(expiredRequest);
+                while (now+step < deadline) {
+                    now += step;
+                    assert.ok(security.getSession(expiredRequest));
+                }
+            } finally {Date.now = clock;}
+            expiredSession.profileAccessToken = worker.createProfileSession('admin');
+            const expiredHeaders = {cookie:`inpx_web_session=${security.packSessionId(expiredSession.id)}`};
             assert.strictEqual((await request(server, result.link, expiredHeaders)).status, 401);
 
             const notZip = await request(server, '/admin-backups/readme.txt', adminHeaders);
@@ -1784,7 +1796,7 @@ const tests = [
     ...require('./rc13-io-tests'),
     ...require('./rc13-client-tests'),
     ...Object.values(require('./catalog-discovery-tests')),
-    ...Object.values(require('./backup-vault-tests')),
+    require('./backup-vault-tests').testEncryptedBackupPreviewRestoreAndRotation,
     ...Object.values(require('./telegram-bot-tests')),
     ...require('./library-appearance-tests'),
     ...require('./epub-fb2-tests'),

@@ -1,7 +1,5 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import _ from 'lodash';
-import store from './store';
-import {appearanceRedirect} from './components/Library/libraryModel';
 
 const Search = () => import('./components/Search/Search.vue');
 const Reader = () => import('./components/Reader/Reader.vue');
@@ -61,8 +59,8 @@ const router = createRouter({
 });
 
 router.beforeEach(to => {
-    const redirect = appearanceRedirect(to, store.state.settings.catalogAppearance);
-    if (redirect) return {path: redirect, replace: true};
+    if (to.path === '/' && !Object.keys(to.query).length)
+        return {path: '/overview', replace: true};
 });
 
 export default router;

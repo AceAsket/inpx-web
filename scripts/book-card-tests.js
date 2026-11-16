@@ -160,7 +160,7 @@ async function testCardIgnoresLateSuccessAndErrorsAcrossCloseAndReopen() {
     const method = base.slice(base.indexOf('    async openBookCard('), base.indexOf('    getBookUid('));
     const List = new Function(`let nextBookCardRequestId = 0; return class {${method}}`)();
     const source = await fs.readFile(path.join(__dirname, '../client/components/Search/Search.vue'), 'utf8');
-    const Search = new Function(`return class {${source.slice(source.indexOf('    listEvent(event)'), source.indexOf('    openReaderLibrary()'))}}`)();
+    const Search = new Function(`return class {${source.slice(source.indexOf('    listEvent(event)'), source.indexOf('    openReadingLists('))}}`)();
     const parent = new Search(), requests = [], alerts = [];
     parent.$root = {stdDialog:{alert:(...args) => alerts.push(args)}};
     const list = new List();

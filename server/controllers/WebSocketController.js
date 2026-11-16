@@ -1075,7 +1075,7 @@ class WebSocketController {
         const session = this.security && ws.req && ws.req.securitySession;
         const tokens = new Set([req.profileAccessToken, session && session.profileAccessToken].filter(Boolean));
         for (const token of tokens) await this.webWorker.closeProfileSession(token);
-        if (session) delete session.profileAccessToken;
+        if (session) session.profileAccessToken = undefined;
         delete ws.userId;
         delete ws.userLastActivity;
         delete ws.clientEvents;

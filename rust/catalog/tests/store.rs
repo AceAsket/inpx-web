@@ -90,6 +90,16 @@ fn overlays_update_rows_and_uids_across_generations() {
         .map(|row| row["id"].as_u64().unwrap())
         .collect();
     assert_eq!(ids, [4, 3, 2]);
+    let first = query(
+        &store,
+        json!({"generation":"second","op":"scan","limit":2,"fields":["id"]}),
+    );
+    assert_eq!(first, json!({"after":2,"rows":[{"id":2}]}));
+    let next = query(
+        &store,
+        json!({"generation":"second","op":"scan","after":2,"limit":3,"fields":["id"]}),
+    );
+    assert_eq!(next, json!({"after":null,"rows":[{"id":3},{"id":4}]}));
 }
 
 #[test]
@@ -129,4 +139,89 @@ fn search_filters_and_picks_the_best_physical_copy() {
         .collect();
     matches.sort_unstable();
     assert_eq!(matches, [(1, 0, "Лучшая"), (5, 3, "Другая")]);
+}
+
+#[test]
+fn advanced_filters_keep_the_first_rank_for_merged_copies() {
+    let dir = tempdir().unwrap();
+    let fixture = |id, source, format, genre, score| {
+        let mut row: Value =
+            serde_json::from_str(&book(id, &id.to_string(), "Ёлка", source, score, 0)).unwrap();
+        row[0]["sourceId"] = json!(source);
+        row[0]["ext"] = json!(format);
+        row[0]["date"] = json!("2026-02-03");
+        row[0]["size"] = json!(100);
+        row[0]["genre"] = json!(genre);
+        row.to_string()
+    };
+    assert!(write(
+        dir.path(),
+        "base",
+        None,
+        &[
+            fixture(1, "main", "fb2", "sf", 1.0),
+            fixture(2, "other", "epub", "sf", 8.0),
+            fixture(3, "third", "pdf", "sf", 10.0),
+            fixture(4, "elsewhere", "fb2", "news", 12.0),
+        ]
+    ));
+    let store = BookStore::open(dir.path()).unwrap();
+    let rows = query(
+        &store,
+        json!({"generation":"base","op":"search","ids":[1,2,3,4],"terms":[[],[],[]],"copies":"merge",
+        "filters":[{"kind":"date","from":"2026-01-01","to":"2026-12-31"},{"kind":"numberRange","field":"size","from":10,"to":100},
+        {"kind":"genre","values":["sf"]},{"kind":"textValues","field":"ext","values":["fb2","epub"]}]}),
+    );
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert_eq!(rows[0]["id"], 2);
+    assert_eq!(rows[0]["order"], 0);
+}
+
+#[test]
+fn wide_search_uses_the_published_order_after_overlay_changes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path();
+    assert!(write(
+        path,
+        "base",
+        None,
+        &[
+            book(1, "first", "Первая", "a", 1.0, 0),
+            book(2, "best", "Четвёртая", "a", 2.0, 0),
+            book(3, "gone", "Третья", "c", 8.0, 0),
+            book(4, "last", "Четвёртая", "b", 1.0, 0),
+        ]
+    ));
+    assert!(write(
+        path,
+        "active",
+        Some("base"),
+        &["remove 3".into(), book(5, "new", "Новая", "c", 1.0, 1)]
+    ));
+    let key = "a".repeat(64);
+    let mut data = b"INPXORD1active".to_vec();
+    for (id, rank, ordinal, deleted) in [
+        (1u32, 1u32, 0u32, 0.0f64),
+        (2, 1, 2, 0.0),
+        (4, 1, 1, 0.0),
+        (5, 0, 3, 1.0),
+    ] {
+        for field in [id, rank, 0, 0, ordinal] {
+            data.extend(field.to_le_bytes());
+        }
+        data.extend(0.0f64.to_le_bytes());
+        data.extend(deleted.to_le_bytes());
+    }
+    std::fs::write(path.join(format!("book-order-{key}.bin")), data).unwrap();
+    let store = BookStore::open(path).unwrap();
+    let wide = |limit, copies| {
+        query(
+            &store,
+            json!({"generation":"active","op":"wideSearch","orderKey":key,"limit":limit,
+        "terms":[[],[],[]],"copies":copies,"filters":[{"kind":"numberValues","field":"del","values":[0]}]}),
+        )
+    };
+    assert_eq!(wide(1, "physical"), json!({"ids":[2],"totalFound":2}));
+    assert_eq!(wide(0, "physical"), json!({"ids":[2,4],"totalFound":2}));
+    assert_eq!(wide(0, "ranked"), json!({"ids":[2],"totalFound":1}));
 }

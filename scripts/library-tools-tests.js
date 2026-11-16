@@ -11,7 +11,7 @@ async function fixture(task) {
         await db.create({table:'book',hash:{field:'_uid',type:'string',unique:true}});
         const worker = Object.create(require('../server/core/WebWorker').prototype);
         Object.assign(worker,{db,config:{dataDir:dir,libDir:dir,tempDir:path.join(dir,'tmp'),adminPassword:'fixture-only'},libraryAssetGeneration:1,
-            profileSessions:new Map(),checkMyState:() => {},resolveLibraryArchivePath:async folder => folder});
+            checkMyState:() => {},resolveLibraryArchivePath:async folder => folder});
         worker.readingListStore = new (require('../server/core/ReadingListStore'))(worker.config);
         await fs.ensureDir(worker.config.tempDir);
         await task(worker,dir);

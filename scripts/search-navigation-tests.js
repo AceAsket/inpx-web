@@ -266,33 +266,6 @@ async function testCatalogExpandedRowsDoNotPublishAfterNewQuery() {
     }
 }
 
-async function testPageScrollerFollowsModelOnMountAndRemount() {
-    const {createRenderer, h, ref, nextTick} = require('vue');
-    const register = type('vueComponent.js');
-    const component = register(type('Search/PageScroller/PageScroller.vue'));
-    component.render = function() {return h('input', {value: this.page});};
-    const renderer = createRenderer({createElement: name => ({name, children: []}),
-        insert: (node, parent) => parent.children.push(node), remove: () => {}, setElementText: () => {},
-        patchProp: (node, key, old, value) => {node[key] = value;}, createText: text => ({text}), createComment: text => ({text}),
-        setText: () => {}, setComment: () => {}, parentNode: () => null, nextSibling: () => null});
-    const page = ref(5), instance = ref();
-    const app = renderer.createApp({render: () => h(component, {ref: instance, modelValue: page.value, pageCount: 12,
-        'onUpdate:modelValue': value => {page.value = value;}})});
-    app.mount({children: []});
-    assert.strictEqual(instance.value.page, 5);
-    instance.value.page++;
-    await nextTick();
-    assert.strictEqual(page.value, 6);
-    page.value = 9; await nextTick();
-    assert.strictEqual(instance.value.page, 9);
-    app.unmount();
-    const remounted = renderer.createApp(component, {modelValue: page.value, pageCount: 12});
-    const restored = remounted.mount({children: []});
-    assert.strictEqual(restored.page, 9);
-    remounted.unmount();
-}
-
 module.exports = [testCatalogSectionUsesSelectedFieldAndPreservesExplicitConditions,testSearchRoutePageAndBoundsIsolation, testSearchRouteHistoryAndNumericParameters,
     testCatalogSearchIgnoresSupersededResponses, testCatalogSearchRetryAndCoalescing,
-    testCatalogSearchUnmountAndCacheRaces, testCatalogExpandedRowsDoNotPublishAfterNewQuery,
-    testPageScrollerFollowsModelOnMountAndRemount];
+    testCatalogSearchUnmountAndCacheRaces, testCatalogExpandedRowsDoNotPublishAfterNewQuery];

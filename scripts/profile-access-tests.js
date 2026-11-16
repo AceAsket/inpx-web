@@ -26,7 +26,6 @@ async function fixture(options, test) {
     const worker = Object.create(Worker.prototype);
     worker.config = config;
     worker.checkMyState = () => {};
-    worker.profileSessions = new Map();
     worker.readingListStore = new ReadingListStore({dataDir: dir, adminLogin: 'admin', adminPassword: 'admin-fixture'});
     worker.dbConfig = async() => ({inpxInfo: {collection: 'Test collection'}});
     worker.getSharedDiscoveryConfig = async() => ({});

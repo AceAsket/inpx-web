@@ -3,6 +3,7 @@ const {join} = require('node:path');
 const {createInterface} = require('node:readline');
 const runtime = require('./ResourceRuntime');
 const {catalogGeneration} = require('./RustShelfIndex');
+const programs = require('./RustPrograms');
 
 const fileName = 'lookup.redb';
 const maxPending = 16;
@@ -10,17 +11,18 @@ const maxRequestBytes = 4 * 1024 * 1024;
 const retryMs = 30_000;
 
 function executable() {
-    return process.env.INPX_RUST_CATALOG_BINARY;
+    return programs.executable('catalog');
 }
 
 function lookupGeneration(config) {
-    return catalogGeneration({...config, indexUpdate:{updatedAt:config?.rustLookupBuiltAt}});
+    return config?.rustLookupGeneration || catalogGeneration({...config, indexUpdate:{updatedAt:config?.rustLookupBuiltAt}});
 }
 
 class LookupProcess {
     constructor(binary, file, generation, command = 'lookup') {
         this.generation = generation;
         this.pending = new Map();
+        this.labelOrders = new Map();
         this.sequence = 0;
         this.child = spawn(binary, [command, file], {windowsHide:true, stdio:['pipe','pipe','pipe']});
         let stderr = '';
@@ -34,6 +36,23 @@ class LookupProcess {
         this.lines = createInterface({input:this.child.stdout, crlfDelay:Infinity});
         this.lines.on('line', line => this.receive(line));
         this.lines.on('error', error => this.fail(error));
+    }
+
+    labelOrder(table) {
+        if (!this.labelOrders.has(table)) {
+            const read = this.query({op:'order',table}).then(order => {
+                if (order === null) return null;
+                if (!Array.isArray(order?.labels) || !Array.isArray(order?.runs) || order.runs.length>64)
+                    throw new Error('Invalid Rust name index');
+                return {labels:order.labels,runs:order.runs.map(run=>new Uint32Array(run))};
+            }).catch(error => {
+                if (error.message.includes('unknown variant `order`')) return null;
+                this.labelOrders.delete(table);
+                throw error;
+            });
+            this.labelOrders.set(table,read);
+        }
+        return this.labelOrders.get(table);
     }
 
     receive(line) {
@@ -51,7 +70,8 @@ class LookupProcess {
         signal?.throwIfAborted();
         const id = ++this.sequence;
         const line = JSON.stringify({...request, id, generation:this.generation}) + '\n';
-        if (this.pending.size >= maxPending || Buffer.byteLength(line) > maxRequestBytes)
+        const requestSize = request.op === 'wideSearch' || request.op === 'put' ? 12*1024*1024 : maxRequestBytes;
+        if (this.pending.size >= maxPending || Buffer.byteLength(line) > requestSize)
             throw Object.assign(new Error('Rust lookup capacity exceeded'), {code:'INPX_RUST_LOOKUP_BUSY'});
         return new Promise((resolve, reject) => {
             const abort = () => reject(signal.reason);
@@ -84,11 +104,11 @@ class LookupProcess {
 }
 
 class RustLookupIndex {
-    constructor(dbPath, config, store = null) {
-        this.binary = executable();
-        this.file = store?.directory || join(dbPath, fileName);
-        this.generation = store?.generation ?? lookupGeneration(config);
-        this.command = store ? 'store' : 'lookup';
+    constructor(dbPath, config, options = {}) {
+        this.binary = options.binary || executable();
+        this.file = options.file || join(dbPath,fileName);
+        this.generation = options.generation ?? lookupGeneration(config);
+        this.command = options.command || 'lookup';
         this.retryAt = 0;
     }
 

@@ -5,12 +5,29 @@ edition = "2024"
 publish = false
 
 [dependencies]
+aws-lc-sys = { version = "0.47", features = ["prebuilt-nasm"] }
 base64 = "0.22"
+encoding_rs = "0.8"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+html-escape = "0.3"
 inpx-reader = { path = "../inpx" }
+memchr = "2"
+quick-xml = "0.42"
 redb = "4"
+regex = "1"
+scrypt = { version = "0.12", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["deflate", "ppmd"] }
 sha2 = "0.10"
 tempfile = "3"
+time = { version = "0.3", default-features = false, features = ["parsing"] }
 unicode-general-category = "1.1"
 unicode-normalization = "0.1"
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs", "ppmd"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

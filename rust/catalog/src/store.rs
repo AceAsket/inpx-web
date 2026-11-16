@@ -1,6 +1,8 @@
-use std::collections::{BTreeSet, HashMap};
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap, hash_map::Entry};
 use std::io::{BufRead, Write};
-use std::path::Path;
+use std::ops::Bound::{Excluded, Unbounded};
+use std::path::{Path, PathBuf};
 
 use redb::{
     Database, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction, ReadableDatabase, ReadableTable,
@@ -9,9 +11,13 @@ use redb::{
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+use crate::catalog_query::{Copies, Filter, merged_key};
+use crate::facets::{Facet, Label, Postings};
+use crate::lookup::{LookupIndex, Table as LookupTable};
+use crate::wide_search::{self, WideOrder, WideResult, WideSearch};
 use crate::{
     Result,
-    index::{METADATA, check_generation, publish},
+    index::{METADATA, REDUCED_CACHE_BYTES, check_generation, publish_with_cache},
 };
 
 const BASE_FILE: &str = "books.redb";
@@ -24,6 +30,8 @@ const BASE: &str = "base";
 struct Header {
     generation: String,
     previous: Option<String>,
+    #[serde(default, rename = "lowMemory")]
+    low_memory: bool,
 }
 
 #[derive(Deserialize)]
@@ -44,7 +52,7 @@ struct SearchFields {
 #[derive(Deserialize)]
 struct BookFrame<'a>(#[serde(borrow)] &'a RawValue, #[serde(borrow)] &'a RawValue);
 
-fn decode(data: &[u8]) -> Result<(&[u8], &[u8])> {
+pub(crate) fn decode(data: &[u8]) -> Result<(&[u8], &[u8])> {
     let (length, data) = data.split_first_chunk::<4>().ok_or("invalid stored row")?;
     data.split_at_checked(u32::from_le_bytes(*length) as usize)
         .ok_or_else(|| "truncated stored row".into())
@@ -197,6 +205,7 @@ pub fn build_store(
         directory,
         &header.generation,
         header.previous.as_deref(),
+        header.low_memory,
         |writer| apply(writer, &mut input),
     )
 }
@@ -205,6 +214,7 @@ pub(crate) fn write_store<T>(
     directory: &Path,
     generation: &str,
     previous: Option<&str>,
+    low_memory: bool,
     build: impl FnOnce(&mut BookStoreWriter<'_>) -> Result<T>,
 ) -> Result<T> {
     if generation.is_empty() {
@@ -217,7 +227,7 @@ pub(crate) fn write_store<T>(
         Ok(result)
     };
     let Some(previous) = previous else {
-        return publish(&directory.join(BASE_FILE), generation, |tx| {
+        return publish_with_cache(&directory.join(BASE_FILE), generation, low_memory, |tx| {
             populate(tx, None)
         });
     };
@@ -230,12 +240,16 @@ pub(crate) fn write_store<T>(
     let path = directory.join(PATCH_FILE);
     if !path.try_exists()? {
         check_generation(&base_read, previous)?;
-        return publish(&path, generation, |tx| {
+        return publish_with_cache(&path, generation, low_memory, |tx| {
             tx.open_table(METADATA)?.insert(BASE, origin.value())?;
             populate(tx, Some(&base_read))
         });
     }
-    let db = Database::builder().open(path)?;
+    let mut builder = Database::builder();
+    if low_memory {
+        builder.set_cache_size(REDUCED_CACHE_BYTES);
+    }
+    let db = builder.open(path)?;
     let previous_read = db.begin_read()?;
     check_generation(&previous_read, previous)?;
     check_base(&previous_read, origin.value())?;
@@ -261,6 +275,10 @@ fn check_base(patch: &redb::ReadTransaction, origin: &str) -> Result<()> {
 pub struct BookStore {
     base: ReadOnlyDatabase,
     patch: Option<ReadOnlyDatabase>,
+    directory: PathBuf,
+    facets: RefCell<HashMap<Facet, Option<Postings>>>,
+    wide_order: RefCell<Option<(String, WideOrder)>>,
+    lookup: RefCell<Option<LookupIndex>>,
 }
 
 #[derive(Deserialize)]
@@ -273,19 +291,47 @@ pub struct StoreRequest {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 enum StoreQuery {
-    Probe,
+    Probe {
+        #[serde(default)]
+        capabilities: bool,
+    },
     Rows {
         ids: Vec<u32>,
         fields: Option<Vec<String>>,
     },
+    #[serde(rename_all = "camelCase")]
+    BookGroups {
+        table: LookupTable,
+        ids: Vec<u32>,
+        lookup_generation: String,
+    },
     Uids {
         uids: Vec<String>,
     },
+    Scan {
+        after: Option<u32>,
+        limit: usize,
+        fields: Option<Vec<String>>,
+    },
+    FacetLabels {
+        table: Facet,
+    },
+    FacetBooks {
+        table: Facet,
+        rows: Vec<u32>,
+        candidates: Option<Vec<u32>>,
+    },
+    BookOrder,
+    WideSearch(WideSearch),
     Search {
         ids: Vec<u32>,
         terms: [Vec<[String; 2]>; 3],
         deleted: Option<i64>,
         source: Option<String>,
+        #[serde(default)]
+        filters: Vec<Filter>,
+        #[serde(default)]
+        copies: Copies,
     },
 }
 
@@ -293,8 +339,32 @@ enum StoreQuery {
 #[serde(untagged)]
 pub enum StoreResponse {
     Probe(bool),
+    Capabilities {
+        #[serde(rename = "advancedSearch")]
+        advanced_search: bool,
+        #[serde(rename = "catalogScan")]
+        catalog_scan: bool,
+        facets: bool,
+        #[serde(rename = "wideSearch")]
+        wide_search: bool,
+    },
     Rows(Vec<Box<RawValue>>),
+    Groups(Vec<BookGroup>),
+    Page {
+        after: Option<u32>,
+        rows: Vec<Box<RawValue>>,
+    },
+    FacetLabels(Option<Vec<Vec<(u32, Label)>>>),
+    Ids(Vec<u32>),
     Matches(Vec<Match>),
+    Ranked(WideResult),
+}
+
+#[derive(Serialize)]
+pub struct BookGroup {
+    id: u32,
+    name: String,
+    books: Vec<Box<RawValue>>,
 }
 
 #[derive(Serialize)]
@@ -305,8 +375,9 @@ pub struct Match {
     title: String,
     serno: f64,
     order: usize,
-    #[serde(skip)]
     score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copy: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -320,6 +391,16 @@ struct SearchRow {
     source: String,
 }
 
+fn project(record: &[u8], fields: Option<&[String]>) -> Result<Box<RawValue>> {
+    if let Some(fields) = fields {
+        let mut row: inpx_reader::Record = serde_json::from_slice(record)?;
+        row.retain(|key, _| fields.contains(key));
+        Ok(serde_json::value::to_raw_value(&row)?)
+    } else {
+        Ok(serde_json::from_slice(record)?)
+    }
+}
+
 impl BookStore {
     pub fn open(directory: &Path) -> Result<Self> {
         let patch = directory.join(PATCH_FILE);
@@ -330,7 +411,41 @@ impl BookStore {
             } else {
                 None
             },
+            directory: directory.into(),
+            facets: RefCell::new(HashMap::new()),
+            wide_order: RefCell::new(None),
+            lookup: RefCell::new(None),
         })
+    }
+
+    pub(crate) fn visit(&self, mut visitor: impl FnMut(u32, &[u8]) -> Result<()>) -> Result<()> {
+        let base = self.base.begin_read()?;
+        let patch = self
+            .patch
+            .as_ref()
+            .map(ReadableDatabase::begin_read)
+            .transpose()?;
+        let records = base.open_table(RECORDS)?;
+        let updated = patch
+            .as_ref()
+            .map(|tx| tx.open_table(RECORDS))
+            .transpose()?;
+        wide_search::visit_rows(&records, updated.as_ref(), 0..=u32::MAX, &mut |id, data| {
+            visitor(id, decode(data)?.0)
+        })
+    }
+
+    fn facet<T>(
+        &self,
+        table: Facet,
+        read: impl FnOnce(Option<&Postings>) -> Result<T>,
+    ) -> Result<T> {
+        let mut facets = self.facets.borrow_mut();
+        let index = match facets.entry(table) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(Postings::open(&self.directory, table).ok()),
+        };
+        read(index.as_ref())
     }
 
     pub fn query(&self, request: StoreRequest) -> Result<StoreResponse> {
@@ -364,7 +479,53 @@ impl BookStore {
             Ok::<_, Box<dyn std::error::Error>>(records.get(id)?)
         };
         Ok(match request.query {
-            StoreQuery::Probe => StoreResponse::Probe(true),
+            StoreQuery::Probe { capabilities } => {
+                if capabilities {
+                    StoreResponse::Capabilities {
+                        advanced_search: true,
+                        catalog_scan: true,
+                        facets: true,
+                        wide_search: true,
+                    }
+                } else {
+                    StoreResponse::Probe(true)
+                }
+            }
+            StoreQuery::FacetLabels { table } => StoreResponse::FacetLabels(
+                self.facet(table, |index| Ok(index.map(Postings::labels)))?,
+            ),
+            StoreQuery::FacetBooks {
+                table,
+                rows,
+                candidates,
+            } => StoreResponse::Ids(self.facet(table, |index| {
+                index
+                    .ok_or("facet index unavailable")?
+                    .intersection(rows, candidates)
+            })?),
+            StoreQuery::BookOrder => StoreResponse::Ids(wide_search::source_order(
+                &self.directory,
+                &request.generation,
+            )?),
+            StoreQuery::WideSearch(query) => {
+                let mut current = self.wide_order.borrow_mut();
+                if current
+                    .as_ref()
+                    .is_none_or(|(key, _)| key != query.order_key())
+                {
+                    let key = query.order_key();
+                    *current = Some((
+                        key.into(),
+                        WideOrder::open(&self.directory, key, &request.generation)?,
+                    ));
+                }
+                StoreResponse::Ranked(wide_search::search(
+                    &records,
+                    updated.as_ref(),
+                    &current.as_ref().unwrap().1,
+                    query,
+                )?)
+            }
             StoreQuery::Rows { ids, fields } => {
                 let mut rows = Vec::new();
                 for id in ids {
@@ -372,17 +533,76 @@ impl BookStore {
                         && !row.value().is_empty()
                     {
                         let record = decode(row.value())?.0;
-                        rows.push(if let Some(fields) = &fields {
-                            let mut row: serde_json::Map<String, serde_json::Value> =
-                                serde_json::from_slice(record)?;
-                            row.retain(|key, _| fields.contains(key));
-                            serde_json::value::to_raw_value(&row)?
-                        } else {
-                            serde_json::from_slice(record)?
-                        });
+                        rows.push(project(record, fields.as_deref())?);
                     }
                 }
                 StoreResponse::Rows(rows)
+            }
+            StoreQuery::BookGroups {
+                table,
+                ids,
+                lookup_generation,
+            } => {
+                let mut lookup = self.lookup.borrow_mut();
+                if lookup.is_none() {
+                    *lookup = Some(LookupIndex::open(&self.directory.join("lookup.redb"))?);
+                }
+                let postings = lookup
+                    .as_ref()
+                    .unwrap()
+                    .postings(lookup_generation, table, ids)?;
+                let mut groups = Vec::with_capacity(postings.len());
+                for row in postings {
+                    let mut books = Vec::with_capacity(row.book_ids.len());
+                    for id in row.book_ids {
+                        if let Some(book) = read(id)?
+                            && !book.value().is_empty()
+                        {
+                            books.push(project(decode(book.value())?.0, None)?);
+                        }
+                    }
+                    groups.push(BookGroup {
+                        id: row.id,
+                        name: row.name,
+                        books,
+                    });
+                }
+                StoreResponse::Groups(groups)
+            }
+            StoreQuery::Scan {
+                after,
+                limit,
+                fields,
+            } => {
+                if !(1..=4096).contains(&limit) {
+                    return Err("invalid catalogue scan batch size".into());
+                }
+                let range = (after.map_or(Unbounded, Excluded), Unbounded);
+                let mut candidates = BTreeSet::new();
+                for entry in records.range::<u32>(range)?.take(limit) {
+                    candidates.insert(entry?.0.value());
+                }
+                if let Some(updated) = &updated {
+                    for entry in updated.range::<u32>(range)?.take(limit) {
+                        candidates.insert(entry?.0.value());
+                    }
+                }
+                let mut rows = Vec::with_capacity(limit);
+                let mut last = None;
+                let mut count = 0;
+                for id in candidates.into_iter().take(limit) {
+                    count += 1;
+                    last = Some(id);
+                    if let Some(row) = read(id)?
+                        && !row.value().is_empty()
+                    {
+                        rows.push(project(decode(row.value())?.0, fields.as_deref())?);
+                    }
+                }
+                StoreResponse::Page {
+                    after: if count == limit { last } else { None },
+                    rows,
+                }
             }
             StoreQuery::Uids { uids } => {
                 let by_uid = base.open_table(UIDS)?;
@@ -411,6 +631,8 @@ impl BookStore {
                 terms,
                 deleted,
                 source,
+                filters,
+                copies,
             } => {
                 let mut matches = HashMap::<String, Match>::new();
                 for (order, id) in ids.into_iter().enumerate() {
@@ -419,6 +641,15 @@ impl BookStore {
                         continue;
                     }
                     let (record, search) = decode(row.value())?;
+                    let full = if filters.is_empty() && copies == Copies::Physical {
+                        None
+                    } else {
+                        let fields: inpx_reader::Record = serde_json::from_slice(record)?;
+                        if !filters.iter().all(|filter| filter.matches(&fields)) {
+                            continue;
+                        }
+                        Some(fields)
+                    };
                     let fields: SearchFields = serde_json::from_slice(search)?;
                     if !terms.iter().zip(&fields.words).all(|(wanted, words)| {
                         wanted.iter().all(|term| {
@@ -435,7 +666,7 @@ impl BookStore {
                     {
                         continue;
                     }
-                    let candidate = Match {
+                    let mut candidate = Match {
                         id,
                         order,
                         score: fields.score,
@@ -443,19 +674,24 @@ impl BookStore {
                         title: book.title,
                         series: book.series,
                         serno: book.serno,
+                        copy: full
+                            .as_ref()
+                            .filter(|_| copies == Copies::Ranked)
+                            .map(merged_key),
+                    };
+                    let key = if copies == Copies::Merge {
+                        merged_key(full.as_ref().expect("complete row when merging copies"))
+                    } else {
+                        fields.physical
                     };
                     matches
-                        .entry(fields.physical)
+                        .entry(key)
                         .and_modify(|old| {
                             if candidate.score > old.score
                                 || candidate.score == old.score && candidate.id < old.id
                             {
-                                old.id = candidate.id;
-                                old.score = candidate.score;
-                                old.author.clone_from(&candidate.author);
-                                old.title.clone_from(&candidate.title);
-                                old.series.clone_from(&candidate.series);
-                                old.serno = candidate.serno;
+                                candidate.order = old.order;
+                                std::mem::swap(old, &mut candidate);
                             }
                         })
                         .or_insert(candidate);

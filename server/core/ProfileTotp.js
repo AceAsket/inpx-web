@@ -1,5 +1,8 @@
 const crypto = require('crypto');
+const {resolve} = require('node:path');
 const SecretStore = require('./SecretStore');
+const native = require('./RustCredentials');
+const trustedDevices = require('./ProfileTrustedDevices');
 
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const period = 30;
@@ -57,8 +60,8 @@ function verify(secret, code, lastStep = -1, now = Date.now()) {
     return null;
 }
 
-function start(login) {
-    const secret = encodeBase32(crypto.randomBytes(20));
+async function start(login) {
+    const secret = native.executable() ? await native.secondFactor({action:'start'}) : encodeBase32(crypto.randomBytes(20));
     const issuer = 'inpx-web';
     const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(login)}`;
     const query = new URLSearchParams({secret, issuer, algorithm:'SHA1', digits:'6', period:String(period)});
@@ -81,11 +84,16 @@ function recoveryHash(userId, code) {
     return crypto.createHash('sha256').update(userId).update('\0').update(code).digest('hex');
 }
 
-function newRecoveryCodes(userId) {
+function legacyRecoveryCodes(userId) {
     const recoveryCodes = Array.from({length:recoveryCount},
         () => encodeBase32(crypto.randomBytes(12)).match(/.{5}/g).join('-'));
     const recoveryHashes = recoveryCodes.map(code => recoveryHash(userId, code.replace(/-/g, '')));
     return {recoveryCodes, recoveryHashes};
+}
+
+async function newRecoveryCodes(userId) {
+    if (native.executable()) return native.secondFactor({action:'recovery',user:userId.toWellFormed()});
+    return legacyRecoveryCodes(userId);
 }
 
 function validChoice(code) {
@@ -93,6 +101,9 @@ function validChoice(code) {
 }
 
 async function readSecret(secretStore, userId, state) {
+    if (native.executable() && secretStore.keyFile) {
+        return native.secondFactor({action:'read', file:resolve(secretStore.keyFile), user:userId.toWellFormed(), state});
+    }
     const decrypted = await secretStore.decrypt(state.secret);
     const prefix = userId + '\n';
     if (!decrypted.startsWith(prefix) || !secretPattern.test(decrypted.slice(prefix.length)))
@@ -100,7 +111,7 @@ async function readSecret(secretStore, userId, state) {
     return decrypted.slice(prefix.length);
 }
 
-async function consume(secretStore, userId, state, provided, now = Date.now()) {
+async function consumeLegacy(secretStore, userId, state, provided, now) {
     if (!validChoice(provided)) return null;
     if (/^\d{6}$/.test(provided)) {
         const secret = await readSecret(secretStore, userId, state).catch(() => '');
@@ -115,9 +126,39 @@ async function consume(secretStore, userId, state, provided, now = Date.now()) {
     return remaining.length === state.recoveryHashes.length ? null : {...state, recoveryHashes:remaining};
 }
 
+async function consumeWithTrust(secretStore, userId, state, provided, now = Date.now(), remember) {
+    if (!validChoice(provided)) return null;
+    if (native.executable() && secretStore.keyFile) {
+        return native.secondFactor({action:'consume', file:resolve(secretStore.keyFile), user:userId.toWellFormed(),
+            state, code:provided.toWellFormed(), now, remember});
+    }
+    const accepted = await consumeLegacy(secretStore,userId,state,provided,now);
+    if (!accepted) return null;
+    const grant = remember && /^\d{6}$/.test(provided)
+        ? trustedDevices.issue(remember.devices,remember.replaced,remember.days)
+        : null;
+    return {state:accepted,grant};
+}
+
+async function consume(secretStore, userId, state, provided, now) {
+    return (await consumeWithTrust(secretStore,userId,state,provided,now))?.state || null;
+}
+
 async function enable(secretStore, userId, secret, lastStep) {
-    const {recoveryCodes, recoveryHashes} = newRecoveryCodes(userId);
+    if (native.executable() && secretStore.keyFile) {
+        return native.secondFactor({action:'enable',file:resolve(secretStore.keyFile),user:userId.toWellFormed(),secret,lastStep});
+    }
+    const {recoveryCodes, recoveryHashes} = legacyRecoveryCodes(userId);
     return {state:{secret:await secretStore.encrypt(userId + '\n' + secret), lastStep, recoveryHashes}, recoveryCodes};
 }
 
-module.exports = {start, normalize, verify, hotp, consume, enable, newRecoveryCodes, readSecret};
+async function confirm(secretStore,userId,secret,code,now=Date.now()) {
+    if (typeof code !== 'string' || !/^\d{6}$/.test(code)) return null;
+    if (native.executable() && secretStore.keyFile) {
+        return native.secondFactor({action:'confirm',file:resolve(secretStore.keyFile),user:userId.toWellFormed(),secret,code,now});
+    }
+    const step = verify(secret,code,-1,now);
+    return step === null ? null : enable(secretStore,userId,secret,step);
+}
+
+module.exports = {start, normalize, verify, hotp, consume, consumeWithTrust, enable, confirm, newRecoveryCodes, readSecret};

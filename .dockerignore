@@ -1,4 +1,5 @@
 .git
+rust/target
 .inpx-web
 client/.cache
 dist

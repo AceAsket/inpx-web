@@ -15,7 +15,7 @@ const fixturePassword = 'reader-fixture-password';
 
 function makeWorker(config) {
     const Worker = require('../server/core/WebWorker');
-    return Object.assign(Object.create(Worker.prototype), {config, myState:'normal', profileSessions:new Map(),
+    return Object.assign(Object.create(Worker.prototype), {config, myState:'normal',
         readingListStore:new ReadingListStore(config)});
 }
 
@@ -265,7 +265,7 @@ async function testAdminRecoversAnotherProfileTotp() {
         } finally {store.load = readStore;}
         assert.equal((await store.getUser(reader.id)).opdsAuthEnabled, false);
 
-        worker.pendingProfileTotp.set('expired-target-token', {userId:reader.id});
+        worker.pendingProfileTotp.create('expired-target-token',reader.id,'fixture-otp-secret',Date.now());
         const result = await reset(reader.id, config.adminPassword, code);
         assert.deepEqual(result,{userId:reader.id,otpEnabled:false,otpRequired:false,opdsAppPasswordSet:false,opdsEnabled:true,opdsAuthEnabled:true});
         assert.equal(worker.getProfileSessionUser(user.token),'');

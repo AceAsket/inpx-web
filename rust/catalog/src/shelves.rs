@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use redb::{ReadOnlyMultimapTable, ReadOnlyTable, ReadTransaction, ReadableTable};
 use serde::{Deserialize, Serialize};
@@ -97,22 +97,32 @@ fn newest(
                 }
             }
         }
-        let mut ranked: Vec<_> = preferred.into_values().collect();
-        ranked.sort_unstable_by_key(|book| {
-            (
-                Reverse(book.date_order),
-                Reverse(book.rating),
-                book.author_order,
-                book.title_order,
-                book.id,
-            )
-        });
+        let ranked: Vec<_> = preferred.into_values().collect();
+        let mut queue = BinaryHeap::from(
+            ranked
+                .iter()
+                .enumerate()
+                .map(|(index, book)| {
+                    Reverse((
+                        Reverse(book.date_order),
+                        Reverse(book.rating),
+                        book.author_order,
+                        book.title_order,
+                        book.id,
+                        index,
+                    ))
+                })
+                .collect::<Vec<_>>(),
+        );
         let mut diversity = Diversity::default();
-        let selected: Vec<_> = ranked
-            .into_iter()
-            .filter(|book| diversity.accepts(book))
-            .take(request.newest_limit)
-            .collect();
+        let selected: Vec<_> = std::iter::from_fn(|| {
+            queue
+                .pop()
+                .map(|Reverse((_, _, _, _, _, index))| ranked[index])
+        })
+        .filter(|book| diversity.accepts(book))
+        .take(request.newest_limit)
+        .collect();
         seen.extend(selected.iter().map(|book| book.uid.as_str()));
         windows.push(selected.into_iter().map(|book| book.uid.clone()).collect());
     }

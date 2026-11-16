@@ -9,6 +9,7 @@ const XmlParser = require('./xml/XmlParser');
 const ZipReader = require('./ZipReader');
 const {coverCacheKey} = require('./BookAssets');
 const {MemoryCache} = require('./MemoryCache');
+const rustArchive = require('./RustBookArchive');
 
 function plainText(value = '') {
     return he.decode(String(value ?? '')).replace(/<\s*(?:\/p|br\s*\/?)\s*>/gi, '\n')
@@ -36,6 +37,14 @@ function fb2Metadata(data) {
 }
 
 async function epubMetadata(file, config = {}) {
+    const native = await rustArchive.metadata(file,null,'epub',{
+        signal:config.resourceSignal,timeoutMs:config.resourceTimeoutMs,
+    });
+    if (native !== null) return native;
+    return legacyEpubMetadata(file,config);
+}
+
+async function legacyEpubMetadata(file, config) {
     const reader = new ZipReader({...config, resourceMaxOutputBytes:4 * 1024 * 1024});
     const checkAbort=()=>config.resourceSignal?.throwIfAborted();
     const oversized=()=>Object.assign(new Error('Метаданные EPUB превышают лимит'),{code:'INPX_RESOURCE_OUTPUT_LIMIT'});
@@ -123,6 +132,22 @@ async function isbnFromData(data, ext, config, maxBytes) {
     } finally {await fs.remove(file);}
 }
 
+async function readFb2Metadata(file) {
+    const handle = await fs.open(file,'r');
+    try {
+        const buffer = Buffer.alloc(2 * 1024 * 1024);
+        const {bytesRead} = await fs.read(handle,buffer,0,buffer.length,0);
+        let data = buffer.subarray(0,bytesRead);
+        // A bounded prefix may end inside a UTF-8 character.
+        for (let cut = 0; cut <= 3; cut++) {
+            if (!isUtf8(data.subarray(0,data.length-cut))) continue;
+            data = data.subarray(0,data.length-cut);
+            break;
+        }
+        return fb2Metadata(data);
+    } finally {await fs.close(handle);}
+}
+
 class BookMetadata {
     constructor(worker) {
         this.worker = worker;
@@ -166,28 +191,16 @@ class BookMetadata {
                 try {
                     if (!['fb2', 'epub'].includes(String(book.ext).toLowerCase()) || this.worker.remoteLib)
                         return value;
-                    file = await this.worker.extractBook(book.folder, `${book.file}.${book.ext}`, book.sourceLibDir);
-                    if (String(book.ext).toLowerCase() === 'fb2') {
-                        // Description precedes the body and binary images. Do not
-                        // parse or restore the entire book for a metadata search.
-                        const handle = await fs.open(file, 'r');
-                        try {
-                            const buffer = Buffer.alloc(2 * 1024 * 1024);
-                            const {bytesRead} = await fs.read(handle, buffer, 0, buffer.length, 0);
-                            let data = buffer.subarray(0, bytesRead);
-                            // A bounded prefix may end inside a UTF-8 character.
-                            for (let cut = 0; cut <= 3; cut++) {
-                                if (isUtf8(data.subarray(0, data.length - cut))) {
-                                    data = data.subarray(0, data.length - cut);
-                                    break;
-                                }
-                            }
-                            value = fb2Metadata(data);
-                        } finally {
-                            await fs.close(handle);
-                        }
-                    } else {
-                        value = await epubMetadata(file, this.worker.config);
+                    const format = String(book.ext).toLowerCase(), name = `${book.file}.${book.ext}`;
+                    let native = null;
+                    if (this.worker.resolveBookInput && rustArchive.executable()) {
+                        const input = await this.worker.resolveBookInput(book.folder,name,book.sourceLibDir);
+                        native = await rustArchive.metadata(input.source,input.name,format);
+                    }
+                    if (native !== null) value = native;
+                    else {
+                        file = await this.worker.extractBook(book.folder,name,book.sourceLibDir);
+                        value = format === 'fb2' ? await readFb2Metadata(file) : await legacyEpubMetadata(file,this.worker.config);
                     }
                 } catch (error) {
                     // A missing/corrupt book must not hide valid index matches.

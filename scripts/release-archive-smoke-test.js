@@ -4,12 +4,20 @@ const path = require('path');
 const os = require('os');
 const {execFileSync} = require('child_process');
 const StreamZip = require('node-stream-zip');
-const {executableNames} = require('../build/release-archive');
+const {executableNames,rustProgramEntry} = require('../build/release-archive');
 
 async function checkArchivePermissions(archive, target, converters = true) {
     const zip = new StreamZip.async({file:archive});
     try {
         const entries = await zip.entries();
+        for (const program of ['server','catalog','reader']) {
+            const name = rustProgramEntry(target,program);
+            const required = process.env[program==='server' ? 'INPX_SMOKE_REQUIRE_RUST_HTTP' : 'INPX_SMOKE_REQUIRE_RUST_CATALOG']==='true';
+            if (required || entries[name]) {
+                assert(entries[name] && !entries[name].isDirectory,`Missing Rust executable: ${name}`);
+                if (target !== 'win') assert.equal((entries[name].attr >>> 16) & 0o7777,0o755);
+            }
+        }
         for (const name of executableNames(target, converters)) {
             assert(entries[name] && !entries[name].isDirectory, `Missing release executable: ${name}`);
             if (target !== 'win')
@@ -39,6 +47,8 @@ async function main() {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-release-extracted-'));
     try {
         await extractArchive(archive, directory);
+        const authState = path.join(directory, 'bin', require('../server/core/RustAuthState').fileName);
+        assert(WebAssembly.validate(await fs.readFile(authState)), 'Release must include a valid Rust authentication module');
         for (const name of names) {
             if (target !== 'win')
                 assert.equal((await fs.stat(path.join(directory, name))).mode & 0o7777, 0o755, `Extracted mode: ${name}`);

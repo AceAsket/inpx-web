@@ -141,16 +141,9 @@ async function testMobiAvailabilityInWebAndOpds() {
     assert(formats.available('fb2',{}).includes('mobi'));
     assert(!formats.available('fb2',{mobiEnabled:false}).includes('mobi'));
     assert(!formats.available('fb2',{conversionEnabled:false}).includes('mobi'));
-    const {loadClient} = require('./catalog-list-filter-tests');
-    const BookView = loadClient(path.resolve(__dirname, '../client/components/Search/BookView/BookView.vue')).default;
-    const view = Object.create(BookView.prototype);
-    view.$store = {state:{config:{conversionFormats:['epub', 'pdf', 'mobi']}}};
-    for (const ext of ['fb2', 'epub', 'pdf']) {
-        view.book = {ext};
-        assert.strictEqual(view.availableConversionFormats.includes('mobi'), ext !== 'pdf');
-    }
-    view.book = {ext:'epub'}; view.$store.state.config.conversionFormats = ['epub', 'pdf'];
-    assert.deepStrictEqual(view.availableConversionFormats, ['pdf']);
+    for (const ext of ['fb2', 'epub', 'pdf'])
+        assert.strictEqual(formats.available(ext, {conversionFormats:['epub', 'pdf', 'mobi']}).includes('mobi'), ext !== 'pdf');
+    assert.deepStrictEqual(formats.available('epub', {conversionFormats:['epub', 'pdf']}), ['pdf']);
     const BookPage = require('../server/core/opds/BookPage');
     for (const ext of ['fb2', 'epub', 'mobi']) {
         for (const enabled of [true, false]) {

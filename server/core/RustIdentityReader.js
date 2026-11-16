@@ -16,7 +16,9 @@ async function readBookIdentities(binary, directory, count, physicalIdentity, co
         for await (const line of lines) {
             const frame = JSON.parse(line);
             if (!header) {
-                if (frame?.records !== count) throw new Error('Rust book identity count differs from JembaDB');
+                if (!Number.isSafeInteger(frame?.records) || frame.records<0 || count!==undefined && frame.records!==count)
+                    throw new Error('Invalid Rust book identity count');
+                count=frame.records;
                 header = true;
             } else {
                 if (!Array.isArray(frame) || !frame.length || frame.length > 512 || received + frame.length > count)

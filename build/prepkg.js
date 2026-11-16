@@ -3,6 +3,8 @@ const path = require('path');
 const yazl = require('yazl');
 
 const MarkdownIt = require('markdown-it');
+const {fileName: authStateFile} = require('../server/core/RustAuthState');
+const {rustProgramEntry} = require('./release-archive');
 
 const platform = process.argv[2];
 
@@ -73,10 +75,36 @@ async function build() {
     if (!platform)
         throw new Error(`Please set platform`);
 
+    const rustTarget = process.env.CARGO_TARGET_DIR || path.resolve(__dirname,'../rust/target');
+    const authState = process.env.INPX_RUST_AUTH_WASM || path.join(rustTarget,'wasm32-unknown-unknown/release',authStateFile);
+    const authBytes = await fs.readFile(authState);
+    if (!WebAssembly.validate(authBytes))
+        throw new Error(`Invalid Rust authentication module: ${authState}`);
+    const nativePlatform = {win:'win32:x64',linux:'linux:x64','linux-arm64':'linux:arm64',macos:'darwin:x64'};
+    const programs = [];
+    for (const program of ['server','catalog','reader']) {
+        const entry = rustProgramEntry(platform,program);
+        let source = process.env[`INPX_RUST_${program.toUpperCase()}_BINARY`];
+        if (!source && nativePlatform[platform] === `${process.platform}:${process.arch}`) {
+            const local = path.join(rustTarget,'release',path.basename(entry));
+            if (await fs.pathExists(local)) source = local;
+        }
+        if (source) {
+            await fs.access(source);
+            programs.push({source,entry});
+        }
+    }
+
     require('./patch-pkg')();
 
     await fs.emptyDir(outDir);
     await bundleJxlDecoder();
+    await fs.writeFile(path.join(outDir,'bin',authStateFile),authBytes);
+    for (const {source,entry} of programs) {
+        const output = path.join(outDir,entry);
+        await fs.copyFile(source,output);
+        if (platform!=='win') await fs.chmod(output,0o755);
+    }
 
     // Добавляем README в релиз.
     let readme = await fs.readFile(path.resolve(__dirname, '../README.md'), 'utf-8');

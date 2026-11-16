@@ -8,8 +8,7 @@ body[data-catalog-appearance="shelves"] .library-dialog-card .settings-dialog-bo
 body[data-catalog-appearance="shelves"] .settings-dialog-body > :not(.q-checkbox) {grid-column: 1 / -1;}
 body[data-catalog-appearance="shelves"] .settings-dialog-body > .q-checkbox {min-width: 0; align-items: flex-start; margin: 0;}
 body[data-catalog-appearance="shelves"] .settings-dialog-body .q-checkbox__label {line-height: 1.5; padding-top: 8px;}
-body[data-catalog-appearance="shelves"] .settings-dialog-body .appearance-control {margin: 0 0 18px;}
-body[data-catalog-appearance="shelves"] .library-dialog-card .q-field--outlined .q-field__control {background: var(--app-surface) !important; border-radius: 12px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .q-field--outlined .q-field__control {--field-autofill-bg: var(--app-surface); background: var(--field-autofill-bg) !important; border-radius: 12px;}
 body[data-catalog-appearance="shelves"] .library-dialog-card .dialog-box {width: 100%; max-width: none; min-width: 0; padding: 0;}
 body[data-catalog-appearance="shelves"] .library-dialog-card .dialog-body > [style*="width"] {width: 100% !important; max-width: 100% !important; min-width: 0 !important;}
 body[data-catalog-appearance="shelves"] .library-dialog-card .info-box {height: auto !important; min-height: 0; padding: 0; margin-top: 0; overflow: visible;}

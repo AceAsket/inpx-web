@@ -1,21 +1,6 @@
 // Shared presentation rules. Keep server records intact for existing book actions.
-const libraryRoutes = new Set(['/overview', '/my-books', '/profile']);
 const catalogRoutes = new Set(['/', '/author', '/series', '/title', '/books', '/for-you', '/newest', '/popular', '/bestsellers', '/extended']);
 const coverCacheVersion = 'rc13';
-
-function appearance(value) {
-    return value === 'shelves' ? 'shelves' : 'classic';
-}
-
-function appearanceRedirect(route, value) {
-    if (appearance(value) === 'shelves') {
-        if (route.path === '/' && !Object.keys(route.query || {}).length)
-            return '/overview';
-    } else if (libraryRoutes.has(route.path)) {
-        return route.path === '/overview' ? '/for-you' : '/books';
-    }
-    return '';
-}
 
 function bookUid(book = {}) {
     return String(book._uid || book.bookUid || '').trim();
@@ -103,5 +88,5 @@ function profileLoginError(error) {
     return error?.code === 'need_profile_login' || error?.message === 'need_profile_login';
 }
 
-module.exports = {appearance, appearanceRedirect, libraryRoutes, catalogRoutes, bookUid, progress, coverUrl, coverCacheVersion,
+module.exports = {catalogRoutes, bookUid, progress, coverUrl, coverCacheVersion,
     readable, ebookReaderUrl, recentBooks, homeBooks, personalAccess, identity, discoveryOptions, normalizeShelves, genreMapFromTree, profileLoginError};

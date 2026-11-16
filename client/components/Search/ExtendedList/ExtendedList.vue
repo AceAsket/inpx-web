@@ -38,7 +38,7 @@
         <div class="extended-grid q-mx-md" :class="{'extended-grid--list': bookCardListMode}">
             <BookView
                 v-for="item in tableData" :key="item.key"
-                :book="item.book" mode="extended" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
+                :book="item.book" :genre-map="genreMap" :show-metadata="settings.showJson" @book-event="bookEvent"
             />
         </div>
         <!-- Формирование списка конец ------------------------------------------------------------------>

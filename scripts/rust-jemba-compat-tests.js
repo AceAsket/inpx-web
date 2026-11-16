@@ -121,7 +121,7 @@ async function checkCatalogueUpdate(binary, directory) {
             const candidate = path.join(directory,`catalogue-native-${step}`);
             await buildIndexInWorker({...config,rustCatalogUpdateEnabled:false},reference,previous,()=>{});
             let native = false, warning, mode;
-            await buildIndexInWorker(config,candidate,previous,state => {
+            await buildIndexInWorker({...config,rustCompatibilityTables:true},candidate,previous,state => {
                 native ||= !!state.nativeUpdate;
                 warning ||= state.rustUpdateWarning;
                 mode ||= state.bookStoreMode;
@@ -136,21 +136,153 @@ async function checkCatalogueUpdate(binary, directory) {
                 await reader.lock({dbPath:candidate,softLock:true});
                 await reader.configureBookStore(candidate,generation);
                 assert(reader.bookStore);
+                if (reader.bookStoreWide) {
+                    assert((await fs.stat(path.join(candidate,'books-sequence.bin'))).isFile());
+                    assert.deepEqual(await reader.bookStore.run(process=>process.query({op:'bookOrder'}),()=>null),actual.tables.book.map(row=>row.id));
+                }
                 assert.deepEqual(await reader.booksByIds(actual.tables.book.map(row => row.id)),actual.tables.book);
+                if (step === 2 && reader.bookStoreScan) {
+                    const {selectShelfBooks} = require('../server/core/RustShelfIndex');
+                    await reader.open({table:'config'});
+                    const metadata = Object.fromEntries((await reader.select({table:'config'})).map(row => [row.id,row.value]));
+                    const request = {nowMs:Date.UTC(2026,9,3),daysWindows:[7,30],newestLimit:2,popularLimit:2,scores:{}};
+                    const options = {directory:candidate,executable:binary,indexPath:''};
+                    assert.equal(await selectShelfBooks(reader,metadata,request,options),null);
+                    await reader.rustShelfIndex.building;
+                    assert(!reader.rustShelfIndex.buildError,reader.rustShelfIndex.buildError);
+                    const windows = await selectShelfBooks(reader,metadata,request,options);
+                    assert(windows[0].length);
+                    const child = reader.rustShelfIndex.process.process;
+                    assert(child);
+                    assert.deepEqual(await selectShelfBooks(reader,metadata,request,options),windows);
+                    assert.equal(reader.rustShelfIndex.process.process,child);
+                }
                 assert.equal(reader.legacyBookOpen,undefined);
             } finally {await reader.unlock();}
             previous = candidate;
         }
         const controller = new AbortController();
         const abandoned = path.join(directory,'catalogue-aborted');
-        await assert.rejects(buildIndexInWorker(config,abandoned,previous,state => {
+        await assert.rejects(buildIndexInWorker({...config,rustCompatibilityTables:true},abandoned,previous,state => {
             if (state.job === 'previous identities') controller.abort(new Error('Stop the native update'));
         },controller.signal),/Stop the native update/);
         assert(!(await fs.readdir(abandoned)).some(name => name.startsWith('.rust-catalog-')));
         console.log('ok Rust catalogue updates preserve Jemba order, identities and all posting tables across generations');
+
+        const nativeConfig = {...config,queryCacheEnabled:true,queryCacheMemSize:0,queryCacheDiskSize:2,
+            queryCacheDiskMb:2,cacheCleanInterval:0};
+        const initial = path.join(directory,'without-jemba-initial');
+        const updated = path.join(directory,'without-jemba-updated');
+        const open = dbPath => require('../server/core/WebWorker').prototype.openCatalogue.call({config:nativeConfig},dbPath);
+        const run = async (dbPath,work) => {
+            const {db,searcher} = await open(dbPath);
+            try {
+                assert(db.nativeCatalogue);
+                assert.equal(db.worker,null);
+                return await work(db,searcher);
+            } finally {try {await searcher.close();} finally {await db.unlock();}}
+        };
+        await new (require('../server/core/AppLogger'))().init({...nativeConfig,loggingEnabled:false});
+        await write([original,fixed,remove]);
+        await buildIndexInWorker({...nativeConfig,lowMemoryMode:true},initial,null,()=>{});
+        const uid = await run(initial,async (db,searcher)=>{
+            const {found} = await searcher.bookSearch({title:'~^чужая',limit:5});
+            assert.equal(found.length,1);
+            return [found[0].id,found[0]._uid];
+        });
+        await write([changed,added,fixed]);
+        await buildIndexInWorker(nativeConfig,updated,initial,()=>{});
+        const files = await fs.readdir(updated);
+        assert(files.includes('catalogue.json') && files.includes('facets'));
+        assert(!files.some(name=>['book','author','config','file_hash','query_cache','query_time'].includes(name)));
+        await run(updated,async (db,searcher)=>{
+            const [row] = await db.booksByUids([uid[1]]);
+            assert.equal(row.id,uid[0]);
+            assert.notEqual(row.title,'Чужая книга');
+            assert.equal(searcher.dbConfig.indexUpdate.recordsRemoved,1);
+            assert((await searcher.search('author',{author:'Иванов',del:'0',limit:10})).found.some(row=>row.author.includes('Иванов')));
+            const shelves = await require('../server/core/WebWorker').prototype.selectDiscoveryBookWindows
+                .call({db,dbSearcher:searcher,libraryAssetGeneration:1,checkLibraryAssetState(){}},'popular',2);
+            assert.equal(shelves[0].length,2);
+            const titleIds = await searcher.selectTableIds('title',{});
+            const groups = await searcher.groupOpdsNames('title',titleIds,1);
+            searcher.config.rustOpdsGrouping=false;
+            try {assert.deepEqual(groups,await searcher.groupOpdsNames('title',titleIds,1));}
+            finally {delete searcher.config.rustOpdsGrouping;}
+            assert(groups.length>0);
+            const {fileHashesByIds,fileHashesByHash,saveFileHash} = require('../server/core/CatalogueServiceCache');
+            await saveFileHash(db,{id:uid[1],hash:'old',size:10});
+            await saveFileHash(db,{id:uid[1],hash:'new',size:20});
+            assert.deepEqual(await fileHashesByHash(db,'old'),[]);
+            assert.deepEqual(await fileHashesByHash(db,'new'),await fileHashesByIds(db,uid[1]));
+            await searcher.putCached('ids-a',{ids:Uint32Array.of(2,3)});
+            await searcher.putCached('ids-b',Uint32Array.of(4));
+            assert.deepEqual(await searcher.getCached('ids-a'),{ids:Uint32Array.of(2,3)});
+            await searcher.putCached('ids-c',Uint32Array.of(5));
+            assert.equal(await searcher.getCached('ids-b'),null);
+        });
+        await run(updated,async (db,searcher)=>{
+            assert.deepEqual(await searcher.getCached('ids-a'),{ids:Uint32Array.of(2,3)});
+            assert.deepEqual(await searcher.getCached('ids-c'),Uint32Array.of(5));
+        });
+        console.log('ok native catalogue builds and updates without Jemba tables, preserving identities and disk caches');
     } finally {
         if (previousBinary === undefined) delete process.env.INPX_RUST_CATALOG_BINARY;
         else process.env.INPX_RUST_CATALOG_BINARY = previousBinary;
+    }
+}
+
+async function checkFolderCatalogue(binary,directory) {
+    const dataDir=path.join(directory,'folder-data'), libDir=path.join(directory,'folder-books');
+    await fs.mkdir(dataDir);
+    await fs.mkdir(libDir);
+    const config={...require('../server/config/base'),dataDir,libDir,dbCacheSize:5,queryCacheEnabled:false,
+        inpxFilterFile:path.join(dataDir,'filter.json'),allowUnsafeFilter:true,
+        librarySources:[{id:'folder',name:'Folder',type:'folder',libDir}]};
+    await fs.writeFile(config.inpxFilterFile,JSON.stringify({filter:'row => row.title !== "Exclude"'}));
+    const book=title=>`<FictionBook><description><title-info><author><last-name>Reader</last-name></author><book-title>${title}</book-title></title-info></description><body><section><p>Text</p></section></body></FictionBook>`;
+    const previous=path.join(dataDir,'before'), target=path.join(dataDir,'after');
+    const first=path.join(libDir,'a.fb2'), second=path.join(libDir,'b.fb2');
+    await fs.writeFile(first,book('One'));
+    await fs.writeFile(second,book('Two'));
+    await fs.writeFile(path.join(libDir,'hidden.fb2'),book('Exclude'));
+    const original=process.env.INPX_RUST_CATALOG_BINARY;
+    process.env.INPX_RUST_CATALOG_BINARY=binary;
+    try {
+        const WebWorker=require('../server/core/WebWorker');
+        const read=async (folder,work)=>{
+            const {db,searcher}=await WebWorker.prototype.openCatalogue.call({config},folder);
+            try {return await work(db,searcher);}
+            finally {try {await searcher.close();} finally {await db.unlock();}}
+        };
+        await buildIndexInWorker({...config,fullOptimization:true},previous,null,()=>{});
+        assert((await fs.readdir(previous)).some(name=>name.startsWith('book-order-')));
+        const earlier=await read(previous,async (db,searcher)=>{
+            assert(db.nativeCatalogue);
+            const {found}=await searcher.bookSearch({title:'=One',limit:10});
+            assert.equal(found.length,1);
+            assert.equal(searcher.dbConfig.stats.bookCountAll,2);
+            return found[0];
+        });
+        await fs.writeFile(first,book('One updated'));
+        await fs.unlink(second);
+        await fs.writeFile(path.join(libDir,'new.fb2'),book('Added'));
+        await buildIndexInWorker(config,target,previous,()=>{});
+        await read(target,async (db,searcher)=>{
+            assert(db.nativeCatalogue);
+            assert.equal(db.worker,null);
+            const [updated]=await db.booksByUids([earlier._uid]);
+            assert.equal(updated.id,earlier.id);
+            assert.equal(updated.title,'One updated');
+            assert.equal(searcher.dbConfig.indexUpdate.recordsChanged,2);
+            assert.equal(searcher.dbConfig.indexUpdate.recordsRemoved,1);
+            assert.equal((await searcher.bookSearch({title:'=Exclude',limit:10})).found.length,0);
+            assert.equal(await fs.access(path.join(target,'books-patch.redb')),undefined);
+        });
+        console.log('ok Folder catalogue publishes and updates a Rust snapshot with a custom filter');
+    } finally {
+        if (original===undefined) delete process.env.INPX_RUST_CATALOG_BINARY;
+        else process.env.INPX_RUST_CATALOG_BINARY=original;
     }
 }
 
@@ -165,6 +297,7 @@ async function main() {
         await checkIndex(binary, directory, db);
         await checkIncomplete(binary, directory);
         await checkCatalogueUpdate(binary,directory);
+        await checkFolderCatalogue(binary,directory);
         console.log('ok Rust table snapshots can be queried and updated by JembaDB 5.1.7');
     } finally {
         await db.unlock();

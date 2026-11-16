@@ -8,7 +8,7 @@
         </template>
 
         <div class="q-mx-md column settings-dialog-body" style="min-width: min(300px, calc(100vw - 96px)); font-size: 120%;">
-            <AppearanceControl @change="dialogVisible = false" />
+            <AppConnectionSettings />
             <div class="row items-center q-ml-sm">
                 <div class="q-mr-sm">
                     Результатов на странице
@@ -627,9 +627,9 @@
 import vueComponent from '../../vueComponent.js';
 
 import Dialog from '../../share/Dialog.vue';
+import AppConnectionSettings from '../../Library/AppConnectionSettings.vue';
 import DiscoverySourceDialog from '../DiscoverySourceDialog/DiscoverySourceDialog.vue';
 import PerformancePanel from './PerformancePanel.vue';
-import AppearanceControl from '../../Library/AppearanceControl.vue';
 import BackupPanel from './BackupPanel.vue';
 import TelegramBotStatus from './TelegramBotStatus.vue';
 import {telegramProbeNotice} from './telegramStatusModel';
@@ -638,9 +638,9 @@ const componentOptions = {
     emits: ['update:modelValue', 'open-library-tasks'],
     components: {
         Dialog,
+        AppConnectionSettings,
         DiscoverySourceDialog,
         PerformancePanel,
-        AppearanceControl,
         BackupPanel,
         TelegramBotStatus,
     },

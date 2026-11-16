@@ -2,11 +2,12 @@ const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
 const profilePassword = require('./ProfilePassword');
+const profileOpdsPassword = require('./ProfileOpdsPassword');
 const profileTotp = require('./ProfileTotp');
 const trustedDevices = require('./ProfileTrustedDevices');
 const profileAuthPolicy = require('./ProfileAuthPolicy');
 const bookFormats = require('../../shared/BookFormats');
-const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
+const {withFileTransaction} = require('./FilePersistence');
 const progressJournal = require('./ReaderProgressJournal');
 
 const readerPreferencesVersion = 2;
@@ -1059,7 +1060,7 @@ class ReadingListStore {
 
     async writeDataNow(data) {
         const checkpoint = crypto.randomBytes(16).toString('hex');
-        await writeFileAtomic(this.file, JSON.stringify({...data, [progressJournal.checkpointField]: checkpoint}, null, 2), {syncDirectory: true});
+        await progressJournal.writeSnapshot(this.file,this.progressFile,JSON.stringify({...data,[progressJournal.checkpointField]:checkpoint},null,2));
         const journalStamp = await this.clearObsoleteProgressJournal();
         const stat = await fs.stat(this.file);
         const admin = data.users?.find(user => user.isAdmin || user.id === 'admin');
@@ -1454,10 +1455,7 @@ class ReadingListStore {
         if ((this.profileAuthPolicy.otpRequired || user.otpRequired) && !user.profileTotp) return false;
         // App passwords contain 192 bits of randomness, so a SHA-256 digest
         // supports constant-time validation without a KDF on every book request.
-        if (typeof password === 'string' && /^inpx_[A-Za-z0-9_-]{32}$/.test(password) && /^[a-f0-9]{64}$/.test(user.opdsAppPasswordHash || '')) {
-            const digest = crypto.createHash('sha256').update(password).digest();
-            if (crypto.timingSafeEqual(digest, Buffer.from(user.opdsAppPasswordHash,'hex'))) return true;
-        }
+        if (await profileOpdsPassword.verify(user.opdsAppPasswordHash,password)) return true;
         return user.profileTotp ? false : this.verifyUserPassword(user.id,password);
     }
 
@@ -1477,24 +1475,33 @@ class ReadingListStore {
         if (operation !== 'create-opds-password') throw new Error('Неизвестное действие с паролем OPDS');
         if (user.opdsEnabled === false || (!user.opdsAuthEnabled && !user.profileTotp) || !user.login || !user.passwordHash)
             throw new Error('Включите авторизацию OPDS в настройках профиля');
-        const opdsAppPassword = 'inpx_' + crypto.randomBytes(24).toString('base64url');
+        const issued = await profileOpdsPassword.issue();
         if (authorize) await authorize();
         if (profileTotp) user.profileTotp = profileTotp;
-        user.opdsAppPasswordHash = crypto.createHash('sha256').update(opdsAppPassword).digest('hex');
+        user.opdsAppPasswordHash = issued.hash;
         await this.save(data);
-        return {opdsAppPasswordSet:true, opdsAppPassword};
+        return {opdsAppPasswordSet:true, opdsAppPassword:issued.password};
     }
 
     async verifyUserPassword(userId, password) {
-        const data = await this.load();
+        const data = await this.loadSnapshot();
         const user = data.users.find(item => item.id === userId);
         if (!user || user.blocked || !user.passwordHash || !await profilePassword.verify(user.passwordHash, user.login, password))
             return false;
-        if (profilePassword.isLegacy(user.passwordHash)) {
-            user.passwordHash = await profilePassword.hash(password);
-            await this.save(data);
-        }
-        return true;
+        if (!profilePassword.isLegacy(user.passwordHash)) return true;
+
+        return withFileTransaction(this.file,async () => {
+            const draft = await this.load();
+            const current = draft.users.find(item => item.id === userId);
+            if (!current || current.blocked || !current.passwordHash) return false;
+            if ((current.passwordHash !== user.passwordHash || current.login !== user.login)
+                && !await profilePassword.verify(current.passwordHash,current.login,password)) return false;
+            if (profilePassword.isLegacy(current.passwordHash)) {
+                current.passwordHash = await profilePassword.hash(password);
+                await this.save(draft);
+            }
+            return true;
+        });
     }
 
     async createUser(profile = {}) {
@@ -1917,36 +1924,14 @@ class ReadingListStore {
             ? Math.max(0, parseInt(patch.generation, 10) || 0)
             : (explicitHiddenPatch ? generation : 0);
         const resetAt = String(target.readerProgressResetAt || '').trim();
-        const force = patch.force === true;
-        if (patchGeneration !== generation) {
-            if (Object.keys(current).length && Math.max(0, parseInt(current.generation, 10) || 0) === generation)
-                return Object.assign({}, current, {generationMismatch: true});
-
-            return {
-                percent: 0,
-                sectionId: '',
-                pageIndex: 0,
-                textOffset: -1,
-                textSnippet: '',
-                updatedAt: resetAt,
-                hidden: false,
-                reset: true,
-                resetAt,
-                generation,
-            };
-        }
-        if (utilsHasProp(patch, 'baseRevision') && Number(patch.baseRevision) !== (Number(current.revision) || 0))
-            return {...current, revision: Number(current.revision) || 0, conflict: true};
-        if (
-            !force
-            &&
-            !utilsHasProp(patch, 'baseRevision')
-            &&
-            Number.isFinite(patchTime)
-            && Number.isFinite(currentTime)
-            && patchTime < currentTime
-        )
-            return {...current};
+        const revision = Number(current.revision) || 0;
+        const checksRevision = utilsHasProp(patch,'baseRevision');
+        const policy = {
+            generation, requestedGeneration:patchGeneration,
+            currentGeneration:Object.keys(current).length ? Math.max(0,parseInt(current.generation,10) || 0) : null,
+            revision, checksRevision, requestedRevision:checksRevision ? Number(patch.baseRevision) : null,
+            requestedTime:patchTime, currentTime, force:patch.force === true,
+        };
         const progress = {
             percent: Number.isFinite(percent) ? Math.max(0, Math.min(1, percent)) : 0,
             sectionId,
@@ -1956,18 +1941,28 @@ class ReadingListStore {
             updatedAt: patchUpdatedAt || this.nowIso(),
             hidden,
             generation,
-            revision: (Number(current.revision) || 0) + 1,
+            revision: revision + 1,
         };
         const updatedAt = this.nowIso();
         const line = Buffer.from(JSON.stringify([target.id, normalizedBookUid, progress, updatedAt]) + '\n');
         const snapshot = this.loaded;
         const existingBytes = snapshot?.journal.offset || Buffer.byteLength(snapshot?.checkpoint || '') + 1;
-        if (!snapshot?.checkpoint || existingBytes + line.length > progressJournal.maxBytes) {
+        const record = snapshot?.checkpoint && existingBytes + line.length <= progressJournal.maxBytes
+            ? {checkpoint:snapshot.checkpoint,journal:snapshot.journal,line} : null;
+        const result = await progressJournal.update(this.progressFile,policy,record);
+        if (result.state==='generationMismatch') return {...current,generationMismatch:true};
+        if (result.state==='conflict') return {...current,revision,conflict:true};
+        if (result.state==='keep') return {...current};
+        if (result.state==='reset') return {percent:0,sectionId:'',pageIndex:0,textOffset:-1,textSnippet:'',
+            updatedAt:resetAt,hidden:false,reset:true,resetAt,generation};
+        if (result.state!=='advance') throw new Error('Unexpected reader progress decision');
+        if (!record) {
             const next = structuredClone(data);
             progressJournal.applyProgress(this.findProgressUser(next.users, target.id), normalizedBookUid, progress, updatedAt);
             await this.save(next);
         } else {
-            snapshot.journal = await progressJournal.append(this.progressFile, snapshot.checkpoint, snapshot.journal, line);
+            if (!result.journal) throw new Error('Reader progress was not written');
+            snapshot.journal = result.journal;
             progressJournal.applyProgress(target, normalizedBookUid, progress, updatedAt);
         }
         return {...progress};

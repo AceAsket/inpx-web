@@ -418,7 +418,7 @@ async function testOverviewPinnedShelvesAreOrderedBoundedAndPrivate() {
         await store.updateReaderProgress(owner.id, '0', {percent:1});
 
         const worker = Object.assign(Object.create(require('../server/core/WebWorker').prototype), {
-            readingListStore:store, profileSessions:new Map(), myState:'normal', libraryAssetGeneration:1,
+            readingListStore:store, myState:'normal', libraryAssetGeneration:1,
         });
         const token = worker.createProfileSession(owner.id);
         await assert.rejects(worker.getOverviewPinnedShelves(owner.id,''), /need_profile_login/);

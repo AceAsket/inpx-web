@@ -30,8 +30,7 @@ function compareBookFields(a,b) {
 
 function compareBooks(a,b) {return compareBookFields(a,b) || a.order - b.order;}
 
-function encodeBook(row) {
-    const tokens = ['author','series','title'].map(field => words(row[field]).flatMap(word => [word,root(word)]));
+function encodeBook(row, tokens = ['author','series','title'].map(field=>words(row[field]).flatMap(word=>[word,root(word)]))) {
     return JSON.stringify([row,{words:tokens,physical:physicalBookKey(row),score:bookScore(row)}]) + '\n';
 }
 

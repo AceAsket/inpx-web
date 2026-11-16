@@ -2,6 +2,7 @@ const fs = require('fs-extra');
 const path = require('path');
 const ZipReader = require('./ZipReader');
 const runtime = require('./ResourceRuntime');
+const rustArchive = require('./RustBookArchive');
 
 function contained(root, target) {
     const relative = path.relative(root, target);
@@ -25,8 +26,6 @@ async function read(worker, book, cache, signal, maxBytes, content = true) {
             if (!contained(sourceReal, await fs.realpath(resolved))) throw new Error('Ссылка ведёт за пределы источника');
             const stat = await fs.stat(resolved);
             const state = {resolved,sourceReal,directory:stat.isDirectory()};
-            if (!state.directory) {state.reader = new ZipReader({...worker.config,resourceMaxOutputBytes:maxBytes,resourceSignal:signal});
-                try {await state.reader.open(resolved);} catch (error) {await state.reader.close().catch(() => {}); throw error;}}
             cache.set(key,state);
         } catch (error) {cache.set(key,{error});}
     }
@@ -38,7 +37,18 @@ async function read(worker, book, cache, signal, maxBytes, content = true) {
         if (!contained(state.sourceReal, await fs.realpath(file))) throw new Error('Ссылка ведёт за пределы источника');
         entry = await fs.stat(file);
         if (!entry.isFile()) throw new Error('Вместо книги найден каталог');
-    } else {
+    }
+    if (content === 'isbn' && rustArchive.executable()) {
+        const numbers = await rustArchive.metadata(file || state.resolved,file ? null : name,String(book.ext).toLowerCase(),
+            {limit:maxBytes,isbnOnly:true,signal});
+        if (numbers !== null) return numbers;
+    }
+    if (!state.directory) {
+        if (!state.reader) {
+            const reader = new ZipReader({...worker.config,resourceMaxOutputBytes:maxBytes,resourceSignal:signal});
+            try {await reader.open(state.resolved); state.reader = reader;}
+            catch (error) {await reader.close().catch(() => {}); state.error = error; throw error;}
+        }
         entry = state.reader.entries[name] || Object.values(state.reader.entries).find(row => row.name === name);
         if (!entry) throw Object.assign(new Error('Файл отсутствует в архиве'),{code:'ENOENT'});
         if (entry.isDirectory || entry.isLink) throw new Error('Недопустимый тип записи архива');
