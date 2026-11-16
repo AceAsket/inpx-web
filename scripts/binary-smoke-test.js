@@ -316,7 +316,9 @@ async function main() {
                 '-e', 'INPX_OPDS_FEEDS_FILE=/library/opds-feeds.json',
                 '-e', 'INPX_ADMIN_PASSWORD=local-smoke-fixture',
                 '-e', 'INPX_KOSYNC_ENABLED=true',
-                ...(process.env.INPX_SMOKE_EPUB === 'true' ? ['-e','INPX_CONVERSION_FORMATS=fb2,epub'] : []),
+                ...(process.env.INPX_SMOKE_EPUB === 'true' ? [
+                    '-e', 'INPX_ENABLE_CONVERSION=true', '-e', 'INPX_CONVERSION_FORMATS=fb2,epub',
+                ] : []),
                 '--mount', `type=bind,source=${library},target=/library,readonly`];
             if (rust) {
                 args.push('-e','DATA_DIR=/data','-e','LIBDIR=/library','-e','INPX=/library/smoke.inpx',imageName);
