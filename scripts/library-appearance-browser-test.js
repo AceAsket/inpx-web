@@ -803,7 +803,9 @@ if (require.main === module) (async() => {
         assert.equal(await shelves.count(), 0, 'Logout clears pinned private shelves');
         await page.reload(); await page.locator('.overview-welcome').waitFor();
         assert.equal(await page.locator('.library-shell--active').count(), 1, 'The library still uses the new shell after reloading');
-        const fresh = await browser.newPage({viewport: {width: 390, height: 844}});
+        // This context checks the saved appearance across an explicit reload.
+        // A first-time service worker claim can reload the document concurrently.
+        const fresh = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers:'block'});
         await fresh.addInitScript(() => {
             if (!localStorage.getItem('vuex'))
                 localStorage.setItem('vuex', JSON.stringify({settings: {catalogAppearance: 'classic'}}));

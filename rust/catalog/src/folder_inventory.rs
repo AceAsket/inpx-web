@@ -42,10 +42,13 @@ pub(crate) fn visit_inventory(
 ) -> Result<()> {
     let mut dirs = vec![root.to_owned()];
     while let Some(dir) = dirs.pop() {
-        let entries = fs::read_dir(&dir)
-            .map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", dir.display())))?;
+        let mut entries = fs::read_dir(&dir)
+            .map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", dir.display())))?
+            .collect::<io::Result<Vec<_>>>()?;
+        // Match Node's readdir order before the stable locale sort. Distinct
+        // filenames can collate equally, and their order affects the fingerprint.
+        entries.sort_by_cached_key(fs::DirEntry::file_name);
         for entry in entries {
-            let entry = entry?;
             let kind = entry.file_type()?;
             if kind.is_dir() {
                 dirs.push(entry.path());
