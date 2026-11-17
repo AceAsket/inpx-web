@@ -9,6 +9,7 @@ use inpx_catalog::{Result, access_runtime::now_ms};
 const PROFILE_TOKEN: usize = 0;
 const PROXY_OWNER: usize = 1;
 const PROXY_TOKEN: usize = 2;
+const EBOOK_ACCESS: usize = 3;
 const COOKIE: &str = "inpx_web_session";
 
 pub(crate) struct Browser {
@@ -45,6 +46,23 @@ pub(crate) struct Valid {
 }
 
 impl Sessions {
+    pub(crate) fn ebook_access(&self, browser: &str) -> String {
+        self.shared
+            .lock()
+            .expect("browser sessions")
+            .browsers
+            .field(browser, EBOOK_ACCESS)
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    pub(crate) fn set_ebook_access(&self, browser: &str, token: Option<&str>) {
+        self.shared
+            .lock()
+            .expect("browser sessions")
+            .browsers
+            .set_field(browser, EBOOK_ACCESS, token);
+    }
     pub(crate) fn new(prefix: &str) -> Result<Self> {
         let mut key = [0; 32];
         getrandom::fill(&mut key).map_err(|_| "Не удалось защитить браузерные сеансы")?;

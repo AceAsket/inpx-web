@@ -31,6 +31,7 @@ pub mod configuration;
 pub mod credentials;
 mod crypto_support;
 pub mod directory_diagnostics;
+pub mod ebook_text;
 mod epub_fb2;
 mod epub_fb2_images;
 mod epub_fb2_input;

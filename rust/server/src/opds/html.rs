@@ -1,4 +1,4 @@
-pub(super) fn escape(value: &str) -> String {
+pub(crate) fn escape(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     append_text(&mut output, value, false);
     output

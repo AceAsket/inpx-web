@@ -29,6 +29,7 @@ WORKDIR /src
 COPY rust/ ./rust/
 COPY package.json ./
 COPY server/core/genres/genresText.js ./server/core/genres/
+COPY shared/ebook.css ./shared/
 RUN cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
 
 FROM rust-build AS rust-auth-build

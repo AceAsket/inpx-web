@@ -8,6 +8,7 @@ use inpx_auth_state::login_rate::{Kind, LoginRate, Policy};
 use inpx_catalog::Result;
 use inpx_catalog::access_runtime::{AccessCommand, AccessReply, AccessRuntime, now_ms};
 use inpx_catalog::catalogue_lock::CatalogueLease;
+use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
@@ -30,6 +31,31 @@ pub(crate) enum Admission {
 }
 
 impl Library {
+    pub(crate) fn login_password(
+        &self,
+        peer: IpAddr,
+        password: &str,
+    ) -> Result<(Admission, String)> {
+        let Admission::Challenge(salt) = self.admit(peer, "")? else {
+            return Ok((
+                if self.protected {
+                    Admission::RateLimited(300)
+                } else {
+                    Admission::Allowed
+                },
+                String::new(),
+            ));
+        };
+        let mut value = Sha256::new();
+        value.update(password.as_bytes());
+        value.update(salt.as_bytes());
+        let token = value
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Ok((self.admit(peer, &token)?, token))
+    }
     pub(crate) fn open(
         data: &Path,
         password: &str,

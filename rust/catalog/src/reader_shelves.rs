@@ -35,6 +35,110 @@ pub(super) struct Entry {
 }
 
 impl ReaderState {
+    pub fn ebook_shelves(&self, owner: &str, stamp: &str) -> Result<Value> {
+        let snapshot = self.snapshot(stamp)?;
+        Ok(
+            json!(items(&snapshot.data["lists"]).iter().filter(|row| owned(row, owner))
+            .map(|row| json!({"id":row["id"],"name":row["name"],"smart":row["filters"].is_object(),
+                "bookCount":entries(row).len()})).collect::<Vec<_>>()),
+        )
+    }
+
+    pub fn ebook_shelf(
+        &self,
+        owner: &str,
+        stamp: &str,
+        id: &str,
+        offset: usize,
+        limit: usize,
+        catalogue: &Catalogue,
+    ) -> Result<Value> {
+        let snapshot = self.snapshot(stamp)?;
+        let data = &snapshot.data;
+        let row = items(&data["lists"])
+            .iter()
+            .find(|row| row["id"] == id && owned(row, owner))
+            .ok_or(NOT_FOUND)?;
+        let mut cursor = offset;
+        let mut books = Vec::new();
+        let unread = row["filters"]["unreadOnly"] == true;
+        let more = if let Some(mut filters) = smart_query(row) {
+            let read = if unread {
+                read_uids(data, super::transfer::user(data, owner)?, owner)
+            } else {
+                HashSet::new()
+            };
+            let mut more = true;
+            while more && books.len() < limit && cursor - offset < 200 {
+                filters.insert(
+                    "limit".into(),
+                    (limit - books.len()).min(200 - (cursor - offset)).into(),
+                );
+                filters.insert("offset".into(), cursor.into());
+                let result = catalogue.browser_books(&filters)?;
+                let found = items(&result["found"]);
+                cursor += found.len();
+                books.extend(
+                    found
+                        .iter()
+                        .filter(|book| !read.contains(string(&book["_uid"])))
+                        .cloned(),
+                );
+                more = !found.is_empty()
+                    && (cursor as u64) < result["totalFound"].as_u64().unwrap_or_default();
+            }
+            more
+        } else {
+            let entries = entries(row);
+            let page = entries.iter().skip(offset).take(limit).collect::<Vec<_>>();
+            let mut by_uid: HashMap<_, _> = catalogue
+                .browser_books_by_uid(page.iter().map(|entry| entry.book_uid.as_str()))?
+                .into_iter()
+                .map(|book| (string(&book["_uid"]).to_owned(), book))
+                .collect();
+            for entry in page {
+                let mut book = by_uid
+                    .remove(&entry.book_uid)
+                    .unwrap_or_else(|| json!({"_uid":entry.book_uid,"unavailable":true}));
+                book["_shelfRead"] = entry.read.into();
+                books.push(book);
+            }
+            cursor += books.len();
+            cursor < entries.len()
+        };
+        Ok(
+            json!({"name":row["name"],"books":books,"next":more.then_some(cursor),"unreadOnly":unread}),
+        )
+    }
+
+    pub fn ebook_recent(&self, owner: &str, stamp: &str, catalogue: &Catalogue) -> Result<Value> {
+        let snapshot = self.snapshot(stamp)?;
+        let user = super::transfer::user(&snapshot.data, owner)?;
+        let mut positions: Vec<_> = user["readerProgress"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, progress)| {
+                progress["hidden"] != true
+                    && string(&progress["relinkedTo"]).is_empty()
+                    && !string(&progress["updatedAt"]).is_empty()
+                    && number(&progress["percent"]) < 1.0
+            })
+            .collect();
+        positions.sort_by(|(_, left), (_, right)| {
+            string(&right["updatedAt"]).cmp(string(&left["updatedAt"]))
+        });
+        let mut books = Vec::new();
+        for (uid, progress) in positions.into_iter().take(10) {
+            let mut book = catalogue
+                .browser_book(uid)?
+                .unwrap_or_else(|| json!({"_uid":uid,"unavailable":true}));
+            book["percent"] = progress["percent"].clone();
+            books.push(book);
+        }
+        Ok(books.into())
+    }
+
     pub fn telegram_shelves(
         &self,
         owner: &str,

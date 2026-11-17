@@ -201,6 +201,15 @@ pub fn cached(directory: &Path, hash: &str) -> Result<Option<Cached>> {
 }
 
 pub fn prepare(directory: &Path, book: &Book, source: &Source) -> Result<Cached> {
+    prepare_limited(directory, book, source, None)
+}
+
+pub fn prepare_limited(
+    directory: &Path,
+    book: &Book,
+    source: &Source,
+    limit: Option<u64>,
+) -> Result<Cached> {
     let extension = book.extension().ok_or(Failure::InvalidType)?;
     let lib_file = format!("{}.{extension}", book.file);
     let input = book_source::resolve(&source.lib_dir, &book.folder, &lib_file)?;
@@ -210,10 +219,11 @@ pub fn prepare(directory: &Path, book: &Book, source: &Source) -> Result<Cached>
     let raw = temp.path().join("book");
     let mut output = BufWriter::new(File::create_new(&raw)?);
     let fb2 = extension.eq_ignore_ascii_case("fb2");
-    extract_input(input, &mut output, if fb2 { MAX_FB2 } else { u64::MAX })?;
+    let cap = limit.unwrap_or(if fb2 { MAX_FB2 } else { u64::MAX });
+    extract_input(input, &mut output, cap)?;
     output.flush()?;
     drop(output);
-    if fb2 && fb2_prepare::normalize_bounded(&raw, MAX_FB2)?.is_none() {
+    if fb2 && fb2_prepare::normalize_bounded(&raw, cap)?.is_none() {
         return Err(Failure::Unsupported.into());
     }
     publish(directory, book, source, &raw)

@@ -39,6 +39,8 @@ mod delivery;
 mod diagnostics;
 #[path = "standalone_discovery.rs"]
 mod discovery;
+#[path = "standalone_ebook.rs"]
+mod ebook;
 #[path = "standalone_events.rs"]
 mod events;
 #[path = "standalone_exchange.rs"]
@@ -85,6 +87,7 @@ struct State {
     access: Access,
     socket: socket::Socket,
     events: events::Events,
+    ebook: ebook::Ebook,
     speech: Arc<speech::Speech>,
     delivery: delivery::Delivery,
     batch: batch::Downloads,
@@ -332,6 +335,12 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     let (metrics, metrics_policy) = metrics::Monitor::new(&config, &data)?;
     let request_access =
         request_access::Standalone::new(&config, prefix, metrics_policy, metadata.access())?;
+    let ebook = ebook::Ebook::new(
+        prefix,
+        &config,
+        request_access.profile_binding(),
+        conversion_formats,
+    );
     let state = Arc::new(State {
         started: Instant::now(),
         index,
@@ -344,6 +353,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         access,
         socket,
         events: events::Events::new(),
+        ebook,
         speech,
         batch,
         delivery,
@@ -609,9 +619,14 @@ impl State {
         {
             standalone_access::private(response.headers_mut());
         }
-        response
-            .headers_mut()
-            .extend(request_access::security_headers(secure));
+        let mut headers = request_access::security_headers(secure);
+        if response
+            .headers()
+            .contains_key(header::CONTENT_SECURITY_POLICY)
+        {
+            headers.remove(header::CONTENT_SECURITY_POLICY);
+        }
+        response.headers_mut().extend(headers);
         Ok(response)
     }
 
@@ -620,6 +635,9 @@ impl State {
         request: Request<Incoming>,
         admission: Admission,
     ) -> std::result::Result<Response<Body>, Infallible> {
+        if self.ebook.matches(request.uri().path()) {
+            return Ok(self.ebook.serve(self, request, admission).await);
+        }
         if self.backups.matches(request.uri().path())
             && matches!(*request.method(), Method::GET | Method::HEAD)
         {

@@ -105,6 +105,42 @@ impl Downloads {
         self.remote.as_deref()
     }
 
+    pub(super) fn ebook_readable(&self, extension: &str) -> bool {
+        self.remote.is_none()
+            && (extension.eq_ignore_ascii_case("fb2")
+                || self.epub && extension.eq_ignore_ascii_case("epub"))
+    }
+
+    pub(super) fn ebook_formats(&self, extension: &str) -> Vec<&'static str> {
+        self.epub
+            .then_some("fb2")
+            .into_iter()
+            .chain(self.conversions.iter().flat_map(Conversion::formats))
+            .filter(|format| {
+                *format != extension
+                    && self
+                        .conversion(format)
+                        .is_some_and(|format| self.supports(format, extension))
+            })
+            .collect()
+    }
+
+    pub(super) fn ebook_extension(&self, format: &str) -> Option<&'static str> {
+        self.conversion(format).and_then(Format::extension)
+    }
+
+    pub(super) fn ebook_text(&self, book: &Book, sources: &[Source]) -> CatalogueResult<Vec<u16>> {
+        let source = book.source(sources).ok_or_else(missing_book)?;
+        let cached = book_delivery::prepare_limited(
+            &self.cache,
+            book,
+            source,
+            Some(inpx_catalog::ebook_text::FILE_LIMIT),
+        )?;
+        let path = cached.reader_file(&self.cache, &book.ext)?;
+        inpx_catalog::ebook_text::read(&path)
+    }
+
     fn cache_book(&self, book: &Book, source: &Source) -> CatalogueResult<book_delivery::Cached> {
         if source.remote {
             let remote = self.remote().ok_or(Unavailable)?;
