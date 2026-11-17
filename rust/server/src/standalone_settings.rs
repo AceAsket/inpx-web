@@ -62,7 +62,7 @@ pub(super) struct Settings {
     file: PathBuf,
     data: PathBuf,
     prefix: String,
-    epub_reader: bool,
+    conversion_formats: Vec<&'static str>,
     source_options: Value,
     config: Mutex<Value>,
     extended_search: AtomicBool,
@@ -74,7 +74,7 @@ impl Settings {
         file: PathBuf,
         data: PathBuf,
         prefix: &str,
-        epub_reader: bool,
+        conversion_formats: Vec<&'static str>,
         config: Value,
         source_options: Value,
     ) -> Self {
@@ -82,7 +82,7 @@ impl Settings {
             file,
             data,
             prefix: prefix.trim_end_matches('/').into(),
-            epub_reader,
+            conversion_formats,
             source_options,
             extended_search: AtomicBool::new(config["extendedSearch"] != false),
             restored: AtomicBool::new(false),
@@ -196,7 +196,7 @@ impl Settings {
                 &self.prefix,
                 &format!("{}/book", self.prefix),
                 tolino,
-                self.epub_reader,
+                &self.conversion_formats,
                 feeds,
             )
         });

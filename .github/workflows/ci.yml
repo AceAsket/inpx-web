@@ -204,5 +204,6 @@ jobs:
       - name: Build and run the standalone Rust image
         if: matrix.target == 'linux'
         run: |
-          docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-lite -t inpx-web:ci-rust .
+          docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-rust -t inpx-web:ci-rust .
           node scripts/binary-smoke-test.js --image inpx-web:ci-rust --rust
+          node scripts/rust-conversion-tests.js inpx-web:ci-rust

@@ -57,6 +57,7 @@
         "conversionEnabled",
         "conversionFormats",
         "converterPaths",
+        "fb2cngConfigPath",
         "fb2cngArgs",
         "conversionConcurrency",
         "conversionQueueLimit",

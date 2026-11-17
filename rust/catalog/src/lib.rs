@@ -10,6 +10,7 @@ pub mod book_archive;
 pub mod book_audit;
 pub mod book_batch;
 pub mod book_cache;
+pub mod book_conversion;
 pub mod book_delivery;
 mod book_maps;
 mod book_metadata;

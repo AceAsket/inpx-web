@@ -67,7 +67,7 @@ jobs:
           }
           const variants = {
             web: {context: '.', target: 'runtime', suffix: ''},
-            rust: {context: '.', target: 'runtime-lite', suffix: '-rust'},
+            rust: {context: '.', target: 'runtime-rust', suffix: '-rust'},
             silero: {context: 'tts/silero', target: '', suffix: '-silero'},
           };
           const {context, target, suffix} = variants[process.env.COMPONENT];
@@ -102,7 +102,9 @@ jobs:
         env:
           IMAGE: ${{ steps.version.outputs.image }}
           INPX_SMOKE_EPUB: 'true'
-        run: node scripts/binary-smoke-test.js --image "$IMAGE" --rust
+        run: |
+          node scripts/binary-smoke-test.js --image "$IMAGE" --rust
+          node scripts/rust-conversion-tests.js "$IMAGE"
       - name: Test image fb2cng and MOBI conversion
         if: matrix.component == 'web'
         env:

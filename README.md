@@ -1112,7 +1112,7 @@ node build/release.js linux
 Docker-образ с Rust-сервером собирается из того же Dockerfile:
 
 ```sh
-docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-lite -t inpx-web:rust .
+docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-rust -t inpx-web:rust .
 ```
 
 <a id="native_run" />

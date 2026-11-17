@@ -178,4 +178,11 @@ LABEL org.opencontainers.image.title="inpx-web-lite" \
 ENV INPX_ENABLE_CONVERSION=false
 ENV INPX_CONVERSION_FORMATS=
 
+FROM runtime-base AS runtime-rust
+
+ENV INPX_ENABLE_CONVERSION=true
+ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw8
+
+COPY --from=fb2cng-tools /fb2cng-runtime/fbc /usr/local/bin/fbc
+
 FROM runtime AS final

@@ -31,7 +31,7 @@ pub(crate) struct Opds {
     static_root: String,
     book_path: String,
     tolino: bool,
-    epub_reader: bool,
+    formats: Vec<String>,
     shared_shelves: shelves::SharedShelves,
 }
 
@@ -153,7 +153,7 @@ impl Opds {
         static_root: &str,
         book_path: &str,
         tolino: bool,
-        epub_reader: bool,
+        formats: &[&str],
         shelves_file: Option<PathBuf>,
     ) -> Self {
         let root = root.trim_end_matches('/');
@@ -163,7 +163,7 @@ impl Opds {
             static_root: static_root.into(),
             book_path: book_path.into(),
             tolino,
-            epub_reader,
+            formats: formats.iter().map(|value| (*value).to_owned()).collect(),
             shared_shelves: shelves::SharedShelves::new(shelves_file),
         }
     }
@@ -344,8 +344,8 @@ impl Opds {
             href: page.scope_url(&page.uri.to_string()),
             scope: page.scope().into(),
             template_scoped: page.profile.is_some(),
-            conversion: self.epub_reader,
-            formats: Some(vec!["fb2".into()]),
+            conversion: !self.formats.is_empty(),
+            formats: Some(self.formats.clone()),
             mobi: false,
             preference: page
                 .profile

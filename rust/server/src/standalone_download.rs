@@ -5,6 +5,7 @@ use hyper::body::{Bytes, Incoming};
 use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::{Request, Response, StatusCode};
 use inpx_catalog::Result as CatalogueResult;
+use inpx_catalog::book_conversion::{Fb2cng, Format as Converted};
 use inpx_catalog::book_delivery::{self, Book, DownloadError, Representation};
 use inpx_catalog::library_sources::Source;
 use inpx_catalog::reader_document::{Document, Image};
@@ -21,6 +22,7 @@ pub(crate) struct Downloads {
     template: String,
     cover_root: String,
     epub: bool,
+    fb2cng: Option<Fb2cng>,
 }
 
 pub(crate) struct Requested {
@@ -36,6 +38,7 @@ enum Format {
     Raw,
     Zip,
     Fb2,
+    Converted(Converted),
 }
 
 impl Format {
@@ -44,6 +47,15 @@ impl Format {
             Self::Raw => "raw",
             Self::Zip => "zip",
             Self::Fb2 => "fb2",
+            Self::Converted(format) => format.name(),
+        }
+    }
+
+    fn extension(self) -> Option<&'static str> {
+        match self {
+            Self::Fb2 => Some("fb2"),
+            Self::Converted(format) => Some(format.extension()),
+            _ => None,
         }
     }
 }
@@ -64,6 +76,7 @@ impl Downloads {
         prefix: &str,
         template: String,
         epub: bool,
+        fb2cng: Option<Fb2cng>,
     ) -> CatalogueResult<Self> {
         let prefix = prefix.trim_end_matches('/');
         Ok(Self {
@@ -72,6 +85,7 @@ impl Downloads {
             template,
             cover_root: format!("{prefix}/cover/by-uid"),
             epub,
+            fb2cng,
         })
     }
 
@@ -178,14 +192,22 @@ impl Downloads {
     ) -> CatalogueResult<(PathBuf, String)> {
         let source = book.source(sources).ok_or_else(missing_book)?;
         let ext = book.extension().ok_or_else(missing_book)?;
-        let format = explicit.trim().to_ascii_lowercase();
-        let convert = if format.is_empty() {
-            self.epub && ext.eq_ignore_ascii_case("epub") && preferred == "fb2"
-        } else if matches!(format.as_str(), "original" | "raw") || format.eq_ignore_ascii_case(ext)
+        let explicit = explicit.trim().to_ascii_lowercase();
+        let preferred = preferred.trim().to_ascii_lowercase();
+        let format = if explicit.is_empty() {
+            &preferred
+        } else {
+            &explicit
+        };
+        let variant = if format.is_empty()
+            || matches!(format.as_str(), "original" | "raw")
+            || format.eq_ignore_ascii_case(ext)
         {
-            false
-        } else if format == "fb2" && self.epub && ext.eq_ignore_ascii_case("epub") {
-            true
+            Format::Raw
+        } else if let Some(variant) = self.conversion(format).filter(|_| convertible(ext)) {
+            variant
+        } else if explicit.is_empty() {
+            Format::Raw
         } else {
             return Err(format!("Неподдерживаемый формат отправки: {format}").into());
         };
@@ -193,17 +215,44 @@ impl Downloads {
         let mut name = book
             .filename(&self.template)?
             .replace(|ch: char| ch.is_ascii_control(), "_");
-        let mut file = if convert {
-            name = replace_extension(&name, "fb2");
-            cached.reader_file(&self.cache, ext)?
-        } else {
-            cached.file(&self.cache, &name, Representation::Raw)?
-        };
+        if let Some(ext) = variant.extension() {
+            name = replace_extension(&name, ext);
+        }
+        let mut file = self.variant(&cached, ext, &name, Some(variant), false)?;
         if archive {
             file = book_delivery::archive_attachment(&self.cache, &file, &name)?;
             name.push_str(".zip");
         }
         Ok((file, name))
+    }
+
+    fn conversion(&self, name: &str) -> Option<Format> {
+        if name == "fb2" && self.epub {
+            Some(Format::Fb2)
+        } else {
+            self.fb2cng.as_ref()?.format(name).map(Format::Converted)
+        }
+    }
+
+    fn variant(
+        &self,
+        cached: &book_delivery::Cached,
+        source_ext: &str,
+        name: &str,
+        variant: Option<Format>,
+        compressed: bool,
+    ) -> CatalogueResult<PathBuf> {
+        match variant {
+            Some(Format::Fb2) => cached.reader_file(&self.cache, source_ext),
+            Some(Format::Converted(format)) => self
+                .fb2cng
+                .as_ref()
+                .ok_or("Конвертер недоступен")?
+                .convert(&self.cache, cached, source_ext, format),
+            Some(Format::Zip) => cached.file(&self.cache, name, Representation::Zip),
+            _ if compressed => cached.file(&self.cache, name, Representation::Gzip),
+            _ => cached.file(&self.cache, name, Representation::Raw),
+        }
     }
 
     pub(crate) fn book_link(
@@ -459,9 +508,9 @@ impl Downloads {
             Target::Hash(_) => path_format.filter(|value| !value.is_empty()),
         };
         let format = match format {
-            Some("raw") => Some(Format::Raw),
+            Some("raw" | "original") => Some(Format::Raw),
             Some("zip") => Some(Format::Zip),
-            Some("fb2") if self.epub => Some(Format::Fb2),
+            Some(name) if self.conversion(name).is_some() => self.conversion(name),
             Some(other)
                 if other.bytes().all(|byte| {
                     byte.is_ascii_lowercase()
@@ -503,9 +552,7 @@ impl Downloads {
             .map_err(failure)?
             .ok_or(StatusCode::NOT_FOUND)?;
         let source = book.source(sources).ok_or(StatusCode::NOT_FOUND)?;
-        if request.format == Some(Format::Fb2)
-            && !matches!(book.ext.to_ascii_lowercase().as_str(), "epub" | "fb2")
-        {
+        if request.format.and_then(Format::extension).is_some() && !convertible(&book.ext) {
             return Err(StatusCode::NOT_FOUND);
         }
         let cached = match initial {
@@ -525,8 +572,11 @@ impl Downloads {
             let mut href = format!("{}/{}", self.root, cached.hash);
             if let Some(variant) = request.format {
                 let format = variant.segment();
-                if variant != Format::Raw {
-                    name = replace_extension(&name, format);
+                if let Some(ext) = variant
+                    .extension()
+                    .or((variant == Format::Zip).then_some("zip"))
+                {
+                    name = replace_extension(&name, ext);
                 }
                 href.push_str(&format!(
                     "/{format}/{}",
@@ -543,20 +593,16 @@ impl Downloads {
             return Ok(Prepared::Redirect(href));
         }
         let compressed = request.format.is_none() && request.gzip;
-        let path = match request.format {
-            Some(Format::Fb2) => cached.reader_file(&self.cache, &book.ext),
-            Some(Format::Zip) => cached.file(&self.cache, &name, Representation::Zip),
-            _ if compressed => cached.file(&self.cache, &name, Representation::Gzip),
-            _ => cached.file(&self.cache, &name, Representation::Raw),
-        }
-        .map_err(failure)?;
+        let path = self
+            .variant(&cached, &book.ext, &name, request.format, compressed)
+            .map_err(failure)?;
         let mut headers = HeaderMap::new();
         let media_type = if request.format == Some(Format::Zip) {
             name.push_str(".zip");
             "application/zip"
-        } else if request.format == Some(Format::Fb2) {
-            name = replace_extension(&name, "fb2");
-            mime("fb2")
+        } else if let Some(ext) = request.format.and_then(Format::extension) {
+            name = replace_extension(&name, ext);
+            mime(ext)
         } else {
             mime(&book.ext)
         };
@@ -575,11 +621,10 @@ impl Downloads {
         if let Some(sync) = sync
             && request.format != Some(Format::Zip)
         {
-            let ext = if request.format == Some(Format::Fb2) {
-                "fb2".to_owned()
-            } else {
-                book.ext.to_ascii_lowercase()
-            };
+            let ext = request
+                .format
+                .and_then(Format::extension)
+                .map_or_else(|| book.ext.to_ascii_lowercase(), str::to_owned);
             if let Err(error) = sync.kosync_link(&book.uid, &ext, || {
                 if compressed {
                     cached.file(&self.cache, &name, Representation::Raw)
@@ -601,6 +646,10 @@ fn replace_extension(name: &str, ext: &str) -> String {
 
 fn missing_book() -> std::io::Error {
     std::io::ErrorKind::NotFound.into()
+}
+
+fn convertible(ext: &str) -> bool {
+    ext.eq_ignore_ascii_case("fb2") || ext.eq_ignore_ascii_case("epub")
 }
 
 pub(crate) async fn respond(
@@ -677,7 +726,7 @@ fn accepts_gzip(headers: &HeaderMap) -> bool {
 fn mime(extension: &str) -> &'static str {
     match extension.to_ascii_lowercase().as_str() {
         "fb2" => "application/x-fictionbook+xml; charset=utf-8",
-        "epub" => "application/epub+zip",
+        "epub" | "kepub.epub" => "application/epub+zip",
         "zip" => "application/zip",
         "pdf" => "application/pdf",
         "txt" => "text/plain; charset=utf-8",

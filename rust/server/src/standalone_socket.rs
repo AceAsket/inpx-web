@@ -53,7 +53,7 @@ impl Socket {
         root: &str,
         config: &Value,
         data: &Path,
-        epub_reader: bool,
+        conversion_formats: &[&str],
         free_access: bool,
         tts_enabled: bool,
     ) -> Self {
@@ -112,7 +112,7 @@ impl Socket {
             "libraryProtocol":{"version":1,"features":["metadata","ratings"]},
             "opdsRoot":config["opds"]["root"].as_str().unwrap_or("/opds"),
             "extendedSearch":config["extendedSearch"]!=false,
-            "conversionEnabled":epub_reader,"conversionFormats":if epub_reader { vec!["fb2"] } else { Vec::new() },
+            "conversionEnabled":!conversion_formats.is_empty(),"conversionFormats":conversion_formats,
             "onlineReaderEnabled":config["onlineReaderEnabled"]!=false,"ebookReaderEnabled":false,
             "canRememberProfileDevice":false,
             "discovery":discovery,
