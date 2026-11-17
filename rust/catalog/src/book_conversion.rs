@@ -97,7 +97,7 @@ struct Fb2cng {
     yaml_lock: Mutex<()>,
 }
 
-struct Tool(PathBuf);
+pub(crate) struct Tool(PathBuf);
 
 enum Pdf {
     MuPdf(Tool),
@@ -613,7 +613,7 @@ impl Pdf {
 }
 
 impl Tool {
-    fn find(exec: &Path, name: &str, configured: &[String]) -> Option<Self> {
+    pub(crate) fn find(exec: &Path, name: &str, configured: &[String]) -> Option<Self> {
         let extension = if cfg!(windows) { ".exe" } else { "" };
         let find = |candidate: PathBuf| {
             if candidate.is_file() {
@@ -647,7 +647,7 @@ impl Tool {
             .map(Self)
     }
 
-    fn command(&self, directory: &Path) -> Command {
+    pub(crate) fn command(&self, directory: &Path) -> Command {
         let mut command = Command::new(&self.0);
         command.current_dir(directory);
         command
@@ -662,7 +662,7 @@ impl Tool {
     }
 }
 
-fn configured(paths: &Value, aliases: &[&str]) -> Vec<String> {
+pub(crate) fn configured(paths: &Value, aliases: &[&str]) -> Vec<String> {
     aliases
         .iter()
         .flat_map(|name| {
@@ -844,7 +844,7 @@ fn remaining(deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-fn run(mut command: Command, deadline: Instant) -> Result<()> {
+pub(crate) fn run(mut command: Command, deadline: Instant) -> Result<()> {
     remaining(deadline)?;
     let program = Path::new(command.get_program())
         .file_name()

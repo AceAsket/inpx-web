@@ -98,7 +98,7 @@ fn relative(value: &str) -> io::Result<String> {
     Ok(value)
 }
 
-fn within(root: &Path, path: PathBuf) -> io::Result<PathBuf> {
+pub(crate) fn within(root: &Path, path: PathBuf) -> io::Result<PathBuf> {
     if !path.starts_with(root) {
         return Err(invalid());
     }
@@ -182,7 +182,7 @@ fn archive_variant(root: &Path, candidate: &Path) -> io::Result<Option<PathBuf>>
 }
 
 #[cfg(unix)]
-fn open_within(root: &Path, path: &Path) -> io::Result<File> {
+pub(crate) fn open_within(root: &Path, path: &Path) -> io::Result<File> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
@@ -220,7 +220,7 @@ fn open_within(root: &Path, path: &Path) -> io::Result<File> {
 }
 
 #[cfg(windows)]
-fn open_within(root: &Path, path: &Path) -> io::Result<File> {
+pub(crate) fn open_within(root: &Path, path: &Path) -> io::Result<File> {
     use std::ffi::OsString;
     use std::os::windows::{ffi::OsStringExt, fs::OpenOptionsExt, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{

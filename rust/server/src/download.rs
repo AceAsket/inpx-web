@@ -152,7 +152,10 @@ struct Prepared {
 }
 
 fn prepare(path: &Path, conditions: &HeaderMap, head: bool) -> io::Result<Prepared> {
-    let mut file = open(path)?;
+    prepare_file(open(path)?, conditions, head)
+}
+
+fn prepare_file(mut file: File, conditions: &HeaderMap, head: bool) -> io::Result<Prepared> {
     let metadata = file.metadata()?;
     if !metadata.is_file() || is_reparse_point(&metadata) {
         return Err(io::Error::new(
@@ -284,13 +287,27 @@ pub(crate) async fn send_local(
     head: bool,
 ) -> Response<Body> {
     match prepare_async(path, conditions, head).await {
-        Ok(prepared) => {
-            let (mut parts, ()) = Response::new(()).into_parts();
-            parts.headers = headers;
-            file_response(parts, prepared, head, None)
-        }
+        Ok(prepared) => local_response(headers, prepared, head),
         Err(status) => error(status),
     }
+}
+
+pub(crate) async fn send_open(
+    file: File,
+    headers: HeaderMap,
+    conditions: HeaderMap,
+    head: bool,
+) -> Response<Body> {
+    match tokio::task::spawn_blocking(move || prepare_file(file, &conditions, head)).await {
+        Ok(Ok(prepared)) => local_response(headers, prepared, head),
+        _ => error(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+fn local_response(headers: HeaderMap, prepared: Prepared, head: bool) -> Response<Body> {
+    let (mut parts, ()) = Response::new(()).into_parts();
+    parts.headers = headers;
+    file_response(parts, prepared, head, None)
 }
 
 async fn prepare_async(

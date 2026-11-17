@@ -528,7 +528,11 @@ impl<R: Read + Seek> Directory<R> {
 }
 
 pub(crate) fn open_directory(path: &Path) -> Extraction<Directory<impl Read + Seek>> {
-    let archive = ArchiveReader::open(path, File::open(path)?)?;
+    input_directory(path, File::open(path)?)
+}
+
+pub(crate) fn input_directory(path: &Path, file: File) -> Extraction<Directory<impl Read + Seek>> {
+    let archive = ArchiveReader::open(path, file)?;
     Ok(archive.directory)
 }
 

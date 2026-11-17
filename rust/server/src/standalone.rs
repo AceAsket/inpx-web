@@ -51,6 +51,8 @@ mod index;
 mod isbn;
 #[path = "standalone_kosync.rs"]
 mod kosync;
+#[path = "standalone_legacy_http.rs"]
+mod legacy_http;
 #[path = "standalone_metadata.rs"]
 mod metadata;
 #[path = "standalone_metrics.rs"]
@@ -83,6 +85,7 @@ struct State {
     diagnostics: diagnostics::Diagnostics,
     backups: backup::Backups,
     assets: Assets,
+    legacy: legacy_http::Routes,
     opds_slots: Arc<Semaphore>,
     access: Access,
     socket: socket::Socket,
@@ -351,6 +354,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         diagnostics: diagnostics::Diagnostics::new(&data),
         backups: backup::Backups::new(&data, &file, prefix, &config),
         assets,
+        legacy: legacy_http::Routes::new(prefix, exec_dir, &config),
         opds_slots: Arc::new(Semaphore::new(8)),
         access,
         socket,
@@ -748,6 +752,9 @@ impl State {
             .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR));
             standalone_access::private(response.headers_mut());
             return Ok(response);
+        }
+        if let Some(route) = self.legacy.route(&request) {
+            return Ok(legacy_http::Routes::serve(self, route, request, admission).await);
         }
         let cover = self.downloads.cover_request(&request);
         let requested = cover

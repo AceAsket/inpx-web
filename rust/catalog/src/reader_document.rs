@@ -276,6 +276,10 @@ impl Document {
     }
 
     pub fn cover(&self) -> Option<Image> {
+        Image::from_bytes(self.cover_bytes()?)
+    }
+
+    fn cover_bytes(&self) -> Option<Vec<u8>> {
         let cover = self.cover_id();
         if cover.is_empty() {
             return None;
@@ -283,7 +287,7 @@ impl Document {
         self.root
             .children("binary")
             .find(|node| node.attr("id") == cover)
-            .and_then(decode_image)
+            .and_then(image_bytes)
     }
 
     fn images(&self) -> impl Iterator<Item = &Element> {
@@ -387,6 +391,16 @@ impl Image {
 }
 
 fn decode_image(node: &Element) -> Option<Image> {
+    Image::from_bytes(image_bytes(node)?)
+}
+
+pub(crate) fn fb2_cover(bytes: &[u8]) -> Option<Vec<u8>> {
+    parse(&crate::fb2_prepare::decode(bytes)?)
+        .ok()?
+        .cover_bytes()
+}
+
+fn image_bytes(node: &Element) -> Option<Vec<u8>> {
     let maximum = IMAGE_LIMIT.div_ceil(3) * 4;
     let mut encoded = String::new();
     node.text_chunks(&mut |text| {
@@ -401,7 +415,10 @@ fn decode_image(node: &Element) -> Option<Image> {
     if encoded.len() > maximum {
         return None;
     }
-    Image::from_bytes(STANDARD.decode(encoded).ok()?)
+    STANDARD
+        .decode(encoded)
+        .ok()
+        .filter(|bytes| bytes.len() <= IMAGE_LIMIT)
 }
 
 fn parse(xml: &str) -> Result<Document> {

@@ -56,6 +56,7 @@ mod jemba_identity;
 pub mod kosync;
 mod kosync_index;
 mod kosync_store;
+pub mod legacy_library_files;
 pub mod library_media;
 pub mod library_sources;
 mod lookup;
