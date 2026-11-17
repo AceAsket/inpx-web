@@ -133,6 +133,15 @@ pub(crate) struct Admission {
 }
 
 impl Standalone {
+    pub(crate) fn profile_binding(&self) -> bool {
+        self.bind_profile
+    }
+
+    pub(crate) fn secure_browser_origin(&self, headers: &HeaderMap) -> bool {
+        read_header(headers, &header::ORIGIN).is_ok_and(|origin| origin.starts_with("https://"))
+            && same_origin(headers, true, "https").unwrap_or(false)
+    }
+
     pub(crate) fn new(
         config: &Value,
         root: &str,

@@ -99,6 +99,21 @@ impl SelectedBooks {
             Self::Ids(ids) => ids.is_empty(),
         }
     }
+
+    pub(crate) fn extend_ids(&self, ids: &mut Vec<u32>) {
+        match self {
+            Self::Bitmap(data) => {
+                for (index, &bits) in data.iter().enumerate() {
+                    let mut pending = bits;
+                    while pending != 0 {
+                        ids.push(index as u32 * 8 + pending.trailing_zeros());
+                        pending &= pending - 1;
+                    }
+                }
+            }
+            Self::Ids(selected) => ids.extend(selected.iter().copied()),
+        }
+    }
 }
 
 const ITEM_LIMIT: usize = 200;

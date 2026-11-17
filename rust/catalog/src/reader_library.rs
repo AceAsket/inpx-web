@@ -7,6 +7,35 @@ use crate::Result;
 use crate::standalone_catalogue::Catalogue;
 
 impl ReaderState {
+    pub fn mobile_home(
+        &self,
+        owner: &str,
+        stamp: &str,
+        limit: &Value,
+        catalogue: &Catalogue,
+        generation: u64,
+    ) -> Result<Value> {
+        let snapshot = self.snapshot(stamp)?;
+        let data = &snapshot.data;
+        let user = super::transfer::user(data, owner)?;
+        let limit = match number(limit) {
+            0.0 => 100,
+            value => value.clamp(1.0, 300.0) as usize,
+        };
+        let reading = reading_library(
+            data,
+            user,
+            &json!({"state":"all","sort":"updatedDesc","limit":limit}),
+            catalogue,
+        )?;
+        let mut listing = super::shelves::listing(data, user, owner, &Value::Null, catalogue)?;
+        let profile = json!({"id":owner,"name":user["name"],"login":string(&user["login"]),
+            "createdAt":user["createdAt"],"isAdmin":user["isAdmin"]==true});
+        Ok(
+            json!({"profile":profile,"reading":reading,"lists":listing["lists"].take(),"indexGeneration":generation}),
+        )
+    }
+
     pub fn reading_library(
         &self,
         owner: &str,
@@ -63,6 +92,22 @@ pub(super) fn reading_library(
             selected.push((uid.trim(), progress, status, percent));
         }
     }
+    let newest = match sort {
+        "updatedDesc" => Some(true),
+        "updatedAsc" => Some(false),
+        _ => None,
+    };
+    let limited_count = if let Some(descending) = newest.filter(|_| query.is_empty()) {
+        let count = selected.len();
+        selected.sort_by(|left, right| {
+            let order = string(&left.1["updatedAt"]).cmp(string(&right.1["updatedAt"]));
+            if descending { order.reverse() } else { order }
+        });
+        selected.truncate(limit);
+        Some(count)
+    } else {
+        None
+    };
     let mut items = Vec::new();
     for chunk in selected.chunks(500) {
         let mut books: HashMap<_, _> = catalogue
@@ -132,7 +177,7 @@ pub(super) fn reading_library(
             _ => newest(),
         }
     });
-    let count = items.len();
+    let count = limited_count.unwrap_or(items.len());
     items.truncate(limit);
     Ok(json!({"state":state,"query":query,"sort":sort,
             "progressGeneration":number(&user["readerProgressGeneration"]).max(0.0) as u64,

@@ -265,3 +265,29 @@ fn source(root: &Path, inpx: &Path) -> Source {
     }
     result
 }
+
+pub fn diagnose(directory: &Path, inpx: &Path) -> Result<serde_json::Value> {
+    let mut report = source(directory, inpx);
+    for path in &mut report.found_inpx {
+        *path = directory.join(&*path);
+    }
+    Ok(serde_json::to_value(report)?)
+}
+
+pub fn rotate_cache(
+    directory: &Path,
+    max: f64,
+    target: f64,
+    force: bool,
+    include: impl Fn(&str) -> bool,
+) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(cleanup::rotate_filtered(
+        directory, max, target, force, include,
+    )?)?)
+}
+
+pub fn purge_cover_cache(directory: &Path, native: bool) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(cleanup::purge_filtered(
+        directory, native,
+    )?)?)
+}

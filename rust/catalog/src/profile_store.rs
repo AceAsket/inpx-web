@@ -38,6 +38,8 @@ pub(crate) struct Account {
     pub(crate) default_opds_format: String,
     #[serde(default)]
     pub(crate) reader_progress_generation: u64,
+    #[serde(default = "crate::profile_decode::default_enabled")]
+    pub(crate) personal_recommendations_enabled: bool,
 }
 
 impl Account {
@@ -58,7 +60,7 @@ impl Account {
     }
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Policy {
     pub(crate) otp_required: bool,

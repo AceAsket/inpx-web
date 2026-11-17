@@ -155,7 +155,7 @@ pub(crate) fn extract_input(
     }
 }
 
-fn read_member<T>(
+pub(crate) fn read_member<T>(
     path: &Path,
     file: File,
     member: &str,
@@ -186,6 +186,93 @@ pub(crate) fn metadata_input(
 }
 
 struct ArchiveCache(VecDeque<CachedArchive>);
+
+pub(crate) struct IsbnReader(ArchiveCache);
+
+#[derive(Default)]
+pub(crate) struct AuditArchive(ArchiveCache);
+
+impl Default for ArchiveCache {
+    fn default() -> Self {
+        Self(VecDeque::new())
+    }
+}
+
+impl Default for IsbnReader {
+    fn default() -> Self {
+        Self(ArchiveCache::default())
+    }
+}
+
+impl AuditArchive {
+    pub(crate) fn check<T>(
+        &mut self,
+        input: crate::book_source::Input,
+        deep: bool,
+        mut process: impl FnMut(u64, &mut dyn Read) -> Extraction<T>,
+    ) -> Extraction<Option<T>> {
+        let crate::book_source::Input { file, path, member } = input;
+        let Some(member) = member else {
+            return if deep {
+                let size = file.metadata()?.len();
+                process(size, &mut BufReader::new(file)).map(Some)
+            } else {
+                Ok(None)
+            };
+        };
+        let archive = self.0.open(&path, file)?;
+        let encoded = encoding_rs::IBM866.encode(&member).0;
+        let legacy = String::from_utf8_lossy(&encoded);
+        let result = if deep {
+            archive
+                .directory
+                .read(&member, Some(&legacy), process)
+                .map(Some)
+        } else {
+            archive
+                .directory
+                .check_member(&member, &legacy)
+                .map(|()| None)
+        };
+        archive.source.detach();
+        result
+    }
+}
+
+impl IsbnReader {
+    pub(crate) fn read(
+        &mut self,
+        input: crate::book_source::Input,
+        format: Format,
+        limit: u64,
+    ) -> Extraction<Vec<String>> {
+        let crate::book_source::Input { file, path, member } = input;
+        let raw = if let Some(member) = member {
+            let archive = self.0.open(&path, file)?;
+            let legacy = encoding_rs::IBM866.encode(&member).0;
+            let legacy = String::from_utf8_lossy(&legacy);
+            let result = archive
+                .directory
+                .read(&member, Some(&legacy), |size, reader| {
+                    book_metadata::read_stream(&format, size, reader, limit, true)
+                });
+            archive.source.detach();
+            result?
+        } else {
+            let size = file.metadata()?.len();
+            if size > limit {
+                return Err(Failure::Limit);
+            }
+            let mut reader = BufReader::with_capacity(READER_BYTES, file);
+            if format == Format::Epub {
+                book_metadata::read_epub(reader, true)?
+            } else {
+                book_metadata::read_stream(&format, size, &mut reader, limit, true)?
+            }
+        };
+        serde_json::from_value(raw).map_err(|failure| Failure::Other(failure.into()))
+    }
+}
 
 struct CachedArchive {
     path: PathBuf,
@@ -364,6 +451,29 @@ impl ArchiveReader {
 }
 
 impl<R: Read + Seek> Directory<R> {
+    fn check_member(&mut self, member: &str, legacy: &str) -> Extraction<()> {
+        let regular = match self {
+            Self::Zip(archive) => {
+                let index = archive
+                    .index_for_name(member)
+                    .or_else(|| archive.index_for_name(legacy))
+                    .ok_or(Failure::Missing)?;
+                let entry = archive.by_index_raw(index)?;
+                !entry.is_dir() && !entry.is_symlink()
+            }
+            Self::SevenZip(_, archive) => {
+                let name = member.replace('\\', "/");
+                let index = *archive.names.get(&name).ok_or(Failure::Missing)?;
+                regular_7z(&archive.archive.files[index])
+            }
+        };
+        if regular {
+            Ok(())
+        } else {
+            Err(Failure::InvalidType)
+        }
+    }
+
     pub(crate) fn open(mut source: R, seven_zip: bool) -> Extraction<Self> {
         if seven_zip {
             let directory = SevenZip::open(&mut source)?;
@@ -413,6 +523,41 @@ impl<R: Read + Seek> Directory<R> {
                 process(file.size(), &mut file)
             }
             Self::SevenZip(source, archive) => archive.read(source, name, process),
+        }
+    }
+}
+
+pub(crate) fn open_directory(path: &Path) -> Extraction<Directory<impl Read + Seek>> {
+    let archive = ArchiveReader::open(path, File::open(path)?)?;
+    Ok(archive.directory)
+}
+
+impl<R: Read + Seek> Directory<R> {
+    pub(crate) fn files(&mut self, mut visit: impl FnMut(&str) -> bool) {
+        match self {
+            Self::Zip(archive) => {
+                for index in 0..archive.len() {
+                    if let Ok(entry) = archive.by_index_raw(index)
+                        && !entry.is_dir()
+                        && !entry.is_symlink()
+                        && !visit(entry.name())
+                    {
+                        break;
+                    }
+                }
+            }
+            Self::SevenZip(_, archive) => {
+                for entry in archive
+                    .archive
+                    .files
+                    .iter()
+                    .filter(|entry| regular_7z(entry))
+                {
+                    if !visit(&entry.name) {
+                        break;
+                    }
+                }
+            }
         }
     }
 }

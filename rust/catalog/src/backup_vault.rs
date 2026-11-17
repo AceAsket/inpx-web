@@ -4,11 +4,14 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{Result, atomic_file, file_stamp};
+use crate::backup_crypto::{self, SALT_BYTES};
+use crate::crypto_support::{KEY_BYTES, Sensitive, random};
+use crate::{Result, atomic_file, file_stamp, secret_store};
 
 const MAX_LISTED: usize = 500;
 const POLICY_NAME: &str = "backup-vault.json";
@@ -54,12 +57,35 @@ pub struct EncryptionPolicy {
     salt: String,
 }
 
+pub(crate) struct ArchiveKey {
+    pub(crate) key: Sensitive<[u8; KEY_BYTES]>,
+    pub(crate) salt: [u8; SALT_BYTES],
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleWindow {
     hour: u8,
     day_start: i64,
     next_day: i64,
+}
+
+impl ScheduleWindow {
+    pub fn at(local: OffsetDateTime) -> Result<Self> {
+        let offset = local.offset();
+        let start = local.date().midnight().assume_offset(offset);
+        let end = local
+            .date()
+            .next_day()
+            .ok_or("Invalid backup schedule date")?
+            .midnight()
+            .assume_offset(offset);
+        Ok(Self {
+            hour: local.hour(),
+            day_start: start.unix_timestamp() * 1000,
+            next_day: end.unix_timestamp() * 1000,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -152,6 +178,24 @@ fn integer(value: &Value, low: u8, high: u8) -> Option<u8> {
 fn timestamp(value: &str) -> Option<i64> {
     let date = OffsetDateTime::parse(value, &Rfc3339).ok()?;
     (date.unix_timestamp_nanos() / 1_000_000).try_into().ok()
+}
+
+pub(crate) fn decode_key(wrapped: &str, salt: &str, master: &Path) -> Result<ArchiveKey> {
+    let key = secret_store::key(master, false)?;
+    let decoded = secret_store::Envelope::parse(wrapped.as_bytes())?.open(&key.0)?;
+    let bytes = Sensitive(STANDARD.decode(&decoded.0)?);
+    let key = Sensitive(
+        bytes
+            .0
+            .as_slice()
+            .try_into()
+            .map_err(|_| "Повреждены настройки шифрования. Задайте пароль заново")?,
+    );
+    let salt = STANDARD
+        .decode(salt)?
+        .try_into()
+        .map_err(|_| "Повреждены настройки шифрования. Задайте пароль заново")?;
+    Ok(ArchiveKey { key, salt })
 }
 
 #[derive(Serialize)]
@@ -249,6 +293,39 @@ impl Vault {
         }
     }
 
+    pub fn update(&self, options: &Value) -> Result<()> {
+        let patch = options
+            .as_object()
+            .ok_or("Некорректные настройки резервных копий")?;
+        let replacement = match patch.get("password") {
+            None => None,
+            Some(Value::String(password)) if password.is_empty() => None,
+            Some(Value::String(password)) => {
+                let salt = random::<SALT_BYTES>()?;
+                let derived = backup_crypto::derive(password.as_bytes(), &salt)?;
+                Some(EncryptionPolicy {
+                    key: wrap_key(&derived, &self.root.join("secret.key"))?,
+                    salt: STANDARD.encode(salt),
+                })
+            }
+            Some(_) => return Err("Некорректный пароль резервной копии".into()),
+        };
+        self.edit(|policy| policy.update(patch, replacement))?;
+        Ok(())
+    }
+
+    pub(crate) fn archive_key(&self) -> Result<Option<ArchiveKey>> {
+        let (policy, _) = Policy::open(&self.policy)?;
+        if policy.key.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(decode_key(
+            &policy.key,
+            &policy.salt,
+            &self.root.join("secret.key"),
+        )?))
+    }
+
     pub(crate) fn open_archive(&self, name: &str) -> Result<File> {
         backup_name(name).ok_or(INVALID_NAME)?;
         let mut options = File::options();
@@ -281,7 +358,7 @@ impl Vault {
         Ok(file)
     }
 
-    fn execute(&self, request: Request) -> Result<Value> {
+    pub fn execute(&self, request: Request) -> Result<Value> {
         match request {
             Request::Probe => Ok(json!(true)),
             Request::Policy { window } => {
@@ -334,6 +411,10 @@ impl Vault {
                 Ok(Value::Null)
             }
         }
+    }
+
+    pub fn archive_path(&self, name: &str) -> Result<PathBuf> {
+        Ok(self.checked_file(name)?.0)
     }
 
     fn edit(&self, apply: impl FnOnce(&mut Policy) -> Result<()>) -> Result<Value> {
@@ -418,4 +499,11 @@ impl Vault {
         result.sort_by_key(|file| Reverse(file.modified_ms));
         Ok(result)
     }
+}
+
+pub(crate) fn wrap_key(derived: &Sensitive<[u8; KEY_BYTES]>, master: &Path) -> Result<String> {
+    let key = secret_store::key(master, true)?;
+    let encoded = Sensitive(STANDARD.encode(derived.0).into_bytes());
+    let encrypted = secret_store::seal(&key.0, &encoded.0)?;
+    Ok(std::str::from_utf8(&encrypted.0)?.into())
 }

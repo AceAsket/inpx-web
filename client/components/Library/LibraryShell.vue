@@ -114,6 +114,25 @@ watch([config, settings], () => {
 watch(listsVisible, (visible, previous) => {
     if (!visible && previous && props.enabled) repository.loadReading(true);
 });
+watch([() => props.enabled, () => config.value.profileAuthorized, () => config.value.clientApi?.features?.includes('readerEvents'),
+    () => config.value.currentUserId, () => settings.value.profileAccessToken, () => settings.value.accessToken,
+    () => config.value.profileBoundId], ([enabled, authorized, supported], _, cleanup) => {
+    if (!enabled || !authorized || !supported || !root.api?.watchReaderEvents) return;
+    let timer;
+    const dispose = root.api.watchReaderEvents(() => {
+        if (timer) return;
+        timer = setTimeout(() => {
+            timer = null;
+            repository.refreshReading();
+            if (route.path === '/overview') repository.loadPinnedShelves(true);
+        }, 100);
+    }, () => {
+        clearTimeout(timer);
+        repository.requireLogin('reading');
+        root.api.updateConfig({skipProfileLogin:true});
+    });
+    cleanup(() => {clearTimeout(timer); dispose();});
+}, {immediate:true});
 watch(() => props.enabled, enabled => {
     if (!enabled) {settingsVisible.value = false; profilesVisible.value = false; detailsVisible.value = false; listsVisible.value = false; actionsVisible.value = false; returnToActions.value = false;}
 });

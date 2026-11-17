@@ -58,7 +58,7 @@ pub struct Accepted {
     #[serde(skip_serializing_if = "Option::is_none")]
     patch: Option<CredentialPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    device_grant: Option<DeviceGrant>,
+    pub device_grant: Option<DeviceGrant>,
 }
 
 impl Request {
@@ -68,6 +68,7 @@ impl Request {
         login: &str,
         password: String,
         otp: String,
+        trust: Option<(&str, bool)>,
     ) -> Self {
         Self {
             source: Source::Registry {
@@ -79,8 +80,8 @@ impl Request {
             key_file,
             password: Secret::new(password),
             otp: Some(Secret::new(otp)),
-            trusted_device_token: Secret::new(String::new()),
-            remember_device: false,
+            trusted_device_token: Secret::new(trust.map_or("", |(token, _)| token).to_owned()),
+            remember_device: trust.is_some_and(|(_, remember)| remember),
         }
     }
 }
@@ -93,11 +94,16 @@ pub struct BrowserProfile {
     pub name: String,
     pub is_admin: bool,
     pub anonymous_profile: bool,
+    pub personal_recommendations_enabled: bool,
     pub requires_login: bool,
     pub opds_enabled: bool,
     pub opds_auth_enabled: bool,
     pub otp_enabled: bool,
     pub otp_required: bool,
+    #[serde(skip)]
+    pub otp_required_individual: bool,
+    #[serde(skip)]
+    pub blocked: bool,
     #[serde(skip)]
     pub preferred_format: String,
     #[serde(skip)]
@@ -107,7 +113,9 @@ pub struct BrowserProfile {
 pub struct BrowserProfiles {
     pub users: Vec<BrowserProfile>,
     pub blocked_logins: Vec<String>,
+    pub blocked_users: Vec<BrowserProfile>,
     pub require_otp: bool,
+    pub auth_policy: serde_json::Value,
     pub stamp: String,
 }
 
@@ -117,10 +125,9 @@ impl Store {
             return Err("Файл профилей недоступен".into());
         };
         let require_otp = document.policy.otp_required;
-        let users = document
+        let (users, blocked_users) = document
             .users
             .iter()
-            .filter(|(_, user)| !user.blocked)
             .map(|(_, user)| {
                 let anonymous_profile = user.id == "default"
                     && !user.is_admin
@@ -136,11 +143,14 @@ impl Store {
                     },
                     is_admin: user.is_admin,
                     anonymous_profile,
+                    personal_recommendations_enabled: user.personal_recommendations_enabled,
                     requires_login: !user.password_hash.is_empty(),
                     opds_enabled: user.opds_enabled,
                     opds_auth_enabled: user.opds_auth_enabled,
                     otp_enabled: user.profile_totp.is_some(),
                     otp_required: require_otp || user.otp_required,
+                    otp_required_individual: user.otp_required,
+                    blocked: user.blocked,
                     preferred_format: user.default_opds_format.clone(),
                     credential_version: credential_version(
                         user,
@@ -149,9 +159,10 @@ impl Store {
                     ),
                 }
             })
-            .collect();
+            .partition(|user| !user.blocked);
         Ok(BrowserProfiles {
             users,
+            blocked_users,
             blocked_logins: document
                 .users
                 .iter()
@@ -159,6 +170,7 @@ impl Store {
                 .map(|(_, user)| user.login.clone())
                 .collect(),
             require_otp,
+            auth_policy: serde_json::to_value(document.policy)?,
             stamp: stamp.to_owned(),
         })
     }
@@ -183,9 +195,9 @@ fn credential_version(account: &Account, policy: Policy, password_hash: &str) ->
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeviceGrant {
-    token: String,
-    max_age_seconds: u32,
+pub struct DeviceGrant {
+    pub token: String,
+    pub max_age_seconds: u32,
 }
 
 /// The caller serializes the operation with other writers to the profile file.

@@ -9,6 +9,9 @@
 
         <div class="q-mx-md column settings-dialog-body" style="min-width: min(300px, calc(100vw - 96px)); font-size: 120%;">
             <AppConnectionSettings />
+            <div v-if="canEditExternalDiscovery" class="row q-mb-sm">
+                <q-btn outline color="primary" dense no-caps icon="la la-tasks" label="Задачи и состояние библиотеки" @click="$emit('open-library-tasks')" />
+            </div>
             <div class="row items-center q-ml-sm">
                 <div class="q-mr-sm">
                     Результатов на странице
@@ -159,7 +162,6 @@
 
                 <div v-show="adminExpanded" class="admin-collapse-body">
                     <div class="admin-toolbar">
-                        <q-btn outline color="primary" dense no-caps icon="la la-tasks" label="Задачи и состояние библиотеки" @click="$emit('open-library-tasks')" />
                         <q-btn outline color="primary" dense no-caps icon="la la-sync" :loading="adminLoading" @click="loadAdminPanel">
                             {{ adminUi.refresh }}
                         </q-btn>
@@ -282,7 +284,7 @@
                             </div>
                         </section>
 
-                        <PerformancePanel v-if="dialogVisible && adminExpanded" />
+                        <PerformancePanel v-if="dialogVisible && adminExpanded && adminDashboardAvailable" />
 
                         <section class="admin-dashboard-section admin-dashboard-section--wide">
                             <div class="admin-dashboard-section-title">Качество рекомендаций</div>
@@ -513,7 +515,7 @@
                 <button class="admin-collapse-head" type="button" @click="opdsExpanded = !opdsExpanded">
                     <div class="admin-collapse-copy">
                         <div class="admin-mail-title">{{ opdsUi.title }}</div>
-                        <div class="admin-mail-subtitle">{{ opdsUi.subtitle }}</div>
+                        <div class="admin-mail-subtitle">{{ config.adminCache ? 'Путь каталога и общий пароль OPDS применяются сразу после сохранения.' : opdsUi.subtitle }}</div>
                     </div>
                     <q-icon class="admin-collapse-icon" :name="opdsExpanded ? 'la la-angle-up' : 'la la-angle-down'" size="20px" />
                 </button>
@@ -891,6 +893,10 @@ class SettingsDialog {
         {label: 'Кэш', value: 'cache'},
         {label: 'Обложки', value: 'cover'},
         {label: 'Индекс', value: 'index'},
+        {label: 'Аудит', value: 'audit'},
+        {label: 'Замеры', value: 'benchmark'},
+        {label: 'Резервные копии', value: 'backup'},
+        {label: 'Доступ', value: 'security'},
         {label: 'Отправка', value: 'delivery'},
         {label: 'Система', value: 'system'},
     ];
@@ -1189,13 +1195,13 @@ class SettingsDialog {
     }
 
     syncAdminCacheSettings() {
-        const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
+        const limits = (this.adminDashboard && this.adminDashboard.limits) || this.config.adminCache || {};
         const toMb = (value, fallback) => {
             const size = Number(value || 0);
             return Math.max(1, Math.round((size > 0 ? size : fallback) / (1024 * 1024)));
         };
         const ratio = Number(limits.cacheCleanTargetRatio || 0.8);
-        const schedule = this.parseDailyCacheSchedule(limits.cacheCleanSchedule || '0 0 * * *');
+        const schedule = this.parseDailyCacheSchedule(limits.cacheCleanSchedule ?? '0 0 * * *');
 
         this.adminCacheSettings = {
             bookCacheSizeMb: toMb(limits.bookCacheSize, 2048 * 1024 * 1024),
@@ -1615,7 +1621,7 @@ class SettingsDialog {
     }
 
     syncAdminSources() {
-        const sources = (this.adminDashboard && this.adminDashboard.sources) || [];
+        const sources = (this.adminDashboard && this.adminDashboard.sources) || this.config.adminLibrarySources || [];
         this.adminSources = sources.map(source => ({
             id: source.id || '',
             name: source.name || '',
@@ -1653,8 +1659,10 @@ class SettingsDialog {
         this.adminLoading = true;
         try {
             await this.refreshAdminDashboard(true);
-            this.refreshAdminEvents();
-            this.startAdminMetricsPolling();
+            if (this.adminDashboardAvailable) {
+                this.refreshAdminEvents();
+                this.startAdminMetricsPolling();
+            }
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
@@ -1663,10 +1671,19 @@ class SettingsDialog {
     }
 
     async refreshAdminDashboard(syncSources = false) {
-        this.adminDashboard = await this.api.getAdminDashboard();
+        if (this.adminDashboardAvailable) {
+            this.adminDashboard = await this.api.getAdminDashboard();
+        } else {
+            const status = await this.api.request({action: 'get-worker-state', workerId: 'server_state'});
+            this.adminDashboard = {index: {...status, ready: status.state === 'normal' && !status.updating}};
+        }
         this.syncAdminCacheSettings();
         if (syncSources)
             this.syncAdminSources();
+    }
+
+    get adminDashboardAvailable() {
+        return !this.config.adminCache || this.config.clientApi?.features?.includes('adminDashboard');
     }
 
     async refreshAdminMetrics() {
@@ -1725,7 +1742,8 @@ class SettingsDialog {
                     this.scheduleAdminIndexPolling();
                 } else {
                     this.adminReindexInProgress = false;
-                    this.refreshAdminEvents();
+                    if (this.adminDashboardAvailable)
+                        this.refreshAdminEvents();
                 }
             } catch (e) {
                 this.adminReindexInProgress = false;
@@ -1939,8 +1957,11 @@ class SettingsDialog {
             const result = await this.api.adminRebuildCover(bookUid);
             await this.refreshAdminDashboard(false);
             this.$root.notify.success(this.adminUi.coverRebuildStarted);
-            if (result.coverUrl)
-                window.setTimeout(() => { (new Image()).src = `${result.coverUrl}?t=${Date.now()}`; }, 50);
+            if (result.coverUrl) {
+                const cover = new URL(result.coverUrl, window.location.href);
+                cover.searchParams.set('t', Date.now());
+                (new Image()).src = cover.href;
+            }
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
@@ -1951,7 +1972,9 @@ class SettingsDialog {
     async reindexAdmin() {
         this.adminReindexLoading = true;
         try {
-            await this.api.adminReindex();
+            const result = await this.api.adminReindex();
+            if (result.started === false)
+                throw new Error('Индекс уже обновляется. Повторите после завершения.');
             this.adminSourcesReindexNeeded = false;
             this.adminReindexInProgress = true;
             await this.refreshAdminDashboard(false);
@@ -2092,10 +2115,11 @@ class SettingsDialog {
         this.settingsImportLoading = true;
         try {
             const data = JSON.parse(await file.text());
-            await this.api.importAdminSettings(data);
+            const result = await this.api.importAdminSettings(data);
             await this.api.updateConfig();
             this.loadSettings();
-            this.$root.notify.success('Настройки восстановлены');
+            this.adminSourcesReindexNeeded = this.adminSourcesReindexNeeded || result.reindexRequired === true;
+            this.$root.notify.success(result.restartRequired ? 'Настройки восстановлены. Для части настроек нужен перезапуск сервера.' : 'Настройки восстановлены');
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {

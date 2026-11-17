@@ -1,8 +1,9 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, hash_map::Entry as MapEntry};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use once_cell::sync::OnceCell;
 use redb::{
     Database, ReadOnlyDatabase, ReadTransaction, ReadableDatabase, ReadableTable, TableDefinition,
 };
@@ -290,17 +291,17 @@ pub enum LookupQuery {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sample {
-    id: u32,
-    name: String,
-    count: u32,
-    book_ids: Vec<u32>,
-    complete: bool,
+    pub(crate) id: u32,
+    pub(crate) name: String,
+    pub(crate) count: u32,
+    pub(crate) book_ids: Vec<u32>,
+    pub(crate) complete: bool,
 }
 
 #[derive(Serialize)]
 pub struct SuggestionSamples {
-    rows: Vec<Sample>,
-    limited: bool,
+    pub(crate) rows: Vec<Sample>,
+    pub(crate) limited: bool,
 }
 
 #[derive(Serialize)]
@@ -365,19 +366,33 @@ struct OldNameCount {
 pub struct LookupIndex {
     db: ReadOnlyDatabase,
     directory: PathBuf,
-    old_counts: RefCell<HashMap<Table, HashMap<u32, u32>>>,
-    orders: RefCell<HashMap<Table, Option<LabelOrder>>>,
+    old_counts: Mutex<HashMap<Table, HashMap<u32, u32>>>,
+    orders: [OnceCell<Option<LabelOrder>>; Table::ALL.len()],
 }
 
 impl LookupIndex {
+    pub(crate) fn browser_label(
+        &self,
+        generation: &str,
+        table: Table,
+        id: u32,
+    ) -> Result<Option<String>> {
+        let transaction = self.db.begin_read()?;
+        check_generation(&transaction, generation)?;
+        let data = transaction.open_table(POSTINGS)?;
+        data.get(table.key(id))?
+            .map(|row| Ok(Entry::decode(row.value())?.name.to_owned()))
+            .transpose()
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         Ok(Self {
             db: Database::builder()
                 .set_cache_size(32 * 1024 * 1024)
                 .open_read_only(path)?,
             directory: path.parent().unwrap_or_else(|| Path::new(".")).into(),
-            old_counts: RefCell::new(HashMap::new()),
-            orders: RefCell::new(HashMap::new()),
+            old_counts: Mutex::default(),
+            orders: Default::default(),
         })
     }
 
@@ -387,23 +402,18 @@ impl LookupIndex {
         table: Table,
         read: impl FnOnce(Option<&LabelOrder>) -> Result<T>,
     ) -> Result<T> {
-        let mut orders = self.orders.borrow_mut();
-        let order = match orders.entry(table) {
-            MapEntry::Occupied(entry) => entry.into_mut(),
-            MapEntry::Vacant(entry) => {
-                let persisted = match transaction.open_table(LABEL_ORDER) {
-                    Ok(data) => data
-                        .get(table.key(0).0)?
-                        .map(|row| serde_json::from_slice(row.value()))
-                        .transpose()?,
-                    Err(redb::TableError::TableDoesNotExist(_)) => None,
-                    Err(error) => return Err(error.into()),
-                };
-                entry.insert(
-                    persisted.or_else(|| load_order(&self.directory.join(table.name())).ok()),
-                )
-            }
-        };
+        let key = table.key(0).0;
+        let order = self.orders[key as usize].get_or_try_init(|| -> Result<_> {
+            let persisted = match transaction.open_table(LABEL_ORDER) {
+                Ok(data) => data
+                    .get(key)?
+                    .map(|row| serde_json::from_slice(row.value()))
+                    .transpose()?,
+                Err(redb::TableError::TableDoesNotExist(_)) => None,
+                Err(error) => return Err(error.into()),
+            };
+            Ok(persisted.or_else(|| load_order(&self.directory.join(table.name())).ok()))
+        })?;
         read(order.as_ref())
     }
 
@@ -455,30 +465,87 @@ impl LookupIndex {
         generation: &str,
         table: Table,
         matches: impl Fn(&str) -> bool,
+        visit: impl FnMut(u32, &str, &str, u32, &[[u8; 4]]) -> Result<()>,
+    ) -> Result<()> {
+        self.visit_name_candidates(generation, table, &[], matches, visit)
+    }
+
+    pub(crate) fn browser_candidates(
+        &self,
+        generation: &str,
+        table: Table,
+        prefixes: &[&str],
+        matches: impl Fn(&str) -> bool,
+    ) -> Result<HashSet<u32>> {
+        let mut books = HashSet::new();
+        self.visit_name_candidates(generation, table, prefixes, matches, |_, _, _, _, ids| {
+            books.extend(ids.iter().copied().map(u32::from_le_bytes));
+            Ok(())
+        })?;
+        Ok(books)
+    }
+
+    pub(crate) fn browser_samples(
+        &self,
+        generation: &str,
+        table: Table,
+        keys: &[String],
+        prefix: bool,
+        limit: usize,
+    ) -> Result<SuggestionSamples> {
+        let transaction = self.db.begin_read()?;
+        check_generation(&transaction, generation)?;
+        let data = transaction.open_table(POSTINGS)?;
+        self.with_order(&transaction, table, |order| {
+            let Some(order) = order else {
+                return Ok(SuggestionSamples {
+                    rows: Vec::new(),
+                    limited: true,
+                });
+            };
+            let (ids, limited) = order.browser_samples(keys, prefix, limit)?;
+            Ok(SuggestionSamples {
+                rows: sample_rows(&data, table, ids)?,
+                limited,
+            })
+        })
+    }
+
+    pub(crate) fn visit_name_candidates(
+        &self,
+        generation: &str,
+        table: Table,
+        prefixes: &[&str],
+        matches: impl Fn(&str) -> bool,
         mut visit: impl FnMut(u32, &str, &str, u32, &[[u8; 4]]) -> Result<()>,
     ) -> Result<()> {
         let transaction = self.db.begin_read()?;
         check_generation(&transaction, generation)?;
         let data = transaction.open_table(POSTINGS)?;
         self.with_order(&transaction, table, |order| {
-            order.ok_or("missing catalogue name order")?.visit_selected(
-                NameSelection::All,
-                |(id, label)| {
-                    if !matches(label) {
-                        return Ok(());
-                    }
-                    if let Some(raw) = data.get(table.key(*id))? {
-                        let row = Entry::decode(raw.value())?;
-                        visit(*id, label, row.name, row.count, row.books)?;
-                    }
-                    Ok(())
-                },
-            )
+            let order = order.ok_or("missing catalogue name order")?;
+            let mut read = |(id, label): &(u32, String)| {
+                if matches(label)
+                    && let Some(raw) = data.get(table.key(*id))?
+                {
+                    let row = Entry::decode(raw.value())?;
+                    visit(*id, label, row.name, row.count, row.books)?;
+                }
+                Ok(())
+            };
+            if prefixes.is_empty() {
+                order.visit_selected(NameSelection::All, read)?;
+            } else {
+                for prefix in prefixes {
+                    order.visit_prefix(prefix, &mut read)?;
+                }
+            }
+            Ok(())
         })
     }
 
     fn old_deleted(&self, table: Table, id: u32) -> Result<u32> {
-        let mut counts = self.old_counts.borrow_mut();
+        let mut counts = self.old_counts.lock().expect("legacy lookup counts");
         let counts = match counts.entry(table) {
             MapEntry::Occupied(entry) => entry.into_mut(),
             MapEntry::Vacant(entry) => {

@@ -152,6 +152,31 @@ pub fn save(file: &Path, directory: &Path, value: &Value) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn stage_backup(
+    mut config: Value,
+    current: &Value,
+    data: &Path,
+    folder: &Path,
+    validate: impl FnOnce(&Value) -> Result<()>,
+) -> Result<()> {
+    let fields = config
+        .as_object_mut()
+        .ok_or("Неверный формат config.json")?;
+    fields.insert("dataDir".into(), serde_json::to_value(data)?);
+    for name in ["tempDir", "logDir"] {
+        if let Some(path) = current.get(name) {
+            fields.insert(name.into(), path.clone());
+        } else {
+            fields.remove(name);
+        }
+    }
+    let mut decoded = select(&config);
+    secrets(&mut decoded, folder, false)?;
+    let decoded = serde_json::to_value(decoded)?;
+    validate(&decoded)?;
+    save(&folder.join("config.json"), folder, &decoded)
+}
+
 fn read(file: &Path) -> Result<ReadConfig> {
     let bytes = match fs::read(file) {
         Ok(bytes) => Sensitive(bytes),

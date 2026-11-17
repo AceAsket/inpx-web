@@ -1,5 +1,5 @@
 #[cfg(target_os = "linux")]
-pub(super) fn rss() -> Option<u64> {
+pub(in crate::standalone) fn rss() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     let kib = status
         .lines()
@@ -12,7 +12,7 @@ pub(super) fn rss() -> Option<u64> {
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn rss() -> Option<u64> {
+pub(in crate::standalone) fn rss() -> Option<u64> {
     let mut info = std::mem::MaybeUninit::<libc::mach_task_basic_info_data_t>::zeroed();
     let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
     // task_info fills this structure for the current process.
@@ -29,12 +29,12 @@ pub(super) fn rss() -> Option<u64> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-pub(super) fn rss() -> Option<u64> {
+pub(in crate::standalone) fn rss() -> Option<u64> {
     None
 }
 
 #[cfg(unix)]
-pub(super) fn cpu() -> Option<(f64, f64)> {
+pub(in crate::standalone) fn cpu() -> Option<(f64, f64)> {
     let mut data = std::mem::MaybeUninit::<libc::rusage>::zeroed();
     // getrusage writes elapsed CPU times for the current process.
     if unsafe { libc::getrusage(libc::RUSAGE_SELF, data.as_mut_ptr()) } != 0 {
@@ -54,7 +54,7 @@ mod windows {
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
 
-    pub(in crate::standalone::metrics) fn rss() -> Option<u64> {
+    pub(in crate::standalone) fn rss() -> Option<u64> {
         let mut counters = PROCESS_MEMORY_COUNTERS {
             cb: mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
             ..Default::default()
@@ -65,7 +65,7 @@ mod windows {
         (success != 0).then_some(counters.WorkingSetSize as u64)
     }
 
-    pub(in crate::standalone::metrics) fn cpu() -> Option<(f64, f64)> {
+    pub(in crate::standalone) fn cpu() -> Option<(f64, f64)> {
         let [mut creation, mut exit, mut kernel, mut user] = [FILETIME::default(); 4];
         // All four buffers live until GetProcessTimes returns.
         let success = unsafe {
@@ -86,9 +86,9 @@ mod windows {
 }
 
 #[cfg(windows)]
-pub(super) use self::windows::{cpu, rss};
+pub(in crate::standalone) use self::windows::{cpu, rss};
 
 #[cfg(not(any(unix, windows)))]
-pub(super) fn cpu() -> Option<(f64, f64)> {
+pub(in crate::standalone) fn cpu() -> Option<(f64, f64)> {
     None
 }

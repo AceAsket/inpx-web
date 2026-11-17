@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,7 +6,10 @@ use futures_util::{SinkExt, StreamExt};
 use hyper::{Request, Response, StatusCode, body::Incoming, header};
 use hyper_util::rt::TokioIo;
 use serde_json::{Map, Value, json};
-use tokio::sync::Semaphore;
+use tokio::sync::{
+    Semaphore,
+    broadcast::{Receiver, error::RecvError},
+};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
@@ -14,6 +18,8 @@ use tokio_tungstenite::tungstenite::protocol::{
 };
 use tokio_tungstenite::tungstenite::{Error, Message};
 
+use super::discovery::{ExternalDiscovery, ExternalOptions, limit as discovery_limit};
+use super::events::{Change, Event, Subscription};
 use super::{NAME, State, VERSION};
 use crate::http::{Body, error};
 use crate::request_access::Admission;
@@ -22,6 +28,9 @@ use crate::standalone_access::{
     profile_scope,
 };
 use crate::standalone_library::Admission as LibraryAdmission;
+use inpx_catalog::book_preview;
+use inpx_catalog::reader_state::shared_discovery;
+use inpx_catalog::reader_state::{apply_metadata_override, apply_search_metadata};
 
 const IDLE: Duration = Duration::from_secs(5 * 60);
 const CONNECTION_REQUESTS: usize = 8;
@@ -32,18 +41,29 @@ pub(super) struct Socket {
     route: String,
     web_config: Map<String, Value>,
     message_limit: usize,
+    import_limit: usize,
     frame_limit: usize,
     jobs: Arc<Semaphore>,
+    previews: Semaphore,
+    external: ExternalDiscovery,
 }
 
 impl Socket {
-    pub(super) fn new(root: &str, config: &Value, epub_reader: bool, free_access: bool) -> Self {
+    pub(super) fn new(
+        root: &str,
+        config: &Value,
+        data: &Path,
+        epub_reader: bool,
+        free_access: bool,
+        tts_enabled: bool,
+    ) -> Self {
         let root = root.trim_end_matches('/');
         let message_limit = megabytes(&config["wsMessageLimitMb"], 1, 16);
+        let import_limit = megabytes(&config["importLimitMb"], 16, 64);
         let frame_limit = [
             message_limit,
             6 * MIB,
-            megabytes(&config["importLimitMb"], 16, 64) + 65536,
+            import_limit + 65536,
             megabytes(&config["backupUploadLimitMb"], 32, 128).div_ceil(3) * 4 + 65536,
         ]
         .into_iter()
@@ -72,15 +92,31 @@ impl Socket {
                 .extend(configured.clone());
         }
         web_config.insert("uiDefaults".into(), ui);
+        let mut discovery = config["discovery"].as_object().cloned().unwrap_or_default();
+        for (name, key) in [
+            ("INPX_DISCOVERY_LIMIT", "shelfLimit"),
+            ("INPX_DISCOVERY_EXTERNAL_SOURCE", "externalSource"),
+            ("INPX_DISCOVERY_EXTERNAL_NAME", "externalName"),
+            ("INPX_DISCOVERY_EXTERNAL_URL", "externalUrl"),
+            ("INPX_DISCOVERY_EXTERNAL_LIMIT", "externalLimit"),
+            ("INPX_DISCOVERY_EXTERNAL_TTL_MINUTES", "externalTtlMinutes"),
+        ] {
+            if let Ok(value) = std::env::var(name) {
+                discovery.insert(key.into(), value.into());
+            }
+        }
         web_config.extend(json!({
             "name":NAME,"version":VERSION,"branch":"production","dbVersion":"15",
             "rootPathStatic":root,"freeAccess":free_access,
-            "clientApi":{"version":1,"features":["resumeSession","bookSearchFormats"]},
+            "clientApi":{"version":1,"features":["resumeSession","readerEvents","mobileHome","cancelAudio","bookSearchFormats","libraryFollowNews","overviewPinnedShelves","overviewRecommendations","separateExternalDiscovery","catalogSuggest","adminDashboard"]},
+            "libraryProtocol":{"version":1,"features":["metadata","ratings"]},
             "opdsRoot":config["opds"]["root"].as_str().unwrap_or("/opds"),
             "extendedSearch":config["extendedSearch"]!=false,
             "conversionEnabled":epub_reader,"conversionFormats":if epub_reader { vec!["fb2"] } else { Vec::new() },
             "onlineReaderEnabled":config["onlineReaderEnabled"]!=false,"ebookReaderEnabled":false,
-            "canRememberProfileDevice":false,"discovery":{},"ttsEnabled":false,
+            "canRememberProfileDevice":false,
+            "discovery":discovery,
+            "ttsEnabled":tts_enabled,
             "telegramShareEnabled":false,"emailShareEnabled":false,
         }).as_object().expect("web configuration").clone());
         Self {
@@ -88,8 +124,11 @@ impl Socket {
             route: format!("{root}/ws"),
             web_config,
             message_limit,
+            import_limit,
             frame_limit,
             jobs: Arc::new(Semaphore::new(64)),
+            previews: Semaphore::new(2),
+            external: ExternalDiscovery::new(data),
         }
     }
 
@@ -101,6 +140,21 @@ impl Socket {
         self.document(path)
             || matches!(path, "/" | "/ws" | "/ws/")
             || path.trim_end_matches('/') == self.route
+    }
+
+    pub(super) fn background_route<'a>(&self, path: &'a str) -> Option<(&'a str, &'a str)> {
+        path.strip_prefix(&self.root)?
+            .strip_prefix("/reader-background/")?
+            .split_once('/')
+            .filter(|(owner, name)| !owner.is_empty() && !name.contains('/'))
+    }
+
+    pub(super) fn profile_login_route(&self, path: &str) -> bool {
+        path.strip_prefix(&self.root) == Some("/api/profile/login")
+    }
+
+    pub(super) fn root(&self) -> &str {
+        &self.root
     }
 
     pub(super) fn upgrade(
@@ -138,7 +192,9 @@ impl Socket {
         browser: &str,
         admission: &Admission,
         connection: Option<u64>,
+        events_connection: u64,
         mut request: Value,
+        subscription: &mut Change,
     ) -> Value {
         let peer = admission.client;
         let proxy_login = admission.proxy_login.as_deref();
@@ -165,6 +221,7 @@ impl Socket {
         let Some(action) = request["action"].as_str().map(str::to_owned) else {
             return fault("Некорректный запрос WebSocket");
         };
+        let _timing = state.diagnostics.request(&action);
         let access =
             match state
                 .access
@@ -187,6 +244,58 @@ impl Socket {
                 | "logout-user-profile"
                 | "logout"
                 | "update-reader-progress"
+                | "prepare-reader-audio"
+                | "preview-reader-voice"
+                | "cancel-reader-audio"
+                | "update-audio-position"
+                | "prepare-batch-download"
+                | "send-book-telegram"
+                | "send-book-email"
+                | "telegram-bot-account"
+                | "update-admin-integrations"
+                | "test-admin-integration"
+                | "update-admin-opds"
+                | "update-admin-library-sources"
+                | "admin-diagnose-library-source"
+                | "update-admin-cache"
+                | "admin-clean-cache"
+                | "admin-clean-broken-covers"
+                | "admin-rebuild-cover"
+                | "import-admin-settings"
+                | "create-admin-backup"
+                | "preview-admin-backup"
+                | "import-admin-backup"
+                | "admin-backup-vault"
+                | "start-library-audit"
+                | "cancel-library-audit"
+                | "start-admin-benchmark"
+                | "cancel-admin-benchmark"
+                | "update-admin-event-log"
+                | "add-admin-test-event"
+                | "relink-reader-book"
+                | "delete-reader-progress"
+                | "clear-reader-progress"
+                | "update-reader-preferences"
+                | "subscribe-client-events"
+                | "profile-totp-enrollment"
+                | "profile-totp"
+                | "reset-user-profile-totp"
+                | "set-user-profile-totp-required"
+                | "set-profile-auth-policy"
+                | "create-user-profile"
+                | "update-user-profile"
+                | "set-user-profile-blocked"
+                | "delete-user-profile"
+                | "import-reading-lists"
+                | "add-reader-bookmark"
+                | "delete-reader-bookmark"
+                | "change-library-follow"
+                | "update-discovery-preferences"
+                | "record-discovery-events"
+                | "update-shared-discovery-config"
+                | "update-book-metadata"
+                | "start-isbn-index"
+                | "cancel-isbn-index"
                 | "admin-reindex"
                 | "kosync-settings"
         ) || shelf_mutation(&action);
@@ -204,6 +313,7 @@ impl Socket {
                 | "get-worker-state"
                 | "test"
                 | "login-user-profile"
+                | "profile-totp-enrollment"
                 | "resume-user-profile"
                 | "logout-user-profile"
                 | "logout"
@@ -224,6 +334,11 @@ impl Socket {
             access.owner.as_deref() == Some(profile.id.as_str())
                 && profile_scope(profile, requested)
         });
+        let admin = permitted_scope
+            && access
+                .users
+                .iter()
+                .any(|user| user.is_admin && access.owner.as_deref() == Some(user.id.as_str()));
         if access.bound
             && (action == "login-user-profile"
                 || !permitted_scope
@@ -237,11 +352,202 @@ impl Socket {
         if !access.bound && access.required && !bootstrap && !permitted_scope {
             return fault("need_profile_login");
         }
-        match action.as_str() {
+        let response = match action.as_str() {
             "test" => json!({"message":format!("{NAME} project is awesome")}),
-            "get-config" => self.config(state, &access, requested),
+            "get-config" => self.config(state, &access, requested, admission, &request),
             "get-worker-state" => worker_state(state, &access, text(&request, "workerId")),
             "get-user-profiles" => profiles(&access, requested),
+            "subscribe-client-events" => {
+                if permitted_scope && !access.token.is_empty() && request["enabled"] != false {
+                    *subscription = Change::Subscribe(Subscription {
+                        owner: access.owner.as_deref().unwrap_or_default().into(),
+                        token: access.token.clone(),
+                        library_token: text(&request, "accessToken").into(),
+                    });
+                    json!({"enabled":true})
+                } else {
+                    *subscription = Change::Clear;
+                    if request["enabled"] != false
+                        && let Err(error) = state
+                            .access
+                            .with_profile(profile_request, |_, _, _| Ok(Value::Null))
+                    {
+                        return fault(&error.to_string());
+                    }
+                    json!({"enabled":false})
+                }
+            }
+            "get-inpx-file" => state
+                .exchange
+                .inpx(text(&request, "inpxFileHash"), &state.index.sources())
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "get-author-info" => {
+                let id = request["authorId"]
+                    .as_u64()
+                    .and_then(|value| value.try_into().ok())
+                    .or_else(|| text(&request, "authorId").parse().ok());
+                state
+                    .exchange
+                    .author(state, text(&request, "author"), id)
+                    .unwrap_or_else(|failure| fault(&failure.to_string()))
+            }
+            "get-book-reviews" => state
+                .exchange
+                .reviews(state, text(&request, "bookUid"))
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "get-rating-index-status" => super::exchange::Exchange::rating_status(state),
+            "prepare-batch-download" => state
+                .batch
+                .prepare(state, profile_request, &request["selection"])
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "send-book-telegram" | "send-book-email" => state
+                .delivery
+                .send(
+                    state,
+                    profile_request,
+                    &request,
+                    action == "send-book-telegram",
+                )
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "telegram-bot-account" => state
+                .delivery
+                .telegram()
+                .account(
+                    state,
+                    profile_request,
+                    text(&request, "operation"),
+                    &request["options"],
+                )
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "admin-telegram-bot-status" => {
+                if !permitted_scope {
+                    return fault("need_profile_login");
+                }
+                if !admin {
+                    return fault("Требуются права администратора");
+                }
+                json!({"telegramBotStatus":state.delivery.telegram().status()})
+            }
+            "create-admin-backup"
+            | "preview-admin-backup"
+            | "import-admin-backup"
+            | "admin-backup-vault" => {
+                if !admin {
+                    return fault("Требуются права администратора");
+                }
+                state
+                    .backups
+                    .dispatch(state, profile_request, &action, &request)
+                    .unwrap_or_else(|error| fault(&error.to_string()))
+            }
+            "start-library-audit"
+            | "cancel-library-audit"
+            | "get-admin-dashboard"
+            | "get-admin-dashboard-metrics"
+            | "get-admin-performance"
+            | "start-admin-benchmark"
+            | "cancel-admin-benchmark"
+            | "get-admin-events"
+            | "update-admin-event-log"
+            | "add-admin-test-event" => {
+                if !admin {
+                    return fault("Требуются права администратора");
+                }
+                let owner = BrowserProfileRequest {
+                    token: &access.token,
+                    user: access.owner.as_deref().unwrap_or(requested),
+                    ..profile_request
+                };
+                state
+                    .diagnostics
+                    .dispatch(state, owner, &action, &request)
+                    .unwrap_or_else(|error| fault(&error.to_string()))
+            }
+            "update-admin-integrations"
+            | "test-admin-integration"
+            | "update-admin-opds"
+            | "update-admin-library-sources"
+            | "admin-diagnose-library-source"
+            | "update-admin-cache"
+            | "admin-clean-cache"
+            | "admin-clean-broken-covers"
+            | "admin-rebuild-cover"
+            | "export-admin-settings"
+            | "import-admin-settings" => {
+                if !permitted_scope {
+                    return fault("need_profile_login");
+                }
+                if !admin {
+                    return fault("Требуются права администратора");
+                }
+                state
+                    .settings
+                    .dispatch(state, &action, &request, self.import_limit)
+                    .unwrap_or_else(|error| fault(&error.to_string()))
+            }
+            "get-library-metadata" => state
+                .exchange
+                .metadata(state, &request)
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "start-isbn-index" | "cancel-isbn-index" => {
+                if !permitted_scope {
+                    return fault("need_profile_login");
+                }
+                if !admin {
+                    return fault("Требуются права администратора");
+                }
+                let result = if action == "start-isbn-index" {
+                    super::isbn::start(state, request["options"]["force"] == true)
+                } else {
+                    state.index.isbn.cancel();
+                    super::isbn::status(state)
+                };
+                result.unwrap_or_else(|failure| fault(&failure.to_string()))
+            }
+            "get-background-tasks" => {
+                let owner = match state
+                    .access
+                    .with_personal_profile(profile_request, |_, owner, _| Ok(owner.into()))
+                {
+                    Ok(owner) => owner,
+                    Err(error) => return fault(&error.to_string()),
+                };
+                super::tasks::snapshot(state, owner.as_str().unwrap_or_default(), admin)
+                    .unwrap_or_else(|failure| fault(&failure.to_string()))
+            }
+            "get-discovery-shelves" => self
+                .discovery(state, profile_request, &request, admin)
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "update-discovery-preferences"
+            | "record-discovery-events"
+            | "update-shared-discovery-config" => state
+                .access
+                .with_personal_profile(profile_request, |store, owner, stamp| {
+                    store.discovery_request(owner, stamp, &action, &request)
+                })
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "update-book-metadata" => state
+                .access
+                .with_personal_profile(profile_request, |store, owner, stamp| {
+                    store.update_book_metadata(
+                        owner,
+                        stamp,
+                        text(&request, "bookUid"),
+                        &request["metadata"],
+                    )
+                })
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "catalog-entity" => {
+                let read = || {
+                    let reading = state.access.catalogue_reading(&access, permitted_scope)?;
+                    let catalogue = state.index.catalogue.read().expect("open catalogue");
+                    let catalogue = catalogue
+                        .as_ref()
+                        .ok_or("Каталог недоступен. Перезапустите сервер.")?;
+                    catalogue.browser_entity(&request["options"], &reading)
+                };
+                read().unwrap_or_else(|failure| fault(&failure.to_string()))
+            }
             "admin-reindex" => {
                 let Some(profile) = access.users.iter().find(|profile| {
                     access.owner.as_deref() == Some(profile.id.as_str())
@@ -254,8 +560,9 @@ impl Socket {
                 if !profile.is_admin {
                     return fault("Только администратор может управлять профилями");
                 }
-                state.start_index_check(true);
-                json!({"started":true})
+                state
+                    .reindex()
+                    .unwrap_or_else(|failure| fault(&failure.to_string()))
             }
             "login-user-profile" => {
                 let login = text(&request, "login").to_owned();
@@ -263,7 +570,9 @@ impl Socket {
                 if login.len() > 100 || password.len() > 4096 || otp.len() > 64 {
                     return fault("INPX_INVALID_PROFILE_CREDENTIALS");
                 }
-                let result = state.access.login(browser, peer, &login, password, otp);
+                let result = state
+                    .access
+                    .login(browser, peer, &login, password, otp, None);
                 if let (Some(activity), BrowserLogin::Accepted { user, .. }) =
                     (&state.metrics.activity, &result)
                 {
@@ -274,9 +583,29 @@ impl Socket {
                 }
                 login_response(result)
             }
+            "profile-totp-enrollment"
+            | "profile-totp"
+            | "reset-user-profile-totp"
+            | "set-user-profile-totp-required"
+            | "set-profile-auth-policy"
+            | "create-user-profile"
+            | "update-user-profile"
+            | "set-user-profile-blocked"
+            | "delete-user-profile" => state
+                .access
+                .profile_command(
+                    profile_request,
+                    admission,
+                    state.request_access.profile_binding(),
+                    &self.root,
+                    &action,
+                    &request,
+                )
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
             "resume-user-profile" => {
                 let Some(owner) = access
                     .owner
+                    .as_deref()
                     .filter(|owner| access.bound || requested.is_empty() || requested == *owner)
                 else {
                     return fault("need_profile_login");
@@ -287,6 +616,7 @@ impl Socket {
                 json!({"userId":owner,"profileAccessToken":access.token})
             }
             "logout-user-profile" => {
+                *subscription = Change::Clear;
                 if access.bound {
                     state.access.sessions.clear_proxy(browser);
                 } else {
@@ -300,15 +630,18 @@ impl Socket {
                 }
                 json!({"success":true})
             }
-            "logout" => state
-                .access
-                .library
-                .logout(text(&request, "accessToken"))
-                .map(|()| json!({"success":true}))
-                .unwrap_or_else(|error| {
-                    eprintln!("WebAccess revoke: {error}");
-                    fault("Хранилище сеансов доступа недоступно")
-                }),
+            "logout" => {
+                *subscription = Change::Clear;
+                state
+                    .access
+                    .library
+                    .logout(text(&request, "accessToken"))
+                    .map(|()| json!({"success":true}))
+                    .unwrap_or_else(|error| {
+                        eprintln!("WebAccess revoke: {error}");
+                        fault("Хранилище сеансов доступа недоступно")
+                    })
+            }
             "kosync-settings" => {
                 let operation = request
                     .get("operation")
@@ -340,27 +673,146 @@ impl Socket {
                     })
                     .unwrap_or_else(|failure| fault(&failure.to_string()))
             }
+            "prepare-reader-audio"
+            | "get-reader-audio-plan"
+            | "get-reader-audio-status"
+            | "preview-reader-voice"
+            | "cancel-reader-audio" => {
+                let owner = match state
+                    .access
+                    .with_profile(profile_request, |_, owner, _| Ok(owner.into()))
+                {
+                    Ok(owner) => owner,
+                    Err(error) => return fault(&error.to_string()),
+                };
+                state
+                    .speech
+                    .request(state, owner.as_str().unwrap_or_default(), &request)
+                    .unwrap_or_else(|failure| fault(&failure.to_string()))
+            }
+            "get-audio-position" | "update-audio-position" => {
+                let patch = (action == "update-audio-position").then_some(&request["progress"]);
+                state
+                    .access
+                    .with_profile(profile_request, |store, owner, stamp| {
+                        store.audio_position(
+                            owner,
+                            stamp,
+                            text(&request, "bookUid"),
+                            text(&request, "variant"),
+                            patch,
+                        )
+                    })
+                    .unwrap_or_else(|failure| fault(&failure.to_string()))
+            }
+            "search-reader-replacement" => {
+                if let Err(error) = state
+                    .access
+                    .with_profile(profile_request, |_, _, _| Ok(Value::Null))
+                {
+                    return fault(&error.to_string());
+                }
+                let title = truncate(text(&request, "title").trim(), 200);
+                let author = truncate(text(&request, "author").trim(), 200);
+                if title.is_empty() && author.is_empty() {
+                    return fault("Укажите название или автора");
+                }
+                self.catalogue(state, "bookSearch", &json!({
+                    "query":{"title":title,"author":author,"ext":"fb2","del":"0","limit":20,"offset":0}
+                }))
+            }
+            "relink-reader-book" => state
+                .access
+                .with_profile(profile_request, |store, owner, stamp| {
+                    let source = text(&request, "bookUid").trim();
+                    let target = text(&request, "replacementBookUid").trim();
+                    let catalogue = state.index.catalogue.read().expect("open catalogue");
+                    let catalogue = catalogue
+                        .as_ref()
+                        .ok_or("Каталог недоступен. Перезапустите сервер.")?;
+                    if catalogue.browser_book(source)?.is_some() {
+                        return Err("Исходная книга доступна. Перенос не требуется".into());
+                    }
+                    if !catalogue
+                        .browser_book(target)?
+                        .is_some_and(|row| text(&row, "ext").eq_ignore_ascii_case("fb2"))
+                    {
+                        return Err("Выберите доступную книгу в формате FB2".into());
+                    }
+                    store.relink_progress(owner, stamp, source, target, &request["baseRevision"])
+                })
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "delete-reader-progress" | "clear-reader-progress" => state
+                .access
+                .with_profile(profile_request, |store, owner, stamp| {
+                    let uid =
+                        (action == "delete-reader-progress").then(|| text(&request, "bookUid"));
+                    store.delete_progress(owner, stamp, uid)
+                })
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "update-reader-preferences" | "export-reading-lists" | "import-reading-lists" => state
+                .access
+                .with_profile(profile_request, |store, owner, stamp| {
+                    match action.as_str() {
+                        "update-reader-preferences" => store.update_preferences(
+                            owner,
+                            stamp,
+                            &request["preferences"],
+                            &self.root,
+                        ),
+                        "export-reading-lists" => store.export_reading_lists(owner, stamp),
+                        _ => store.import_reading_lists(
+                            owner,
+                            stamp,
+                            &request["data"],
+                            &self.root,
+                            self.import_limit,
+                        ),
+                    }
+                })
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "add-reader-bookmark" | "delete-reader-bookmark" => state
+                .access
+                .with_profile(profile_request, |store, owner, stamp| {
+                    store.bookmark_request(owner, stamp, &action, &request)
+                })
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
+            "get-library-follows" | "change-library-follow" => state
+                .access
+                .with_personal_profile(profile_request, |store, owner, stamp| {
+                    let catalogue = state.index.catalogue.read().expect("open catalogue");
+                    let catalogue = catalogue
+                        .as_ref()
+                        .ok_or("Каталог недоступен. Перезапустите сервер.")?;
+                    store.library_follows(owner, stamp, &action, &request, catalogue)
+                })
+                .unwrap_or_else(|failure| fault(&failure.to_string())),
             action
                 if shelf_mutation(action)
                     || matches!(
                         action,
-                        "get-reading-lists" | "get-reading-list" | "get-user-reading-library"
+                        "get-reading-lists"
+                            | "get-reading-list"
+                            | "get-user-reading-library"
+                            | "get-mobile-home"
+                            | "get-overview-pinned-shelves"
                     ) =>
             {
-                state
-                    .access
-                    .with_profile(profile_request, |store, owner, stamp| {
-                        let catalogue = state.index.catalogue.lock().expect("open catalogue");
-                        let catalogue = catalogue
-                            .as_ref()
-                            .ok_or("Каталог недоступен. Перезапустите сервер.")?;
-                        if action == "get-user-reading-library" {
-                            store.reading_library(owner, stamp, &request["options"], catalogue)
-                        } else {
-                            store.shelf_request(owner, stamp, action, &request, catalogue)
-                        }
-                    })
+                reading_shelves(state, profile_request, action, &request)
                     .unwrap_or_else(|failure| fault(&failure.to_string()))
+            }
+            "get-book-preview" => {
+                let uid = text(&request, "bookUid");
+                if uid.is_empty() || uid.encode_utf16().count() > 1024 {
+                    return fault("Invalid book UID");
+                }
+                let Ok(_permit) = self.previews.try_acquire() else {
+                    return json!({"error":"Preview queue is full","errorCode":"INPX_RESOURCE_IO_QUEUE_FULL"});
+                };
+                match crate::standalone_download::load_book(&state.index.catalogue, uid) {
+                    Ok(book) => book_preview::read(uid, book.as_ref(), &state.index.sources()),
+                    Err(failure) => fault(&failure.to_string()),
+                }
             }
             "get-book-link" | "get-book-info" | "get-book-gallery" => {
                 let uid = text(&request, "bookUid");
@@ -374,21 +826,35 @@ impl Socket {
                     "get-book-info" => state.downloads.book_info(
                         uid,
                         &state.index.catalogue,
-                        &state.sources,
+                        &state.index.sources(),
                         request["card"] == true,
                         request["readerOnly"] == true,
                     ),
                     "get-book-gallery" => {
                         state
                             .downloads
-                            .gallery(uid, &state.index.catalogue, &state.sources)
+                            .gallery(uid, &state.index.catalogue, &state.index.sources())
                     }
-                    _ => state
-                        .downloads
-                        .book_link(uid, &state.index.catalogue, &state.sources),
+                    _ => state.downloads.book_link(
+                        uid,
+                        &state.index.catalogue,
+                        &state.index.sources(),
+                    ),
                 };
                 match result {
-                    Ok(Some(result)) => result,
+                    Ok(Some(mut result)) => {
+                        if let Some(book) = result
+                            .get_mut("bookInfo")
+                            .and_then(|info| info.get_mut("book"))
+                            .and_then(Value::as_object_mut)
+                        {
+                            match state.access.metadata_overrides() {
+                                Ok(overrides) => apply_metadata_override(book, &overrides),
+                                Err(error) => return fault(&error.to_string()),
+                            }
+                        }
+                        result
+                    }
                     Ok(None) => fault("404 Файл не найден"),
                     Err(failure) => {
                         use inpx_catalog::book_delivery::{DownloadError, classify};
@@ -405,10 +871,43 @@ impl Socket {
                 }
             }
             _ => self.catalogue(state, &action, &request),
+        };
+        if permitted_scope {
+            state.diagnostics.log_action(state, &action, &response);
         }
+        let event_kind = if action == "update-audio-position" {
+            Some("audio")
+        } else if reader_change(&action) {
+            Some("reader")
+        } else {
+            None
+        };
+        if permitted_scope
+            && text(&response, "error").is_empty()
+            && let Some(kind) = event_kind
+            && ["conflict", "generationMismatch", "reset"]
+                .into_iter()
+                .all(|field| response["progress"][field] != true)
+            && let Some(owner) = access.owner.as_deref()
+        {
+            state.events.send(
+                kind,
+                Some(events_connection),
+                owner,
+                text(&request, "bookUid"),
+            );
+        }
+        response
     }
 
-    fn config(&self, state: &State, access: &BrowserAccess, requested: &str) -> Value {
+    fn config(
+        &self,
+        state: &State,
+        access: &BrowserAccess,
+        requested: &str,
+        admission: &Admission,
+        request: &Value,
+    ) -> Value {
         let bare = access.required && access.owner.is_none();
         let mut config = if bare {
             [
@@ -441,6 +940,29 @@ impl Socket {
                 && (access.owner.as_deref() == Some(profile.id.as_str())
                     || !access.required && !profile.requires_login && !profile.otp_required)
         });
+        let binding = state.request_access.profile_binding();
+        let can_remember = !binding
+            && admission.secure
+            && request["client"]["type"] != "android"
+            && access.auth_policy["trustedBrowsersEnabled"] == true;
+        if let Some(features) = config
+            .get_mut("clientApi")
+            .and_then(|api| api["features"].as_array_mut())
+        {
+            features.extend(
+                ["profileTotp", "adminProfileTotpReset", "adminProfileBlock"].map(Value::from),
+            );
+            if !binding {
+                features.extend(["adminProfileTotpPolicy", "profileAuthPolicy"].map(Value::from));
+            }
+        }
+        config.insert("canRememberProfileDevice".into(), can_remember.into());
+        if can_remember {
+            config.insert(
+                "trustedBrowserDays".into(),
+                access.auth_policy["trustedBrowserDays"].clone(),
+            );
+        }
         config.extend(json!({
             "csrfToken":access.csrf,
             "profileLoginRequired":access.required,"profileAuthorized":authorized,
@@ -453,16 +975,93 @@ impl Socket {
                 "opdsEnabled":profile.opds_enabled,"opdsAuthEnabled":profile.opds_auth_enabled,
                 "defaultDownloadFormat":"original","defaultOpdsFormat":if authorized && !profile.preferred_format.is_empty() { &profile.preferred_format } else { "original" },
                 "currentReading":[],"currentReadingCount":0,"readerPreferences":null,
+                "personalRecommendationsEnabled":authorized && profile.personal_recommendations_enabled,
             })),
             "userProfiles":if bare { Vec::new() } else { profile_rows(access) },
         }).as_object().expect("browser profile config").clone());
+        if let Some(profile) = selected.filter(|_| authorized) {
+            if let Ok(details) = state.access.profile_settings(access, &profile.id)
+                && let Some(details) = details.as_object()
+            {
+                let current = config
+                    .get_mut("currentUserProfile")
+                    .and_then(Value::as_object_mut)
+                    .expect("selected browser profile");
+                for key in [
+                    "emailTo",
+                    "telegramChatId",
+                    "defaultDownloadFormat",
+                    "defaultEmailFormat",
+                    "defaultTelegramFormat",
+                    "defaultOpdsFormat",
+                    "emailAsZip",
+                    "telegramAsZip",
+                    "readerPreferences",
+                ] {
+                    if let Some(value) = details.get(key) {
+                        current.insert(key.into(), value.clone());
+                    }
+                }
+            }
+            if !binding && profile.is_admin {
+                config.insert("profileAuthPolicy".into(), access.auth_policy.clone());
+            }
+        }
+        let (telegram, email) = if authorized {
+            config
+                .get("currentUserProfile")
+                .map_or((false, false), |profile| state.delivery.options(profile))
+        } else {
+            (false, false)
+        };
+        config.insert("telegramShareEnabled".into(), telegram.into());
+        config.insert("emailShareEnabled".into(), email.into());
         if !bare {
+            let current = state.settings.snapshot();
+            config.insert(
+                "opdsRoot".into(),
+                current["opds"]["root"].as_str().unwrap_or("/opds").into(),
+            );
+            config.insert(
+                "extendedSearch".into(),
+                (current["extendedSearch"] != false).into(),
+            );
+            if let Some(link) = current.get("bookReadLink") {
+                config.insert("bookReadLink".into(), link.clone());
+            }
+            if let Some(defaults) = current["uiDefaults"].as_object()
+                && let Some(view) = config.get_mut("uiDefaults").and_then(Value::as_object_mut)
+            {
+                view.extend(defaults.clone());
+            }
+            if authorized && selected.is_some_and(|profile| profile.is_admin) {
+                config.insert(
+                    "adminIntegrations".into(),
+                    super::settings::admin_integrations(&current, state),
+                );
+                config.insert(
+                    "adminOpds".into(),
+                    super::settings::opds_view(&current["opds"], true),
+                );
+                config.insert(
+                    "adminCache".into(),
+                    super::admin_cache::Cache::settings(&current),
+                );
+                config.insert(
+                    "adminLibrarySources".into(),
+                    super::settings::display_sources(&current, state),
+                );
+            }
             let index = state.index.snapshot();
             config.insert("librarySources".into(), index["sources"].clone());
             config.insert("dbConfig".into(), json!({
                 "inpxHash":index["inpxHash"],"inpxInfo":index["inpxInfo"],"stats":index["stats"],
                 "indexUpdate":index["indexUpdate"]
             }));
+            config.insert(
+                "discovery".into(),
+                self.discovery_config(&state.access.shared_discovery_config().unwrap_or_default()),
+            );
         }
         Value::Object(config)
     }
@@ -472,6 +1071,8 @@ impl Socket {
             action,
             "search"
                 | "bookSearch"
+                | "catalog-browse"
+                | "catalog-suggest"
                 | "get-author-book-list"
                 | "get-author-series-list"
                 | "get-series-book-list"
@@ -484,7 +1085,25 @@ impl Socket {
         if matches!(action, "search" | "bookSearch") && !request["query"].is_object() {
             return fault("query is empty");
         }
-        let catalogue = state.index.catalogue.lock().expect("open catalogue");
+        if query
+            .get("ratingCount")
+            .is_some_and(|value| !value.is_null() && value != "")
+            && let Err(error) = state.exchange.prepare_rating_filter(state)
+        {
+            return fault(&error.to_string());
+        }
+        let overrides = if matches!(
+            action,
+            "search" | "bookSearch" | "get-author-book-list" | "get-series-book-list"
+        ) {
+            match state.access.metadata_overrides() {
+                Ok(overrides) => Some(overrides),
+                Err(error) => return fault(&error.to_string()),
+            }
+        } else {
+            None
+        };
+        let catalogue = state.index.catalogue.read().expect("open catalogue");
         let Some(catalogue) = catalogue.as_ref() else {
             return fault("Каталог недоступен. Перезапустите сервер.");
         };
@@ -493,10 +1112,12 @@ impl Socket {
                 "" => return fault("from is empty"),
                 table => catalogue.browser_names(table, query),
             },
-            "bookSearch" if self.web_config.get("extendedSearch") == Some(&Value::Bool(false)) => {
+            "bookSearch" if !state.settings.extended_search() => {
                 return fault("config.extendedSearch disabled");
             }
             "bookSearch" => catalogue.browser_books(query),
+            "catalog-browse" => catalogue.browser_browse(&request["options"]),
+            "catalog-suggest" => catalogue.browser_suggest(&request["options"]),
             "get-author-book-list" | "get-author-series-list" => {
                 let id = request["authorId"]
                     .as_u64()
@@ -509,7 +1130,151 @@ impl Socket {
             "get-genre-tree" => crate::opds::standalone::genre_tree(catalogue),
             _ => unreachable!("catalogue action already selected"),
         };
-        returned.unwrap_or_else(|failure| fault(&failure.to_string()))
+        returned
+            .map(|mut result| {
+                if let Some(overrides) = overrides {
+                    apply_search_metadata(&mut result, &overrides);
+                }
+                result
+            })
+            .unwrap_or_else(|failure| fault(&failure.to_string()))
+    }
+
+    fn discovery(
+        &self,
+        state: &State,
+        profile: BrowserProfileRequest<'_>,
+        request: &Value,
+        admin: bool,
+    ) -> inpx_catalog::Result<Value> {
+        let mut config = self.discovery_config(&state.access.shared_discovery_config()?);
+        if config["enabled"] == false {
+            return Ok(json!({"shelves":[]}));
+        }
+        if admin {
+            let overrides: Map<_, _> = [
+                "externalSource",
+                "externalName",
+                "externalUrl",
+                "externalTtlMinutes",
+            ]
+            .into_iter()
+            .filter_map(|key| {
+                request
+                    .get(key)
+                    .map(|value| (key.to_owned(), value.clone()))
+            })
+            .collect();
+            if !overrides.is_empty() {
+                let patch = shared_discovery(&config, &Value::Object(overrides));
+                config
+                    .as_object_mut()
+                    .expect("discovery config")
+                    .extend(patch.as_object().expect("external config").clone());
+            }
+        }
+        let recommendations_only = request["recommendationsOnly"] == true;
+        let external_only = request["externalOnly"] == true && !recommendations_only;
+        let mut result = if external_only {
+            json!({"shelves":[]})
+        } else {
+            self.local_discovery(state, profile, request, &config, recommendations_only)?
+        };
+        if !recommendations_only
+            && (external_only || request["includeExternal"] != false)
+            && let Some(options) = ExternalOptions::new(&config, request)
+        {
+            let shelf = self
+                .external
+                .feed(&options)
+                .and_then(|feed| {
+                    let catalogue = state.index.catalogue.read().expect("open catalogue");
+                    let catalogue = catalogue
+                        .as_ref()
+                        .ok_or("Каталог недоступен. Перезапустите сервер.")?;
+                    self.external.build_shelf(catalogue, &options, feed)
+                })
+                .unwrap_or_else(|error| options.error_shelf(&error));
+            result["shelves"]
+                .as_array_mut()
+                .expect("discovery shelves")
+                .push(shelf);
+        }
+        Ok(result)
+    }
+
+    fn discovery_config(&self, stored: &Value) -> Value {
+        let base = &self.web_config["discovery"];
+        let mut merged = shared_discovery(base, stored);
+        merged["enabled"] = (base["enabled"] != false).into();
+        merged["shelfLimit"] = discovery_limit(&base["shelfLimit"], 8, 24).into();
+        merged
+    }
+
+    fn local_discovery(
+        &self,
+        state: &State,
+        profile: BrowserProfileRequest<'_>,
+        request: &Value,
+        config: &Value,
+        recommendations_only: bool,
+    ) -> inpx_catalog::Result<Value> {
+        let default = discovery_limit(&config["shelfLimit"], 8, 24);
+        let personal_limit = discovery_limit(
+            &request["personalLimit"],
+            if recommendations_only { 12 } else { default },
+            24,
+        );
+        let personal = if recommendations_only || !profile.user.is_empty() {
+            let read = state
+                .access
+                .with_personal_profile(profile, |store, owner, stamp| {
+                    store.personal_discovery(owner, stamp)
+                });
+            if recommendations_only {
+                Some(read?)
+            } else {
+                read.ok()
+            }
+        } else {
+            None
+        };
+        let scores = if recommendations_only {
+            None
+        } else {
+            Some(state.access.discovery_scores()?)
+        };
+        let catalogue = state.index.catalogue.read().expect("open catalogue");
+        let catalogue = catalogue
+            .as_ref()
+            .ok_or("Каталог недоступен. Перезапустите сервер.")?;
+        let mut result = if let Some(scores) = scores {
+            catalogue.local_overview(
+                discovery_limit(&request["newestLimit"], default, 24),
+                discovery_limit(&request["popularLimit"], default, 24),
+                &scores,
+            )?
+        } else {
+            json!({"shelves":[]})
+        };
+        if let Some(personal) = personal {
+            let similar_limit = if recommendations_only {
+                Some(personal_limit)
+            } else {
+                (request["personalSimilarEnabled"] != false).then_some(personal_limit.max(16))
+            };
+            let shelves = catalogue.personal_overview(
+                &personal,
+                personal_limit,
+                similar_limit,
+                recommendations_only,
+            )?;
+            result["shelves"]
+                .as_array_mut()
+                .expect("discovery shelves")
+                .extend(shelves);
+        }
+        Ok(result)
     }
 }
 
@@ -531,6 +1296,8 @@ async fn run(
         .as_ref()
         .map(|activity| activity.connect());
     let connection = online.as_ref().map(|connection| connection.id);
+    let events_connection = state.events.connect();
+    let mut subscribed = None::<(Arc<Subscription>, Receiver<Arc<Event>>)>;
     let mut running = JoinSet::new();
     loop {
         tokio::select! {
@@ -561,7 +1328,13 @@ async fn run(
                 // The browser requests a fresh salt with an otherwise empty envelope.
                 let probe = state.access.library.protected() && request.as_object().is_some_and(|fields|
                     fields.len() == 1 && fields.contains_key("requestId"));
-                if (!probe && !request["action"].is_string()) || frame.len() > state.socket.message_limit {
+                let limit = match request["action"].as_str() {
+                    Some("update-reader-preferences" | "update-user-profile") => state.socket.message_limit.max(6 * MIB),
+                    Some("import-reading-lists" | "import-admin-settings") => state.socket.import_limit + 65536,
+                    Some("preview-admin-backup" | "import-admin-backup") => state.backups.request_limit(),
+                    _ => state.socket.message_limit,
+                };
+                if (!probe && !request["action"].is_string()) || frame.len() > limit {
                     let reason = if request["action"].is_string() { "Превышен размер запроса" } else { "Некорректный запрос WebSocket" };
                     if send(&mut socket, fault(reason), id).await.is_err() { return; }
                     continue;
@@ -578,18 +1351,46 @@ async fn run(
                 let admission = admission.clone();
                 running.spawn(async move {
                     let _permit = permit;
-                    let response = tokio::task::spawn_blocking(move || {
-                        state.socket.dispatch(&state, &browser, &admission, connection, request)
-                    }).await.unwrap_or_else(|_| fault("server_busy"));
+                    let (response, change) = tokio::task::spawn_blocking(move || {
+                        let mut change = Change::Unchanged;
+                        let response = state.socket.dispatch(&state, &browser, &admission, connection,
+                            events_connection, request, &mut change);
+                        (response, change)
+                    }).await.unwrap_or_else(|_| (fault("server_busy"), Change::Unchanged));
                     if response["error"] == "need_access_token" {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
-                    (response, id)
+                    (response, id, change)
                 });
             }
             result = running.join_next(), if !running.is_empty() => {
-                let Some(Ok((result,id))) = result else { return; };
+                let Some(Ok((result,id,change))) = result else { return; };
+                match change {
+                    Change::Unchanged => (),
+                    Change::Clear => subscribed = None,
+                    Change::Subscribe(subscription) => {
+                        subscribed = Some((Arc::new(subscription), state.events.subscribe()));
+                    }
+                }
                 if send(&mut socket,result,id).await.is_err() { return; }
+            }
+            event = async { subscribed.as_mut().expect("event subscription").1.recv().await }, if subscribed.is_some() => {
+                match event {
+                    Ok(event) => {
+                        let (subscription, _) = subscribed.as_ref().expect("event subscription");
+                        if event.origin == Some(events_connection) || event.owner != subscription.owner { continue; }
+                        if !subscription.clone().authorized(state.clone(), browser.clone(), admission.clone()).await {
+                            close(&mut socket, CloseCode::Policy, "Session expired").await;
+                            return;
+                        }
+                        if !matches!(timeout(Duration::from_secs(5), send(&mut socket,event.message(),None)).await, Ok(Ok(()))) { return; }
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        close(&mut socket, CloseCode::Again, "Resubscribe and refresh").await;
+                        return;
+                    }
+                    Err(RecvError::Closed) => return,
+                }
             }
         }
     }
@@ -641,15 +1442,28 @@ fn profile_rows(access: &BrowserAccess) -> Vec<Value> {
             .users
             .iter()
             .any(|user| user.is_admin && Some(user.id.as_str()) == owner);
+    let admin = access
+        .users
+        .iter()
+        .any(|user| user.is_admin && Some(user.id.as_str()) == access.owner.as_deref());
     let mut users: Vec<_> = access
         .users
         .iter()
+        .chain(access.blocked_users.iter().filter(|_| admin))
         .filter(|user| show_all || Some(user.id.as_str()) == owner)
         .collect();
     users.sort_by(|left, right| left.name.cmp(&right.name));
-    users.into_iter().map(|user| json!({"id":user.id,"name":user.name,"login":user.login,
+    users.into_iter().map(|user| {
+        let mut row = json!({"id":user.id,"name":user.name,"login":user.login,
         "requiresLogin":user.requires_login && Some(user.id.as_str()) != owner,"anonymousProfile":user.anonymous_profile,"isAdmin":user.is_admin,
-        "opdsEnabled":user.opds_enabled,"opdsAuthEnabled":user.opds_auth_enabled,"currentReadingCount":0})).collect()
+        "opdsEnabled":user.opds_enabled,"opdsAuthEnabled":user.opds_auth_enabled,"currentReadingCount":0});
+        if admin {
+            row["otpEnabled"] = user.otp_enabled.into();
+            row["otpRequired"] = user.otp_required_individual.into();
+            row["blocked"] = user.blocked.into();
+        }
+        row
+    }).collect()
 }
 
 fn profiles(access: &BrowserAccess, requested: &str) -> Value {
@@ -672,9 +1486,11 @@ fn worker_state(state: &State, access: &BrowserAccess, worker: &str) -> Value {
         "progress":index["progress"],"recsLoaded":index["recsLoaded"],"jobStep":index["jobStep"],"jobStepCount":index["jobStepCount"]})
 }
 
-fn login_response(result: BrowserLogin) -> Value {
+pub(super) fn login_response(result: BrowserLogin) -> Value {
     match result {
-        BrowserLogin::Accepted { user, token } => json!({"userId":user,"profileAccessToken":token}),
+        BrowserLogin::Accepted { user, token, .. } => {
+            json!({"userId":user,"profileAccessToken":token})
+        }
         BrowserLogin::Invalid => {
             json!({"error":"Неверный логин или пароль","errorCode":"INPX_INVALID_PROFILE_CREDENTIALS"})
         }
@@ -696,6 +1512,51 @@ fn fault(message: &str) -> Value {
     json!({"error":message,"errorCode":message})
 }
 
+fn reading_shelves(
+    state: &State,
+    profile: BrowserProfileRequest<'_>,
+    action: &str,
+    request: &Value,
+) -> inpx_catalog::Result<Value> {
+    let run = || {
+        let execute =
+            |store: &inpx_catalog::reader_state::ReaderState, owner: &str, stamp: &str| {
+                let guard = state.index.catalogue.read().expect("open catalogue");
+                let catalogue = guard
+                    .as_ref()
+                    .ok_or("Каталог недоступен. Перезапустите сервер.")?;
+                match action {
+                    "get-user-reading-library" => {
+                        store.reading_library(owner, stamp, &request["options"], catalogue)
+                    }
+                    "get-mobile-home" => store.mobile_home(
+                        owner,
+                        stamp,
+                        &request["limit"],
+                        catalogue,
+                        state.index.generation(),
+                    ),
+                    _ => store.shelf_request(owner, stamp, action, request, catalogue),
+                }
+            };
+        if matches!(
+            action,
+            "get-overview-pinned-shelves" | "set-overview-pinned-shelves"
+        ) {
+            state.access.with_personal_profile(profile, execute)
+        } else {
+            state.access.with_profile(profile, execute)
+        }
+    };
+    match run() {
+        Err(error) if error.to_string() == inpx_catalog::library_media::RATING_FILTER_PENDING => {
+            state.exchange.prepare_rating_filter(state)?;
+            run()
+        }
+        result => result,
+    }
+}
+
 fn shelf_mutation(action: &str) -> bool {
     matches!(
         action,
@@ -707,12 +1568,41 @@ fn shelf_mutation(action: &str) -> bool {
             | "set-reading-list-book-read"
             | "mark-reader-books-read"
             | "mark-series-read"
+            | "mark-series-until"
             | "add-series-to-reading-list"
+            | "set-overview-pinned-shelves"
     )
+}
+
+fn reader_change(action: &str) -> bool {
+    shelf_mutation(action)
+        || matches!(
+            action,
+            "update-reader-progress"
+                | "relink-reader-book"
+                | "delete-reader-progress"
+                | "clear-reader-progress"
+                | "update-reader-preferences"
+                | "add-reader-bookmark"
+                | "delete-reader-bookmark"
+                | "import-reading-lists"
+                | "change-library-follow"
+        )
 }
 
 fn text<'a>(request: &'a Value, field: &str) -> &'a str {
     request[field].as_str().unwrap_or_default()
+}
+
+fn truncate(value: &str, units: usize) -> &str {
+    let mut left = units;
+    for (offset, ch) in value.char_indices() {
+        let Some(next) = left.checked_sub(ch.len_utf16()) else {
+            return &value[..offset];
+        };
+        left = next;
+    }
+    value
 }
 
 fn take_text(request: &mut Value, field: &str) -> String {
@@ -722,7 +1612,7 @@ fn take_text(request: &mut Value, field: &str) -> String {
     }
 }
 
-fn megabytes(value: &Value, default: usize, max: usize) -> usize {
+pub(super) fn megabytes(value: &Value, default: usize, max: usize) -> usize {
     let parsed = value.as_f64().or_else(|| value.as_str()?.parse().ok());
     parsed
         .filter(|value| value.is_finite() && *value >= 1.0)

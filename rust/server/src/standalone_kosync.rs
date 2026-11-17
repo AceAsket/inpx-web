@@ -124,7 +124,8 @@ impl Routes {
                     patch: patch.as_ref(),
                 },
                 |uid| load_book(&state.index.catalogue, uid),
-                |book| state.downloads.kosync_fb2(book, &state.sources),
+                |book| state.downloads.kosync_fb2(book, &state.index.sources()),
+                |owner, uid| state.events.send("reader", None, owner, uid),
             )
         })
         .await

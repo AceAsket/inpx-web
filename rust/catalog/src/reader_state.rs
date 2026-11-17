@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value, json};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -10,12 +12,36 @@ use crate::progress_journal::{self, JournalAppend, JournalRequest, ProgressJourn
 use crate::progress_update::{ProgressDecision, ProgressPolicy};
 use crate::{Result, atomic_file, crypto_support};
 
+#[path = "reader_bookmarks.rs"]
+mod bookmarks;
+#[path = "reader_discovery.rs"]
+mod discovery;
+pub use discovery::shared_discovery;
+#[path = "reader_follows.rs"]
+mod follows;
 #[path = "reader_library.rs"]
 mod library;
+#[path = "reader_metadata.rs"]
+mod metadata;
+pub use metadata::{apply_metadata_override, apply_search_metadata};
+#[path = "reader_preferences.rs"]
+mod preferences;
+#[path = "profile_management.rs"]
+mod profiles;
+#[path = "profile_security.rs"]
+mod security;
+pub use profiles::{ProfileChange, ProfileSessionsChange};
+pub use security::INVALID_CREDENTIALS;
+pub use security::ProfileSecurity;
 #[path = "published_reading.rs"]
 mod published;
+#[path = "reader_telegram.rs"]
+mod telegram;
+#[path = "reader_transfer.rs"]
+mod transfer;
 pub use published::PublishedReading;
 pub(crate) use shelves::{FILTERS, normalize_filters, relative_date};
+pub use telegram::persist_telegram_offset;
 #[path = "reader_shelves.rs"]
 mod shelves;
 
@@ -23,6 +49,13 @@ pub struct ReaderState {
     file: PathBuf,
     progress_file: PathBuf,
     journal: ProgressJournal,
+    follow_checks: Mutex<HashMap<String, String>>,
+    metadata: RefCell<Option<(String, Arc<Value>)>>,
+}
+
+pub struct CatalogueReading {
+    pub(crate) progress: Option<Map<String, Value>>,
+    pub(crate) overrides: Value,
 }
 
 struct Snapshot {
@@ -39,7 +72,79 @@ impl ReaderState {
             file: data.join("reading-lists.json"),
             journal: ProgressJournal::new(&progress_file),
             progress_file,
+            follow_checks: Mutex::default(),
+            metadata: RefCell::default(),
         }
+    }
+
+    pub fn catalogue_reading(&self, stamp: &str, owner: Option<&str>) -> Result<CatalogueReading> {
+        let mut data = self.snapshot(stamp)?.data;
+        let progress = owner
+            .map(|owner| {
+                let profile = data["users"]
+                    .as_array_mut()
+                    .into_iter()
+                    .flatten()
+                    .find(|user| user["id"] == owner)
+                    .ok_or("need_profile_login")?;
+                let Value::Object(progress) = profile["readerProgress"].take() else {
+                    return Ok(Map::new());
+                };
+                Ok::<_, Box<dyn std::error::Error>>(progress)
+            })
+            .transpose()?;
+        Ok(CatalogueReading {
+            progress,
+            overrides: data["metadataOverrides"].take(),
+        })
+    }
+
+    pub fn discovery_scores(&self, stamp: &str) -> Result<HashMap<String, u64>> {
+        Ok(shelves::discovery_scores(&self.snapshot(stamp)?.data))
+    }
+
+    pub(crate) fn backup_profiles(&self, stamp: &str) -> Result<Value> {
+        let mut data = self.snapshot(stamp)?.data;
+        let fields = data.as_object_mut().ok_or("Некорректный файл профилей")?;
+        fields.remove(progress_journal::CHECKPOINT_FIELD);
+        for user in fields
+            .get_mut("users")
+            .and_then(Value::as_array_mut)
+            .ok_or("Некорректный файл профилей")?
+        {
+            let fields = user.as_object_mut().ok_or("Некорректный профиль")?;
+            fields.remove("profileTrustedDevices");
+            if let Some(owner) = fields.get("id").and_then(Value::as_str).map(str::to_owned)
+                && let Some(preferences) = fields.get_mut("readerPreferences")
+            {
+                self.inline_preferences(&owner, preferences)?;
+            }
+        }
+        Ok(data)
+    }
+
+    pub(crate) fn restore_preferences(
+        &self,
+        owner: &str,
+        root: &str,
+        prefs: &mut Value,
+    ) -> Result<()> {
+        self.externalize_preferences(owner, root, prefs)
+    }
+
+    pub fn shared_discovery_config(&self, expected: &str) -> Result<Value> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Shared {
+            #[serde(default)]
+            shared_discovery_config: Value,
+        }
+        let file = File::open(&self.file)?;
+        if stamp(&file)?.to_string() != expected {
+            return Err("Файл профилей изменился, повторите запрос".into());
+        }
+        let shared: Shared = serde_json::from_reader(std::io::BufReader::new(file))?;
+        Ok(shared.shared_discovery_config)
     }
 
     fn snapshot(&self, expected: &str) -> Result<Snapshot> {
@@ -187,7 +292,7 @@ fn reader_state(user: &Value, uid: &str) -> Value {
             .extend(stored.clone());
     }
     json!({
-        "preferences":user["readerPreferences"].as_object().cloned().unwrap_or_default(),
+        "preferences":preferences::normalize(&user["readerPreferences"]),
         "progress":progress,
         "progressGeneration":number(&user["readerProgressGeneration"]).max(0.0) as u64,
         "progressResetAt":string(&user["readerProgressResetAt"]),

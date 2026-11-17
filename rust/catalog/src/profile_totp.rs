@@ -26,6 +26,16 @@ impl State {
         &self.secret
     }
 
+    pub(crate) fn remaining(&self) -> usize {
+        self.recovery_hashes.len()
+    }
+
+    pub(crate) fn regenerate(&mut self, user: &str) -> Result<Vec<String>> {
+        let verified = recovery(user)?;
+        self.recovery_hashes = verified.recovery_hashes;
+        Ok(verified.recovery_codes)
+    }
+
     pub(crate) fn from_stored(value: &serde_json::Value) -> Option<Self> {
         if value.is_null() {
             return None;
@@ -69,8 +79,8 @@ pub(crate) struct Recovery {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Enrollment {
-    state: State,
-    recovery_codes: Vec<String>,
+    pub(crate) state: State,
+    pub(crate) recovery_codes: Vec<String>,
 }
 
 pub(crate) fn start() -> Result<String> {

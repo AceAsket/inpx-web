@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{self, HeaderMap, HeaderValue};
@@ -83,10 +83,133 @@ impl Downloads {
         &self.cache
     }
 
+    pub(super) fn raw_book(&self, book: &Book, sources: &[Source]) -> CatalogueResult<PathBuf> {
+        let source = book.source(sources).ok_or_else(missing_book)?;
+        let cached = book_delivery::prepare(&self.cache, book, source)?;
+        cached.file(&self.cache, "", Representation::Raw)
+    }
+
+    pub(super) fn template(&self) -> &str {
+        &self.template
+    }
+
+    pub(super) fn legacy_covers(&self) -> PathBuf {
+        self.cache.with_file_name("cover")
+    }
+
+    pub(super) fn rebuild_cover(
+        &self,
+        uid: &str,
+        catalogue: &RwLock<Option<Catalogue>>,
+        sources: &[Source],
+    ) -> CatalogueResult<Value> {
+        use sha2::{Digest, Sha256};
+        let mut row = load_row(catalogue, uid)?.ok_or("Книга не найдена")?;
+        let book: Book = serde_json::from_value(row.clone())?;
+        let mut removed = 0;
+        let mut rebuilt = false;
+        if book.ext.eq_ignore_ascii_case("fb2")
+            || self.epub && book.ext.eq_ignore_ascii_case("epub")
+        {
+            if let Some((document, _)) = self.document(&book, sources)?
+                && let Some(image) = document.cover()
+            {
+                removed += usize::from(image.rebuild(&self.cache)?);
+                rebuilt = true;
+            }
+        }
+        let revision = if row["_recordHash"].is_null() {
+            json!([row.get("inpxSize").unwrap_or(&row["size"]), row["date"]])
+        } else {
+            row["_recordHash"].take()
+        };
+        let key = serde_json::to_vec(&json!([
+            uid,
+            row["sourceId"],
+            row["sourceLibDir"],
+            row["folder"],
+            row["file"],
+            row["ext"],
+            revision
+        ]))?;
+        let digest = Sha256::digest(key)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let key = format!("book-v3-{digest}");
+        let legacy = self.legacy_covers();
+        if std::fs::symlink_metadata(&legacy)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.is_symlink())
+        {
+            for entry in std::fs::read_dir(legacy)? {
+                let entry = entry?;
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if let Some(suffix) = name.strip_prefix(&key)
+                    && (matches!(suffix, ".jpg" | ".png" | ".gif")
+                        || suffix.starts_with("-abs-")
+                            && matches!(suffix.rsplit('.').next(), Some("jpg" | "png" | "gif")))
+                    && entry.file_type()?.is_file()
+                {
+                    match std::fs::remove_file(entry.path()) {
+                        Ok(()) => removed += 1,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
+        }
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("uid", uid)
+            .finish();
+        Ok(
+            json!({"success":true,"bookUid":uid,"libid":row["libid"],"sourceId":row["sourceId"],
+            "removed":removed,"rebuilt":rebuilt,"coverUrl":format!("{}?{query}",self.cover_root)}),
+        )
+    }
+
+    pub(super) fn attachment(
+        &self,
+        book: &Book,
+        sources: &[Source],
+        explicit: &str,
+        preferred: &str,
+        archive: bool,
+    ) -> CatalogueResult<(PathBuf, String)> {
+        let source = book.source(sources).ok_or_else(missing_book)?;
+        let ext = book.extension().ok_or_else(missing_book)?;
+        let format = explicit.trim().to_ascii_lowercase();
+        let convert = if format.is_empty() {
+            self.epub && ext.eq_ignore_ascii_case("epub") && preferred == "fb2"
+        } else if matches!(format.as_str(), "original" | "raw") || format.eq_ignore_ascii_case(ext)
+        {
+            false
+        } else if format == "fb2" && self.epub && ext.eq_ignore_ascii_case("epub") {
+            true
+        } else {
+            return Err(format!("Неподдерживаемый формат отправки: {format}").into());
+        };
+        let cached = book_delivery::prepare(&self.cache, book, source)?;
+        let mut name = book
+            .filename(&self.template)?
+            .replace(|ch: char| ch.is_ascii_control(), "_");
+        let mut file = if convert {
+            name = replace_extension(&name, "fb2");
+            cached.reader_file(&self.cache, ext)?
+        } else {
+            cached.file(&self.cache, &name, Representation::Raw)?
+        };
+        if archive {
+            file = book_delivery::archive_attachment(&self.cache, &file, &name)?;
+            name.push_str(".zip");
+        }
+        Ok((file, name))
+    }
+
     pub(crate) fn book_link(
         &self,
         uid: &str,
-        catalogue: &Mutex<Option<Catalogue>>,
+        catalogue: &RwLock<Option<Catalogue>>,
         sources: &[Source],
     ) -> CatalogueResult<Option<serde_json::Value>> {
         let Some(book) = load_book(catalogue, uid)? else {
@@ -109,7 +232,7 @@ impl Downloads {
     pub(crate) fn book_info(
         &self,
         uid: &str,
-        catalogue: &Mutex<Option<Catalogue>>,
+        catalogue: &RwLock<Option<Catalogue>>,
         sources: &[Source],
         card: bool,
         reader_only: bool,
@@ -150,7 +273,7 @@ impl Downloads {
     pub(crate) fn gallery(
         &self,
         uid: &str,
-        catalogue: &Mutex<Option<Catalogue>>,
+        catalogue: &RwLock<Option<Catalogue>>,
         sources: &[Source],
     ) -> CatalogueResult<Option<Value>> {
         let Some(book) = load_book(catalogue, uid)? else {
@@ -168,6 +291,28 @@ impl Downloads {
         }
         let file = cached.reader_file(&self.cache, &book.ext)?;
         Ok(Some(Document::read(&file)?.gallery()))
+    }
+
+    pub(super) fn speech_document(
+        &self,
+        uid: &str,
+        catalogue: &RwLock<Option<Catalogue>>,
+        sources: &[Source],
+    ) -> CatalogueResult<(PathBuf, String)> {
+        let book = load_book(catalogue, uid)?.ok_or("404 Файл не найден")?;
+        let epub = book.ext.eq_ignore_ascii_case("epub");
+        if !(book.ext.eq_ignore_ascii_case("fb2") || self.epub && epub) {
+            return Err("Озвучка доступна для книг FB2.".into());
+        }
+        let source = book.source(sources).ok_or("404 Файл не найден")?;
+        let cached = book_delivery::prepare(&self.cache, &book, source)?;
+        let path = cached.reader_file(&self.cache, &book.ext)?;
+        let format = if epub {
+            "epub-reader-v2"
+        } else {
+            "fb2-images-v9"
+        };
+        Ok((path, format!("{}:{format}", cached.hash)))
     }
 
     fn document(
@@ -229,7 +374,7 @@ impl Downloads {
     pub(crate) fn cover(
         &self,
         uid: &str,
-        catalogue: &Mutex<Option<Catalogue>>,
+        catalogue: &RwLock<Option<Catalogue>>,
         sources: &[Source],
     ) -> Result<Prepared, StatusCode> {
         let book = load_book(catalogue, uid)
@@ -341,7 +486,7 @@ impl Downloads {
     pub(crate) fn prepare(
         &self,
         request: Requested,
-        catalogue: &Mutex<Option<Catalogue>>,
+        catalogue: &RwLock<Option<Catalogue>>,
         sources: &[Source],
         sync: Option<&Access>,
     ) -> Result<Prepared, StatusCode> {
@@ -454,6 +599,10 @@ fn replace_extension(name: &str, ext: &str) -> String {
     format!("{stem}.{ext}")
 }
 
+fn missing_book() -> std::io::Error {
+    std::io::ErrorKind::NotFound.into()
+}
+
 pub(crate) async fn respond(
     prepared: Result<Prepared, StatusCode>,
     conditions: HeaderMap,
@@ -473,7 +622,7 @@ pub(crate) async fn respond(
 }
 
 pub(super) fn load_book(
-    catalogue: &Mutex<Option<Catalogue>>,
+    catalogue: &RwLock<Option<Catalogue>>,
     uid: &str,
 ) -> CatalogueResult<Option<Book>> {
     load_row(catalogue, uid)?
@@ -481,8 +630,8 @@ pub(super) fn load_book(
         .transpose()
 }
 
-fn load_row(catalogue: &Mutex<Option<Catalogue>>, uid: &str) -> CatalogueResult<Option<Value>> {
-    let catalogue = catalogue.lock().expect("open catalogue");
+fn load_row(catalogue: &RwLock<Option<Catalogue>>, uid: &str) -> CatalogueResult<Option<Value>> {
+    let catalogue = catalogue.read().expect("open catalogue");
     catalogue
         .as_ref()
         .ok_or("Каталог недоступен. Перезапустите сервер.")?

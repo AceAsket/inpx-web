@@ -10,12 +10,16 @@ use crate::Result;
 use crate::framed_protocol::{Frames, complete, header, with_body};
 use crate::isbn;
 
+#[path = "isbn_index.rs"]
+mod native;
+pub use native::{IsbnBuild, IsbnIndex};
+
 const STATE: TableDefinition<u8, &[u8]> = TableDefinition::new("progress");
 const MATCHES: TableDefinition<(&str, u32), bool> = TableDefinition::new("isbn_books");
 const BODY_LIMIT: u64 = 32 * 1024 * 1024;
 const LEGACY_LIMIT: u64 = 256 * 1024 * 1024;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Progress {
     version: u8,
@@ -38,7 +42,7 @@ struct Progress {
     updated_at: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Row(u32, Vec<String>, #[serde(default)] bool);
 
 #[derive(Deserialize)]

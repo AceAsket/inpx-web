@@ -15,6 +15,10 @@ use crate::book_archive::Failure;
 use crate::fb2_prepare::js_space;
 use crate::{Result, book_cache};
 
+#[path = "reader_speech.rs"]
+mod speech;
+pub use speech::{SpeechMode, SpeechPart, speech_anchor_key};
+
 const MAX_BYTES: u64 = 500 * 1024 * 1024;
 const GALLERY_LIMIT: usize = 18;
 pub(crate) const IMAGE_LIMIT: usize = 2 * 1024 * 1024;
@@ -352,8 +356,7 @@ impl Image {
     }
 
     pub fn stage(&self, directory: &Path) -> Result<PathBuf> {
-        let digest = crate::crypto_support::hex(&Sha256::digest(&self.bytes));
-        let target = directory.join(format!("{digest}.reader-cover"));
+        let target = self.stage_path(directory);
         if book_cache::regular_file(&target, true)?.is_none() {
             let mut file = tempfile::NamedTempFile::new_in(directory)?;
             file.write_all(&self.bytes)?;
@@ -366,6 +369,20 @@ impl Image {
             }
         }
         Ok(target)
+    }
+
+    fn stage_path(&self, directory: &Path) -> PathBuf {
+        let digest = crate::crypto_support::hex(&Sha256::digest(&self.bytes));
+        directory.join(format!("{digest}.reader-cover"))
+    }
+
+    pub fn rebuild(&self, directory: &Path) -> Result<bool> {
+        let target = self.stage_path(directory);
+        let existed = book_cache::regular_file(&target, false)?.is_some();
+        let mut staged = tempfile::NamedTempFile::new_in(directory)?;
+        staged.write_all(&self.bytes)?;
+        staged.persist(&target)?;
+        Ok(existed)
     }
 }
 

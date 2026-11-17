@@ -156,7 +156,11 @@ export default {
     }},
     beforeUnmount() {this.stopPolling();},
     methods:{
-        stateLabel(state) {return {queued:'В очереди',running:'В работе',generating:'В работе',ready:'Готово',error:'Ошибка',cancelled:'Отменено'}[state] || state;},
+        stateLabel(state) {
+            return {queued:'В очереди',running:'В работе',generating:'В работе',cancelling:'Останавливается',
+                ready:'Готово',completed:'Завершено',error:'Ошибка',failed:'Ошибка',cancelled:'Отменено',
+                'timed-out':'Истекло время','memory-pressure':'Недостаточно памяти'}[state] || state;
+        },
         stopPolling() {clearTimeout(this.pollTimer); this.generation++;},
         openTasks() {
             if (!this.authorized || !this.$store.state.config.currentUserProfile?.isAdmin) return;

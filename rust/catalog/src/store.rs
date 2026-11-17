@@ -1,13 +1,12 @@
-use std::collections::{BTreeSet, HashMap, hash_map::Entry};
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::ops::Bound::{Excluded, Unbounded};
 use std::path::{Path, PathBuf};
-use std::{
-    borrow::Cow,
-    cell::{OnceCell, RefCell},
-};
+use std::sync::{Arc, Mutex};
 
+use once_cell::sync::OnceCell;
 use redb::{
     AccessGuard, Database, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction, ReadableDatabase,
     ReadableTable, Table, TableDefinition, WriteTransaction,
@@ -133,9 +132,6 @@ impl<'a> BookStoreWriter<'a> {
 
     fn replace(&mut self, id: u32) -> Result<()> {
         if let Some(old) = self.books.get(id)? {
-            if self.original.is_none() {
-                return Err("duplicate book ID".into());
-            }
             if !old.value().is_empty() {
                 let (record, _) = decode(old.value())?;
                 let old: BookKey = serde_json::from_slice(record)?;
@@ -148,9 +144,7 @@ impl<'a> BookStoreWriter<'a> {
                 }
             }
         }
-        if self.original.is_some() {
-            self.changed.insert(id);
-        }
+        self.changed.insert(id);
         Ok(())
     }
 
@@ -164,15 +158,20 @@ impl<'a> BookStoreWriter<'a> {
         if uid.is_empty() || uid.encode_utf16().count() > 100 {
             return Err("invalid book UID length".into());
         }
-        self.replace(id)?;
+        let patch = self.original.is_some();
+        if patch {
+            self.replace(id)?;
+        }
         self.row.clear();
         let data = record.get().as_bytes();
         self.row
             .extend_from_slice(&u32::try_from(data.len())?.to_le_bytes());
         self.row.extend_from_slice(data);
         serde_json::to_writer(&mut self.row, projection)?;
-        self.books.insert(id, self.row.as_slice())?;
-        if self.original.is_none() && self.uids.insert(uid, id)?.is_some() {
+        if self.books.insert(id, self.row.as_slice())?.is_some() && !patch {
+            return Err("duplicate book ID".into());
+        }
+        if !patch && self.uids.insert(uid, id)?.is_some() {
             return Err("duplicate book UID".into());
         }
         Ok(())
@@ -351,10 +350,20 @@ pub struct BookStore {
     base: ReadOnlyDatabase,
     patch: Option<ReadOnlyDatabase>,
     directory: PathBuf,
-    facets: RefCell<HashMap<Facet, Option<Postings>>>,
+    facets: [OnceCell<Option<Postings>>; Facet::Source as usize + 1],
     active_books: OnceCell<SelectedBooks>,
-    wide_order: RefCell<Option<(String, WideOrder)>>,
-    lookup: RefCell<Option<LookupIndex>>,
+    wide_order: Mutex<Option<(String, Arc<WideOrder>)>>,
+    lookup: OnceCell<LookupIndex>,
+}
+
+impl BookStore {
+    pub fn read_cache_bytes(&self) -> usize {
+        self.base.cache_stats().used_bytes()
+            + self
+                .patch
+                .as_ref()
+                .map_or(0, |db| db.cache_stats().used_bytes())
+    }
 }
 
 #[derive(Deserialize)]
@@ -600,20 +609,30 @@ impl BookStore {
                 None
             },
             directory: directory.into(),
-            facets: RefCell::new(HashMap::new()),
+            facets: Default::default(),
             active_books: OnceCell::new(),
-            wide_order: RefCell::new(None),
-            lookup: RefCell::new(None),
+            wide_order: Mutex::default(),
+            lookup: OnceCell::new(),
         })
     }
 
     pub(crate) fn visit(&self, visitor: impl FnMut(u32, &[u8]) -> Result<()>) -> Result<()> {
-        self.visit_rows(None, visitor)
+        self.visit_rows(None, None, visitor)
+    }
+
+    pub(crate) fn visit_search_rows(
+        &self,
+        generation: &str,
+        candidates: Option<&[u32]>,
+        visitor: impl FnMut(u32, &[u8]) -> Result<()>,
+    ) -> Result<()> {
+        self.visit_rows(Some(generation), candidates, visitor)
     }
 
     fn visit_rows(
         &self,
         generation: Option<&str>,
+        candidates: Option<&[u32]>,
         mut visitor: impl FnMut(u32, &[u8]) -> Result<()>,
     ) -> Result<()> {
         let base = self.base.begin_read()?;
@@ -630,6 +649,25 @@ impl BookStore {
             .as_ref()
             .map(|tx| tx.open_table(RECORDS))
             .transpose()?;
+        if let Some(candidates) = candidates {
+            for &id in candidates {
+                let changed = updated
+                    .as_ref()
+                    .map(|table| table.get(id))
+                    .transpose()?
+                    .flatten();
+                let row = match changed {
+                    Some(row) => Some(row),
+                    None => records.get(id)?,
+                };
+                if let Some(row) = row
+                    && !row.value().is_empty()
+                {
+                    visitor(id, decode(row.value())?.0)?;
+                }
+            }
+            return Ok(());
+        }
         wide_search::visit_rows(&records, updated.as_ref(), 0..=u32::MAX, &mut |id, data| {
             visitor(id, decode(data)?.0)
         })
@@ -647,7 +685,7 @@ impl BookStore {
             del: Option<i64>,
         }
         let mut counts = FileCounter::new(&self.directory, true)?;
-        self.visit_rows(Some(generation), |_, record| {
+        self.visit_rows(Some(generation), None, |_, record| {
             let row: FileRow = serde_json::from_slice(record)?;
             counts.add(&row.folder, &row.file, &row.ext, row.del.unwrap_or(0) != 0)
         })?;
@@ -659,11 +697,8 @@ impl BookStore {
         table: Facet,
         read: impl FnOnce(Option<&Postings>) -> Result<T>,
     ) -> Result<T> {
-        let mut facets = self.facets.borrow_mut();
-        let index = match facets.entry(table) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => entry.insert(Postings::open(&self.directory, table).ok()),
-        };
+        let index =
+            self.facets[table as usize].get_or_init(|| Postings::open(&self.directory, table).ok());
         read(index.as_ref())
     }
 
@@ -684,21 +719,31 @@ impl BookStore {
         groups.try_fold(first, |selection, group| select(group, Some(&selection)))
     }
 
+    pub(crate) fn select_facet(
+        &self,
+        facet: Facet,
+        previous: Option<&SelectedBooks>,
+        matches: impl Fn(&Label) -> bool,
+    ) -> Result<SelectedBooks> {
+        self.facet(facet, |index| {
+            let index = index.ok_or("facet index unavailable")?;
+            Ok(SelectedBooks::from_postings(
+                index.matching(matches),
+                previous,
+            ))
+        })
+    }
+
     pub(crate) fn opds_books(&self, genres: &[&str]) -> Result<Cow<'_, SelectedBooks>> {
-        if self.active_books.get().is_none() {
-            let active = self.facet(Facet::Del, |index| {
+        let active = self.active_books.get_or_try_init(|| {
+            self.facet(Facet::Del, |index| {
                 let index = index.ok_or("missing catalogue deletion index")?;
                 Ok(SelectedBooks::from_postings(
                     index.matching(|label| label == &Label::Number(0)),
                     None,
                 ))
-            })?;
-            let _ = self.active_books.set(active);
-        }
-        let active = self
-            .active_books
-            .get()
-            .expect("catalogue active book selection");
+            })
+        })?;
         if genres.is_empty() {
             return Ok(Cow::Borrowed(active));
         }
@@ -738,12 +783,13 @@ impl BookStore {
     pub(crate) fn browser_search(
         &self,
         generation: &str,
+        candidates: Option<&[u32]>,
         matches: impl FnMut(&inpx_reader::Record) -> bool,
         merge: bool,
         start: usize,
         limit: usize,
     ) -> Result<(Vec<inpx_reader::Record>, usize)> {
-        let ids = self.browser_search_order(generation, matches, merge)?;
+        let ids = self.browser_search_order(generation, candidates, matches, merge)?;
         let total = ids.len();
         let page = ids.into_iter().skip(start).take(limit).collect();
         Ok((self.catalogue_rows(generation, page)?, total))
@@ -752,17 +798,21 @@ impl BookStore {
     pub(crate) fn browser_search_order(
         &self,
         generation: &str,
+        candidates: Option<&[u32]>,
         mut matches: impl FnMut(&inpx_reader::Record) -> bool,
         merge: bool,
     ) -> Result<Vec<u32>> {
         let mut ids = Vec::new();
-        self.visit(|id, raw| {
+        self.visit_search_rows(generation, candidates, |id, raw| {
             let row = serde_json::from_slice(raw)?;
             if matches(&row) {
                 ids.push(id);
             }
             Ok(())
         })?;
+        if ids.is_empty() {
+            return Ok(ids);
+        }
         let mut candidates = self.rank_shelf_ids(generation, ids, merge)?;
         candidates.sort_unstable_by(Match::catalogue_order);
         Ok(candidates.into_iter().map(|book| book.id).collect())
@@ -802,11 +852,10 @@ impl BookStore {
     }
 
     fn with_lookup<T>(&self, read: impl FnOnce(&LookupIndex) -> Result<T>) -> Result<T> {
-        let mut lookup = self.lookup.borrow_mut();
-        if lookup.is_none() {
-            *lookup = Some(LookupIndex::open(&self.directory.join("lookup.redb"))?);
-        }
-        read(lookup.as_ref().ok_or("missing catalogue lookup")?)
+        let lookup = self
+            .lookup
+            .get_or_try_init(|| LookupIndex::open(&self.directory.join("lookup.redb")))?;
+        read(lookup)
     }
 
     fn entity_rows(
@@ -857,7 +906,9 @@ impl BookStore {
                 books.push(book);
             }
         }
-        Ok(series_through(books, &query.target, query.numbers))
+        Ok(series_through(books, &query.target, |uid| {
+            query.numbers.get(uid).copied()
+        }))
     }
 
     pub fn query(&self, request: StoreRequest) -> Result<StoreResponse> {
@@ -932,21 +983,26 @@ impl BookStore {
                 &request.generation,
             )?),
             StoreQuery::WideSearch(query) => {
-                let mut current = self.wide_order.borrow_mut();
-                if current
-                    .as_ref()
-                    .is_none_or(|(key, _)| key != query.order_key())
-                {
+                let order = {
+                    let mut current = self.wide_order.lock().expect("wide search order");
                     let key = query.order_key();
-                    *current = Some((
-                        key.into(),
-                        WideOrder::open(&self.directory, key, &request.generation)?,
-                    ));
-                }
+                    match current.as_ref() {
+                        Some((cached, order)) if cached == key => order.clone(),
+                        _ => {
+                            let order = Arc::new(WideOrder::open(
+                                &self.directory,
+                                key,
+                                &request.generation,
+                            )?);
+                            *current = Some((key.into(), order.clone()));
+                            order
+                        }
+                    }
+                };
                 StoreResponse::Ranked(wide_search::search(
                     &records,
                     updated.as_ref(),
-                    &current.as_ref().unwrap().1,
+                    &order,
                     query,
                 )?)
             }

@@ -93,20 +93,54 @@ pub(crate) fn words(text: &str, mut visit: impl FnMut(&str, &str)) {
     }
 }
 
+const ENDINGS: &[&str] = &[
+    "иями", "ями", "ами", "ого", "ому", "ыми", "ими", "ах", "ях", "ов", "ев", "ая", "ое", "ую",
+    "ые", "ых", "ой", "ей", "ий", "ый", "ам", "ям", "ом", "ем", "а", "я", "ы", "и", "у", "ю", "е",
+    "о", "ь",
+];
+
 fn root(word: &str) -> &str {
     if word.len() < 10 || !word.chars().all(|c| ('а'..='я').contains(&c)) {
         return word;
     }
-    const ENDINGS: &[&str] = &[
-        "иями", "ями", "ами", "ого", "ому", "ыми", "ими", "ах", "ях", "ов", "ев", "ая", "ое", "ую",
-        "ые", "ых", "ой", "ей", "ий", "ый", "ам", "ям", "ом", "ем", "а", "я", "ы", "и", "у", "ю",
-        "е", "о", "ь",
-    ];
     ENDINGS
         .iter()
         .find_map(|suffix| word.strip_suffix(suffix))
         .filter(|root| root.len() >= 8)
         .unwrap_or(word)
+}
+
+pub(crate) fn shorter_search_roots<'a>(
+    word: &'a str,
+    stem: &'a str,
+) -> impl Iterator<Item = &'a str> {
+    // The word index stores stems. A raw prefix can extend into an ending
+    // that was stripped from the indexed word, including a partial ending.
+    let longest = ENDINGS.iter().map(|ending| ending.len()).max().unwrap_or(0);
+    word.char_indices()
+        .rev()
+        .take_while(move |(at, _)| word.len() - at <= longest)
+        .filter_map(move |(at, _)| {
+            let (prefix, tail) = word.split_at(at);
+            (prefix.len() >= 8
+                && prefix.len() < stem.len()
+                && ENDINGS.iter().any(|ending| ending.starts_with(tail)))
+            .then_some(prefix)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_prefix_can_end_inside_a_stripped_ending() {
+        let query = "учениям";
+        let title_word = "учениями";
+        assert!(title_word.starts_with(query));
+        assert!(!root(title_word).starts_with(root(query)));
+        assert!(shorter_search_roots(query, root(query)).any(|stem| stem == root(title_word)));
+    }
 }
 
 pub(crate) fn normalize_key(value: &str) -> String {
@@ -126,6 +160,10 @@ pub(crate) struct SearchProjection {
 
 impl SearchProjection {
     pub fn from_book(row: &Record) -> Self {
+        Self::for_source(row, field(row, "sourceId"))
+    }
+
+    pub(crate) fn for_source(row: &Record, source: &str) -> Self {
         let words = ["author", "series", "title"].map(|key| {
             let mut result = Vec::new();
             words(field(row, key), |word, root| {
@@ -133,7 +171,6 @@ impl SearchProjection {
             });
             result
         });
-        let source = field(row, "sourceId");
         let file = field(row, "file");
         let folder = field(row, "folder");
         let ext = field(row, "ext");
@@ -154,5 +191,13 @@ impl SearchProjection {
             physical,
             score,
         }
+    }
+
+    pub(crate) fn title_roots(&self) -> impl Iterator<Item = &str> {
+        self.words[2]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| pair[1].as_str())
     }
 }

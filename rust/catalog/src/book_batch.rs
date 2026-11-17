@@ -2,10 +2,11 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufWriter, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use serde::Deserialize;
+use unicode_normalization::UnicodeNormalization;
 use zip::{
     CompressionMethod, DateTime, ZipWriter,
     result::ZipError,
@@ -15,7 +16,7 @@ use zip::{
 use crate::Result;
 use crate::framed_protocol::{Frames, complete, header, with_body};
 
-const MAX_BOOKS: usize = 200;
+pub const MAX_BOOKS: usize = 200;
 const INPUT_LIMIT: u64 = 512 * 1024 * 1024;
 const OUTPUT_LIMIT: u64 = 1024 * 1024 * 1024;
 const INLINE_LIMIT: u64 = 8 * 1024 * 1024;
@@ -63,7 +64,7 @@ impl Write for BudgetWriter {
     }
 }
 
-struct Batch {
+pub struct Batch {
     path: PathBuf,
     zip: Option<ZipWriter<StreamWriter<BudgetWriter>>>,
     names: HashSet<String>,
@@ -73,7 +74,7 @@ struct Batch {
 }
 
 impl Batch {
-    fn open(path: PathBuf, limit: u64) -> Result<Self> {
+    pub fn open(path: PathBuf, limit: u64) -> Result<Self> {
         let exceeded = Rc::new(Cell::new(false));
         let output = BudgetWriter {
             output: BufWriter::with_capacity(128 * 1024, File::create_new(&path)?),
@@ -127,18 +128,91 @@ impl Batch {
         Ok(())
     }
 
-    fn finish(mut self) -> Result<u64> {
-        let mut output = self
-            .zip
-            .take()
-            .expect("active batch writer")
-            .finish()?
-            .into_inner();
+    pub fn add_file(&mut self, path: &Path, name: String) -> Result<()> {
+        let reader = File::open(path)?;
+        let size = reader.metadata()?.len();
+        self.add(
+            Entry {
+                source: path.to_path_buf(),
+                name,
+                size,
+                mode: 0o644,
+                mtime: [1980, 1, 1, 0, 0, 0],
+            },
+            reader,
+        )
+    }
+
+    pub fn finish(mut self) -> Result<u64> {
+        let output = self.zip.take().expect("active batch writer").finish();
+        if self.exceeded.get() {
+            return Err(FULL.into());
+        }
+        let mut output = output?.into_inner();
         output.flush()?;
         let bytes = output.written;
         drop(output);
         self.published = true;
         Ok(bytes)
+    }
+}
+
+pub fn entry_name(
+    book: &crate::book_delivery::Book,
+    template: &str,
+    index: usize,
+    names: &mut HashSet<String>,
+) -> Result<String> {
+    let ext = book.extension().ok_or("Недопустимое расширение книги")?;
+    let folder = segment(&book.series, "Вне серий");
+    let order = book
+        .serno
+        .filter(|value| *value != 0.0)
+        .map_or_else(String::new, |value| format!("{value}. "));
+    let label = segment(
+        &format!("{order}{} — {}", book.author, book.title),
+        &format!("Книга-{}", index + 1),
+    );
+    let filename = if template.trim().is_empty() {
+        format!("{:03}_{label}.{ext}", index + 1)
+    } else {
+        book.filename(template)?
+    };
+    let stem = filename
+        .strip_suffix(&format!(".{ext}"))
+        .unwrap_or(&filename);
+    let mut entry = format!("{folder}/{filename}");
+    let mut duplicate = 1;
+    while !names.insert(entry.to_lowercase()) {
+        duplicate += 1;
+        entry = format!("{folder}/{stem}_{duplicate}.{ext}");
+    }
+    Ok(entry)
+}
+
+fn segment(value: &str, fallback: &str) -> String {
+    let safe: String = value
+        .nfc()
+        .filter(|ch| !ch.is_ascii_control())
+        .map(|ch| {
+            if matches!(ch, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let safe: String = safe
+        .trim()
+        .trim_matches('.')
+        .trim()
+        .chars()
+        .take(120)
+        .collect();
+    if safe.is_empty() {
+        fallback.to_owned()
+    } else {
+        safe
     }
 }
 

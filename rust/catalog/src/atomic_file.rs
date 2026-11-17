@@ -6,6 +6,16 @@ use tempfile::NamedTempFile;
 
 use crate::{Result, file_stamp::path_stamp};
 
+pub fn save_json(path: &Path, value: &serde_json::Value) -> Result<()> {
+    let expected = current_stamp(path)?;
+    let mut file = NamedTempFile::new_in(path.parent().ok_or("missing parent directory")?)?;
+    serde_json::to_writer(&mut file, value)?;
+    if publish(file, path, expected.as_deref())?.is_none() {
+        return Err("Файл изменился, повторите сохранение".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn current_stamp(path: &Path) -> Result<Option<String>> {
     match path_stamp(path) {
         Ok(current) => Ok(Some(current.to_string())),

@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 use time::{Date, Duration, Month, OffsetDateTime};
 
 use super::{ReaderState, now, number, string};
+use crate::catalog_entity::{SeriesVolumes, normalize_entity_text};
 use crate::standalone_catalogue::Catalogue;
 use crate::{Result, crypto_support};
 
@@ -28,12 +29,100 @@ pub(crate) const FILTERS: &[&str] = &[
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Entry {
-    book_uid: String,
-    read: bool,
+pub(super) struct Entry {
+    pub(super) book_uid: String,
+    pub(super) read: bool,
 }
 
 impl ReaderState {
+    pub fn telegram_shelves(
+        &self,
+        owner: &str,
+        stamp: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value> {
+        let snapshot = self.snapshot(stamp)?;
+        let mut lists = items(&snapshot.data["lists"])
+            .iter()
+            .filter(|row| owned(row, owner))
+            .map(|row| json!({"id":row["id"],"name":row["name"]}))
+            .collect::<Vec<_>>();
+        lists.sort_by_cached_key(|row| string(&row["name"]).to_lowercase().replace('ё', "е"));
+        let more = lists.len() > offset.saturating_add(limit);
+        Ok(
+            json!({"more":more,"rows":lists.into_iter().skip(offset).take(limit).collect::<Vec<_>>()}),
+        )
+    }
+
+    pub fn telegram_shelf_page(
+        &self,
+        owner: &str,
+        stamp: &str,
+        id: &str,
+        offset: usize,
+        limit: usize,
+        catalogue: &Catalogue,
+    ) -> Result<Value> {
+        let snapshot = self.snapshot(stamp)?;
+        let data = &snapshot.data;
+        let user = super::transfer::user(data, owner)?;
+        let row = items(&data["lists"])
+            .iter()
+            .find(|row| row["id"] == id && owned(row, owner))
+            .ok_or(NOT_FOUND)?;
+        let (more, books) = if let Some(mut filters) =
+            smart_query(row).filter(|filters| filters.get("unreadOnly") != Some(&Value::Bool(true)))
+        {
+            filters.insert("limit".into(), limit.into());
+            filters.insert("offset".into(), offset.into());
+            let mut result = catalogue.browser_books(&filters)?;
+            (
+                result["totalFound"].as_u64().unwrap_or_default()
+                    > offset.saturating_add(limit) as u64,
+                result["found"].take(),
+            )
+        } else {
+            let selected = computed_entries(row, &read_uids(data, user, owner), catalogue)?;
+            let ids = selected
+                .iter()
+                .skip(offset)
+                .take(limit)
+                .map(|entry| entry.book_uid.as_str());
+            (
+                selected.len() > offset.saturating_add(limit),
+                json!(catalogue.browser_books_by_uid(ids)?),
+            )
+        };
+        Ok(json!({"name":row["name"],"more":more,"rows":books}))
+    }
+
+    pub fn batch_shelf(
+        &self,
+        owner: &str,
+        stamp: &str,
+        id: &str,
+        catalogue: &Catalogue,
+    ) -> Result<Value> {
+        let snapshot = self.snapshot(stamp)?;
+        let data = &snapshot.data;
+        let user = super::transfer::user(data, owner)?;
+        let row = items(&data["lists"])
+            .iter()
+            .find(|row| row["id"] == id && owned(row, owner))
+            .ok_or(NOT_FOUND)?;
+        let entries = computed_entries(row, &read_uids(data, user, owner), catalogue)?;
+        if entries.len() > crate::book_batch::MAX_BOOKS {
+            return Err("В одном ZIP может быть не больше 200 книг".into());
+        }
+        Ok(json!(
+            entries
+                .into_iter()
+                .map(|entry| entry.book_uid)
+                .collect::<Vec<_>>()
+        ))
+    }
+
     pub fn shelf_request(
         &self,
         owner: &str,
@@ -53,6 +142,26 @@ impl ReaderState {
         match action {
             "get-reading-lists" => return listing(data, user, owner, request, catalogue),
             "get-reading-list" => return detail(data, user, owner, request, catalogue),
+            "get-overview-pinned-shelves" => return overview_pins(data, user, owner, catalogue),
+            "set-overview-pinned-shelves" => {
+                let requested = request["shelfIds"]
+                    .as_array()
+                    .filter(|ids| ids.len() <= MAX_OVERVIEW_SHELVES)
+                    .ok_or("Можно закрепить до 8 полок в Обзоре")?;
+                let pins = pin_ids(data, owner, requested);
+                if pins.len() != requested.len() {
+                    return Err(
+                        "Полки для Обзора должны существовать в вашем профиле и не повторяться"
+                            .into(),
+                    );
+                }
+                let reply = json!({"shelfIds":pins,"maxShelves":MAX_OVERVIEW_SHELVES});
+                if reply["shelfIds"] != user["overviewShelfIds"] {
+                    data["users"][index]["overviewShelfIds"] = reply["shelfIds"].clone();
+                    self.publish(snapshot, stamp)?;
+                }
+                return Ok(reply);
+            }
             _ => (),
         }
         let updated = now();
@@ -104,6 +213,35 @@ impl ReaderState {
                 result["series"] = series.into();
                 result
             }
+            "mark-series-until" => {
+                let options = &request["options"];
+                let original = string(&options["name"]);
+                let uid = string(&options["bookUid"]);
+                if original.chars().count() > 500 || uid.chars().count() > 512 {
+                    return Err("Слишком длинный поисковый запрос".into());
+                }
+                let name = normalize_entity_text(original);
+                let uid = normalize_entity_text(uid);
+                if name.is_empty() || uid.is_empty() {
+                    return Err("Выберите том серии".into());
+                }
+                let volumes = catalogue.browser_series_through(
+                    original,
+                    &name,
+                    &uid,
+                    &data["metadataOverrides"],
+                )?;
+                let uids = match volumes {
+                    SeriesVolumes::Found { uids } => uids,
+                    SeriesVolumes::InvalidVolume => {
+                        return Err("Для этого тома не указан номер в серии".into());
+                    }
+                    SeriesVolumes::TooMany => {
+                        return Err("В серии больше 5000 книг. Выберите меньший диапазон".into());
+                    }
+                };
+                mark_books(data, index, owner, &uids, true, None, &updated)?
+            }
             _ => {
                 if list_id.is_empty() {
                     return Err("listId is empty".into());
@@ -147,9 +285,7 @@ pub(super) fn listing(
         }
         let filters = &row["filters"];
         // Keep existing shelves listed while their specialised index is unavailable.
-        let books = if !string(&filters["ratingCount"]).is_empty()
-            || !string(&filters["isbn"]).is_empty()
-        {
+        let books = if !string(&filters["isbn"]).is_empty() && !catalogue.isbn_filter_ready() {
             entries(row)
         } else {
             computed_entries(row, &read, catalogue)?
@@ -157,20 +293,92 @@ pub(super) fn listing(
         lists.push(stats(row, owner, &books, uid));
     }
     lists.sort_by_cached_key(|row| string(&row["name"]).to_lowercase().replace('ё', "е"));
+    let pins = pin_ids(data, owner, items(&user["overviewShelfIds"]));
+    Ok(json!({"lists":lists,"overviewShelfIds":pins,"maxShelves":MAX_OVERVIEW_SHELVES}))
+}
+
+pub(super) fn pin_ids<'a>(data: &Value, owner: &str, ids: &'a [Value]) -> Vec<&'a str> {
     let owned_ids: HashSet<_> = items(&data["lists"])
         .iter()
         .filter(|row| owned(row, owner))
         .map(|row| string(&row["id"]))
         .collect();
-    let pins = unique_strings(
-        items(&user["overviewShelfIds"])
+    let mut seen = HashSet::new();
+    ids.iter()
+        .map(|id| string(id).trim())
+        .filter(|id| !id.is_empty() && owned_ids.contains(id) && seen.insert(*id))
+        .take(MAX_OVERVIEW_SHELVES)
+        .collect()
+}
+
+fn overview_pins(data: &Value, user: &Value, owner: &str, catalogue: &Catalogue) -> Result<Value> {
+    const CANDIDATES: usize = 256;
+    const PREVIEW: usize = 8;
+    let ids = pin_ids(data, owner, items(&user["overviewShelfIds"]));
+    let mut shelves = Vec::new();
+    let mut read = None;
+    for id in &ids {
+        let row = items(&data["lists"])
             .iter()
-            .map(string)
-            .filter(|id| owned_ids.contains(id)),
-    );
-    Ok(
-        json!({"lists":lists,"overviewShelfIds":pins.into_iter().take(MAX_OVERVIEW_SHELVES).collect::<Vec<_>>(),"maxShelves":MAX_OVERVIEW_SHELVES}),
-    )
+            .find(|row| row["id"] == *id && owned(row, owner))
+            .expect("owned pinned shelf");
+        let smart = row["filters"].is_object();
+        let mut books = if let Some(mut filters) = smart_query(row) {
+            let unread = filters.get("unreadOnly").is_some_and(|value| value == true);
+            filters.insert(
+                "limit".into(),
+                (if unread { CANDIDATES } else { PREVIEW }).into(),
+            );
+            let mut result = catalogue.browser_books(&filters)?;
+            let matched = result["found"].take();
+            let read = unread.then(|| read.get_or_insert_with(|| read_uids(data, user, owner)));
+            matched
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|book| {
+                    read.as_ref()
+                        .is_none_or(|read| !read.contains(string(&book["_uid"])))
+                })
+                .take(PREVIEW)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            let entries = entries(row);
+            let candidates = entries.iter().take(CANDIDATES);
+            let mut by_uid: HashMap<_, _> = catalogue
+                .browser_books_by_uid(candidates.clone().map(|entry| entry.book_uid.as_str()))?
+                .into_iter()
+                .filter(|book| number(&book["del"]) == 0.0)
+                .map(|book| (string(&book["_uid"]).to_owned(), book))
+                .collect();
+            candidates
+                .filter_map(|entry| by_uid.remove(&entry.book_uid))
+                .take(PREVIEW)
+                .collect()
+        };
+        for book in &mut books {
+            let uid = string(&book["_uid"]);
+            let progress = &user["readerProgress"][uid];
+            let overrides = &data["metadataOverrides"][uid];
+            book["_readerProgress"] = if progress.is_object() {
+                json!({"percent":number(&progress["percent"]),"started":truthy(&progress["updatedAt"])})
+            } else {
+                Value::Null
+            };
+            if let Some(overrides) = overrides.as_object() {
+                for key in ["title", "author", "series", "serno"] {
+                    if let Some(value) = overrides.get(key) {
+                        book[key] = value.clone();
+                    }
+                }
+                book["metadataOverridden"] = true.into();
+                book["metadataOverrideUpdatedAt"] = string(&overrides["updatedAt"]).into();
+            }
+        }
+        shelves.push(json!({"id":id,"title":row["name"],"smart":smart,"books":books}));
+    }
+    Ok(json!({"shelfIds":ids,"maxShelves":MAX_OVERVIEW_SHELVES,"shelves":shelves}))
 }
 
 fn detail(
@@ -438,18 +646,10 @@ fn computed_entries(
     read: &HashSet<String>,
     catalogue: &Catalogue,
 ) -> Result<Vec<Entry>> {
-    let Some(mut filters) = row["filters"].as_object().cloned() else {
+    let Some(filters) = smart_query(row) else {
         return Ok(entries(row));
     };
     let unread = filters.get("unreadOnly") == Some(&Value::Bool(true));
-    filters.insert("del".into(), "0".into());
-    if let Some(date) = filters
-        .get("date")
-        .and_then(Value::as_str)
-        .and_then(relative_date)
-    {
-        filters.insert("date".into(), date.into());
-    }
     Ok(catalogue
         .browser_shelf_uids(&filters)?
         .into_iter()
@@ -458,6 +658,19 @@ fn computed_entries(
             (!unread || !read).then_some(Entry { book_uid, read })
         })
         .collect())
+}
+
+fn smart_query(row: &Value) -> Option<Map<String, Value>> {
+    let mut filters = row["filters"].as_object()?.clone();
+    filters.insert("del".into(), "0".into());
+    if let Some(date) = filters
+        .get("date")
+        .and_then(Value::as_str)
+        .and_then(relative_date)
+    {
+        filters.insert("date".into(), date.into());
+    }
+    Some(filters)
 }
 
 fn series_books<'a>(catalogue: &Catalogue, request: &'a Value) -> Result<(&'a str, Vec<String>)> {
@@ -503,7 +716,13 @@ fn stats(row: &Value, owner: &str, books: &[Entry], uid: &str) -> Value {
         "readBook":entry.is_some_and(|entry| entry.read),"filters":row["filters"],"opds":opds(&row["opds"])})
 }
 
-fn entries(row: &Value) -> Vec<Entry> {
+pub(super) fn discovery_lists(data: &Value, owner: &str) -> Vec<Value> {
+    items(&data["lists"]).iter().filter(|row| owned(row, owner))
+        .map(|row| json!({"books":entries(row),"updatedAt":row["updatedAt"],"createdAt":row["createdAt"]}))
+        .collect()
+}
+
+pub(super) fn entries(row: &Value) -> Vec<Entry> {
     let mut seen = HashSet::new();
     items(&row["books"])
         .iter()
@@ -526,6 +745,26 @@ fn entries(row: &Value) -> Vec<Entry> {
         .collect()
 }
 
+pub(super) fn discovery_scores(data: &Value) -> HashMap<String, u64> {
+    let mut scores = HashMap::new();
+    for user in items(&data["users"]) {
+        for (uid, progress) in user["readerProgress"].as_object().into_iter().flatten() {
+            let read = number(&progress["percent"]);
+            let score = 8
+                + u64::from(read >= 0.15) * 8
+                + u64::from(read >= 0.5) * 12
+                + u64::from(read >= 0.95) * 18;
+            *scores.entry(uid.clone()).or_default() += score;
+        }
+    }
+    for list in items(&data["lists"]) {
+        for entry in entries(list) {
+            *scores.entry(entry.book_uid).or_default() += if entry.read { 14 } else { 6 };
+        }
+    }
+    scores
+}
+
 fn check_name(data: &Value, owner: &str, name: &str, excluded: &str) -> Result<()> {
     let name = name.to_lowercase();
     if items(&data["lists"]).iter().any(|row| {
@@ -536,7 +775,7 @@ fn check_name(data: &Value, owner: &str, name: &str, excluded: &str) -> Result<(
     Ok(())
 }
 
-fn shelf_name(value: &Value) -> Result<String> {
+pub(super) fn shelf_name(value: &Value) -> Result<String> {
     let name = string(value)
         .split(crate::fb2_prepare::js_space)
         .filter(|part| !part.is_empty())
@@ -576,7 +815,7 @@ pub(crate) fn normalize_filters(raw: &Value) -> Result<Value> {
             value.trim().to_owned()
         };
         if field == "ratingCount" {
-            validate_rating_count(&value)?;
+            crate::library_media::rating_range(&value)?;
         }
         filters.insert(field.into(), value.into());
     }
@@ -595,32 +834,6 @@ pub(crate) fn normalize_filters(raw: &Value) -> Result<Value> {
     );
     filters.insert("del".into(), "0".into());
     Ok(filters.into())
-}
-
-fn validate_rating_count(value: &str) -> Result<()> {
-    const MAX: u64 = (1 << 53) - 1;
-    let parse = |text: &str| -> Result<u64> {
-        if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
-            return Err("Число голосов: укажите N, N..M, N.. или ..M".into());
-        }
-        text.parse::<u64>()
-            .ok()
-            .filter(|&count| count <= MAX)
-            .ok_or_else(|| "Некорректный диапазон числа голосов".into())
-    };
-    if let Some((from, to)) = value.split_once("..") {
-        if from.is_empty() && to.is_empty() {
-            parse(value)?;
-        }
-        let min = if from.is_empty() { 0 } else { parse(from)? };
-        let max = if to.is_empty() { MAX } else { parse(to)? };
-        if min > max {
-            return Err("Некорректный диапазон числа голосов".into());
-        }
-    } else {
-        parse(value)?;
-    }
-    Ok(())
 }
 
 pub(crate) fn relative_date(value: &str) -> Option<String> {
@@ -659,11 +872,11 @@ fn unique_strings<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
         .collect()
 }
 
-fn items(value: &Value) -> &[Value] {
+pub(super) fn items(value: &Value) -> &[Value] {
     value.as_array().map_or(&[], Vec::as_slice)
 }
 
-fn truthy(value: &Value) -> bool {
+pub(super) fn truthy(value: &Value) -> bool {
     match value {
         Value::Null | Value::Bool(false) => false,
         Value::Number(_) => number(value) != 0.0,
@@ -677,11 +890,11 @@ pub(super) fn owned(row: &Value, owner: &str) -> bool {
         && (row["userId"] == owner || owner == "default" && string(&row["userId"]).is_empty())
 }
 
-fn visibility(value: &Value) -> &'static str {
+pub(super) fn visibility(value: &Value) -> &'static str {
     if value == "opds" { "opds" } else { "private" }
 }
 
-fn opds(value: &Value) -> Value {
+pub(super) fn opds(value: &Value) -> Value {
     let group = match string(&value["grouping"]) {
         "authors" => "authors",
         "series" => "series",

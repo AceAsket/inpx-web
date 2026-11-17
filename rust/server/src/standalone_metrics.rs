@@ -23,7 +23,7 @@ use crate::http::{Body, BodyError};
 use crate::request_access::{Metrics, ServiceAccess, trim_js};
 
 #[path = "standalone_process_metrics.rs"]
-mod process;
+pub(super) mod process;
 
 const MAX_FILES: usize = 20_000;
 const MAX_PROFILES: usize = 512;
@@ -58,6 +58,21 @@ pub(super) struct Connection {
 }
 
 impl Activity {
+    pub(super) fn snapshot(&self) -> Value {
+        let counts = self.counts.lock().expect("metrics activity");
+        let mut totals = [0_u64; 2];
+        let profiles = counts
+            .profiles
+            .iter()
+            .map(|(profile, stats)| {
+                totals[0] = totals[0].saturating_add(stats[0]);
+                totals[1] = totals[1].saturating_add(stats[1]);
+                serde_json::json!({"profile":profile,"logins":stats[0],"downloads":stats[1]})
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({"totals":{"logins":totals[0],"downloads":totals[1]},"profiles":profiles})
+    }
+
     fn new(data: &Path) -> Result<Self> {
         let file = data.join("session-secret");
         let secret = match std::fs::read_to_string(&file) {
@@ -118,10 +133,10 @@ impl Activity {
     }
 
     pub(super) fn login(&self, owner: &str) {
-        self.record(Some(owner), 0);
+        self.record(Some(owner), 0, 1);
     }
 
-    fn record(&self, owner: Option<&str>, field: usize) {
+    fn record(&self, owner: Option<&str>, field: usize, amount: u64) {
         let mut counts = self.counts.lock().expect("metrics activity");
         let profile = if let Some(owner) = owner {
             let mut mac = self.signer.clone();
@@ -139,7 +154,7 @@ impl Activity {
             "guest".into()
         };
         let value = &mut counts.profiles.entry(profile).or_default()[field];
-        *value = value.saturating_add(1);
+        *value = value.saturating_add(amount);
     }
 }
 
@@ -202,9 +217,14 @@ impl Monitor {
                 .flatten()
                 .filter(|source| source["enabled"] == false)
                 .count(),
-            activity: enabled
-                .then(|| Activity::new(data).map(Arc::new))
-                .transpose()?,
+            activity: match Activity::new(data) {
+                Ok(activity) => Some(Arc::new(activity)),
+                Err(error) if enabled => return Err(error),
+                Err(error) => {
+                    eprintln!("Server activity: {error}");
+                    None
+                }
+            },
             slot: Arc::new(Semaphore::new(1)),
         };
         Ok((monitor, access))
@@ -386,7 +406,12 @@ impl Monitor {
             "Configured library sources by enabled state.",
             "gauge",
         );
-        sample(&mut output, name, "{enabled=\"true\"}", state.sources.len());
+        sample(
+            &mut output,
+            name,
+            "{enabled=\"true\"}",
+            state.index.sources().len(),
+        );
         sample(
             &mut output,
             name,
@@ -399,6 +424,14 @@ impl Monitor {
             "Admin event log entries by level and category.",
             "gauge",
         );
+        for ((level, category), count) in state.diagnostics.event_counts(state) {
+            sample(
+                &mut output,
+                "admin_events_total",
+                &format!("{{level=\"{level}\",category=\"{category}\"}}"),
+                count,
+            );
+        }
         if let Some(activity) = &self.activity {
             let counts = activity.counts.lock().expect("metrics activity");
             let mut clients = 0;
@@ -499,9 +532,18 @@ impl Monitor {
 }
 
 pub(super) fn track_download(
+    response: Response<Body>,
+    activity: &Arc<Activity>,
+    owner: Option<String>,
+) -> Response<Body> {
+    track_downloads(response, activity, owner, 1)
+}
+
+pub(super) fn track_downloads(
     mut response: Response<Body>,
     activity: &Arc<Activity>,
     owner: Option<String>,
+    books: u64,
 ) -> Response<Body> {
     let whole = response.status() == StatusCode::OK
         || response.status() == StatusCode::PARTIAL_CONTENT
@@ -516,7 +558,7 @@ pub(super) fn track_download(
                 });
     if whole && let Some(length) = response.body().size_hint().exact() {
         if length == 0 {
-            activity.record(owner.as_deref(), 1);
+            activity.record(owner.as_deref(), 1, books);
         } else {
             let body = response.into_parts();
             response = Response::from_parts(
@@ -524,7 +566,7 @@ pub(super) fn track_download(
                 Delivery {
                     body: body.1,
                     remaining: length,
-                    count: Some((activity.clone(), owner)),
+                    count: Some((activity.clone(), owner, books)),
                 }
                 .boxed_unsync(),
             );
@@ -536,7 +578,7 @@ pub(super) fn track_download(
 struct Delivery {
     body: Body,
     remaining: u64,
-    count: Option<(Arc<Activity>, Option<String>)>,
+    count: Option<(Arc<Activity>, Option<String>, u64)>,
 }
 
 impl Stream for Delivery {
@@ -553,9 +595,9 @@ impl Stream for Delivery {
         {
             self.remaining = self.remaining.saturating_sub(bytes.len() as u64);
             if self.remaining == 0
-                && let Some((activity, owner)) = self.count.take()
+                && let Some((activity, owner, books)) = self.count.take()
             {
-                activity.record(owner.as_deref(), 1);
+                activity.record(owner.as_deref(), 1, books);
             }
         }
         frame

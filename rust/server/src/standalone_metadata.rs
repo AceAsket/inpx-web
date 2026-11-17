@@ -251,7 +251,7 @@ impl Routes {
         let outcome = timeout_at(
             deadline,
             tokio::task::spawn_blocking(move || {
-                let found = server.index.catalogue.lock().ok().and_then(|catalogue| {
+                let found = server.index.catalogue.read().ok().and_then(|catalogue| {
                     catalogue
                         .as_ref()?
                         .browser_books(criteria.as_object()?)
@@ -368,7 +368,7 @@ impl Routes {
         tokio::task::spawn_blocking(move || {
             let (_pending, _reader) = (pending, reader);
             let value = book
-                .source(&state.sources)
+                .source(&state.index.sources())
                 .and_then(|source| book_delivery::metadata(&book, source).ok())
                 .unwrap_or_default();
             state
@@ -406,7 +406,10 @@ impl Routes {
             let (_pending, _reader) = (pending, reader);
             match load_book(&state.index.catalogue, &uid) {
                 Ok(None) => failure(StatusCode::NOT_FOUND, "Book not found", head),
-                Ok(Some(book)) => match state.downloads.provider_image(&book, &state.sources) {
+                Ok(Some(book)) => match state
+                    .downloads
+                    .provider_image(&book, &state.index.sources())
+                {
                     Ok(Some(image)) => {
                         if let Err(error) = image.stage(state.downloads.cache()) {
                             eprintln!("Metadata cover cache: {error}");

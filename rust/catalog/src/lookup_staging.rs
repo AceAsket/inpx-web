@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{BufRead, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serializer, ser::SerializeSeq};
@@ -275,6 +275,7 @@ pub(crate) fn publish_sorted(
     generation: &str,
     name_counts: [usize; 4],
     low_memory: bool,
+    mut report: impl FnMut(Option<&str>) -> Result<()>,
 ) -> Result<usize> {
     let directory = path
         .parent()
@@ -286,9 +287,11 @@ pub(crate) fn publish_sorted(
     input.push(b'\n');
     let mut series = name_counts[1];
     for (table, count) in Table::ALL.into_iter().zip(name_counts) {
-        let labels: Vec<String> = serde_json::from_reader(File::open(
-            directory.join(format!("{}.labels", table.name())),
-        )?)?;
+        report(Some(table.name()))?;
+        let labels: Vec<String> = serde_json::from_reader(BufReader::with_capacity(
+            128 * 1024,
+            File::open(directory.join(format!("{}.labels", table.name())))?,
+        ))?;
         if labels.len() != count {
             return Err("staged lookup label count differs".into());
         }
@@ -312,6 +315,7 @@ pub(crate) fn publish_sorted(
             input.extend_from_slice(&omitted);
         }
     }
+    report(None)?;
     publish(path, input.as_slice())?;
     Ok(series)
 }

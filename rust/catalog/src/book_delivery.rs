@@ -39,7 +39,11 @@ pub struct Book {
 impl Book {
     pub fn source<'a>(&self, sources: &'a [Source]) -> Option<&'a Source> {
         if !self.source_id.is_empty() {
-            return sources.iter().find(|source| source.id == self.source_id);
+            return sources.iter().find(|source| {
+                source.id == self.source_id
+                    && (self.source_lib_dir.is_empty()
+                        || source.lib_dir == Path::new(&self.source_lib_dir))
+            });
         }
         if !self.source_lib_dir.is_empty() {
             return sources
@@ -69,6 +73,25 @@ impl Book {
             self.extension().ok_or("Invalid book extension")?,
         )
     }
+
+    pub fn caption(&self, template: &str) -> Result<String> {
+        book_names::render(self, template, &self.ext)
+    }
+}
+
+pub fn archive_attachment(directory: &Path, source: &Path, name: &str) -> Result<PathBuf> {
+    let digest = Sha256::digest(name.as_bytes());
+    let target = source.with_extension(format!(
+        "{}.delivery-v1-{}.zip",
+        source
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default(),
+        crypto_support::hex(&digest[..12])
+    ));
+    let token = crypto_support::hex(&crypto_support::random::<16>()?);
+    book_cache::zip_book(source, &target, &Staging::new(directory, &token)?, name)?;
+    Ok(target)
 }
 
 pub fn metadata(book: &Book, source: &Source) -> Result<serde_json::Value> {

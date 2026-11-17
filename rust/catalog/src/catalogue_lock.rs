@@ -24,8 +24,12 @@ pub struct CatalogueLease {
 
 impl CatalogueLease {
     pub fn open(directory: &Path) -> Result<Self> {
-        let lease = Lease::acquire(directory)?
-            .ok_or_else(|| format!("Database locked: {}", directory.display()))?;
+        let lease = Lease::acquire(directory)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("Database locked: {}", directory.display()),
+            )
+        })?;
         let leases = Mutex::new(HashMap::from([(directory.into(), lease)]));
         let (stop, parent) = mpsc::channel();
         let watcher = thread::Builder::new()

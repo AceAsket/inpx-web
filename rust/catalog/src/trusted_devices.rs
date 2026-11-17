@@ -15,6 +15,13 @@ pub(crate) struct Device {
 }
 
 impl Device {
+    pub(crate) fn active_count(value: &serde_json::Value, now: i64) -> usize {
+        Self::from_stored(value)
+            .iter()
+            .filter(|device| device.expires_at > now)
+            .count()
+    }
+
     pub(crate) fn from_stored(value: &serde_json::Value) -> Vec<Self> {
         let Some(rows) = value.as_array() else {
             return Vec::new();

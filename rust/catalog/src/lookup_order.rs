@@ -1,6 +1,7 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,8 @@ pub struct LabelOrder {
     // The label list retains insertion order for predicates that iterate the index.
     labels: Vec<(u32, String)>,
     runs: Vec<Vec<u32>>,
+    #[serde(skip)]
+    utf16_ordered: OnceLock<bool>,
 }
 
 /// A bounded directory of comparison points in the saved order. The application
@@ -51,6 +54,7 @@ impl LabelOrder {
         Self {
             labels,
             runs: vec![indices],
+            utf16_ordered: OnceLock::new(),
         }
     }
 
@@ -81,6 +85,99 @@ impl LabelOrder {
         self.labels
             .get(position as usize)
             .ok_or_else(|| "invalid name index position".into())
+    }
+
+    pub(crate) fn visit_prefix(
+        &self,
+        prefix: &str,
+        mut visit: impl FnMut(&(u32, String)) -> Result<()>,
+    ) -> Result<()> {
+        if let Some(run) = self.native_run() {
+            for &position in self.prefix_run(run, prefix)? {
+                let row = self.label(position)?;
+                if !row.1.starts_with(prefix) {
+                    break;
+                }
+                visit(row)?;
+            }
+            return Ok(());
+        }
+        // Compatibility indexes can contain overlapping runs sorted with ICU collation.
+        self.labels
+            .iter()
+            .filter(|(_, label)| label.starts_with(prefix))
+            .try_for_each(visit)
+    }
+
+    fn native_run(&self) -> Option<&[u32]> {
+        let [run] = self.runs.as_slice() else {
+            return None;
+        };
+        self.utf16_ordered
+            .get_or_init(|| {
+                run.is_sorted_by(|left, right| {
+                    self.label(*left)
+                        .ok()
+                        .zip(self.label(*right).ok())
+                        .is_some_and(|((_, left), (_, right))| {
+                            left.encode_utf16().cmp(right.encode_utf16()).is_le()
+                        })
+                })
+            })
+            .then_some(run.as_slice())
+    }
+
+    fn prefix_run<'a>(&self, run: &'a [u32], prefix: &str) -> Result<&'a [u32]> {
+        let (mut start, mut end) = (0, run.len());
+        while start < end {
+            let middle = start + (end - start) / 2;
+            let (_, label) = self.label(run[middle])?;
+            if label.encode_utf16().cmp(prefix.encode_utf16()).is_lt() {
+                start = middle + 1;
+            } else {
+                end = middle;
+            }
+        }
+        Ok(&run[start..])
+    }
+
+    pub(crate) fn browser_samples(
+        &self,
+        keys: &[String],
+        prefix: bool,
+        limit: usize,
+    ) -> Result<(Vec<u32>, bool)> {
+        let Some(run) = self.native_run() else {
+            return Ok((Vec::new(), true));
+        };
+        let mut ids = IndexSet::new();
+        for key in keys {
+            for &position in self.prefix_run(run, key)? {
+                let (id, label) = self.label(position)?;
+                if label != key {
+                    break;
+                }
+                ids.insert(*id);
+                if ids.len() > limit {
+                    return Ok((ids.into_iter().take(limit).collect(), true));
+                }
+            }
+        }
+        if prefix {
+            for key in keys {
+                for &position in self.prefix_run(run, key)? {
+                    let (id, label) = self.label(position)?;
+                    if !label.starts_with(key) {
+                        break;
+                    }
+                    ids.insert(*id);
+                    if ids.len() > limit {
+                        return Ok((ids.into_iter().take(limit).collect(), true));
+                    }
+                }
+            }
+        }
+        Ok((ids.into_iter().collect(), false))
     }
 
     pub(crate) fn slices(&self, windows: Vec<[usize; 3]>) -> Result<Vec<Vec<String>>> {
@@ -319,5 +416,9 @@ pub(crate) fn load_order(table: &Path) -> Result<LabelOrder> {
     if runs.iter().flatten().copied().collect::<HashSet<_>>().len() != labels.len() {
         return Err("name index runs are incomplete".into());
     }
-    Ok(LabelOrder { labels, runs })
+    Ok(LabelOrder {
+        labels,
+        runs,
+        utf16_ordered: OnceLock::new(),
+    })
 }

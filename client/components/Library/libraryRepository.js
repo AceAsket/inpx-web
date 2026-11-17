@@ -4,7 +4,7 @@ const READING_TTL = 30000;
 const DISCOVERY_TTL = 15 * 60 * 1000;
 
 function emptyState() {
-    return {revision: 0, reading: null, lists: [], shelves: [], externalShelves: [], recommendations: [], readingLoading: false, shelvesLoading: false,
+    return {revision: 0, readingRevision: 0, reading: null, lists: [], shelves: [], externalShelves: [], recommendations: [], readingLoading: false, shelvesLoading: false,
         readingError: '', listsError: '', shelvesError: '', readingLoginRequired: false, shelvesLoginRequired: false,
         externalShelvesLoading: false, externalShelvesLoaded: false, externalShelvesError: '', externalShelvesLoginRequired: false,
         recommendationsLoading: false, recommendationsLoaded: false, recommendationsError: '', recommendationsLoginRequired: false,
@@ -67,10 +67,11 @@ class LibraryRepository {
         if (this.pending[kind]) return this.pending[kind];
         if (!force && this.loadedAt[kind] !== undefined && this.now() - this.loadedAt[kind] < ttl) return;
         const epoch = this.epoch;
+        const readingRevision = this.state.readingRevision;
         const discoveryRevision = this.discoveryRevision;
         const pinnedShelvesRevision = this.pinnedShelvesRevision;
         const current = () => epoch === this.epoch && (kind === 'pinnedShelves' ? pinnedShelvesRevision === this.pinnedShelvesRevision
-            : kind === 'reading' || discoveryRevision === this.discoveryRevision);
+            : kind === 'reading' ? readingRevision === this.state.readingRevision : discoveryRevision === this.discoveryRevision);
         this.patch({[`${kind}Loading`]: true, [`${kind}Error`]: ''});
         const pending = (async() => {
             try {
@@ -96,9 +97,13 @@ class LibraryRepository {
 
     requireLogin(kind) {
         delete this.loadedAt[kind];
-        if (kind === 'reading') this.invalidatePinnedShelves();
+        if (kind === 'reading') {
+            delete this.pending.reading;
+            this.invalidatePinnedShelves();
+        }
         this.patch({[`${kind}LoginRequired`]: true, [`${kind}Error`]: '', [`${kind}Loaded`]: false,
-            ...(kind === 'reading' ? {reading: null, lists: [], listsError: '', pinnedShelves: [], pinnedShelvesError: ''} : {[kind]: []})});
+            ...(kind === 'reading' ? {readingRevision:this.state.readingRevision+1,readingLoading:false,
+                reading: null, lists: [], listsError: '', pinnedShelves: [], pinnedShelvesError: ''} : {[kind]: []})});
     }
 
     loadReading(force = false) {
@@ -116,6 +121,14 @@ class LibraryRepository {
             return {reading: reading.value, lists: lists.status === 'fulfilled' ? lists.value.lists || [] : [],
                 listsError: lists.status === 'rejected' && !profileLoginError(lists.reason) ? lists.reason.message : ''};
         });
+    }
+
+    refreshReading() {
+        delete this.pending.reading;
+        delete this.loadedAt.reading;
+        this.invalidatePinnedShelves();
+        this.patch({readingRevision:this.state.readingRevision+1,readingLoading:false});
+        return this.loadReading(true);
     }
 
     loadShelves(force = false) {

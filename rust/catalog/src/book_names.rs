@@ -108,7 +108,7 @@ pub(crate) fn filename(book: &Book, template: &str, ext: &str) -> Result<String>
     Ok(name)
 }
 
-fn render(book: &Book, template: &str, ext: &str) -> Result<String> {
+pub(crate) fn render(book: &Book, template: &str, ext: &str) -> Result<String> {
     static TOKEN: OnceLock<Regex> = OnceLock::new();
     static CONDITIONAL: OnceLock<Regex> = OnceLock::new();
     let token = TOKEN.get_or_init(|| Regex::new(r"\$\{([A-Z_]+)\}").unwrap());

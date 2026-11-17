@@ -36,6 +36,7 @@ import wsc from './webSocketConnection';
 import * as utils from '../../share/utils';
 import * as cryptoUtils from '../../share/cryptoUtils';
 import LockQueue from '../../../server/core/LockQueue';
+import {watchReaderEvents} from './readerEvents';
 import packageJson from '../../../package.json';
 
 const rotor = '|/-\\';
@@ -352,6 +353,7 @@ class Api {
                     throw new Error('Выполняется выход из профиля');
 
                 if (response && response.error == 'need_access_token') {
+                    if (options.suppressAccessLogin) throw new Error('need_access_token');
                     this.accessGranted = false;
                     await this.showPasswordDialog();
                 } else if (response && response.error == 'need_profile_login') {
@@ -663,6 +665,11 @@ class Api {
 
     async getMobileHome(limit = 100, requestOptions = {}) {
         return await this.request({action: 'get-mobile-home', limit}, 120, requestOptions);
+    }
+
+    watchReaderEvents(refresh, expired) {
+        return watchReaderEvents(wsc, signal => this.request({action:'subscribe-client-events'}, 10,
+            {signal,suppressProfileLogin:true,suppressAccessLogin:true}), refresh, expired);
     }
 
     async updateReaderProgress(bookUid, progress = {}, options = {}) {

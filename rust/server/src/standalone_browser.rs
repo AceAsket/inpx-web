@@ -140,9 +140,21 @@ impl Sessions {
     }
 
     pub(crate) fn http_owner(&self, headers: &HeaderMap) -> Option<(String, Identity)> {
+        self.http_profile(headers, "")
+    }
+
+    pub(crate) fn http_profile(
+        &self,
+        headers: &HeaderMap,
+        supplied: &str,
+    ) -> Option<(String, Identity)> {
         let mut shared = self.shared.lock().expect("browser sessions");
         let browser = unpack(&mut shared.browsers, headers)?;
-        let token = shared.browsers.field(&browser, PROFILE_TOKEN)?.to_owned();
+        let token = if supplied.is_empty() {
+            shared.browsers.field(&browser, PROFILE_TOKEN)?.to_owned()
+        } else {
+            supplied.to_owned()
+        };
         let identity = profile(&mut shared.profiles, &token)?;
         Some((token, identity))
     }
@@ -184,6 +196,67 @@ impl Sessions {
             .expect("browser sessions")
             .profiles
             .remove(token);
+    }
+
+    pub(crate) fn has_profile(&self, token: &str) -> bool {
+        self.shared
+            .lock()
+            .expect("browser sessions")
+            .profiles
+            .has(token)
+    }
+
+    pub(crate) fn refresh_credentials(
+        &self,
+        versions: &std::collections::HashMap<&str, ([u8; 32], [u8; 32])>,
+    ) {
+        self.shared
+            .lock()
+            .expect("browser sessions")
+            .profiles
+            .update(|identity| {
+                let (old, new) = versions.get(identity.owner.as_str())?;
+                (identity.credential_version == *old).then(|| Identity {
+                    owner: identity.owner.clone(),
+                    credential_version: *new,
+                })
+            });
+    }
+
+    pub(crate) fn existing_browser(&self, headers: &HeaderMap) -> Option<String> {
+        unpack(
+            &mut self.shared.lock().expect("browser sessions").browsers,
+            headers,
+        )
+    }
+
+    pub(crate) fn revoke_owner(&self, owner: &str) {
+        self.shared
+            .lock()
+            .expect("browser sessions")
+            .profiles
+            .revoke(owner, "");
+    }
+
+    pub(crate) fn revoke_all_profiles(&self) {
+        self.shared
+            .lock()
+            .expect("browser sessions")
+            .profiles
+            .clear_except("");
+    }
+
+    pub(crate) fn refresh_profile(&self, token: &str, identity: Identity, revoke: bool, all: bool) {
+        let mut shared = self.shared.lock().expect("browser sessions");
+        if !shared.profiles.has(token) {
+            return;
+        }
+        if all {
+            shared.profiles.clear_except(token);
+        } else if revoke {
+            shared.profiles.revoke(&identity.owner, token);
+        }
+        shared.profiles.insert(token, identity, now_ms());
     }
 
     pub(crate) fn logout(&self, browser: &str, supplied: &str) {

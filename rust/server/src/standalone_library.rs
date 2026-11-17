@@ -72,6 +72,19 @@ impl Library {
         self.protected
     }
 
+    pub(crate) fn allowed(&self, token: &str) -> Result<bool> {
+        let Some(store) = self.store.as_ref().filter(|_| self.protected) else {
+            return Ok(true);
+        };
+        if access_wire::token(token.as_bytes()).is_none() {
+            return Ok(false);
+        }
+        let mut store = store
+            .lock()
+            .map_err(|_| "Хранилище сеансов доступа недоступно")?;
+        check(&mut store, token, now_ms())
+    }
+
     pub(crate) fn login_metrics(&self) -> [u64; inpx_auth_state::login_rate::METRIC_COUNT] {
         self.store
             .as_ref()
@@ -91,16 +104,8 @@ impl Library {
             .map_err(|_| "Хранилище сеансов доступа недоступно")?;
         let now = now_ms();
         let client = peer.to_string();
-        let allowed = access_wire::token(token.as_bytes()).is_some()
-            && matches!(
-                store.runtime.run(
-                    AccessCommand::Check {
-                        token: token.into()
-                    },
-                    now
-                )?,
-                AccessReply::Allowed
-            );
+        let allowed =
+            access_wire::token(token.as_bytes()).is_some() && check(&mut store, token, now)?;
         if !token.is_empty() {
             if !allowed {
                 let retry = store
@@ -165,4 +170,16 @@ impl Drop for Store {
             eprintln!("WebAccess flush: {error}");
         }
     }
+}
+
+fn check(store: &mut Store, token: &str, now: i64) -> Result<bool> {
+    Ok(matches!(
+        store.runtime.run(
+            AccessCommand::Check {
+                token: token.into()
+            },
+            now
+        )?,
+        AccessReply::Allowed
+    ))
 }

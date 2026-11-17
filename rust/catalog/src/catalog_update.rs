@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use crate::Result;
 use crate::catalog_postings::{CountsSummary, Postings};
 use crate::catalog_text::{SearchProjection, field, lower, number, supported_text};
+use crate::crypto_support::hex;
 use crate::folder_index::{CacheStaging, FolderCache};
 use crate::folder_inventory::Entry;
 use crate::jemba::write_updated_books;
@@ -310,6 +311,7 @@ impl Import<'_> {
         mut row: Record,
         source: &Source,
         store: &mut BookStoreWriter<'_>,
+        projection: Option<SearchProjection>,
     ) -> Result<()> {
         let parsed = field(&row, "_uid").to_owned();
         if TEXT_FIELDS.iter().any(|key| {
@@ -396,7 +398,7 @@ impl Import<'_> {
         } else {
             serde_json::to_string(&row)?
         };
-        let hash = format!("{:x}", Sha256::digest(serialized.as_bytes()));
+        let hash = hex(&Sha256::digest(serialized.as_bytes()));
         let changed =
             prior.is_none_or(|i| self.previous.books[i].hash.as_deref() != Some(hash.as_str()));
         if changed {
@@ -405,17 +407,18 @@ impl Import<'_> {
             }
             self.changed_ids.push(id);
         }
-        if changed || !store.is_patch() {
-            let projection = SearchProjection::from_book(&row);
+        let projection = (changed || !store.is_patch())
+            .then(|| projection.unwrap_or_else(|| SearchProjection::from_book(&row)));
+        if let Some(projection) = &projection {
             serialized.pop();
             write_json_suffix(&mut serialized, &hash, id)?;
             let raw = RawValue::from_string(serialized)?;
-            store.add(id, &uid, &raw, &projection)?;
+            store.add(id, &uid, &raw, projection)?;
             if changed && !self.request.native_catalogue {
                 self.changes.insert(id, ChangedBook { uid, raw });
             }
         }
-        self.postings.add(&row, id)?;
+        self.postings.add(&row, id, projection.as_ref())?;
         Ok(())
     }
 }
@@ -477,12 +480,13 @@ const ARCHIVE_BATCH_SIZE: usize = 512;
 
 enum ArchiveBatch {
     File(String),
-    Records(Vec<Record>),
+    Records(Vec<(Record, Option<SearchProjection>)>),
 }
 
 fn read_archive_batches(
     mut archive: Archive<BufReader<File>>,
     sender: SyncSender<ArchiveBatch>,
+    projection_source: Option<&str>,
 ) -> std::result::Result<Info, String> {
     let mut batch = Vec::with_capacity(ARCHIVE_BATCH_SIZE);
     let send = |event| {
@@ -507,7 +511,9 @@ fn read_archive_batches(
                     send(ArchiveBatch::File(name.to_owned()))?;
                 }
                 Event::Record(row) => {
-                    batch.push(row);
+                    let projection =
+                        projection_source.map(|source| SearchProjection::for_source(&row, source));
+                    batch.push((row, projection));
                     if batch.len() == ARCHIVE_BATCH_SIZE {
                         flush(&mut batch)?;
                     }
@@ -543,28 +549,31 @@ fn scan_archive(
     report_source(output, source, total_files, 3)?;
     let mut current = 3;
     let mut last = Instant::now();
+    let mut file_name = String::new();
     std::thread::scope(|scope| {
         let (sender, receiver) = sync_channel(4);
-        let reading = scope.spawn(move || read_archive_batches(archive, sender));
+        let projection_source = (!store.is_patch()).then_some(source.id.as_str());
+        let reading = scope.spawn(move || read_archive_batches(archive, sender, projection_source));
         let imported = (|| -> Result<()> {
             for batch in &receiver {
                 match batch {
                     ArchiveBatch::File(name) => {
                         current += 1;
-                        if last.elapsed().as_millis() >= 125 {
-                            output(
-                                json!({"fileName":name,"current":current,"totalFiles":total_files,"recsLoaded":*recs_loaded,
-                                "sourceId":source.id,"sourceName":source.name,"progress":current as f64 / total_files as f64}),
-                            )?;
-                            last = Instant::now();
-                        }
+                        file_name = name;
                     }
                     ArchiveBatch::Records(rows) => {
-                        for row in rows {
+                        for (row, projection) in rows {
                             *recs_loaded += 1;
-                            import.add(row, source, store)?;
+                            import.add(row, source, store, projection)?;
                         }
                     }
+                }
+                if last.elapsed().as_millis() >= 125 {
+                    output(
+                        json!({"fileName":file_name,"current":current,"totalFiles":total_files,"recsLoaded":*recs_loaded,
+                        "sourceId":source.id,"sourceName":source.name,"progress":current as f64 / total_files as f64}),
+                    )?;
+                    last = Instant::now();
                 }
             }
             Ok(())
@@ -590,7 +599,7 @@ fn scan_folder(
     let mut last = Instant::now();
     for (index, entry) in folder.entries.iter().enumerate() {
         let row = serde_json::from_str(folder.cache.record(&entry.relative)?.get())?;
-        import.add(row, source, store)?;
+        import.add(row, source, store, None)?;
         *recs_loaded += 1;
         let current = index + 1;
         if current == total_files || last.elapsed().as_millis() >= 125 {
@@ -666,7 +675,16 @@ pub(crate) fn prepare_update_reporting<'a>(
         Some(order)
     } else {
         if let Some(rows) = &rows {
-            rows.visit(|id, row: &Identity| previous.add(id, row))?;
+            let mut loaded = 0;
+            rows.visit(|id, row: &Identity| {
+                previous.add(id, row)?;
+                loaded += 1;
+                if loaded % 16384 == 0 || loaded == rows.count {
+                    output(json!({"recsLoaded":loaded,"totalRecords":rows.count,
+                        "progress":loaded as f64 / rows.count as f64}))?;
+                }
+                Ok(())
+            })?;
         }
         None
     };

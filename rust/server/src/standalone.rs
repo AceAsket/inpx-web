@@ -14,7 +14,6 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use inpx_catalog::configuration;
-use inpx_catalog::library_sources::{self, Source};
 use inpx_catalog::opds_access::Resource;
 use inpx_catalog::standalone_catalogue::CatalogueFiles;
 use inpx_catalog::{Result, profile_bootstrap, web_app};
@@ -24,21 +23,50 @@ use tokio::sync::Semaphore;
 
 use crate::assets::{self, Assets};
 use crate::http::{Body, body, error};
-use crate::opds::standalone::Opds;
 use crate::request_access::{self, Admission, Decision, Protocol, ServiceRoute};
 use crate::standalone_access::{self, Access, Rejection};
 use crate::standalone_download::{self, Downloads};
 
+#[path = "standalone_admin_cache.rs"]
+mod admin_cache;
+#[path = "standalone_backup.rs"]
+mod backup;
+#[path = "standalone_batch.rs"]
+mod batch;
+#[path = "standalone_delivery.rs"]
+mod delivery;
+#[path = "standalone_diagnostics.rs"]
+mod diagnostics;
+#[path = "standalone_discovery.rs"]
+mod discovery;
+#[path = "standalone_events.rs"]
+mod events;
+#[path = "standalone_exchange.rs"]
+mod exchange;
 #[path = "standalone_index.rs"]
 mod index;
+#[path = "standalone_isbn.rs"]
+mod isbn;
 #[path = "standalone_kosync.rs"]
 mod kosync;
 #[path = "standalone_metadata.rs"]
 mod metadata;
 #[path = "standalone_metrics.rs"]
 mod metrics;
+#[path = "standalone_profile_http.rs"]
+mod profile_http;
+#[path = "standalone_settings.rs"]
+mod settings;
+#[path = "standalone_smtp.rs"]
+mod smtp;
 #[path = "standalone_socket.rs"]
 mod socket;
+#[path = "standalone_speech.rs"]
+mod speech;
+#[path = "standalone_tasks.rs"]
+mod tasks;
+#[path = "standalone_telegram.rs"]
+mod telegram;
 
 const VERSION: &str = env!("INPX_RELEASE_VERSION");
 const NAME: &str = "inpx-web";
@@ -46,17 +74,25 @@ const NAME: &str = "inpx-web";
 struct State {
     started: Instant,
     index: index::Index,
-    sources: Vec<Source>,
+    settings: settings::Settings,
+    admin_cache: admin_cache::Cache,
+    diagnostics: diagnostics::Diagnostics,
+    backups: backup::Backups,
     assets: Assets,
-    opds: Option<Opds>,
     opds_slots: Arc<Semaphore>,
     access: Access,
     socket: socket::Socket,
+    events: events::Events,
+    speech: Arc<speech::Speech>,
+    delivery: delivery::Delivery,
+    batch: batch::Downloads,
     downloads: Downloads,
     download_slots: Arc<Semaphore>,
     kosync: kosync::Routes,
     request_access: request_access::Standalone,
     metadata: metadata::Routes,
+    exchange: exchange::Exchange,
+    isbn_limit: u64,
     metrics: metrics::Monitor,
 }
 
@@ -162,27 +198,34 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         return Err("Remote library synchronization requires the compatibility runtime".into());
     }
     let prefix = text(&config["server"]["root"]).unwrap_or_default();
-    let tolino = match std::env::var("INPX_OPDS_COMPATIBILITY") {
-        Ok(value) if value == "tolino" => true,
-        Ok(value) if value == "standard" => false,
-        Err(std::env::VarError::NotPresent) => config["opds"]["compatibility"] == "tolino",
-        _ => return Err("INPX_OPDS_COMPATIBILITY: standard или tolino".into()),
-    };
     let data = text(&config["dataDir"]).map_or(default_data, PathBuf::from);
     let kosync_enabled = std::env::var("INPX_KOSYNC_ENABLED").as_deref() != Ok("false");
-    let access = Access::new(&data, &config, kosync_enabled)?;
+    let epub_reader = epub_reader(&config);
+    let settings = settings::Settings::new(
+        file.clone(),
+        data.clone(),
+        prefix,
+        epub_reader,
+        config.clone(),
+        json!({
+            "argument":args.get("--library-sources").unwrap_or_default(),
+            "environment":env("INPX_LIBRARY_SOURCES").or_else(|| env("LIBRARY_SOURCES")).unwrap_or_default(),
+            "libDir":args.nonempty("--lib-dir").map(str::to_owned).or_else(||env("LIBDIR")),
+            "inpx":args.nonempty("--inpx").map(str::to_owned).or_else(||env("INPX")),
+            "execDir":exec_dir,
+        }),
+    );
+    let access = Access::new(
+        &data,
+        &config,
+        kosync_enabled,
+        settings.build_opds(&config)?,
+    )?;
     if fresh || needs_save {
         configuration::save(&file, &data, &config)?;
     }
 
-    let sources = library_sources::resolve(serde_json::from_value(json!({
-        "configured":config["librarySources"].as_array().cloned().unwrap_or_default(),
-        "argument":args.get("--library-sources").unwrap_or_default(),
-        "environment":env("INPX_LIBRARY_SOURCES").or_else(|| env("LIBRARY_SOURCES")).unwrap_or_default(),
-        "libDir":override_string(&args,"--lib-dir","LIBDIR",&config["libDir"]).unwrap_or_default(),
-        "inpx":override_string(&args,"--inpx","INPX",&config["inpx"]).unwrap_or_default(),
-        "execDir":exec_dir,
-    }))?)?;
+    let sources = settings.sources()?;
     let filter = text(&config["inpxFilterFile"])
         .map_or_else(|| file.with_file_name("filter.json"), PathBuf::from);
     let low_memory =
@@ -193,11 +236,11 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             filter,
             low_memory,
         },
-        &sources,
+        sources.clone(),
     )?;
     if args.recreate && !created {
         index.start(true);
-        index.refresh(&sources, true);
+        index.refresh(sources, true);
     }
     let login = override_string(&args, "--admin-login", "INPX_ADMIN_LOGIN", &Value::Null)
         .unwrap_or_else(|| "admin".into());
@@ -245,29 +288,6 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         Some(port) => port.parse::<u16>()?,
         None => u16::try_from(config["server"]["port"].as_u64().unwrap_or(12380))?,
     };
-    let conversion_enabled = std::env::var("INPX_ENABLE_CONVERSION").map_or_else(
-        |_| config["conversionEnabled"] != false,
-        |value| value != "false",
-    );
-    let fb2_enabled = std::env::var("INPX_CONVERSION_FORMATS").map_or_else(
-        |_| {
-            config["conversionFormats"]
-                .as_array()
-                .is_none_or(|formats| {
-                    formats.iter().any(|value| {
-                        value
-                            .as_str()
-                            .is_some_and(|format| format.eq_ignore_ascii_case("fb2"))
-                    })
-                })
-        },
-        |value| {
-            value
-                .split(',')
-                .any(|name| name.trim().eq_ignore_ascii_case("fb2"))
-        },
-    );
-    let epub_reader = conversion_enabled && fb2_enabled;
     let downloads = Downloads::new(
         &data,
         prefix,
@@ -275,42 +295,61 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         epub_reader,
     )?;
     let listener = TcpListener::bind((host, port)).await?;
-    let opds_feeds = std::env::var("INPX_OPDS_FEEDS_FILE")
-        .ok()
-        .or_else(|| text(&config["opdsFeedsFile"]).map(str::to_owned))
-        .and_then(|path| (!path.trim().is_empty()).then(|| data.join(path.trim())));
-    let opds = (config["opds"]["enabled"] == Value::Bool(true)).then(|| {
-        Opds::new(
-            text(&config["opds"]["root"]).unwrap_or("/opds"),
-            prefix,
-            downloads.root(),
-            tolino,
-            epub_reader,
-            opds_feeds,
-        )
-    });
-    let socket = socket::Socket::new(prefix, &config, epub_reader, !access.library.protected());
+    let speech = speech::Speech::new(&data, prefix, &config)?;
+    let batch = batch::Downloads::new(&data, downloads.root());
+    let delivery = delivery::Delivery::new(&data, &config);
+    let socket = socket::Socket::new(
+        prefix,
+        &config,
+        &data,
+        epub_reader,
+        !access.library.protected(),
+        speech.enabled(),
+    );
     let metadata = metadata::Routes::new(prefix);
+    let exchange = exchange::Exchange::new(&config);
     let (metrics, metrics_policy) = metrics::Monitor::new(&config, &data)?;
     let request_access =
         request_access::Standalone::new(&config, prefix, metrics_policy, metadata.access())?;
     let state = Arc::new(State {
         started: Instant::now(),
         index,
-        sources,
+        settings,
+        admin_cache: admin_cache::Cache::new(),
+        diagnostics: diagnostics::Diagnostics::new(&data),
+        backups: backup::Backups::new(&data, &file, prefix, &config),
         assets,
-        opds,
         opds_slots: Arc::new(Semaphore::new(8)),
         access,
         socket,
+        events: events::Events::new(),
+        speech,
+        batch,
+        delivery,
         downloads,
         download_slots: Arc::new(Semaphore::new(4)),
         kosync: kosync::Routes::new(prefix, kosync_enabled),
         request_access,
         metadata,
+        exchange,
+        isbn_limit: isbn_limit(&config),
         metrics,
     });
     println!("{NAME} v{VERSION} listening on {}", listener.local_addr()?);
+    delivery::Delivery::start(&state);
+    tokio::spawn(admin_cache::Cache::schedule(state.clone()));
+    tokio::spawn(diagnostics::Diagnostics::collect_lag(state.clone()));
+    tokio::spawn(backup::Backups::schedule(state.clone()));
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                let state = state.clone();
+                let _ = tokio::task::spawn_blocking(move || state.batch.cleanup()).await;
+            }
+        });
+    }
     state.schedule_index_checks(
         !created && !args.recreate,
         index::interval(&config["inpxCheckInterval"]),
@@ -344,6 +383,20 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
                 .await;
         });
     }
+}
+
+fn isbn_limit(config: &Value) -> u64 {
+    let parse = |key| {
+        std::env::var(key)
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    };
+    const MIB: u64 = 1024 * 1024;
+    parse("INPX_ISBN_MAX_BOOK_BYTES")
+        .or_else(|| parse("INPX_ISBN_MAX_BOOK_MB").map(|size| size.saturating_mul(MIB)))
+        .or_else(|| config["isbnMaxBookBytes"].as_u64())
+        .unwrap_or(64 * MIB)
+        .max(MIB)
 }
 
 fn install_bundle(
@@ -391,13 +444,40 @@ fn text(value: &Value) -> Option<&str> {
     value.as_str().filter(|value| !value.is_empty())
 }
 
+fn epub_reader(config: &Value) -> bool {
+    std::env::var("INPX_ENABLE_CONVERSION").map_or(config["conversionEnabled"] != false, |value| {
+        value != "false"
+    }) && std::env::var("INPX_CONVERSION_FORMATS").map_or_else(
+        |_| {
+            config["conversionFormats"]
+                .as_array()
+                .is_none_or(|formats| {
+                    formats.iter().any(|value| {
+                        text(value).is_some_and(|format| format.eq_ignore_ascii_case("fb2"))
+                    })
+                })
+        },
+        |value| {
+            value
+                .split(',')
+                .any(|name| name.trim().eq_ignore_ascii_case("fb2"))
+        },
+    )
+}
+
 impl State {
     fn service_route(&self, request: &Request<Incoming>, websocket: bool) -> ServiceRoute {
         if websocket || !matches!(*request.method(), Method::GET | Method::HEAD) {
             return ServiceRoute::Other;
         }
         let path = request.uri().path();
-        if self.opds.as_ref().is_some_and(|opds| opds.matches(path)) {
+        if self
+            .access
+            .opds()
+            .route
+            .as_ref()
+            .is_some_and(|opds| opds.matches(path))
+        {
             ServiceRoute::Other
         } else if self.metadata.matches(path) {
             ServiceRoute::Metadata
@@ -418,8 +498,18 @@ impl State {
     fn start_index_check(self: &Arc<Self>, force: bool) -> Option<tokio::task::JoinHandle<()>> {
         self.index.start(force).then(|| {
             let state = self.clone();
-            tokio::task::spawn_blocking(move || state.index.refresh(&state.sources, force))
+            tokio::task::spawn_blocking(move || state.index.refresh(state.index.sources(), force))
         })
+    }
+
+    fn reindex(self: &Arc<Self>) -> Result<Value> {
+        let sources = self.settings.sources()?;
+        if !self.index.start(true) {
+            return Ok(json!({"started":false}));
+        }
+        let state = self.clone();
+        tokio::task::spawn_blocking(move || state.index.refresh(sources, true));
+        Ok(json!({"started":true}))
     }
 
     fn schedule_index_checks(self: &Arc<Self>, on_start: bool, interval: Option<Duration>) {
@@ -496,8 +586,30 @@ impl State {
         request: Request<Incoming>,
         admission: Admission,
     ) -> std::result::Result<Response<Body>, Infallible> {
-        if self
-            .opds
+        if self.backups.matches(request.uri().path())
+            && matches!(*request.method(), Method::GET | Method::HEAD)
+        {
+            return Ok(self.backups.serve(self, request, admission).await);
+        }
+        if self.batch.matches(request.uri().path())
+            && matches!(*request.method(), Method::GET | Method::HEAD)
+        {
+            return Ok(self.batch.serve(self, request, admission).await);
+        }
+        if self.speech.matches(request.uri().path())
+            && matches!(*request.method(), Method::GET | Method::HEAD)
+        {
+            let prepared = self.speech.playback(&request);
+            return Ok(standalone_download::respond(
+                prepared,
+                request.headers().clone(),
+                request.method() == Method::HEAD,
+            )
+            .await);
+        }
+        let opds_policy = self.access.opds();
+        if opds_policy
+            .route
             .as_ref()
             .is_some_and(|opds| opds.matches(request.uri().path()))
         {
@@ -507,14 +619,16 @@ impl State {
             let state = self.clone();
             let response = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
-                let grant = match state
-                    .access
-                    .check(&request, &admission, Resource::Catalogue)
-                {
+                let grant = match state.access.check_with_opds(
+                    &request,
+                    &admission,
+                    Resource::Catalogue,
+                    &opds_policy,
+                ) {
                     Ok(grant) => grant,
                     Err(rejected) => return rejected.response(),
                 };
-                let opds = state.opds.as_ref().expect("OPDS enabled");
+                let opds = opds_policy.route.as_ref().expect("OPDS enabled");
                 let reading = if let Some(required) = opds.published_reading(request.uri().path()) {
                     match state.access.published_reading(&grant) {
                         Ok(reading) => Some(reading),
@@ -524,7 +638,7 @@ impl State {
                 } else {
                     None
                 };
-                let catalogue = state.index.catalogue.lock().expect("open catalogue");
+                let catalogue = state.index.catalogue.read().expect("open catalogue");
                 let Some(catalogue) = catalogue.as_ref() else {
                     return error(StatusCode::SERVICE_UNAVAILABLE);
                 };
@@ -543,10 +657,44 @@ impl State {
         if self.kosync.matches(request.uri().path()) {
             return Ok(self.kosync.serve(self, request, admission.client).await);
         }
+        if request.method() == Method::POST && self.socket.profile_login_route(request.uri().path())
+        {
+            return Ok(profile_http::login(self, request, &admission).await);
+        }
         if !matches!(*request.method(), Method::GET | Method::HEAD) {
             return Ok(error(StatusCode::NOT_FOUND));
         }
         let head = request.method() == Method::HEAD;
+        if let Some((owner, name)) = self.socket.background_route(request.uri().path()) {
+            let Ok(owner) = percent_encoding::percent_decode_str(owner).decode_utf8() else {
+                return Ok(error(StatusCode::NOT_FOUND));
+            };
+            let owner = owner.into_owned();
+            let name = name.to_owned();
+            let state = self.clone();
+            let mut response = tokio::task::spawn_blocking(move || {
+                match state
+                    .access
+                    .reader_background(request.headers(), &admission, &owner, &name)
+                {
+                    Ok((mime, bytes)) => Response::builder()
+                        .header(header::CONTENT_TYPE, mime)
+                        .header(header::CONTENT_LENGTH, bytes.len())
+                        .body(crate::http::body(if head {
+                            Bytes::new()
+                        } else {
+                            bytes.into()
+                        }))
+                        .expect("valid reader background headers"),
+                    Err(Rejection::Unauthorized) => error(StatusCode::UNAUTHORIZED),
+                    Err(rejected) => rejected.response(),
+                }
+            })
+            .await
+            .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR));
+            standalone_access::private(response.headers_mut());
+            return Ok(response);
+        }
         let cover = self.downloads.cover_request(&request);
         let requested = cover
             .is_none()
@@ -571,12 +719,12 @@ impl State {
                 let prepared = if let Some(uid) = cover {
                     state
                         .downloads
-                        .cover(&uid, &state.index.catalogue, &state.sources)
+                        .cover(&uid, &state.index.catalogue, &state.index.sources())
                 } else {
                     state.downloads.prepare(
                         requested.expect("download request"),
                         &state.index.catalogue,
-                        &state.sources,
+                        &state.index.sources(),
                         state.kosync.enabled.then_some(&state.access),
                     )
                 };

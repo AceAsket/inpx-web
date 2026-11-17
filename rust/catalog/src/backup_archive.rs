@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -27,6 +27,8 @@ const INVALID_ZIP: &str = "Повреждён ZIP резервной копии"
 const INLINE_ZIP_LIMIT: u64 = 1024 * 1024;
 const MAX_EXPANDED: u64 = 256 * 1024 * 1024;
 const MAX_BACKUP: u64 = 128 * 1024 * 1024;
+
+pub const INFO: &str = "backup-info.json";
 
 #[derive(Deserialize)]
 struct Pack {
@@ -217,7 +219,11 @@ fn check_password_length(length: usize) -> Result<()> {
     Ok(())
 }
 
-fn save_archive(request: Pack, mut input: impl BufRead) -> Result<()> {
+fn save_archive(request: Pack, input: impl BufRead) -> Result<()> {
+    write_archive(request, input, u64::MAX)
+}
+
+fn write_archive(request: Pack, mut input: impl BufRead, limit: u64) -> Result<()> {
     let directory = request
         .destination
         .parent()
@@ -243,9 +249,122 @@ fn save_archive(request: Pack, mut input: impl BufRead) -> Result<()> {
     } else {
         pack(&request, input, output)?;
     }
+    if file.as_file().metadata()?.len() > limit {
+        return Err(
+            "Резервная копия превышает лимит восстановления. Увеличьте backupUploadLimitMb".into(),
+        );
+    }
     file.as_file().sync_all()?;
     file.persist(&request.destination)?;
     atomic_file::sync_parent(&request.destination)
+}
+
+pub(crate) fn write_snapshot(
+    directory: &Path,
+    destination: PathBuf,
+    timestamp: time::OffsetDateTime,
+    encryption: Option<&backup_vault::ArchiveKey>,
+    upload_limit: u64,
+    expanded_limit: u64,
+) -> Result<()> {
+    let mut total = 0;
+    let mut files = Vec::new();
+    for name in NAMES {
+        let path = directory.join(name);
+        if let Some(file) = fs::metadata(&path).map(Some).or_else(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        })? {
+            total += file.len();
+            if total > expanded_limit {
+                return Err(EXPANDED.into());
+            }
+            files.push(Source {
+                name: name.into(),
+                input: Input::File { path },
+            });
+        }
+    }
+    let request = Pack {
+        destination,
+        encrypted: encryption.is_some(),
+        timestamp: (
+            timestamp.year().try_into()?,
+            timestamp.month() as u8,
+            timestamp.day(),
+            timestamp.hour(),
+            timestamp.minute(),
+            timestamp.second(),
+        ),
+        files,
+    };
+    if let Some(encryption) = encryption {
+        write_archive(
+            request,
+            Cursor::new(&encryption.key.0).chain(&encryption.salt[..]),
+            upload_limit,
+        )
+    } else {
+        write_archive(request, io::empty(), upload_limit)
+    }
+}
+
+pub(crate) fn read_snapshot(
+    source: impl Read + Seek,
+    password: &[u8],
+    fingerprint: Option<&str>,
+    folder: &Path,
+    upload_limit: u64,
+    expanded_limit: u64,
+) -> Result<serde_json::Value> {
+    check_password_length(password.len())?;
+    let mut source = BufReader::with_capacity(128 * 1024, source);
+    let encrypted = source.fill_buf()?.starts_with(backup_crypto::MAGIC);
+    let mut digest = Sha256::new();
+    let mut total = 0;
+    loop {
+        let bytes = source.fill_buf()?;
+        if bytes.is_empty() {
+            break;
+        }
+        let len = bytes.len();
+        total += len as u64;
+        if total > upload_limit {
+            return Err("Превышен размер бэкапа".into());
+        }
+        digest.update(bytes);
+        source.consume(len);
+    }
+    let actual = format!("{:x}", digest.finalize());
+    if fingerprint.is_some_and(|expected| expected != actual) {
+        return Err("Файл резервной копии изменился после проверки".into());
+    }
+    source.rewind()?;
+    let files = if encrypted {
+        let mut archive = tempfile::tempfile_in(folder)?;
+        backup_crypto::decrypt(source, total, password, &mut archive)?;
+        archive.rewind()?;
+        extract_files(BufReader::new(archive), folder, expanded_limit)?
+    } else {
+        extract_files(source, folder, expanded_limit)?
+    };
+    Ok(serde_json::json!({"files":files,"fingerprint":actual,"encrypted":encrypted}))
+}
+
+fn extract_files(source: impl Read + Seek, folder: &Path, limit: u64) -> Result<Vec<Entry>> {
+    let (mut zip, files) = inspect_zip(source, limit)?;
+    for (index, entry) in files.iter().enumerate() {
+        let mut staged = tempfile::NamedTempFile::new_in(folder)?;
+        let mut output = BufWriter::new(staged.as_file_mut());
+        extract_entry(&mut zip, index, entry.size, &mut output)?;
+        output.flush()?;
+        drop(output);
+        staged.persist_noclobber(folder.join(&entry.name))?;
+    }
+    Ok(files)
 }
 
 fn pack(request: &Pack, mut input: impl BufRead, output: impl Write) -> Result<()> {
@@ -384,11 +503,32 @@ fn unpack_saved(
 }
 
 fn unpack(
-    mut source: impl Read + Seek,
+    source: impl Read + Seek,
     limit: u64,
     mut output: impl Write,
     inspection: Option<&ArchiveInspection>,
 ) -> Result<()> {
+    let (mut zip, files) = inspect_zip(source, limit)?;
+    if let Some(inspection) = inspection {
+        serde_json::to_writer(
+            &mut output,
+            &SavedContents {
+                files: &files,
+                inspection,
+            },
+        )?;
+    } else {
+        serde_json::to_writer(&mut output, &files)?;
+    }
+    output.write_all(b"\n")?;
+    for (index, entry) in files.iter().enumerate() {
+        extract_entry(&mut zip, index, entry.size, &mut output)?;
+    }
+    output.flush()?;
+    Ok(())
+}
+
+fn inspect_zip<R: Read + Seek>(mut source: R, limit: u64) -> Result<(ZipArchive<R>, Vec<Entry>)> {
     let expected = directory(&mut source)?;
     let mut zip = ZipArchive::new(source).map_err(|_| INVALID_ZIP)?;
     if zip.len() != expected.entries || zip.central_directory_start() != expected.offset {
@@ -416,29 +556,23 @@ fn unpack(
             size,
         });
     }
-    if let Some(inspection) = inspection {
-        serde_json::to_writer(
-            &mut output,
-            &SavedContents {
-                files: &files,
-                inspection,
-            },
-        )?;
-    } else {
-        serde_json::to_writer(&mut output, &files)?;
+    Ok((zip, files))
+}
+
+fn extract_entry(
+    zip: &mut ZipArchive<impl Read + Seek>,
+    index: usize,
+    size: u64,
+    mut output: impl Write,
+) -> Result<()> {
+    let file = zip.by_index(index).map_err(|_| INVALID_ZIP)?;
+    let extracted = io::copy(&mut file.take(size + 1), &mut output)?;
+    if extracted > size {
+        return Err(EXPANDED.into());
     }
-    output.write_all(b"\n")?;
-    for (index, entry) in files.iter().enumerate() {
-        let file = zip.by_index(index).map_err(|_| INVALID_ZIP)?;
-        let extracted = io::copy(&mut file.take(entry.size + 1), &mut output)?;
-        if extracted > entry.size {
-            return Err(EXPANDED.into());
-        }
-        if extracted != entry.size {
-            return Err(INVALID_ZIP.into());
-        }
+    if extracted != size {
+        return Err(INVALID_ZIP.into());
     }
-    output.flush()?;
     Ok(())
 }
 

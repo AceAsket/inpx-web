@@ -48,6 +48,12 @@ struct User {
     default_opds_format: Value,
     #[serde(default)]
     reader_progress_generation: Value,
+    #[serde(default)]
+    personal_recommendations_enabled: Value,
+}
+
+pub(crate) fn default_enabled() -> bool {
+    true
 }
 
 fn default_user_id() -> Value {
@@ -128,6 +134,7 @@ impl User {
             profile_trusted_devices,
             otp_required: self.otp_required == Value::Bool(true),
             is_admin,
+            personal_recommendations_enabled: self.personal_recommendations_enabled != false,
             opds_enabled: self.opds_enabled != Value::Bool(false),
             opds_auth_enabled: self.opds_auth_enabled == Value::Bool(true),
             opds_app_password_hash: self
@@ -182,15 +189,18 @@ pub(crate) fn decode(input: &str) -> Option<Document> {
             users.push((index, account));
         }
     }
-    let policy = snapshot.profile_auth_policy;
     Some(Document {
         users,
-        policy: Policy {
-            otp_required: policy["otpRequired"] == Value::Bool(true),
-            trusted_browsers_enabled: policy["trustedBrowsersEnabled"].as_bool().unwrap_or(true),
-            trusted_browser_days: safe_integer(&policy["trustedBrowserDays"])
-                .filter(|value| (1..=180).contains(value))
-                .unwrap_or(30) as u32,
-        },
+        policy: auth_policy(&snapshot.profile_auth_policy),
     })
+}
+
+pub(crate) fn auth_policy(policy: &Value) -> Policy {
+    Policy {
+        otp_required: policy["otpRequired"] == true,
+        trusted_browsers_enabled: policy["trustedBrowsersEnabled"].as_bool().unwrap_or(true),
+        trusted_browser_days: safe_integer(&policy["trustedBrowserDays"])
+            .filter(|value| (1..=180).contains(value))
+            .unwrap_or(30) as u32,
+    }
 }

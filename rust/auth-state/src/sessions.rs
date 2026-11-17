@@ -97,6 +97,15 @@ impl<T: SessionData> SessionTable<T> {
         self.tokens.get(token).map(|entry| &entry.value)
     }
 
+    pub fn update(&mut self, mut refresh: impl FnMut(&T) -> Option<T>) {
+        for session in self.tokens.values_mut() {
+            if let Some(value) = refresh(&session.value) {
+                assert_eq!(session.value.owner(), value.owner());
+                session.value = value;
+            }
+        }
+    }
+
     pub(crate) fn get_mut(&mut self, token: &str) -> Option<&mut T> {
         self.tokens.get_mut(token).map(|entry| &mut entry.value)
     }

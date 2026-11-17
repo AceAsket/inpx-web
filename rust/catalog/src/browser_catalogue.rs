@@ -1,15 +1,24 @@
 use std::collections::{HashMap, HashSet};
 
-use inpx_reader::Record;
+use inpx_reader::{Record, js_whitespace};
 use serde_json::{Map, Value, json};
 
+use crate::catalog_entity::{
+    EntityBook, EntitySelection, SeriesVolume, SeriesVolumes, normalize_entity_text, order_entity,
+    series_through,
+};
 use crate::catalog_query::Filter;
-use crate::catalog_text::{field, lower, number, words};
-use crate::facets::Facet;
+use crate::catalog_text::{field, lower, number, shorter_search_roots, words};
+use crate::facets::{Facet, Label};
 use crate::lookup::Table;
+use crate::lookup_discovery::{BrowseResults, SelectedBooks};
 use crate::opds_catalogue::NameQuery;
+use crate::reader_state::{CatalogueReading, number as query_number};
 use crate::standalone_catalogue::Catalogue;
 use crate::{Result, StoreResponse};
+
+#[path = "catalog_suggest.rs"]
+mod suggestions;
 
 struct Search {
     filters: Vec<Filter>,
@@ -18,18 +27,32 @@ struct Search {
     start: usize,
     limit: usize,
     hide_copies: bool,
+    ratings: Option<(u64, u64)>,
+    isbn: Option<String>,
 }
 
 impl Search {
     fn new(query: &Map<String, Value>, except: &str) -> Result<Self> {
         let mut filters = Vec::new();
         let mut comparisons = Vec::new();
-        if query
+        let ratings = query
             .get("ratingCount")
-            .is_some_and(|value| !value.is_null() && value != "")
-        {
-            return Err("Индекс количества оценок пока недоступен".into());
-        }
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                crate::library_media::rating_range(&crate::library_sources::js_string(value))
+            })
+            .transpose()?
+            .flatten();
+        let isbn = query
+            .get("isbn")
+            .filter(|value| !value.is_null() && *value != "")
+            .map(|value| {
+                value
+                    .as_str()
+                    .and_then(crate::isbn::normalize)
+                    .ok_or("Укажите корректный ISBN-10 или ISBN-13")
+            })
+            .transpose()?;
         for (key, value) in query {
             if key == except {
                 continue;
@@ -112,6 +135,8 @@ impl Search {
         Ok(Self {
             filters,
             comparisons,
+            ratings,
+            isbn,
             source: query
                 .get("sourceId")
                 .and_then(Value::as_str)
@@ -139,17 +164,135 @@ impl Search {
     }
 
     fn constrained(&self) -> bool {
-        !self.source.is_empty() || !self.filters.is_empty() || !self.comparisons.is_empty()
+        !self.source.is_empty()
+            || !self.filters.is_empty()
+            || !self.comparisons.is_empty()
+            || self.ratings.is_some()
+            || self.isbn.is_some()
     }
 
     fn active_only(&self) -> bool {
         self.source.is_empty()
+            && self.ratings.is_none()
+            && self.isbn.is_none()
             && self.comparisons.is_empty()
             && matches!(&self.filters[..], [Filter::NumberValues { field, values }] if field == "del" && values == &[0.0])
     }
 }
 
 impl Catalogue {
+    pub fn browser_author_name(&self, id: u32) -> Result<Option<String>> {
+        self.lookup
+            .browser_label(&self.lookup_generation, Table::Author, id)
+    }
+
+    fn extra_candidates(&self, search: &Search) -> Result<Option<HashSet<u32>>> {
+        let ratings = search
+            .ratings
+            .map(|range| self.rating_candidates(range))
+            .transpose()?;
+        let isbn = search
+            .isbn
+            .as_ref()
+            .map(|value| self.isbn_candidates(value))
+            .transpose()?;
+        Ok(match (ratings, isbn) {
+            (Some(ratings), Some(mut isbn)) => {
+                isbn.retain(|id| ratings.contains(id));
+                Some(isbn)
+            }
+            (ratings, isbn) => ratings.or(isbn),
+        })
+    }
+
+    fn search_candidates(&self, search: &Search) -> Result<Option<Vec<u32>>> {
+        let mut candidates = self.extra_candidates(search)?;
+        if candidates.as_ref().is_some_and(|ids| ids.len() <= 1024) {
+            let mut ids: Vec<_> = candidates
+                .take()
+                .expect("selected candidates")
+                .into_iter()
+                .collect();
+            ids.sort_unstable();
+            return Ok(Some(ids));
+        }
+        let mut narrow = |books: HashSet<u32>| {
+            let selected = match &mut candidates {
+                Some(selected) => {
+                    selected.retain(|id| books.contains(id));
+                    selected
+                }
+                slot @ None => slot.insert(books),
+            };
+            // Rechecking a short list is cheaper than reading more posting lists.
+            selected.len() <= 1024
+        };
+        'indexed: {
+            for (field, query) in &search.comparisons {
+                let Ok(table) = name_table(field) else {
+                    continue;
+                };
+                if query.matches("") || query.matches("?") {
+                    // Empty values share a marker, and the series index omits it.
+                    continue;
+                }
+                let prefix = match query {
+                    NameQuery::Exact(value) | NameQuery::Prefix(value) => {
+                        std::slice::from_ref(value)
+                    }
+                    _ => &[],
+                };
+                let prefixes: Vec<_> = prefix.iter().map(String::as_str).collect();
+                let books = self.lookup.browser_candidates(
+                    &self.lookup_generation,
+                    table,
+                    &prefixes,
+                    |label| query.matches(label),
+                )?;
+                if narrow(books) {
+                    break 'indexed;
+                }
+            }
+            for filter in &search.filters {
+                let Filter::Terms { field, terms } = filter else {
+                    continue;
+                };
+                if terms.is_empty() {
+                    return Ok(Some(Vec::new()));
+                }
+                if name_table(field).is_err() {
+                    continue;
+                }
+                for [word, stem] in terms {
+                    let prefix = format!("{field}:{stem}");
+                    let shorter: Vec<_> = shorter_search_roots(word, stem)
+                        .map(|root| format!("{field}:{root}"))
+                        .collect();
+                    let prefixes: Vec<_> = std::iter::once(prefix.as_str())
+                        .chain(shorter.iter().map(String::as_str))
+                        .collect();
+                    let books = self.lookup.browser_candidates(
+                        &self.lookup_generation,
+                        Table::Word,
+                        &prefixes,
+                        |label| {
+                            label.starts_with(&prefix) || shorter.iter().any(|root| root == label)
+                        },
+                    )?;
+                    if narrow(books) {
+                        break 'indexed;
+                    }
+                }
+            }
+        }
+        Ok(candidates.map(|books| {
+            // Preserve the order used to break ranking ties across physical copies.
+            let mut ids: Vec<_> = books.into_iter().collect();
+            ids.sort_unstable();
+            ids
+        }))
+    }
+
     pub fn browser_book(&self, uid: &str) -> Result<Option<Value>> {
         Ok(self.browser_books_by_uid([uid])?.pop())
     }
@@ -189,16 +332,11 @@ impl Catalogue {
     }
 
     pub(crate) fn filtered_shelf_ids(&self, query: &Map<String, Value>) -> Result<Vec<u32>> {
-        if query
-            .get("isbn")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
-        {
-            return Err("Индекс ISBN пока недоступен".into());
-        }
         let search = Search::new(query, "")?;
+        let candidates = self.search_candidates(&search)?;
         self.store.browser_search_order(
             &self.generation,
+            candidates.as_deref(),
             |book| search.matches(book),
             search.hide_copies,
         )
@@ -206,14 +344,260 @@ impl Catalogue {
 
     pub fn browser_books(&self, query: &Map<String, Value>) -> Result<Value> {
         let search = Search::new(query, "")?;
+        let candidates = self.search_candidates(&search)?;
         let (found, total) = self.store.browser_search(
             &self.generation,
+            candidates.as_deref(),
             |book| search.matches(book),
             search.hide_copies,
             search.start,
             search.limit,
         )?;
         Ok(json!({"found":found,"totalFound":total}))
+    }
+
+    pub fn browser_browse(&self, options: &Value) -> Result<Value> {
+        let kind = options["kind"].as_str().unwrap_or_default();
+        let table = match kind {
+            "author" => Table::Author,
+            "series" => Table::Series,
+            _ => return Err("Укажите авторов или серии".into()),
+        };
+        let prefix = options
+            .get("prefix")
+            .map_or(Some(""), Value::as_str)
+            .filter(|value| {
+                value.chars().count() <= 500 && !value.chars().any(|ch| ch.is_ascii_control())
+            })
+            .ok_or("Некорректный префикс каталога")?;
+        let prefix = lower(prefix);
+        let selected = self.browse_selection(&options["filters"])?;
+        let mut results = BrowseResults::default();
+        if !selected.as_ref().is_some_and(SelectedBooks::is_empty) {
+            self.lookup.visit_name_candidates(
+                &self.lookup_generation,
+                table,
+                &[&prefix],
+                |label| label != "?",
+                |_, key, name, active, books| {
+                    let count = selected.as_ref().map_or(u64::from(active), |selected| {
+                        books
+                            .iter()
+                            .filter(|id| selected.contains(u32::from_le_bytes(**id)))
+                            .count() as u64
+                    });
+                    results.add(&key[prefix.len()..], name, count);
+                    Ok(())
+                },
+            )?;
+        }
+        let mut result = serde_json::to_value(results.finish(&prefix))?;
+        result["kind"] = kind.into();
+        result["prefix"] = prefix.into_owned().into();
+        Ok(result)
+    }
+
+    pub fn browser_entity(&self, options: &Value, reading: &CatalogueReading) -> Result<Value> {
+        let kind = options["kind"].as_str().unwrap_or_default();
+        let table = match kind {
+            "author" => Table::Author,
+            "series" => Table::Series,
+            _ => return Err("Укажите автора или серию".into()),
+        };
+        let original = options["name"]
+            .as_str()
+            .filter(|value| value.chars().count() <= 500)
+            .ok_or("Укажите автора или серию")?;
+        let name = normalize_entity_text(original);
+        if name.is_empty() {
+            return Err("Укажите автора или серию".into());
+        }
+        let page = query_number(&options["page"]).max(1.0) as u64;
+        let limit = match query_number(&options["limit"]) {
+            0.0 => 40,
+            value => value.clamp(1.0, 100.0) as usize,
+        };
+        let scoped = self.browse_selection(&options["filters"])?;
+        let mut ids: Vec<_> = self
+            .entity_candidates(table, original, &name)?
+            .into_iter()
+            .filter(|&id| scoped.as_ref().is_none_or(|scope| scope.contains(id)))
+            .collect();
+        ids.sort_unstable();
+        let mut rows = Vec::with_capacity(ids.len());
+        self.store
+            .visit_search_rows(&self.generation, Some(&ids), |_, bytes| {
+                let row: EntityBook = serde_json::from_slice(bytes)?;
+                if row.del.unwrap_or_default() == 0 {
+                    rows.push(row);
+                }
+                Ok(())
+            })?;
+        let series = order_entity(&mut rows, table == Table::Author)?;
+        let ordered: Vec<_> = rows.iter().map(|row| row.id).collect();
+        let progress = |uid: &str| {
+            reading
+                .progress
+                .as_ref()
+                .and_then(|entries| entries.get(uid))
+        };
+        let page = EntitySelection::new(&ordered, page, limit, |index| {
+            progress(&rows[index].uid).is_some_and(|entry| {
+                entry["hidden"] != true && query_number(&entry["percent"]) >= 0.999
+            })
+        })?;
+        let mut books = HashMap::new();
+        for mut book in self
+            .store
+            .catalogue_rows(&self.generation, page.wanted().collect())?
+        {
+            let uid = field(&book, "_uid").to_owned();
+            if let Some(override_) = reading.overrides[uid.trim()].as_object() {
+                for field in ["title", "author", "series", "serno"] {
+                    if let Some(value) = override_.get(field) {
+                        book.insert(field.into(), value.clone());
+                    }
+                }
+                book.insert("metadataOverridden".into(), true.into());
+                book.insert(
+                    "metadataOverrideUpdatedAt".into(),
+                    override_
+                        .get("updatedAt")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .into(),
+                );
+            }
+            if let Some(progress) = progress(&uid) {
+                book.insert("_readerProgress".into(), progress.clone());
+            }
+            books.insert(number(&book, "id") as u32, book);
+        }
+        let next = page.next_id.and_then(|id| books.get(&id)).cloned();
+        let books: Vec<_> = page.ids.iter().filter_map(|id| books.remove(id)).collect();
+        Ok(
+            json!({"kind":kind,"name":name,"total":ordered.len(),"page":page.page,"pageCount":page.page_count,
+            "limit":limit,"read":reading.progress.as_ref().map(|_| page.read),"next":next,"books":books,"series":series}),
+        )
+    }
+
+    fn entity_candidates(&self, table: Table, original: &str, name: &str) -> Result<HashSet<u32>> {
+        let select = |value: &str| {
+            let key = lower(value);
+            self.lookup
+                .browser_candidates(&self.lookup_generation, table, &[&key], |label| {
+                    label != "?" && label == key
+                })
+        };
+        let ids = select(original)?;
+        if ids.is_empty() && name != original {
+            return select(name);
+        }
+        Ok(ids)
+    }
+
+    pub(crate) fn follow_uids(&self, kind: &str, name: &str, limit: usize) -> Result<Vec<String>> {
+        #[derive(serde::Deserialize)]
+        struct BookUid {
+            #[serde(rename = "_uid")]
+            uid: String,
+        }
+
+        let table = match kind {
+            "author" => Table::Author,
+            "series" => Table::Series,
+            _ => return Err("Укажите автора или серию (до 200 символов)".into()),
+        };
+        let mut ids = self.entity_candidates(table, name, name)?;
+        let active = self.store.opds_books(&[])?;
+        ids.retain(|id| active.contains(*id));
+        if ids.len() > limit {
+            return Err("Слишком много книг для одной подписки (лимит 5000)".into());
+        }
+        let mut ids: Vec<_> = ids.into_iter().collect();
+        ids.sort_unstable();
+        let mut uids = Vec::with_capacity(ids.len());
+        self.store
+            .visit_search_rows(&self.generation, Some(&ids), |_, bytes| {
+                let book: BookUid = serde_json::from_slice(bytes)?;
+                if !book.uid.is_empty() {
+                    uids.push(book.uid);
+                }
+                Ok(())
+            })?;
+        uids.sort_unstable();
+        uids.dedup();
+        Ok(uids)
+    }
+
+    pub(crate) fn browser_series_through(
+        &self,
+        name: &str,
+        normalized: &str,
+        target: &str,
+        overrides: &Value,
+    ) -> Result<SeriesVolumes> {
+        let mut ids: Vec<_> = self
+            .entity_candidates(Table::Series, name, normalized)?
+            .into_iter()
+            .collect();
+        ids.sort_unstable();
+        let mut volumes = Vec::with_capacity(ids.len());
+        self.store
+            .visit_search_rows(&self.generation, Some(&ids), |_, bytes| {
+                let book: SeriesVolume = serde_json::from_slice(bytes)?;
+                if book.del.unwrap_or_default() == 0 {
+                    volumes.push(book);
+                }
+                Ok(())
+            })?;
+        Ok(series_through(volumes, target, |uid| {
+            overrides[uid]
+                .get("serno")
+                .map(|number| Some(query_number(number)))
+        }))
+    }
+
+    fn browse_selection(&self, filters: &Value) -> Result<Option<SelectedBooks>> {
+        let mut selected = None;
+        for (field, facet, separators) in [
+            ("lang", Facet::Lang, &[','][..]),
+            ("ext", Facet::Ext, &[',', '|'][..]),
+            ("genre", Facet::Genre, &[','][..]),
+            ("sourceId", Facet::Source, &[][..]),
+        ] {
+            let Some(value) = filters.get(field) else {
+                continue;
+            };
+            let value = value
+                .as_str()
+                .filter(|value| {
+                    value.encode_utf16().count() <= 500 && !value.starts_with(['~', '*', '#', '='])
+                })
+                .ok_or("Некорректный фильтр каталога")?;
+            if value.is_empty() {
+                continue;
+            }
+            let values = split_values(value, separators);
+            let active = self.store.opds_books(&[])?;
+            selected = Some(self.store.select_facet(
+                facet,
+                Some(selected.as_ref().unwrap_or(&active)),
+                |label| {
+                    let Label::Text(label) = label else {
+                        return false;
+                    };
+                    match facet {
+                        Facet::Source => label == value.trim_matches(js_whitespace),
+                        Facet::Genre => values
+                            .iter()
+                            .any(|value| value == label.trim_matches(js_whitespace)),
+                        _ => values.contains(label),
+                    }
+                },
+            )?);
+        }
+        Ok(selected)
     }
 
     pub fn browser_names(&self, field: &str, query: &Map<String, Value>) -> Result<Value> {
@@ -281,13 +665,15 @@ impl Catalogue {
 
     fn matching(&self, search: &Search) -> Result<HashMap<u32, bool>> {
         let mut selected = HashMap::new();
-        self.store.visit(|id, bytes| {
-            let row: Record = serde_json::from_slice(bytes)?;
-            if search.matches(&row) {
-                selected.insert(id, number(&row, "del") != 0);
-            }
-            Ok(())
-        })?;
+        let candidates = self.search_candidates(search)?;
+        self.store
+            .visit_search_rows(&self.generation, candidates.as_deref(), |id, bytes| {
+                let row: Record = serde_json::from_slice(bytes)?;
+                if search.matches(&row) {
+                    selected.insert(id, number(&row, "del") != 0);
+                }
+                Ok(())
+            })?;
         Ok(selected)
     }
 
@@ -308,7 +694,11 @@ impl Catalogue {
                 json!({"author":"","books":[]})
             });
         };
-        let mut books = self.store.catalogue_rows(&self.generation, row.book_ids)?;
+        let mut ids = row.book_ids;
+        if let Some(selected) = self.extra_candidates(&search)? {
+            ids.retain(|id| selected.contains(id));
+        }
+        let mut books = self.store.catalogue_rows(&self.generation, ids)?;
         books.retain(|book| search.matches(book));
         if !series {
             return Ok(json!({"author":row.name,"books":books}));
@@ -339,15 +729,19 @@ impl Catalogue {
         let name = name.to_lowercase();
         let mut ids = Vec::new();
         if !name.is_empty() {
-            self.lookup.visit_names(
+            self.lookup.visit_name_candidates(
                 &self.lookup_generation,
                 Table::Series,
+                &[&name],
                 |key| key == name,
                 |_, _, _, _, books| {
                     ids.extend(books.iter().copied().map(u32::from_le_bytes));
                     Ok(())
                 },
             )?;
+        }
+        if let Some(selected) = self.extra_candidates(&search)? {
+            ids.retain(|id| selected.contains(id));
         }
         let mut books = self.store.catalogue_rows(&self.generation, ids)?;
         books.retain(|book| search.matches(book));

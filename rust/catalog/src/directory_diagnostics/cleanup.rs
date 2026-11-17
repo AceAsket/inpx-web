@@ -139,6 +139,16 @@ pub(super) fn rotate(
     target_size: f64,
     force_target: bool,
 ) -> io::Result<Rotation> {
+    rotate_filtered(directory, max_size, target_size, force_target, |_| true)
+}
+
+pub(super) fn rotate_filtered(
+    directory: &Path,
+    max_size: f64,
+    target_size: f64,
+    force_target: bool,
+    include: impl Fn(&str) -> bool,
+) -> io::Result<Rotation> {
     if !max_size.is_finite() || !(0.0..=max_size).contains(&target_size) {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
@@ -148,6 +158,9 @@ pub(super) fn rotate(
     let mut result = Rotation::default();
     let mut files = Vec::new();
     let Some(root) = scan(directory, false, |name, metadata| {
+        if !include(&name) {
+            return;
+        }
         let stamp = Stamp::read(&metadata);
         result.size = result.size.saturating_add(stamp.bytes);
         files.push(CacheFile { name, stamp });
@@ -196,16 +209,38 @@ pub(super) fn rotate(
 }
 
 pub(super) fn purge_covers(directory: &Path) -> io::Result<CoverRepair> {
+    purge_filtered(directory, false)
+}
+
+pub(super) fn purge_filtered(directory: &Path, native: bool) -> io::Result<CoverRepair> {
     let mut result = CoverRepair::default();
     let mut broken = Vec::new();
     let Some(root) = scan(directory, true, |name, metadata| {
+        if native && !name.ends_with(".reader-cover") {
+            return;
+        }
         result.checked += 1;
         let allowed = Path::new(&name).extension().is_some_and(|ext| {
             ["png", "jpg", "gif"]
                 .iter()
                 .any(|kind| ext.eq_ignore_ascii_case(kind))
         });
-        if metadata.len() == 0 || !allowed {
+        let invalid = if native {
+            use sha2::{Digest, Sha256};
+            metadata.len() > crate::reader_document::IMAGE_LIMIT as u64
+                || fs::read(directory.join(&name)).ok().and_then(|bytes| {
+                    crate::reader_document::Image::from_bytes(bytes.clone())?;
+                    Some(
+                        name == format!(
+                            "{}.reader-cover",
+                            crate::crypto_support::hex(&Sha256::digest(bytes))
+                        ),
+                    )
+                }) != Some(true)
+        } else {
+            !allowed
+        };
+        if metadata.len() == 0 || invalid {
             broken.push(CacheFile {
                 name,
                 stamp: Stamp::read(&metadata),

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,14 @@ use crate::{
 const LOOKUP: &str = "lookup.redb";
 const METADATA: &str = "catalogue.json";
 const DB_VERSION: &str = "15";
+const MIGRATION_READY: &str = ".db-migration-ready";
+const MIGRATION_INPUT: &str = ".migration-input.json";
+
+#[derive(Deserialize, Serialize)]
+struct MigrationInput {
+    legacy: String,
+    source_hash: String,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +63,10 @@ pub struct Catalogue {
     pub inpx_hash: String,
     pub index_update: Value,
     pub created: bool,
+    pub(crate) overview_cache: Mutex<crate::catalog_overview::ShelfCache>,
+    pub(crate) recommendation_cache: Mutex<crate::catalog_personal_overview::RecommendationCache>,
+    pub(crate) rating_filter: Mutex<Option<Arc<crate::library_media::RatingIndex>>>,
+    pub(crate) isbn_index: Option<Arc<crate::isbn_store::IsbnIndex>>,
     _lease: CatalogueLease,
 }
 
@@ -71,7 +84,11 @@ enum PreviousCatalogue<'a> {
 }
 
 impl CatalogueFiles {
-    pub fn open_or_create(&self, sources: &[Source]) -> Result<Catalogue> {
+    pub fn open_or_create(
+        &self,
+        sources: &[Source],
+        mut report: impl FnMut(Value) -> Result<()>,
+    ) -> Result<Catalogue> {
         fs::create_dir_all(&self.data)?;
         let _publishing = self.publication_lock()?;
         let directory = self.data.join("db");
@@ -81,11 +98,12 @@ impl CatalogueFiles {
             atomic_file::sync_parent(&directory)?;
         }
         if !directory.try_exists()? {
-            let stage = self.build(sources, None, |_| Ok(()))?;
+            let stage = self.build(sources, None, &mut report)?;
             stage.validate(self.low_memory)?;
             if directory.try_exists()? {
                 return Err("Catalogue was published by another process".into());
             }
+            report(startup_step("publish", "Подключение готового индекса"))?;
             fs::rename(stage.0.path(), &directory)?;
             atomic_file::sync_parent(&directory)?;
             save_folder_caches(&directory);
@@ -93,17 +111,93 @@ impl CatalogueFiles {
         }
         let book_table = directory.join("book");
         if !directory.join(METADATA).try_exists()? && book_table.is_dir() {
+            report(startup_step("migration", "Перенос каталога JembaDB → Redb"))?;
             let legacy = CatalogueLease::open(&directory)?;
-            let stage = self.build(sources, Some(PreviousCatalogue::Jemba(&book_table)), |_| {
-                Ok(())
-            })?;
-            stage.validate(self.low_memory)?;
+            let pending = self.prepare_migration(sources, &book_table, &mut report)?;
             remove_previous(&previous)?;
+            report(startup_step("publish", "Подключение готового индекса"))?;
             // Directory renames on Windows require closing the lease handle.
             drop(legacy);
-            return self.replace(stage, &directory, &previous, true);
+            let catalogue = self.replace(&pending, &directory, &previous, true)?;
+            return Ok(catalogue);
         }
-        Catalogue::open(&directory, self.low_memory, false)
+        let resuming_publication =
+            directory.join(MIGRATION_INPUT).is_file() && previous.join("book").is_dir();
+        if resuming_publication {
+            report(startup_step(
+                "resume",
+                "Открываю готовый индекс после прерванного переноса",
+            ))?;
+        }
+        let catalogue = Catalogue::open(&directory, self.low_memory, resuming_publication)?;
+        if resuming_publication {
+            finish_publication(&directory, &previous);
+        }
+        Ok(catalogue)
+    }
+
+    fn prepare_migration(
+        &self,
+        sources: &[Source],
+        book_table: &Path,
+        report: &mut impl FnMut(Value) -> Result<()>,
+    ) -> Result<PathBuf> {
+        let pending = self.data.join(MIGRATION_READY);
+        let legacy = legacy_revision(book_table)?;
+        if pending.try_exists()? {
+            let input: MigrationInput =
+                serde_json::from_reader(File::open(pending.join(MIGRATION_INPUT))?)?;
+            if input.legacy == legacy && input.source_hash == self.source_hash(sources)? {
+                report(startup_step(
+                    "resume",
+                    "Использую готовый индекс после прерванного переноса",
+                ))?;
+                let (_, _, header) = Catalogue::load(&pending, self.low_memory)?;
+                if header.inpx_hash != input.source_hash {
+                    return Err(
+                        "В готовом индексе и состоянии переноса указаны разные источники".into(),
+                    );
+                }
+                return Ok(pending);
+            }
+            report(startup_step(
+                "migration-reset",
+                "Исходный каталог изменился. Построение нового индекса",
+            ))?;
+            fs::remove_dir_all(&pending)?;
+        }
+        let stage = self.build(
+            sources,
+            Some(PreviousCatalogue::Jemba(book_table)),
+            &mut *report,
+        )?;
+        report(startup_step("validate", "Проверка готового индекса"))?;
+        let (_, _, header) = Catalogue::load(stage.0.path(), self.low_memory)?;
+        if legacy_revision(book_table)? != legacy {
+            return Err("Таблица JembaDB изменилась во время переноса".into());
+        }
+        write_json(
+            &stage.0.path().join(MIGRATION_INPUT),
+            &MigrationInput {
+                legacy,
+                source_hash: header.inpx_hash,
+            },
+        )?;
+        for entry in fs::read_dir(stage.0.path().join("facets"))? {
+            File::options()
+                .write(true)
+                .open(entry?.path())?
+                .sync_all()?;
+        }
+        atomic_file::sync_directory(&stage.0.path().join("facets"))?;
+        atomic_file::sync_directory(stage.0.path())?;
+        fs::rename(stage.0.path(), &pending)?;
+        atomic_file::sync_parent(&pending)?;
+        report(startup_step(
+            "checkpoint",
+            "Готовый индекс сохранён. При повторном запуске он будет использован снова",
+        ))?;
+        Ok(pending)
     }
 
     pub fn source_hash(&self, sources: &[Source]) -> Result<String> {
@@ -133,7 +227,7 @@ impl CatalogueFiles {
 
         // Windows cannot rename a catalogue directory while its stores or lease are open.
         drop(active.take());
-        match self.replace(stage, &directory, &previous, false) {
+        match self.replace(stage.0.path(), &directory, &previous, false) {
             Ok(catalogue) => {
                 *active = Some(catalogue);
                 Ok(())
@@ -150,25 +244,38 @@ impl CatalogueFiles {
 
     fn replace(
         &self,
-        stage: PreparedCatalogue,
+        stage: &Path,
         directory: &Path,
         previous: &Path,
         created: bool,
     ) -> Result<Catalogue> {
         fs::rename(directory, previous)?;
         let mut moved = false;
+        let mut synced = false;
         let install = (|| {
-            fs::rename(stage.0.path(), directory)?;
+            fs::rename(stage, directory)?;
             moved = true;
             atomic_file::sync_parent(directory)?;
+            synced = true;
             Catalogue::open(directory, self.low_memory, created)
         })();
         let catalogue = match install {
             Ok(catalogue) => catalogue,
+            // A complete startup migration is already installed. Keep both
+            // directories while another process holds the active catalogue.
+            Err(error)
+                if created
+                    && synced
+                    && error
+                        .downcast_ref::<io::Error>()
+                        .is_some_and(|error| error.kind() == ErrorKind::WouldBlock) =>
+            {
+                return Err(error);
+            }
             Err(error) => {
                 let restore = (|| -> Result<()> {
                     if moved {
-                        fs::rename(directory, stage.0.path())?;
+                        fs::rename(directory, stage)?;
                     }
                     fs::rename(previous, directory)?;
                     atomic_file::sync_parent(directory)
@@ -181,10 +288,7 @@ impl CatalogueFiles {
                 };
             }
         };
-        if let Err(error) = fs::remove_dir_all(previous) {
-            eprintln!("Cannot remove previous catalogue: {error}");
-        }
-        save_folder_caches(directory);
+        finish_publication(directory, previous);
         Ok(catalogue)
     }
 
@@ -223,6 +327,26 @@ fn remove_previous(previous: &Path) -> Result<()> {
 impl Catalogue {
     fn open(directory: &Path, low_memory: bool, created: bool) -> Result<Self> {
         let lease = CatalogueLease::open(directory)?;
+        let (store, lookup, header) = Self::load(directory, low_memory)?;
+        Ok(Self {
+            store,
+            lookup,
+            lookup_generation: header.rust_lookup_generation,
+            generation: header.rust_book_store_generation,
+            info: header.inpx_info,
+            stats: header.stats,
+            inpx_hash: header.inpx_hash,
+            index_update: header.index_update,
+            created,
+            overview_cache: Mutex::default(),
+            recommendation_cache: Mutex::default(),
+            rating_filter: Mutex::default(),
+            isbn_index: None,
+            _lease: lease,
+        })
+    }
+
+    fn load(directory: &Path, low_memory: bool) -> Result<(BookStore, LookupIndex, Header)> {
         let header_file = File::open(directory.join(METADATA)).map_err(|error| {
             if error.kind() == ErrorKind::NotFound {
                 io::Error::other("Missing native catalogue metadata or legacy JembaDB book table")
@@ -252,18 +376,7 @@ impl Catalogue {
                 capabilities: false,
             },
         })?;
-        Ok(Self {
-            store,
-            lookup,
-            lookup_generation: header.rust_lookup_generation,
-            generation: header.rust_book_store_generation,
-            info: header.inpx_info,
-            stats: header.stats,
-            inpx_hash: header.inpx_hash,
-            index_update: header.index_update,
-            created,
-            _lease: lease,
-        })
+        Ok((store, lookup, header))
     }
 }
 
@@ -279,6 +392,7 @@ impl CatalogueFiles {
             .tempdir_in(&self.data)?;
         let input_directory = stage.path().join(".folder-input");
         fs::create_dir(&input_directory)?;
+        report(startup_step("sources", "Проверка источников каталога"))?;
         let (inputs, source_hash, filter) =
             collect(sources, &self.filter, Some((&input_directory, &self.data)))?;
         let elapsed = SystemTime::now().duration_since(UNIX_EPOCH)?;
@@ -318,14 +432,20 @@ impl CatalogueFiles {
         }
         let summary = prepare_update_reporting(stage.path(), &request, &mut report)?;
         let sizes = summary.counts.name_counts;
-        report(
-            json!({"job":"lookup","jobMessage":"Сохранение поискового индекса","jobStep":2,"progress":0}),
-        )?;
         let series = lookup_staging::publish_sorted(
             &stage.path().join(LOOKUP),
             &generation,
             sizes,
             self.low_memory,
+            |table| match table {
+                Some(table) => report(
+                    json!({"job":"lookup order","jobMessage":format!("Сортировка поискового индекса ({table})"),
+                    "jobStep":2,"progress":0}),
+                ),
+                None => report(
+                    json!({"job":"lookup","jobMessage":"Запись поискового индекса в Redb","jobStep":2,"progress":0}),
+                ),
+            },
         )?;
         let mut stats = serde_json::to_value(&summary.counts)?;
         let files = stats["filesCount"].as_u64().unwrap_or(0)
@@ -364,6 +484,39 @@ impl CatalogueFiles {
         atomic_file::sync_directory(stage.path())?;
         Ok(PreparedCatalogue(stage))
     }
+}
+
+fn startup_step(job: &str, message: &str) -> Value {
+    json!({"job":job,"jobMessage":message,"progress":0})
+}
+
+fn legacy_revision(book_table: &Path) -> Result<String> {
+    let mut paths = fs::read_dir(book_table)?
+        .map(|entry| Ok(entry?.path()))
+        .collect::<io::Result<Vec<_>>>()?;
+    paths.sort_unstable();
+    let mut hash = Sha256::new();
+    for path in paths {
+        let name = path
+            .file_name()
+            .ok_or("missing legacy table file name")?
+            .as_encoded_bytes();
+        hash.update(name.len().to_le_bytes());
+        hash.update(name);
+        hash.update(crate::file_stamp::path_stamp(&path)?.to_string());
+    }
+    Ok(crypto_support::hex(&hash.finalize()))
+}
+
+fn finish_publication(directory: &Path, previous: &Path) {
+    if let Err(error) = fs::remove_dir_all(previous) {
+        eprintln!("Cannot remove previous catalogue: {error}");
+    } else if let Err(error) = fs::remove_file(directory.join(MIGRATION_INPUT))
+        && error.kind() != ErrorKind::NotFound
+    {
+        eprintln!("Cannot remove catalogue migration marker: {error}");
+    }
+    save_folder_caches(directory);
 }
 
 fn save_folder_caches(directory: &Path) {

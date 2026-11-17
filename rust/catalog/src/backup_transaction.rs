@@ -111,6 +111,37 @@ impl<'a> BackupTransaction<'a> {
         Ok(true)
     }
 
+    pub(crate) fn restore(&self, source: &Path, files: Vec<Entry>) -> Result<()> {
+        fs::create_dir(&self.folder)?;
+        let incoming = self.folder.join("incoming");
+        let staged = (|| -> Result<()> {
+            fs::create_dir(&incoming)?;
+            for &entry in &files {
+                fs::rename(source.join(entry.name()), incoming.join(entry.name()))?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = staged {
+            self.clean()?;
+            return Err(error);
+        }
+        let result = self.commit(files);
+        if result.is_err() && matches!(self.manifest(), Ok(None)) {
+            self.clean()?;
+        }
+        match result? {
+            BackupResponse::Committed { .. } => {
+                if let Err(error) = self.recover_startup() {
+                    // The commit is durable. Startup will retry cleanup.
+                    eprintln!("Backup restore cleanup: {error}");
+                }
+                Ok(())
+            }
+            BackupResponse::Failed { message, .. } => Err(message.into()),
+            _ => Err("Некорректное состояние восстановления резервной копии".into()),
+        }
+    }
+
     fn target(&self, entry: Entry) -> PathBuf {
         match entry {
             Entry::Config => self.config.into(),

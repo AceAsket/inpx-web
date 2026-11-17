@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::Result;
-use crate::crypto_support::{Sensitive, hex, parse_hex, random};
+use crate::crypto_support::{Sensitive, hex, md5, parse_hex, random};
 use crate::framed_protocol::{Frames, header, reply};
 use crate::kosync_index::{Cache, Query};
 use crate::kosync_store::{Client, Store};
@@ -186,14 +186,4 @@ pub(crate) fn fingerprint(file: &mut File) -> Result<String> {
         count += expected;
     }
     Ok(hex(&md5(&bytes[..count])?))
-}
-
-fn md5(bytes: &[u8]) -> Result<[u8; 16]> {
-    let mut digest = [0; 16];
-    // KOReader requires MD5 for client keys and document IDs.
-    let result = unsafe { aws_lc_sys::MD5(bytes.as_ptr(), bytes.len(), digest.as_mut_ptr()) };
-    if result.is_null() {
-        return Err("Не удалось вычислить отпечаток KOSync".into());
-    }
-    Ok(digest)
 }

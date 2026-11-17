@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::Result;
 use crate::catalog_files::{FileCounter, FileTotals};
-use crate::catalog_text::{field, lower, number, words};
+use crate::catalog_text::{SearchProjection, field, lower, number, words};
 use crate::lookup_staging::{StagedPosting, write_table};
 
 const EMPTY: &str = "?";
@@ -187,7 +187,12 @@ impl Postings {
         }
     }
 
-    pub fn add(&mut self, row: &Record, id: u32) -> Result<()> {
+    pub fn add(
+        &mut self,
+        row: &Record,
+        id: u32,
+        projection: Option<&SearchProjection>,
+    ) -> Result<()> {
         let author = field(row, "author");
         let title = field(row, "title");
         let series = field(row, "series");
@@ -205,7 +210,17 @@ impl Postings {
         self.files
             .add(field(row, "folder"), field(row, "file"), ext, deleted)?;
 
-        self.add_words("title", title, id, None);
+        if let Some(projection) = projection {
+            let mut key = String::new();
+            for root in projection.title_roots() {
+                key.clear();
+                key.push_str("title:");
+                key.push_str(root);
+                self.word.add_text(&key, id);
+            }
+        } else {
+            self.add_words("title", title, id, None);
+        }
         self.add_words("author", author, id, Some(0));
         self.add_words("series", series, id, Some(1));
         let author = if author.is_empty() { EMPTY } else { author };

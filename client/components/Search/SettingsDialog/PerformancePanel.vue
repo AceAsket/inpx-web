@@ -6,7 +6,7 @@
                     Производительность
                 </div>
                 <div class="performance-muted">
-                    Выберите параметры проверки и сравните расход ресурсов. Серверные лимиты меняются при следующем запуске контейнера.
+                    {{ info?.settings.native ? 'Сравните параллельное чтение архивов и проверку книг в выбранном источнике.' : 'Выберите параметры проверки и сравните расход ресурсов. Серверные лимиты меняются при следующем запуске контейнера.' }}
                 </div>
             </div>
             <q-btn flat dense round icon="la la-sync" aria-label="Обновить показатели производительности" :disable="busy" @click="refresh" />
@@ -15,8 +15,8 @@
             {{ error }}
         </div>
         <template v-if="info">
-            <h3 class="performance-section-title">Действует на сервере</h3>
-            <div class="performance-active" data-testid="performance-active">
+            <h3 class="performance-section-title">{{ info.settings.native ? 'Показатели сервера' : 'Действует на сервере' }}</h3>
+            <div v-if="!info.settings.native" class="performance-active" data-testid="performance-active">
                 <strong>{{ profileName(info.settings.selected) }}</strong>
                 <span>Всего {{ info.settings.limits.total }} · изображения {{ info.settings.limits.images }} · архивы {{ info.settings.limits.reviews }} · конвертация {{ info.settings.limits.conversions }}</span>
             </div>
@@ -25,7 +25,8 @@
                 <span>CPU сейчас, ядер: <b>{{ number(cpuPercent === null ? null : cpuPercent / 100) }}</b></span>
                 <span>Лимит памяти: <b>{{ bytes(info.machine.memoryLimit) }}</b></span>
                 <span>Память сейчас: <b>{{ bytes(info.machine.memoryUsed) }}</b></span>
-                <span v-if="info.processMemory">RSS Node: <b>{{ bytes(info.processMemory.rss) }}</b></span>
+                <span v-if="info.processMemory">RSS {{ info.settings.native ? 'Rust' : 'Node' }}: <b>{{ bytes(info.processMemory.rss) }}</b></span>
+                <span v-if="info.settings.native && info.databaseCache?.available">Кэш чтения каталога: <b>{{ bytes(info.databaseCache.readCacheBytes) }}</b></span>
                 <span v-if="info.databaseCache?.workerHeapUsed">Heap каталога: <b>{{ bytes(info.databaseCache.workerHeapUsed) }}<template v-if="info.databaseCache.workerHeapLimit"> / {{ bytes(info.databaseCache.workerHeapLimit) }}</template></b></span>
                 <span>Задачи: <b>{{ info.runtime.active }}</b> · в очереди {{ info.runtime.queued }}</span>
             </div>
@@ -44,7 +45,8 @@
                     <strong>{{ profile.name }}</strong>
                     <span v-if="selected === profile.id" class="performance-badge">Для теста</span>
                     <span>Одновременно: {{ profile.limits.total }}</span>
-                    <small>Изображения {{ profile.limits.images }} · архивы {{ profile.limits.reviews }} · конвертация {{ profile.limits.conversions }}</small>
+                    <small v-if="info.settings.native">Архивы {{ profile.limits.reviews }} · проверка содержимого {{ profile.limits.conversions }}</small>
+                    <small v-else>Изображения {{ profile.limits.images }} · архивы {{ profile.limits.reviews }} · конвертация {{ profile.limits.conversions }}</small>
                 </button>
                 <button type="button" class="performance-profile" :class="{'performance-profile--selected': selected === 'custom'}" :aria-pressed="selected === 'custom'" :disabled="running || busy" @click="selected = 'custom'">
                     <strong>Свои значения</strong>
@@ -62,7 +64,7 @@
             </div>
             <div class="performance-muted" role="status" data-testid="performance-save-status">{{ preferenceStatus }}</div>
             <div v-if="selected === 'custom' && customLimits" class="performance-custom">
-                <q-input v-for="field in customFields" :key="field.key" v-model.number="customLimits[field.key]" type="number" outlined dense :label="field.label" min="1" :max="info.settings.hardMax" step="1" :disable="running || busy" />
+                <q-input v-for="field in editableFields" :key="field.key" v-model.number="customLimits[field.key]" type="number" outlined dense :label="field.label" min="1" :max="info.settings.hardMax" step="1" :disable="running || busy" />
                 <div class="performance-muted">Целые значения от 1 до {{ info.settings.hardMax }}. Лимит каждого вида задач не должен превышать общий.</div>
                 <div v-if="customError" class="text-negative" role="alert">{{ customError }}</div>
             </div>
@@ -106,7 +108,8 @@
             <div v-if="reportSummary" class="performance-result-cards">
                 <article v-for="(row,index) in info.report.rows" :key="index" class="performance-result-card" :data-status="reportSummary.rows[index]?.status || 'insufficient'">
                     <div class="performance-result-card-heading"><strong>{{ profileName(row.profile) }}</strong><span>{{ statusLabel(reportSummary.rows[index]?.status || 'insufficient') }}</span></div>
-                    <div class="performance-muted">Проверенные лимиты: изображения {{ row.limits?.images ?? '—' }} · архивы {{ row.limits?.reviews ?? '—' }} · конвертация {{ row.limits?.conversions ?? '—' }}</div>
+                    <div v-if="info.settings.native" class="performance-muted">Архивы {{ row.limits?.reviews ?? '—' }} · проверка содержимого {{ row.limits?.conversions ?? '—' }}</div>
+                    <div v-else class="performance-muted">Проверенные лимиты: изображения {{ row.limits?.images ?? '—' }} · архивы {{ row.limits?.reviews ?? '—' }} · конвертация {{ row.limits?.conversions ?? '—' }}</div>
                     <div class="performance-result-metrics">
                         <span>Лимит задач <b>{{ row.limits?.total ?? '—' }}</b></span>
                         <span>Отклик p95 <b>{{ duration(row.probeP95Ms) }}</b></span>
@@ -142,14 +145,14 @@
                     * Периодическая выборка {{ memoryScope(info.report.machine?.memoryScope) }}. Отклик — внутренняя проверка каталога.
                     Меньшее время проходов означает более быстрое выполнение этой проверки. p95 — время, в которое укладываются 95% внутренних проб, а не поиска в браузере.
                     Первый проход выполняется после подготовки инструментов; кэш ОС и NAS не очищается. Пиковый прирост памяти считается от начала режима и не показывает удержание после сборки мусора.
-                    CPU — средняя занятость ядер за тест; без метрик контейнера учитывается только Node.js, без дочерних конвертеров. Лимит задач не равен числу занятых ядер.
+                    CPU — средняя занятость ядер за тест. {{ info.settings.native ? 'Без метрик контейнера учитывается процесс Rust.' : 'Без метрик контейнера учитывается процесс Node.js без дочерних конвертеров.' }}
                     Между отдельными запусками могут отличаться число операций, другая нагрузка и состояние кэша. Их время нельзя напрямую сравнивать как одинаковый тест.
                 </div>
                 <div v-for="(warning, i) in info.report.warnings" :key="i" class="performance-muted">
                     {{ warning }}
                 </div>
             </details>
-            <details v-if="selected !== 'compare'" class="performance-details">
+            <details v-if="selected !== 'compare' && !info.settings.native" class="performance-details">
                 <summary>Параметры следующего запуска · {{ profileName(selected) }}</summary>
                 <pre>{{ compose }}</pre>
                 <div class="performance-copy">
@@ -160,7 +163,7 @@
                     Добавьте параметры к текущему запуску и пересоздайте контейнер. Проверка сама настройки не применяет.
                 </div>
             </details>
-            <div v-else class="performance-muted performance-recommendation-note">Для параметров запуска выберите один режим или свои значения. Сервер продолжает работать с текущими лимитами.</div>
+            <div v-else-if="!info.settings.native" class="performance-muted performance-recommendation-note">Для параметров запуска выберите один режим или свои значения. Сервер продолжает работать с текущими лимитами.</div>
         </template>
         <div v-else-if="!error" class="performance-muted" role="status">
             Загрузка показателей…
@@ -189,11 +192,16 @@ export default {
                 : this.info.settings.profiles.find(profile=>profile.id===this.selected)?.limits.total;
         },
         running() {return ['running','cancelling'].includes(this.info?.job?.state);},
+        editableFields() {
+            if (!this.info?.settings.native) return this.customFields;
+            return this.customFields.filter(field=>field.key !== 'images').map(field =>
+                field.key === 'conversions' ? {...field,label:'Проверка содержимого'} : field);
+        },
         customError() {
             if (this.selected !== 'custom') return '';
             const limits = this.customLimits, max = this.info?.settings.hardMax || 1;
-            if (!limits || this.customFields.some(({key}) => !Number.isInteger(limits[key]) || limits[key] < 1 || limits[key] > max)) return `Укажите целые значения от 1 до ${max}.`;
-            return this.customFields.some(({key}) => key !== 'total' && limits[key] > limits.total) ? 'Лимит отдельного вида задач превышает общий.' : '';
+            if (!limits || this.editableFields.some(({key}) => !Number.isInteger(limits[key]) || limits[key] < 1 || limits[key] > max)) return `Укажите целые значения от 1 до ${max}.`;
+            return this.editableFields.some(({key}) => key !== 'total' && limits[key] > limits.total) ? 'Лимит отдельного вида задач превышает общий.' : '';
         },
         environment() {
             if(this.selected==='compare')return {};
@@ -271,6 +279,7 @@ export default {
         start() {
             if(this.busy || this.running || !this.sourceId || this.customError)return;
             const options=preferencesModel.testOptions(this.testDraft);
+            if (this.info.settings.native && options.mode === 'custom') options.limits.images = 1;
             return this.performAction(()=>this.$root.api.startAdminBenchmark(options));
         },
         cancel() {return this.performAction(()=>this.$root.api.cancelAdminBenchmark());},
@@ -294,7 +303,8 @@ export default {
         date(value) {return new Date(value).toLocaleString('ru-RU');},
         memoryScope(value) {
             return ['cgroup','container'].includes(value) ? 'контейнера / группы процессов'
-                : value === 'host' ? 'общей группы процессов (оценка предварительная)' : 'только процесса Node.js';
+                : value === 'host' ? 'общей группы процессов (оценка предварительная)'
+                    : this.info?.settings.native ? 'процесса Rust' : 'процесса Node.js';
         },
     },
 };

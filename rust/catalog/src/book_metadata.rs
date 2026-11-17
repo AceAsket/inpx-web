@@ -141,7 +141,7 @@ pub(crate) fn read_description<T>(
     Ok(None)
 }
 
-fn trim_incomplete_utf8(bytes: &[u8]) -> &[u8] {
+pub(crate) fn trim_incomplete_utf8(bytes: &[u8]) -> &[u8] {
     if let Err(error) = std::str::from_utf8(bytes)
         && error.error_len().is_none()
     {

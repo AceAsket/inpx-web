@@ -226,6 +226,7 @@ impl KoSync {
         request: ProgressRequest<'_>,
         book: impl FnOnce(&str) -> Result<Option<book_delivery::Book>>,
         fb2: impl FnOnce(&book_delivery::Book) -> Result<Option<PathBuf>>,
+        notify: impl FnOnce(&str, &str),
     ) -> Result<Option<Box<RawValue>>> {
         let ProgressRequest {
             session,
@@ -296,6 +297,7 @@ impl KoSync {
         self.require_profile_stamp(stamp)?;
         let previous_revision = stored_number(&previous, "bridgeRevision");
         let previous_generation = stored_number(&previous, "bridgeGeneration").unwrap_or(0);
+        let mut changed = false;
         let record = if let Some(patch) = patch {
             let timestamp = now_ms() / 1000;
             reply = raw_fields(json!({"document":document,"timestamp":timestamp}))?;
@@ -320,6 +322,9 @@ impl KoSync {
                     let saved = reader.request(owner, stamp, &linked.uid, Some(&patch_data))?;
                     let progress = &saved["progress"];
                     if progress["conflict"] != true && progress["generationMismatch"] != true {
+                        changed = progress["revision"]
+                            .as_u64()
+                            .is_some_and(|next| next > revision);
                         set_bridge(
                             &mut record,
                             progress["revision"].as_u64().unwrap_or(0),
@@ -371,6 +376,9 @@ impl KoSync {
         }
         reply.shift_remove("bridgeRevision");
         reply.shift_remove("bridgeGeneration");
+        if changed && let Some(book) = &linked {
+            notify(owner, &book.uid);
+        }
         Ok(Some(to_raw_value(&reply)?))
     }
 

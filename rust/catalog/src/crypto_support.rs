@@ -12,6 +12,16 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub(crate) const KEY_BYTES: usize = 32;
 pub(crate) const NONCE_BYTES: usize = 12;
 pub(crate) const TAG_BYTES: usize = 16;
+
+pub(crate) fn md5(bytes: &[u8]) -> crate::Result<[u8; 16]> {
+    let mut digest = [0; 16];
+    // The legacy protocols and library archive names require MD5.
+    let result = unsafe { aws_lc_sys::MD5(bytes.as_ptr(), bytes.len(), digest.as_mut_ptr()) };
+    if result.is_null() {
+        return Err("Не удалось вычислить MD5".into());
+    }
+    Ok(digest)
+}
 pub(crate) const BLOCK_BYTES: usize = 16;
 
 pub(crate) fn random<const N: usize>() -> io::Result<[u8; N]> {
