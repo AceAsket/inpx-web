@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 
 use crate::catalog_update::{FolderInput, Source as UpdateSource, prepare_update_reporting};
 use crate::catalogue_lock::CatalogueLease;
+use crate::inpx_filter::Filter as RecordFilter;
 use crate::library_sources::{Kind, Source};
 use crate::{
     BookStore, LookupIndex, LookupRequest, Result, UpdateRequest, atomic_file, crypto_support,
@@ -423,6 +424,7 @@ impl CatalogueFiles {
             inputs,
             include,
             exclude,
+            RecordFilter::compile(filter.filter.as_ref())?,
         );
         let incremental = previous_catalogue.is_some();
         let previous_store = match previous_catalogue {
@@ -597,11 +599,6 @@ fn collect(
         }
         None => Filter::default(),
     };
-    if filter.filter.as_ref().is_some_and(|value| {
-        value.as_str().is_none_or(|text| !text.is_empty()) && value != &Value::Bool(false)
-    }) {
-        return Err("JavaScript INPX filters require the compatibility runtime".into());
-    }
     let mut inputs = Vec::new();
     for (index, source) in sources.iter().enumerate() {
         if index != 0 {

@@ -18,6 +18,7 @@ use crate::catalog_text::{SearchProjection, field, lower, number, supported_text
 use crate::crypto_support::hex;
 use crate::folder_index::{CacheStaging, FolderCache};
 use crate::folder_inventory::Entry;
+use crate::inpx_filter::Filter;
 use crate::jemba::write_updated_books;
 use crate::jemba_identity::{BookRows, Identity, physical_identity};
 use crate::store::{BookStore, BookStoreWriter, write_store};
@@ -43,6 +44,8 @@ pub struct UpdateRequest {
     include_authors: Option<HashSet<String>>,
     #[serde(default)]
     exclude_authors: HashSet<String>,
+    #[serde(skip)]
+    record_filter: Option<Filter>,
 }
 
 impl UpdateRequest {
@@ -52,6 +55,7 @@ impl UpdateRequest {
         sources: Vec<Source>,
         include_authors: Option<HashSet<String>>,
         exclude_authors: HashSet<String>,
+        record_filter: Option<Filter>,
     ) -> Self {
         Self {
             previous_book: None,
@@ -64,6 +68,7 @@ impl UpdateRequest {
             sources,
             include_authors,
             exclude_authors,
+            record_filter,
         }
     }
 
@@ -351,6 +356,14 @@ impl Import<'_> {
             row.insert("_legacyUid".into(), parsed.as_str().into());
         }
         let (uid, prior) = self.previous.identify(&parsed, &identity, &self.seen);
+        if uid != parsed {
+            row.insert("_uid".into(), uid.as_str().into());
+        }
+        if let Some(filter) = &self.request.record_filter
+            && !filter.includes(&row)?
+        {
+            return Ok(());
+        }
         let author = field(&row, "author");
         if self.request.include_authors.is_some() || !self.request.exclude_authors.is_empty() {
             let author = lower(if author.is_empty() { "?" } else { author });
@@ -368,9 +381,6 @@ impl Import<'_> {
         }
         if !self.seen.insert(uid.clone()) {
             return Ok(());
-        }
-        if uid != parsed {
-            row.insert("_uid".into(), uid.as_str().into());
         }
 
         let id = match prior {

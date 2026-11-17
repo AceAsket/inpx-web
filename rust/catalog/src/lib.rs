@@ -48,6 +48,7 @@ mod folder_record;
 mod framed_protocol;
 mod gzip;
 mod index;
+mod inpx_filter;
 mod isbn;
 pub mod isbn_store;
 mod jemba;

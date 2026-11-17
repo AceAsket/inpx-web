@@ -124,6 +124,8 @@ impl Args {
                 "--version" | "-v" if value.is_none() => parsed.version = true,
                 "--reset-admin-password" if value.is_none() => parsed.reset = true,
                 "--recreate" if value.is_none() => parsed.recreate = true,
+                // Rust interprets the record predicate without executing JavaScript.
+                "--unsafe-filter" if value.is_none() => {}
                 "--host" | "--port" | "--config" | "--data-dir" | "--app-dir" | "--lib-dir"
                 | "--inpx" | "--library-sources" | "--admin-login" | "--admin-password"
                 | "--web-bundle" => {
