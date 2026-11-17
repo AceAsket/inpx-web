@@ -1104,10 +1104,30 @@ node build/release.js linux
 ```
 
 Для других платформ передайте `linux-arm64`, `win` или `macos` обеим командам
-упаковки и используйте Rust-бинарники соответствующей платформы. Для `win`
-можно собрать установщик через `npm run build:win-installer` с тем же
-`INPX_BUILD_DIST_DIR`. Файл `bin/public.json` содержит веб-интерфейс и должен
-оставаться рядом с `inpx-web` в каталоге `bin`.
+упаковки и используйте Rust-бинарники соответствующей платформы. Файл
+`bin/public.json` содержит веб-интерфейс и должен оставаться в каталоге `bin`.
+
+Полный установщик Windows x64 включает fb2cng, Kindling, инструменты для
+архивов и обложек, а также библиотеки Visual C++. Для сборки нужны Visual
+Studio с инструментами C++ x64 и Inno Setup 6. Выполните в PowerShell из корня проекта
+
+```powershell
+$env:INPX_BUILD_DIST_DIR = Join-Path $PWD 'dist/rust-preview'
+cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
+npm run build:rust -- win
+New-Item -ItemType Directory -Force dist/win/bin | Out-Null
+$env:FB2CNG_RELEASE_API = 'https://api.github.com/repos/rupor-github/fb2cng/releases/tags/v1.9.0'
+npm run build:win-tools
+node scripts/bundle-kindling.js win
+./scripts/stage-rust-windows-tools.ps1 -ApplicationDir "$env:INPX_BUILD_DIST_DIR/win" -ToolsDir dist/win/bin
+node build/windows-installer.js --rust
+```
+
+Установщик появится в `dist/rust-preview/release/inpx-web-<version>-win-rust-setup.exe`.
+Для обновления остановите сервер, скопируйте весь каталог данных (по умолчанию
+`%LOCALAPPDATA%\inpx-web`) и установите Rust в каталог программы RC15. Для
+отката остановите Rust, верните сохранённую копию данных и установите RC15 в
+тот же каталог программы. Позиции чтения восстановятся на момент копирования.
 
 Docker-образ с Rust-сервером собирается из того же Dockerfile:
 

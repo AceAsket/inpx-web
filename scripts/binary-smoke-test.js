@@ -296,7 +296,8 @@ async function checkEbookGuestDownload(url,html,format='fb2'){
 async function main() {
     const options = process.argv.slice(2);
     const rust = options.includes('--rust');
-    const [target, argument] = options.filter(value=>value!=='--rust');
+    const requireConverters = options.includes('--require-converters');
+    const [target, argument] = options.filter(value=>!['--rust','--require-converters'].includes(value));
     const binary = target && target !== '--image' ? path.resolve(target) : null;
     const imageName = target === '--image' ? argument : null;
     const allowMissingNativeJxl = argument === '--allow-missing-native-jxl';
@@ -358,6 +359,12 @@ async function main() {
             delete env.INPX_RUST_CATALOG_BINARY;
         }
         if(process.env.INPX_SMOKE_EPUB==='true'){delete env.INPX_MOBI_ENABLED;env.INPX_CONVERSION_FORMATS='fb2,epub';}
+        if (requireConverters) {
+            delete env.INPX_ENABLE_CONVERSION;
+            delete env.INPX_MOBI_ENABLED;
+            if (process.env.INPX_SMOKE_EPUB === 'true') env.INPX_CONVERSION_FORMATS = 'fb2,epub,mobi';
+            else delete env.INPX_CONVERSION_FORMATS;
+        }
         child = spawn(command, args, {cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
         exited = new Promise(resolve => {
             child.once('exit', resolve);
@@ -424,6 +431,8 @@ async function main() {
         catch (error) {throw new Error(`Packaged cached download failed: ${error.message}\n${output}`,{cause:error});}
         if (nativeJxlCover || requireRustHttp) await checkCoverDownload(url, bookUid, nativeJxlCover);
         if (rust) {
+            if (requireConverters)
+                await require('./rust-conversion-tests').checkPackagedConversions(url, bookUid, dir);
             const opds = await fetch(`${url}/opds`);
             assert.equal(opds.status,200);
             assert.match(await opds.text(),/Shared smoke shelf/);

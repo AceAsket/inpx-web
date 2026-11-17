@@ -31,7 +31,12 @@ DefaultGroupName=inpx-web
 AllowNoIcons=yes
 PrivilegesRequired=lowest
 OutputDir={#OutputDir}
+#ifdef RustRuntime
+OutputBaseFilename=inpx-web-{#AppVersion}-win-rust-setup
+ArchitecturesAllowed=x64compatible
+#else
 OutputBaseFilename=inpx-web-{#AppVersion}-win-setup
+#endif
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -53,6 +58,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
+#ifdef RustRuntime
+Source: "{#SourceDir}\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 Source: "{#SourceDir}\inpx-web.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\readme.html"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#SourceDir}\bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist

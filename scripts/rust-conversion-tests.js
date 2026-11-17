@@ -83,6 +83,12 @@ function pdf(bytes) {
     assert.match(bytes.subarray(-32).toString(),/%%EOF/);
 }
 
+async function checkPackagedConversions(base, uid, directory) {
+    await epub(await download(base, uid, 'epub'), directory, 'installed');
+    await mobi(await download(base, uid, 'mobi'), directory, 'installed');
+    console.log('ok installed Rust HTTP server converted FB2 to valid EPUB and dual MOBI');
+}
+
 async function conversionEpub(directory) {
     const file = path.join(directory,'conversion.epub');
     await require('./epub-fb2-tests').fixture(file,[],{
@@ -368,4 +374,5 @@ async function main(image, calibreImage) {
     }
 }
 
+module.exports = {checkPackagedConversions};
 if (require.main===module) main(process.argv[2],process.argv[3]).catch(error=>{console.error(error);process.exitCode=1;});

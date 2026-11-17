@@ -66,7 +66,8 @@ async function main() {
                 assert.equal((await fs.stat(path.join(directory, name))).mode & 0o7777, 0o755, `Extracted mode: ${name}`);
         }
         const run = (script, args) => execFileSync(process.execPath, [path.join(__dirname, script), ...args], {stdio:'inherit', windowsHide:true});
-        run('binary-smoke-test.js', [path.join(directory, names[0]), ...(!converters ? ['--allow-missing-native-jxl'] : []), ...(rust ? ['--rust'] : [])]);
+        run('binary-smoke-test.js', [path.join(directory, names[0]), ...(!converters ? ['--allow-missing-native-jxl'] : []),
+            ...(rust ? ['--rust'] : []), ...(rust && converters ? ['--require-converters'] : [])]);
         if (converters) {
             run('fb2cng-integration-tests.js', ['--fbc', path.join(directory, names[1])]);
             run('mobi-integration-tests.js', ['--fbc', path.join(directory, names[1]), '--kindling', path.join(directory, names[2])]);

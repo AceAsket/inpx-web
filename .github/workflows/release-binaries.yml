@@ -196,23 +196,46 @@ jobs:
           INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
         run: node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$ARCHIVE_PATH"
 
+      - name: Build the standalone Rust application
+        env:
+          INPX_BUILD_DIST_DIR: ${{ runner.temp }}/inpx-rust-release
+        run: npm run build:rust -- ${{ matrix.target }}
+
+      - name: Stage the Windows Rust converters and Visual C++ runtime
+        if: matrix.target == 'win'
+        shell: pwsh
+        run: ./scripts/stage-rust-windows-tools.ps1 -ApplicationDir "${{ runner.temp }}/inpx-rust-release/win" -ToolsDir dist/win/bin
+
       - name: Verify the standalone Rust archive on this target
         shell: bash
         env:
           INPX_BUILD_DIST_DIR: ${{ runner.temp }}/inpx-rust-release
           INPX_SMOKE_EPUB: 'true'
         run: |
-          npm run build:rust -- ${{ matrix.target }}
           node build/release.js ${{ matrix.target }}
           version=$(node -p "require('./package.json').version")
           archive="$INPX_BUILD_DIST_DIR/release/inpx-web-$version-${{ matrix.target }}.zip"
-          node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$archive" --application-only --rust
+          options=(--rust)
+          if [[ "${{ matrix.target }}" != win ]]; then options+=(--application-only); fi
+          node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$archive" "${options[@]}"
           cp "$archive" "dist/release/inpx-web-$version-${{ matrix.target }}-rust.zip"
 
       - name: Build Windows installer
         if: matrix.target == 'win'
         shell: pwsh
         run: npm run build:win-installer
+
+      - name: Build and test the full Rust Windows installer
+        if: matrix.target == 'win'
+        shell: pwsh
+        env:
+          INPX_BUILD_DIST_DIR: ${{ runner.temp }}/inpx-rust-release
+        run: |
+          node build/windows-installer.js --rust
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $setup = (Get-Item "$env:INPX_BUILD_DIST_DIR/release/*-win-rust-setup.exe").FullName
+          ./scripts/test-rust-windows-installer.ps1 -Installer $setup
+          Copy-Item -LiteralPath $setup -Destination dist/release
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
