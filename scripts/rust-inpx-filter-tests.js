@@ -211,4 +211,8 @@ async function main(rustImage, rc15Image, inpx) {
     }
 }
 
-main(...process.argv.slice(2)).catch(error=>{console.error(error);process.exitCode=1;});
+if (require.main === module) {
+    main(...process.argv.slice(2)).catch(error=>{console.error(error);process.exitCode=1;});
+}
+
+module.exports = {docker, until, legacyRows, rustRows, initial};
