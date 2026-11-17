@@ -114,6 +114,10 @@ async function build() {
         await fs.copyFile(source,output);
         if (platform!=='win') await fs.chmod(output,0o755);
     }
+    if (programs.length) {
+        await fs.copyFile(path.resolve(__dirname, '../rust/catalog/LICENSE.quickjs'),
+            path.join(outDir,'bin','LICENSE.quickjs'));
+    }
 
     // Добавляем README в релиз.
     let readme = await fs.readFile(path.resolve(__dirname, '../README.md'), 'utf-8');

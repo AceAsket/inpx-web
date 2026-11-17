@@ -50,7 +50,7 @@ COPY build/ ./build/
 COPY client/ ./client/
 COPY server/ ./server/
 COPY shared/ ./shared/
-COPY rust/catalog/config-fields.json ./rust/catalog/config-fields.json
+COPY rust/catalog/config-fields.json rust/catalog/LICENSE.quickjs ./rust/catalog/
 COPY rust/server/app-directory.json ./rust/server/app-directory.json
 
 FROM web-source AS build-node

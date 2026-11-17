@@ -27,6 +27,29 @@ const changed = {
     excludeAuthors:['КиМуРи МаРиЯ','Еськов Кирилл Юрьевич'],
     info:{...initial.info,version:'reindexed'},
 };
+const complex = {
+    ...changed,
+    filter:String.raw`(() => {
+        const language = new RegExp('^ru$', 'iu');
+        const formats = /^(fb2|epub)$/u;
+        const wanted = [/мастер|маргарит/iu, /(?<![а-яё])(?:роман|повесть|рассказ)\p{L}*(?![а-яё])/iu,
+            /^театр/iu, /\b(\d+)\s*[-–]\s*\1\b/u];
+        return function (row) {
+            if (row.del != 0 || row.sourceId !== 'main' || !formats.test(row.ext) || !language.test(row.lang))
+                return false;
+            const title = (row.title || '').trim();
+            if (title.length <= 2) return false;
+            for (const part of title.split(/\s*[:—]\s*/u)) {
+                let index = 0;
+                while (index < wanted.length) {
+                    if (wanted[index++].test(part)) return true;
+                }
+            }
+            return false;
+        };
+    })()`,
+    info:{...initial.info,version:'complex-regex-loops'},
+};
 
 async function docker(...args) {
     return (await run('docker',args,{timeout:40000,windowsHide:true})).stdout.trim();
@@ -136,6 +159,23 @@ function compare(label, legacy, rust) {
     console.log(JSON.stringify({stage:label,count:rust.count,booksSha256:rust.digest,indexHash:rust.hash}));
 }
 
+async function failedFilter(client, file, filter, error) {
+    const failures = async()=>{
+        const result = await run('docker',['logs',client.name],{timeout:7000});
+        return result.stderr.split('\n').filter(line=>line.includes('Index update failed:'));
+    };
+    const before = (await failures()).length;
+    await writeFilter(file,{...complex,filter});
+    await reindex(client);
+    const after = await until(failures,entries=>entries.length>before,'Rust did not report a failed filter',30);
+    assert.match(after.at(-1),error);
+    const status = await until(async()=>{
+        const response = await fetch(client.origin+'/api/index-status',{signal:AbortSignal.timeout(5000)});
+        return response.json();
+    },status=>status.ready && status.error,'Rust did not keep the previous catalogue ready after a rule error',10);
+    assert.equal(status.updating,false);
+}
+
 async function main(rustImage, rc15Image, inpx) {
     assert(rustImage && rc15Image && inpx,
         'Usage: node scripts/rust-inpx-filter-tests.js <rust-image> <rc15-image> <library.inpx>');
@@ -162,7 +202,7 @@ async function main(rustImage, rc15Image, inpx) {
         const beforeLegacy = await contents(legacy,'initial',join(directory,'rc15-initial-db'));
         console.log(JSON.stringify({stage:'rc15-ready',sourceSha256:sourceDigest,count:beforeLegacy.count}));
         await until(()=>docker('image','inspect',rustImage,'--format','{{.Id}}').catch(()=>''),Boolean,
-            'Rust image did not finish building',360);
+            'Rust image did not finish building',600);
         const rust = await start(names[1],rustImage,source,newRules);
         clients.push(rust);
         const beforeRust = await contents(rust,'initial');
@@ -184,20 +224,30 @@ async function main(rustImage, rc15Image, inpx) {
         const ids = new Map(beforeRust.rows.map(row=>[row._uid,row.id]));
         assert(afterRust.rows.every(row=>ids.get(row._uid)===row.id),'Retained Rust IDs changed during reindex');
 
-        await writeFilter(join(newRules,'filter.json'),{
-            ...changed,filter:'row => { const keep = row.del === 0; return keep; }',
-        });
-        await reindex(rust);
-        await until(async()=>{
-            const response = await fetch(rust.origin+'/api/index-status',{signal:AbortSignal.timeout(5000)});
-            return response.json();
-        },status=>typeof status.error==='string' && status.error.length>0,
-        'Rust did not report the unsupported filter');
-        const retained = await contents(rust,'reindexed');
-        assert.equal(retained.hash,afterRust.hash);
-        assert.equal(retained.digest,afterRust.digest);
+        await Promise.all([oldRules,newRules].map(dir=>writeFilter(join(dir,'filter.json'),complex)));
+        await Promise.all([legacy,rust].map(reindex));
+        const [complexLegacy,complexRust] = await Promise.all([
+            contents(legacy,complex.info.version,join(directory,'rc15-complex-db')),
+            contents(rust,complex.info.version),
+        ]);
+        compare('complex-live-reindex',complexLegacy,complexRust);
+        assert(complexRust.count<afterRust.count);
+        assert(complexRust.rows.every(row=>ids.get(row._uid)===row.id));
+
+        const filterFile = join(newRules,'filter.json');
+        for (const [rule,error] of [
+            ['row => /[/.test(row.title)',/Некорректное правило filter INPX/],
+            ['row => { while (true) {} }',/interrupted/i],
+            ['row => /^(a+)+$/.test("a".repeat(10000) + "!")',/interrupted/i],
+            ['row => process.version',/process.*not defined/i],
+        ]) {
+            await failedFilter(rust,filterFile,rule,error);
+            const retained = await contents(rust,complex.info.version);
+            assert.equal(retained.hash,complexRust.hash);
+            assert.equal(retained.digest,complexRust.digest);
+        }
         assert.equal(createHash('sha256').update(await fs.readFile(source)).digest('hex'),sourceDigest);
-        console.log('ok unsupported rule leaves the ready catalogue and original INPX intact');
+        console.log('ok syntax errors, loop and regex deadlines, and missing Node.js globals leave the ready catalogue and INPX intact');
     } catch (error) {
         for (const name of names) {
             const logs = await run('docker',['logs','--tail','32',name],{timeout:7000}).catch(()=>null);
