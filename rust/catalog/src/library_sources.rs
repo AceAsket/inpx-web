@@ -52,11 +52,6 @@ pub enum Kind {
 }
 
 pub fn resolve(options: Options) -> Result<Vec<Source>> {
-    let configured = if options.argument.is_empty() {
-        options.configured
-    } else {
-        parse_sources(&options.argument)?
-    };
     if let Some(remote) = options.remote {
         return Ok(vec![Source {
             kind: None,
@@ -69,6 +64,11 @@ pub fn resolve(options: Options) -> Result<Vec<Source>> {
             remote: true,
         }]);
     }
+    let configured = if options.argument.is_empty() {
+        options.configured
+    } else {
+        parse_sources(&options.argument)?
+    };
     let environment = parse_sources(&options.environment)?;
     let mut rows = if environment.is_empty() {
         configured

@@ -125,33 +125,38 @@ impl Index {
     pub(super) fn refresh(&self, sources: Arc<Vec<Source>>, force: bool) {
         match self.rebuild(sources, force) {
             Ok(false) => return,
-            Ok(true) => {}
-            Err(error) => {
-                eprintln!("Index update failed: {error}");
-                let catalogue = self.catalogue.read().expect("open catalogue");
-                let mut status = self.status.lock().expect("index status");
-                if let Some(catalogue) = catalogue.as_ref() {
-                    *status = self::status(catalogue, &self.sources());
-                } else {
-                    status["state"] = "database_unavailable".into();
-                    status["ready"] = false.into();
-                    status["dbLoaded"] = false.into();
-                    status["searchReady"] = false.into();
-                    status["updating"] = false.into();
-                }
-                status["error"] = "Не удалось обновить поисковый индекс".into();
-            }
+            Ok(true) => self.job.store(IDLE, Ordering::Release),
+            Err(error) => self.failed(error.as_ref(), "Не удалось обновить поисковый индекс"),
         }
-        self.job.store(IDLE, Ordering::Release);
     }
 
+    pub(super) fn failed(&self, error: &dyn std::error::Error, message: &str) {
+        eprintln!("Index update failed: {error}");
+        let catalogue = self.catalogue.read().expect("open catalogue");
+        let mut status = self.status.lock().expect("index status");
+        if let Some(catalogue) = catalogue.as_ref() {
+            *status = self::status(catalogue, &self.sources());
+        } else {
+            status["state"] = "database_unavailable".into();
+            status["ready"] = false.into();
+            status["dbLoaded"] = false.into();
+            status["searchReady"] = false.into();
+            status["updating"] = false.into();
+        }
+        status["error"] = message.into();
+        self.job.store(IDLE, Ordering::Release);
+    }
     fn rebuild(&self, sources: Arc<Vec<Source>>, force: bool) -> Result<bool> {
-        let (generation, hash) = {
+        let (generation, hash, store) = {
             let current = self.catalogue.read().expect("open catalogue");
             let current = current
                 .as_ref()
                 .ok_or("Каталог недоступен. Перезапустите сервер.")?;
-            (current.generation.clone(), current.inpx_hash.clone())
+            (
+                current.generation.clone(),
+                current.inpx_hash.clone(),
+                current.store.clone(),
+            )
         };
         if !force && self.files.source_hash(&sources)? == hash {
             self.status
@@ -173,10 +178,11 @@ impl Index {
             json!({"updating":true,"job":"","jobStep":0,"jobStepCount":3,"progress":0,
             "recsLoaded":0,"jobMessage":"Подготовка нового индекса","error":null}),
         );
-        let stage = self.files.prepare(&sources, &generation, |patch| {
+        let stage = self.files.prepare(&sources, &generation, &store, |patch| {
             self.progress(patch);
             Ok(())
         })?;
+        drop(store);
         self.progress(json!({"job":"publish","jobStep":3,"progress":0,"jobMessage":"Переключение поискового индекса"}));
         // Publication needs exclusive access while the store files are closed and replaced.
         let mut catalogue = self.catalogue.write().expect("open catalogue");

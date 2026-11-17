@@ -1053,6 +1053,15 @@ impl Socket {
                 );
             }
             let index = state.index.snapshot();
+            if let Some(source) = state
+                .index
+                .sources()
+                .iter()
+                .find(|source| source.kind != Some(inpx_catalog::library_sources::Kind::Folder))
+                && let Some(protocol) = config.get_mut("libraryProtocol")
+            {
+                protocol["sourceId"] = source.id.as_str().into();
+            }
             config.insert("librarySources".into(), index["sources"].clone());
             config.insert("dbConfig".into(), json!({
                 "inpxHash":index["inpxHash"],"inpxInfo":index["inpxInfo"],"stats":index["stats"],

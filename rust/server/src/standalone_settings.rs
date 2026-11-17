@@ -140,9 +140,7 @@ impl Settings {
     }
 
     pub(super) fn validate_backup(&self, config: &Value) -> Result<()> {
-        if !matches!(&config["remoteLib"], Value::Null | Value::Bool(false)) {
-            return Err("Удалённая библиотека требует совместимого режима".into());
-        }
+        super::remote::Remote::address(&config["remoteLib"])?;
         for key in ["server", "opds", "uiDefaults", "discovery"] {
             if config.get(key).is_some_and(|value| !value.is_object()) {
                 return Err(format!("Некорректное поле настроек {key}").into());
@@ -163,6 +161,9 @@ impl Settings {
     pub(super) fn sources(&self) -> Result<Arc<Vec<Source>>> {
         let config = self.snapshot();
         let mut options = self.source_options.clone();
+        if super::remote::Remote::address(&config["remoteLib"])?.is_some() {
+            options["remote"] = json!({"inpx":self.data.join("remote.inpx"),"libDir":self.data});
+        }
         options["configured"] = config["librarySources"]
             .as_array()
             .cloned()

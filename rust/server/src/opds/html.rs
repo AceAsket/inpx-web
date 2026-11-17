@@ -4,7 +4,7 @@ pub(super) fn escape(value: &str) -> String {
     output
 }
 
-pub(super) fn sanitize(mut value: &str) -> String {
+pub(crate) fn sanitize(mut value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     while let Some(offset) = value.find('<') {
         append_text(&mut output, &value[..offset], true);

@@ -54,7 +54,7 @@ struct Filter {
 }
 
 pub struct Catalogue {
-    pub store: BookStore,
+    pub store: Arc<BookStore>,
     pub(crate) lookup: LookupIndex,
     pub(crate) lookup_generation: String,
     pub generation: String,
@@ -79,7 +79,7 @@ pub struct CatalogueFiles {
 pub struct PreparedCatalogue(tempfile::TempDir);
 
 enum PreviousCatalogue<'a> {
-    Native(&'a str),
+    Native(&'a str, &'a BookStore),
     Jemba(&'a Path),
 }
 
@@ -208,11 +208,15 @@ impl CatalogueFiles {
         &self,
         sources: &[Source],
         previous_generation: &str,
+        previous_store: &BookStore,
         report: impl FnMut(Value) -> Result<()>,
     ) -> Result<PreparedCatalogue> {
         let stage = self.build(
             sources,
-            Some(PreviousCatalogue::Native(previous_generation)),
+            Some(PreviousCatalogue::Native(
+                previous_generation,
+                previous_store,
+            )),
             report,
         )?;
         stage.validate(self.low_memory)?;
@@ -329,7 +333,7 @@ impl Catalogue {
         let lease = CatalogueLease::open(directory)?;
         let (store, lookup, header) = Self::load(directory, low_memory)?;
         Ok(Self {
-            store,
+            store: Arc::new(store),
             lookup,
             lookup_generation: header.rust_lookup_generation,
             generation: header.rust_book_store_generation,
@@ -421,16 +425,21 @@ impl CatalogueFiles {
             exclude,
         );
         let incremental = previous_catalogue.is_some();
-        match previous_catalogue {
-            Some(PreviousCatalogue::Native(generation)) => {
+        let previous_store = match previous_catalogue {
+            Some(PreviousCatalogue::Native(generation, previous_store)) => {
                 let previous = self.data.join("db");
                 let patch = store::stage_patch(stage.path(), &previous)?;
                 request.set_previous(&previous, generation, patch);
+                Some(previous_store)
             }
-            Some(PreviousCatalogue::Jemba(book_table)) => request.set_previous_jemba(book_table),
-            None => {}
-        }
-        let summary = prepare_update_reporting(stage.path(), &request, &mut report)?;
+            Some(PreviousCatalogue::Jemba(book_table)) => {
+                request.set_previous_jemba(book_table);
+                None
+            }
+            None => None,
+        };
+        let summary =
+            prepare_update_reporting(stage.path(), &request, previous_store, &mut report)?;
         let sizes = summary.counts.name_counts;
         let series = lookup_staging::publish_sorted(
             &stage.path().join(LOOKUP),
@@ -595,9 +604,6 @@ fn collect(
     }
     let mut inputs = Vec::new();
     for (index, source) in sources.iter().enumerate() {
-        if source.remote {
-            return Err("Remote library synchronization requires the compatibility runtime".into());
-        }
         if index != 0 {
             hash.update(b"|");
         }

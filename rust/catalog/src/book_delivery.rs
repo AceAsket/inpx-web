@@ -10,7 +10,7 @@ use crate::book_cache::{self, Descriptor, Staging};
 use crate::book_metadata::Format;
 use crate::library_sources::Source;
 use crate::reader_document::{IMAGE_LIMIT, Image};
-use crate::{Result, book_names, book_source, crypto_support, fb2_prepare};
+use crate::{Result, book_names, book_source, crypto_support, fb2_prepare, jemba_identity};
 
 const ASSET_VERSION: &str = "rust-original-v1";
 const MAX_FB2: u64 = 500 * 1024 * 1024;
@@ -30,6 +30,14 @@ pub struct Book {
     pub folder: String,
     pub file: String,
     pub ext: String,
+    #[serde(default)]
+    insno: i64,
+    #[serde(default)]
+    libid: String,
+    #[serde(default)]
+    sourcelib: String,
+    #[serde(default, rename = "_legacyUid")]
+    legacy_uid: String,
     #[serde(default)]
     source_id: String,
     #[serde(default)]
@@ -76,6 +84,26 @@ impl Book {
 
     pub fn caption(&self, template: &str) -> Result<String> {
         book_names::render(self, template, &self.ext)
+    }
+
+    pub fn remote_ids(&self, source: &str) -> Result<(String, Option<&str>)> {
+        let physical = jemba_identity::physical_identity(
+            source,
+            &self.folder,
+            &self.file,
+            &self.ext,
+            self.insno,
+            &self.libid,
+            &self.sourcelib,
+        )?;
+        let primary = if physical.is_empty() {
+            self.uid.clone()
+        } else {
+            physical
+        };
+        let legacy = (!self.legacy_uid.is_empty() && self.legacy_uid != primary)
+            .then_some(self.legacy_uid.as_str());
+        Ok((primary, legacy))
     }
 }
 
@@ -188,10 +216,44 @@ pub fn prepare(directory: &Path, book: &Book, source: &Source) -> Result<Cached>
     if fb2 && fb2_prepare::normalize_bounded(&raw, MAX_FB2)?.is_none() {
         return Err(Failure::Unsupported.into());
     }
+    publish(directory, book, source, &raw)
+}
+
+pub fn too_large() -> Box<dyn std::error::Error> {
+    Failure::Limit.into()
+}
+
+pub fn prepare_remote(
+    directory: &Path,
+    book: &Book,
+    source: &Source,
+    download: impl FnOnce(&Path, &dyn Fn(&str) -> bool) -> Result<String>,
+) -> Result<Cached> {
+    let temporary = tempfile::Builder::new()
+        .prefix(".remote-")
+        .tempdir_in(directory)?;
+    let check = |hash: &str| {
+        cached(directory, hash)
+            .ok()
+            .flatten()
+            .is_some_and(|file| file.matches(book, source))
+    };
+    let hash = download(temporary.path(), &check)?;
+    let raw = temporary.path().join("book");
+    if !raw.exists() {
+        return cached(directory, &hash)?
+            .filter(|file| file.matches(book, source))
+            .ok_or_else(|| Failure::Missing.into());
+    }
+    publish(directory, book, source, &raw)
+}
+
+fn publish(directory: &Path, book: &Book, source: &Source, raw: &Path) -> Result<Cached> {
+    let extension = book.extension().ok_or(Failure::InvalidType)?;
     let mut descriptor = Descriptor {
         book_uid: book.uid.clone(),
         lib_folder: book.folder.clone(),
-        lib_file,
+        lib_file: format!("{}.{extension}", book.file),
         source_lib_dir: source
             .lib_dir
             .to_str()
@@ -203,7 +265,7 @@ pub fn prepare(directory: &Path, book: &Book, source: &Source) -> Result<Cached>
     };
     let token = crypto_support::hex(&crypto_support::random::<16>()?);
     let stage = Staging::new(directory, &token)?;
-    let published = book_cache::publish(&raw, &stage, descriptor.clone(), true)?;
+    let published = book_cache::publish(raw, &stage, descriptor.clone(), true)?;
     descriptor.size = published.size;
     Ok(Cached {
         hash: published.hash,

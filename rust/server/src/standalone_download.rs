@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{self, HeaderMap, HeaderValue};
@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use crate::download;
 use crate::http::{Body, body, error};
+use crate::standalone::remote::{Remote, Unavailable};
 use crate::standalone_access::Access;
 
 pub(crate) struct Downloads {
@@ -23,6 +24,7 @@ pub(crate) struct Downloads {
     cover_root: String,
     epub: bool,
     conversions: Option<Conversion>,
+    remote: Option<Arc<Remote>>,
 }
 
 pub(crate) struct Requested {
@@ -77,6 +79,7 @@ impl Downloads {
         template: String,
         epub: bool,
         conversions: Option<Conversion>,
+        remote: Option<Arc<Remote>>,
     ) -> CatalogueResult<Self> {
         let prefix = prefix.trim_end_matches('/');
         Ok(Self {
@@ -86,6 +89,7 @@ impl Downloads {
             cover_root: format!("{prefix}/cover/by-uid"),
             epub,
             conversions,
+            remote,
         })
     }
 
@@ -97,9 +101,26 @@ impl Downloads {
         &self.cache
     }
 
+    pub(super) fn remote(&self) -> Option<&Remote> {
+        self.remote.as_deref()
+    }
+
+    fn cache_book(&self, book: &Book, source: &Source) -> CatalogueResult<book_delivery::Cached> {
+        if source.remote {
+            let remote = self.remote().ok_or(Unavailable)?;
+            return book_delivery::prepare_remote(
+                &self.cache,
+                book,
+                source,
+                |directory, cached| remote.download(book, directory, cached),
+            );
+        }
+        book_delivery::prepare(&self.cache, book, source)
+    }
+
     pub(super) fn raw_book(&self, book: &Book, sources: &[Source]) -> CatalogueResult<PathBuf> {
         let source = book.source(sources).ok_or_else(missing_book)?;
-        let cached = book_delivery::prepare(&self.cache, book, source)?;
+        let cached = self.cache_book(book, source)?;
         cached.file(&self.cache, "", Representation::Raw)
     }
 
@@ -214,7 +235,7 @@ impl Downloads {
         } else {
             return Err(format!("Неподдерживаемый формат отправки: {format}").into());
         };
-        let cached = book_delivery::prepare(&self.cache, book, source)?;
+        let cached = self.cache_book(book, source)?;
         let mut name = book
             .filename(&self.template)?
             .replace(|ch: char| ch.is_ascii_control(), "_");
@@ -288,7 +309,7 @@ impl Downloads {
         let Some(source) = book.source(sources) else {
             return Ok(None);
         };
-        let cached = book_delivery::prepare(&self.cache, &book, source)?;
+        let cached = self.cache_book(&book, source)?;
         let extension = book.extension().ok_or("Invalid book extension")?;
         Ok(Some(json!({
             "link":format!("{}/{}", self.root, cached.hash),
@@ -355,7 +376,7 @@ impl Downloads {
         let Some(source) = book.source(sources) else {
             return Ok(None);
         };
-        let cached = book_delivery::prepare(&self.cache, &book, source)?;
+        let cached = self.cache_book(&book, source)?;
         if cached.size() > 32 * 1024 * 1024 {
             return Ok(Some(json!({"images":[],"limited":true,"omitted":1})));
         }
@@ -375,7 +396,7 @@ impl Downloads {
             return Err("Озвучка доступна для книг FB2.".into());
         }
         let source = book.source(sources).ok_or("404 Файл не найден")?;
-        let cached = book_delivery::prepare(&self.cache, &book, source)?;
+        let cached = self.cache_book(&book, source)?;
         let path = cached.reader_file(&self.cache, &book.ext)?;
         let format = if epub {
             "epub-reader-v2"
@@ -393,7 +414,7 @@ impl Downloads {
         let Some(source) = book.source(sources) else {
             return Ok(None);
         };
-        let cached = book_delivery::prepare(&self.cache, book, source)?;
+        let cached = self.cache_book(book, source)?;
         let path = cached.reader_file(&self.cache, &book.ext)?;
         Ok(Some((Document::read(&path)?, cached)))
     }
@@ -406,7 +427,7 @@ impl Downloads {
         let Some(source) = book.source(sources) else {
             return Ok(None);
         };
-        let cached = book_delivery::prepare(&self.cache, book, source)?;
+        let cached = self.cache_book(book, source)?;
         if cached.size() > 64 * 1024 * 1024 {
             return Ok(None);
         }
@@ -582,7 +603,7 @@ impl Downloads {
         let cached = match initial {
             Some(cached) if cached.matches(&book, source) => cached,
             _ => {
-                let cached = book_delivery::prepare(&self.cache, &book, source).map_err(failure)?;
+                let cached = self.cache_book(&book, source).map_err(failure)?;
                 if let Target::Hash(hash) = &request.target
                     && *hash != cached.hash
                 {
@@ -708,6 +729,9 @@ fn load_row(catalogue: &RwLock<Option<Catalogue>>, uid: &str) -> CatalogueResult
 }
 
 fn failure(error: Box<dyn std::error::Error>) -> StatusCode {
+    if error.is::<Unavailable>() {
+        return StatusCode::BAD_GATEWAY;
+    }
     if let Some(error) = error.downcast_ref::<ConversionError>() {
         return match error {
             ConversionError::Busy => StatusCode::SERVICE_UNAVAILABLE,

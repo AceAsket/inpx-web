@@ -55,6 +55,8 @@ mod metadata;
 mod metrics;
 #[path = "standalone_profile_http.rs"]
 mod profile_http;
+#[path = "standalone_remote.rs"]
+pub(crate) mod remote;
 #[path = "standalone_settings.rs"]
 mod settings;
 #[path = "standalone_smtp.rs"]
@@ -194,11 +196,9 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             .expect("application defaults")
             .extend(saved);
     }
-    if !matches!(&config["remoteLib"], Value::Null | Value::Bool(false)) {
-        return Err("Remote library synchronization requires the compatibility runtime".into());
-    }
     let prefix = text(&config["server"]["root"]).unwrap_or_default();
     let data = text(&config["dataDir"]).map_or(default_data, PathBuf::from);
+    let remote = remote::Remote::new(&config, &data)?.map(Arc::new);
     let kosync_enabled = std::env::var("INPX_KOSYNC_ENABLED").as_deref() != Ok("false");
     let epub_reader = epub_reader(&config);
     let conversion = Conversion::new(&config, exec_dir)?;
@@ -229,6 +229,19 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     )?;
     if fresh || needs_save {
         configuration::save(&file, &data, &config)?;
+    }
+    if let Some(remote) = remote.clone() {
+        std::fs::create_dir_all(&data)?;
+        tokio::task::spawn_blocking(move || -> std::result::Result<(), String> {
+            if let Err(error) = remote.sync_inpx() {
+                if !remote.has_inpx() {
+                    return Err(error.to_string());
+                }
+                eprintln!("Удалённая библиотека: {error}. Используется сохранённый INPX.");
+            }
+            Ok(())
+        })
+        .await??;
     }
 
     let sources = settings.sources()?;
@@ -300,6 +313,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         env("INPX_BOOK_FILENAME_TEMPLATE").unwrap_or_default(),
         epub_reader,
         conversion,
+        remote,
     )?;
     let listener = TcpListener::bind((host, port)).await?;
     let speech = speech::Speech::new(&data, prefix, &config)?;
@@ -358,7 +372,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         });
     }
     state.schedule_index_checks(
-        !created && !args.recreate,
+        !created && !args.recreate && state.downloads.remote().is_none(),
         index::interval(&config["inpxCheckInterval"]),
     );
     if state.access.library.protected() {
@@ -505,7 +519,7 @@ impl State {
     fn start_index_check(self: &Arc<Self>, force: bool) -> Option<tokio::task::JoinHandle<()>> {
         self.index.start(force).then(|| {
             let state = self.clone();
-            tokio::task::spawn_blocking(move || state.index.refresh(state.index.sources(), force))
+            tokio::task::spawn_blocking(move || state.refresh_index(state.index.sources(), force))
         })
     }
 
@@ -515,8 +529,21 @@ impl State {
             return Ok(json!({"started":false}));
         }
         let state = self.clone();
-        tokio::task::spawn_blocking(move || state.index.refresh(sources, true));
+        tokio::task::spawn_blocking(move || state.refresh_index(sources, true));
         Ok(json!({"started":true}))
+    }
+
+    fn refresh_index(&self, sources: Arc<Vec<inpx_catalog::library_sources::Source>>, force: bool) {
+        if let Some(remote) = self.downloads.remote()
+            && let Err(error) = remote.sync_inpx()
+        {
+            self.index.failed(
+                error.as_ref(),
+                "Не удалось обновить INPX удалённой библиотеки",
+            );
+            return;
+        }
+        self.index.refresh(sources, force);
     }
 
     fn schedule_index_checks(self: &Arc<Self>, on_start: bool, interval: Option<Duration>) {

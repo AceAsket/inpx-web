@@ -4,7 +4,7 @@ use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{Engine, engine::general_purpose::STANDARD, read::DecoderReader};
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
@@ -96,6 +96,42 @@ pub(crate) fn rating_range(value: &str) -> Result<Option<(u64, u64)>> {
 impl Catalogue {
     pub fn publish_rating_filter(&self, ratings: Arc<RatingIndex>) {
         *self.rating_filter.lock().expect("catalogue rating filter") = Some(ratings);
+    }
+
+    pub fn build_remote_rating_index(
+        &self,
+        source: &str,
+        revision: String,
+        counts: &HashMap<String, u64>,
+        mut progress: impl FnMut(u64),
+    ) -> Result<RatingIndex> {
+        let mut entries = Vec::new();
+        let mut done = 0;
+        if !counts.is_empty() {
+            self.store
+                .visit_search_rows(&self.generation, None, |id, bytes| {
+                    let book: Book = serde_json::from_slice(bytes)?;
+                    let (primary, legacy) = book.remote_ids(source)?;
+                    if let Some(&count) = counts
+                        .get(&primary)
+                        .or_else(|| legacy.and_then(|uid| counts.get(uid)))
+                    {
+                        entries.push(RatingEntry {
+                            count,
+                            id,
+                            uid: book.uid,
+                        });
+                    }
+                    done += 1;
+                    if done % 5000 == 0 {
+                        progress(done);
+                    }
+                    Ok(())
+                })?;
+        }
+        entries.sort_unstable_by_key(|row| (row.count, row.id));
+        progress(done);
+        Ok(RatingIndex { revision, entries })
     }
 
     pub(crate) fn rating_candidates(&self, (min, max): (u64, u64)) -> Result<HashSet<u32>> {
@@ -653,12 +689,50 @@ pub struct InpxExchange {
     transfer: Mutex<()>,
 }
 
+pub fn install_remote_inpx(path: &Path, encoded: &str, limit: u64) -> Result<()> {
+    if encoded.is_empty() || encoded.len() as u64 > limit.div_ceil(3) * 4 {
+        return Err("Недопустимый размер удалённого INPX".into());
+    }
+    let old = crate::atomic_file::current_stamp(path)?;
+    let parent = path.parent().ok_or("Каталог удалённого INPX недоступен")?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    let mut decoded = DecoderReader::new(encoded.as_bytes(), &STANDARD).take(limit + 1);
+    let bytes = io::copy(&mut decoded, &mut file)?;
+    std::io::Write::flush(&mut file)?;
+    if bytes == 0 || bytes > limit {
+        return Err("Недопустимый размер удалённого INPX".into());
+    }
+    let archive = zip::ZipArchive::new(file.reopen()?)?;
+    if !archive
+        .file_names()
+        .any(|name| name.to_ascii_lowercase().ends_with(".inp"))
+    {
+        return Err("Удалённый INPX не содержит записей каталога".into());
+    }
+    drop(archive);
+    if crate::atomic_file::publish(file, path, old.as_deref())?.is_none() {
+        return Err("Локальный INPX изменился во время синхронизации".into());
+    }
+    Ok(())
+}
+
 impl InpxExchange {
     pub fn new(file: PathBuf) -> Self {
         Self {
             file,
             revision: Mutex::default(),
             transfer: Mutex::default(),
+        }
+    }
+
+    pub fn current_hash(&self) -> Result<String> {
+        match File::open(&self.file) {
+            Ok(mut file) => {
+                let current = stamp(&file)?;
+                self.hash(&mut file, &current)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+            Err(error) => Err(error.into()),
         }
     }
 

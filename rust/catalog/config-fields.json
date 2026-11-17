@@ -68,6 +68,7 @@
         "conversionQueueTimeoutMs",
         "allowRemoteLib",
         "remoteLib",
+        "maxPayloadSize",
         "server",
         "opds",
         "opdsFeedsFile",

@@ -1,5 +1,5 @@
 mod atom;
-mod html;
+pub(crate) mod html;
 pub(crate) mod response;
 pub(crate) mod standalone;
 mod urls;

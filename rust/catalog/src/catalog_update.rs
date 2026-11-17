@@ -619,7 +619,7 @@ pub fn prepare_update<'a>(
     request: &'a UpdateRequest,
     mut output: impl Write,
 ) -> Result<UpdateSummary<'a>> {
-    prepare_update_reporting(directory, request, |value| {
+    prepare_update_reporting(directory, request, None, |value| {
         serde_json::to_writer(&mut output, &value)?;
         output.write_all(b"\n")?;
         output.flush()?;
@@ -630,6 +630,7 @@ pub fn prepare_update<'a>(
 pub(crate) fn prepare_update_reporting<'a>(
     directory: &Path,
     request: &'a UpdateRequest,
+    previous_store: Option<&BookStore>,
     mut output: impl FnMut(serde_json::Value) -> Result<()>,
 ) -> Result<UpdateSummary<'a>> {
     if request.sources.is_empty() {
@@ -663,10 +664,17 @@ pub(crate) fn prepare_update_reporting<'a>(
             .ok_or("missing previous catalogue generation")?;
         let order = source_order(path, generation)?;
         previous = Previous::new(order.len());
-        let store = if request.low_memory {
-            BookStore::open_low_memory(path)?
-        } else {
-            BookStore::open(path)?
+        let opened;
+        let store = match previous_store {
+            Some(store) => store,
+            None => {
+                opened = if request.low_memory {
+                    BookStore::open_low_memory(path)?
+                } else {
+                    BookStore::open(path)?
+                };
+                &opened
+            }
         };
         store.visit(|id, raw| previous.add(id, &serde_json::from_slice(raw)?))?;
         if previous.books.len() != order.len() {

@@ -88,7 +88,11 @@ impl Exchange {
                 .browser_author_name(id)?
                 .unwrap_or_default();
         }
-        Ok(json!({"authorInfo":author_info(&name,&state.index.sources())?}))
+        let info = match state.downloads.remote() {
+            Some(remote) => remote.author(&name)?,
+            None => author_info(&name, &state.index.sources())?,
+        };
+        Ok(json!({"authorInfo":info}))
     }
 
     pub(super) fn reviews(&self, state: &State, uid: &str) -> Result<Value> {
@@ -96,6 +100,11 @@ impl Exchange {
             return Err("bookUid is empty".into());
         }
         let book = load_book(&state.index.catalogue, uid)?.ok_or("404 Файл не найден")?;
+        if let Some(remote) = state.downloads.remote() {
+            return Ok(
+                json!({"reviews":remote.reviews(&book)?,"libraryRating":remote.rating(&book)?}),
+            );
+        }
         let reviews = book
             .source(&state.index.sources())
             .map(|source| self.media.reviews(&book, &source.lib_dir))
@@ -153,13 +162,19 @@ impl Exchange {
         let book = load_book(&state.index.catalogue, text(request, "bookUid"))?
             .ok_or("Книга не найдена")?;
         match kind {
-            "rating" => Ok(json!({"rating":self.rating(&book,&state.index.sources())?})),
+            "rating" => Ok(json!({"rating":match state.downloads.remote() {
+                Some(remote) => remote.rating(&book)?,
+                None => self.rating(&book,&state.index.sources())?,
+            }})),
             "reviews" => {
-                let reviews = book
-                    .source(&state.index.sources())
-                    .map(|source| self.media.reviews(&book, &source.lib_dir))
-                    .transpose()?
-                    .unwrap_or_default();
+                let reviews = match state.downloads.remote() {
+                    Some(remote) => remote.reviews(&book)?,
+                    None => book
+                        .source(&state.index.sources())
+                        .map(|source| self.media.reviews(&book, &source.lib_dir))
+                        .transpose()?
+                        .unwrap_or_default(),
+                };
                 let items: Vec<_> = reviews.iter().skip(cursor).take(10).map(|review| json!({
                     "name":clip(text(review,"name"),300),"time":clip(text(review,"time"),100),"text":clip(text(review,"text"),16000),
                 })).collect();
@@ -239,6 +254,36 @@ impl Exchange {
     }
 
     fn load_rating_index(&self, state: &State) -> Result<Arc<RatingIndex>> {
+        if let Some(remote) = state.downloads.remote() {
+            let ratings =
+                remote.ratings(|done| self.ratings.lock().expect("rating status").done = done)?;
+            let catalogue = state.index.catalogue.read().expect("open catalogue");
+            let catalogue = catalogue.as_ref().ok_or(UNAVAILABLE)?;
+            let revision = format!(
+                "{}:{}:{}",
+                catalogue.generation, ratings.source, ratings.revision
+            );
+            let cached = {
+                let mut tracker = self.ratings.lock().expect("rating status");
+                tracker.done = 0;
+                tracker.total = catalogue.stats["bookCountAll"].as_u64();
+                tracker
+                    .index
+                    .as_ref()
+                    .filter(|index| index.revision == revision)
+                    .cloned()
+            };
+            let index = match cached {
+                Some(index) => index,
+                None => Arc::new(catalogue.build_remote_rating_index(
+                    &ratings.source,
+                    revision,
+                    &ratings.counts,
+                    |done| self.ratings.lock().expect("rating status").done = done,
+                )?),
+            };
+            return Ok(self.publish_index(catalogue, index));
+        }
         let active = state.index.sources();
         let sources: HashMap<_, _> = active
             .iter()
@@ -280,12 +325,20 @@ impl Exchange {
         let index = Arc::new(catalogue.build_rating_index(&sources, revision, |done| {
             self.ratings.lock().expect("rating status").done = done;
         })?);
+        Ok(self.publish_index(catalogue, index))
+    }
+
+    fn publish_index(
+        &self,
+        catalogue: &inpx_catalog::standalone_catalogue::Catalogue,
+        index: Arc<RatingIndex>,
+    ) -> Arc<RatingIndex> {
         catalogue.publish_rating_filter(index.clone());
         let mut tracker = self.ratings.lock().expect("rating status");
         tracker.index = Some(index.clone());
         tracker.generation = catalogue.generation.clone();
         tracker.error.clear();
-        Ok(index)
+        index
     }
 
     pub(super) fn prepare_rating_filter(&self, state: &State) -> Result<()> {

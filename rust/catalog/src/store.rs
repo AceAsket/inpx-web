@@ -49,7 +49,26 @@ pub(crate) fn stage_patch(directory: &Path, previous: &Path) -> Result<bool> {
         return Ok(false);
     }
     let target = directory.join(BASE_FILE);
-    if fs::hard_link(&base, &target).is_err() {
+    let linked = if fs::hard_link(&base, &target).is_ok() {
+        match open_read(&target, REDUCED_CACHE_BYTES) {
+            Ok(_) => true,
+            Err(error)
+                if error
+                    .downcast_ref::<redb::DatabaseError>()
+                    .is_some_and(|error| {
+                        matches!(error, redb::DatabaseError::DatabaseAlreadyOpen)
+                    }) =>
+            {
+                // Some mounted filesystems refuse a second reader of the same inode.
+                fs::remove_file(&target)?;
+                false
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        false
+    };
+    if !linked {
         fs::copy(&base, &target)?;
         fs::OpenOptions::new()
             .write(true)
