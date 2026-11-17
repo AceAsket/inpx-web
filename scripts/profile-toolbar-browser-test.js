@@ -459,6 +459,7 @@ function profileRequest(page, payload, session) {
         const buttonTops = await listActions.evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().top));
         assert.equal(buttonTops.length, 3);
         assert(Math.max(...buttonTops) - Math.min(...buttonTops) <= 1, 'Mobile list actions stay in one row');
+        await noOverflow(current.locator('.profile-reading-row'));
         const listRow = current.locator('.profile-list-preview-item');
         await listRow.getByRole('checkbox', {name:'Прочитано',exact:true}).waitFor();
         await listRow.getByRole('checkbox', {name:'Прочитано',exact:true}).click();

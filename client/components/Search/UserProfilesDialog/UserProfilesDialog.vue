@@ -231,7 +231,7 @@
                                                 <span v-if="Number(list.readCount || 0) > 0">{{ list.readCount }}/{{ list.bookCount }} прочитано</span>
                                             </div>
                                         </div>
-                                        <div class="reading-progress-actions profile-reading-actions">
+                                        <div class="reading-progress-actions profile-reading-actions profile-list-actions">
                                             <q-btn
                                                 flat dense no-caps color="primary"
                                                 :icon="isReadingListExpanded(list.id) ? 'la la-angle-up' : 'la la-angle-down'"
@@ -1754,6 +1754,7 @@ export default vueComponent(UserProfilesDialog);
 }
 
 @media (max-width: 520px) {
+    .profile-list-actions {flex-wrap: nowrap; gap: 2px;}
     .profile-list-compact-action {min-width: 36px; min-height: 36px;}
     .profile-list-compact-action :deep(.block) {display: none !important;}
     .profile-list-compact-action :deep(.q-icon) {margin: 0;}
