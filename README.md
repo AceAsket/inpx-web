@@ -270,7 +270,7 @@ docker run -d \
 | Переменная | Действие |
 | --- | --- |
 | `INPX_BOOK_FILENAME_TEMPLATE` | Имя скачиваемого файла, файла в ZIP-подборке и вложения при отправке книги. Расширение добавляется автоматически. |
-| `INPX_BOOK_TITLE_TEMPLATE` | Заголовок внутри EPUB/EPUB3/KEPUB/KFX/AZW8 при конвертации FB2 через fbc; именно его может показывать Kindle. |
+| `INPX_BOOK_TITLE_TEMPLATE` | Шаблон заголовка в метаданных EPUB, EPUB3, KEPUB, KFX, AZW8 и MOBI при конвертации FB2 через fbc. |
 
 Например, получить `02 - Доктор Гарин.epub` и заголовок `02 - Доктор Гарин` внутри книги:
 
@@ -1113,6 +1113,15 @@ Docker-образ с Rust-сервером собирается из того ж
 
 ```sh
 docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-rust -t inpx-web:rust .
+```
+
+В образ входят fb2cng, Kindling и MuPDF. Из FB2 и EPUB можно получить MOBI
+с разделами MOBI7 и KF8 или PDF. Для выбора PDF через Calibre соберите вариант
+с Calibre и укажите в `config.json` путь `converterPaths.calibre` со значением
+`/usr/bin/ebook-convert`.
+
+```sh
+docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-calibre -t inpx-web:rust-calibre .
 ```
 
 <a id="native_run" />

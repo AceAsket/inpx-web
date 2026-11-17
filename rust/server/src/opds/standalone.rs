@@ -346,7 +346,7 @@ impl Opds {
             template_scoped: page.profile.is_some(),
             conversion: !self.formats.is_empty(),
             formats: Some(self.formats.clone()),
-            mobi: false,
+            mobi: self.formats.iter().any(|format| format == "mobi"),
             preference: page
                 .profile
                 .map(|profile| profile.preferred_format.clone())

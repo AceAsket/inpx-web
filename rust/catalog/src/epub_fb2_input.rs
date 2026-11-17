@@ -410,7 +410,11 @@ pub(crate) struct Source<R: Read + Seek> {
 }
 
 impl<R: Read + Seek> Source<R> {
-    pub(crate) fn open(mut reader: R) -> Result<Self> {
+    pub(crate) fn open(reader: R) -> Result<Self> {
+        Self::open_limited(reader, 256 * MB)
+    }
+
+    pub(crate) fn open_limited(mut reader: R, expanded_limit: u64) -> Result<Self> {
         let expected = archive_count(&mut reader)?;
         if expected.is_some_and(|count| count > 10000) {
             return Err(invalid("слишком много файлов или повторяющиеся имена"));
@@ -440,7 +444,7 @@ impl<R: Read + Seek> Source<R> {
                 return Err(invalid("символическая ссылка или зашифрованный архив"));
             }
             expanded += entry.size().min(64 * MB + 1);
-            if entry.size() > 64 * MB || expanded > 256 * MB {
+            if entry.size() > 64 * MB || expanded > expanded_limit {
                 return Err(invalid("превышен распакованный размер книги"));
             }
             if !entry.is_dir() {
@@ -448,6 +452,10 @@ impl<R: Read + Seek> Source<R> {
             }
         }
         Ok(Self { zip, files })
+    }
+
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.files.keys().map(String::as_str)
     }
 
     pub(crate) fn has(&self, name: &str) -> bool {

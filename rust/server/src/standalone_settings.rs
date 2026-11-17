@@ -24,7 +24,8 @@ const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch b
     metricsEnabled metricsPath metricsExemptAuth dbCacheSize dbCacheBudgetMb queryCacheMemMb queryCacheDiskMb
     maxFilesDirSize bookCacheSize coverCacheSize queryCacheEnabled queryCacheMemSize queryCacheDiskSize
     cacheCleanInterval cacheCleanSchedule cacheCleanTargetRatio adminEventLogEnabled adminEventLogSize inpxCheckInterval
-    lowMemoryMode fullOptimization converterPaths fb2cngArgs server opds telegramShareEnabled telegramBotEnabled
+    lowMemoryMode fullOptimization converterPaths fb2cngArgs fb2cngConfigPath bookTitleTemplate kindlingPath mobiEnabled
+    server opds telegramShareEnabled telegramBotEnabled
     telegramIpFamily telegramProxyMode telegramProxyProtocol telegramProxyHost telegramProxyPort telegramProxyUsername
     telegramChatId telegramCaptionTemplate emailShareEnabled smtpHost smtpPort smtpSecure smtpUser emailFrom emailTo
     discovery uiDefaults";

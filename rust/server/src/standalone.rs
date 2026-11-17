@@ -16,7 +16,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use inpx_catalog::opds_access::Resource;
 use inpx_catalog::standalone_catalogue::CatalogueFiles;
 use inpx_catalog::{Result, profile_bootstrap, web_app};
-use inpx_catalog::{book_conversion::Fb2cng, configuration};
+use inpx_catalog::{book_conversion::Conversion, configuration};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
@@ -201,11 +201,11 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     let data = text(&config["dataDir"]).map_or(default_data, PathBuf::from);
     let kosync_enabled = std::env::var("INPX_KOSYNC_ENABLED").as_deref() != Ok("false");
     let epub_reader = epub_reader(&config);
-    let fb2cng = Fb2cng::new(&config, exec_dir)?;
+    let conversion = Conversion::new(&config, exec_dir)?;
     let conversion_formats: Vec<_> = epub_reader
         .then_some("fb2")
         .into_iter()
-        .chain(fb2cng.iter().flat_map(Fb2cng::formats))
+        .chain(conversion.iter().flat_map(Conversion::formats))
         .collect();
     let settings = settings::Settings::new(
         file.clone(),
@@ -299,7 +299,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         prefix,
         env("INPX_BOOK_FILENAME_TEMPLATE").unwrap_or_default(),
         epub_reader,
-        fb2cng,
+        conversion,
     )?;
     let listener = TcpListener::bind((host, port)).await?;
     let speech = speech::Speech::new(&data, prefix, &config)?;

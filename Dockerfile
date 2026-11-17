@@ -149,7 +149,7 @@ LABEL org.opencontainers.image.title="inpx-web-calibre" \
       org.opencontainers.image.source="https://github.com/AceAsket/inpx-web"
 
 ENV QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox
-ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw8,pdf
+ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw8,mobi,pdf
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -178,11 +178,8 @@ LABEL org.opencontainers.image.title="inpx-web-lite" \
 ENV INPX_ENABLE_CONVERSION=false
 ENV INPX_CONVERSION_FORMATS=
 
-FROM runtime-base AS runtime-rust
+FROM runtime AS runtime-rust
 
-ENV INPX_ENABLE_CONVERSION=true
-ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw8
-
-COPY --from=fb2cng-tools /fb2cng-runtime/fbc /usr/local/bin/fbc
+ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw8,mobi,pdf
 
 FROM runtime AS final

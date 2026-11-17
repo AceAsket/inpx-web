@@ -59,7 +59,7 @@ async function checkCoverDownload(url, uid, nativeJxlCover) {
     console.log(nativeJxlCover ? 'ok packaged native JXL cover over HTTP without djxl' : 'ok packaged embedded PNG cover over HTTP');
 }
 
-async function createFixture(dir, {nativeJxlCover = false} = {}) {
+async function createFixture(dir, {nativeJxlCover = false, extraEpubs = []} = {}) {
     await fs.ensureDir(dir);
     const zip = new yazl.ZipFile();
     const output = fs.createWriteStream(path.join(dir, 'smoke.inpx'));
@@ -84,6 +84,13 @@ async function createFixture(dir, {nativeJxlCover = false} = {}) {
         books.addBuffer(epubData, '2.epub');
         const epubRow = [...row]; epubRow[2] = 'EPUB original'; epubRow[5] = '2'; epubRow[6] = String(epubData.length); epubRow[7] = '2'; epubRow[9] = 'epub'; epubRow[11] = 'ru';
         rows += epubRow.join('\x04') + '\n';
+    }
+    for (const [index, [title, data]] of extraEpubs.entries()) {
+        const id = String(index + 3);
+        books.addBuffer(data,id+'.epub');
+        const entry = [...row];
+        entry[2] = title; entry[5] = id; entry[6] = String(data.length); entry[7] = id; entry[9] = 'epub';
+        rows += entry.join('\x04') + '\n';
     }
     books.end(); await bookDone;
     if (nativeJxlCover) {

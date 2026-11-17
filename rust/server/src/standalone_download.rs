@@ -5,7 +5,7 @@ use hyper::body::{Bytes, Incoming};
 use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::{Request, Response, StatusCode};
 use inpx_catalog::Result as CatalogueResult;
-use inpx_catalog::book_conversion::{Fb2cng, Format as Converted};
+use inpx_catalog::book_conversion::{Conversion, Error as ConversionError, Format as Converted};
 use inpx_catalog::book_delivery::{self, Book, DownloadError, Representation};
 use inpx_catalog::library_sources::Source;
 use inpx_catalog::reader_document::{Document, Image};
@@ -22,7 +22,7 @@ pub(crate) struct Downloads {
     template: String,
     cover_root: String,
     epub: bool,
-    fb2cng: Option<Fb2cng>,
+    conversions: Option<Conversion>,
 }
 
 pub(crate) struct Requested {
@@ -76,7 +76,7 @@ impl Downloads {
         prefix: &str,
         template: String,
         epub: bool,
-        fb2cng: Option<Fb2cng>,
+        conversions: Option<Conversion>,
     ) -> CatalogueResult<Self> {
         let prefix = prefix.trim_end_matches('/');
         Ok(Self {
@@ -85,7 +85,7 @@ impl Downloads {
             template,
             cover_root: format!("{prefix}/cover/by-uid"),
             epub,
-            fb2cng,
+            conversions,
         })
     }
 
@@ -204,7 +204,10 @@ impl Downloads {
             || format.eq_ignore_ascii_case(ext)
         {
             Format::Raw
-        } else if let Some(variant) = self.conversion(format).filter(|_| convertible(ext)) {
+        } else if let Some(variant) = self
+            .conversion(format)
+            .filter(|variant| self.supports(*variant, ext))
+        {
             variant
         } else if explicit.is_empty() {
             Format::Raw
@@ -218,7 +221,7 @@ impl Downloads {
         if let Some(ext) = variant.extension() {
             name = replace_extension(&name, ext);
         }
-        let mut file = self.variant(&cached, ext, &name, Some(variant), false)?;
+        let mut file = self.variant(book, &cached, &name, Some(variant), false)?;
         if archive {
             file = book_delivery::archive_attachment(&self.cache, &file, &name)?;
             name.push_str(".zip");
@@ -230,25 +233,43 @@ impl Downloads {
         if name == "fb2" && self.epub {
             Some(Format::Fb2)
         } else {
-            self.fb2cng.as_ref()?.format(name).map(Format::Converted)
+            self.conversions
+                .as_ref()?
+                .format(name)
+                .map(Format::Converted)
+        }
+    }
+
+    fn supports(&self, format: Format, extension: &str) -> bool {
+        match format {
+            Format::Fb2 => {
+                self.epub
+                    && (extension.eq_ignore_ascii_case("fb2")
+                        || extension.eq_ignore_ascii_case("epub"))
+            }
+            Format::Converted(format) => self
+                .conversions
+                .as_ref()
+                .is_some_and(|conversions| conversions.supports(format, extension)),
+            Format::Raw | Format::Zip => true,
         }
     }
 
     fn variant(
         &self,
+        book: &Book,
         cached: &book_delivery::Cached,
-        source_ext: &str,
         name: &str,
         variant: Option<Format>,
         compressed: bool,
     ) -> CatalogueResult<PathBuf> {
         match variant {
-            Some(Format::Fb2) => cached.reader_file(&self.cache, source_ext),
+            Some(Format::Fb2) => cached.reader_file(&self.cache, &book.ext),
             Some(Format::Converted(format)) => self
-                .fb2cng
+                .conversions
                 .as_ref()
                 .ok_or("Конвертер недоступен")?
-                .convert(&self.cache, cached, source_ext, format),
+                .convert(&self.cache, book, cached, format),
             Some(Format::Zip) => cached.file(&self.cache, name, Representation::Zip),
             _ if compressed => cached.file(&self.cache, name, Representation::Gzip),
             _ => cached.file(&self.cache, name, Representation::Raw),
@@ -552,7 +573,10 @@ impl Downloads {
             .map_err(failure)?
             .ok_or(StatusCode::NOT_FOUND)?;
         let source = book.source(sources).ok_or(StatusCode::NOT_FOUND)?;
-        if request.format.and_then(Format::extension).is_some() && !convertible(&book.ext) {
+        if request
+            .format
+            .is_some_and(|format| !self.supports(format, &book.ext))
+        {
             return Err(StatusCode::NOT_FOUND);
         }
         let cached = match initial {
@@ -594,7 +618,7 @@ impl Downloads {
         }
         let compressed = request.format.is_none() && request.gzip;
         let path = self
-            .variant(&cached, &book.ext, &name, request.format, compressed)
+            .variant(&book, &cached, &name, request.format, compressed)
             .map_err(failure)?;
         let mut headers = HeaderMap::new();
         let media_type = if request.format == Some(Format::Zip) {
@@ -648,10 +672,6 @@ fn missing_book() -> std::io::Error {
     std::io::ErrorKind::NotFound.into()
 }
 
-fn convertible(ext: &str) -> bool {
-    ext.eq_ignore_ascii_case("fb2") || ext.eq_ignore_ascii_case("epub")
-}
-
 pub(crate) async fn respond(
     prepared: Result<Prepared, StatusCode>,
     conditions: HeaderMap,
@@ -688,6 +708,12 @@ fn load_row(catalogue: &RwLock<Option<Catalogue>>, uid: &str) -> CatalogueResult
 }
 
 fn failure(error: Box<dyn std::error::Error>) -> StatusCode {
+    if let Some(error) = error.downcast_ref::<ConversionError>() {
+        return match error {
+            ConversionError::Busy => StatusCode::SERVICE_UNAVAILABLE,
+            ConversionError::TimedOut => StatusCode::GATEWAY_TIMEOUT,
+        };
+    }
     match book_delivery::classify(error.as_ref()) {
         DownloadError::Missing => StatusCode::NOT_FOUND,
         DownloadError::Limit => StatusCode::PAYLOAD_TOO_LARGE,
