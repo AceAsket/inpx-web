@@ -2,7 +2,7 @@ name: Validate development changes
 
 on:
   push:
-    branches: [develop, master, main]
+    branches: [develop, master, main, rust]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -23,7 +23,7 @@ jobs:
     name: Rust reader and catalog
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.browser_only }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt --component clippy
@@ -201,9 +201,50 @@ jobs:
       - name: Test real image converters
         if: matrix.target == 'linux'
         run: bash scripts/test-image-converters.sh inpx-web:ci-full
-      - name: Build and run the standalone Rust image
-        if: matrix.target == 'linux'
+  rc15-compatibility:
+    name: Rust container and RC15 compatibility
+    if: github.event_name != 'workflow_dispatch' || !inputs.browser_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      RC15_IMAGE: aceasket/inpx-web-7z:1.8.3-rc.15@sha256:3c6da61758971eedbc130d3e52e3147254c01596d7c63aa6f1fb8764cb9da2f5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.62.1
+      - run: npx playwright install --with-deps chromium
+      - name: Prepare release images and deterministic INPX
         run: |
+          docker pull "$RC15_IMAGE"
           docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-rust -t inpx-web:ci-rust .
+          mkdir -p "$RUNNER_TEMP/parity/library" "$RUNNER_TEMP/parity/results"
+          node scripts/rc15-ci-fixture.js "$RUNNER_TEMP/parity/library/library.inpx"
+      - name: Compare catalogues and measure indexing and search
+        shell: bash
+        run: |
+          echo '| Operation | RC15 | Rust | Unit |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---:|---:|---|' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/rust-inpx-filter-tests.js inpx-web:ci-rust "$RC15_IMAGE" "$RUNNER_TEMP/parity/library/library.inpx" --ci-fixture 2>&1 | tee "$RUNNER_TEMP/parity/results/catalogue.log"
+      - name: Compare legacy HTTP routes in Chromium
+        shell: bash
+        run: node scripts/rust-legacy-http-tests.js inpx-web:ci-rust "$RC15_IMAGE" 2>&1 | tee "$RUNNER_TEMP/parity/results/http.log"
+      - name: Verify and measure RC15 upgrade and rollback
+        shell: bash
+        run: |
+          echo '| Operation | RC15 | Rust | Unit |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---:|---:|---|' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/rust-upgrade-rollback-tests.js inpx-web:ci-rust "$RC15_IMAGE" "$RUNNER_TEMP/parity/library/library.inpx" --ci-fixture 2>&1 | tee "$RUNNER_TEMP/parity/results/upgrade.log"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: rc15-compatibility-results
+          path: ${{ runner.temp }}/parity/results/*.log
+          if-no-files-found: ignore
+      - name: Test packaged Rust application and converters
+        run: |
           node scripts/binary-smoke-test.js --image inpx-web:ci-rust --rust
           node scripts/rust-conversion-tests.js inpx-web:ci-rust

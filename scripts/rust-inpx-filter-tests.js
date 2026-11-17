@@ -70,12 +70,13 @@ async function writeFilter(file, rule) {
     await fs.rename(file+'.next',file);
 }
 
-async function start(name, image, source, rules, snapshotDirectory) {
+async function start(name, image, source, rules) {
+    const started = performance.now();
     await docker('run','-d','--name',name,'--tmpfs','/data','-p','127.0.0.1::12380',
         '-e','INPX_AUTH_MODE=local','-e','INPX_REQUIRE_AUTH=false','-e','INPX_ALLOW_ANONYMOUS_ACCESS=true',
         '--mount','type=bind,source='+dirname(source)+',target=/library,readonly',
         '--mount','type=bind,source='+rules+',target=/rules,readonly',
-        ...(snapshotDirectory?['--mount','type=bind,source='+snapshotDirectory+',target=/snapshots']:[]),image,
+        image,
         'sh','-ec','cp /rules/config.json /data/config.json; exec inpx-web "$@"','test',
         '--data-dir=/data','--host=0.0.0.0','--port=12380','--lib-dir=/library',
         '--inpx=/library/'+basename(source),'--admin-password='+password,'--unsafe-filter');
@@ -87,12 +88,14 @@ async function start(name, image, source, rules, snapshotDirectory) {
             return response.ok;
         } catch { return false; }
     },Boolean,name+' did not become ready');
+    const readySeconds = secondsSince(started);
     const client = await connect(origin);
     const identity = await signIn(client,'admin',password);
     return {
         close:client.close,
         name,
         origin,
+        readySeconds,
         send:(action, payload)=>client.send(action,{...identity,...payload}),
     };
 }
@@ -108,7 +111,11 @@ async function config(client, version) {
 
 async function legacyRows(name, directory) {
     await fs.mkdir(directory);
-    await docker('exec',name,'cp','-R','/data/db/book','/snapshots/'+basename(directory)+'/book');
+    // docker cp cannot see a tmpfs on every engine. Stage the closed table
+    // files in the container layer and extract them as the host test user.
+    const snapshot = await docker('exec',name,'mktemp','-d');
+    await docker('exec',name,'cp','-R','/data/db/book',snapshot+'/book');
+    await docker('cp',name+':'+snapshot+'/book',join(directory,'book'));
     const db = new JembaDb();
     try {
         await db.lock({dbPath:directory,softLock:true});
@@ -130,8 +137,8 @@ async function rustRows(name, fields) {
     return reply.result.rows;
 }
 
-async function contents(client, version, legacyDirectory) {
-    const db = await config(client,version);
+async function contents(client, version, legacyDirectory, db = undefined) {
+    db ??= await config(client,version);
     assert.equal(db.inpxInfo.collection,initial.info.collection);
     const expected = db.stats.bookCount;
     assert(expected>0 && expected<1000,'Expected a small filtered catalogue, got '+expected);
@@ -153,8 +160,42 @@ async function reindex(client) {
     assert.equal(result.started,true);
 }
 
-function compare(label, legacy, rust) {
+function secondsSince(start) {
+    return Math.round((performance.now()-start)/10)/100;
+}
+
+async function timing(stage, rc15, rust, unit) {
+    console.log(JSON.stringify({stage,rc15,rust,unit}));
+    if (process.env.GITHUB_STEP_SUMMARY)
+        await fs.appendFile(process.env.GITHUB_STEP_SUMMARY,`| ${stage} | ${rc15} | ${rust} | ${unit} |\n`);
+}
+
+async function rebuild(client, rule, legacyDirectory) {
+    const start = performance.now();
+    await reindex(client);
+    const db = await config(client,rule.info.version);
+    const seconds = secondsSince(start);
+    return {...await contents(client,rule.info.version,legacyDirectory,db),seconds};
+}
+
+async function exactSearch(client) {
+    const times = [];
+    let ids;
+    for (let i=0;i<12;i++) {
+        const start = performance.now();
+        const result = await client.send('bookSearch',{query:{title:'=Мастер и Маргарита',del:'0',limit:100}});
+        const elapsed = performance.now()-start;
+        assert(!result.error && result.totalFound>0 && result.found.length===result.totalFound);
+        const found = result.found.map(book=>book._uid).sort();
+        if (i) { assert.deepEqual(found,ids); times.push(elapsed); }
+        ids = found;
+    }
+    return {ids,median:Number(times.sort((a,b)=>a-b)[5].toFixed(2))};
+}
+
+function compare(label, legacy, rust, expected) {
     assert.deepEqual(rust.records,legacy.records);
+    if (expected !== undefined) assert.equal(rust.count,expected,label);
     assert.equal(rust.hash,legacy.hash);
     console.log(JSON.stringify({stage:label,count:rust.count,booksSha256:rust.digest,indexHash:rust.hash}));
 }
@@ -176,10 +217,11 @@ async function failedFilter(client, file, filter, error) {
     assert.equal(status.updating,false);
 }
 
-async function main(rustImage, rc15Image, inpx) {
+async function main(rustImage, rc15Image, inpx, fixtureType) {
     assert(rustImage && rc15Image && inpx,
         'Usage: node scripts/rust-inpx-filter-tests.js <rust-image> <rc15-image> <library.inpx>');
     const source = resolve(inpx);
+    const counts = fixtureType === '--ci-fixture' ? require('./rc15-ci-fixture').expected : [];
     const directory = await fs.mkdtemp(join(tmpdir(),'inpx-filter-comparison-'));
     const prefix = 'inpx-filter-'+process.pid;
     const names = [prefix+'-rc15',prefix+'-rust'];
@@ -197,7 +239,7 @@ async function main(rustImage, rc15Image, inpx) {
             return dir;
         };
         const [oldRules,newRules] = await Promise.all(['rc15','rust'].map(prepare));
-        const legacy = await start(names[0],rc15Image,source,oldRules,directory);
+        const legacy = await start(names[0],rc15Image,source,oldRules);
         clients.push(legacy);
         const beforeLegacy = await contents(legacy,'initial',join(directory,'rc15-initial-db'));
         console.log(JSON.stringify({stage:'rc15-ready',sourceSha256:sourceDigest,count:beforeLegacy.count}));
@@ -206,16 +248,19 @@ async function main(rustImage, rc15Image, inpx) {
         const rust = await start(names[1],rustImage,source,newRules);
         clients.push(rust);
         const beforeRust = await contents(rust,'initial');
-        compare('first-index',beforeLegacy,beforeRust);
+        compare('first-index',beforeLegacy,beforeRust,counts[0]);
+        await timing('First index to ready',legacy.readySeconds,rust.readySeconds,'s');
+        const oldSearch = await exactSearch(legacy);
+        const newSearch = await exactSearch(rust);
+        assert.deepEqual(newSearch.ids,oldSearch.ids);
+        await timing('Exact title search (11 warm requests, median)',oldSearch.median,newSearch.median,'ms');
         assert(beforeRust.rows.some(row=>row.author.includes('Кимури Мария')));
 
         await Promise.all([oldRules,newRules].map(dir=>writeFilter(join(dir,'filter.json'),changed)));
-        await Promise.all([legacy,rust].map(reindex));
-        const [afterLegacy,afterRust] = await Promise.all([
-            contents(legacy,'reindexed',join(directory,'rc15-reindexed-db')),
-            contents(rust,'reindexed'),
-        ]);
-        compare('live-reindex',afterLegacy,afterRust);
+        const afterLegacy = await rebuild(legacy,changed,join(directory,'rc15-reindexed-db'));
+        const afterRust = await rebuild(rust,changed);
+        compare('live-reindex',afterLegacy,afterRust,counts[1]);
+        await timing('Simple filter reindex',afterLegacy.seconds,afterRust.seconds,'s');
         assert(afterRust.count<beforeRust.count);
         for (const row of afterRust.rows) {
             assert(!['Еськов Кирилл Юрьевич','Кимури Мария'].some(author=>row.author.split(',').includes(author)));
@@ -225,12 +270,10 @@ async function main(rustImage, rc15Image, inpx) {
         assert(afterRust.rows.every(row=>ids.get(row._uid)===row.id),'Retained Rust IDs changed during reindex');
 
         await Promise.all([oldRules,newRules].map(dir=>writeFilter(join(dir,'filter.json'),complex)));
-        await Promise.all([legacy,rust].map(reindex));
-        const [complexLegacy,complexRust] = await Promise.all([
-            contents(legacy,complex.info.version,join(directory,'rc15-complex-db')),
-            contents(rust,complex.info.version),
-        ]);
-        compare('complex-live-reindex',complexLegacy,complexRust);
+        const complexLegacy = await rebuild(legacy,complex,join(directory,'rc15-complex-db'));
+        const complexRust = await rebuild(rust,complex);
+        compare('complex-live-reindex',complexLegacy,complexRust,counts[2]);
+        await timing('Regex and loop filter reindex',complexLegacy.seconds,complexRust.seconds,'s');
         assert(complexRust.count<afterRust.count);
         assert(complexRust.rows.every(row=>ids.get(row._uid)===row.id));
 
@@ -265,4 +308,4 @@ if (require.main === module) {
     main(...process.argv.slice(2)).catch(error=>{console.error(error);process.exitCode=1;});
 }
 
-module.exports = {docker, until, legacyRows, rustRows, initial};
+module.exports = {docker, until, legacyRows, rustRows, initial, timing};
