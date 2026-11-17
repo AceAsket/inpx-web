@@ -60,7 +60,7 @@ impl IsbnIndex {
         if let Some(job) = &shared.build {
             let mut current = status(
                 "running",
-                (&job.progress.signature == signature).then_some(&job.progress),
+                (job.progress.signature == signature).then_some(&job.progress),
                 "",
             );
             if job.progress.signature == signature {

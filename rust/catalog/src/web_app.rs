@@ -179,15 +179,8 @@ fn comparison_key(name: &str) -> String {
 fn safe_name(name: &str) -> bool {
     !matches!(comparison_key(name).as_str(), MARKER | VERSION_FILE)
         && !name.contains(['\\', ':', '\0'])
-        && name.split('/').all(|part| {
-            if part.is_empty() || matches!(part, "." | "..") {
-                return false;
-            }
-            #[cfg(windows)]
-            if part.ends_with(['.', ' ']) {
-                return false;
-            }
-            true
+        && !name.split('/').any(|part| {
+            matches!(part, "" | "." | "..") || cfg!(windows) && part.ends_with(['.', ' '])
         })
 }
 

@@ -154,7 +154,9 @@ pub(super) fn mobi(file: &Path) -> Result<()> {
     }
     let table = read_at(&mut file, 78, count * 8)?;
     let offsets = table
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|record| u32_at(record, 0).expect("record offset"))
         .collect::<Vec<_>>();
     if offsets[0] < 78 + table.len()

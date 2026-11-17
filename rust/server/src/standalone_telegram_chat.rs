@@ -309,8 +309,7 @@ async fn dispatch(
             let (bot, chat, owner) = (ctx.bot.clone(), ctx.chat.clone(), ctx.owner.clone());
             let result = tokio::task::spawn_blocking(move || {
                 worker
-                    .delivery
-                    .send_from_chat(&worker, &active, &bot, &chat, &owner, &uid, original)
+                    .send_from_chat(&active, &bot, &chat, &owner, &uid, original)
                     .map_err(|error| error.to_string())
             })
             .await;

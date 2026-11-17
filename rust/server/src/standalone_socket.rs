@@ -192,8 +192,7 @@ impl Socket {
         state: &Arc<State>,
         browser: &str,
         admission: &Admission,
-        connection: Option<u64>,
-        events_connection: u64,
+        (connection, events_connection): (Option<u64>, u64),
         mut request: Value,
         subscription: &mut Change,
     ) -> Value {
@@ -1363,8 +1362,8 @@ async fn run(
                     let _permit = permit;
                     let (response, change) = tokio::task::spawn_blocking(move || {
                         let mut change = Change::Unchanged;
-                        let response = state.socket.dispatch(&state, &browser, &admission, connection,
-                            events_connection, request, &mut change);
+                        let response = state.socket.dispatch(&state, &browser, &admission,
+                            (connection, events_connection), request, &mut change);
                         (response, change)
                     }).await.unwrap_or_else(|_| (fault("server_busy"), Change::Unchanged));
                     if response["error"] == "need_access_token" {

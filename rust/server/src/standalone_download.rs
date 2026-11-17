@@ -179,15 +179,13 @@ impl Downloads {
         let book: Book = serde_json::from_value(row.clone())?;
         let mut removed = 0;
         let mut rebuilt = false;
-        if book.ext.eq_ignore_ascii_case("fb2")
-            || self.epub && book.ext.eq_ignore_ascii_case("epub")
+        if (book.ext.eq_ignore_ascii_case("fb2")
+            || self.epub && book.ext.eq_ignore_ascii_case("epub"))
+            && let Some((document, _)) = self.document(&book, sources)?
+            && let Some(image) = document.cover()
         {
-            if let Some((document, _)) = self.document(&book, sources)?
-                && let Some(image) = document.cover()
-            {
-                removed += usize::from(image.rebuild(&self.cache)?);
-                rebuilt = true;
-            }
+            removed += usize::from(image.rebuild(&self.cache)?);
+            rebuilt = true;
         }
         let revision = if row["_recordHash"].is_null() {
             json!([row.get("inpxSize").unwrap_or(&row["size"]), row["date"]])

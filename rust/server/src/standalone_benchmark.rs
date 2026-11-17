@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -59,7 +59,7 @@ struct Machine {
 impl Machine {
     fn sample() -> Self {
         let cpu = std::thread::available_parallelism().map_or(1, |count| count.get());
-        let mut machine = Self {
+        let machine = Self {
             cpu,
             scope: "process",
             limit: None,
@@ -68,12 +68,13 @@ impl Machine {
             cpu_us: None,
         };
         #[cfg(target_os = "linux")]
-        machine.linux();
+        let machine = machine.with_linux_metrics();
         machine
     }
 
     #[cfg(target_os = "linux")]
-    fn linux(&mut self) {
+    fn with_linux_metrics(mut self) -> Self {
+        use std::fs;
         let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
         let field = |key| {
             meminfo
@@ -111,6 +112,7 @@ impl Machine {
             self.limit = host_limit;
             self.available = host_available;
         }
+        self
     }
 
     fn view(&self) -> Value {

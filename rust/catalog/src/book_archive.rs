@@ -185,24 +185,14 @@ pub(crate) fn metadata_input(
     }
 }
 
+#[derive(Default)]
 struct ArchiveCache(VecDeque<CachedArchive>);
 
+#[derive(Default)]
 pub(crate) struct IsbnReader(ArchiveCache);
 
 #[derive(Default)]
 pub(crate) struct AuditArchive(ArchiveCache);
-
-impl Default for ArchiveCache {
-    fn default() -> Self {
-        Self(VecDeque::new())
-    }
-}
-
-impl Default for IsbnReader {
-    fn default() -> Self {
-        Self(ArchiveCache::default())
-    }
-}
 
 impl AuditArchive {
     pub(crate) fn check<T>(

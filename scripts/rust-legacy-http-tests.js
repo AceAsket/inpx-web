@@ -8,7 +8,7 @@ const {pipeline} = require('node:stream/promises');
 const {createWriteStream} = require('node:fs');
 const {ZipFile} = require('yazl');
 const {chromium} = require(process.env.INPX_PLAYWRIGHT_MODULE || 'playwright');
-const {docker, until} = require('./rust-inpx-filter-tests');
+const {docker, until, timing} = require('./rust-inpx-filter-tests');
 const {connect, signIn} = require('./rust-events-tests');
 
 const root = '/library';
@@ -178,6 +178,26 @@ async function bytes(response) {
     return Buffer.from(await response.arrayBuffer());
 }
 
+async function measureRoutes(base) {
+    const medians = new Map();
+    for (const [label,path] of [['/app-reset','/app-reset'],
+        ['/reader-lab-source','/reader-lab-source/'+encodeURIComponent(fixtureName)],
+        ['/cover by libid','/cover/main/1001']]) {
+        const samples = [];
+        for (let i=0;i<12;i++) {
+            const started = performance.now();
+            const response = await fetch(base+root+path,{signal:AbortSignal.timeout(5000)});
+            assert.equal(response.status,200);
+            const body = await response.arrayBuffer();
+            const elapsed = performance.now()-started;
+            assert(body.byteLength>0);
+            if (i) samples.push(elapsed);
+        }
+        medians.set(label,Number(samples.sort((a,b)=>a-b)[5].toFixed(2)));
+    }
+    return medians;
+}
+
 async function httpChecks(base, assets, browser) {
     const path = root+'/reader-lab-source/'+encodeURIComponent(fixtureName);
     const reset = await fetch(base+root+'/app-reset');
@@ -257,16 +277,22 @@ async function main(rust, rc15) {
         .map(type=>'inpx-legacy-'+process.pid+'-'+type);
     try {
         const assets = await fixture(directory,browser);
-        const legacy = await httpChecks(await start(names[0],rc15,directory),assets,browser);
+        const legacyBase = await start(names[0],rc15,directory);
+        const legacy = await httpChecks(legacyBase,assets,browser);
+        const before = await measureRoutes(legacyBase);
         await protectedFiles(await start(names[2],rc15,directory,{protectedAccess:true}),assets);
         await rootPaths(await start(names[4],rc15,directory,{rootless:true}),assets);
         console.log('ok RC15 recovery, original FB2, legacy covers and profile access');
         await until(()=>docker('image','inspect',rust,'--format','{{.Id}}').catch(()=>''),Boolean,
             'Rust image did not finish building',600);
-        const native = await httpChecks(await start(names[1],rust,directory),assets,browser);
+        const rustBase = await start(names[1],rust,directory);
+        const native = await httpChecks(rustBase,assets,browser);
+        const after = await measureRoutes(rustBase);
         await protectedFiles(await start(names[3],rust,directory,{protectedAccess:true}),assets);
         await rootPaths(await start(names[5],rust,directory,{rootless:true}),assets);
         assert.deepEqual(native,legacy);
+        for (const [label,median] of before)
+            await timing(label+' (11 warm GETs, median)',median,after.get(label),'ms');
         console.log('ok Rust matches RC15 for recovery, FB2, ZIP/7z cover archives, embedded and WebP/JXL covers');
     } catch (error) {
         for (const name of names) {

@@ -98,7 +98,7 @@ impl Routes {
             let grant = state
                 .access
                 .check(&request, &admission, Resource::Download)
-                .map_err(|rejected| rejected.response())?;
+                .map_err(|rejected| Box::new(rejected.response()))?;
             let sources = state.index.sources();
             let file = match route {
                 Route::Cover(path) => state
@@ -116,12 +116,13 @@ impl Routes {
                 }
                 Route::Reset => unreachable!(),
             };
-            file.map(|file| (file, grant.private())).map_err(error)
+            file.map(|file| (file, grant.private()))
+                .map_err(|status| Box::new(error(status)))
         })
         .await;
         let (file, private) = match result {
             Ok(Ok(reply)) => reply,
-            Ok(Err(response)) => return response,
+            Ok(Err(response)) => return *response,
             Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR),
         };
         let mut response = match file {
@@ -171,7 +172,7 @@ impl Routes {
         sources: Arc<Vec<inpx_catalog::library_sources::Source>>,
         cache: &Path,
     ) -> Result<Prepared, StatusCode> {
-        let (source, libid) = path.split_once('/').map_or(("", path), |parts| parts);
+        let (source, libid) = path.split_once('/').unwrap_or(("", path));
         if libid.contains('/') {
             return Err(StatusCode::NOT_FOUND);
         }

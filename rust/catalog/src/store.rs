@@ -150,17 +150,17 @@ impl<'a> BookStoreWriter<'a> {
     }
 
     fn replace(&mut self, id: u32) -> Result<()> {
-        if let Some(old) = self.books.get(id)? {
-            if !old.value().is_empty() {
-                let (record, _) = decode(old.value())?;
-                let old: BookKey = serde_json::from_slice(record)?;
-                if self
-                    .uids
-                    .get(old.uid)?
-                    .is_some_and(|owner| owner.value() == id)
-                {
-                    self.uids.remove(old.uid)?;
-                }
+        if let Some(old) = self.books.get(id)?
+            && !old.value().is_empty()
+        {
+            let (record, _) = decode(old.value())?;
+            let old: BookKey = serde_json::from_slice(record)?;
+            if self
+                .uids
+                .get(old.uid)?
+                .is_some_and(|owner| owner.value() == id)
+            {
+                self.uids.remove(old.uid)?;
             }
         }
         self.changed.insert(id);

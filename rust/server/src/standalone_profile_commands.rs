@@ -143,8 +143,7 @@ impl Access {
             "profile-totp" => reader.change_profile_totp(
                 profile_security,
                 &self.totp,
-                owner,
-                token,
+                (owner, token),
                 stamp,
                 request,
                 |token| self.sessions.has_profile(token),

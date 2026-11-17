@@ -275,10 +275,11 @@ impl Delivery {
         })?;
         Ok(json!({"success":true}))
     }
+}
 
+impl State {
     pub(super) fn send_from_chat(
         &self,
-        state: &State,
         service: &Arc<Telegram>,
         bot: &str,
         chat: &str,
@@ -287,10 +288,10 @@ impl Delivery {
         original: bool,
     ) -> Result<()> {
         let details = || {
-            if !Arc::ptr_eq(service, &self.telegram()) {
+            if !Arc::ptr_eq(service, &self.delivery.telegram()) {
                 return Err("Настройки Telegram изменились".into());
             }
-            state.access.telegram(|store, stamp| {
+            self.access.telegram(|store, stamp| {
                 let profile = store.telegram_chat(stamp, bot, chat)?;
                 if profile["id"] != owner {
                     return Err("Привязка Telegram отключена".into());
@@ -299,14 +300,14 @@ impl Delivery {
             })
         };
         details()?;
-        let task = self.outgoing.enter(owner)?;
+        let task = self.delivery.outgoing.enter(owner)?;
         let profile = details()?;
-        let book = load_book(&state.index.catalogue, uid)?.ok_or("Книга не найдена в каталоге")?;
-        let (path, filename) = state
+        let book = load_book(&self.index.catalogue, uid)?.ok_or("Книга не найдена в каталоге")?;
+        let (path, filename) = self
             .downloads
             .attachment(
                 &book,
-                &state.index.sources(),
+                &self.index.sources(),
                 if original { "original" } else { "" },
                 profile["defaultTelegramFormat"]
                     .as_str()

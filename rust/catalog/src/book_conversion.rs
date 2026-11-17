@@ -470,10 +470,9 @@ impl Fb2cng {
                     .to_string_lossy()
                     .to_ascii_lowercase()
                     .ends_with(&suffix)
+                && found.replace(item.path()).is_some()
             {
-                if found.replace(item.path()).is_some() {
-                    return Err("fb2cng создал несколько выходных файлов".into());
-                }
+                return Err("fb2cng создал несколько выходных файлов".into());
             }
         }
         found.ok_or_else(|| format!("fb2cng не создал файл формата {}", format.name()).into())

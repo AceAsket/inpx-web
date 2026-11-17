@@ -124,7 +124,7 @@ impl Index {
 
     pub(super) fn refresh(&self, sources: Arc<Vec<Source>>, force: bool) {
         match self.rebuild(sources, force) {
-            Ok(false) => return,
+            Ok(false) => (),
             Ok(true) => self.job.store(IDLE, Ordering::Release),
             Err(error) => self.failed(error.as_ref(), "Не удалось обновить поисковый индекс"),
         }

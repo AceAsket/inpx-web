@@ -54,10 +54,8 @@ impl ReaderState {
         let admin = is_admin(transfer::user(data, owner)?);
         let policy = profile_decode::auth_policy(&data["profileAuthPolicy"]);
         let target = string(&request["targetUserId"]).trim();
-        if action != "update-user-profile" || target != owner {
-            if !admin {
-                return Err(ADMIN_ONLY.into());
-            }
+        if (action != "update-user-profile" || target != owner) && !admin {
+            return Err(ADMIN_ONLY.into());
         }
         let users = data["users"]
             .as_array_mut()

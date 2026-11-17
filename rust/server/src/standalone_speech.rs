@@ -130,6 +130,12 @@ struct CachedSegment<'a> {
     part: &'a SpeechPart,
 }
 
+struct SpeechSelection<'a> {
+    book: &'a str,
+    index: usize,
+    preview: bool,
+}
+
 impl Speech {
     pub(super) fn new(data: &Path, root: &str, config: &Value) -> Result<Arc<Self>> {
         let setting = |name: &str, key: &str| {
@@ -237,12 +243,14 @@ impl Speech {
             }];
             return self.enqueue(
                 consumer,
-                "voice-preview-v1",
+                SpeechSelection {
+                    book: "voice-preview-v1",
+                    index: 0,
+                    preview: true,
+                },
                 &parts,
-                0,
                 Some(&parts),
                 request,
-                true,
             );
         }
         let uid = request["bookUid"]
@@ -299,12 +307,14 @@ impl Speech {
         };
         self.enqueue(
             consumer,
-            &key,
+            SpeechSelection {
+                book: &key,
+                index,
+                preview: false,
+            },
             &parts,
-            index,
             segments.as_deref(),
             request,
-            false,
         )
     }
 
@@ -358,7 +368,7 @@ impl Speech {
             if path == "/health" && response.status() == StatusCode::NOT_FOUND {
                 return Ok(Value::Null);
             }
-            Ok(response_json(response).await?)
+            response_json(response).await
         })
     }
 
@@ -414,12 +424,10 @@ impl Speech {
     fn enqueue(
         self: &Arc<Self>,
         key: ConsumerKey,
-        book: &str,
+        selection: SpeechSelection<'_>,
         parts: &[SpeechPart],
-        index: usize,
         segments: Option<&[SpeechPart]>,
         request: &Value,
-        preview: bool,
     ) -> Result<Value> {
         if self.cancelled(&key) {
             return Ok(json!({"state":"cancelled"}));
@@ -432,6 +440,7 @@ impl Speech {
             return Err("Неизвестный голос Silero.".into());
         }
         let options = plan::Options::parse(request.get("options"))?;
+        let index = selection.index;
         let text = &parts[index].text;
         let segments = options
             .as_ref()
@@ -444,13 +453,11 @@ impl Speech {
         let id = cache_id(
             &self.model,
             speaker,
-            book,
+            &selection,
             text,
             &engine,
             options.as_ref(),
             segments,
-            index,
-            preview,
         )?;
         let attempt = random_id()?;
         let payload = serde_json::to_vec(&Synthesis {
@@ -516,7 +523,7 @@ impl Speech {
             },
         );
         if !cached {
-            if preview {
+            if selection.preview {
                 scheduler.queue.push_front(id.clone());
             } else {
                 scheduler.queue.push_back(id.clone());
@@ -928,14 +935,17 @@ impl Scheduler {
 fn cache_id(
     model: &str,
     speaker: &str,
-    book: &str,
+    selection: &SpeechSelection<'_>,
     text: &str,
     engine: &str,
     options: Option<&plan::Options>,
     segments: Option<&[SpeechPart]>,
-    index: usize,
-    preview: bool,
 ) -> Result<String> {
+    let SpeechSelection {
+        book,
+        index,
+        preview,
+    } = *selection;
     let mut key = vec![
         json!("silero-mp3-v1"),
         json!(model),

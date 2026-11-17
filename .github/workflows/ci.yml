@@ -231,7 +231,10 @@ jobs:
           node scripts/rust-inpx-filter-tests.js inpx-web:ci-rust "$RC15_IMAGE" "$RUNNER_TEMP/parity/library/library.inpx" --ci-fixture 2>&1 | tee "$RUNNER_TEMP/parity/results/catalogue.log"
       - name: Compare legacy HTTP routes in Chromium
         shell: bash
-        run: node scripts/rust-legacy-http-tests.js inpx-web:ci-rust "$RC15_IMAGE" 2>&1 | tee "$RUNNER_TEMP/parity/results/http.log"
+        run: |
+          echo '| Operation | RC15 | Rust | Unit |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---:|---:|---|' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/rust-legacy-http-tests.js inpx-web:ci-rust "$RC15_IMAGE" 2>&1 | tee "$RUNNER_TEMP/parity/results/http.log"
       - name: Verify and measure RC15 upgrade and rollback
         shell: bash
         run: |
