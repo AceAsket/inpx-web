@@ -36,11 +36,17 @@ async function testWebSocketConnectionReportsFailuresWithoutNativeMessage() {
 
         terminate() {}
     }
-    const connection = Object.assign(Object.create(WebSocketConnection.prototype), {
-        WebSocket: Socket, openTimeout: 50, listeners: [], ws: null,
-    });
-    await assert.rejects(connection.send({action:'get-config'}), /по WebSocket/);
-    assert.equal(connection.connecting, false);
+    class TestConnection extends WebSocketConnection {
+        periodicClean() {}
+    }
+    const connection = new TestConnection('ws://fixture.invalid', 0.05);
+    connection.WebSocket = Socket;
+    try {
+        await assert.rejects(connection.send({action:'get-config'}), /по WebSocket/);
+        assert.equal(connection.connecting, false);
+    } finally {
+        connection.close();
+    }
 }
 
 async function testLoginRateReservesAttemptsDuringCredentialVerification() {

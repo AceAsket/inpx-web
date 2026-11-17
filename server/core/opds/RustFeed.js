@@ -79,7 +79,7 @@ function prepare(content, req, page, legacy) {
             scope:req.query.user ? String(req.query.user) : '',templateScoped:!!page.getScopeUserId(req),
             conversion:!!page.config.conversionEnabled,
             formats:Array.isArray(page.config.conversionFormats) ? page.config.conversionFormats.map(String) : undefined,
-            mobi:page.config.mobiEnabled!==false,
+            mobi:require('../BookConverter').mobiEnabled(page.config),
             preference:String(req.opdsUser?.defaultOpdsFormat || ''),
             title:text(content.title || page.title || 'Каталог'),
             modified:content.updated ? text(content.updated) : undefined,

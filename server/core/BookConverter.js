@@ -93,6 +93,20 @@ function kindlingCommandCandidates(configuredPath = '') {
     return [bundledToolPath(file), localToolPath(file), 'kindling', '/usr/local/bin/kindling', '/usr/bin/kindling'].filter(Boolean);
 }
 
+function mobiEnabled(config = {}) {
+    const override = process.env.INPX_MOBI_ENABLED;
+    return override === undefined ? config.mobiEnabled !== false : override !== 'false';
+}
+
+function formatSettings(config = {}) {
+    const {conversionEnabled,conversionFormats} = config;
+    return {conversionEnabled,conversionFormats,mobiEnabled:mobiEnabled(config)};
+}
+
+function kindlingPath(configuredPath = '') {
+    return String(process.env.INPX_KINDLING_PATH ?? configuredPath ?? '').trim();
+}
+
 function stableStringify(value) {
     if (Array.isArray(value))
         return `[${value.map(stableStringify).join(',')}]`;
@@ -128,7 +142,7 @@ function fb2cngConfigError(configPath, message) {
 }
 
 async function readFb2cngConfig(configPath = '') {
-    const rawPath = String(configPath || '').trim();
+    const rawPath = String(process.env.INPX_FB2CNG_CONFIG ?? process.env.FB2CNG_CONFIG ?? configPath ?? '').trim();
     if (!rawPath)
         return {path: '', fingerprint: 'default'};
 
@@ -205,9 +219,9 @@ async function getConversionCacheInfo({cacheBasePath, inputFile = '', sourceFile
         fb2cngConfigFingerprint: fb2cngConfig.fingerprint,
         fb2cngVersion: usesFb2cng ? String(config.fb2cngVersion || '') : '',
         converterPaths: config.converterPaths || {},
-        ...(normalizedFormat === 'mobi' ? {mobiProfile: 'dual-v1', kindlingVersion: config.kindlingVersion || 'v0.45.6', kindlingPath: config.kindlingPath || ''} : {}),
+        ...(normalizedFormat === 'mobi' ? {mobiProfile: 'dual-v1', kindlingVersion: config.kindlingVersion || 'v0.45.6', kindlingPath: kindlingPath(config.kindlingPath)} : {}),
         ...(fb2cngArgs.length ? {fb2cngArgs} : {}),
-        ...(bookTitle !== null ? {bookTitleTemplate: config.bookTitleTemplate, bookTitle} : {}),
+        ...(bookTitle !== null ? {bookTitleTemplate: bookNaming.titleTemplate(config), bookTitle} : {}),
         ...(Object.keys(config.converterPaths || {}).length ? {configuredToolPolicy: 'strict-v1'} : {}),
     });
     const fingerprint = crypto.createHash('sha256').update(signature).digest('hex').slice(0, 20);
@@ -415,9 +429,9 @@ async function convertPrepared(convertInput, outputFile, format, converterPaths 
     await convertWithCalibre(convertInput, outputFile, format, converterPaths);
 }
 
-async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null, mobiEnabled = true, kindlingPath = ''}) {
+async function convert({inputFile, outputFile, format, sourceFileName = '', converterPaths = null, fb2cngConfigPath = null, fb2cngArgs = [], bookTitle = null, mobiEnabled: enabled = true, kindlingPath: configuredKindlingPath = ''}) {
     format = String(format || '').toLowerCase();
-    if (format === 'mobi' && mobiEnabled !== true)
+    if (format === 'mobi' && !mobiEnabled({mobiEnabled:enabled}))
         throw new Error('Конвертация в MOBI выключена настройками сервера.');
     const sourceExt = path.extname(sourceFileName || inputFile).toLowerCase();
     if (!canConvertSourceTo(sourceExt, format))
@@ -444,7 +458,7 @@ async function convert({inputFile, outputFile, format, sourceFileName = '', conv
                 await fs.copyFile(inputFile, tempInput);
                 convertInput = tempInput;
             }
-            await convertPrepared(convertInput, workingOutput, format, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle, kindlingPath);
+            await convertPrepared(convertInput, workingOutput, format, converterPaths, fb2cngConfigPath, fb2cngArgs, bookTitle, kindlingPath(configuredKindlingPath));
             await fs.rename(workingOutput, outputFile);
         } finally {
             await fs.remove(workingOutput);
@@ -483,7 +497,7 @@ async function prepareConvertedFile({
     if (!config.conversionEnabled)
         throw new Error(disabledMessage || 'Book conversion is disabled');
 
-    if (String(format).toLowerCase() === 'mobi' && config.mobiEnabled !== undefined && config.mobiEnabled !== true)
+    if (String(format).toLowerCase() === 'mobi' && !mobiEnabled(config))
         throw new Error('Конвертация в MOBI выключена настройками сервера.');
 
     const cacheInfo = await getConversionCacheInfo({
@@ -526,6 +540,8 @@ async function prepareConvertedFile({
 
 module.exports = {
     configure: config => runtime.configure(config),
+    mobiEnabled,
+    formatSettings,
     canConvertTo,
     canConvertSourceTo,
     fb2cngCommandCandidates,

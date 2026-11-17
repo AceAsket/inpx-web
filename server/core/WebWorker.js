@@ -6610,7 +6610,7 @@ class WebWorker {
         let preparedFile = rawFile;
         let preparedFileName = downFileName;
         const sourceFormat = String(book.ext || '').toLowerCase();
-        const selected = bookFormats.resolve(sourceFormat, this.config, preference, format);
+        const selected = bookFormats.resolve(sourceFormat, bookConverter.formatSettings(this.config), preference, format);
         const targetFormat = selected === 'raw' ? '' : selected;
 
         if (targetFormat && targetFormat !== sourceFormat) {

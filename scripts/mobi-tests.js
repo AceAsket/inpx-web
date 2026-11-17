@@ -27,15 +27,22 @@ async function withFixture(fn) {
     try { await fn(dir); } finally { await fs.remove(dir); }
 }
 
-async function testMobiDefaultsEnabledSupportsExplicitDisableAndDoesNotPersist() {
+async function testMobiEffectiveSettingsKeepLaunchOverridesSeparate() {
     const execFile = require('util').promisify(require('child_process').execFile);
     const script = `const assert=require('assert');const config=require('./server/config/base');
-        assert.strictEqual(config.mobiEnabled,process.env.INPX_MOBI_ENABLED!=='false');
-        assert.strictEqual(config.conversionFormats.includes('mobi'),config.mobiEnabled);
+        const {formatSettings,mobiEnabled}=require('./server/core/BookConverter');
+        const {available}=require('./shared/BookFormats');
+        assert.strictEqual(config.mobiEnabled,true);
+        assert.strictEqual(config.kindlingPath,'');
+        assert.strictEqual(available('fb2',formatSettings(config)).includes('mobi'),process.env.INPX_MOBI_ENABLED!=='false');
+        assert.strictEqual(mobiEnabled({...config,mobiEnabled:false}),
+            process.env.INPX_MOBI_ENABLED!==undefined && process.env.INPX_MOBI_ENABLED!=='false');
         const saved=require('./server/config').propsToSave;
-        for(const key of ['mobiEnabled','kindlingPath','kindlingVersion'])assert.ok(!saved.includes(key));`;
+        assert(saved.includes('mobiEnabled'));
+        assert(saved.includes('kindlingPath'));
+        assert(!saved.includes('kindlingVersion'));`;
     for (const flag of [undefined, 'true', 'false', '']) {
-        const env={...process.env, INPX_CONVERSION_FORMATS:'epub,pdf'};
+        const env={...process.env, INPX_CONVERSION_FORMATS:'epub,pdf', INPX_KINDLING_PATH:'/runtime/kindling'};
         if(flag===undefined)delete env.INPX_MOBI_ENABLED;else env.INPX_MOBI_ENABLED=flag;
         await execFile(process.execPath, ['-e', script], {cwd: path.resolve(__dirname, '..'),
             env});
@@ -165,5 +172,5 @@ async function testMobiAvailabilityInWebAndOpds() {
     }
 }
 
-module.exports = [testMobiDefaultsEnabledSupportsExplicitDisableAndDoesNotPersist, testMobiPipelineUsesOneSlotAndCachesValidatedOutput,
+module.exports = [testMobiEffectiveSettingsKeepLaunchOverridesSeparate, testMobiPipelineUsesOneSlotAndCachesValidatedOutput,
     testMobiCacheIncludesBothConvertersAndMetadata, testMobiRejectsCorruptAndAzw3OnlyResults, testMobiAvailabilityInWebAndOpds];

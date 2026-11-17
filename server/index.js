@@ -35,7 +35,7 @@ function applyEnvSecurityOverrides(targetConfig) {
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_CONVERSION_FORMATS')) {
         const formats = process.env.INPX_CONVERSION_FORMATS.split(',').map(value => value.trim().toLowerCase())
             .filter(value => value && value !== 'mobi');
-        if (targetConfig.mobiEnabled !== false) formats.push('mobi');
+        formats.push('mobi');
         targetConfig.conversionFormats = [...new Set(formats)];
     }
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_OPDS_COMPATIBILITY')) {
