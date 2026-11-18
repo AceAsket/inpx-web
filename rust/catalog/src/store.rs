@@ -824,7 +824,7 @@ impl BookStore {
         &self,
         generation: &str,
         candidates: Option<&[u32]>,
-        matches: impl Fn(&[u8], Option<i64>) -> Result<bool>,
+        matches: impl Fn(&[u8], Option<i64>, &str) -> Result<bool>,
         merge: bool,
     ) -> Result<Vec<u32>> {
         #[derive(Deserialize)]
@@ -837,7 +837,7 @@ impl BookStore {
         self.visit_stored_rows(Some(generation), candidates, |id, bytes| {
             let (record, projection) = decode(bytes)?;
             let row: SearchRow = serde_json::from_slice(record)?;
-            if !matches(record, row.del)? {
+            if !matches(record, row.del, &row.source)? {
                 return Ok(());
             }
             let rank: Rank = serde_json::from_slice(projection)?;

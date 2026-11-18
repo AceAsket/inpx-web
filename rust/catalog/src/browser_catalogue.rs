@@ -178,11 +178,8 @@ impl Search {
             || self.isbn.is_some()
     }
 
-    fn active_only(&self) -> bool {
-        self.source.is_empty()
-            && self.ratings.is_none()
-            && self.isbn.is_none()
-            && self.comparisons.is_empty()
+    fn only_active_filter(&self) -> bool {
+        self.comparisons.is_empty()
             && matches!(&self.filters[..], [Filter::NumberValues { field, values }] if field == "del" && values == &[0.0])
     }
 }
@@ -346,14 +343,16 @@ impl Catalogue {
     fn ordered_books(&self, query: &Map<String, Value>, search: &Search) -> Result<Arc<Vec<u32>>> {
         let compute = || {
             let candidates = self.search_candidates(search)?;
-            let all = !search.constrained();
-            let active = search.active_only();
+            let all = search.filters.is_empty() && search.comparisons.is_empty();
+            let active = search.only_active_filter();
             self.store
                 .browser_search_order(
                     &self.generation,
                     candidates.as_deref(),
-                    |row, del| {
-                        Ok(if all {
+                    |row, del, source| {
+                        Ok(if !search.source.is_empty() && search.source != source {
+                            false
+                        } else if all {
                             true
                         } else if active {
                             del == Some(0)
@@ -657,10 +656,12 @@ impl Catalogue {
         let table = name_table(field)?;
         let term = NameQuery::parse(query.get(field).and_then(Value::as_str).unwrap_or_default())?;
         let search = Search::new(query, field)?;
-        let non_deleted = search
-            .active_only()
-            .then(|| self.store.opds_books(&[]))
-            .transpose()?;
+        let non_deleted = (search.source.is_empty()
+            && search.ratings.is_none()
+            && search.isbn.is_none()
+            && search.only_active_filter())
+        .then(|| self.store.opds_books(&[]))
+        .transpose()?;
         let matching = (non_deleted.is_none() && search.constrained())
             .then(|| self.matching(&search))
             .transpose()?;
