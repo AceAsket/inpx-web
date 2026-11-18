@@ -24,6 +24,7 @@ pub(crate) struct Downloads {
     template: String,
     cover_root: String,
     pub(super) covers: Covers,
+    local_books: book_delivery::LocalBooks,
     epub: bool,
     conversions: Option<Conversion>,
     remote: Option<Arc<Remote>>,
@@ -91,6 +92,7 @@ impl Downloads {
             template,
             cover_root: format!("{prefix}/cover/by-uid"),
             covers,
+            local_books: Default::default(),
             epub,
             conversions,
             remote,
@@ -135,10 +137,11 @@ impl Downloads {
 
     pub(super) fn ebook_text(&self, book: &Book, sources: &[Source]) -> CatalogueResult<Vec<u16>> {
         let source = book.source(sources).ok_or_else(missing_book)?;
-        let cached = book_delivery::prepare_limited(
+        let cached = self.local_books.prepare(
             &self.cache,
             book,
             source,
+            &self.covers,
             Some(inpx_catalog::ebook_text::FILE_LIMIT),
         )?;
         let path = cached.reader_file(&self.cache, &book.ext)?;
@@ -155,7 +158,8 @@ impl Downloads {
                 |directory, cached| remote.download(book, directory, cached),
             );
         }
-        book_delivery::prepare(&self.cache, book, source)
+        self.local_books
+            .prepare(&self.cache, book, source, &self.covers, None)
     }
 
     pub(super) fn raw_book(&self, book: &Book, sources: &[Source]) -> CatalogueResult<PathBuf> {
@@ -207,8 +211,9 @@ impl Downloads {
             .collect::<String>();
         let key = format!("book-v3-{digest}");
         let legacy = self.legacy_covers();
-        if std::fs::symlink_metadata(&legacy)
-            .is_ok_and(|metadata| metadata.is_dir() && !metadata.is_symlink())
+        if rebuilt
+            && std::fs::symlink_metadata(&legacy)
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.is_symlink())
         {
             for entry in std::fs::read_dir(legacy)? {
                 let entry = entry?;
@@ -379,11 +384,14 @@ impl Downloads {
         };
         let mut cover = String::new();
         if !card
-            && self
-                .source_cover(&book, sources, || {
+            && (document.cover().is_some()
+                || match self.source_cover(&book, sources, || {
                     self.covers.embedded(&document, &self.cache)
-                })?
-                .is_some()
+                }) {
+                    Ok(image) => image.is_some(),
+                    Err(error) if error.is::<MissingDecoder>() => false,
+                    Err(error) => return Err(error),
+                })
         {
             let query = url::form_urlencoded::Serializer::new(String::new())
                 .append_pair("uid", uid)
@@ -795,6 +803,7 @@ fn failure(error: Box<dyn std::error::Error>) -> StatusCode {
         DownloadError::Missing => StatusCode::NOT_FOUND,
         DownloadError::Limit => StatusCode::PAYLOAD_TOO_LARGE,
         DownloadError::Unsupported => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        DownloadError::DecoderMemory => StatusCode::UNPROCESSABLE_ENTITY,
         DownloadError::Internal => {
             eprintln!("Book download: {error}");
             StatusCode::INTERNAL_SERVER_ERROR

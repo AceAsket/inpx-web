@@ -101,7 +101,7 @@ impl Covers {
                     && source.is_none_or(|id| id == archives.sources[archive.source].id)
             }) {
                 if let Ok(Some(bytes)) = archive.read(&name, covers) {
-                    match self.normalize(bytes, cache) {
+                    match self.normalize(bytes, cache, IMAGE_LIMIT) {
                         Ok(Some(image)) => return Ok(Some(image)),
                         Err(error) if error.is::<MissingDecoder>() => missing_decoder = true,
                         _ => {}
@@ -116,16 +116,30 @@ impl Covers {
     }
 
     pub fn sidecar(&self, book: &Book, source: &Source, cache: &Path) -> Result<Option<Image>> {
-        let mut missing_decoder = false;
         if !source.remote {
-            for input in cover_inputs(&source.lib_dir, &book.folder, &book.file)? {
-                let mut bytes = Vec::new();
-                if extract_input(input, &mut bytes, IMAGE_LIMIT as u64).is_ok() {
-                    match self.browser_image(bytes, cache) {
-                        Ok(Some(image)) => return Ok(Some(image)),
-                        Err(error) if error.is::<MissingDecoder>() => missing_decoder = true,
-                        _ => {}
-                    }
+            return self.read_sidecars(
+                cover_inputs(&source.lib_dir, &book.folder, &book.file)?,
+                cache,
+                IMAGE_LIMIT,
+            );
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn read_sidecars(
+        &self,
+        inputs: Vec<crate::book_source::Input>,
+        cache: &Path,
+        limit: usize,
+    ) -> Result<Option<Image>> {
+        let mut missing_decoder = false;
+        for input in inputs {
+            let mut bytes = Vec::new();
+            if extract_input(input, &mut bytes, limit as u64).is_ok() {
+                match self.browser_image(bytes, cache, limit) {
+                    Ok(Some(image)) => return Ok(Some(image)),
+                    Err(error) if error.is::<MissingDecoder>() => missing_decoder = true,
+                    _ => {}
                 }
             }
         }
@@ -138,25 +152,30 @@ impl Covers {
 
     pub fn embedded(&self, document: &Document, cache: &Path) -> Result<Option<Image>> {
         match document.cover_bytes() {
-            Some(bytes) => self.browser_image(bytes, cache),
+            Some(bytes) => self.browser_image(bytes, cache, IMAGE_LIMIT),
             None => Ok(None),
         }
     }
 
-    fn browser_image(&self, bytes: Vec<u8>, cache: &Path) -> Result<Option<Image>> {
+    pub(crate) fn browser_image(
+        &self,
+        bytes: Vec<u8>,
+        cache: &Path,
+        limit: usize,
+    ) -> Result<Option<Image>> {
         if self.webp.is_none() && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-            return Ok(Image::from_bytes(bytes));
+            return Ok(Image::from_bytes_limited(bytes, limit));
         }
-        self.normalize(bytes, cache)
+        self.normalize(bytes, cache, limit)
     }
 
-    fn normalize(&self, bytes: Vec<u8>, cache: &Path) -> Result<Option<Image>> {
+    fn normalize(&self, bytes: Vec<u8>, cache: &Path, limit: usize) -> Result<Option<Image>> {
         let webp = bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP");
         let jxl = bytes.starts_with(b"\xff\x0a") || bytes.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n");
         let (extension, tool) = match (webp, jxl) {
             (true, _) => ("webp", self.webp.as_ref()),
             (_, true) => ("jxl", self.jxl.as_ref()),
-            _ => return Ok(Image::from_bytes(bytes)),
+            _ => return Ok(Image::from_bytes_limited(bytes, limit)),
         };
         let tool = tool.ok_or(MissingDecoder)?;
         let temp = tempfile::tempdir_in(cache)?;
@@ -172,9 +191,10 @@ impl Covers {
         run(command, Instant::now() + Duration::from_secs(15))?;
         let mut bytes = Vec::new();
         File::open(output)?
-            .take(IMAGE_LIMIT as u64 + 1)
+            .take(limit as u64 + 1)
             .read_to_end(&mut bytes)?;
-        Ok(Image::from_bytes(bytes).filter(|image| image.content_type == "image/png"))
+        Ok(Image::from_bytes_limited(bytes, limit)
+            .filter(|image| image.content_type == "image/png"))
     }
 }
 
@@ -310,7 +330,7 @@ fn embedded(
     })
 }
 
-fn read_member(
+pub(crate) fn read_member(
     archive: &mut Directory<impl Read + Seek>,
     name: &str,
     limit: u64,

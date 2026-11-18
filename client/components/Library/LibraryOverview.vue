@@ -167,6 +167,7 @@ input {min-width: 0; flex: 1; background: transparent; color: var(--app-text); b
 input::placeholder {color: var(--app-muted); opacity: 1;}
 .overview-search__filters, .overview-search__submit {color: var(--app-muted); border: 0; background: transparent; display: grid; place-items: center; width: 32px; height: 42px; border-radius: 8px; cursor: pointer; flex-shrink: 0;}
 .overview-reading {min-width: 0;}
+.overview-reading + .library-notice-card {margin-block-start: 24px;}
 .current-book {display: flex; flex-direction: column; max-width: 440px; border-radius: 20px; padding: 20px; background: var(--library-hero);}
 .current-book__caption {display: flex; align-items: center; gap: 9px; color: var(--library-on-hero); margin-bottom: 16px;}
 .current-book__caption h1 {font-size: 14px; font-weight: 550; letter-spacing: 0; flex: 1;}

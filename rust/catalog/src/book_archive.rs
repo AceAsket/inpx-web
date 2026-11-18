@@ -17,6 +17,10 @@ use crate::framed_protocol::{Frames, complete, header};
 
 const READER_BYTES: usize = 128 * 1024;
 const SEVEN_ZIP_MEMORY_KIB: usize = 128 * 1024;
+// Flibusta uses PPMd with a 256 MiB model. Only one high-memory decoder
+// may run at once, while ordinary archive reads remain independent.
+const LARGE_DECODER_KIB: usize = 256 * 1024;
+static LARGE_DECODER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const ARCHIVES_PER_WORKER: usize = 4;
 
 #[derive(Deserialize)]
@@ -55,6 +59,7 @@ struct Extract {
 #[derive(Debug)]
 pub(crate) enum Failure {
     Unsupported,
+    DecoderMemory { needed: usize, limit: usize },
     Missing,
     Limit,
     InvalidType,
@@ -72,6 +77,14 @@ impl std::error::Error for Failure {}
 impl Failure {
     fn message(&self) -> (&'static str, String) {
         match self {
+            Self::DecoderMemory { needed, limit } => (
+                "INPX_ARCHIVE_UNSUPPORTED",
+                format!(
+                    "Декодеру архива нужно {} МиБ памяти, лимит — {} МиБ",
+                    needed.div_ceil(1024),
+                    limit / 1024
+                ),
+            ),
             Self::Unsupported => (
                 "INPX_ARCHIVE_UNSUPPORTED",
                 "Архив требует другого декодера".into(),
@@ -116,8 +129,11 @@ impl From<sevenz_rust2::Error> for Failure {
             | Unsupported(_)
             | UnsupportedVersion { .. }
             | UnsupportedCompressionMethod(_)
-            | MaxMemLimited { .. }
             | PasswordRequired => Self::Unsupported,
+            MaxMemLimited { actaul_kb, max_kb } => Self::DecoderMemory {
+                needed: actaul_kb,
+                limit: max_kb,
+            },
             FileNotFound => Self::Missing,
             _ => Self::Other(error.into()),
         }
@@ -559,7 +575,15 @@ impl<R: Read + Seek> Directory<R> {
 impl SevenZip {
     fn open(reader: &mut (impl Read + Seek)) -> Extraction<Self> {
         let password = Password::empty();
-        let archive = Archive::read_with_memory_limit(reader, &password, SEVEN_ZIP_MEMORY_KIB)?;
+        let archive = match Archive::read_with_memory_limit(reader, &password, SEVEN_ZIP_MEMORY_KIB)
+        {
+            Err(sevenz_rust2::Error::MaxMemLimited { .. }) => {
+                let _guard = LARGE_DECODER.lock().unwrap_or_else(|e| e.into_inner());
+                reader.rewind()?;
+                Archive::read_with_memory_limit(reader, &password, LARGE_DECODER_KIB)?
+            }
+            result => result?,
+        };
         let mut names = HashMap::with_capacity(archive.files.len());
         for (index, entry) in archive.files.iter().enumerate() {
             let name = entry.name.replace('\\', "/");
@@ -591,22 +615,31 @@ impl SevenZip {
             return process(entry.size, &mut io::empty());
         }
         let block = self.archive.stream_map.file_block_index[index].ok_or(Failure::Missing)?;
-        let decoder = BlockDecoder::new_with_memory_limit(
-            1,
-            SEVEN_ZIP_MEMORY_KIB,
-            block,
-            &self.archive,
-            &self.password,
-            source,
-        );
         let mut result = Err(Failure::Missing);
-        decoder.for_each_entries(&mut |candidate, reader| {
-            if !std::ptr::eq(entry, candidate) {
-                return Ok(true);
+        let mut decode = |limit| {
+            let decoder = BlockDecoder::new_with_memory_limit(
+                1,
+                limit,
+                block,
+                &self.archive,
+                &self.password,
+                &mut *source,
+            );
+            decoder.for_each_entries(&mut |candidate, reader| {
+                if !std::ptr::eq(entry, candidate) {
+                    return Ok(true);
+                }
+                result = process(entry.size, reader);
+                Ok(false)
+            })
+        };
+        match decode(SEVEN_ZIP_MEMORY_KIB) {
+            Err(sevenz_rust2::Error::MaxMemLimited { .. }) => {
+                let _guard = LARGE_DECODER.lock().unwrap_or_else(|e| e.into_inner());
+                decode(LARGE_DECODER_KIB)?
             }
-            result = process(entry.size, reader);
-            Ok(false)
-        })?;
+            other => other?,
+        };
         result
     }
 }

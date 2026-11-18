@@ -1,4 +1,7 @@
+use once_cell::sync::OnceCell;
+use std::collections::{BTreeMap, VecDeque};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use inpx_reader::{Record, js_whitespace};
 use serde_json::{Map, Value, json};
@@ -30,6 +33,10 @@ struct Search {
     ratings: Option<(u64, u64)>,
     isbn: Option<String>,
 }
+
+// Order belongs to one published catalogue. A cell shares an in-flight search
+// across pages without holding the cache mutex while reading the store.
+pub(crate) type SearchOrders = VecDeque<(String, Arc<OnceCell<Arc<Vec<u32>>>>)>;
 
 impl Search {
     fn new(query: &Map<String, Value>, except: &str) -> Result<Self> {
@@ -333,26 +340,72 @@ impl Catalogue {
 
     pub(crate) fn filtered_shelf_ids(&self, query: &Map<String, Value>) -> Result<Vec<u32>> {
         let search = Search::new(query, "")?;
-        let candidates = self.search_candidates(&search)?;
-        self.store.browser_search_order(
-            &self.generation,
-            candidates.as_deref(),
-            |book| search.matches(book),
-            search.hide_copies,
-        )
+        Ok(self.ordered_books(query, &search)?.as_ref().clone())
+    }
+
+    fn ordered_books(&self, query: &Map<String, Value>, search: &Search) -> Result<Arc<Vec<u32>>> {
+        let compute = || {
+            let candidates = self.search_candidates(search)?;
+            let all = !search.constrained();
+            let active = search.active_only();
+            self.store
+                .browser_search_order(
+                    &self.generation,
+                    candidates.as_deref(),
+                    |row, del| {
+                        Ok(if all {
+                            true
+                        } else if active {
+                            del == Some(0)
+                        } else {
+                            search.matches(&serde_json::from_slice(row)?)
+                        })
+                    },
+                    search.hide_copies,
+                )
+                .map(Arc::new)
+        };
+        if search.isbn.is_some() || search.ratings.is_some() {
+            return compute();
+        }
+        let key = serde_json::to_string(
+            &query
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "offset" | "limit" | "page"))
+                .collect::<BTreeMap<_, _>>(),
+        )?;
+        if key.len() > 4096 {
+            return compute();
+        }
+        let cell = {
+            let mut orders = self
+                .search_orders
+                .lock()
+                .map_err(|_| "Search cache unavailable")?;
+            let entry = orders
+                .iter()
+                .position(|(saved, _)| saved == &key)
+                .and_then(|i| orders.remove(i))
+                .unwrap_or_else(|| (key, Arc::default()));
+            let cell = entry.1.clone();
+            orders.push_front(entry);
+            orders.truncate(6);
+            cell
+        };
+        cell.get_or_try_init(compute).cloned()
     }
 
     pub fn browser_books(&self, query: &Map<String, Value>) -> Result<Value> {
         let search = Search::new(query, "")?;
-        let candidates = self.search_candidates(&search)?;
-        let (found, total) = self.store.browser_search(
-            &self.generation,
-            candidates.as_deref(),
-            |book| search.matches(book),
-            search.hide_copies,
-            search.start,
-            search.limit,
-        )?;
+        let ids = self.ordered_books(query, &search)?;
+        let total = ids.len();
+        let page = ids
+            .iter()
+            .skip(search.start)
+            .take(search.limit)
+            .copied()
+            .collect();
+        let found = self.store.catalogue_rows(&self.generation, page)?;
         Ok(json!({"found":found,"totalFound":total}))
     }
 

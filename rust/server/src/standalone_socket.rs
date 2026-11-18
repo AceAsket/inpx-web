@@ -861,6 +861,7 @@ impl Socket {
                         match classify(failure.as_ref()) {
                             DownloadError::Missing => fault("404 Файл не найден"),
                             DownloadError::Unsupported => fault("Неподдерживаемый формат книги"),
+                            DownloadError::DecoderMemory => fault(&failure.to_string()),
                             DownloadError::Limit => fault("Файл книги слишком большой"),
                             DownloadError::Internal => {
                                 eprintln!("WebSocket book link: {failure}");
@@ -1348,13 +1349,13 @@ async fn run(
                     if send(&mut socket, fault(reason), id).await.is_err() { return; }
                     continue;
                 }
+                if send(&mut socket,json!({"_rok":1}),id.clone()).await.is_err() { return; }
                 let Some(permit) = (running.len() < CONNECTION_REQUESTS)
                     .then(|| state.socket.jobs.clone().try_acquire_owned().ok()).flatten()
                 else {
-                    close(&mut socket, CloseCode::Again, "Too many active requests").await;
-                    return;
+                    if send(&mut socket, fault("server_busy"), id).await.is_err() { return; }
+                    continue;
                 };
-                if send(&mut socket,json!({"_rok":1}),id.clone()).await.is_err() { return; }
                 let state = state.clone();
                 let browser = browser.clone();
                 let admission = admission.clone();

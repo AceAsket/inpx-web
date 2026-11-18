@@ -332,6 +332,7 @@ pub(super) fn book_error(error: Box<dyn std::error::Error>) -> Box<dyn std::erro
         DownloadError::Missing => "Файл книги не найден".into(),
         DownloadError::Limit => "Файл книги слишком большой".into(),
         DownloadError::Unsupported => "Неподдерживаемый формат книги".into(),
+        DownloadError::DecoderMemory => error,
         DownloadError::Internal => {
             if error
                 .to_string()

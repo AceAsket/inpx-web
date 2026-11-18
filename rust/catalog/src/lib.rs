@@ -45,6 +45,7 @@ mod epub_input;
 mod epub_prepare;
 mod facets;
 mod fb2_prepare;
+mod fb2_sidecars;
 mod file_stamp;
 mod folder_fb2;
 pub mod folder_index;

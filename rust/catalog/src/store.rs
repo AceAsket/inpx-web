@@ -523,6 +523,18 @@ pub struct Match {
 }
 
 impl Match {
+    fn retain_best(mut self, key: String, matches: &mut HashMap<String, Match>) {
+        matches
+            .entry(key)
+            .and_modify(|old| {
+                if self.score > old.score || self.score == old.score && self.id < old.id {
+                    self.order = old.order;
+                    std::mem::swap(old, &mut self);
+                }
+            })
+            .or_insert(self);
+    }
+
     fn catalogue_order(&self, right: &Self) -> std::cmp::Ordering {
         self.author
             .cmp(&right.author)
@@ -654,6 +666,17 @@ impl BookStore {
         candidates: Option<&[u32]>,
         mut visitor: impl FnMut(u32, &[u8]) -> Result<()>,
     ) -> Result<()> {
+        self.visit_stored_rows(generation, candidates, |id, data| {
+            visitor(id, decode(data)?.0)
+        })
+    }
+
+    fn visit_stored_rows(
+        &self,
+        generation: Option<&str>,
+        candidates: Option<&[u32]>,
+        mut visitor: impl FnMut(u32, &[u8]) -> Result<()>,
+    ) -> Result<()> {
         let base = self.base.begin_read()?;
         let patch = self
             .patch
@@ -682,14 +705,12 @@ impl BookStore {
                 if let Some(row) = row
                     && !row.value().is_empty()
                 {
-                    visitor(id, decode(row.value())?.0)?;
+                    visitor(id, row.value())?;
                 }
             }
             return Ok(());
         }
-        wide_search::visit_rows(&records, updated.as_ref(), 0..=u32::MAX, &mut |id, data| {
-            visitor(id, decode(data)?.0)
-        })
+        wide_search::visit_rows(&records, updated.as_ref(), 0..=u32::MAX, &mut visitor)
     }
 
     pub fn count_files(&self, generation: &str) -> Result<FileTotals> {
@@ -711,7 +732,7 @@ impl BookStore {
         counts.finish()
     }
 
-    fn facet<T>(
+    pub(crate) fn facet<T>(
         &self,
         table: Facet,
         read: impl FnOnce(Option<&Postings>) -> Result<T>,
@@ -799,40 +820,47 @@ impl BookStore {
         })
     }
 
-    pub(crate) fn browser_search(
-        &self,
-        generation: &str,
-        candidates: Option<&[u32]>,
-        matches: impl FnMut(&inpx_reader::Record) -> bool,
-        merge: bool,
-        start: usize,
-        limit: usize,
-    ) -> Result<(Vec<inpx_reader::Record>, usize)> {
-        let ids = self.browser_search_order(generation, candidates, matches, merge)?;
-        let total = ids.len();
-        let page = ids.into_iter().skip(start).take(limit).collect();
-        Ok((self.catalogue_rows(generation, page)?, total))
-    }
-
     pub(crate) fn browser_search_order(
         &self,
         generation: &str,
         candidates: Option<&[u32]>,
-        mut matches: impl FnMut(&inpx_reader::Record) -> bool,
+        matches: impl Fn(&[u8], Option<i64>) -> Result<bool>,
         merge: bool,
     ) -> Result<Vec<u32>> {
-        let mut ids = Vec::new();
-        self.visit_search_rows(generation, candidates, |id, raw| {
-            let row = serde_json::from_slice(raw)?;
-            if matches(&row) {
-                ids.push(id);
+        #[derive(Deserialize)]
+        struct Rank {
+            score: f64,
+            physical: String,
+        }
+        let mut ranked = HashMap::new();
+        let mut order = 0;
+        self.visit_stored_rows(Some(generation), candidates, |id, bytes| {
+            let (record, projection) = decode(bytes)?;
+            let row: SearchRow = serde_json::from_slice(record)?;
+            if !matches(record, row.del)? {
+                return Ok(());
             }
+            let rank: Rank = serde_json::from_slice(projection)?;
+            let key = if merge {
+                crate::catalog_query::merged_key_from_record(record)?
+            } else {
+                rank.physical
+            };
+            Match {
+                id,
+                order,
+                score: rank.score,
+                author: row.author,
+                title: row.title,
+                series: row.series,
+                serno: row.serno,
+                copy: None,
+            }
+            .retain_best(key, &mut ranked);
+            order += 1;
             Ok(())
         })?;
-        if ids.is_empty() {
-            return Ok(ids);
-        }
-        let mut candidates = self.rank_shelf_ids(generation, ids, merge)?;
+        let mut candidates: Vec<_> = ranked.into_values().collect();
         candidates.sort_unstable_by(Match::catalogue_order);
         Ok(candidates.into_iter().map(|book| book.id).collect())
     }
@@ -1159,7 +1187,7 @@ impl BookStore {
                     {
                         continue;
                     }
-                    let mut candidate = Match {
+                    let candidate = Match {
                         id,
                         order,
                         score: fields.score,
@@ -1177,17 +1205,7 @@ impl BookStore {
                     } else {
                         fields.physical
                     };
-                    matches
-                        .entry(key)
-                        .and_modify(|old| {
-                            if candidate.score > old.score
-                                || candidate.score == old.score && candidate.id < old.id
-                            {
-                                candidate.order = old.order;
-                                std::mem::swap(old, &mut candidate);
-                            }
-                        })
-                        .or_insert(candidate);
+                    candidate.retain_best(key, &mut matches);
                 }
                 StoreResponse::Matches(matches.into_values().collect())
             }

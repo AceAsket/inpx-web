@@ -215,6 +215,9 @@ async function testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability
     assert.equal(model.readable({bookUid: 'a', ext: 'fb2'}, {onlineReaderEnabled: true}), true);
     assert.equal(model.readable({bookUid: 'a', ext: 'fb2', unavailable: true}, {onlineReaderEnabled: true}), false);
     assert.equal(model.coverUrl({bookUid: 'source:a/b'}, '/library/'), '/library/cover/by-uid?uid=source%3Aa%2Fb&cache=rc13');
+    const revision = '2026-11-18T10:00:00.000Z';
+    assert.equal(model.coverUrl({bookUid: 'source:a/b'}, '/library/', revision),
+        '/library/cover/by-uid?uid=source%3Aa%2Fb&cache=' + encodeURIComponent(revision));
     assert.equal(model.coverUrl({libid: 7, sourceId: 'other lib'}, '/library'), '/library/cover/other%20lib/7?cache=rc13');
     assert.deepEqual(Array.from(model.genreMapFromTree([{value: [{value: 'sf', name: 'Фантастика'}, {value: 'prose', name: 'Проза'}]}, {}])), [['sf', 'Фантастика'], ['prose', 'Проза']]);
 }

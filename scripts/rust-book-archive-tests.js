@@ -119,8 +119,13 @@ async function verify(worker,root,sevenZip) {
         }
         await assert.rejects(extract(worker,basename(archive),names[2],{maxOutputBytes:1000}),{code:'INPX_RESOURCE_OUTPUT_LIMIT'});
     }
+    const ppmd = join(root,'ppmd.7z');
+    await exec(sevenZip,['a','-t7z','-m0=PPMd:o32:mem=256m','-mmt=1',ppmd,'a.fb2'],{cwd:join(root,'inputs'),windowsHide:true});
+    assert.equal(await BookArchive.extract(ppmd,'a.fb2',nativeOutput),true);
+    assert.deepEqual(await fs.readFile(nativeOutput),entries[0]);
+    await fs.unlink(nativeOutput);
     assert.deepEqual(await fs.readdir(worker.config.tempDir),[]);
-    console.log('ok Rust book archive: ZIP64, stored/deflate, UTF-8/CP866, CRC, limits, cache replacement, direct files and solid/non-solid 7z');
+    console.log('ok Rust book archive: ZIP64, stored/deflate, UTF-8/CP866, CRC, limits, cache replacement, solid/non-solid 7z and 256 MiB PPMd');
 }
 
 async function benchmark(worker,root,sevenZip,binary) {

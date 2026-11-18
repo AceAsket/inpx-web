@@ -56,6 +56,9 @@ impl Reader {
             Err(Failure::Unsupported) => {
                 Outcome::Issue("skipped", "Формат архива недоступен для проверки".into())
             }
+            Err(error @ Failure::DecoderMemory { .. }) => {
+                Outcome::Issue("skipped", error.to_string())
+            }
             Err(Failure::Other(error))
                 if error
                     .downcast_ref::<io::Error>()

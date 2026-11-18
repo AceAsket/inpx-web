@@ -196,7 +196,7 @@ async function observerRevoked(base, root, writer, subscriber, identity, update,
     assert.equal(writer.events.length,0);
 }
 
-module.exports = {fixture,verify,connect,signIn,title,password,waitFor};
+module.exports = {fixture,verify,connect,signIn,title,password,waitFor,zip};
 
 if (require.main===module) {
     const [target,path] = process.argv.slice(2);

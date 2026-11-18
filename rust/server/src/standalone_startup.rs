@@ -34,6 +34,8 @@ pub(super) fn response(state: &State, request: &Request<Incoming>) -> Response<B
         "previous identities" => "Чтение прежних идентификаторов книг",
         "load inpx" => "Загрузка записей библиотеки",
         "book save" => "Сохранение книг",
+        "book order" => "Сохранение порядка книг",
+        "postings" => "Сохранение списков поискового индекса",
         "lookup order" => "Сортировка поискового индекса",
         "lookup" => "Запись поискового индекса",
         "validate" => "Проверка готового индекса",

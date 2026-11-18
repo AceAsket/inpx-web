@@ -32,25 +32,51 @@ pub(crate) fn resolve(library: &Path, folder: &str, name: &str) -> io::Result<In
 
 pub(crate) fn cover_inputs(library: &Path, folder: &str, file: &str) -> io::Result<Vec<Input>> {
     let folder = relative(folder)?;
+    if folder.is_empty() {
+        return Ok(vec![]);
+    }
+    let root = library.canonicalize()?;
+    let archive = archive_location(&root, &folder)?.unwrap_or_else(|| root.join(folder));
+    asset_inputs(&root, &archive, file, "covers")
+}
+
+pub(crate) fn fb2_inputs(
+    library: &Path,
+    folder: &str,
+    file: &str,
+    book: &Input,
+) -> io::Result<(Vec<Input>, Vec<Input>)> {
+    if folder.is_empty() {
+        return Ok((vec![], vec![]));
+    }
+    let root = library.canonicalize()?;
+    let archive = if book.member.is_some() {
+        book.path.clone()
+    } else {
+        let folder = relative(folder)?;
+        archive_location(&root, &folder)?.unwrap_or_else(|| root.join(folder))
+    };
+    Ok((
+        asset_inputs(&root, &archive, file, "covers")?,
+        asset_inputs(&root, &archive, file, "images")?,
+    ))
+}
+
+fn asset_inputs(root: &Path, archive: &Path, file: &str, kind: &str) -> io::Result<Vec<Input>> {
     let file = relative(file)?;
     let Some(stem) = Path::new(&file).file_stem().and_then(|name| name.to_str()) else {
         return Ok(Vec::new());
     };
-    if folder.is_empty() || stem.is_empty() {
-        return Ok(Vec::new());
-    }
-    let root = library.canonicalize()?;
-    let parent = root.parent().unwrap_or(&root);
-    let archive = archive_location(&root, &folder)?.unwrap_or_else(|| root.join(folder));
+    let parent = root.parent().unwrap_or(root);
     let Some(archive_name) = archive.file_stem() else {
         return Ok(Vec::new());
     };
     let mut found = Vec::new();
     let mut visited = std::collections::HashSet::new();
     for directory in [
-        archive.parent().unwrap_or(&root).join("covers"),
-        root.join("covers"),
-        parent.join("covers"),
+        archive.parent().unwrap_or(root).join(kind),
+        root.join(kind),
+        parent.join(kind),
     ] {
         let Ok(directory) = directory.canonicalize() else {
             continue;
@@ -63,14 +89,17 @@ pub(crate) fn cover_inputs(library: &Path, folder: &str, file: &str) -> io::Resu
             name.push(".");
             name.push(ext);
             let path = directory.join(name);
-            let Some(path) = existing(parent, &path)? else {
+            let Ok(Some(path)) = existing(parent, &path) else {
                 continue;
             };
             if !path.is_file() {
                 continue;
             }
+            let Ok(file) = open_within(parent, &path) else {
+                continue;
+            };
             found.push(Input {
-                file: open_within(parent, &path)?,
+                file,
                 path,
                 member: Some(stem.into()),
             });
@@ -152,10 +181,12 @@ fn archive_location(root: &Path, folder: &str) -> io::Result<Option<PathBuf>> {
     }
     for entry in ordered_entries(root)? {
         let (subdir, entry) = entry?;
+        // Asset archives deliberately share the name of their book archive.
+        // Only an explicitly selected folder may resolve into an asset directory.
         if entry.file_type()?.is_dir()
-            && !["fb2", "books", "archives"]
+            && !["fb2", "books", "archives", "images", "covers", "authors"]
                 .iter()
-                .any(|name| subdir == *name)
+                .any(|name| subdir.eq_ignore_ascii_case(name))
             && let Some(found) = archive_variant(root, &entry.path().join(name))?
         {
             return Ok(Some(found));

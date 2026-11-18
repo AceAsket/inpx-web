@@ -1549,7 +1549,7 @@ async function verifyIndexRefresh(binary, root) {
     const original = join(loose,'original.fb2'), replacement = join(loose,'replacement.fb2');
     const book = title=>`<FictionBook><description><title-info><book-title>${title}</book-title><lang>en</lang></title-info></description><body><section><p>Sample.</p></section></body></FictionBook>`;
     const settings = {server:{host:'127.0.0.1',port:0,root:'/reader'},opds:{enabled:true,root:'/catalogue'},
-        inpxCheckInterval:0, librarySources:[{id:'main',inpx:archive},
+        inpxCheckInterval:0, librarySources:[{id:'main',inpx:archive,libDir:library},
             {id:'loose',type:'folder',libDir:loose}]};
     const args = ['--standalone','--data-dir='+data,'--config='+config,'--web-bundle='+web,'--admin-password=fixture-admin'];
     await createFixture(library);
@@ -1589,6 +1589,21 @@ async function verifyIndexRefresh(binary, root) {
             const command = {action:'admin-reindex',csrfToken,profileAccessToken,userId:'admin'};
             const originalBook = await find(ws,'Packaged smoke book');
             stable = originalBook._uid;
+            const coverUrl = '/reader/cover/by-uid?'+new URLSearchParams({uid:stable});
+            async function readCover() {
+                const response = await fetch(url + coverUrl);
+                assert.equal(response.status,200);
+                return bytes(response);
+            }
+            const embedded = await readCover();
+            assert.equal(embedded.readUInt32BE(0),0x89504e47);
+            const link = () => ws.request({...command,action:'get-book-link',bookUid:stable});
+            const first = await link();
+            assert.ok(first.link,first.error);
+            const descriptor = join(data,'public-files','source-verified-v1','book',first.link.split('/').pop()+'.d.json');
+            await fs.writeFile(descriptor,JSON.stringify({...await readJson(descriptor),cacheHitMarker:true}));
+            assert.equal((await link()).link,first.link);
+            assert.equal((await readJson(descriptor)).cacheHitMarker,true,'A repeat request republished the book');
             assert(await find(ws,'Original folder record'));
             const follow = (operation,payload)=>ws.request({...command,action:'change-library-follow',operation,payload});
             const news = options=>ws.request({...command,action:'get-library-follows',options});
@@ -1600,6 +1615,7 @@ async function verifyIndexRefresh(binary, root) {
             assert.deepEqual((await follow('add',{kind:'series',value:'Подписная серия'})).follows.map(row=>row.unread),[0,0]);
             assert.deepEqual((await news({autoRefresh:true,limit:0})).follows.map(row=>row.revision),[1,1]);
             const before = await index(url);
+            // The same UID retains its embedded cover across publication.
             await fs.unlink(original);
             await fs.writeFile(replacement,book('Replacement folder record'));
             const row = ['Tester,Smoke:', 'sf:', 'Updated smoke book', '', '0', '1', '100', '1', '0', 'fb2', '2026-09-14', 'en', '0', ''];
@@ -1617,6 +1633,31 @@ async function verifyIndexRefresh(binary, root) {
             assert.equal(after.indexUpdate.recordsChanged,3);
             assert.equal(after.indexUpdate.recordsRemoved,1);
             assert.equal((await find(ws,'Updated smoke book'))._uid,stable);
+            assert.deepEqual(await readCover(),embedded);
+            // A changed sidecar must be observed even when the INPX row stays the same.
+            const external = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==','base64');
+            await fs.mkdir(join(library,'covers'),{recursive:true});
+            await fs.writeFile(join(library,'covers','smoke.zip'),await zip([['1',external]]));
+            await fs.mkdir(join(library,'images'),{recursive:true});
+            await fs.writeFile(join(library,'images','smoke.zip'),await zip([['1/figure',embedded]]));
+            const stripped = '<FictionBook><description><title-info><book-title>Updated smoke book</book-title></title-info></description><body><section><image href="#figure"/></section></body></FictionBook>';
+            // Both asset directories also contain smoke.zip, ahead of the book
+            // directory in alphabetical order.
+            await fs.mkdir(join(library,'volumes'),{recursive:true});
+            await fs.rename(join(library,'smoke.zip'),join(library,'volumes','smoke.zip'));
+            await fs.writeFile(join(library,'volumes','smoke.zip'),await zip([['1.fb2',stripped]]));
+            const current = await index(url);
+            assert.equal((await ws.request(command)).started,true);
+            await updated(url,status=>status.indexUpdate.updatedAt!==current.indexUpdate.updatedAt);
+            assert.deepEqual(await readCover(),external);
+            const restored = await link();
+            assert.notEqual(restored.link,first.link);
+            const gallery = await ws.request({...command,action:'get-book-gallery',bookUid:stable});
+            assert.deepEqual(gallery.images.map(image=>image.id),['figure']);
+            const raw = await (await fetch(url+restored.link+'/raw')).text();
+            assert(raw.includes(embedded.toString('base64')) && raw.includes(external.toString('base64')));
+            await fs.writeFile(join(library,'images','smoke.zip'),await zip([['1/figure',external]]));
+            assert.notEqual((await link()).link,restored.link);
             assert.equal(await find(ws,'Packaged smoke book'),undefined);
             assert.equal(await find(ws,'Original folder record'),undefined);
             assert(await find(ws,'Replacement folder record'));
@@ -1688,6 +1729,21 @@ async function verifyIndexRefresh(binary, root) {
         } finally { await legacy.stop(); }
     }
     console.log('ok standalone admin, periodic and forced catalogue updates preserve book identity and recover from a broken filter');
+}
+
+async function verifyTwoLibraries(binary, root) {
+    const libraries = require('./rust-two-libraries-tests');
+    const state = await libraries.fixture(root);
+    const web = join(root, 'web.json');
+    await bundle(web);
+    const args = ['--standalone', '--host=127.0.0.1', '--data-dir=' + join(root, 'data'),
+        '--config=' + join(root, 'config.json'), '--web-bundle=' + web, '--admin-password=' + libraries.password];
+    for (const reindex of [true, false]) {
+        const server = await start(binary, args);
+        try { await libraries.verify(server.url, state, reindex); }
+        finally { await server.stop(); }
+    }
+    console.log('ok two INPX libraries retain separate books, covers, illustrations and progress after reindex and restart');
 }
 
 async function verifyLibraryMedia(binary, root) {
@@ -2372,6 +2428,7 @@ async function verifyJembaUpgrade(binary, root) {
         await verifyLibraryPassword(binary,join(root,'library-password'));
         await verifyServiceRoutes(binary,join(root,'services'));
         await verifyIndexRefresh(binary,join(root,'reindex'));
+        await verifyTwoLibraries(binary,join(root,'two-libraries'));
         await verifyOverview(binary,join(root,'overview'));
         await verifyLibraryMedia(binary,join(root,'library-media'));
         await verifyReaderTransfer(binary,join(root,'reader-transfer'));

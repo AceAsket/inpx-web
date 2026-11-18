@@ -385,6 +385,9 @@ fn read_error(error: Box<dyn std::error::Error>) -> Failure {
             "Текст книги не найден. Скачайте оригинал.",
         ),
         DownloadError::Internal => error.into(),
+        DownloadError::DecoderMemory => {
+            Failure::new(StatusCode::UNPROCESSABLE_ENTITY, error.to_string())
+        }
     }
 }
 

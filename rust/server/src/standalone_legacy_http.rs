@@ -86,7 +86,13 @@ impl Routes {
             return state.legacy.recovery(head);
         }
         let cover = matches!(&route, Route::Cover(_));
-        let Ok(permit) = state.download_slots.clone().try_acquire_owned() else {
+        let slots = state.download_slots.clone();
+        let permit = if cover {
+            slots.acquire_owned().await.ok()
+        } else {
+            slots.try_acquire_owned().ok()
+        };
+        let Some(permit) = permit else {
             return error(StatusCode::SERVICE_UNAVAILABLE);
         };
         let state = state.clone();

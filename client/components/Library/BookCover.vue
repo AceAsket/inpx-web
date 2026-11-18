@@ -19,7 +19,10 @@ const props = defineProps({book: {type: Object, required: true}, showRating:{typ
 const emit = defineEmits(['load', 'error']);
 const store = useStore();
 const element = ref(null), visible = ref(false), failed = ref(false);
-const src = computed(() => coverUrl(props.book, store.state.config.rootPathStatic));
+const src = computed(() => {
+    const {rootPathStatic, dbConfig} = store.state.config;
+    return coverUrl(props.book, rootPathStatic, dbConfig?.indexUpdate?.updatedAt || dbConfig?.inpxHash);
+});
 const letter = computed(() => Array.from(props.book.title || 'К')[0].toUpperCase());
 const color = computed(() => {
     const colors = ['#286b64', '#405d77', '#73594f', '#5e5578', '#556c47'];

@@ -112,7 +112,12 @@ impl FolderCache {
                 self.store(file, &path, &metadata)?;
                 Ok(true)
             }
-            Err(Failure::Unsupported | Failure::Missing | Failure::Other(_)) => Ok(false),
+            Err(
+                Failure::Unsupported
+                | Failure::DecoderMemory { .. }
+                | Failure::Missing
+                | Failure::Other(_),
+            ) => Ok(false),
             Err(error) => Err(error.into()),
         }
     }

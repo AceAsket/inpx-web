@@ -1,6 +1,9 @@
+use std::collections::VecDeque;
 use std::fs::{self, File};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -176,44 +179,103 @@ pub fn cache_directory(data: &Path) -> Result<PathBuf> {
 }
 
 pub fn cached(directory: &Path, hash: &str) -> Result<Option<Cached>> {
-    let value = book_cache::inspect(directory, hash, None, false, false)?;
-    Ok(if value.is_null() {
-        None
-    } else {
-        Some(Cached {
-            hash: hash.into(),
-            descriptor: serde_json::from_value(value)?,
-        })
-    })
+    lookup_cached(directory, hash, false)
 }
 
-pub fn prepare(directory: &Path, book: &Book, source: &Source) -> Result<Cached> {
-    prepare_limited(directory, book, source, None)
+fn lookup_cached(directory: &Path, hash: &str, refresh: bool) -> Result<Option<Cached>> {
+    let value = book_cache::inspect(directory, hash, None, refresh, false)?;
+    Ok(serde_json::from_value(value).ok().map(|descriptor| Cached {
+        hash: hash.into(),
+        descriptor,
+    }))
 }
 
-pub fn prepare_limited(
-    directory: &Path,
-    book: &Book,
-    source: &Source,
-    limit: Option<u64>,
-) -> Result<Cached> {
-    let extension = book.extension().ok_or(Failure::InvalidType)?;
-    let lib_file = format!("{}.{extension}", book.file);
-    let input = book_source::resolve(&source.lib_dir, &book.folder, &lib_file)?;
-    let temp = tempfile::Builder::new()
-        .prefix(".extract-")
-        .tempdir_in(directory)?;
-    let raw = temp.path().join("book");
-    let mut output = BufWriter::new(File::create_new(&raw)?);
-    let fb2 = extension.eq_ignore_ascii_case("fb2");
-    let cap = limit.unwrap_or(if fb2 { MAX_FB2 } else { u64::MAX });
-    extract_input(input, &mut output, cap)?;
-    output.flush()?;
-    drop(output);
-    if fb2 && fb2_prepare::normalize_bounded(&raw, cap)?.is_none() {
-        return Err(Failure::Unsupported.into());
+struct LocalEntry {
+    uid: String,
+    inputs: Vec<(PathBuf, Option<String>, crate::file_stamp::FileStamp)>,
+    hash: String,
+    extracted_size: u64,
+}
+
+#[derive(Default)]
+pub struct LocalBooks {
+    shards: [Mutex<VecDeque<LocalEntry>>; 32],
+}
+
+impl LocalBooks {
+    pub fn prepare(
+        &self,
+        directory: &Path,
+        book: &Book,
+        source: &Source,
+        decoder: &crate::legacy_library_files::Covers,
+        limit: Option<u64>,
+    ) -> Result<Cached> {
+        let extension = book.extension().ok_or(Failure::InvalidType)?;
+        let fb2 = extension.eq_ignore_ascii_case("fb2");
+        let cap = limit.unwrap_or(if fb2 { MAX_FB2 } else { u64::MAX });
+        let mut key = DefaultHasher::new();
+        book.uid.hash(&mut key);
+        let mut entries = self.shards[key.finish() as usize % self.shards.len()]
+            .lock()
+            .map_err(|_| "Book cache unavailable")?;
+        let lib_file = format!("{}.{extension}", book.file);
+        let input = book_source::resolve(&source.lib_dir, &book.folder, &lib_file)?;
+        let (covers, images) = if fb2 {
+            book_source::fb2_inputs(&source.lib_dir, &book.folder, &book.file, &input)?
+        } else {
+            (vec![], vec![])
+        };
+        let inputs = std::iter::once(&input)
+            .chain(&covers)
+            .chain(&images)
+            .map(|item| {
+                Ok((
+                    item.path.clone(),
+                    item.member.clone(),
+                    crate::file_stamp::stamp(&item.file)?,
+                ))
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        if let Some(i) = entries
+            .iter()
+            .position(|entry| entry.uid == book.uid && entry.inputs == inputs)
+            && let Some(hit) = lookup_cached(directory, &entries[i].hash, true)?
+            && hit.matches(book, source)
+        {
+            if hit.size().max(entries[i].extracted_size) > cap {
+                return Err(Failure::Limit.into());
+            }
+            let entry = entries.remove(i).expect("existing cached book");
+            entries.push_front(entry);
+            return Ok(hit);
+        }
+        let temp = tempfile::Builder::new()
+            .prefix(".extract-")
+            .tempdir_in(directory)?;
+        let raw = temp.path().join("book");
+        let mut output = BufWriter::new(File::create_new(&raw)?);
+        extract_input(input, &mut output, cap)?;
+        output.flush()?;
+        let extracted_size = output.get_ref().metadata()?.len();
+        drop(output);
+        if fb2 && fb2_prepare::normalize_bounded(&raw, cap)?.is_none() {
+            return Err(Failure::Unsupported.into());
+        }
+        if fb2 && (!covers.is_empty() || !images.is_empty()) {
+            crate::fb2_sidecars::restore(&raw, decoder, directory, covers, images, cap)?;
+        }
+        let result = publish(directory, book, source, &raw)?;
+        entries.retain(|entry| entry.uid != book.uid);
+        entries.push_front(LocalEntry {
+            uid: book.uid.clone(),
+            inputs,
+            hash: result.hash.clone(),
+            extracted_size,
+        });
+        entries.truncate(16);
+        Ok(result)
     }
-    publish(directory, book, source, &raw)
 }
 
 pub fn too_large() -> Box<dyn std::error::Error> {
@@ -348,6 +410,7 @@ pub enum DownloadError {
     Missing,
     Limit,
     Unsupported,
+    DecoderMemory,
     Internal,
 }
 
@@ -360,6 +423,7 @@ pub fn classify(error: &(dyn std::error::Error + 'static)) -> DownloadError {
             Failure::Missing | Failure::InvalidType => DownloadError::Missing,
             Failure::Limit => DownloadError::Limit,
             Failure::Unsupported => DownloadError::Unsupported,
+            Failure::DecoderMemory { .. } => DownloadError::DecoderMemory,
             Failure::Other(cause) => classify(cause.as_ref()),
         };
     }

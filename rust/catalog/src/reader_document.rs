@@ -339,7 +339,11 @@ pub struct Image {
 
 impl Image {
     pub(crate) fn from_bytes(bytes: Vec<u8>) -> Option<Self> {
-        if bytes.len() > IMAGE_LIMIT {
+        Self::from_bytes_limited(bytes, IMAGE_LIMIT)
+    }
+
+    pub(crate) fn from_bytes_limited(bytes: Vec<u8>, limit: usize) -> Option<Self> {
+        if bytes.len() > limit {
             return None;
         }
         let content_type = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -361,7 +365,18 @@ impl Image {
 
     pub fn stage(&self, directory: &Path) -> Result<PathBuf> {
         let target = self.stage_path(directory);
-        if book_cache::regular_file(&target, true)?.is_none() {
+        if let Some(mut existing) = book_cache::regular_file(&target, false)? {
+            let mut bytes = Vec::new();
+            if existing.metadata()?.len() == self.bytes.len() as u64 {
+                (&mut existing)
+                    .take(self.bytes.len() as u64 + 1)
+                    .read_to_end(&mut bytes)?;
+            }
+            if bytes != self.bytes {
+                drop(existing);
+                self.rebuild(directory)?;
+            }
+        } else {
             let mut file = tempfile::NamedTempFile::new_in(directory)?;
             file.write_all(&self.bytes)?;
             match file.persist_noclobber(&target) {

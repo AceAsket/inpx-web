@@ -1741,6 +1741,8 @@ class SettingsDialog {
                 if (this.adminIndexBusy) {
                     this.scheduleAdminIndexPolling();
                 } else {
+                    if (this.adminReindexInProgress && this.adminIndex.ready)
+                        await this.api.updateConfig({skipProfileLogin: true});
                     this.adminReindexInProgress = false;
                     if (this.adminDashboardAvailable)
                         this.refreshAdminEvents();
@@ -1956,7 +1958,11 @@ class SettingsDialog {
         try {
             const result = await this.api.adminRebuildCover(bookUid);
             await this.refreshAdminDashboard(false);
-            this.$root.notify.success(this.adminUi.coverRebuildStarted);
+            if (result.rebuilt === false) {
+                this.$root.notify.info('В источнике книги не найдена новая обложка.');
+                return;
+            }
+            this.$root.notify.success(result.rebuilt ? 'Обложка пересобрана.' : this.adminUi.coverRebuildStarted);
             if (result.coverUrl) {
                 const cover = new URL(result.coverUrl, window.location.href);
                 cover.searchParams.set('t', Date.now());

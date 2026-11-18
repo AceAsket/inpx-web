@@ -12,6 +12,8 @@ use time::{
 
 use crate::Result;
 use crate::access_runtime::now_ms;
+use crate::facets::{Facet, Label};
+use crate::lookup::Table;
 use crate::reader_state::number;
 use crate::standalone_catalogue::Catalogue;
 
@@ -561,8 +563,10 @@ impl Catalogue {
                 .then_with(|| ru.compare(&a.book.title, &b.book.title))
                 .then_with(|| a.id.cmp(&b.id))
         };
+        let candidates =
+            self.recommendation_candidates(taste, limit + 1, seed.unsigned_abs() as usize, now)?;
         self.store
-            .visit_search_rows(&self.generation, None, |id, bytes| {
+            .visit_search_rows(&self.generation, Some(&candidates), |id, bytes| {
                 let book: Candidate = serde_json::from_slice(bytes)?;
                 if book.del != 0
                     || book.uid.is_empty()
@@ -597,6 +601,145 @@ impl Catalogue {
         exploration.truncate(cap);
         Ok(diversify(affinity, exploration, limit, ratio))
     }
+
+    fn recommendation_candidates(
+        &self,
+        taste: &Taste<'_>,
+        limit: usize,
+        seed: usize,
+        now: i64,
+    ) -> Result<Vec<u32>> {
+        let mut ids = HashSet::new();
+        for (i, maximum, budget) in [
+            (0, 24, 32),
+            (1, 16, 16),
+            (2, 16, 32),
+            (3, 24, 12),
+            (4, 8, 16),
+        ] {
+            let mut weighted: Vec<_> = taste.weights[i].iter().collect();
+            weighted.sort_unstable_by(|a, b| b.1.total_cmp(a.1).then_with(|| a.0.cmp(b.0)));
+            let mut keys = std::collections::BTreeSet::new();
+            for (key, _) in weighted.into_iter().take(maximum) {
+                if i == 3 {
+                    crate::catalog_text::words(key, |_, root| {
+                        keys.insert(format!("title:{root}"));
+                    });
+                } else {
+                    keys.insert(key.clone());
+                }
+            }
+            if keys.is_empty() {
+                continue;
+            }
+            let budget = limit * budget;
+            match i {
+                2 | 4 => {
+                    self.store
+                        .facet(if i == 2 { Facet::Genre } else { Facet::Lang }, |index| {
+                            let lists = index.ok_or("missing taste facet")?.matching(
+                                |key| matches!(key, Label::Text(text) if keys.contains(text)),
+                            );
+                            for list in &lists {
+                                sample(list, budget / lists.len(), seed + i, |id| {
+                                    ids.insert(*id);
+                                });
+                            }
+                            Ok(())
+                        })?;
+                }
+                _ => {
+                    let table = match i {
+                        0 => Table::Author,
+                        1 => Table::Series,
+                        _ => Table::Word,
+                    };
+                    for key in &keys {
+                        self.lookup.visit_name_candidates(
+                            &self.lookup_generation,
+                            table,
+                            &[key],
+                            |label| label == key,
+                            |_, _, _, _, books| {
+                                sample(books, budget.div_ceil(keys.len()), seed + i, |id| {
+                                    ids.insert(u32::from_le_bytes(*id));
+                                });
+                                Ok(())
+                            },
+                        )?;
+                    }
+                }
+            }
+        }
+        for (facet, values, budget) in [
+            (Facet::Librate, &[3, 4, 5][..], 8),
+            (Facet::Del, &[0][..], 8),
+        ] {
+            self.store.facet(facet, |index| {
+                let lists = index.ok_or("missing recommendation facet")?.matching(
+                    |label| matches!(label, Label::Number(value) if values.contains(value)),
+                );
+                for list in &lists {
+                    sample(
+                        list,
+                        (limit * budget).div_ceil(lists.len()),
+                        seed + 6,
+                        |id| {
+                            ids.insert(*id);
+                        },
+                    );
+                }
+                Ok(())
+            })?;
+        }
+        self.store.facet(Facet::Date, |index| {
+            let index = index.ok_or("missing catalogue dates")?;
+            let mut dates: Vec<_> = index
+                .labels()
+                .into_iter()
+                .flatten()
+                .filter_map(|(id, label)| {
+                    let Label::Text(date) = label else {
+                        return None;
+                    };
+                    Some((age(now, &date)?, id))
+                })
+                .filter(|(days, _)| (0..=365).contains(days))
+                .collect();
+            dates.sort_unstable();
+            let mut remaining = [limit * 4; 3];
+            for (days, id) in dates {
+                let left = &mut remaining[if days <= 30 {
+                    0
+                } else if days <= 90 {
+                    1
+                } else {
+                    2
+                }];
+                if *left > 0 {
+                    let books = index.book_lists(&[id])?[0];
+                    *left -= sample(books, *left, seed + 5, |id| {
+                        ids.insert(*id);
+                    });
+                }
+            }
+            Ok(())
+        })?;
+        let mut result: Vec<_> = ids.into_iter().collect();
+        result.sort_unstable();
+        Ok(result)
+    }
+}
+
+// Rotate one selection within each evenly spaced part of a posting list.
+fn sample<T>(books: &[T], count: usize, seed: usize, mut add: impl FnMut(&T)) -> usize {
+    let take = count.min(books.len());
+    for i in 0..take {
+        let start = i * books.len() / take;
+        let end = (i + 1) * books.len() / take;
+        add(&books[start + seed % (end - start)]);
+    }
+    take
 }
 
 fn key(value: &str) -> String {

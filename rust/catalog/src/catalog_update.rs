@@ -791,6 +791,9 @@ pub(crate) fn prepare_update_reporting<'a>(
     } = previous;
     drop((by_uid, physical));
     let expected = previous_count - records_removed + new_count;
+    output(
+        json!({"job":"book order","jobMessage":"Сохранение порядка книг","jobStep":1,"progress":0}),
+    )?;
     if request.native_catalogue {
         let unchanged = |row: &&OldBook| row.retained && !row.changed;
         let mut kept: Vec<u32> = match native_order {
@@ -837,6 +840,9 @@ pub(crate) fn prepare_update_reporting<'a>(
         }
     }
     let posting_path = directory.join(".postings");
+    output(
+        json!({"job":"postings","jobMessage":"Сохранение списков поискового индекса","jobStep":1,"progress":0}),
+    )?;
     fs::create_dir(&posting_path)?;
     let facet_path = if request.native_catalogue {
         let path = directory.join("facets");
