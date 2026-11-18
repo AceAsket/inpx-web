@@ -368,7 +368,7 @@
                             <q-select v-model="adminCacheSettings.cacheCleanFrequency" :options="adminCacheFrequencyOptions" outlined dense emit-value map-options label="Периодичность" :disable="!adminCacheSettings.cacheCleanEnabled" />
                             <q-select v-if="adminCacheSettings.cacheCleanFrequency === 'weekly'" v-model="adminCacheSettings.cacheCleanWeekDay" :options="adminCacheWeekDayOptions" outlined dense emit-value map-options label="День недели" :disable="!adminCacheSettings.cacheCleanEnabled" />
                             <q-select v-if="adminCacheSettings.cacheCleanFrequency === 'monthly'" v-model="adminCacheSettings.cacheCleanMonthDay" :options="adminCacheMonthDayOptions" outlined dense emit-value map-options label="Число месяца" :disable="!adminCacheSettings.cacheCleanEnabled" />
-                            <q-input class="admin-cache-time-input" v-model="adminCacheSettings.cacheCleanTime" outlined dense type="time" label="Время запуска" hint="По времени сервера" persistent-hint :disable="!adminCacheSettings.cacheCleanEnabled || adminCacheSettings.cacheCleanFrequency === 'advanced'" />
+                            <q-input v-if="adminCacheSettings.cacheCleanFrequency !== 'interval'" class="admin-cache-time-input" v-model="adminCacheSettings.cacheCleanTime" outlined dense type="time" label="Время запуска" hint="По времени сервера" persistent-hint :disable="!adminCacheSettings.cacheCleanEnabled || adminCacheSettings.cacheCleanFrequency === 'advanced'" />
                             <q-input v-model.number="adminCacheSettings.cacheCleanTargetPercent" outlined dense type="number" min="10" max="100" label="Цель после чистки, %" />
                         </div>
                         <div class="admin-cache-actions">
@@ -974,11 +974,17 @@ class SettingsDialog {
         {label: 'Список', value: 'list'},
     ];
 
-    adminCacheFrequencyOptions = [
-        {label: 'Каждый день', value: 'daily'},
-        {label: 'Раз в неделю', value: 'weekly'},
-        {label: 'Раз в месяц', value: 'monthly'},
-    ];
+    get adminCacheFrequencyOptions() {
+        const options = [
+            {label: 'Каждый день', value: 'daily'},
+            {label: 'Раз в неделю', value: 'weekly'},
+            {label: 'Раз в месяц', value: 'monthly'},
+        ];
+        const limits = this.adminDashboard?.limits || this.config.adminCache || {};
+        if (this.hasCacheInterval(limits))
+            options.push({label: this.cacheIntervalLabel(limits), value: 'interval'});
+        return options;
+    }
 
     adminCacheWeekDayOptions = [
         {label: 'Понедельник', value: 1},
@@ -1204,7 +1210,8 @@ class SettingsDialog {
             return Math.max(1, Math.round((size > 0 ? size : fallback) / (1024 * 1024)));
         };
         const ratio = Number(limits.cacheCleanTargetRatio || 0.8);
-        const schedule = this.parseDailyCacheSchedule(limits.cacheCleanSchedule ?? '0 0 * * *');
+        const schedule = this.hasCacheInterval(limits) ? this.makeParsedAdminCacheSchedule({frequency: 'interval'})
+            : this.parseAdminCacheSchedule(limits.cacheCleanSchedule ?? '0 0 * * *');
 
         this.adminCacheSettings = {
             bookCacheSizeMb: toMb(limits.bookCacheSize, 2048 * 1024 * 1024),
@@ -1229,6 +1236,8 @@ class SettingsDialog {
             return this.makeParsedAdminCacheSchedule({advancedSchedule: text});
 
         const [minuteText, hourText, dayOfMonth, month, dayOfWeek] = fields;
+        if (!/^\d+$/.test(minuteText) || !/^\d+$/.test(hourText))
+            return this.makeParsedAdminCacheSchedule({advancedSchedule: text});
         const minute = this.clampAdminCacheNumber(minuteText, 0, 59, 0);
         const hour = this.clampAdminCacheNumber(hourText, 0, 23, 0);
         const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
@@ -1268,13 +1277,19 @@ class SettingsDialog {
         return Math.max(min, Math.min(max, parsed));
     }
 
-    parseDailyCacheSchedule(schedule = '') {
-        return this.parseAdminCacheSchedule(schedule);
+    hasCacheInterval(limits) {
+        return !limits.cacheCleanSchedule && limits.cacheCleanInterval > 0 && Boolean(limits.cacheCleanNextRunAt);
+    }
+
+    cacheIntervalLabel(limits) {
+        return `Каждые ${Number(limits.cacheCleanInterval).toLocaleString('ru-RU')} мин`;
     }
 
     dailyCacheScheduleFromSettings(settings = this.adminCacheSettings) {
         if (!settings.cacheCleanEnabled)
             return '';
+        if (settings.cacheCleanFrequency === 'interval')
+            return undefined; // Omit the cron override to keep using the server interval.
         if (settings.cacheCleanAdvancedSchedule && !['daily', 'weekly', 'monthly'].includes(settings.cacheCleanFrequency))
             return settings.cacheCleanAdvancedSchedule;
 
@@ -1375,6 +1390,8 @@ class SettingsDialog {
 
     adminCacheRotationValue() {
         const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
+        if (this.hasCacheInterval(limits))
+            return this.cacheIntervalLabel(limits);
         const schedule = String(limits.cacheCleanSchedule || '').trim();
         const parsed = this.parseAdminCacheSchedule(schedule);
         if (!parsed.enabled)

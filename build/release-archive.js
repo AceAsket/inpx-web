@@ -18,6 +18,7 @@ function rustProgramEntry(target, program) {
 
 async function createReleaseArchive(sourceDir, archiveFile, target) {
     const executables = new Set(executableNames(target));
+    if (target.startsWith('linux')) executables.add('bin/djxl');
     for (const program of ['server','catalog','reader']) executables.add(rustProgramEntry(target,program));
     await fs.access(path.join(sourceDir, executableNames(target, false)[0]));
     const entries = [];

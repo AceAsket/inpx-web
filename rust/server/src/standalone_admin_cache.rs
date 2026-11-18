@@ -32,8 +32,8 @@ impl Cache {
         json!({
             "bookCacheSize":book_size(config),
             "coverCacheSize":cover_size(config),
-            "cacheCleanInterval":numeric(&config["cacheCleanInterval"]).unwrap_or_default(),
-            "cacheCleanSchedule":config["cacheCleanSchedule"].as_str().unwrap_or_default(),
+            "cacheCleanInterval":interval_minutes(config).unwrap_or_default(),
+            "cacheCleanSchedule":schedule_pattern(config).unwrap_or_default(),
             "cacheCleanNextRunAt":next,
             "cacheCleanServerTimeZone":std::env::var("TZ").ok().or_else(||
                 (local_offset(now)==UtcOffset::UTC).then(|| "UTC".to_owned())).unwrap_or_default(),
@@ -212,23 +212,56 @@ fn numeric(value: &Value) -> Option<f64> {
         .filter(|value| value.is_finite())
 }
 
-fn book_size(config: &Value) -> f64 {
+fn env_number(name: &str) -> Option<f64> {
+    std::env::var(name)
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+}
+
+fn env_size(bytes: &str, megabytes: &str, default_mb: u64) -> f64 {
+    let read = |key| std::env::var(key).ok()?.trim().parse::<u64>().ok();
+    read(bytes).unwrap_or_else(|| {
+        read(megabytes)
+            .unwrap_or(default_mb)
+            .saturating_mul(1024 * 1024)
+    }) as f64
+}
+
+pub(super) fn book_size(config: &Value) -> f64 {
     numeric(&config["bookCacheSize"])
         .or_else(|| numeric(&config["maxFilesDirSize"]))
-        .unwrap_or(2048.0 * MIB)
+        .unwrap_or_else(|| env_size("INPX_BOOK_CACHE_SIZE", "INPX_BOOK_CACHE_SIZE_MB", 2048))
         .max(0.0)
 }
 
-fn cover_size(config: &Value) -> f64 {
+pub(super) fn cover_size(config: &Value) -> f64 {
     numeric(&config["coverCacheSize"])
-        .unwrap_or(512.0 * MIB)
+        .unwrap_or_else(|| env_size("INPX_COVER_CACHE_SIZE", "INPX_COVER_CACHE_SIZE_MB", 512))
         .max(0.0)
 }
 
 fn ratio(config: &Value) -> f64 {
     numeric(&config["cacheCleanTargetRatio"])
+        .or_else(|| env_number("INPX_CACHE_CLEAN_TARGET_RATIO"))
         .unwrap_or(0.8)
         .clamp(0.1, 1.0)
+}
+
+fn interval_minutes(config: &Value) -> Option<f64> {
+    numeric(&config["cacheCleanInterval"])
+        .or_else(|| env_number("INPX_CACHE_CLEAN_INTERVAL_MINUTES"))
+        .map(|minutes| minutes.max(0.0))
+}
+
+fn schedule_pattern(config: &Value) -> Option<&str> {
+    match config.get("cacheCleanSchedule") {
+        Some(value) => Some(value.as_str().unwrap_or_default().trim()),
+        None if interval_minutes(config).is_none() => Some("0 0 * * *"),
+        None => None,
+    }
 }
 
 pub(super) fn validate_schedule(schedule: &str) -> Result<()> {
@@ -243,13 +276,12 @@ fn local_offset(instant: OffsetDateTime) -> UtcOffset {
 }
 
 fn next_run(config: &Value, now: OffsetDateTime) -> Option<OffsetDateTime> {
-    if let Some(schedule) = config.get("cacheCleanSchedule") {
-        let pattern = schedule.as_str()?.trim();
+    if let Some(pattern) = schedule_pattern(config) {
         return (!pattern.is_empty())
             .then(|| Cron::parse(pattern).ok()?.next(now))
             .flatten();
     }
-    let interval = (numeric(&config["cacheCleanInterval"])? * 60.0).round() as i64;
+    let interval = (interval_minutes(config)? * 60.0).round() as i64;
     if interval <= 0 {
         return None;
     }

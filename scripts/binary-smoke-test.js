@@ -39,7 +39,7 @@ async function isolateNativeJxl(binary, directory) {
     return executable;
 }
 
-async function checkCoverDownload(url, uid, nativeJxlCover) {
+async function checkCoverDownload(url, uid, jxlCover) {
     const location = `${url}/cover/by-uid?${new URLSearchParams({uid})}`;
     const response = await fetch(location, {signal: AbortSignal.timeout(30000)});
     if (response.status !== 200)
@@ -47,7 +47,7 @@ async function checkCoverDownload(url, uid, nativeJxlCover) {
     assert.match(response.headers.get('content-type'), /^image\/png$/);
     const png = Buffer.from(await response.arrayBuffer());
     assert.deepStrictEqual(png.subarray(0, 16), Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'));
-    const size = nativeJxlCover ? 192 : 1;
+    const size = jxlCover ? 192 : 1;
     assert.equal(png.readUInt32BE(16), size);
     assert.equal(png.readUInt32BE(20), size);
     if (process.env.INPX_SMOKE_REQUIRE_RUST_HTTP==='true') {
@@ -56,7 +56,7 @@ async function checkCoverDownload(url, uid, nativeJxlCover) {
         assert.equal(cached.headers.get('x-powered-by'),null,'Rust serves the cached cover');
         assert.deepEqual(Buffer.from(await cached.arrayBuffer()),png);
     }
-    console.log(nativeJxlCover ? 'ok packaged native JXL cover over HTTP without djxl' : 'ok packaged embedded PNG cover over HTTP');
+    console.log(jxlCover ? 'ok packaged JPEG XL cover decoded over HTTP' : 'ok packaged embedded PNG cover over HTTP');
 }
 
 async function createFixture(dir, {nativeJxlCover = false, extraEpubs = []} = {}) {
@@ -297,7 +297,7 @@ async function main() {
     const options = process.argv.slice(2);
     const rust = options.includes('--rust');
     const requireConverters = options.includes('--require-converters');
-    const [target, argument] = options.filter(value=>!['--rust','--require-converters'].includes(value));
+    const [target, argument] = options.filter(value=>!['--rust','--require-converters','--bundled-djxl'].includes(value));
     const binary = target && target !== '--image' ? path.resolve(target) : null;
     const imageName = target === '--image' ? argument : null;
     const allowMissingNativeJxl = argument === '--allow-missing-native-jxl';
@@ -314,7 +314,8 @@ async function main() {
     try {
         const nativeJxlCover = !rust && binary !== null && (!allowMissingNativeJxl
             || await fs.pathExists(path.join(path.dirname(binary), 'bin', 'inpx-jxl.node')));
-        await createFixture(library, {nativeJxlCover});
+        const jxlCover = nativeJxlCover || options.includes('--bundled-djxl') || Boolean(rust && imageName);
+        await createFixture(library, {nativeJxlCover:jxlCover});
         const port = await unusedPort();
         let command, cwd;
         let args;
@@ -429,7 +430,7 @@ async function main() {
             await require('./profile-sessions-integration-test')(url,{adminPassword:'local-smoke-fixture'});
         try {await checkCachedBookDownload(url,link,dir);}
         catch (error) {throw new Error(`Packaged cached download failed: ${error.message}\n${output}`,{cause:error});}
-        if (nativeJxlCover || requireRustHttp) await checkCoverDownload(url, bookUid, nativeJxlCover);
+        if (jxlCover || requireRustHttp) await checkCoverDownload(url, bookUid, jxlCover);
         if (rust) {
             if (requireConverters)
                 await require('./rust-conversion-tests').checkPackagedConversions(url, bookUid, dir);

@@ -58,6 +58,10 @@ async function main() {
     try {
         await extractArchive(archive, directory);
         if (target.startsWith('linux')) {
+            const djxl = path.join(directory, 'bin', 'djxl');
+            assert.equal((await fs.stat(djxl)).mode & 0o7777, 0o755);
+            await fs.access(path.join(directory, 'bin', 'djxl-licenses', 'LICENSE.jpeg-xl'));
+            execFileSync(djxl, ['--version'], {stdio:'inherit'});
             for (const program of ['server','catalog','reader']) {
                 const name = rust && program === 'server' ? names[0] : rustProgramEntry(target,program);
                 const binary = path.join(directory,name);
@@ -76,6 +80,7 @@ async function main() {
         }
         const run = (script, args) => execFileSync(process.execPath, [path.join(__dirname, script), ...args], {stdio:'inherit', windowsHide:true});
         run('binary-smoke-test.js', [path.join(directory, names[0]), ...(!converters ? ['--allow-missing-native-jxl'] : []),
+            ...(rust && target.startsWith('linux') ? ['--bundled-djxl'] : []),
             ...(rust ? ['--rust'] : []), ...(rust && converters ? ['--require-converters'] : [])]);
         if (converters) {
             run('fb2cng-integration-tests.js', ['--fbc', path.join(directory, names[1])]);

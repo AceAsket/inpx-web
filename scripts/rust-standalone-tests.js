@@ -1982,6 +1982,18 @@ async function verifyProfileCommands(binary, root) {
     } finally { await server.stop(); }
 }
 
+async function verifyCacheSettings(binary, root) {
+    const test = require('./rust-cache-settings-tests');
+    const library = join(root,'library'), data = join(root,'data'), web = join(root,'web.json');
+    await createFixture(library);
+    await bundle(web);
+    const server = await start(binary,['--standalone','--host=127.0.0.1','--data-dir='+data,
+        '--lib-dir='+library,'--web-bundle='+web,'--admin-password='+test.password], test.env);
+    try { await test.verify(server.url, data); }
+    finally { await server.stop(); }
+    console.log('ok cache environment defaults, file rotation and live Prometheus limits');
+}
+
 async function verifyReaderTransfer(binary, root) {
     const library = join(root,'library'), data = join(root,'data');
     await fs.mkdir(library,{recursive:true});
@@ -2464,6 +2476,7 @@ async function verifyJembaUpgrade(binary, root) {
         await verifyLibraryMedia(binary,join(root,'library-media'));
         await verifyReaderTransfer(binary,join(root,'reader-transfer'));
         await verifyProfileCommands(binary,join(root,'profile-commands'));
+        await verifyCacheSettings(binary,join(root,'cache-settings'));
         await verifyMobileEvents(binary,join(root,'mobile-events'));
         await verifyJembaUpgrade(binary,join(root,'jemba-upgrade'));
     }

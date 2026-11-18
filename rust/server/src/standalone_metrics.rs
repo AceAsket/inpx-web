@@ -18,7 +18,7 @@ use serde_json::Value;
 use sha2::Sha256;
 use tokio::sync::Semaphore;
 
-use super::{State, VERSION, env, send_bytes};
+use super::{State, VERSION, admin_cache, env, send_bytes};
 use crate::http::{Body, BodyError};
 use crate::request_access::{Metrics, ServiceAccess, trim_js};
 
@@ -33,8 +33,6 @@ pub(super) struct Monitor {
     enabled: bool,
     token_required: bool,
     data: PathBuf,
-    book_limit: u64,
-    cover_limit: u64,
     disabled_sources: usize,
     pub(super) activity: Option<Arc<Activity>>,
     slot: Arc<Semaphore>,
@@ -223,11 +221,6 @@ impl Monitor {
             enabled,
             token_required,
             data: data.into(),
-            book_limit: integer(&config["bookCacheSize"])
-                .or_else(|| integer(&config["maxFilesDirSize"]))
-                .unwrap_or_else(|| cache_limit("BOOK", 2048)),
-            cover_limit: integer(&config["coverCacheSize"])
-                .unwrap_or_else(|| cache_limit("COVER", 512)),
             disabled_sources: config["librarySources"]
                 .as_array()
                 .into_iter()
@@ -288,6 +281,7 @@ impl Monitor {
     }
 
     fn document(&self, state: &State) -> String {
+        let config = state.settings.snapshot();
         let status = state.index.snapshot();
         let stats = &status["stats"];
         let n = |name: &str| stats[name].as_f64().unwrap_or(0.0);
@@ -396,7 +390,7 @@ impl Monitor {
             (
                 "book_cache_limit_bytes",
                 "Prepared book cache limit in bytes.",
-                self.book_limit,
+                admin_cache::book_size(&config) as u64,
             ),
             (
                 "cover_cache_size_bytes",
@@ -406,7 +400,7 @@ impl Monitor {
             (
                 "cover_cache_limit_bytes",
                 "Cover cache limit in bytes.",
-                self.cover_limit,
+                admin_cache::cover_size(&config) as u64,
             ),
             (
                 "cover_cache_files",
@@ -626,23 +620,6 @@ impl Stream for Delivery {
     fn size_hint(&self) -> SizeHint {
         self.body.size_hint()
     }
-}
-
-fn integer(value: &Value) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| value.as_str()?.trim().parse().ok())
-}
-
-fn cache_limit(name: &str, default_mb: u64) -> u64 {
-    env(&format!("INPX_{name}_CACHE_SIZE"))
-        .and_then(|value| value.trim().parse().ok())
-        .unwrap_or_else(|| {
-            env(&format!("INPX_{name}_CACHE_SIZE_MB"))
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .unwrap_or(default_mb)
-                .saturating_mul(1024 * 1024)
-        })
 }
 
 fn family(output: &mut String, name: &str, help: &str, kind: &str) {
