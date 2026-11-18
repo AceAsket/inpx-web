@@ -140,7 +140,8 @@ After restoring a full backup, restart the container. If library sources changed
 | `INPX_COVER_CACHE_SIZE_MB` | Cover cache size limit in MB. Default: `512`. |
 | `INPX_METRICS_ENABLED` | Enable Prometheus metrics when `true`. |
 | `INPX_METRICS_PATH` | Metrics endpoint path. Default: `/metrics`. |
-| `INPX_REQUIRE_AUTH` | Require app-level auth for all non-exempt requests. |
+| `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. The navigation and sign-in form remain visible to guests. |
+| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local profile login, use `INPX_ALLOW_ANONYMOUS_ACCESS=false`. |
 | `INPX_AUTH_MODE` | Use `proxy` for Authelia/Authentik/SWAG-style trusted proxy auth. |
 | `INPX_TRUST_PROXY` | Trust reverse proxy headers when `true`. |
 | `INPX_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDR list. |
