@@ -107,8 +107,8 @@ Silero запускается отдельным CPU-контейнером `ace
 | `INPX`, `LIBDIR` | INPX-индекс и архивы одной библиотеки. |
 | `INPX_LIBRARY_SOURCES` | Несколько источников INPX и папки FB2/EPUB. |
 | `INPX_ADMIN_PASSWORD` | Пароль администратора при создании профиля. |
-| `INPX_ALLOW_ANONYMOUS_ACCESS` | Задайте `false`, чтобы требовать вход в профиль для поиска, книг и обложек. До входа меню и форма входа остаются видимыми. |
-| `INPX_REQUIRE_AUTH` | Значение `true` включает проверку пользователя доверенного reverse proxy в режиме `INPX_AUTH_MODE=proxy`. Для обычного локального входа используйте `INPX_ALLOW_ANONYMOUS_ACCESS=false`. |
+| `INPX_ALLOW_ANONYMOUS_ACCESS` | Задайте `false`, чтобы требовать вход в профиль для поиска, книг и обложек. В стабильной версии и RC21 до входа видны меню и форма входа. |
+| `INPX_REQUIRE_AUTH` | Значение `true` включает проверку пользователя доверенного reverse proxy в режиме `INPX_AUTH_MODE=proxy`. Для локального входа в стабильной версии и RC21 задайте `INPX_ALLOW_ANONYMOUS_ACCESS=false`. В ветке Rust после RC21 достаточно `INPX_REQUIRE_AUTH=true`: до входа в библиотеку видна только форма входа. |
 | `INPX_COVER_CACHE_SIZE_MB` | Лимит кэша обложек; по умолчанию `512` МБ. |
 | `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Включение Silero и адрес сервиса. |
 | `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Включение и токен провайдера Audiobookshelf. |
@@ -225,8 +225,8 @@ Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.8.2-silero`. 
 | `INPX`, `LIBDIR` | INPX index and archives for a single library. |
 | `INPX_LIBRARY_SOURCES` | Multiple INPX sources and FB2/EPUB folders. |
 | `INPX_ADMIN_PASSWORD` | Initial admin profile password. |
-| `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. The navigation and sign-in form remain visible to guests. |
-| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local profile login, use `INPX_ALLOW_ANONYMOUS_ACCESS=false`. |
+| `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. On stable and RC21, guests can see the navigation and sign-in form. |
+| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on stable and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. On the Rust branch after RC21, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
 | `INPX_COVER_CACHE_SIZE_MB` | Cover cache limit; defaults to `512` MB. |
 | `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Enable Silero and set its service URL. |
 | `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Enable the Audiobookshelf provider and set its token. |
