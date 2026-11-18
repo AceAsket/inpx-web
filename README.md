@@ -7,14 +7,20 @@
 inpx-web-7z
 ===========
 
+> [!IMPORTANT]
+> **Развитие проекта с версии 1.8.3**
+>
+> - **Сервер на Rust и новый веб-интерфейс** — все новые возможности.
+> - **Версия с сервером на Node.js** — только исправления ошибок.
+>
+> [Ветка `rust`](https://github.com/AceAsket/inpx-web/tree/rust) · [Сборка Rust-версии](#сборка-с-автономным-rust-сервером)
+
 [![INPX Reader — скачать читалку для Android](https://img.shields.io/badge/INPX_Reader-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK-0F766E?style=for-the-badge&logo=android&logoColor=white)](https://github.com/AceAsket/inpx-reader-releases/releases/latest)
 [![INPX Server — сервер для Android](https://img.shields.io/badge/INPX_Server-%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%20%D0%B4%D0%BB%D1%8F%20Android-455A64?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
 
 > **Читать и слушать на Android:** [скачайте INPX Reader](https://github.com/AceAsket/inpx-reader-releases/releases/latest) — наше клиентское приложение для подключения к вашей библиотеке INPX Web.
 
 Стабильная версия **1.8.2** доступна в Docker и в виде готовых сборок для Linux, Windows и macOS. Для сборки из исходников используйте тег `v1.8.2`. [Скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) · [История изменений](./CHANGELOG.md)
-
-> **С выпуска 1.8.3** сборки с сервером на Node.js будут получать только исправления ошибок. Новые возможности будут появляться только в версии с новым веб-интерфейсом и сервером на Rust. [Ветка `rust`](https://github.com/AceAsket/inpx-web/tree/rust) · [Инструкция по сборке](#сборка-с-автономным-rust-сервером)
 
 В 1.8.2 добавлены OPDS 2.0, лёгкий интерфейс `/ebook` и синхронизация прогресса с KOReader. Читалка сохраняет место при выходе из полноэкранного режима, в том числе после перелистывания. [Подключение KOReader](./docs/koreader-sync.md)
 
