@@ -33,7 +33,7 @@ async function main(rust, rc15, input, artifacts) {
         await until(()=>fetch(before+'/ready').then(r=>r.ok).catch(()=>false),Boolean,'RC15 index',360);
         await docker('stop',prefix+'-old');
         await docker('run','--rm',...data,'--entrypoint','sh',rc15,'-ec','test -d /data/db/book');
-        browser = await chromium.launch({headless:true});
+        browser = await chromium.launch({headless:true,executablePath:process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport:{width:850,height:620}});
         const base = await start(prefix+'-new',rust);
         const url = base+'/library/#/books';
@@ -64,7 +64,7 @@ async function main(rust, rc15, input, artifacts) {
         assert(number(seen[1].records)>number(seen[0].records),'Live record count must increase between sources');
         await until(()=>fetch(base+'/ready').then(r=>r.ok).catch(()=>false),Boolean,'Published Rust index',360);
         await page.locator('.library-shell__nav').waitFor({timeout:60000});
-        assert.equal(await page.locator('body').getAttribute('data-catalog-appearance'),'shelves');
+        await page.locator('body[data-catalog-appearance="shelves"]').waitFor({timeout:15000});
         assert.equal(new URL(page.url()).hash.split('?')[0],'#/books');
         const report = {sources:seen, reload:true, automaticCatalogue:true, appearance:'shelves'};
         if (artifacts) await fs.writeFile(join(artifacts,'migration.json'),JSON.stringify(report,null,2));
