@@ -50,16 +50,7 @@ fn run(state: &State, generation: &str, build: &mut IsbnBuild) -> Result<bool> {
                 .ok_or(CHANGED)?;
             catalogue.source_book_batch(after)?
         };
-        for row in rows {
-            if build.cancelled() {
-                return Ok(false);
-            }
-            let id = row["id"]
-                .as_u64()
-                .and_then(|number| number.try_into().ok())
-                .ok_or("Некорректный идентификатор книги")?;
-            build.record(id, &row, &sources, &mut reader);
-        }
+        build.record_batch(rows, &sources, &mut reader)?;
         state.index.isbn.checkpoint(build)?;
         if next.is_none() {
             let lock = state.index.catalogue.read().expect("open catalogue");

@@ -11,23 +11,50 @@ pub(crate) struct Input {
 }
 
 pub(crate) fn resolve(library: &Path, folder: &str, name: &str) -> io::Result<Input> {
-    let folder = relative(folder)?;
+    Folder::resolve(library, folder)?.open(member_name(name)?)
+}
+
+pub(crate) fn member_name(name: &str) -> io::Result<String> {
     let name = relative(name)?;
-    if name.is_empty() || Path::new(&name).file_name().is_none() {
-        return Err(invalid());
+    Path::new(&name).file_name().ok_or_else(invalid)?;
+    Ok(name)
+}
+
+pub(crate) struct Folder {
+    root: PathBuf,
+    pub(crate) path: PathBuf,
+    pub(crate) archived: bool,
+}
+
+impl Folder {
+    pub(crate) fn resolve(library: &Path, folder: &str) -> io::Result<Self> {
+        let folder = relative(folder)?;
+        let root = library.canonicalize()?;
+        let path = archive_location(&root, &folder)?.ok_or_else(|| {
+            io::Error::new(ErrorKind::NotFound, "Book folder or archive not found")
+        })?;
+        Ok(Self {
+            archived: !path.is_dir(),
+            path,
+            root,
+        })
     }
-    let root = library.canonicalize()?;
-    let candidate = archive_location(&root, &folder)?
-        .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Book folder or archive not found"))?;
-    let (path, member) = if candidate.is_dir() {
-        let path = existing(&root, &candidate.join(&name))?
-            .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Book file not found"))?;
-        (path, None)
-    } else {
-        (candidate, Some(name))
-    };
-    let file = open_within(&root, &path)?;
-    Ok(Input { file, path, member })
+
+    pub(crate) fn open_archive(&self) -> io::Result<File> {
+        open_within(&self.root, &self.path)
+    }
+
+    pub(crate) fn open(&self, name: String) -> io::Result<Input> {
+        let (path, member) = if self.archived {
+            (self.path.clone(), Some(name))
+        } else {
+            let path = existing(&self.root, &self.path.join(&name))?
+                .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "Book file not found"))?;
+            (path, None)
+        };
+        let file = open_within(&self.root, &path)?;
+        Ok(Input { file, path, member })
+    }
 }
 
 pub(crate) fn cover_inputs(library: &Path, folder: &str, file: &str) -> io::Result<Vec<Input>> {

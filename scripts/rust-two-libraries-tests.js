@@ -21,8 +21,10 @@ async function fixture(directory, runtimeDirectory = directory) {
         // Same INPX row, archive name, libid, text member and picture IDs in both sources.
         const row = ['Same,Author:', 'sf:', 'Shared catalogue title', '', 0, 1, 512, 1, 0, 'fb2', '2026-11-18', 'en', 0, ''];
         const title = 'Manuscript from ' + id;
+        const isbn = i === 0 ? '9780140328721' : '9783161484100';
         const fb2 = '<FictionBook xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>' +
-            title + '</book-title><coverpage><image l:href="#cover"/></coverpage></title-info></description>' +
+            title + '</book-title><coverpage><image l:href="#cover"/></coverpage></title-info>' +
+            '<publish-info><isbn>' + isbn + '</isbn></publish-info></description>' +
             '<body><section><p>' + title + '</p><image l:href="#figure"/></section></body></FictionBook>';
         const cover = i === 0 ? first : second, illustration = i === 0 ? second : first;
         await zip(join(library, 'library.inpx'), [['collection.info', id], ['books.inp', row.join('\x04') + '\n']]);
@@ -31,7 +33,7 @@ async function fixture(directory, runtimeDirectory = directory) {
         await zip(join(library, 'images', 'books.zip'), [['1/figure', illustration]]);
         const libDir = runtimeDirectory + '/' + id;
         sources.push({id, name:id, type:'inpx', libDir, inpx:libDir + '/library.inpx'});
-        books.push({id, title, cover, illustration, percent:0});
+        books.push({id, title, isbn, cover, illustration, percent:0});
     }
     const config = {server:{host:'0.0.0.0',port:12380,root:'/reader'}, librarySources:sources, inpxCheckInterval:0};
     await fs.writeFile(join(directory, 'config.json'), JSON.stringify(config));
@@ -49,6 +51,10 @@ async function verify(url, state, reindex) {
         };
         async function check() {
             const search = query => send('bookSearch', {query});
+            const isbnJob = await client.send('start-isbn-index', auth);
+            assert.ok(['running', 'ready'].includes(isbnJob.state), isbnJob.error);
+            await waitFor(async () => (await send('get-background-tasks')).isbnIndex,
+                index => index.state === 'ready', 'Two-source ISBN index did not finish');
             const pages = await Promise.all([0, 1].map(offset => search({del:'0', limit:1, offset})));
             assert.deepEqual(pages.map(page => page.totalFound), [2, 2]);
             assert.equal(new Set(pages.map(page => page.found[0]._uid)).size, 2);
@@ -67,6 +73,7 @@ async function verify(url, state, reindex) {
                 assert.equal(row.sourceId, book.id);
                 if (book.uid) assert.equal(row._uid, book.uid);
                 book.uid = row._uid;
+                assert.deepEqual((await search({isbn:book.isbn})).found.map(item=>item._uid), [book.uid]);
                 const fields = {bookUid:book.uid};
                 const {bookInfo} = await send('get-book-info', {...fields, readerOnly:true});
                 assert.equal(new Fb2Parser(bookInfo.fb2).bookInfo().titleInfo.bookTitle, book.title);

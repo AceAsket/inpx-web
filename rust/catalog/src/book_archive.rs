@@ -12,6 +12,7 @@ use zip::result::ZipError;
 
 use crate::Result;
 use crate::book_metadata::{self, Format};
+use crate::book_source::Folder;
 use crate::file_stamp::{FileStamp, stamp};
 use crate::framed_protocol::{Frames, complete, header};
 
@@ -207,6 +208,12 @@ struct ArchiveCache(VecDeque<CachedArchive>);
 #[derive(Default)]
 pub(crate) struct IsbnReader(ArchiveCache);
 
+pub(crate) struct IsbnMember {
+    pub row: usize,
+    pub name: String,
+    pub format: Format,
+}
+
 #[derive(Default)]
 pub(crate) struct AuditArchive(ArchiveCache);
 
@@ -245,38 +252,72 @@ impl AuditArchive {
     }
 }
 
-impl IsbnReader {
-    pub(crate) fn read(
-        &mut self,
-        input: crate::book_source::Input,
-        format: Format,
-        limit: u64,
-    ) -> Extraction<Vec<String>> {
-        let crate::book_source::Input { file, path, member } = input;
-        let raw = if let Some(member) = member {
-            let archive = self.0.open(&path, file)?;
-            let legacy = encoding_rs::IBM866.encode(&member).0;
-            let legacy = String::from_utf8_lossy(&legacy);
-            let result = archive
-                .directory
-                .read(&member, Some(&legacy), |size, reader| {
-                    book_metadata::read_stream(&format, size, reader, limit, true)
-                });
-            archive.source.detach();
-            result?
+impl IsbnMember {
+    fn loose(&self, folder: &Folder, limit: u64) -> Extraction<Vec<String>> {
+        let file = folder.open(self.name.clone())?.file;
+        let size = file.metadata()?.len();
+        if size > limit {
+            return Err(Failure::Limit);
+        }
+        let mut reader = BufReader::with_capacity(READER_BYTES, file);
+        let data = if self.format == Format::Epub {
+            book_metadata::read_epub(reader, true)?
         } else {
-            let size = file.metadata()?.len();
-            if size > limit {
-                return Err(Failure::Limit);
-            }
-            let mut reader = BufReader::with_capacity(READER_BYTES, file);
-            if format == Format::Epub {
-                book_metadata::read_epub(reader, true)?
-            } else {
-                book_metadata::read_stream(&format, size, &mut reader, limit, true)?
-            }
+            book_metadata::read_stream(&self.format, size, &mut reader, limit, true)?
         };
-        serde_json::from_value(raw).map_err(|failure| Failure::Other(failure.into()))
+        serde_json::from_value(data).map_err(|e| Failure::Other(e.into()))
+    }
+
+    fn numbers(&self, size: u64, reader: &mut dyn Read, limit: u64) -> Extraction<Vec<String>> {
+        let raw = book_metadata::read_stream(&self.format, size, reader, limit, true)?;
+        serde_json::from_value(raw).map_err(|e| Failure::Other(e.into()))
+    }
+}
+
+impl IsbnReader {
+    pub(crate) fn read_group(
+        &mut self,
+        folder: &Folder,
+        members: &[IsbnMember],
+        limit: u64,
+        cancelled: &impl Fn() -> bool,
+        mut found: impl FnMut(usize, Vec<String>),
+    ) -> Extraction<()> {
+        if !folder.archived {
+            for member in members {
+                if cancelled() {
+                    break;
+                }
+                if let Ok(numbers) = member.loose(folder, limit) {
+                    found(member.row, numbers);
+                }
+            }
+            return Ok(());
+        }
+        let archive = self.0.open(&folder.path, folder.open_archive()?)?;
+        match &mut archive.directory {
+            Directory::SevenZip(source, seven) => {
+                seven.read_isbn_blocks(source, members, limit, cancelled, found)
+            }
+            directory => {
+                for member in members {
+                    if cancelled() {
+                        break;
+                    }
+                    let legacy = encoding_rs::IBM866.encode(&member.name).0;
+                    let legacy = String::from_utf8_lossy(&legacy);
+                    if let Ok(numbers) =
+                        directory.read(&member.name, Some(&legacy), |size, reader| {
+                            member.numbers(size, reader, limit)
+                        })
+                    {
+                        found(member.row, numbers);
+                    }
+                }
+            }
+        }
+        archive.source.detach();
+        Ok(())
     }
 }
 
@@ -514,13 +555,7 @@ impl<R: Read + Seek> Directory<R> {
             Self::Zip(archive) => {
                 let index = archive
                     .index_for_name(name)
-                    .or_else(|| {
-                        legacy_name.and_then(|legacy| {
-                            archive
-                                .file_names()
-                                .position(|candidate| candidate == legacy)
-                        })
-                    })
+                    .or_else(|| legacy_name.and_then(|legacy| archive.index_for_name(legacy)))
                     .ok_or(Failure::Missing)?;
                 let mut file = archive.by_index(index)?;
                 if file.is_dir() || file.is_symlink() {
@@ -573,6 +608,59 @@ impl<R: Read + Seek> Directory<R> {
 }
 
 impl SevenZip {
+    fn read_isbn_blocks(
+        &self,
+        source: &mut (impl Read + Seek),
+        members: &[IsbnMember],
+        limit: u64,
+        cancelled: &impl Fn() -> bool,
+        mut found: impl FnMut(usize, Vec<String>),
+    ) {
+        let mut blocks =
+            std::collections::BTreeMap::<usize, HashMap<usize, Vec<&IsbnMember>>>::new();
+        for member in members {
+            let Some(&index) = self.names.get(&member.name) else {
+                continue;
+            };
+            let entry = &self.archive.files[index];
+            if !regular_7z(entry) || entry.size > limit {
+                continue;
+            }
+            if !entry.has_stream {
+                if let Ok(numbers) = member.numbers(entry.size, &mut io::empty(), limit) {
+                    found(member.row, numbers);
+                }
+            } else if let Some(block) = self.archive.stream_map.file_block_index[index] {
+                blocks
+                    .entry(block)
+                    .or_default()
+                    .entry(index)
+                    .or_default()
+                    .push(member);
+            }
+        }
+        for (block, mut targets) in blocks {
+            if cancelled() {
+                break;
+            }
+            let mut index = self.archive.stream_map.block_first_file_index[block];
+            let _ = self.visit_block(source, block, |entry, reader| {
+                if cancelled() {
+                    return Ok(false);
+                }
+                if let Some(matches) = targets.remove(&index)
+                    && let Ok(numbers) = matches[0].numbers(entry.size, reader, limit)
+                {
+                    for member in matches {
+                        found(member.row, numbers.clone());
+                    }
+                }
+                index += 1;
+                Ok(!targets.is_empty())
+            });
+        }
+    }
+
     fn open(reader: &mut (impl Read + Seek)) -> Extraction<Self> {
         let password = Password::empty();
         let archive = match Archive::read_with_memory_limit(reader, &password, SEVEN_ZIP_MEMORY_KIB)
@@ -616,6 +704,25 @@ impl SevenZip {
         }
         let block = self.archive.stream_map.file_block_index[index].ok_or(Failure::Missing)?;
         let mut result = Err(Failure::Missing);
+        self.visit_block(source, block, |candidate, reader| {
+            if !std::ptr::eq(entry, candidate) {
+                return Ok(true);
+            }
+            result = process(entry.size, reader);
+            Ok(false)
+        })?;
+        result
+    }
+
+    fn visit_block(
+        &self,
+        source: &mut (impl Read + Seek),
+        block: usize,
+        mut visit: impl FnMut(
+            &sevenz_rust2::ArchiveEntry,
+            &mut dyn Read,
+        ) -> std::result::Result<bool, sevenz_rust2::Error>,
+    ) -> Extraction<()> {
         let mut decode = |limit| {
             let decoder = BlockDecoder::new_with_memory_limit(
                 1,
@@ -625,13 +732,7 @@ impl SevenZip {
                 &self.password,
                 &mut *source,
             );
-            decoder.for_each_entries(&mut |candidate, reader| {
-                if !std::ptr::eq(entry, candidate) {
-                    return Ok(true);
-                }
-                result = process(entry.size, reader);
-                Ok(false)
-            })
+            decoder.for_each_entries(&mut visit)
         };
         match decode(SEVEN_ZIP_MEMORY_KIB) {
             Err(sevenz_rust2::Error::MaxMemLimited { .. }) => {
@@ -640,7 +741,7 @@ impl SevenZip {
             }
             other => other?,
         };
-        result
+        Ok(())
     }
 }
 

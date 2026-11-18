@@ -1924,6 +1924,22 @@ async function verifyLibraryMedia(binary, root) {
         try {
             assert.equal((await send('get-inpx-file')).error,'Remote lib access disabled');
             assert.equal((await send('get-background-tasks')).isbnIndex.state,'ready');
+            const sevenZip = require('../server/core/ExternalTools').sevenZipCommandCandidates()
+                .find(tool=>spawnSync(tool,['i'],{windowsHide:true,stdio:'ignore'}).status===0);
+            if (sevenZip) {
+                const input = join(root,'solid-isbn');
+                await fs.mkdir(input);
+                await fs.writeFile(join(input,'1.fb2'),fb2('Packaged smoke book','0-306-40615-2'));
+                await fs.writeFile(join(input,'2.fb2'),fb2('Slow ISBN sample',''));
+                await fs.writeFile(join(input,'3.epub'),epub);
+                const solid = join(library,'smoke.7z');
+                execFileSync(sevenZip,['a','-t7z','-ms=on','-mmt=1',solid,'1.fb2','2.fb2','3.epub'],{cwd:input,windowsHide:true,stdio:'ignore'});
+                await fs.rename(join(library,'smoke.zip'),join(input,'original.zip'));
+                await send('start-isbn-index',{options:{force:true}});
+                const rebuilt = await waitFor(async()=>(await send('get-background-tasks')).isbnIndex,'ready');
+                assert.deepEqual([rebuilt.checked,rebuilt.found,rebuilt.errors],[552,2,0]);
+                assert.equal((await send('bookSearch',{query:{isbn:'9783161484100'}})).found?.[0]?.title,'ISBN in EPUB');
+            }
             const found = await send('bookSearch',{query:{isbn:'9780306406157'}});
             assert.equal(found.found?.[0]._uid,uid,found.error);
             assert.equal(found.found[0].title,'Новое название');

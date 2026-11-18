@@ -38,7 +38,7 @@ pub(crate) fn read_stream(
     }
     match format {
         Format::Fb2 => read_fb2(
-            BufReader::with_capacity(16 * 1024, reader),
+            BufReader::with_capacity(if isbn_only { 1024 } else { 16 * 1024 }, reader),
             limit,
             isbn_only,
         ),
@@ -112,9 +112,12 @@ pub(crate) fn read_description<T>(
     let mut bytes = Vec::with_capacity(16 * 1024);
     let mut position = 0_usize;
     while (bytes.len() as u64) < limit {
+        // Most descriptions fit near the start. Avoid inflating 16 KiB of book
+        // text just to read a short header from a PPMd stream.
+        let chunk = (bytes.len() as u64).clamp(1024, 16 * 1024);
         let count = reader
             .by_ref()
-            .take((limit - bytes.len() as u64).min(16 * 1024))
+            .take((limit - bytes.len() as u64).min(chunk))
             .read_to_end(&mut bytes)?;
         let utf16 = matches!(
             &bytes[..],

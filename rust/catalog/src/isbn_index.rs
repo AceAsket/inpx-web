@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,9 +9,10 @@ use sha2::{Digest, Sha256};
 
 use super::{Checkpoint, Progress, Row, Store};
 use crate::Result;
-use crate::book_archive::{Failure, IsbnReader};
+use crate::book_archive::{IsbnMember, IsbnReader};
 use crate::book_delivery::Book;
 use crate::book_metadata::Format;
+use crate::book_source::{Folder, member_name};
 use crate::crypto_support::{hex, random};
 use crate::library_sources::Source;
 use crate::standalone_catalogue::Catalogue;
@@ -239,61 +240,95 @@ impl IsbnBuild {
         }
     }
 
-    pub fn record(
+    pub fn record_batch(
         &mut self,
-        id: u32,
-        row: &Value,
+        rows: Vec<Value>,
         sources: &[Source],
         reader: &mut BookIsbnReader,
-    ) {
-        let deleted = row["del"].as_i64().unwrap_or_default() != 0;
-        let mut numbers = crate::isbn::extract(row["isbn"].as_str().unwrap_or_default());
-        let format = match row["ext"]
-            .as_str()
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "fb2" => Some(Format::Fb2),
-            "epub" => Some(Format::Epub),
-            _ => None,
-        };
-        if numbers.is_empty() {
-            if let Some(format) = format.filter(|_| !deleted) {
-                match reader.read(row.clone(), sources, format) {
-                    Ok(extracted) => numbers = extracted,
-                    Err(_) => self.progress.errors += 1,
-                }
+    ) -> Result<()> {
+        enum Outcome {
+            Numbers(Vec<String>),
+            Skipped,
+            Unread,
+        }
+        let mut records = Vec::with_capacity(rows.len());
+        let mut groups = HashMap::<(_, String), Vec<IsbnMember>>::new();
+        for (row_index, row) in rows.into_iter().enumerate() {
+            let id = row["id"]
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .ok_or("Некорректный идентификатор книги")?;
+            let deleted = row["del"].as_i64().unwrap_or_default() != 0;
+            let numbers = crate::isbn::extract(row["isbn"].as_str().unwrap_or_default());
+            let ext = row["ext"].as_str().unwrap_or_default();
+            let format = if ext.eq_ignore_ascii_case("fb2") {
+                Some(Format::Fb2)
+            } else if ext.eq_ignore_ascii_case("epub") {
+                Some(Format::Epub)
             } else {
-                self.progress.skipped += 1;
+                None
+            };
+            let outcome = if !numbers.is_empty() {
+                Outcome::Numbers(numbers)
+            } else if let Some(format) = format.filter(|_| !deleted) {
+                if let Ok(book) = serde_json::from_value::<Book>(row)
+                    && let Some(source) = book.source(sources)
+                    && let Ok(name) = member_name(&format!("{}.{}", book.file, book.ext))
+                {
+                    groups
+                        .entry((&source.lib_dir, book.folder))
+                        .or_default()
+                        .push(IsbnMember {
+                            row: row_index,
+                            name,
+                            format,
+                        });
+                }
+                Outcome::Unread
+            } else {
+                Outcome::Skipped
+            };
+            records.push((id, deleted, outcome));
+        }
+        for ((library, folder), members) in groups {
+            if self.cancelled() {
+                return Ok(());
+            }
+            if let Ok(folder) = Folder::resolve(library, &folder) {
+                let _ = reader.archive.read_group(
+                    &folder,
+                    &members,
+                    reader.limit,
+                    &|| self.cancelled(),
+                    |row, numbers| {
+                        records[row].2 = Outcome::Numbers(numbers);
+                    },
+                );
             }
         }
-        if !numbers.is_empty() {
-            self.pending.push(Row(id, numbers, deleted));
-            self.progress.found += 1;
+        // A checkpoint advances only over a complete page in catalogue ID order.
+        if !self.cancelled() {
+            for (id, deleted, outcome) in records {
+                match outcome {
+                    Outcome::Numbers(numbers) if !numbers.is_empty() => {
+                        self.pending.push(Row(id, numbers, deleted));
+                        self.progress.found += 1;
+                    }
+                    Outcome::Numbers(_) => {}
+                    Outcome::Unread => self.progress.errors += 1,
+                    Outcome::Skipped => self.progress.skipped += 1,
+                }
+                self.progress.checked += 1;
+                self.progress.last_id = id;
+            }
         }
-        self.progress.checked += 1;
-        self.progress.last_id = id;
+        Ok(())
     }
 }
 
 pub struct BookIsbnReader {
     archive: IsbnReader,
     limit: u64,
-}
-
-impl BookIsbnReader {
-    fn read(&mut self, row: Value, sources: &[Source], format: Format) -> Result<Vec<String>> {
-        let book: Book = serde_json::from_value(row)?;
-        let source = book.source(sources).ok_or("Источник книги недоступен")?;
-        let ext = book.extension().ok_or(Failure::InvalidType)?;
-        let input = crate::book_source::resolve(
-            &source.lib_dir,
-            &book.folder,
-            &format!("{}.{ext}", book.file),
-        )?;
-        Ok(self.archive.read(input, format, self.limit)?)
-    }
 }
 
 impl Catalogue {
