@@ -20,7 +20,17 @@ async function temporary(task) {
 }
 
 async function testLaunchResourceProfilesAndOverrides() {
-    const small = policy.resolve({}, {...machine(), cpu:0.5, memoryLimit:512 * 1024 * 1024});
+    const lowSpec = {...machine(), cpu:0.5, memoryLimit:512 * 1024 * 1024};
+    const defaults = policy.resolve({}, lowSpec);
+    assert.strictEqual(defaults.requested,'unlimited');
+    assert(Object.values(defaults.limits).every(limit=>limit === Infinity));
+    assert.deepStrictEqual(policy.resolve({INPX_RESOURCE_PROFILE:'unlimited'},lowSpec).limits,defaults.limits);
+    const unbounded = new ResourceRuntime(defaults);
+    let release;
+    const gate = new Promise(resolve=>{release=resolve;});
+    const requests = Array.from({length:20},()=>unbounded.run(()=>gate,{kind:'images'}));
+    try {assert.strictEqual(unbounded.active,20);} finally {release();await Promise.all(requests);}
+    const small = policy.resolve({INPX_RESOURCE_PROFILE:'auto'}, lowSpec);
     assert.strictEqual(small.selected, 'economy');
     assert.strictEqual(small.hardMax, 1);
     const settings = policy.resolve({INPX_RESOURCE_PROFILE:'performance', INPX_RESOURCE_MAX_PROCESSES:'3',
@@ -344,7 +354,7 @@ async function testResourceErrorsCannotBecomeCachedEmptyReviews() {
 }
 
 async function testCustomBenchmarkLimitsAndLaunchSettingsAgree() {
-    const settings = policy.resolve({INPX_RESOURCE_MAX_PROCESSES:'12'}, machine());
+    const settings = policy.resolve({INPX_RESOURCE_MAX_PROCESSES:'12',INPX_RESOURCE_BACKGROUND:'1'}, machine());
     const values = {total:9, images:3, reviews:9, conversions:5};
     const custom = customProfile(values, settings);
     const resolved = policy.resolve({INPX_RESOURCE_PROFILE:'performance', INPX_RESOURCE_MAX_PROCESSES:'9',
@@ -421,6 +431,9 @@ async function testSelectedProfileRunsOnlySelectedLimitsAndLegacyReportsNeedRete
         assert.strictEqual(row.tasksPerPass, 6);
         assert.strictEqual(report.recommendation.measured, false, 'A single profile is not a comparison');
         assert.strictEqual(JSON.stringify(runtime.settings), before, 'Testing selected limits never applies them');
+        await service.start({mode:'profile',profileId:'unlimited',sourceId:'source'}); await service.completion;
+        assert.strictEqual(service.job.state,'completed');
+        assert.strictEqual(service.last.rows[0].tasksPerStage,12);
         const restored = new ResourceBenchmark(config, {runtime, hardware:machine});
         assert.strictEqual((await restored.snapshot()).report.legacy, false);
         await fs.writeJson(service.resultFile, {...report, schema:1,

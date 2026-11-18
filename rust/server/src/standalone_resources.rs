@@ -100,7 +100,7 @@ impl Budget {
         let requested = std::env::var("INPX_RESOURCE_PROFILE")
             .ok()
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "auto".into());
+            .unwrap_or_else(|| "unlimited".into());
         let estimated = cpu
             .saturating_mul(2)
             .min(memory.map_or(8, |size| ((size / mib * 7 / 10) / 256).min(8) as usize))
@@ -123,7 +123,7 @@ impl Budget {
                 .ok()
                 .and_then(|s| s.parse::<usize>().ok())
                 .or_else(|| {
-                    (requested == "auto")
+                    matches!(requested.as_str(), "auto" | "unlimited")
                         .then(|| {
                             config["conversionConcurrency"]
                                 .as_u64()

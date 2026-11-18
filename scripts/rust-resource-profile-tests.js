@@ -18,7 +18,7 @@ async function fixture(directory, runtimePath = directory) {
     await fs.writeFile(join(directory,'config.json'), JSON.stringify({converterPaths:{djxl:runtimePath+'/djxl'}}));
 }
 
-async function verify(base, directory, profile, expected) {
+async function verify(base, directory, profile, expected, conversions) {
     const client = await connect(base);
     try {
         const identity = await signIn(client, 'admin', password);
@@ -26,6 +26,7 @@ async function verify(base, directory, profile, expected) {
         assert.equal(performance.settings.requested, profile);
         assert.equal(performance.settings.selected, profile);
         assert.equal(performance.settings.limits.images, expected);
+        if (conversions !== undefined) assert.equal(performance.settings.limits.conversions, conversions);
         const result = await client.send('bookSearch',{...identity,query:{del:'0',limit:5}});
         const book = result.found.find(b => b.title === 'JXL' || b.title === 'Packaged smoke book');
         assert(book);

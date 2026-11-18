@@ -293,7 +293,7 @@ th,td {text-align:start; padding:6px 10px; border-bottom:1px solid var(--app-bor
 .performance-comparison tr:last-child td,.performance-comparison tr:last-child th[scope="row"] {border:0;}
 @media (max-width:600px) {.performance-panel {padding:12px;} .performance-form {grid-template-columns:1fr;}}
 @container (max-width:330px) {
-    .performance-heading {flex-wrap:nowrap; gap:4px;}
+    .performance-heading {gap:4px;}
     .performance-heading h3 {font-size:15px;}
     .performance-comparison thead {position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%);}
     .performance-comparison tbody,.performance-comparison {display:block;}

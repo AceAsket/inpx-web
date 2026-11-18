@@ -5,7 +5,7 @@ const resourceRuntime = require('./ResourceRuntime');
 // each book separately multiplies native processes by the number of readers.
 class ImageRuntime {
     constructor(concurrency = resourceRuntime.settings.limits.images, resources = resourceRuntime) {
-        this.concurrency = Math.max(1, Math.min(16, Math.floor(Number(concurrency)) || 1));
+        this.concurrency = concurrency === Infinity ? Infinity : Math.max(1, Math.min(16, Math.floor(Number(concurrency)) || 1));
         this.resources = resources;
         this.backgroundConcurrency = Math.min(resources.settings.limits.background, Math.max(1, this.concurrency - 1));
         this.active = 0;

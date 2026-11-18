@@ -48,7 +48,8 @@ class ResourceRuntime {
     }
 
     drain() {
-        while (this.active < this.settings.hardMax) {
+        const ceiling = this.settings.selected === 'unlimited' ? this.settings.limits.total : this.settings.hardMax;
+        while (this.active < ceiling) {
             const eligible = entry => entry.group.active < entry.limits.total
                 && (entry.group.kinds[entry.kind] || 0) < (entry.limits[entry.kind] || entry.limits.total)
                 && (!entry.background || entry.group !== this.normal || entry.group.background < entry.limits.background);

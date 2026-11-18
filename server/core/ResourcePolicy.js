@@ -8,6 +8,7 @@ const profiles = {
     economy: {name:'Бережный', total:2, images:1, reviews:2, conversions:1, background:1},
     balanced: {name:'Сбалансированный', total:4, images:2, reviews:4, conversions:2, background:1},
     performance: {name:'Производительный', total:6, images:3, reviews:6, conversions:3, background:2},
+    unlimited: {name:'Без ограничений', total:Infinity, images:Infinity, reviews:Infinity, conversions:Infinity, background:Infinity},
 };
 
 function read(file) {
@@ -108,20 +109,25 @@ function integer(env, name, fallback, min, max) {
 }
 
 function resolve(env = process.env, machine = hardware()) {
-    const requested = env.INPX_RESOURCE_PROFILE || 'auto';
-    if (requested !== 'auto' && !Object.hasOwn(profiles, requested)) throw new Error('INPX_RESOURCE_PROFILE: auto, economy, balanced or performance required');
+    const requested = env.INPX_RESOURCE_PROFILE || 'unlimited';
+    if (requested !== 'auto' && !Object.hasOwn(profiles, requested)) throw new Error('INPX_RESOURCE_PROFILE: auto, economy, balanced, performance or unlimited required');
     const automatic = machine.cpu < 2 || machine.memoryLimit < 2 * 1024 * MiB ? 'economy' : 'balanced';
     const selected = requested === 'auto' ? automatic : requested;
     const estimated = Math.max(1, Math.min(8, Math.ceil(machine.cpu * 2), Math.floor((machine.memoryLimit * 0.7) / (256 * MiB))));
-    const hardMax = integer(env, 'INPX_RESOURCE_MAX_PROCESSES', estimated, 1, 16);
+    const explicitMax = integer(env, 'INPX_RESOURCE_MAX_PROCESSES', undefined, 1, 16);
+    const hardMax = explicitMax ?? estimated;
     const overrides = {};
     if (env.INPX_RESOURCE_TOTAL !== undefined && env.INPX_RESOURCE_TOTAL !== '')
         overrides.total = integer(env, 'INPX_RESOURCE_TOTAL', 1, 1, 16);
     for (const [key, variable] of Object.entries({images:'INPX_RESOURCE_IMAGES', reviews:'INPX_RESOURCE_REVIEWS', conversions:'INPX_RESOURCE_CONVERSIONS', background:'INPX_RESOURCE_BACKGROUND'})) {
         if (env[variable] !== undefined && env[variable] !== '') overrides[key] = integer(env, variable, 1, 1, 16);
     }
+    if (overrides.conversions === undefined && env.INPX_CONVERSION_CONCURRENCY)
+        overrides.conversions = integer(env, 'INPX_CONVERSION_CONCURRENCY', undefined, 1, 16);
     const choices = Object.entries(profiles).map(([id, item]) => {
-        const limits = {total:overrides.total ? Math.min(overrides.total, hardMax) : Math.min(item.total, hardMax, estimated)};
+        const total = id === 'unlimited' ? Math.min(overrides.total ?? Infinity, explicitMax ?? Infinity)
+            : Math.min(overrides.total ?? Math.min(item.total, estimated), hardMax);
+        const limits = {total};
         for (const key of ['images','reviews','conversions','background']) limits[key] = Math.min(overrides[key] || item[key], limits.total);
         return {id, name:item.name, limits};
     });
@@ -145,7 +151,7 @@ function fingerprint(config, policy, machine, source = {}) {
         tools:config.converterPaths || {}, fb2cng:config.fb2cngVersion, conversionEnabled:config.conversionEnabled,
         node:process.versions.node, memoryScope:machine.memoryScope, cgroupVersion:machine.cgroupVersion,
         ...(process.env.INPX_JXL_DECODER === 'native' ? {jxlDecoder:'native'} : {}),
-        hardMax:policy.hardMax, overrides:policy.overrides,
+        hardMax:policy.hardMax, overrides:policy.overrides, selected:policy.selected, limits:policy.limits,
         taskTimeoutMs:policy.taskTimeoutMs,
         source:[source.id, source.libDir]})).digest('hex');
 }

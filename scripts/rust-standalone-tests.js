@@ -2001,14 +2001,19 @@ async function verifyResourceProfiles(binary, root) {
     await createFixture(library,{nativeJxlCover:true});
     await bundle(web);
     for (const [profile, total, expected] of [
-        ['economy',6,1],['performance',6,3],['performance',1,1],['unlimited',null,null],['unlimited',2,2],
+        ['economy',6,1],['performance',6,3],['performance',1,1],[null,null,null],['unlimited',null,null],[null,2,2],
     ]) {
         const dir = join(root,profile+'-'+total);
         await probe.fixture(dir);
+        const config = join(dir,'config.json');
+        if (!profile && !total) {
+            const saved = JSON.parse(await fs.readFile(config,'utf8'));
+            await fs.writeFile(config,JSON.stringify({...saved,conversionConcurrency:1}));
+        }
         const server = await start(binary,['--standalone','--host=127.0.0.1','--data-dir='+dir,
-            '--config='+join(dir,'config.json'),'--lib-dir='+library,'--web-bundle='+web,'--admin-password='+probe.password],
-        {INPX_RESOURCE_PROFILE:profile,...(total ? {INPX_RESOURCE_TOTAL:String(total),INPX_RESOURCE_MAX_PROCESSES:'6'} : {})});
-        try { await probe.verify(server.url, dir, profile, expected); }
+            '--config='+config,'--lib-dir='+library,'--web-bundle='+web,'--admin-password='+probe.password],
+        {...(profile ? {INPX_RESOURCE_PROFILE:profile} : {}),...(total ? {INPX_RESOURCE_TOTAL:String(total),INPX_RESOURCE_MAX_PROCESSES:'6'} : {})});
+        try { await probe.verify(server.url, dir, profile || 'unlimited', expected, !profile && !total ? 1 : undefined); }
         finally { await server.stop(); }
     }
 }
