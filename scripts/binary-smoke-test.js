@@ -353,7 +353,7 @@ async function main() {
         if (nativeJxlCover || rust && binary) {
             for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
             env.PATH = rust ? '' : cwd;
-            if (nativeJxlCover) env.INPX_JXL_DECODER = 'native';
+            if (nativeJxlCover || options.includes('--bundled-djxl')) env.INPX_JXL_DECODER = 'native';
         }
         if (requireRustCatalogue) {
             delete env.INPX_RUST_READER_BINARY;
