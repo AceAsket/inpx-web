@@ -473,13 +473,20 @@ async function main() {
     } finally {
         if (target === '--image')
             await promisify(execFile)('docker', ['rm', '-f', containerName], {windowsHide: true, timeout: 15000}).catch(() => {});
-        if (child && child.exitCode === null)
-            child.kill();
+        if (child?.pid && child.exitCode === null && child.signalCode === null) {
+            if (process.platform === 'win32' && target !== '--image') {
+                const taskkill = path.join(process.env.SystemRoot, 'System32', 'taskkill.exe');
+                await promisify(execFile)(taskkill, ['/pid', String(child.pid), '/t', '/f'], {windowsHide:true, timeout:5000})
+                    .catch(() => child.kill());
+            } else {
+                child.kill();
+            }
+        }
         if (exited) {
             const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
             try { await exited; } finally { clearTimeout(timer); }
         }
-        await fs.remove(dir);
+        await fs.rm(dir, {recursive:true, force:true, maxRetries:5, retryDelay:200});
     }
 }
 

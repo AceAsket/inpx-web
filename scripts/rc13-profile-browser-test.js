@@ -19,7 +19,7 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
         const library = path.join(directory, 'library'); await fixture(library);
         const config = path.join(library, 'config.json');
         await fs.writeJson(config, {...await fs.readJson(config), adminPassword: password});
-        const dataDir = path.join(directory, 'data'); await fs.copy(path.resolve('dist/tmp/public'), path.join(dataDir, 'public'));
+        const dataDir = path.join(directory, 'data'); await fs.copy(path.join(require('../build/dist-dir'),'tmp/public'), path.join(dataDir, 'public'));
         const port = await unusedPort(), base = `http://127.0.0.1:${port}`;
         child = spawn(process.execPath, [path.resolve('server'), `--data-dir=${dataDir}`, `--config=${config}`, `--lib-dir=${library}`, `--port=${port}`, '--host=127.0.0.1'],
             {windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: {...process.env, INPX_TTS_ENABLED: 'false', INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
@@ -75,10 +75,12 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
             await page.waitForFunction(() => !document.querySelector('.reader-loading') && document.querySelector('.reader-html')?.textContent.trim());
         };
         await page.goto(base + '/#/profile'); await page.locator('.profile-page').waitFor();
-        // The app reloads on the first controllerchange. Poll in a rerunnable
-        // Playwright task and wait for that new document before starting login.
-        await page.waitForFunction(() => !!navigator.serviceWorker.controller
-            && performance.getEntriesByType('navigation').some(entry => entry.type === 'reload'));
+        await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+        assert.equal(await page.evaluate(() => performance.getEntriesByType('navigation')[0].type), 'navigate');
+        await fs.appendFile(path.join(dataDir, 'public', 'sw.js'), '\n// Updated fixture worker\n');
+        await page.evaluate(() => { void navigator.serviceWorker.ready.then(registration => registration.update()); });
+        await page.waitForFunction(() => navigator.serviceWorker.controller
+            && performance.getEntriesByType('navigation')[0]?.type === 'reload');
         await page.locator('.profile-page').waitFor();
         await login('admin', password);
         await api({action: 'create-user-profile', profile: {name: 'Bob', login: 'bob', password: 'bob-browser-password'}});

@@ -17,7 +17,7 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
         const configFile=path.join(library,'config.json'),config=await fs.readJson(configFile);
         config.uiDefaults={...config.uiDefaults,catalogAppearance:'shelves',langDefault:'ru'};
         await fs.writeJson(configFile,config);
-        const dataDir=path.join(directory,'data'); await fs.copy(path.resolve('dist/tmp/public'),path.join(dataDir,'public'));
+        const dataDir=path.join(directory,'data'); await fs.copy(path.join(require('../build/dist-dir'),'tmp/public'),path.join(dataDir,'public'));
         const ReadingListStore=require('../server/core/ReadingListStore');
         const passwordHash=await require('../server/core/ProfilePassword').hash('overview-fixture-profile');
         const profiles=new ReadingListStore({...config,dataDir,adminPassword:'overview-local-fixture'});
