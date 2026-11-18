@@ -8750,7 +8750,8 @@ class Reader {
             }
             this.pagedBuildProgressPercent = 100;
             this.loadingMessage = `${this.uiText.loadingPagesFinalizing.replace('...', '')} 100%`;
-            await this.waitForAnimationFrames(1);
+            // A reload as soon as pagination finishes must see the committed layout.
+            await Promise.all([this.waitForAnimationFrames(1), pageCache.savePages(diskKey, finalPages)]);
             if (jobId && jobId !== this.pagedBuildJobId) {
                 storePartialLayout(queue.length);
                 return false;
@@ -8781,7 +8782,6 @@ class Reader {
                 buildProgressPercent: 100,
                 stats: Object.assign({}, stats, {status: 'done'}),
             });
-            void pageCache.savePages(diskKey, finalPages);
             if (this.readerDebugEnabled)
                 publishStats('done');
             return true;

@@ -74,13 +74,12 @@ async function lookup(key) {
     });
 }
 
-export async function readPages(key) {
-    if (!key) return null;
+async function withStorageTimeout(operation) {
     // Storage can be blocked by another tab or unavailable in private browsing.
     let timeout;
     try {
-        return await Promise.race([lookup(key), new Promise(resolve => {
-            timeout = setTimeout(resolve, 750, null);
+        return await Promise.race([operation, new Promise(resolve => {
+            timeout = setTimeout(resolve, 1500, null);
         })]);
     } catch {
         return null;
@@ -89,35 +88,42 @@ export async function readPages(key) {
     }
 }
 
-export async function savePages(key, pages) {
-    if (!key || !pages.length) return;
-    try {
-        let characters = 0;
-        for (const page of pages) {
-            characters += page.html.length + page.footnotesHtml.length + page.sectionId.length;
-            for (const id of page.anchorIds) characters += id.length;
-            if (characters > maxLayoutCharacters) return;
-        }
-        const db = await database();
-        if (!db) return;
-        const store = db.transaction('layouts', 'readwrite').objectStore('layouts');
-        // Checkpoints can contain Vue proxies, which IndexedDB cannot clone.
-        const snapshot = pages.map(({html, footnotesHtml, sectionId, anchorIds}) =>
-            ({html, footnotesHtml, sectionId, anchorIds: Array.from(anchorIds)}));
-        store.put({pages: snapshot, writtenAt: Date.now()}, key);
-        const count = store.count();
-        count.onsuccess = () => {
-            let excess = count.result - maxLayouts;
-            if (excess <= 0) return;
-            const oldest = store.index('writtenAt').openKeyCursor();
-            oldest.onsuccess = () => {
-                const cursor = oldest.result;
-                if (!cursor) return;
-                store.delete(cursor.primaryKey);
-                if (--excess > 0) cursor.continue();
-            };
-        };
-    } catch {
-        // A quota or storage failure only makes the next opening a cold one.
+export function readPages(key) {
+    return key ? withStorageTimeout(lookup(key)) : null;
+}
+
+async function writePages(key, pages) {
+    let characters = 0;
+    for (const page of pages) {
+        characters += page.html.length + (page.footnotesHtml || '').length + page.sectionId.length;
+        for (const id of page.anchorIds) characters += id.length;
+        if (characters > maxLayoutCharacters) return;
     }
+    const db = await database();
+    if (!db) return;
+    const transaction = db.transaction('layouts', 'readwrite');
+    const store = transaction.objectStore('layouts');
+    // Checkpoints can contain Vue proxies, which IndexedDB cannot clone.
+    const snapshot = pages.map(({html, footnotesHtml = '', sectionId, anchorIds}) =>
+        ({html, footnotesHtml, sectionId, anchorIds: Array.from(anchorIds)}));
+    store.put({pages: snapshot, writtenAt: Date.now()}, key);
+    const count = store.count();
+    count.onsuccess = () => {
+        let excess = count.result - maxLayouts;
+        if (excess <= 0) return;
+        const oldest = store.index('writtenAt').openKeyCursor();
+        oldest.onsuccess = () => {
+            const cursor = oldest.result;
+            if (!cursor) return;
+            store.delete(cursor.primaryKey);
+            if (--excess > 0) cursor.continue();
+        };
+    };
+    return new Promise(resolve => {
+        transaction.oncomplete = transaction.onabort = () => resolve();
+    });
+}
+
+export function savePages(key, pages) {
+    if (key && pages.length) return withStorageTimeout(writePages(key, pages));
 }
