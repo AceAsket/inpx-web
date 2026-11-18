@@ -42,7 +42,7 @@
                 </div>
                 <div class="performance-source">
                     <label for="performance-check-source">Хранилище</label>
-                    <select id="performance-check-source" v-model="sourceId" :disabled="running || busy || !info.sources.length">
+                    <select id="performance-check-source" v-model="sourceId" :disabled="running || busy || !info.sources.length" @change="sourceNotice = ''">
                         <option v-if="!info.sources.length" value="">Нет доступных хранилищ</option>
                         <option v-for="source in info.sources" :key="source.id" :value="source.id">{{ source.name }}</option>
                     </select>
@@ -74,7 +74,7 @@
                     <table v-if="info.report.mode === 'compare' && info.report.rows.length" class="performance-comparison">
                         <thead><tr><th>Режим</th><th>Отклик p95</th><th>Пик памяти</th></tr></thead>
                         <tbody><tr v-for="row in info.report.rows" :key="row.profile">
-                            <th scope="row">{{ profileName(row.profile) }}</th><td>{{ duration(row.probeP95Ms) }}</td><td>{{ bytes(row.peakMemory) }}</td>
+                            <th scope="row">{{ profileName(row.profile) }}</th><td data-label="Отклик p95">{{ duration(row.probeP95Ms) }}</td><td data-label="Пик памяти">{{ bytes(row.peakMemory) }}</td>
                         </tr></tbody>
                     </table>
                     <span v-if="info.recommendation.measured && !info.report.stale && !info.report.legacy && info.report.schema === 2">Рекомендуемый режим — {{ profileName(info.recommendation.profile) }}</span>
@@ -207,7 +207,7 @@ export default {
                 this.previousCpu = Number.isFinite(usage) ? {at, usage, scope} : null;
                 this.info = info; this.error = '';
                 if (!info.sources.some(item => item.id === this.sourceId)) {
-                    if(this.sourceId)this.sourceNotice='Сохранённое хранилище недоступно. Выбрано первое доступное; проверьте источник перед тестом.';
+                    if(this.sourceId)this.sourceNotice=info.sources[0] ? 'Хранилище недоступно. Выбрано «'+info.sources[0].name+'».' : '';
                     this.sourceId = info.sources[0]?.id || '';
                 }
                 if (!this.selected || !['custom','compare',...info.settings.profiles.map(profile=>profile.id)].includes(this.selected))
@@ -226,6 +226,7 @@ export default {
         },
         start() {
             if(this.busy || this.running || !this.sourceId || this.customError)return;
+            this.sourceNotice = '';
             const options=preferencesModel.testOptions(this.testDraft);
             if (this.info.settings.native && options.mode === 'custom') options.limits.images = 1;
             return this.performAction(()=>this.$root.api.startAdminBenchmark(options));
@@ -255,7 +256,7 @@ export default {
 </script>
 
 <style scoped>
-.performance-panel {grid-column:1/-1; min-width:0; padding:18px; border:1px solid var(--app-border); border-radius:12px; color:var(--app-text); background:var(--app-surface);}
+.performance-panel {container-type:inline-size; grid-column:1/-1; min-width:0; padding:18px; border:1px solid var(--app-border); border-radius:12px; color:var(--app-text); background:var(--app-surface);}
 .performance-heading,.performance-active,.performance-actions,.performance-copy {display:flex; align-items:center; justify-content:space-between; gap:10px 16px; flex-wrap:wrap;}
 .performance-panel h3,.performance-panel h4 {margin:0; font-weight:700; line-height:1.3; letter-spacing:normal;}
 .performance-panel h3 {font-size:18px;} .performance-panel h4 {font-size:15px; margin:20px 0 10px;}
@@ -291,4 +292,14 @@ th,td {text-align:start; padding:6px 10px; border-bottom:1px solid var(--app-bor
 .performance-comparison th[scope="row"] {font-weight:500;}
 .performance-comparison tr:last-child td,.performance-comparison tr:last-child th[scope="row"] {border:0;}
 @media (max-width:600px) {.performance-panel {padding:12px;} .performance-form {grid-template-columns:1fr;}}
+@container (max-width:330px) {
+    .performance-heading {flex-wrap:nowrap; gap:4px;}
+    .performance-heading h3 {font-size:15px;}
+    .performance-comparison thead {position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%);}
+    .performance-comparison tbody,.performance-comparison {display:block;}
+    .performance-comparison tr {display:grid; grid-template-columns:1fr 1fr; gap:3px 7px; padding:6px 0; border-top:1px solid var(--app-border);}
+    .performance-comparison tr > * {padding:0; border:0;}
+    .performance-comparison th[scope="row"] {grid-column:1/-1; font-weight:600;}
+    .performance-comparison td::before {content:attr(data-label); display:block; font-size:11px; color:var(--app-muted);}
+}
 </style>

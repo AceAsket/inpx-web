@@ -125,16 +125,18 @@ const MiB=1024**2;
         await panel.getByRole('spinbutton',{name:'Изображения',exact:true}).fill('3');
         sourceIds=['one'];legacy=true;jobState='failed';
         await panel.getByRole('button',{name:'Обновить показатели производительности',exact:true}).click();
-        await panel.getByText(/Сохранённое хранилище недоступно/).waitFor();
+        await panel.getByText(/Хранилище недоступно/).waitFor();
         await panel.getByTestId('performance-result').getByText('Старый формат отчёта. Повторите проверку.',{exact:true}).waitFor();
         await panel.getByRole('status').getByText('Предыдущая попытка не завершилась',{exact:true}).waitFor();
         await panel.getByTestId('performance-result').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(directory,'performance-legacy-320.png')});
         legacy=false;compare=true;jobState='completed';await choice.selectOption('compare');
+        await panel.getByTestId('performance-start').click();
         await panel.getByRole('button',{name:'Обновить показатели производительности'}).click();
+        await page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$store.commit('setSettings',{darkTheme:true}));
         const comparison=panel.locator('.performance-comparison');
         await comparison.getByText('Сбалансированный',{exact:true}).waitFor();
         for (const width of [320,1280]) {
-            await page.setViewportSize({width,height:980});
+            await page.setViewportSize({width,height:width === 320 ? 1400 : 980});
             assert(await panel.evaluate(node=>node.scrollWidth<=node.clientWidth+1));
             await panel.screenshot({path:path.join(directory,'performance-compact-'+width+'.png')});
         }
