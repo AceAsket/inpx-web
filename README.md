@@ -7,12 +7,20 @@
 inpx-web-7z
 ===========
 
+> [!IMPORTANT]
+> **Развитие проекта с версии 1.8.3**
+>
+> - **Сервер на Rust и новый веб-интерфейс** — все новые возможности.
+> - **Версия с сервером на Node.js** — только исправления ошибок.
+>
+> [Ветка `rust`](https://github.com/AceAsket/inpx-web/tree/rust) · [Сборка Rust-версии](https://github.com/AceAsket/inpx-web/blob/rust/README.md#сборка-с-автономным-rust-сервером)
+
 [![INPX Reader — скачать читалку для Android](https://img.shields.io/badge/INPX_Reader-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK-0F766E?style=for-the-badge&logo=android&logoColor=white)](https://github.com/AceAsket/inpx-reader-releases/releases/latest)
 [![INPX Server — сервер для Android](https://img.shields.io/badge/INPX_Server-%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%20%D0%B4%D0%BB%D1%8F%20Android-455A64?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
 
 > **Читать и слушать на Android:** [скачайте INPX Reader](https://github.com/AceAsket/inpx-reader-releases/releases/latest) — наше клиентское приложение для подключения к вашей библиотеке INPX Web.
 
-Стабильная версия — **1.8.1**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.1`. Для разработки используется ветка `develop`.
+Стабильная версия — **1.8.1**: [скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.1), [история изменений](./CHANGELOG.md). Docker-примеры используют стабильный образ; сборка из исходников — тег `v1.8.1`.
 
 <a id="ключевые-отличия" />
 
@@ -1456,7 +1464,7 @@ sudo service nginx reload
 
 ### Разработка
 
-Для разработки получите ветку `develop` и установите зависимости под Node.js 24 или новее:
+Для отладки сервера на Node.js используйте ветку `develop` и Node.js 24 или новее.
 
 ```sh
 git clone --branch develop --single-branch https://github.com/AceAsket/inpx-web.git
