@@ -1,161 +1,93 @@
 <template>
     <Dialog ref="dialog" v-model="dialogVisible" variant="settings">
         <template #header>
-            <div class="row items-center" style="font-size: 110%">
-                <q-icon class="q-mr-sm text-green" name="la la-cog" size="28px"></q-icon>
-                Настройки
-            </div>
+            <span>Настройки</span>
         </template>
 
-        <div class="q-mx-md column settings-dialog-body" style="min-width: min(300px, calc(100vw - 96px)); font-size: 120%;">
-            <AppConnectionSettings />
-            <div v-if="canEditExternalDiscovery" class="row q-mb-sm">
-                <q-btn outline color="primary" dense no-caps icon="la la-tasks" label="Задачи и состояние библиотеки" @click="$emit('open-library-tasks')" />
-            </div>
-            <div class="row items-center q-ml-sm">
-                <div class="q-mr-sm">
-                    Результатов на странице
-                </div>
-                <q-select
-                    v-model="limit"
-                    :options="limitOptions"
-                    class="bg-white"
-                    dropdown-icon="la la-angle-down la-sm"
-                    outlined
-                    dense
-                    emit-value
-                    map-options
-                />
-            </div>
-
-            <q-checkbox v-show="config.latestVersion" v-model="showNewReleaseAvailable" size="36px" label="Уведомлять о выходе новой версии" />
-            <q-checkbox v-model="downloadAsZip" size="36px" label="Скачивать книги в виде zip-архива" />
-            <q-checkbox v-model="showCounts" size="36px" label="Показывать количество" />
-            <q-checkbox v-model="showRates" size="36px" label="Показывать оценки" />
-            <q-checkbox v-model="showInfo" size="36px" label="Показывать кнопку «Инфо»" />
-            <q-checkbox v-model="autoLoadBookReviews" size="36px" label="Автоматически загружать отзывы и оценки" />
-            <q-checkbox v-model="autoLoadAuthorInfo" size="36px" label="Автоматически загружать сведения об авторе" />
-            <div class="text-caption text-grey-7 q-px-sm">По умолчанию отзывы и сведения об авторе загружаются при открытии соответствующей вкладки в карточке книги.</div>
-            <q-checkbox v-model="showGenres" size="36px" label="Показывать жанры" />
-            <div class="settings-card-view row items-center q-ml-sm q-my-xs">
-                <div class="q-mr-sm settings-card-view-label">
-                    Вид карточек
-                </div>
-                <q-btn-toggle
-                    v-model="bookCardView"
-                    class="settings-card-view-toggle"
-                    toggle-color="primary"
-                    :options="bookCardViewOptions"
-                    push
-                    no-caps
-                    rounded
-                />
-            </div>
-            <q-checkbox v-model="showDates" size="36px" label="Показывать даты поступления" />
-            <q-checkbox v-model="showDeleted" size="36px" label="Показывать удалённые" />
-            <q-checkbox v-model="abCacheEnabled" size="36px" label="Кешировать запросы" />
-            <q-checkbox v-model="darkTheme" size="36px" label="Ночная тема" />
-
-            <div v-if="discoveryEnabled" class="q-mt-sm q-ml-sm text-weight-medium" style="font-size: 92%;">
-                Витрины
-            </div>
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryNewest" size="36px" label="Показывать вкладку «Новинки»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryPopular" size="36px" label="Показывать вкладку «Популярное»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryContinueReading" size="36px" label="Показывать полку «Продолжить чтение»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryFromLists" size="36px" label="Показывать полку «Из ваших списков»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnfinishedSeries" size="36px" label="Показывать полку «Незаконченные серии»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoverySimilar" size="36px" label="Показывать полку «Похоже на то, что вы читали»" />
-            <q-checkbox v-if="discoveryEnabled" v-model="showDiscoveryUnreadOnly" size="36px" label="Во вкладке «Для вас» показывать только непрочитанное" />
-            <q-checkbox v-if="discoveryEnabled" v-model="compactDiscoveryCards" size="36px" label="Использовать компактные карточки в витринах" />
-            <q-checkbox v-if="effectiveExternalDiscoveryAvailable" v-model="showDiscoveryExternal" size="36px" label="Показывать вкладку внешнего источника" />
-
-            <div v-if="discoveryEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Лимит «Новинки»</div>
-                <q-select
-                    v-model="discoveryNewestLimit"
-                    :options="discoveryLimitOptions"
-                    class="bg-white"
-                    dropdown-icon="la la-angle-down la-sm"
-                    outlined
-                    dense
-                    emit-value
-                    map-options
-                />
-            </div>
-
-            <div v-if="discoveryEnabled" class="row items-center q-ml-sm q-mt-sm">
-                <div class="q-mr-sm">Лимит «Популярное»</div>
-                <q-select
-                    v-model="discoveryPopularLimit"
-                    :options="discoveryLimitOptions"
-                    class="bg-white"
-                    dropdown-icon="la la-angle-down la-sm"
-                    outlined
-                    dense
-                    emit-value
-                    map-options
-                />
-            </div>
-
-            <div v-if="discoveryEnabled && canEditExternalDiscovery" class="row items-center q-ml-sm q-mt-sm settings-inline-row">
-                <div class="q-mr-sm settings-inline-label">Внешний источник</div>
-                <div class="settings-inline-summary text-grey-8">
-                    {{ externalDiscoverySummary }}
-                </div>
-                <q-btn
-                    class="q-ml-sm"
-                    color="primary"
-                    flat
-                    dense
-                    no-caps
-                    icon="la la-sliders-h"
-                    @click="discoverySourceDialogVisible = true"
-                >
-                    Управлять
-                </q-btn>
-            </div>
-
-            <div v-if="effectiveExternalDiscoveryAvailable && !canEditExternalDiscovery" class="q-ml-sm q-mt-sm text-grey-7" style="font-size: 85%;">
-                Внешний источник настраивает администратор профиля.
-            </div>
-            <div v-if="canEditExternalDiscovery" class="admin-mail-box admin-collapse-box">
-                <button class="admin-collapse-head" type="button" @click="backupExpanded = !backupExpanded">
-                    <div class="admin-collapse-copy">
-                        <div class="admin-mail-title">{{ backupUi.title }}</div>
-                        <div class="admin-mail-subtitle">{{ backupUi.subtitle }}</div>
+        <div class="settings-dialog-body">
+            <h2 class="settings-heading">Личные настройки</h2>
+            <details class="settings-group">
+                <summary><q-icon name="la la-book-open" />Каталог и карточки</summary>
+                <div class="settings-group-body">
+                    <div class="settings-fields">
+                        <q-select v-model="limit" :options="limitOptions" label="Книг на странице" outlined dense emit-value map-options />
+                        <div class="settings-card-view">
+                            <span>Вид каталога</span>
+                            <q-btn-toggle v-model="bookCardView" class="settings-card-view-toggle" toggle-color="primary"
+                                :options="bookCardViewOptions" no-caps unelevated />
+                        </div>
                     </div>
-                    <q-icon class="admin-collapse-icon" :name="backupExpanded ? 'la la-angle-up' : 'la la-angle-down'" size="20px" />
+                    <div class="settings-checks">
+                        <q-checkbox v-model="darkTheme" size="36px" label="Ночная тема" />
+                        <q-checkbox v-model="showDeleted" size="36px" label="Показывать удалённые книги" />
+                        <q-checkbox v-model="showCounts" size="36px" label="Показывать количество книг" />
+                        <q-checkbox v-model="showRates" size="36px" label="Показывать оценки" />
+                        <q-checkbox v-model="showGenres" size="36px" label="Показывать жанры" />
+                        <q-checkbox v-model="showDates" size="36px" label="Показывать даты поступления" />
+                        <q-checkbox v-model="showInfo" size="36px" label="Показывать кнопку «Инфо»" />
+                        <q-checkbox v-model="abCacheEnabled" size="36px" label="Кэшировать запросы" />
+                    </div>
+                    <div class="settings-checks settings-divider">
+                        <q-checkbox v-model="autoLoadBookReviews" size="36px" label="Автоматически загружать отзывы и оценки" />
+                        <q-checkbox v-model="autoLoadAuthorInfo" size="36px" label="Автоматически загружать сведения об авторе" />
+                    </div>
+                </div>
+            </details>
+
+            <details v-if="discoveryEnabled" class="settings-group">
+                <summary><q-icon name="la la-bookmark" />Полки и витрины</summary>
+                <div class="settings-group-body">
+                    <div class="settings-checks">
+                        <q-checkbox v-model="showDiscoveryNewest" size="36px" label="Новинки" />
+                        <q-checkbox v-model="showDiscoveryPopular" size="36px" label="Популярное" />
+                        <q-checkbox v-model="showDiscoveryContinueReading" size="36px" label="Продолжить чтение" />
+                        <q-checkbox v-model="showDiscoveryFromLists" size="36px" label="Из ваших списков" />
+                        <q-checkbox v-model="showDiscoveryUnfinishedSeries" size="36px" label="Незаконченные серии" />
+                        <q-checkbox v-model="showDiscoverySimilar" size="36px" label="Похоже на то, что вы читали" />
+                        <q-checkbox v-if="effectiveExternalDiscoveryAvailable" v-model="showDiscoveryExternal" size="36px" label="Внешняя подборка" />
+                    </div>
+                    <div class="settings-checks settings-divider">
+                        <q-checkbox v-model="showDiscoveryUnreadOnly" size="36px" label="Только непрочитанное в «Для вас»" />
+                        <q-checkbox v-model="compactDiscoveryCards" size="36px" label="Компактные карточки" />
+                    </div>
+                    <div class="settings-fields">
+                        <q-select v-model="discoveryNewestLimit" :options="discoveryLimitOptions" label="Книг в «Новинках»" outlined dense emit-value map-options />
+                        <q-select v-model="discoveryPopularLimit" :options="discoveryLimitOptions" label="Книг в «Популярном»" outlined dense emit-value map-options />
+                    </div>
+                </div>
+            </details>
+
+            <details class="settings-group">
+                <summary><q-icon name="la la-mobile" />Приложение и загрузки</summary>
+                <div class="settings-group-body">
+                    <AppConnectionSettings />
+                    <q-checkbox v-model="downloadAsZip" size="36px" label="Скачивать книги в ZIP" />
+                    <q-checkbox v-if="config.latestVersion" v-model="showNewReleaseAvailable" size="36px" label="Уведомлять о новой версии" />
+                </div>
+            </details>
+
+            <h2 v-if="canEditExternalDiscovery" class="settings-heading">Управление библиотекой</h2>
+            <button v-if="canEditExternalDiscovery" type="button" class="settings-task-link" @click="$emit('open-library-tasks')">
+                <q-icon name="la la-tasks" />Задачи и состояние библиотеки<q-icon name="la la-angle-right" />
+            </button>
+            <div v-if="canEditExternalDiscovery && adminDashboardAvailable" class="admin-mail-box admin-collapse-box">
+                <button class="admin-collapse-head" type="button" :aria-expanded="performanceExpanded" @click="performanceExpanded = !performanceExpanded">
+                    <q-icon class="settings-icon" name="la la-tachometer-alt" />
+                    <span class="admin-collapse-copy">Производительность</span>
+                    <q-icon class="admin-collapse-icon" :name="performanceExpanded ? 'la la-angle-up' : 'la la-angle-down'" size="20px" />
                 </button>
-
-                <div v-show="backupExpanded" class="admin-collapse-body">
-                    <BackupPanel v-if="backupExpanded" />
-                    <div class="admin-backup-note">
-                        <strong>Перенос только настроек</strong>
-                        <div>{{ backupUi.settingsBackupInfo }}</div>
-                    </div>
-                    <div class="admin-backup-actions">
-                        <q-btn outline color="primary" dense no-caps icon="la la-file-export" :loading="settingsExportLoading" @click="exportSettings">
-                            {{ backupUi.settings }}
-                        </q-btn>
-                        <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="settingsImportLoading" @click="openSettingsImport">
-                            {{ backupUi.settingsImport }}
-                        </q-btn>
-                        <input
-                            ref="settingsImportInput"
-                            type="file"
-                            accept="application/json,.json"
-                            style="display: none"
-                            @change="onSettingsImportSelected"
-                        />
-                    </div>
-                </div>
+                <PerformancePanel v-if="dialogVisible && performanceExpanded" />
             </div>
-
+            <button v-if="canEditExternalDiscovery && discoveryEnabled" type="button" class="settings-task-link" @click="discoverySourceDialogVisible = true">
+                <q-icon name="la la-globe" />
+                <span>Внешний источник витрины<small class="settings-source-name">{{ externalDiscoverySummary }}</small></span>
+                <q-icon name="la la-angle-right" />
+            </button>
             <div v-if="canEditExternalDiscovery" class="admin-mail-box admin-collapse-box">
-                <button class="admin-collapse-head" type="button" @click="toggleAdminExpanded">
+                <button class="admin-collapse-head" type="button" :aria-expanded="adminExpanded" @click="toggleAdminExpanded">
+                    <q-icon class="settings-icon" name="la la-server" />
                     <div class="admin-collapse-copy">
                         <div class="admin-mail-title">{{ adminUi.title }}</div>
-                        <div class="admin-mail-subtitle">{{ adminUi.subtitle }}</div>
                     </div>
                     <q-icon class="admin-collapse-icon" :name="adminExpanded ? 'la la-angle-up' : 'la la-angle-down'" size="20px" />
                 </button>
@@ -286,8 +218,6 @@
                                 </div>
                             </div>
                         </section>
-
-                        <PerformancePanel v-if="dialogVisible && adminExpanded && adminDashboardAvailable" />
 
                         <section class="admin-dashboard-section admin-dashboard-section--wide">
                             <div class="admin-dashboard-section-title">Качество рекомендаций</div>
@@ -515,14 +445,48 @@
             </div>
 
             <div v-if="canEditExternalDiscovery" class="admin-mail-box admin-collapse-box">
-                <button class="admin-collapse-head" type="button" @click="opdsExpanded = !opdsExpanded">
+                <button class="admin-collapse-head" type="button" :aria-expanded="backupExpanded" @click="backupExpanded = !backupExpanded">
+                    <q-icon class="settings-icon" name="la la-archive" />
+                    <div class="admin-collapse-copy">
+                        <div class="admin-mail-title">{{ backupUi.title }}</div>
+                    </div>
+                    <q-icon class="admin-collapse-icon" :name="backupExpanded ? 'la la-angle-up' : 'la la-angle-down'" size="20px" />
+                </button>
+
+                <div v-show="backupExpanded" class="admin-collapse-body">
+                    <BackupPanel v-if="backupExpanded" />
+                    <div class="admin-backup-note">
+                        <strong>Перенос только настроек</strong>
+                        <div>{{ backupUi.settingsBackupInfo }}</div>
+                    </div>
+                    <div class="admin-backup-actions">
+                        <q-btn outline color="primary" dense no-caps icon="la la-file-export" :loading="settingsExportLoading" @click="exportSettings">
+                            {{ backupUi.settings }}
+                        </q-btn>
+                        <q-btn outline color="primary" dense no-caps icon="la la-file-import" :loading="settingsImportLoading" @click="openSettingsImport">
+                            {{ backupUi.settingsImport }}
+                        </q-btn>
+                        <input
+                            ref="settingsImportInput"
+                            type="file"
+                            accept="application/json,.json"
+                            style="display: none"
+                            @change="onSettingsImportSelected"
+                        />
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="canEditExternalDiscovery" class="admin-mail-box admin-collapse-box">
+                <button class="admin-collapse-head" type="button" :aria-expanded="opdsExpanded" @click="opdsExpanded = !opdsExpanded">
+                    <q-icon class="settings-icon" name="la la-rss" />
                     <div class="admin-collapse-copy">
                         <div class="admin-mail-title">{{ opdsUi.title }}</div>
-                        <div class="admin-mail-subtitle">{{ config.adminCache ? 'Путь каталога и общий пароль OPDS применяются сразу после сохранения.' : opdsUi.subtitle }}</div>
                     </div>
                     <q-icon class="admin-collapse-icon" :name="opdsExpanded ? 'la la-angle-up' : 'la la-angle-down'" size="20px" />
                 </button>
                 <div v-show="opdsExpanded" class="admin-collapse-body">
+                    <p v-if="!config.adminCache" class="admin-mail-subtitle">{{ opdsUi.subtitle }}</p>
                     <div class="admin-mail-grid">
                         <q-checkbox v-model="opdsSettings.enabled" size="34px" :label="opdsUi.enabled" />
                         <q-input v-model="opdsSettings.root" outlined dense clearable :label="opdsUi.root" />
@@ -542,10 +506,10 @@
             </div>
 
             <div v-if="canEditExternalDiscovery" class="admin-mail-box admin-collapse-box">
-                <button class="admin-collapse-head" type="button" @click="mailExpanded = !mailExpanded">
+                <button class="admin-collapse-head" type="button" :aria-expanded="mailExpanded" @click="mailExpanded = !mailExpanded">
+                    <q-icon class="settings-icon" name="la la-paper-plane" />
                     <div class="admin-collapse-copy">
                         <div class="admin-mail-title">{{ mailUi.title }}</div>
-                        <div class="admin-mail-subtitle">{{ mailUi.subtitle }}</div>
                     </div>
                     <q-icon class="admin-collapse-icon" :name="mailExpanded ? 'la la-angle-up' : 'la la-angle-down'" size="20px" />
                 </button>
@@ -616,12 +580,10 @@
                 </div>
             </div>
 
-            <div class="settings-dialog-actions">
-                <q-btn class="settings-ok-btn" color="primary" dense no-caps @click="okClick">
-                    OK
-                </q-btn>
-            </div>
         </div>
+        <template #footer>
+            <q-btn class="settings-ok-btn" color="primary" unelevated no-caps label="OK" @click="okClick" />
+        </template>
 
         <DiscoverySourceDialog v-if="canEditExternalDiscovery" v-model="discoverySourceDialogVisible" />
     </Dialog>
@@ -794,6 +756,7 @@ class SettingsDialog {
     opdsExpanded = false;
     mailExpanded = false;
     adminExpanded = false;
+    performanceExpanded = false;
     adminLoading = false;
     adminCleanLoading = false;
     adminCleanBookCacheLoading = false;
@@ -826,7 +789,6 @@ class SettingsDialog {
     opdsSettings = this.makeDefaultOpdsSettings();
     adminUi = {
         title: 'Администрирование',
-        subtitle: 'Состояние библиотеки, источники и журнал событий.',
         refresh: 'Обновить',
         cleanCache: 'Очистить кэш',
         reindex: 'Переиндексировать',
@@ -911,14 +873,12 @@ class SettingsDialog {
     ];
     backupUi = {
         title: 'Резервная копия',
-        subtitle: 'Полный бэкап и отдельный экспорт конфигурации.',
         settingsBackupInfo: 'JSON настроек нужен только для переноса конфигурации. Пользователи, списки, прогресс и закладки в него не входят.',
         settings: 'Экспорт настроек JSON',
         settingsImport: 'Восстановить настройки JSON',
     };
     mailUi = {
         title: 'Отправка книг',
-        subtitle: 'Настройки SMTP и Telegram доступны только администратору.',
         telegramEnabled: 'Включить Telegram',
         telegramToken: 'Telegram bot token',
         telegramChatId: 'Telegram chat id задаётся в профиле пользователя',
@@ -2166,42 +2126,79 @@ export default vueComponent(SettingsDialog);
 
 <style scoped>
 .settings-dialog-body {
-    padding-bottom: 16px;
-}
-
-.settings-inline-row {
-    flex-wrap: wrap;
-    gap: 6px 8px;
-}
-
-.settings-inline-label {
-    min-width: 132px;
-}
-
-.settings-inline-summary {
-    flex: 1 1 220px;
-    min-width: 180px;
-}
-
-.settings-card-view {
-    flex-wrap: wrap;
+    display: grid;
     gap: 8px;
+    min-width: 0;
+    color: var(--app-text);
+    font-size: 14px;
 }
-
-.settings-card-view-label {
-    min-width: 110px;
+.settings-heading {
+    margin: 12px 0 2px;
+    color: var(--app-muted);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
 }
-
-.settings-card-view-toggle {
-    background: var(--app-surface);
-}
-
-.admin-mail-box {
-    margin: 18px 0 4px;
-    padding: 14px;
+.settings-group, .settings-task-link, .admin-mail-box {
+    min-width: 0;
     border: 1px solid var(--app-border);
-    border-radius: 14px;
+    border-radius: 12px;
     background: var(--app-surface);
+}
+.settings-group > summary, .settings-task-link, .admin-collapse-head {
+    display: flex;
+    box-sizing: border-box;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 10px 14px;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+.settings-group > summary {list-style: none; border-radius: inherit;}
+.settings-group > summary::-webkit-details-marker {display: none;}
+.settings-group > summary::after {
+    content: '';
+    width: 8px;
+    height: 8px;
+    margin: 0 5px 3px auto;
+    flex-shrink: 0;
+    border: solid var(--app-muted);
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+}
+.settings-group[open] > summary::after {transform: rotate(225deg); margin-bottom: -4px;}
+.settings-group > summary:hover, .settings-task-link:hover, .admin-collapse-head:hover {background: var(--app-surface-2);}
+.settings-task-link:focus-visible, .admin-collapse-head:focus-visible, .settings-group > summary:focus-visible {
+    outline: 2px solid var(--app-primary);
+    outline-offset: -2px;
+}
+.settings-group > summary .q-icon, .settings-task-link .q-icon, .settings-icon {color: var(--app-primary); font-size: 20px;}
+.settings-task-link .q-icon:last-child {margin-left: auto; color: var(--app-muted);}
+.settings-group-body {
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px 14px;
+    border-top: 1px solid var(--app-border);
+}
+.settings-checks, .settings-fields {
+    display: grid;
+    gap: 4px 16px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.settings-fields {align-items: center; gap: 12px 16px;}
+.settings-checks :deep(.q-checkbox) {min-height: 40px; min-width: 0;}
+.settings-divider {border-top: 1px solid var(--app-border); padding-top: 8px;}
+.settings-card-view {display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;}
+.settings-card-view-toggle {background: var(--app-surface-2); border-radius: 8px;}
+.settings-source-name {display: block; color: var(--app-muted); font-size: 12px; font-weight: 400; overflow-wrap: anywhere;}
+@media (max-width: 599px) {
+    .settings-checks, .settings-fields {grid-template-columns: minmax(0, 1fr);}
+    .settings-group-body {padding: 10px;}
 }
 
 .admin-collapse-box {
@@ -2209,19 +2206,7 @@ export default vueComponent(SettingsDialog);
     overflow: hidden;
 }
 
-.admin-collapse-head {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    gap: 12px;
-    padding: 14px;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-}
+.admin-collapse-head {border: 0; background: transparent;}
 
 .admin-collapse-copy {
     min-width: 0;
@@ -2241,6 +2226,7 @@ export default vueComponent(SettingsDialog);
     font-size: 15px;
     font-weight: 800;
 }
+.admin-collapse-head .admin-mail-title {font: inherit;}
 
 .admin-mail-subtitle {
     margin-top: 3px;
@@ -2698,14 +2684,6 @@ export default vueComponent(SettingsDialog);
 
 .password-visibility-toggle {
     cursor: pointer;
-}
-
-.settings-dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 18px;
-    padding-top: 14px;
-    border-top: 1px solid var(--app-border);
 }
 
 .settings-ok-btn {

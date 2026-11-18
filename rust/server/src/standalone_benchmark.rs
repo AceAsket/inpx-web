@@ -189,7 +189,7 @@ impl Settings {
     fn view(&self) -> Value {
         let policy = &self.budget;
         json!({"native":true,"requested":policy.requested,"storedProfile":policy.stored,"selected":policy.selected.id,"automatic":policy.automatic,
-            "limits":policy.selected.limits,"hardMax":policy.hard_max,"profiles":policy.profiles,
+            "limits":policy.selected.limits,"hardMax":policy.hard_max,"profiles":policy.profiles,"fileConversionLimit":policy.file_conversion_limit,
             "benchmarkEnabled":self.enabled,"benchmarkTimeoutMs":self.timeout,"launchEnv":policy.launch_env})
     }
 }

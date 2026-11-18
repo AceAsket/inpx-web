@@ -138,6 +138,8 @@ function resolve(env = process.env, machine = hardware(), storedProfile = null) 
         if (env[name] !== undefined && env[name] !== '') launchEnv[name] = String(Number(env[name]));
     }
     if (env.INPX_RESOURCE_BENCH_ENABLED !== undefined) launchEnv.INPX_RESOURCE_BENCH_ENABLED = env.INPX_RESOURCE_BENCH_ENABLED === 'false' ? 'false' : 'true';
+    if (!env.INPX_RESOURCE_CONVERSIONS && env.INPX_CONVERSION_CONCURRENCY)
+        launchEnv.INPX_CONVERSION_CONCURRENCY = String(overrides.conversions);
     return {requested, storedProfile, selected, automatic, limits:current.limits, hardMax, hardwareMax:estimated, overrides, profiles:choices,
         launchEnv,
         taskTimeoutMs:integer(env, 'INPX_RESOURCE_TASK_TIMEOUT_MS', 120000, 1000, 3600000),

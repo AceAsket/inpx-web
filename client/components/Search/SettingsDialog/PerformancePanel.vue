@@ -1,12 +1,8 @@
 <template>
     <section class="performance-panel">
-        <header class="performance-heading">
-            <h3>Производительность</h3>
-            <q-btn flat dense round icon="la la-sync" aria-label="Обновить показатели производительности" :disable="busy" @click="refresh" />
-        </header>
         <div v-if="error" class="text-negative" role="alert">{{ error }}</div>
-        <template v-if="info">
-            <div class="performance-active" data-testid="performance-active">
+        <div class="performance-active" data-testid="performance-active">
+            <template v-if="info">
                 <div class="performance-server-profile">
                     <label for="performance-server-profile">Режим сервера</label>
                     <select id="performance-server-profile" :value="info.settings.requested || info.settings.selected"
@@ -16,7 +12,10 @@
                     </select>
                 </div>
                 <span>В работе <b>{{ info.runtime.active }}</b> · в очереди <b>{{ info.runtime.queued }}</b></span>
-            </div>
+            </template>
+            <q-btn flat dense round icon="la la-sync" aria-label="Обновить показатели производительности" :disable="busy" @click="refresh" />
+        </div>
+        <template v-if="info">
             <details class="performance-details">
                 <summary>Ресурсы и лимиты</summary>
                 <q-btn v-if="info.settings.storedProfile" flat dense no-caps color="primary" label="Вернуть режим из настроек запуска"
@@ -35,6 +34,7 @@
                     <span v-if="info.settings.native && info.databaseCache?.available">Кэш каталога <b>{{ bytes(info.databaseCache.readCacheBytes) }}</b></span>
                     <span v-if="info.databaseCache?.workerHeapUsed">Heap каталога <b>{{ bytes(info.databaseCache.workerHeapUsed) }} / {{ bytes(info.databaseCache.workerHeapLimit) }}</b></span>
                 </div>
+                <p v-if="conversionLimitSource" class="performance-limit-source">Лимит конвертации задан в <code>{{ conversionLimitSource }}</code>.</p>
             </details>
             <div v-if="info.databaseCache?.available === false" class="text-negative" role="alert">
                 {{ info.databaseCache.error || 'Каталог недоступен. Перезапустите сервер для восстановления.' }}
@@ -135,6 +135,16 @@ export default {
         preferenceStatus:'',sourceNotice:'',
         customFields:[{key:'total', label:'Всего одновременно'}, {key:'images', label:'Изображения'}, {key:'reviews', label:'Архивы'}, {key:'conversions', label:'Конвертация'}]}),
     computed: {
+        conversionLimitSource() {
+            const settings = this.info?.settings;
+            if (settings?.selected !== 'unlimited' || settings.limits.conversions == null) return '';
+            const limit = settings.limits.conversions;
+            const env = settings.launchEnv || {};
+            for (const key of ['INPX_RESOURCE_CONVERSIONS', 'INPX_CONVERSION_CONCURRENCY', 'INPX_RESOURCE_TOTAL', 'INPX_RESOURCE_MAX_PROCESSES']) {
+                if (Number(env[key]) === limit) return key;
+            }
+            return settings.fileConversionLimit === limit ? 'config.json · conversionConcurrency' : '';
+        },
         preferenceIdentity() {return preferencesModel.preferenceScope(this.$store?.state.config,this.$store?.state.settings);},
         testDraft() {return {selected:this.selected,sourceId:this.sourceId,customLimits:this.customLimits};},
         reportSummary() {return this.info?.report ? summarizeReport(this.info.report):null;},
@@ -269,8 +279,8 @@ export default {
 </script>
 
 <style scoped>
-.performance-panel {container-type:inline-size; grid-column:1/-1; min-width:0; padding:18px; border:1px solid var(--app-border); border-radius:12px; color:var(--app-text); background:var(--app-surface);}
-.performance-heading,.performance-active,.performance-actions,.performance-copy {display:flex; align-items:center; justify-content:space-between; gap:10px 16px; flex-wrap:wrap;}
+.performance-panel {container-type:inline-size; min-width:0; padding:14px; border-top:1px solid var(--app-border); color:var(--app-text);}
+.performance-active,.performance-actions,.performance-copy {display:flex; align-items:center; justify-content:space-between; gap:10px 16px; flex-wrap:wrap;}
 .performance-panel h3,.performance-panel h4 {margin:0; font-weight:700; line-height:1.3; letter-spacing:normal;}
 .performance-panel h3 {font-size:18px;} .performance-panel h4 {font-size:15px; margin:20px 0 10px;}
 .performance-muted {color:var(--app-muted); font-size:13px; line-height:1.45;}
@@ -279,6 +289,7 @@ export default {
 .performance-active > span {font-size:13px; color:var(--app-muted);}
 .performance-active b {color:var(--app-text);}
 .performance-details {border-bottom:1px solid var(--app-border); min-width:0; padding:9px 0;}
+.performance-limit-source {color:var(--app-muted); font-size:12px; overflow-wrap:anywhere;}
 .performance-details:last-child {border-bottom:0; padding-bottom:0;}
 .performance-details summary {cursor:pointer; width:fit-content; max-width:100%; padding:4px 0; font-size:13px; color:var(--app-link); font-weight:600;}
 .performance-details :is(summary,pre):focus-visible,.performance-table-wrap:focus-visible {outline:2px solid var(--app-link); outline-offset:2px;}
@@ -307,8 +318,6 @@ th,td {text-align:start; padding:6px 10px; border-bottom:1px solid var(--app-bor
 .performance-comparison tr:last-child td,.performance-comparison tr:last-child th[scope="row"] {border:0;}
 @media (max-width:600px) {.performance-panel {padding:12px;} .performance-form {grid-template-columns:1fr;}}
 @container (max-width:330px) {
-    .performance-heading {gap:4px;}
-    .performance-heading h3 {font-size:15px;}
     .performance-comparison thead {position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%);}
     .performance-comparison tbody,.performance-comparison {display:block;}
     .performance-comparison tr {display:grid; grid-template-columns:1fr 1fr; gap:3px 7px; padding:6px 0; border-top:1px solid var(--app-border);}

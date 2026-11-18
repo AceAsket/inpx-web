@@ -210,6 +210,15 @@ if (require.main === module) (async() => {
         await api(`const uids=${JSON.stringify(uids)}; for(let i=0;i<4;i++) await root.api.updateReaderProgress(uids[i], {percent:[.34,.14,.01,1][i],sectionId:'chapter'}); return true;`);
 
         await page.getByRole('button', {name: 'Настройки библиотеки', exact: true}).click();
+        const desktopSettings = page.locator('.library-dialog-card[data-dialog-kind="settings"]');
+        await desktopSettings.waitFor();
+        assert.equal(await desktopSettings.locator('.settings-group[open]').count(), 0);
+        await desktopSettings.screenshot({path:path.join(directory,'settings-desktop.png')});
+        await desktopSettings.getByRole('button', {name:/Внешний источник витрины/}).click();
+        const sourceDialog = page.locator('.library-dialog-card').filter({has:page.getByText('Тип источника', {exact:true})});
+        await sourceDialog.waitFor();
+        await sourceDialog.getByRole('button', {name:'Закрыть окно',exact:true}).click();
+        await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         for (const name of ['Автоматически загружать отзывы и оценки', 'Автоматически загружать сведения об авторе']) {
             const option = page.getByRole('checkbox', {name, exact:true});
             assert.equal(await option.getAttribute('aria-checked'), 'false'); await option.click();
@@ -217,6 +226,7 @@ if (require.main === module) (async() => {
         await page.waitForFunction(() => {const s = JSON.parse(localStorage.getItem('vuex') || '{}').settings; return s?.autoLoadBookReviews && s?.autoLoadAuthorInfo;});
         await page.reload(); await page.getByRole('navigation', {name: 'Разделы библиотеки'}).waitFor();
         await page.getByRole('button', {name: 'Настройки библиотеки', exact: true}).click();
+        await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         for (const name of ['Автоматически загружать отзывы и оценки', 'Автоматически загружать сведения об авторе']) {
             const option = page.getByRole('checkbox', {name, exact:true});
             assert.equal(await option.getAttribute('aria-checked'), 'true', 'Opt-in persists'); await option.click();
@@ -250,6 +260,7 @@ if (require.main === module) (async() => {
         assert.equal(await appPromo.count(),0,'Hiding the app block persists after reload');
         await page.getByRole('button',{name:'Настройки библиотеки',exact:true}).click();
         const appearanceSettings=page.locator('.library-dialog-card[data-dialog-kind="settings"]');
+        await appearanceSettings.locator('summary').filter({hasText:'Приложение и загрузки'}).click();
         const appSwitch=appearanceSettings.getByRole('checkbox',{name:'QR-код приложения в боковом меню',exact:true});
         assert.equal(await appSwitch.getAttribute('aria-checked'),'false');
         await appearanceSettings.getByRole('button',{name:'Открыть QR',exact:true}).click();await appDialog.waitFor();
@@ -798,6 +809,16 @@ if (require.main === module) (async() => {
         }
         await page.getByRole('button', {name: 'Настройки библиотеки', exact: true}).click();
         await page.locator('.library-dialog-card[data-dialog-kind="settings"]').waitFor();
+        const settingsCard = page.locator('.library-dialog-card[data-dialog-kind="settings"]');
+        assert(await settingsCard.locator('.settings-group > summary').evaluateAll(rows => rows.every(row =>
+            row.getBoundingClientRect().right <= row.parentElement.getBoundingClientRect().right)));
+        await settingsCard.screenshot({path:path.join(directory,'settings-sections-mobile.png')});
+        const shelfSettings = settingsCard.locator('details').filter({has:page.locator('summary').filter({hasText:'Полки и витрины'})});
+        assert.equal(await shelfSettings.evaluate(node => node.open), false);
+        await shelfSettings.locator('summary').focus();
+        await page.keyboard.press('Enter');
+        await shelfSettings.getByRole('checkbox',{name:'Новинки',exact:true}).waitFor();
+        await settingsCard.screenshot({path:path.join(directory,'settings-mobile.png')});
         const settingsBounds = await page.locator('.library-dialog-card[data-dialog-kind="settings"]').evaluate(node => ({width: node.clientWidth, scroll: node.scrollWidth, height: node.getBoundingClientRect().height}));
         assert(settingsBounds.scroll <= settingsBounds.width + 1 && settingsBounds.height <= 844 - 24, 'Settings must fit a phone');
         await page.getByRole('button', {name: 'OK', exact: true}).click();

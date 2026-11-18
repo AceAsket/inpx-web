@@ -137,7 +137,7 @@ module.exports = {
     adminPassword: process.env.INPX_ADMIN_PASSWORD || '',
     resetAdminPassword: process.env.INPX_RESET_ADMIN_PASSWORD === 'true',
     conversionEnabled: process.env.INPX_ENABLE_CONVERSION !== 'false',
-    conversionConcurrency: 2,
+    conversionConcurrency: null,
     conversionQueueLimit: 16,
     conversionTimeoutMs: 120000,
     conversionQueueTimeoutMs: 120000,

@@ -71,6 +71,7 @@ pub(crate) struct Policy {
     pub profiles: [Profile; 4],
     pub hard_max: usize,
     pub launch_env: Value,
+    pub file_conversion_limit: Option<usize>,
     pub(crate) timeout: Duration,
 }
 
@@ -128,21 +129,20 @@ impl Policy {
         let total = read("INPX_RESOURCE_TOTAL", 1, 16)?;
         let images = read("INPX_RESOURCE_IMAGES", 1, 16)?;
         let reviews = read("INPX_RESOURCE_REVIEWS", 1, 16)?;
-        let conversions = read("INPX_RESOURCE_CONVERSIONS", 1, 16)?.or_else(|| {
-            std::env::var("INPX_CONVERSION_CONCURRENCY")
-                .ok()
-                .and_then(|s| s.parse::<usize>().ok())
-                .or_else(|| {
-                    matches!(requested.as_str(), "auto" | "unlimited")
-                        .then(|| {
-                            config["conversionConcurrency"]
-                                .as_u64()
-                                .map(|n| n.min(16) as usize)
-                        })
-                        .flatten()
-                })
-                .map(|n| n.clamp(1, 16))
-        });
+        let conversion_env = match read("INPX_RESOURCE_CONVERSIONS", 1, 16)? {
+            Some(limit) => Some(limit),
+            None => read("INPX_CONVERSION_CONCURRENCY", 1, 16)?,
+        };
+        // Older Node installations wrote 2 even when the operator never chose a limit.
+        let file_conversion_limit = config["conversionConcurrency"]
+            .as_u64()
+            .filter(|&n| {
+                n != 2
+                    && conversion_env.is_none()
+                    && matches!(requested.as_str(), "auto" | "unlimited")
+            })
+            .map(|n| n.clamp(1, 16) as usize);
+        let conversions = conversion_env.or(file_conversion_limit);
         let background = read("INPX_RESOURCE_BACKGROUND", 1, 16)?;
         let timeout = read("INPX_RESOURCE_TASK_TIMEOUT_MS", 1000, 3_600_000)?.unwrap_or(120_000);
         if std::env::var("INPX_RESOURCE_MAX_PROCESSES").is_ok_and(|s| !s.is_empty()) {
@@ -199,6 +199,7 @@ impl Policy {
             profiles,
             hard_max,
             launch_env,
+            file_conversion_limit,
             timeout: Duration::from_millis(timeout as u64),
         })
     }

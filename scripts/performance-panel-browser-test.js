@@ -82,8 +82,8 @@ const MiB=1024**2;
         const panel=page.locator('.performance-panel');
         const open=async()=>{
             await page.locator('.library-shell__header').getByRole('button',{name:'Настройки библиотеки',exact:true}).click();
-            if(!await panel.count())await page.getByRole('button',{name:/Администрирование/}).click();
-            await panel.getByTestId('performance-active').waitFor();
+            if(!await panel.count())await page.getByRole('button',{name:'Производительность',exact:true}).click();
+            await panel.getByLabel('Режим сервера',{exact:true}).waitFor();
         };
         const choice=panel.getByLabel('Режим проверки',{exact:true}), source=panel.getByLabel('Хранилище',{exact:true});
         const close=()=>page.getByRole('button',{name:'OK',exact:true}).click();

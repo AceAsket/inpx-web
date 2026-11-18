@@ -234,6 +234,7 @@ function profileRequest(page, payload, session) {
         await page.keyboard.press('Enter');
         await page.getByRole('button', {name: 'Закрыть избранное', exact: true}).click();
         await openSettings();
+        await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         await page.getByRole('checkbox', {name: 'Ночная тема', exact: true}).click();
         await page.getByRole('button', {name: /Администрирование/}).click();
         const activity = page.getByRole('region', {name: 'Активность пользователей', exact: true});
@@ -266,6 +267,7 @@ function profileRequest(page, payload, session) {
         await pause(350);
         await page.screenshot({path: path.join(directory, 'admin-tasks.png')});
         await page.getByRole('button', {name: 'Закрыть задачи', exact: true}).click();
+        await page.getByRole('button', {name: 'Производительность', exact: true}).click();
         const performancePanel = page.locator('.performance-panel');
         const testMode = performancePanel.getByLabel('Режим проверки',{exact:true});
         await testMode.selectOption('custom');
@@ -371,6 +373,9 @@ function profileRequest(page, payload, session) {
         await openProfile(page);
         await openSettings();
         assert.equal(await page.getByRole('button', {name: /Администрирование/}).count(), 0, 'Guests cannot see administration');
+        assert.equal(await page.getByRole('button', {name:'Производительность',exact:true}).count(), 0);
+        assert.equal(await page.getByRole('heading', {name:'Управление библиотекой'}).count(), 0);
+        assert.equal(await page.getByRole('button', {name:/Внешний источник витрины/}).count(), 0);
         await page.getByRole('button', {name: 'OK', exact: true}).click();
         assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('inpx-web-profile-session') || '{}').profileAccessToken || ''), '');
         const response = await page.evaluate(token => new Promise((resolve, reject) => {

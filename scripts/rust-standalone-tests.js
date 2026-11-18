@@ -1995,11 +1995,39 @@ async function verifyCacheSettings(binary, root) {
 }
 
 async function verifyResourceProfiles(binary, root) {
-    if (process.platform === 'win32') return;
     const probe = require('./rust-resource-profile-tests');
     const library = join(root,'library'), web = join(root,'web.json');
     await createFixture(library,{nativeJxlCover:true});
     await bundle(web);
+    const {connect,signIn} = require('./rust-events-tests');
+    const data = join(root,'converted');
+    await fs.mkdir(data,{recursive:true});
+    const configFile = join(data,'config.json');
+    const args = ['--standalone','--host=127.0.0.1','--data-dir='+data,'--config='+configFile,'--lib-dir='+library,
+        '--web-bundle='+web,'--admin-password='+probe.password];
+    for (const [saved, overrides, expected] of [
+        [2, {}, null],
+        [1, {}, 1],
+        [2, {INPX_CONVERSION_CONCURRENCY:'2'}, 2],
+        [2, {INPX_RESOURCE_CONVERSIONS:'3',INPX_CONVERSION_CONCURRENCY:'2'}, 3],
+    ]) {
+        await fs.writeFile(configFile,JSON.stringify({conversionConcurrency:saved}));
+        const server = await start(binary,args,overrides);
+        try {
+            const client = await connect(server.url);
+            try {
+                const identity = await signIn(client,'admin',probe.password);
+                const {settings} = await client.send('get-admin-performance',identity);
+                assert.equal(settings.selected,'unlimited');
+                assert.equal(settings.limits.conversions,expected);
+                assert.equal(settings.fileConversionLimit,saved === 1 ? 1 : null);
+                if (overrides.INPX_CONVERSION_CONCURRENCY && !overrides.INPX_RESOURCE_CONVERSIONS)
+                    assert.equal(settings.launchEnv.INPX_CONVERSION_CONCURRENCY, '2');
+            } finally {client.close();}
+        } finally {await server.stop();}
+    }
+    console.log('ok migrated and explicit concurrency limits for the unlimited profile');
+    if (process.platform === 'win32') return;
     for (const [profile, total, expected] of [
         ['economy',6,1],['economy',null,1],['performance',6,3],['performance',1,1],[null,null,null],['unlimited',null,null],[null,2,2],
     ]) {
