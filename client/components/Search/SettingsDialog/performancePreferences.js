@@ -1,5 +1,5 @@
 const KEY='inpx.performance.preferences.v1';
-const selections=['economy','balanced','performance','custom','compare'];
+const selections=['economy','balanced','performance','unlimited','custom','compare'];
 const limitKeys=['total','images','reviews','conversions'];
 function normalizeDraft(value) {
     if(!value || !selections.includes(value.selected))return null;

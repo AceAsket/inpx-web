@@ -140,7 +140,8 @@ async function verify(base) {
         const performance = ()=>send('get-admin-performance');
         const pending = await performance();
         assert(pending.databaseCache.available && pending.databaseCache.engine==='redb');
-        assert(pending.settings.native && pending.settings.profiles.length===3);
+        assert(pending.settings.native);
+        assert.deepEqual(pending.settings.profiles.map(p=>p.id), ['economy','balanced','performance','unlimited']);
         assert(pending.machine.cpu>0);
         assert.match((await admin.send('start-admin-benchmark',{...identity,options:{mode:'profile',profileId:'missing'}})).error,/профиль/);
         assert.match((await admin.send('start-admin-benchmark',{...identity,options:{mode:'custom',limits:{total:2,images:1,reviews:3,conversions:1}}})).error,/лимит/);

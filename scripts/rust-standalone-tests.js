@@ -38,7 +38,7 @@ async function bundle(file) {
 function environment() {
     const env = {...process.env};
     for (const name of Object.keys(env))
-        if (/^(PATH|INPX_(REQUIRE_AUTH|ALLOW_ANONYMOUS_ACCESS|AUTH_MODE|AUTH_EXEMPT_HEALTH|TRUST_PROXY|TRUSTED_PROXY_CIDRS|PROXY_AUTH_HEADER|PROXY_BIND_PROFILE|LOGIN_RATE_LIMIT_ENABLED|RESET_ADMIN_PASSWORD|LIBRARY_SOURCES|OPDS_COMPATIBILITY|OPDS_FEEDS_FILE|KOSYNC_ENABLED|ENABLE_CONVERSION|CONVERSION_FORMATS|ADMIN_.*|METRICS_.*|ABS_.*|RUST_.*)|LIBRARY_SOURCES|LIBDIR|INPX)$/i.test(name))
+        if (/^(PATH|INPX_(REQUIRE_AUTH|ALLOW_ANONYMOUS_ACCESS|AUTH_MODE|AUTH_EXEMPT_HEALTH|TRUST_PROXY|TRUSTED_PROXY_CIDRS|PROXY_AUTH_HEADER|PROXY_BIND_PROFILE|LOGIN_RATE_LIMIT_ENABLED|RESOURCE_.*|CONVERSION_CONCURRENCY|RESET_ADMIN_PASSWORD|LIBRARY_SOURCES|OPDS_COMPATIBILITY|OPDS_FEEDS_FILE|KOSYNC_ENABLED|ENABLE_CONVERSION|CONVERSION_FORMATS|ADMIN_.*|METRICS_.*|ABS_.*|RUST_.*)|LIBRARY_SOURCES|LIBDIR|INPX)$/i.test(name))
             delete env[name];
     return {...env,PATH:'',INPX_BOOK_FILENAME_TEMPLATE:'[${TITLE}] Тест.${EXT}'};
 }
@@ -1313,7 +1313,7 @@ async function verifyLibraryPassword(binary, root) {
     const imported = hash('existing active session'), expired = hash('existing expired session');
     const settings = {server:{host:'127.0.0.1',root:'/reader'},opds:{enabled:true,root:'/catalogue'},
         librarySources:[{id:'fixture',inpx:join(collection,'smoke.inpx')}],
-        requireAuth:true,authMode:'local',allowAnonymousAccess:false,accessPassword:password,accessTimeout:5,
+        requireAuth:true,authMode:'local',allowAnonymousAccess:true,accessPassword:password,accessTimeout:5,
         loginRateLimitMaxAttempts:2};
     await createFixture(collection);
     await bundle(web);
@@ -2000,12 +2000,14 @@ async function verifyResourceProfiles(binary, root) {
     const library = join(root,'library'), web = join(root,'web.json');
     await createFixture(library,{nativeJxlCover:true});
     await bundle(web);
-    for (const [profile, total, expected] of [['economy',6,1],['performance',6,3],['performance',1,1]]) {
+    for (const [profile, total, expected] of [
+        ['economy',6,1],['performance',6,3],['performance',1,1],['unlimited',null,null],['unlimited',2,2],
+    ]) {
         const dir = join(root,profile+'-'+total);
         await probe.fixture(dir);
         const server = await start(binary,['--standalone','--host=127.0.0.1','--data-dir='+dir,
             '--config='+join(dir,'config.json'),'--lib-dir='+library,'--web-bundle='+web,'--admin-password='+probe.password],
-        {INPX_RESOURCE_PROFILE:profile,INPX_RESOURCE_TOTAL:String(total),INPX_RESOURCE_MAX_PROCESSES:'6'});
+        {INPX_RESOURCE_PROFILE:profile,...(total ? {INPX_RESOURCE_TOTAL:String(total),INPX_RESOURCE_MAX_PROCESSES:'6'} : {})});
         try { await probe.verify(server.url, dir, profile, expected); }
         finally { await server.stop(); }
     }

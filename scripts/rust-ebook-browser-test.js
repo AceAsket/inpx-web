@@ -38,8 +38,8 @@ async function start(image, name, library, profileRequired, libraryPassword = ''
         conversionFormats:['fb2','epub','mobi','pdf'],
     }));
     await docker('run','-d','--name',name,'--tmpfs','/data','-p','127.0.0.1::12380',
-        '-e','INPX_AUTH_MODE=local','-e','INPX_REQUIRE_AUTH=false',
-        '-e','INPX_ALLOW_ANONYMOUS_ACCESS='+!profileRequired,
+        '-e','INPX_AUTH_MODE=local','-e','INPX_REQUIRE_AUTH='+profileRequired,
+        '-e','INPX_ALLOW_ANONYMOUS_ACCESS=true',
         '-e','INPX_ENABLE_CONVERSION=true','-e','INPX_CONVERSION_FORMATS=fb2,epub,mobi,pdf',
         '--mount','type=bind,source='+library+',target=/library,readonly',image,
         'sh','-ec','cp /library/container.json /data/config.json; exec inpx-web "$@"','test',
@@ -118,6 +118,30 @@ async function readPosition(context, base, uid) {
         assert(!state.error,state.error);
         return state.progress;
     } finally { client.close(); }
+}
+
+async function checkLibraryLogin(browser, base) {
+    const context = await browser.newContext();
+    try {
+        const page = await context.newPage();
+        const login = page.getByRole('textbox',{name:'Логин',exact:true});
+        for (const route of ['/books', '/reader?bookUid=fixture']) {
+            await page.goto(base+root+'/#'+route);
+            await login.waitFor();
+            assert.equal(await page.locator('.library-shell__nav, .reader-html').count(),0);
+            await page.keyboard.press('Escape');
+            assert(await login.isVisible());
+        }
+        await page.goto(base+root+'/#/books');
+        await login.fill('admin');
+        await page.getByRole('textbox',{name:'Пароль',exact:true}).fill(password);
+        await page.getByRole('button',{name:'OK',exact:true}).click();
+        await page.locator('.library-shell__nav').waitFor();
+        await page.goto(base+root+'/#/profile');
+        await page.locator('.profile-bottom .profile-logout').click();
+        await login.waitFor();
+        assert.equal(await page.locator('.library-shell__nav').count(),0);
+    } finally {await context.close();}
 }
 
 async function profileFlow(browser, base, data) {
@@ -252,8 +276,9 @@ async function main(image) {
             return start(image,name,library,...args);
         };
         const base = await startCase('profile',true);
-        const data = await setup(base);
         browser = await chromium.launch({headless:true});
+        await checkLibraryLogin(browser,base);
+        const data = await setup(base);
         await profileFlow(browser,base,data);
         const guest = await startCase('guest',false,'test-ebook-library-password');
         await guestFlow(browser,guest);

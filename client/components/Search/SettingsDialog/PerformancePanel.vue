@@ -18,7 +18,7 @@
             <h3 class="performance-section-title">Действует на сервере</h3>
             <div class="performance-active" data-testid="performance-active">
                 <strong>{{ profileName(info.settings.selected) }}</strong>
-                <span>Всего {{ info.settings.limits.total }} · изображения {{ info.settings.limits.images }} · архивы {{ info.settings.limits.reviews }} · конвертация {{ info.settings.limits.conversions }} · фон {{ info.settings.limits.background }}</span>
+                <span>Всего {{ limitLabel(info.settings.limits.total) }} · изображения {{ limitLabel(info.settings.limits.images) }} · архивы {{ limitLabel(info.settings.limits.reviews) }} · конвертация {{ limitLabel(info.settings.limits.conversions) }} · фон {{ limitLabel(info.settings.limits.background) }}</span>
             </div>
             <div class="performance-stats">
                 <span>Доступно CPU: <b>{{ number(info.machine.cpu) }}</b></span>
@@ -44,9 +44,9 @@
                 >
                     <strong>{{ profile.name }}</strong>
                     <span v-if="selected === profile.id" class="performance-badge">Для теста</span>
-                    <span>Одновременно: {{ profile.limits.total }}</span>
-                    <small v-if="info.settings.native">Архивы {{ profile.limits.reviews }} · проверка содержимого {{ profile.limits.conversions }}</small>
-                    <small v-else>Изображения {{ profile.limits.images }} · архивы {{ profile.limits.reviews }} · конвертация {{ profile.limits.conversions }}</small>
+                    <span>Одновременно: {{ limitLabel(profile.limits.total) }}</span>
+                    <small v-if="info.settings.native">Архивы {{ limitLabel(profile.limits.reviews) }} · проверка содержимого {{ limitLabel(profile.limits.conversions) }}</small>
+                    <small v-else>Изображения {{ limitLabel(profile.limits.images) }} · архивы {{ limitLabel(profile.limits.reviews) }} · конвертация {{ limitLabel(profile.limits.conversions) }}</small>
                 </button>
                 <button type="button" class="performance-profile" :class="{'performance-profile--selected': selected === 'custom'}" :aria-pressed="selected === 'custom'" :disabled="running || busy" @click="selected = 'custom'">
                     <strong>Свои значения</strong>
@@ -108,10 +108,10 @@
             <div v-if="reportSummary" class="performance-result-cards">
                 <article v-for="(row,index) in info.report.rows" :key="index" class="performance-result-card" :data-status="reportSummary.rows[index]?.status || 'insufficient'">
                     <div class="performance-result-card-heading"><strong>{{ profileName(row.profile) }}</strong><span>{{ statusLabel(reportSummary.rows[index]?.status || 'insufficient') }}</span></div>
-                    <div v-if="info.settings.native" class="performance-muted">Архивы {{ row.limits?.reviews ?? '—' }} · проверка содержимого {{ row.limits?.conversions ?? '—' }}</div>
-                    <div v-else class="performance-muted">Проверенные лимиты: изображения {{ row.limits?.images ?? '—' }} · архивы {{ row.limits?.reviews ?? '—' }} · конвертация {{ row.limits?.conversions ?? '—' }}</div>
+                    <div v-if="info.settings.native" class="performance-muted">Архивы {{ limitLabel(row.limits?.reviews) }} · проверка содержимого {{ limitLabel(row.limits?.conversions) }}</div>
+                    <div v-else class="performance-muted">Проверенные лимиты: изображения {{ limitLabel(row.limits?.images) }} · архивы {{ limitLabel(row.limits?.reviews) }} · конвертация {{ limitLabel(row.limits?.conversions) }}</div>
                     <div class="performance-result-metrics">
-                        <span>Лимит задач <b>{{ row.limits?.total ?? '—' }}</b></span>
+                        <span>Лимит задач <b>{{ limitLabel(row.limits?.total) }}</b></span>
                         <span>Отклик p95 <b>{{ duration(row.probeP95Ms) }}</b></span>
                         <span>Пик памяти <b>{{ bytes(row.peakMemory) }}</b></span>
                         <span>Пиковый прирост <b>{{ bytes(row.memoryDelta) }}</b></span>
@@ -132,7 +132,7 @@
                         <tbody>
                             <tr v-for="row in info.report.rows" :key="row.profile">
                                 <td>{{ profileName(row.profile) }}{{ row.completed ? '' : ' · ошибка проверки' }}</td>
-                                <td>{{ row.limits.total }}</td>
+                                <td>{{ limitLabel(row.limits.total) }}</td>
                                 <td>{{ duration(row.firstPassMs) }}</td><td>{{ duration(row.repeatPassMs) }}</td>
                                 <td>{{ duration(row.elapsedMs) }}<span v-if="row.rounds > 1"> · {{ row.rounds - 1 }} повт.</span></td>
                                 <td>{{ duration(row.probeP95Ms) }}</td><td>{{ bytes(row.peakMemory) }}</td>
@@ -187,9 +187,12 @@ export default {
         testDraft() {return {selected:this.selected,sourceId:this.sourceId,customLimits:this.customLimits};},
         reportSummary() {return this.info?.report ? summarizeReport(this.info.report):null;},
         testConcurrency() {
-            return this.selected==='custom' ? this.customLimits?.total : this.selected==='compare'
-                ? Math.max(...this.info.settings.profiles.map(profile=>profile.limits.total))
-                : this.info.settings.profiles.find(profile=>profile.id===this.selected)?.limits.total;
+            const profiles = this.info.settings.profiles;
+            const limit = this.selected === 'custom' ? this.customLimits?.total
+                : this.selected === 'compare' ? Math.max(...profiles.filter(p => p.id !== 'unlimited').map(p => p.limits.total))
+                    : profiles.find(p => p.id === this.selected)?.limits.total;
+            const sample = this.info.benchmarkSampleSize;
+            return sample ? Math.min(limit ?? sample, sample) : limit;
         },
         running() {return ['running','cancelling'].includes(this.info?.job?.state);},
         editableFields() {
@@ -209,7 +212,7 @@ export default {
             if (this.selected === 'custom' && this.customLimits && !this.customError) Object.assign(env, {
                 INPX_RESOURCE_MAX_PROCESSES:String(this.customLimits.total), INPX_RESOURCE_IMAGES:String(this.customLimits.images),
                 INPX_RESOURCE_TOTAL:String(this.customLimits.total),
-                INPX_RESOURCE_BACKGROUND:String(Math.min(this.info.settings.limits.background, this.customLimits.total)),
+                INPX_RESOURCE_BACKGROUND:String(Math.min(this.info.settings.limits.background ?? this.customLimits.total, this.customLimits.total)),
                 INPX_RESOURCE_REVIEWS:String(this.customLimits.reviews), INPX_RESOURCE_CONVERSIONS:String(this.customLimits.conversions)});
             return env;
         },
@@ -267,7 +270,9 @@ export default {
                 if (!this.selected || !['custom','compare',...info.settings.profiles.map(profile=>profile.id)].includes(this.selected))
                     this.selected = info.settings.selected;
                 if (!this.customLimits) {
-                    const {total, images, reviews, conversions} = info.settings.limits;
+                    const defaults = info.settings.selected === 'unlimited'
+                        ? info.settings.profiles.find(p => p.id === 'balanced').limits : info.settings.limits;
+                    const {total, images, reviews, conversions} = defaults;
                     this.customLimits = {total, images, reviews, conversions};
                 }
             } catch (error) {
@@ -295,6 +300,7 @@ export default {
             try {await copyToClipboard(value); this.$q.notify({type:'positive', message:'Настройки запуска скопированы'});}
             catch (_) {this.error = 'Не удалось скопировать. Выделите настройки в блоке выше.';}
         },
+        limitLabel(value) {return value === null ? 'без лимита' : value ?? '—';},
         profileName(id) {return id === 'custom' ? 'Свои значения' : id==='compare' ? 'Сравнение трёх режимов' : this.info?.settings.profiles.find(item => item.id === id)?.name || id;},
         statusLabel(value) {return {pass:'В пределах критериев',attention:'Требует внимания',failed:'Ошибка проверки',insufficient:'Предварительно'}[value] || 'Предварительно';},
         number(value) {return Number.isFinite(value) ? value.toLocaleString('ru-RU', {maximumFractionDigits:1}) : '—';},

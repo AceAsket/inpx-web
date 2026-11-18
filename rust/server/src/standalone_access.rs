@@ -221,10 +221,7 @@ impl Access {
             file: data.join("reading-lists.json"),
             key_file: data.join("secret.key"),
             opds: RwLock::new(Arc::new(opds)),
-            require_profile: std::env::var("INPX_ALLOW_ANONYMOUS_ACCESS").map_or(
-                config["allowAnonymousAccess"] == Value::Bool(false),
-                |value| value == "false",
-            ),
+            require_profile: crate::request_access::local_login_required(config),
             policy,
             state: Mutex::new(State {
                 profiles: Store::default(),

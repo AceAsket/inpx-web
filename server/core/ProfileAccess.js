@@ -16,8 +16,13 @@ class ProfileAccess {
         this.security = security;
     }
 
+    static localLoginRequired(config) {
+        const mode = String(config.authMode || 'local').trim().toLowerCase();
+        return config.allowAnonymousAccess === false || ((!mode || mode === 'local') && config.requireAuth === true);
+    }
+
     get loginRequired() {
-        return this.config.allowAnonymousAccess === false || this.globalTotpRequired;
+        return ProfileAccess.localLoginRequired(this.config) || this.globalTotpRequired;
     }
 
     get globalTotpRequired() {

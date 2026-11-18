@@ -4,7 +4,7 @@
         <Notify ref="notify" />
         <StdDialog ref="stdDialog" />
 
-        <LibraryShell v-if="accessGranted" class="col" :enabled="isShelvesLayout">
+        <LibraryShell v-if="accessGranted || $route.path === '/reader-lab'" class="col" :enabled="isShelvesLayout">
             <router-view v-slot="{ Component }">
                 <keep-alive exclude="Reader,ReaderLab,CatalogBook,CatalogEntity">
                     <component :is="Component" class="col" />
@@ -37,9 +37,11 @@ const componentOptions = {
         darkTheme(newValue) {
             this.applyTheme(newValue);
         },
-        '$route.path'() {
+        '$route.path'(path, previous) {
             this.applyPwaManifest();
             this.applyLibraryLayout();
+            if (previous === '/reader-lab' && path !== previous && !this.accessGranted)
+                this.$root.api?.updateConfig();
         },
         accessGranted() {this.applyInitialUiDefaults();},
         config() {this.applyInitialUiDefaults();},

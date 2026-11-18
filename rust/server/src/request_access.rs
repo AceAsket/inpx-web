@@ -132,6 +132,28 @@ pub(crate) struct Admission {
     pub(crate) forwarded_host: Option<String>,
 }
 
+fn auth_mode(config: &Value) -> String {
+    std::env::var("INPX_AUTH_MODE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| config["authMode"].as_str().unwrap_or("local").into())
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn require_auth(config: &Value) -> bool {
+    std::env::var("INPX_REQUIRE_AUTH")
+        .map_or_else(|_| truthy(&config["requireAuth"]), |value| value == "true")
+}
+
+pub(crate) fn local_login_required(config: &Value) -> bool {
+    std::env::var("INPX_ALLOW_ANONYMOUS_ACCESS")
+        .map_or(config["allowAnonymousAccess"] == false, |value| {
+            value == "false"
+        })
+        || (matches!(auth_mode(config).as_str(), "" | "local") && require_auth(config))
+}
+
 impl Standalone {
     pub(crate) fn profile_binding(&self) -> bool {
         self.bind_profile
@@ -156,9 +178,7 @@ impl Standalone {
                 .unwrap_or_else(|| default.into())
         };
         let flag = |variable| std::env::var(variable).ok().map(|value| value == "true");
-        let mode = value("INPX_AUTH_MODE", "authMode", "local")
-            .trim()
-            .to_ascii_lowercase();
+        let mode = auth_mode(config);
         if !matches!(mode.as_str(), "proxy" | "local" | "none" | "") {
             return Err("Unsupported authentication mode".into());
         }
@@ -177,7 +197,7 @@ impl Standalone {
         let proxy_header = value("INPX_PROXY_AUTH_HEADER", "proxyAuthHeader", "Remote-User");
         let require_proxy = mode == "proxy"
             && (bind.unwrap_or_else(|| truthy(&config["proxyBindProfile"]))
-                || flag("INPX_REQUIRE_AUTH").unwrap_or_else(|| truthy(&config["requireAuth"])));
+                || require_auth(config));
         let policy = Policy::new(Settings {
             revision: 0,
             require_proxy,

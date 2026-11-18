@@ -144,7 +144,13 @@ impl Settings {
 
     fn select(&self, mode: &str, options: &Value) -> Result<Vec<Candidate>> {
         match mode {
-            "compare" => Ok(self.budget.profiles.to_vec()),
+            "compare" => Ok(self
+                .budget
+                .profiles
+                .iter()
+                .filter(|profile| profile.id != "unlimited")
+                .cloned()
+                .collect()),
             "profile" => Ok(vec![
                 self.budget
                     .profiles
@@ -270,7 +276,7 @@ impl Benchmark {
         let process_cpu = process::cpu()
             .map(|(user, system)| json!({"user":user*1_000_000.0,"system":system*1_000_000.0}));
         Ok(
-            json!({"settings":settings.view(),"machine":machine.view(),"runtime":state.resources.runtime(),
+            json!({"settings":settings.view(),"benchmarkSampleSize":ITEMS,"machine":machine.view(),"runtime":state.resources.runtime(),
             "sources":sources.iter().filter(|source| !source.lib_dir.as_os_str().is_empty())
                 .map(|source| json!({"id":source.id,"name":source.name})).collect::<Vec<_>>(),
             "job":self.view(),"report":report,"recommendation":recommendation,"databaseCache":cache,
@@ -597,6 +603,7 @@ impl Run<'_> {
         width: usize,
         uid: &str,
     ) -> Result<f64> {
+        let width = width.min(ITEMS);
         let sources = std::slice::from_ref(source);
         let limit = 4 * MIB;
         std::thread::scope(|thread| {

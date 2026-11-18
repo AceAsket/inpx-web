@@ -208,6 +208,7 @@ class Api {
             }
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
+            this.accessGranted = !config.profileLoginRequired || !!config.profileAuthorized;
             if (config.profileLoginRequired && !config.profileAuthorized) {
                 if (options.skipProfileLogin)
                     return;
@@ -356,17 +357,19 @@ class Api {
                     if (options.suppressAccessLogin) throw new Error('need_access_token');
                     this.accessGranted = false;
                     await this.showPasswordDialog();
+                    if (params.action !== 'get-config')
+                        await this.updateConfig();
                 } else if (response && response.error == 'need_profile_login') {
+                    if (this.$store.state.config.profileLoginRequired)
+                        this.accessGranted = false;
                     if (options.suppressProfileLogin)
                         throw new Error('need_profile_login');
                     await this.showProfileLoginDialog('', {required: !!this.$store.state.config.profileLoginRequired});
                 } else if (response && response.error == 'server_busy') {
-                    this.accessGranted = true;
                     await this.showBusyDialog();
                 } else if (response && response.error == 'bad_csrf_token') {
                     await this.updateConfig({skipProfileLogin: !!this.profileLoginPromise});
                 } else {
-                    this.accessGranted = true;
                     if (response.error) {
                         throw Object.assign(new Error(response.error), {code: response.errorCode});
                     }
@@ -808,6 +811,8 @@ class Api {
         this.commit('setSettings', {currentUserId: 'default', profileAccessToken: ''});
         this.commit('setConfig', {...this.$store.state.config,
             profileAuthorized: false, currentUserId: 'default', currentUserProfile: null, userProfiles: []});
+        if (this.$store.state.config.profileLoginRequired)
+            this.accessGranted = false;
     }
 
     async createUserProfile(profile) {
@@ -930,7 +935,7 @@ class Api {
         });
         this.writeStoredProfileSession('', '');
         this.accessGranted = false;
-        await this.request({action: 'test'});
+        await this.updateConfig();
     }
 
     showProfileLoginDialog(prefillLogin = '', opts = {}) {

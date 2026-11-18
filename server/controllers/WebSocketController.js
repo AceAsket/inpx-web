@@ -10,6 +10,7 @@ const {getReaderSpeech} = require('../core/ReaderSpeech');
 const {withFileTransaction} = require('../core/FilePersistence');
 const clientProtocol = require('../core/ClientProtocol');
 const requestLimits = require('../core/RequestLimits');
+const ProfileAccess = require('../core/ProfileAccess');
 const {admission:profileAdmission} = require('../core/ProfileSessions');
 
 const cleanPeriod = 1*60*1000;//1 минута
@@ -25,7 +26,7 @@ class WebSocketController {
 
         this.workerState = new WorkerState();
         this.webWorker = new WebWorker(config, readingListStore);
-        this.profileAccess = security ? new (require('../core/ProfileAccess'))(config, this.webWorker, security) : null;
+        this.profileAccess = security ? new ProfileAccess(config, this.webWorker, security) : null;
 
         this.wss = wss;
         this.activeRequests = 0;
@@ -597,7 +598,7 @@ class WebSocketController {
         config.libraryProtocol = require('../core/LibraryExchange').protocol;
         config.ttsEnabled = Boolean(this.config.ttsEnabled && this.config.ttsUrl);
         config.ebookReaderEnabled = !this.webWorker.remoteLib;
-        config.profileLoginRequired = this.profileAccess?.loginRequired ?? (this.config.allowAnonymousAccess === false);
+        config.profileLoginRequired = this.profileAccess?.loginRequired ?? ProfileAccess.localLoginRequired(this.config);
         config.profileBoundId = req.profileBoundId || '';
         config.canRememberProfileDevice = canRememberProfileDevice;
         config.trustedBrowserDays = trustedBrowserDays;

@@ -3,7 +3,7 @@ use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
 use inpx_catalog::Result;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -16,11 +16,25 @@ pub(crate) enum Kind {
 
 #[derive(Clone, Copy, Serialize)]
 pub(crate) struct Limits {
+    #[serde(serialize_with = "limit_value")]
     pub total: usize,
+    #[serde(serialize_with = "limit_value")]
     pub images: usize,
+    #[serde(serialize_with = "limit_value")]
     pub reviews: usize,
+    #[serde(serialize_with = "limit_value")]
     pub conversions: usize,
+    #[serde(serialize_with = "limit_value")]
     pub background: usize,
+}
+
+const UNLIMITED: usize = tokio::sync::Semaphore::MAX_PERMITS;
+
+fn limit_value<S: Serializer>(
+    limit: &usize,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    (*limit != UNLIMITED).then_some(limit).serialize(serializer)
 }
 
 impl Limits {
@@ -52,7 +66,7 @@ pub(crate) struct Budget {
     pub requested: String,
     pub automatic: &'static str,
     pub selected: Profile,
-    pub profiles: [Profile; 3],
+    pub profiles: [Profile; 4],
     pub hard_max: usize,
     pub launch_env: Value,
     pub(crate) timeout: Duration,
@@ -91,7 +105,8 @@ impl Budget {
             .saturating_mul(2)
             .min(memory.map_or(8, |size| ((size / mib * 7 / 10) / 256).min(8) as usize))
             .clamp(1, 8);
-        let hard_max = number("INPX_RESOURCE_MAX_PROCESSES", 1, 16)?.unwrap_or(estimated);
+        let explicit_max = number("INPX_RESOURCE_MAX_PROCESSES", 1, 16)?;
+        let hard_max = explicit_max.unwrap_or(estimated);
         let mut launch_env = json!({});
         let mut read = |key, min, max| -> Result<Option<usize>> {
             let value = number(key, min, max)?;
@@ -127,9 +142,22 @@ impl Budget {
             ("economy", "Бережный", 2, 1, 1),
             ("balanced", "Сбалансированный", 4, 2, 1),
             ("performance", "Производительный", 6, 3, 2),
+            (
+                "unlimited",
+                "Без ограничений",
+                UNLIMITED,
+                UNLIMITED,
+                UNLIMITED,
+            ),
         ]
         .map(|(id, name, count, parallel, bg)| {
-            let total = total.unwrap_or(count.min(estimated)).min(hard_max);
+            let total = if id == "unlimited" {
+                total
+                    .unwrap_or(UNLIMITED)
+                    .min(explicit_max.unwrap_or(UNLIMITED))
+            } else {
+                total.unwrap_or(count.min(estimated)).min(hard_max)
+            };
             Profile {
                 id,
                 name,
@@ -151,7 +179,7 @@ impl Budget {
                     requested.as_str()
                 }
             })
-            .ok_or("INPX_RESOURCE_PROFILE: auto, economy, balanced или performance")?
+            .ok_or("INPX_RESOURCE_PROFILE: auto, economy, balanced, performance или unlimited")?
             .clone();
         Ok(Self {
             requested,
