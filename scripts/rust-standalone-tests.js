@@ -2001,7 +2001,7 @@ async function verifyResourceProfiles(binary, root) {
     await createFixture(library,{nativeJxlCover:true});
     await bundle(web);
     for (const [profile, total, expected] of [
-        ['economy',6,1],['performance',6,3],['performance',1,1],[null,null,null],['unlimited',null,null],[null,2,2],
+        ['economy',6,1],['economy',null,1],['performance',6,3],['performance',1,1],[null,null,null],['unlimited',null,null],[null,2,2],
     ]) {
         const dir = join(root,profile+'-'+total);
         await probe.fixture(dir);
@@ -2010,11 +2010,26 @@ async function verifyResourceProfiles(binary, root) {
             const saved = JSON.parse(await fs.readFile(config,'utf8'));
             await fs.writeFile(config,JSON.stringify({...saved,conversionConcurrency:1}));
         }
-        const server = await start(binary,['--standalone','--host=127.0.0.1','--data-dir='+dir,
+        const launch = () => start(binary,['--standalone','--host=127.0.0.1','--data-dir='+dir,
             '--config='+config,'--lib-dir='+library,'--web-bundle='+web,'--admin-password='+probe.password],
         {...(profile ? {INPX_RESOURCE_PROFILE:profile} : {}),...(total ? {INPX_RESOURCE_TOTAL:String(total),INPX_RESOURCE_MAX_PROCESSES:'6'} : {})});
-        try { await probe.verify(server.url, dir, profile || 'unlimited', expected, !profile && !total ? 1 : undefined); }
+        const server = await launch();
+        const hotSwitch = profile === 'economy' && total === null;
+        try { await probe.verify(server.url, dir, profile || 'unlimited', expected, !profile && !total ? 1 : undefined, hotSwitch); }
         finally { await server.stop(); }
+        if (hotSwitch) {
+            const restarted = await launch();
+            try {
+                const {connect,signIn} = require('./rust-events-tests');
+                const client = await connect(restarted.url);
+                try {
+                    const auth = await signIn(client,'admin',probe.password);
+                    assert.equal((await client.send('get-admin-performance',auth)).settings.selected,'unlimited');
+                    assert((await client.send('set-admin-resource-profile',{...auth,profile:null})).success);
+                    assert.equal((await client.send('get-admin-performance',auth)).settings.selected,'economy');
+                } finally { client.close(); }
+            } finally { await restarted.stop(); }
+        }
     }
 }
 

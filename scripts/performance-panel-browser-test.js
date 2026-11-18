@@ -17,7 +17,7 @@ const MiB=1024**2;
     try {
         const library=path.join(directory,'library');await createFixture(library);
         await fs.writeJson(path.join(library,'config.json'),{loggingEnabled:false,allowAnonymousAccess:true,adminPassword:'performance-browser-fixture'});
-        const dataDir=path.join(directory,'data');await fs.copy(path.resolve('dist/tmp/public'),path.join(dataDir,'public'));
+        const dataDir=path.join(directory,'data');await fs.copy(path.join(require('../build/dist-dir'),'tmp/public'),path.join(dataDir,'public'));
         const port=await unusedPort(),base=`http://127.0.0.1:${port}`;
         child=spawn(process.execPath,[path.resolve('server'),`--data-dir=${dataDir}`,`--config=${library}/config.json`,`--lib-dir=${library}`,`--port=${port}`,'--host=127.0.0.1'],
             {windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,INPX_TTS_ENABLED:'false',INPX_LIBRARY_SOURCES:'',LIBRARY_SOURCES:'',
@@ -33,7 +33,7 @@ const MiB=1024**2;
                 draft:{selected:'performance',sourceId:'two',customLimits:{total:9,images:3,reviews:9,conversions:3}}}]}));
         },preferenceKey);
         page=await context.newPage();
-        const errors=[],requests=[];let reads=0,sourceIds=['one','two'],legacy=false,compare=false,jobState='idle';
+        const errors=[],requests=[];let storedProfile=null,reads=0,sourceIds=['one','two'],legacy=false,compare=false,jobState='idle';
         const report=()=>({schema:legacy ? 1:2,legacy,mode:'custom',measuredAt:'2026-11-07T10:00:00.000Z',source:{id:'one',name:'Первое хранилище'},
             machine:{memoryScope:'cgroup'},confidence:'partial',criteria:{probeP95Ms:100,timerLagP95Ms:100,memoryRatio:.85,minProbeSamples:5},
             recommendation:{profile:'balanced',measured:false},rows:[{profile:'custom',completed:true,limits:{total:8,images:4,reviews:8,conversions:3},
@@ -58,12 +58,14 @@ const MiB=1024**2;
                         job:jobState==='idle' ? null:{state:jobState,stage:'Готово',progress:0,message:jobState==='failed' ? 'Предыдущая попытка не завершилась':''},
                         recommendation:{profile:'balanced',measured:false,reason:'Рекомендация не меняет параметры теста.'},
                         sources:sourceIds.map(id=>({id,name:id==='one' ? 'Первое хранилище':'Второе хранилище'})),
-                        settings:{selected:'balanced',limits:{total:4,images:2,reviews:4,conversions:2,background:1},hardMax:12,
+                        settings:{storedProfile,requested:storedProfile || 'balanced',automatic:'balanced',selected:storedProfile && storedProfile !== 'auto' ? storedProfile : 'balanced',limits:{total:4,images:2,reviews:4,conversions:2,background:1},hardMax:12,
                             benchmarkEnabled:true,benchmarkTimeoutMs:60000,launchEnv:{},profiles:[
                                 {id:'economy',name:'Бережный',limits:{total:2,images:1,reviews:2,conversions:1}},
                                 {id:'balanced',name:'Сбалансированный',limits:{total:4,images:2,reviews:4,conversions:2}},
-                                {id:'performance',name:'Производительный',limits:{total:6,images:3,reviews:6,conversions:3}}]}};
-                } else if(request.action==='start-admin-benchmark') {requests.push(request.options);value={job:{state:'completed'}};}
+                                {id:'performance',name:'Производительный',limits:{total:6,images:3,reviews:6,conversions:3}},
+                                {id:'unlimited',name:'Без ограничений',limits:{total:null,images:null,reviews:null,conversions:null}}]}};
+                } else if(request.action==='set-admin-resource-profile') {storedProfile=request.profile;value={success:true};}
+                else if(request.action==='start-admin-benchmark') {requests.push(request.options);value={job:{state:'completed'}};}
                 else if(request.action==='cancel-admin-benchmark')value={job:{state:'cancelled'}};
                 else {server.send(message);return;}
                 socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));socket.send(JSON.stringify({requestId:request.requestId,...value}));
@@ -89,7 +91,18 @@ const MiB=1024**2;
         assert.equal(await choice.inputValue(),'balanced','Another profile draft must not become the admin test selection');
         await choice.selectOption('economy');await panel.getByTestId('performance-start').click();
         assert.deepEqual(requests.at(-1),{sourceId:'one',mode:'profile',profileId:'economy'});
-        await panel.getByTestId('performance-active').getByText('Сбалансированный',{exact:true}).waitFor();
+        const serverProfile=panel.getByLabel('Режим сервера',{exact:true});
+        assert.equal(await serverProfile.inputValue(),'balanced');
+        assert.deepEqual(await serverProfile.locator('option').evaluateAll(options=>options.map(o=>o.value)),['auto','economy','balanced','performance','unlimited']);
+        await serverProfile.selectOption('auto');
+        await page.waitForFunction(()=>document.querySelector('#performance-server-profile')?.disabled===false);
+        assert.equal(storedProfile,'auto');assert.equal(await choice.inputValue(),'economy');
+        const resources=panel.getByText('Ресурсы и лимиты',{exact:true});
+        await resources.click();
+        await panel.getByRole('button',{name:'Вернуть режим из настроек запуска'}).click();
+        await page.waitForFunction(()=>document.querySelector('#performance-server-profile')?.value==='balanced');
+        assert.equal(storedProfile,null);
+        await resources.click();
         await choice.selectOption('compare');await panel.getByTestId('performance-start').click();
         assert.deepEqual(requests.at(-1),{sourceId:'one',mode:'compare'});
         await choice.selectOption('custom');

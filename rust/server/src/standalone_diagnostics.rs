@@ -327,6 +327,7 @@ impl Diagnostics {
             "update-admin-library-sources" => ("sources", "Обновлены источники библиотек"),
             "update-admin-integrations"
             | "update-admin-opds"
+            | "set-admin-resource-profile"
             | "update-admin-cache"
             | "import-admin-settings" => ("settings", "Обновлены настройки администратора"),
             "admin-clean-cache" => ("cache", "Очистка кэша завершена"),

@@ -81,6 +81,7 @@ module.exports = {
     dbCacheBudgetMb: numberFromEnv('INPX_DB_CACHE_BUDGET_MB', null),
 
     maxPayloadSize: 500,//in MB
+    resourceProfile: null,
     wsMessageLimitMb: numberFromEnv('INPX_WS_MESSAGE_LIMIT_MB', 1),
     importLimitMb: numberFromEnv('INPX_IMPORT_LIMIT_MB', 16),
     backupUploadLimitMb: numberFromEnv('INPX_BACKUP_UPLOAD_LIMIT_MB', 32),

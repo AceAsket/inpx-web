@@ -7,11 +7,20 @@
         <div v-if="error" class="text-negative" role="alert">{{ error }}</div>
         <template v-if="info">
             <div class="performance-active" data-testid="performance-active">
-                <div><span class="performance-muted">Режим сервера</span><strong>{{ profileName(info.settings.selected) }}</strong></div>
+                <div class="performance-server-profile">
+                    <label for="performance-server-profile">Режим сервера</label>
+                    <select id="performance-server-profile" :value="info.settings.requested || info.settings.selected"
+                        :disabled="busy" @change="setServerProfile($event.target.value, $event.target)">
+                        <option value="auto">Автоматический ({{ profileName(info.settings.automatic) }})</option>
+                        <option v-for="profile in info.settings.profiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
+                    </select>
+                </div>
                 <span>В работе <b>{{ info.runtime.active }}</b> · в очереди <b>{{ info.runtime.queued }}</b></span>
             </div>
             <details class="performance-details">
                 <summary>Ресурсы и лимиты</summary>
+                <q-btn v-if="info.settings.storedProfile" flat dense no-caps color="primary" label="Вернуть режим из настроек запуска"
+                    :disable="busy" @click="setServerProfile(null)" />
                 <div class="performance-stats">
                     <span>Всего <b>{{ limitLabel(info.settings.limits.total) }}</b></span>
                     <span>Изображения <b>{{ limitLabel(info.settings.limits.images) }}</b></span>
@@ -224,6 +233,10 @@ export default {
                 if (!this.disposed && generation === this.generation)this.scheduleRefresh();
             }
         },
+        async setServerProfile(profile, select) {
+            await this.performAction(() => this.$root.api.setAdminResourceProfile(profile));
+            if (select && this.info) select.value = this.info.settings.requested || this.info.settings.selected;
+        },
         start() {
             if(this.busy || this.running || !this.sourceId || this.customError)return;
             this.sourceNotice = '';
@@ -272,9 +285,10 @@ export default {
 .performance-stats,.performance-actions,.performance-copy {display:flex; gap:8px 16px; flex-wrap:wrap; margin:10px 0; justify-content:flex-start;}
 .performance-form,.performance-custom {display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:10px;}
 .performance-form > div {display:grid; min-width:0; gap:4px;}
-.performance-form label {font-size:13px; color:var(--app-muted);}
-.performance-form select {width:100%; min-width:0; min-height:40px; font:inherit; font-size:14px; color:var(--app-text); background:var(--app-surface-2); border:1px solid var(--app-border); border-radius:7px; padding:6px 9px;}
-.performance-form select:focus-visible {outline:2px solid var(--app-link); outline-offset:1px;}
+.performance-server-profile {min-width:0; max-width:100%;}
+.performance-server-profile label,.performance-form label {font-size:13px; color:var(--app-muted);}
+.performance-server-profile select,.performance-form select {width:100%; min-width:0; min-height:40px; font:inherit; font-size:14px; color:var(--app-text); background:var(--app-surface-2); border:1px solid var(--app-border); border-radius:7px; padding:6px 9px;}
+.performance-server-profile select:focus-visible,.performance-form select:focus-visible {outline:2px solid var(--app-link); outline-offset:1px;}
 .performance-custom,.performance-job {margin-top:12px;}
 .performance-custom > .text-negative {grid-column:1/-1;}
 .performance-job {display:grid; gap:6px;}

@@ -1,6 +1,7 @@
 {
     "properties": [
         "dataDir",
+        "resourceProfile",
         "wsMessageLimitMb",
         "importLimitMb",
         "backupUploadLimitMb",

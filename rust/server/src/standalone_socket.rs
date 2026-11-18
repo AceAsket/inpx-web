@@ -44,7 +44,7 @@ pub(super) struct Socket {
     import_limit: usize,
     frame_limit: usize,
     jobs: Arc<Semaphore>,
-    previews: Semaphore,
+    pub(super) previews: Arc<super::resources::AdmissionSlots>,
     external: ExternalDiscovery,
 }
 
@@ -129,7 +129,7 @@ impl Socket {
             import_limit,
             frame_limit,
             jobs: Arc::new(Semaphore::new(64)),
-            previews: Semaphore::new(archive_slots),
+            previews: super::resources::AdmissionSlots::new(archive_slots),
             external: ExternalDiscovery::new(data),
         }
     }
@@ -258,6 +258,7 @@ impl Socket {
                 | "update-admin-opds"
                 | "update-admin-library-sources"
                 | "admin-diagnose-library-source"
+                | "set-admin-resource-profile"
                 | "update-admin-cache"
                 | "admin-clean-cache"
                 | "admin-clean-broken-covers"
@@ -469,6 +470,7 @@ impl Socket {
             | "update-admin-opds"
             | "update-admin-library-sources"
             | "admin-diagnose-library-source"
+            | "set-admin-resource-profile"
             | "update-admin-cache"
             | "admin-clean-cache"
             | "admin-clean-broken-covers"
@@ -807,7 +809,7 @@ impl Socket {
                 if uid.is_empty() || uid.encode_utf16().count() > 1024 {
                     return fault("Invalid book UID");
                 }
-                let Ok(_permit) = self.previews.try_acquire() else {
+                let Some(_permit) = self.previews.try_take() else {
                     return json!({"error":"Preview queue is full","errorCode":"INPX_RESOURCE_IO_QUEUE_FULL"});
                 };
                 let _resource = match state.resources.acquire(super::resources::Kind::Archives) {
@@ -824,7 +826,7 @@ impl Socket {
                 if uid.is_empty() {
                     return fault("bookUid is empty");
                 }
-                let Ok(_permit) = state.download_slots.try_acquire() else {
+                let Some(_permit) = state.download_slots.try_take() else {
                     return fault("server_busy");
                 };
                 let result = match action.as_str() {

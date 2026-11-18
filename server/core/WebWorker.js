@@ -4479,6 +4479,24 @@ class WebWorker {
                 authors:{bytes:this.authorInfoCache?.bytes || 0, entries:this.authorInfoCache?.size || 0}}};
     }
 
+    async setAdminResourceProfile(userId, profileAccessToken, profile) {
+        await this.requireAdmin(userId, profileAccessToken);
+        if (profile !== null && (typeof profile !== 'string' || !profile))
+            throw new Error('Выберите профиль сервера');
+        return withFileTransaction(this.config.configFile, async() => {
+            const settings = require('./ResourcePolicy').resolve(process.env, undefined, profile);
+            await this.saveRuntimeConfigPatch({resourceProfile: profile});
+            resourceRuntime.configure(settings);
+            imageRuntime.drain();
+            reviewRuntime.drain();
+            this.config.conversionConcurrency = settings.limits.conversions;
+            bookConverter.configure(this.config);
+            this.wakeBackgroundJobs();
+            this.addAdminEvent('info', 'settings', 'Изменён профиль производительности', {profile: settings.requested});
+            return {success: true};
+        });
+    }
+
     async startAdminBenchmark(userId = '', profileAccessToken = '', options = {}) {
         await this.requireAdmin(userId, profileAccessToken);
         this.checkMyState();

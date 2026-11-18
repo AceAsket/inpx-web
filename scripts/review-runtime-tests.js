@@ -89,7 +89,8 @@ async function testReviewReadsShareBudgetWithWarmupAndRatings() {
             ])});
         }
         const value = worker({reviewWarmupEnabled:true,libDir:dirs[0], librarySources:dirs.map(libDir => ({libDir}))});
-        const original = {open:ZipReader.prototype.open, close:ZipReader.prototype.close, cpu:os.availableParallelism, concurrency:runtime.concurrency};
+        const resources = require('../server/core/ResourceRuntime');
+        const original = {open:ZipReader.prototype.open, close:ZipReader.prototype.close, cpu:os.availableParallelism, settings:resources.settings};
         let active = 0, peak = 0, opened = 0, closed = 0;
         const ratingsReads = [];
         ZipReader.prototype.open = async function(file, entries) {
@@ -105,7 +106,7 @@ async function testReviewReadsShareBudgetWithWarmupAndRatings() {
         };
         try {
             os.availableParallelism = () => 64;
-            runtime.concurrency = 3;
+            resources.configure({...original.settings, limits:{...original.settings.limits, reviews:3}});
             const warming = value.warmReviewIndexes();
             const books = ids.map(file => ({folder:'collection.zip', file, ext:'fb2', sourceLibDir:dirs[0]}));
             const results = await Promise.all([warming, ...books.map(book => value.getBookReviews(book))]);
@@ -123,7 +124,7 @@ async function testReviewReadsShareBudgetWithWarmupAndRatings() {
             assert.strictEqual(runtime.queue.length, 0);
         } finally {
             os.availableParallelism = original.cpu;
-            runtime.concurrency = original.concurrency;
+            resources.configure(original.settings);
             ZipReader.prototype.open = original.open;
             ZipReader.prototype.close = original.close;
         }

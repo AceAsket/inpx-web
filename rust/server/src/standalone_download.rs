@@ -85,6 +85,13 @@ pub(crate) enum Prepared {
 }
 
 impl Downloads {
+    pub(crate) fn set_resource_limits(&self, limits: crate::standalone::resources::Limits) {
+        self.covers.set_concurrency(limits.images);
+        if let Some(conversions) = &self.conversions {
+            conversions.set_concurrency(limits.conversions);
+        }
+    }
+
     pub(crate) fn new(
         data: &Path,
         prefix: &str,

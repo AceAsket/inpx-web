@@ -33,6 +33,7 @@ class ConversionRuntime {
             queueTimeoutMs: limit(config.conversionQueueTimeoutMs, defaults.queueTimeoutMs, 100, 3600000),
             stderrBytes: defaults.stderrBytes,
         };
+        this.drain();
     }
 
     run(task) {

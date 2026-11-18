@@ -78,7 +78,7 @@ async function verify(base) {
         const reader = await signIn(guest,'diagnostic-reader',password);
         for (const action of [
             'start-library-audit','cancel-library-audit','get-admin-dashboard','get-admin-dashboard-metrics',
-            'get-admin-performance','start-admin-benchmark','cancel-admin-benchmark','get-admin-events',
+            'get-admin-performance','set-admin-resource-profile','start-admin-benchmark','cancel-admin-benchmark','get-admin-events',
             'update-admin-event-log','add-admin-test-event',
         ]) assert.match((await guest.send(action,reader)).error,/администратора/);
         assert.equal((await admin.send('start-library-audit',{...identity,csrfToken:'bad'})).error,'bad_csrf_token');
@@ -143,6 +143,18 @@ async function verify(base) {
         assert(pending.settings.native);
         assert.deepEqual(pending.settings.profiles.map(p=>p.id), ['economy','balanced','performance','unlimited']);
         assert(pending.machine.cpu>0);
+        for (const profile of ['auto','economy','balanced','performance','unlimited']) {
+            await send('set-admin-resource-profile',{profile});
+            const {settings} = await performance();
+            assert.equal(settings.storedProfile,profile);
+            assert.equal(settings.requested,profile);
+            assert.equal(settings.selected,profile==='auto' ? settings.automatic : profile);
+        }
+        assert((await admin.send('set-admin-resource-profile',{...identity,profile:'unknown'})).error);
+        assert.equal((await admin.send('set-admin-resource-profile',{...identity,profile:'economy',csrfToken:'bad'})).error,'bad_csrf_token');
+        assert.equal((await performance()).settings.requested,'unlimited');
+        await send('set-admin-resource-profile',{profile:null});
+        assert.equal((await performance()).settings.requested,pending.settings.requested);
         assert.match((await admin.send('start-admin-benchmark',{...identity,options:{mode:'profile',profileId:'missing'}})).error,/профиль/);
         assert.match((await admin.send('start-admin-benchmark',{...identity,options:{mode:'custom',limits:{total:2,images:1,reviews:3,conversions:1}}})).error,/лимит/);
         const start = await send('start-admin-benchmark',{options:{sourceId,mode:'compare'}});

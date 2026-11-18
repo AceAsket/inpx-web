@@ -4,15 +4,20 @@ const resourceRuntime = require('./ResourceRuntime');
 // Share a small budget across books, covers and EPUB image decoders. Limiting
 // each book separately multiplies native processes by the number of readers.
 class ImageRuntime {
-    constructor(concurrency = resourceRuntime.settings.limits.images, resources = resourceRuntime) {
-        this.concurrency = concurrency === Infinity ? Infinity : Math.max(1, Math.min(16, Math.floor(Number(concurrency)) || 1));
+    constructor(concurrency, resources = resourceRuntime) {
+        this.fixedConcurrency = concurrency === undefined || concurrency === Infinity ? concurrency : Math.max(1, Math.min(16, Math.floor(Number(concurrency)) || 1));
         this.resources = resources;
-        this.backgroundConcurrency = Math.min(resources.settings.limits.background, Math.max(1, this.concurrency - 1));
         this.active = 0;
         this.backgroundActive = 0;
         this.foregroundStreak = 0;
         this.queue = [];
         this.context = new AsyncLocalStorage();
+    }
+
+    get concurrency() { return this.fixedConcurrency ?? this.resources.settings.limits.images; }
+
+    get backgroundConcurrency() {
+        return Math.min(this.resources.settings.limits.background, Math.max(1, this.concurrency - 1));
     }
 
     run(task) {

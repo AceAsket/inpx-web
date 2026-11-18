@@ -100,7 +100,7 @@ struct State {
     delivery: delivery::Delivery,
     batch: batch::Downloads,
     downloads: Downloads,
-    download_slots: Arc<Semaphore>,
+    download_slots: Arc<resources::AdmissionSlots>,
     kosync: kosync::Routes,
     request_access: request_access::Standalone,
     metadata: metadata::Routes,
@@ -215,8 +215,9 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     let kosync_enabled = std::env::var("INPX_KOSYNC_ENABLED").as_deref() != Ok("false");
     let epub_reader = epub_reader(&config);
     let (cpu, memory) = diagnostics::hardware();
-    let resources = Arc::new(resources::Budget::new(cpu, memory, &config)?);
-    let conversion = Conversion::new(&config, exec_dir, resources.selected.limits.conversions)?;
+    let policy = resources::Policy::new(cpu, memory, &config)?;
+    let resources = Arc::new(resources::Budget::new(policy.clone()));
+    let conversion = Conversion::new(&config, exec_dir, policy.selected.limits.conversions)?;
     let conversion_formats: Vec<_> = epub_reader
         .then_some("fb2")
         .into_iter()
@@ -328,8 +329,8 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         inpx_catalog::legacy_library_files::Covers::new(
             exec_dir,
             &config,
-            resources.selected.limits.images,
-            resources.timeout,
+            policy.selected.limits.images,
+            policy.timeout,
         ),
     )?;
     let listener = TcpListener::bind((host, port)).await?;
@@ -343,7 +344,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         &conversion_formats,
         !access.library.protected(),
         speech.enabled(),
-        resources.selected.limits.reviews,
+        policy.selected.limits.reviews,
     );
     let metadata = metadata::Routes::new(prefix);
     let exchange = exchange::Exchange::new(&config);
@@ -374,7 +375,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         batch,
         delivery,
         downloads,
-        download_slots: Arc::new(Semaphore::new(resources.selected.limits.total.max(4))),
+        download_slots: resources::AdmissionSlots::new(policy.selected.limits.total.max(4)),
         resources,
         kosync: kosync::Routes::new(prefix, kosync_enabled),
         request_access,
@@ -819,9 +820,9 @@ impl State {
             let download = requested.is_some() && !head;
             let slots = self.download_slots.clone();
             let permit = if cover.is_some() {
-                slots.acquire_owned().await.ok()
+                Some(slots.take().await)
             } else {
-                slots.try_acquire_owned().ok()
+                slots.try_take()
             };
             let Some(permit) = permit else {
                 return Ok(error(StatusCode::SERVICE_UNAVAILABLE));

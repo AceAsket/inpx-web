@@ -108,8 +108,8 @@ function integer(env, name, fallback, min, max) {
     return n;
 }
 
-function resolve(env = process.env, machine = hardware()) {
-    const requested = env.INPX_RESOURCE_PROFILE || 'unlimited';
+function resolve(env = process.env, machine = hardware(), storedProfile = null) {
+    const requested = storedProfile ?? (env.INPX_RESOURCE_PROFILE || 'unlimited');
     if (requested !== 'auto' && !Object.hasOwn(profiles, requested)) throw new Error('INPX_RESOURCE_PROFILE: auto, economy, balanced, performance or unlimited required');
     const automatic = machine.cpu < 2 || machine.memoryLimit < 2 * 1024 * MiB ? 'economy' : 'balanced';
     const selected = requested === 'auto' ? automatic : requested;
@@ -138,7 +138,7 @@ function resolve(env = process.env, machine = hardware()) {
         if (env[name] !== undefined && env[name] !== '') launchEnv[name] = String(Number(env[name]));
     }
     if (env.INPX_RESOURCE_BENCH_ENABLED !== undefined) launchEnv.INPX_RESOURCE_BENCH_ENABLED = env.INPX_RESOURCE_BENCH_ENABLED === 'false' ? 'false' : 'true';
-    return {requested, selected, automatic, limits:current.limits, hardMax, hardwareMax:estimated, overrides, profiles:choices,
+    return {requested, storedProfile, selected, automatic, limits:current.limits, hardMax, hardwareMax:estimated, overrides, profiles:choices,
         launchEnv,
         taskTimeoutMs:integer(env, 'INPX_RESOURCE_TASK_TIMEOUT_MS', 120000, 1000, 3600000),
         benchmarkTimeoutMs:integer(env, 'INPX_RESOURCE_BENCH_TIMEOUT_MS', 60000, 10000, 180000),

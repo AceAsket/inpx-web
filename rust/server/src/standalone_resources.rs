@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use inpx_catalog::Result;
@@ -55,21 +55,26 @@ pub(crate) struct Profile {
     pub limits: Limits,
 }
 
-#[derive(Default)]
 struct Queue {
+    policy: Policy,
     sequence: u64,
     waiting: VecDeque<(u64, Kind)>,
     active: [usize; 4],
 }
 
-pub(crate) struct Budget {
+#[derive(Clone)]
+pub(crate) struct Policy {
     pub requested: String,
+    pub stored: Option<String>,
     pub automatic: &'static str,
     pub selected: Profile,
     pub profiles: [Profile; 4],
     pub hard_max: usize,
     pub launch_env: Value,
     pub(crate) timeout: Duration,
+}
+
+pub(crate) struct Budget {
     queue: Mutex<Queue>,
     changed: Condvar,
 }
@@ -89,7 +94,7 @@ fn number(name: &str, min: usize, max: usize) -> Result<Option<usize>> {
         .ok_or_else(|| format!("{name}: ожидается целое число от {min} до {max}").into())
 }
 
-impl Budget {
+impl Policy {
     pub(crate) fn new(cpu: usize, memory: Option<u64>, config: &Value) -> Result<Self> {
         let mib = 1024 * 1024;
         let automatic = if cpu < 2 || memory.is_some_and(|size| size < 2048 * mib) {
@@ -97,9 +102,14 @@ impl Budget {
         } else {
             "balanced"
         };
-        let requested = std::env::var("INPX_RESOURCE_PROFILE")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let requested = config["resourceProfile"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| {
+                std::env::var("INPX_RESOURCE_PROFILE")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            })
             .unwrap_or_else(|| "unlimited".into());
         let estimated = cpu
             .saturating_mul(2)
@@ -182,6 +192,7 @@ impl Budget {
             .ok_or("INPX_RESOURCE_PROFILE: auto, economy, balanced, performance или unlimited")?
             .clone();
         Ok(Self {
+            stored: config["resourceProfile"].as_str().map(str::to_owned),
             requested,
             automatic,
             selected,
@@ -189,21 +200,43 @@ impl Budget {
             hard_max,
             launch_env,
             timeout: Duration::from_millis(timeout as u64),
-            queue: Mutex::default(),
-            changed: Condvar::new(),
         })
+    }
+}
+
+impl Budget {
+    pub(crate) fn new(policy: Policy) -> Self {
+        Self {
+            queue: Mutex::new(Queue {
+                policy,
+                sequence: 0,
+                waiting: VecDeque::new(),
+                active: [0; 4],
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn policy(&self) -> Policy {
+        self.queue.lock().expect("resource queue").policy.clone()
+    }
+
+    pub(crate) fn configure(&self, policy: Policy) {
+        self.queue.lock().expect("resource queue").policy = policy;
+        self.changed.notify_all();
     }
 
     pub(crate) fn acquire(&self, kind: Kind) -> Result<Permit<'_>> {
-        let limits = self.selected.limits;
         let mut queue = self.queue.lock().expect("resource queue");
+        let timeout = queue.policy.timeout;
         let id = queue.sequence;
         queue.sequence = queue.sequence.wrapping_add(1);
         queue.waiting.push_back((id, kind));
         // Serve the oldest eligible waiter. A saturated category cannot block other work.
         let (mut queue, timed) = self
             .changed
-            .wait_timeout_while(queue, self.timeout, |q| {
+            .wait_timeout_while(queue, timeout, |q| {
+                let limits = q.policy.selected.limits;
                 q.active.iter().sum::<usize>() >= limits.total
                     || q.waiting
                         .iter()
@@ -241,21 +274,70 @@ impl Drop for Permit<'_> {
     }
 }
 
+/// Request admission is independent from the shared processing budget. Keep
+/// counting existing requests when an administrator changes its capacity.
+pub(crate) struct AdmissionSlots {
+    counts: tokio::sync::watch::Sender<(usize, usize)>,
+}
+
+pub(crate) struct AdmissionPermit(Arc<AdmissionSlots>);
+
+impl AdmissionSlots {
+    pub(crate) fn new(limit: usize) -> Arc<Self> {
+        Arc::new(Self {
+            counts: tokio::sync::watch::channel((0, limit)).0,
+        })
+    }
+
+    pub(crate) fn resize(&self, limit: usize) {
+        self.counts.send_modify(|state| state.1 = limit);
+    }
+
+    pub(crate) fn try_take(self: &Arc<Self>) -> Option<AdmissionPermit> {
+        let mut taken = false;
+        self.counts.send_if_modified(|(active, limit)| {
+            if *active < *limit {
+                *active += 1;
+                taken = true;
+            }
+            false // Taking a slot cannot wake another waiter.
+        });
+        taken.then(|| AdmissionPermit(self.clone()))
+    }
+
+    pub(crate) async fn take(self: &Arc<Self>) -> AdmissionPermit {
+        let mut state = self.counts.subscribe();
+        loop {
+            if let Some(permit) = self.try_take() {
+                return permit;
+            }
+            state.changed().await.expect("live admission slots");
+        }
+    }
+}
+
+impl Drop for AdmissionPermit {
+    fn drop(&mut self) {
+        self.0.counts.send_modify(|(active, _)| *active -= 1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn background_and_foreground_share_the_total_and_release_timed_out_waiters() {
-        let mut budget = Budget::new(8, None, &Value::Null).unwrap();
-        budget.selected.limits = Limits {
+        let mut policy = Policy::new(8, None, &Value::Null).unwrap();
+        policy.selected.limits = Limits {
             total: 2,
             images: 1,
             reviews: 2,
             conversions: 2,
             background: 1,
         };
-        budget.timeout = Duration::from_millis(10);
+        policy.timeout = Duration::from_millis(10);
+        let budget = Budget::new(policy);
         let background = budget.acquire(Kind::Background).unwrap();
         let image = budget.acquire(Kind::Images).unwrap();
         assert!(budget.acquire(Kind::Conversions).is_err());

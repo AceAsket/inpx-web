@@ -88,9 +88,9 @@ impl Routes {
         let cover = matches!(&route, Route::Cover(_));
         let slots = state.download_slots.clone();
         let permit = if cover {
-            slots.acquire_owned().await.ok()
+            Some(slots.take().await)
         } else {
-            slots.try_acquire_owned().ok()
+            slots.try_take()
         };
         let Some(permit) = permit else {
             return error(StatusCode::SERVICE_UNAVAILABLE);

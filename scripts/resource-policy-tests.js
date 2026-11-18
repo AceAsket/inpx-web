@@ -264,14 +264,33 @@ async function testBenchmarkCancellationDrainsProcessesBeforeCleanup() {
     });
 }
 
+async function testChangingResourceProfileDrainsWaitingWork() {
+    const select = profile => policy.resolve({}, machine(), profile);
+    const runtime = new ResourceRuntime(select('economy'));
+    const releases = [];
+    const task = () => runtime.run(() => new Promise(resolve => releases.push(resolve)), {kind:'images'});
+    const work = [task(),task(),task()];
+    assert.equal(releases.length,1);
+    runtime.configure(select('unlimited'));
+    assert.equal(releases.length,3);
+    runtime.configure(select('economy'));
+    work.push(task());
+    releases[0](); releases[1]();
+    await Promise.all(work.slice(0,2));
+    assert.equal(releases.length,3);
+    releases[2](); await work[2];
+    assert.equal(releases.length,4);
+    releases[3](); await work[3];
+}
+
 async function testPerformanceEndpointsRequireAdministratorAndCsrf() {
     const Worker = require('../server/core/WebWorker'), Controller = require('../server/controllers/WebSocketController');
     const worker = Object.create(Worker.prototype);
     worker.requireAdmin = async() => {throw new Error('denied');};
     worker.getResourceBenchmark = () => assert.fail('Unauthenticated access reached the benchmark');
-    for (const method of ['getAdminPerformance','startAdminBenchmark','cancelAdminBenchmark'])
+    for (const method of ['getAdminPerformance','setAdminResourceProfile','startAdminBenchmark','cancelAdminBenchmark'])
         await assert.rejects(worker[method]('forged-admin-id', 'invalid-token'), /denied/);
-    for (const action of ['start-admin-benchmark','cancel-admin-benchmark'])
+    for (const action of ['set-admin-resource-profile','start-admin-benchmark','cancel-admin-benchmark'])
         assert.strictEqual(Controller.prototype.isCsrfProtectedAction(action), true);
 }
 
@@ -513,7 +532,7 @@ async function testBenchmarkDatabaseFailureStopsBeforeFurtherCandidates() {
 }
 
 module.exports = [testLaunchResourceProfilesAndOverrides, testCgroupV2InheritedCpuAndMemoryLimits, testCgroupV1QuotasAndEscapedMountPaths,
-    testGlobalResourceAdmissionAndForegroundPriority,
+    testGlobalResourceAdmissionAndForegroundPriority, testChangingResourceProfileDrainsWaitingWork,
     testResourceQueueCancellationAndCallerContext, testRuntimeFailureDiagnosticsAreBoundedAndExcludePayloads, testNativeOutputCaptureLimitsAndAbortTree,
     testRecommendationPrefersSmallestSafeNearBestProfile, testBenchmarkPercentileKeepsRareSlowProbesVisible,
     testSelectedProfileRunsOnlySelectedLimitsAndLegacyReportsNeedRetest, testBenchmarkPersistsResultsAndDetectsChangedEnvironment,

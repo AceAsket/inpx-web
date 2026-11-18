@@ -18,7 +18,7 @@ async function fixture(directory, runtimePath = directory) {
     await fs.writeFile(join(directory,'config.json'), JSON.stringify({converterPaths:{djxl:runtimePath+'/djxl'}}));
 }
 
-async function verify(base, directory, profile, expected, conversions) {
+async function verify(base, directory, profile, expected, conversions, switchToUnlimited = false) {
     const client = await connect(base);
     try {
         const identity = await signIn(client, 'admin', password);
@@ -32,8 +32,8 @@ async function verify(base, directory, profile, expected, conversions) {
         assert(book);
         const url = base+'/cover/by-uid?uid='+encodeURIComponent(book._uid);
         // Hold the first wave until all available slots are occupied, even on slow CI hosts.
-        const requests = expected === null ? 20 : 6;
-        const target = expected ?? requests;
+        const requests = expected === null || switchToUnlimited ? 20 : 6;
+        const target = switchToUnlimited ? requests : expected ?? requests;
         const hold = join(directory,'hold');
         await fs.writeFile(hold,'');
         const responses = Promise.all(Array.from({length:requests}, async () => {
@@ -41,6 +41,7 @@ async function verify(base, directory, profile, expected, conversions) {
             assert.equal(response.status,200);
             assert.deepEqual(Buffer.from(await response.arrayBuffer()),png);
         }));
+        let switched = false;
         try {
             const deadline = Date.now()+15000;
             while (Date.now()<deadline) {
@@ -48,7 +49,14 @@ async function verify(base, directory, profile, expected, conversions) {
                     if (error.code !== 'ENOENT') throw error;
                     return '';
                 });
-                if (lines.trim().split('\n').filter(line=>line==='start').length>=target) break;
+                const started = lines.trim().split('\n').filter(line=>line==='start').length;
+                if (switchToUnlimited && started && !switched) {
+                    assert.equal(started,expected);
+                    const change = await client.send('set-admin-resource-profile',{...identity,profile:'unlimited'});
+                    assert.equal(change.success,true,change.error);
+                    switched = true;
+                }
+                if (started>=target) break;
                 await Promise.race([delay(50), responses]);
             }
         } finally {
@@ -64,7 +72,8 @@ async function verify(base, directory, profile, expected, conversions) {
         }
         assert.equal(active,0);
         assert.equal(peak,target);
-        console.log(`ok ${profile}: ${peak} simultaneous cover decoders for ${requests} HTTP requests`);
+        assert.equal(switched,switchToUnlimited);
+        console.log(`ok ${switchToUnlimited ? profile+' -> unlimited' : profile}: ${peak} simultaneous cover decoders for ${requests} HTTP requests`);
     } finally { client.close(); }
 }
 

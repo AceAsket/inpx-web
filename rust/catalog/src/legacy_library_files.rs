@@ -68,6 +68,10 @@ impl std::fmt::Display for MissingDecoder {
 impl std::error::Error for MissingDecoder {}
 
 impl Covers {
+    pub fn set_concurrency(&self, limit: usize) {
+        self.decoders.set_limit(limit);
+    }
+
     pub fn new(exec: &Path, config: &Value, images: usize, queue_timeout: Duration) -> Self {
         let paths = &config["converterPaths"];
         Self {

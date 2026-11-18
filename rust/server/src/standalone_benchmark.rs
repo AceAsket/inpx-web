@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{Job, SOURCE_CHANGED, State, integer, percentile, process, timestamp};
-use crate::standalone::resources::{Budget, Limits, Profile as Candidate};
+use crate::standalone::resources::{Budget, Limits, Policy, Profile as Candidate};
 use crate::standalone_access::BrowserProfileRequest;
 
 const MIB: u64 = 1024 * 1024;
@@ -129,7 +129,7 @@ impl Machine {
 struct Settings {
     enabled: bool,
     timeout: u64,
-    budget: Arc<Budget>,
+    budget: Policy,
 }
 
 impl Settings {
@@ -138,7 +138,7 @@ impl Settings {
             enabled: std::env::var("INPX_RESOURCE_BENCH_ENABLED").as_deref() != Ok("false"),
             timeout: environment_number("INPX_RESOURCE_BENCH_TIMEOUT_MS", 60000)
                 .clamp(10000, 180000),
-            budget: budget.clone(),
+            budget: budget.policy(),
         }
     }
 
@@ -188,7 +188,7 @@ impl Settings {
 
     fn view(&self) -> Value {
         let policy = &self.budget;
-        json!({"native":true,"requested":policy.requested,"selected":policy.selected.id,"automatic":policy.automatic,
+        json!({"native":true,"requested":policy.requested,"storedProfile":policy.stored,"selected":policy.selected.id,"automatic":policy.automatic,
             "limits":policy.selected.limits,"hardMax":policy.hard_max,"profiles":policy.profiles,
             "benchmarkEnabled":self.enabled,"benchmarkTimeoutMs":self.timeout,"launchEnv":policy.launch_env})
     }

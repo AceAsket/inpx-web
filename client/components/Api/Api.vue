@@ -551,6 +551,10 @@ class Api {
         return await this.request({action:'get-admin-performance'}, 30);
     }
 
+    async setAdminResourceProfile(profile) {
+        return await this.request({action:'set-admin-resource-profile', profile}, 30);
+    }
+
     async startAdminBenchmark(options = {}) {
         return await this.request({action:'start-admin-benchmark', options}, 30);
     }

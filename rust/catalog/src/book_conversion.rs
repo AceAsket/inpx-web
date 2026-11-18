@@ -108,6 +108,10 @@ enum Pdf {
 }
 
 impl Conversion {
+    pub fn set_concurrency(&self, limit: usize) {
+        self.queue.set_limit(limit);
+    }
+
     pub fn new(config: &Value, exec_dir: &Path, concurrency: usize) -> Result<Option<Self>> {
         let enabled = std::env::var("INPX_ENABLE_CONVERSION")
             .map_or(config["conversionEnabled"] != false, |value| {
@@ -702,11 +706,16 @@ fn milliseconds(config: &Value, variables: &[&str], key: &str, default: u64) -> 
 }
 
 pub(crate) struct Queue {
-    active: Mutex<(HashSet<PathBuf>, usize)>,
+    active: Mutex<QueueState>,
     changed: Condvar,
-    limit: usize,
     max_waiting: usize,
     timeout: Duration,
+}
+
+struct QueueState {
+    paths: HashSet<PathBuf>,
+    waiting: usize,
+    limit: usize,
 }
 
 pub(crate) struct Ticket<'a> {
@@ -734,12 +743,20 @@ impl Queue {
 
     pub(crate) fn with_limits(concurrency: usize, max_waiting: usize, timeout: Duration) -> Self {
         Self {
-            active: Mutex::default(),
+            active: Mutex::new(QueueState {
+                paths: HashSet::new(),
+                waiting: 0,
+                limit: concurrency,
+            }),
             changed: Condvar::new(),
-            limit: concurrency,
             max_waiting,
             timeout,
         }
+    }
+
+    pub(crate) fn set_limit(&self, limit: usize) {
+        self.active.lock().expect("conversion queue").limit = limit;
+        self.changed.notify_all();
     }
 
     pub(crate) fn enter<'a>(&'a self, path: &'a Path) -> Result<Ticket<'a>> {
@@ -747,23 +764,24 @@ impl Queue {
             .active
             .lock()
             .map_err(|_| "Конвертер книг недоступен")?;
-        let busy = |active: &HashSet<PathBuf>| active.len() >= self.limit || active.contains(path);
-        if busy(&state.0) {
-            if state.1 >= self.max_waiting {
+        let busy =
+            |state: &QueueState| state.paths.len() >= state.limit || state.paths.contains(path);
+        if busy(&state) {
+            if state.waiting >= self.max_waiting {
                 return Err(Error::Busy.into());
             }
-            state.1 += 1;
+            state.waiting += 1;
             let (mut waiting, _) = self
                 .changed
-                .wait_timeout_while(state, self.timeout, |state| busy(&state.0))
+                .wait_timeout_while(state, self.timeout, |state| busy(state))
                 .map_err(|_| "Конвертер книг недоступен")?;
-            waiting.1 -= 1;
-            if busy(&waiting.0) {
+            waiting.waiting -= 1;
+            if busy(&waiting) {
                 return Err(Error::Busy.into());
             }
             state = waiting;
         }
-        state.0.insert(path.to_owned());
+        state.paths.insert(path.to_owned());
         Ok(Ticket { queue: self, path })
     }
 }
@@ -774,7 +792,7 @@ impl Drop for Ticket<'_> {
             .active
             .lock()
             .expect("conversion queue")
-            .0
+            .paths
             .remove(self.path);
         self.queue.changed.notify_all();
     }

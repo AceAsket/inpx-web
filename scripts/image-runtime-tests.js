@@ -34,7 +34,8 @@ async function testImagesShareBudgetAcrossBooksCoversAndEpub() {
         const ZipReader = require('../server/core/ZipReader');
         const Worker = require('../server/core/WebWorker');
         const originalNormalize = imageUtils.normalizeForFb2;
-        const originalConcurrency = imageRuntime.concurrency;
+        const resources = require('../server/core/ResourceRuntime');
+        const originalSettings = resources.settings;
         const originalExtract = ZipReader.prototype.extractToBuf;
         const ids = [123,456,789], count = 12;
         const file = path.join(dir, 'images.zip');
@@ -55,7 +56,7 @@ async function testImagesShareBudgetAcrossBooksCoversAndEpub() {
         });
         const converterPaths = {djxl:'test-djxl', dwebp:'test-webp'};
         try {
-            imageRuntime.concurrency = 2;
+            resources.configure({...originalSettings, limits:{...originalSettings.limits, images:2}});
             imageUtils.normalizeForFb2 = images.normalizeForFb2;
             ZipReader.prototype.extractToBuf = async function(...args) {
                 peakExtract = Math.max(peakExtract, ++activeExtract);
@@ -86,7 +87,7 @@ async function testImagesShareBudgetAcrossBooksCoversAndEpub() {
             assert.deepStrictEqual(await fs.readdir(dir), ['images.zip'], 'Clean decoder files after success and a broken image');
         } finally {
             imageUtils.normalizeForFb2 = originalNormalize;
-            imageRuntime.concurrency = originalConcurrency;
+            resources.configure(originalSettings);
             ZipReader.prototype.extractToBuf = originalExtract;
         }
         assert.strictEqual(imageRuntime.active, 0);

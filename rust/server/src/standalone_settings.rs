@@ -278,6 +278,13 @@ impl Settings {
                     "update-admin-library-sources" => {
                         json!({"librarySources":normalized_sources(&request["sources"])?})
                     }
+                    "set-admin-resource-profile" => {
+                        let profile = request
+                            .get("profile")
+                            .filter(|value| value.is_null() || value.is_string())
+                            .ok_or("Выберите профиль сервера")?;
+                        json!({"resourceProfile":profile})
+                    }
                     "update-admin-cache" => Cache::patch(&current, &request["cache"])?,
                     "import-admin-settings" => import(&current, &request["data"], import_limit)?,
                     _ => return Err("Неизвестная операция с настройками".into()),
@@ -287,6 +294,12 @@ impl Settings {
                 next.as_object_mut()
                     .expect("settings")
                     .extend(fields.clone());
+                let resource_policy = if fields.contains_key("resourceProfile") {
+                    let (cpu, memory) = super::diagnostics::hardware();
+                    Some(super::resources::Policy::new(cpu, memory, &next)?)
+                } else {
+                    None
+                };
                 let opds = fields
                     .contains_key("opds")
                     .then(|| self.build_opds(&next))
@@ -310,6 +323,13 @@ impl Settings {
                 *current = next;
                 self.extended_search
                     .store(current["extendedSearch"] != false, Ordering::Relaxed);
+                if let Some(policy) = resource_policy {
+                    let limits = policy.selected.limits;
+                    state.resources.configure(policy);
+                    state.downloads.set_resource_limits(limits);
+                    state.socket.previews.resize(limits.reviews);
+                    state.download_slots.resize(limits.total.max(4));
+                }
                 if let Some(opds) = opds {
                     state.access.set_opds(opds);
                 }
@@ -327,6 +347,7 @@ impl Settings {
                     "update-admin-library-sources" => {
                         json!({"sources":current["librarySources"],"reindexRequired":true})
                     }
+                    "set-admin-resource-profile" => json!({"success":true}),
                     "update-admin-cache" => json!({"cache":Cache::settings(&current)}),
                     _ => {
                         json!({"success":true,"importedKeys":fields.keys().collect::<Vec<_>>(), "settings":export(&current,state),
