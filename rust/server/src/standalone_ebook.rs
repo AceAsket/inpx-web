@@ -26,7 +26,7 @@ mod reader;
 
 const CSS: &str = include_str!("../../../shared/ebook.css");
 const FORMAT_NAMES: &[&str] = &[
-    "fb2", "epub", "epub3", "kepub", "kfx", "azw8", "pdf", "mobi",
+    "fb2", "epub", "epub3", "kepub", "kfx", "azw3", "azw8", "pdf", "mobi",
 ];
 const BAD_INPUT: &str = "Некорректные параметры запроса.";
 const BUSY: &str = "Сервер занят или библиотека пока недоступна. Повторите запрос позже.";

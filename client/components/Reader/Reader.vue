@@ -1608,6 +1608,7 @@ import he from 'he';
 import ReaderAudio from './ReaderAudio.vue';
 import ReaderBrowserSpeech from './ReaderBrowserSpeech.vue';
 import readerPreferencesStorage from './readerPreferencesStorage';
+import * as pageCache from './readerPageCache';
 import {createLocator} from '../../../shared/SpeechAnchor';
 import {findTextRect} from '../../../shared/VisibleTextAnchor';
 
@@ -1880,6 +1881,7 @@ class Reader {
     pagedBuildJobId = 0;
     pagedLayoutSignature = '';
     committedPagedContentSize = null;
+    pagedDocumentDigest = null;
     pagedLayoutCache = new Map();
     pagedLayoutCacheLimit = 2;
     restoreProgressFrame = 0;
@@ -8408,7 +8410,28 @@ class Reader {
             buildCalibrationKey,
             buildGeometrySignature,
         );
-        const cachedLayout = this.takePagedLayoutCacheEntry(layoutCacheKey);
+        let cachedLayout = this.takePagedLayoutCacheEntry(layoutCacheKey);
+        let diskKey = cachedLayout?.diskKey || '';
+        const lookupStarted = performance.now();
+        if (!cachedLayout && layoutCacheKey && this.readerHtml && pageCache.available()) {
+            const scope = this.currentUserId || '';
+            const digest = this.pagedDocumentDigest ||= pageCache.documentDigest([
+                this.readerHtml, this.title, this.seriesLine, this.authorLine, this.coverSrc,
+                this.coverIntrinsicWidth, this.coverIntrinsicHeight,
+            ]);
+            diskKey = pageCache.storageKey(await digest, scope, layoutCacheKey, measureHtml);
+            const pages = await pageCache.readPages(diskKey);
+            if (buildOwnerJobId !== this.pagedBuildJobId || this.pagedBuildInProgress ||
+                digest !== this.pagedDocumentDigest || scope !== (this.currentUserId || '') ||
+                buildSourceKey !== this.readerSourceKey || buildLayoutSignature !== this.getPagedLayoutSignature() ||
+                buildGeometrySignature !== this.getPagedGeometrySignature()) return false;
+            if (pages) {
+                const root = measureHtml.ownerDocument.createElement('div');
+                root.innerHTML = this.readerHtml;
+                this.indexReaderPageFootnotes(root);
+                cachedLayout = {type: 'complete', pages, buildProgressPercent: 100};
+            }
+        }
         if (cachedLayout && cachedLayout.type === 'complete' && Array.isArray(cachedLayout.pages) && cachedLayout.pages.length) {
             this.pagedPages = cachedLayout.pages;
             this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
@@ -8420,10 +8443,14 @@ class Reader {
             this.resetBottomClipCalibrationSample();
             this.noteCompactChromeTotalPages();
             this.rebuildSearchResults(false);
+            if (this.bookPreparing && this.restorePending)
+                this.restoreSavedPagedLocation();
             this.storePagedLayoutCacheEntry(layoutCacheKey, cachedLayout);
             if (this.readerDebugEnabled) {
                 this.readerDebug = Object.assign({}, this.readerDebug, {
-                    paginationStats: Object.assign({}, cachedLayout.stats || {}, {status: 'cached'}),
+                    paginationStats: Object.assign({}, cachedLayout.stats || {}, {
+                        status: 'cached', durationMs: Math.round(performance.now() - lookupStarted),
+                    }),
                 });
             }
             return true;
@@ -8561,6 +8588,7 @@ class Reader {
                 return;
             this.storePagedLayoutCacheEntry(layoutCacheKey, {
                 type: 'partial',
+                diskKey,
                 queue,
                 totalUnits,
                 pages,
@@ -8753,6 +8781,7 @@ class Reader {
                 buildProgressPercent: 100,
                 stats: Object.assign({}, stats, {status: 'done'}),
             });
+            void pageCache.savePages(diskKey, finalPages);
             if (this.readerDebugEnabled)
                 publishStats('done');
             return true;
@@ -9143,6 +9172,7 @@ class Reader {
         );
         this.contents = this.sanitizeContents(this.extractReaderContents(parser));
         this.readerHtml = this.buildReaderHtml(parser);
+        this.pagedDocumentDigest = null;
         this.readerSearchText = this.normalizeReaderSearchText(this.stripHtml(this.readerHtml || '')).toLowerCase();
 
         const emptyProgress = {percent: 0, sectionId: '', pageIndex: 0, textOffset: -1, textSnippet: '', updatedAt: ''};
@@ -9459,40 +9489,9 @@ class Reader {
             return;
         const scroller = this.$refs.scroller;
 
-        if (this.isPagedMode) {
-            const savedPageIndex = Number(this.progress.pageIndex);
-            const textOffset = Number(this.progress.textOffset);
-            const textSnippet = String(this.progress.textSnippet || '').trim();
-            if ((Number.isFinite(textOffset) && textOffset >= 0) || textSnippet) {
-                const textPageIndex = this.findPagedPageIndexByReaderTextAnchor(textSnippet, textOffset, savedPageIndex);
-                if (textPageIndex >= 0) {
-                    this.setCurrentPagedRestorePage(textPageIndex, {
-                        textSnippet,
-                        textOffset,
-                    });
-                    return;
-                }
-            }
-            const progressPercent = Number(this.progress.percent || 0) || 0;
-            if (progressPercent > 0 && progressPercent < 1 && this.totalPagedLogicalPages > 1) {
-                this.setCurrentPagedPage(Math.round((this.totalPagedLogicalPages - 1) * progressPercent), false);
-                return;
-            }
-            if (Number.isFinite(savedPageIndex) && savedPageIndex > 0) {
-                this.setCurrentPagedPage(savedPageIndex, false);
-                return;
-            }
-        }
+        if (this.isPagedMode && this.restoreSavedPagedLocation()) return;
 
         if (this.progress.sectionId) {
-            if (this.isPagedMode) {
-                const pageIndex = this.getPageIndexForSection(this.progress.sectionId);
-                if (pageIndex >= 0) {
-                    this.setCurrentPagedPage(pageIndex, false);
-                    return;
-                }
-            }
-
             const target = scroller.querySelector(`#${this.escapeCssId(this.progress.sectionId)}`);
             if (target) {
                 if (this.isPagedMode)
@@ -9512,6 +9511,39 @@ class Reader {
             scroller.scrollTop = maxScroll * (Number(this.progress.percent || 0) || 0);
             this.updateCurrentSectionFromScroll();
         }
+    }
+
+    restoreSavedPagedLocation() {
+        const savedPageIndex = Number(this.progress.pageIndex);
+        const textOffset = Number(this.progress.textOffset);
+        const textSnippet = String(this.progress.textSnippet || '').trim();
+        if ((Number.isFinite(textOffset) && textOffset >= 0) || textSnippet) {
+            const textPageIndex = this.findPagedPageIndexByReaderTextAnchor(textSnippet, textOffset, savedPageIndex);
+            if (textPageIndex >= 0) {
+                this.setCurrentPagedRestorePage(textPageIndex, {
+                    textSnippet,
+                    textOffset,
+                });
+                return true;
+            }
+        }
+        const progressPercent = Number(this.progress.percent || 0) || 0;
+        if (progressPercent > 0 && progressPercent < 1 && this.totalPagedLogicalPages > 1) {
+            this.setCurrentPagedPage(Math.round((this.totalPagedLogicalPages - 1) * progressPercent), false);
+            return true;
+        }
+        if (Number.isFinite(savedPageIndex) && savedPageIndex > 0) {
+            this.setCurrentPagedPage(savedPageIndex, false);
+            return true;
+        }
+        if (this.progress.sectionId) {
+            const page = this.getPageIndexForSection(this.progress.sectionId);
+            if (page >= 0) {
+                this.setCurrentPagedPage(page, false);
+                return true;
+            }
+        }
+        return false;
     }
 
     scheduleRestoreProgressRetry() {
@@ -10164,6 +10196,10 @@ class Reader {
         ].filter((value) => value.length >= 12);
         if (!needles.length)
             return -1;
+
+        const preferred = this.pagedPages[preferredIndex];
+        if (preferred && this.getHtmlReaderSearchText(preferred.html).includes(needles[0]))
+            return preferredIndex;
 
         let bestIndex = -1;
         let bestMatchLength = 0;

@@ -53,7 +53,7 @@ async function checkDesktopOpening(browser, url, progress) {
                 const live = document.querySelector('.reader-page-sheet--live');
                 const total = Number(/page:\s*\d+\/(\d+)/.exec(debug)?.[1]);
                 const overlay = document.querySelector('.reader-reflow-indicator--strong:not(.reader-reflow-fade-leave-active)');
-                if (live && !overlay && /pagination: building/.test(debug) && total >= 1) {
+                if (live && !overlay && /pagination: (building|cached)/.test(debug) && total >= 1) {
                     window.__opening = {index: Number(live.dataset.pageIndex), text: live.innerText};
                     if (!saved) window.dispatchEvent(new KeyboardEvent('keydown', {key: 'PageDown', cancelable: true}));
                     return;
@@ -72,6 +72,14 @@ async function checkDesktopOpening(browser, url, progress) {
         if (progress.textSnippet) {
             assert(opening.text.includes(progress.textSnippet), 'Restore the saved text before revealing the book');
             assert.equal(index, opening.index);
+            await page.reload();
+            await page.waitForFunction(() => /pagination: cached/.test(document.querySelector('.reader-debug-panel')?.textContent)
+                && !document.querySelector('.reader-reflow-indicator--strong')
+                && document.querySelectorAll('.reader-page-sheet--live').length === 1 && window.__opening);
+            assert.equal(await page.evaluate(() => window.__opening.index), index, 'First visible cached page matches the saved text');
+            const restored = page.locator('.reader-page-sheet--live');
+            assert.equal(Number(await restored.getAttribute('data-page-index')), index);
+            assert((await restored.innerText()).includes(progress.textSnippet), 'Reload restores the saved text from persisted pages');
         } else {
             assert.equal(opening.index, 0);
             assert.equal(index, 1, 'Finishing pagination must preserve an early page turn');

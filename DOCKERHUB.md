@@ -13,7 +13,7 @@ This image is built from the [`AceAsket/inpx-web`](https://github.com/AceAsket/i
 - Built-in FB2 reader with profiles, progress, bookmarks, themes, fonts, Wake Lock and separate PWA mode.
 - Personal reading lists, read/unread marks, OPDS and profile-level OPDS links.
 - Book sending by Telegram and email when configured.
-- Conversion to `epub`, `epub3`, `kepub`, `kfx`, `azw8` and `pdf` in the default image.
+- Conversion to `epub`, `epub3`, `kepub`, `kfx`, `azw3`, `azw8` and `pdf` in the default image.
 - Admin dashboard, event log, backup/restore, source management, health checks and Prometheus metrics.
 
 ## Tags

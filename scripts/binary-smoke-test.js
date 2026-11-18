@@ -362,7 +362,7 @@ async function main() {
         if (requireConverters) {
             delete env.INPX_ENABLE_CONVERSION;
             delete env.INPX_MOBI_ENABLED;
-            if (process.env.INPX_SMOKE_EPUB === 'true') env.INPX_CONVERSION_FORMATS = 'fb2,epub,mobi';
+            if (process.env.INPX_SMOKE_EPUB === 'true') env.INPX_CONVERSION_FORMATS = 'fb2,epub,azw3,mobi';
             else delete env.INPX_CONVERSION_FORMATS;
         }
         child = spawn(command, args, {cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});

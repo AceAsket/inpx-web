@@ -14,8 +14,8 @@ const PUBLICATION: &str = "application/opds-publication+json";
 const ACQUISITION: &str = "http://opds-spec.org/acquisition";
 const IMAGE: &str = "http://opds-spec.org/image";
 const PAGE_SIZE: usize = 100;
-const FORMATS: [&str; 8] = [
-    "fb2", "epub", "epub3", "kepub", "kfx", "azw8", "pdf", "mobi",
+const FORMATS: [&str; 9] = [
+    "fb2", "epub", "epub3", "kepub", "kfx", "azw3", "azw8", "pdf", "mobi",
 ];
 
 #[derive(Deserialize)]
@@ -505,7 +505,7 @@ fn media_type(format: &str) -> String {
         "epub" | "epub3" | "kepub" => "application/epub+zip",
         "mobi" => "application/x-mobipocket-ebook",
         "pdf" => "application/pdf",
-        "kfx" | "azw8" => "application/vnd.amazon.ebook",
+        "kfx" | "azw3" | "azw8" => "application/vnd.amazon.ebook",
         ext if !ext.is_empty()
             && ext.bytes().all(|byte| {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')

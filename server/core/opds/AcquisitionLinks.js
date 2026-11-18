@@ -3,7 +3,7 @@ const {formatSettings} = require('../BookConverter');
 
 const mimeTypes = {
     fb2:'application/fb2+xml', epub:'application/epub+zip', epub3:'application/epub+zip', kepub:'application/epub+zip',
-    mobi:'application/x-mobipocket-ebook', pdf:'application/pdf', kfx:'application/vnd.amazon.ebook', azw8:'application/vnd.amazon.ebook',
+    mobi:'application/x-mobipocket-ebook', pdf:'application/pdf', kfx:'application/vnd.amazon.ebook', azw3:'application/vnd.amazon.ebook', azw8:'application/vnd.amazon.ebook',
 };
 
 function forBook(book, config, profile = {}) {

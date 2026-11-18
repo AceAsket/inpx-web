@@ -15,12 +15,13 @@ const {withFileTransaction} = require('./FilePersistence');
 const pending = new Map();
 const validatedFb2cngConfigs = new Set();
 const conversionCacheSchema = 'v2';
-const targetFormats = new Set(['fb2', 'epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf', 'mobi']);
+const targetFormats = new Set(['fb2', 'epub', 'epub3', 'kepub', 'kfx', 'azw3', 'azw8', 'pdf', 'mobi']);
 const fb2cngFormats = new Map([
     ['epub', 'epub2'],
     ['epub3', 'epub3'],
     ['kepub', 'kepub'],
     ['kfx', 'kfx'],
+    ['azw3', 'azw3'],
     ['azw8', 'azw8'],
 ]);
 const fb2cngOutputExtensions = new Map([
@@ -133,6 +134,22 @@ function readFb2cngArgs(value = []) {
     if (value.some(arg => managed.has(arg.split('=')[0]) || /^-[co].+/.test(arg)))
         throw error('формат, конфиг и пути файлов задаёт приложение; служебные флаги нельзя переопределять через fb2cngArgs.');
     return value.slice();
+}
+
+function fb2cngArgumentsForFormat(value, format) {
+    const args = readFb2cngArgs(value);
+    const result = [];
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (!/^--kfx-compression(?==|$)/.test(arg)) {
+            result.push(arg);
+        } else if (format === 'kfx' || format === 'azw8') {
+            result.push(arg.replace('--kfx-compression', '--compression'));
+        } else if (arg === '--kfx-compression') {
+            i++;
+        }
+    }
+    return result;
 }
 
 function fb2cngConfigError(configPath, message) {
@@ -310,7 +327,7 @@ async function convertWithFb2cng(inputFile, outputFile, format, converterPaths =
 async function convertWithFb2cngIsolated(inputFile, outputFile, format, converterPaths, configInfo, extraArgs, bookTitle) {
     const outputDir = `${outputFile}.fb2cng`;
     const fb2cngFormat = fb2cngFormats.get(format);
-    const conversionArgs = readFb2cngArgs(extraArgs);
+    const conversionArgs = fb2cngArgumentsForFormat(extraArgs, format);
     await validateFb2cngConfig(configInfo, converterPaths);
     let titleConfigDir = '';
     try {

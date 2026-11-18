@@ -140,7 +140,7 @@ module.exports = {
     conversionQueueLimit: 16,
     conversionTimeoutMs: 120000,
     conversionQueueTimeoutMs: 120000,
-    conversionFormats: Array.from(new Set(String(process.env.INPX_CONVERSION_FORMATS || 'fb2,epub,epub3,kepub,kfx,azw8,pdf').split(',')
+    conversionFormats: Array.from(new Set(String(process.env.INPX_CONVERSION_FORMATS || 'fb2,epub,epub3,kepub,kfx,azw3,azw8,pdf').split(',')
         .map(item => item.trim().toLowerCase()).filter(item => item && item !== 'mobi')
         .concat('mobi'))),
     mobiEnabled: true,
@@ -149,7 +149,7 @@ module.exports = {
     converterPaths: {},
     fb2cngArgs: [],
     fb2cngConfigPath: '',
-    fb2cngVersion: process.env.INPX_FB2CNG_VERSION || 'v1.9.0',
+    fb2cngVersion: process.env.INPX_FB2CNG_VERSION || 'v2.1.1',
     bookFilenameTemplate: process.env.INPX_BOOK_FILENAME_TEMPLATE || '',
     bookTitleTemplate: '',
     telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN),

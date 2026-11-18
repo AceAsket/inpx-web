@@ -163,6 +163,7 @@ function testConvertedBookFileNames() {
     assert.strictEqual(bookConverter.getConvertedExtension('epub3'), 'epub');
     assert.strictEqual(bookConverter.getConvertedExtension('kepub'), 'kepub.epub');
     assert.strictEqual(bookConverter.getConvertedExtension('KEPUB'), 'kepub.epub');
+    assert.strictEqual(bookConverter.getConvertedExtension('AzW3'), 'azw3');
     assert.strictEqual(bookConverter.getConvertedExtension('AzW8'), 'azw8');
     assert.strictEqual(bookConverter.getConvertedFileName('Book.fb2', 'kepub'), 'Book.kepub.epub');
     assert.strictEqual(bookConverter.getConvertedFileName('Book.fb2', 'KEPUB'), 'Book.kepub.epub');

@@ -16,7 +16,7 @@
 - Обложки и их кэширование, поддержка WebP и JXL.
 - Чтение FB2 в браузере: темы, шрифты, закладки, заметки, сохранение позиции и отдельный PWA-ярлык читалки.
 - Профили читателей, личные списки, отметки «прочитано», OPDS и персональные OPDS-ссылки.
-- Конвертация в EPUB, EPUB3, KEPUB, KFX, AZW8 и PDF в основном образе через fb2cng и MuPDF.
+- Конвертация в EPUB, EPUB3, KEPUB, KFX, AZW3, AZW8 и PDF в основном образе через fb2cng и MuPDF.
 - Отправка книг в Telegram и по электронной почте при настройке доставки.
 - Панель администратора, журнал событий, резервное копирование и восстановление, управление источниками, health checks и метрики Prometheus.
 
@@ -77,14 +77,14 @@ docker run -d \
 
 ### Имена файлов и заголовки
 
-Основной образ включает fbc **1.9.0**. Добавьте параметры запуска, чтобы получить имя файла и заголовок книги для Kindle вида `02 - Доктор Гарин`:
+Основной образ включает fbc **2.1.1**. Добавьте параметры запуска, чтобы получить имя файла и заголовок книги для Kindle вида `02 - Доктор Гарин`:
 
 ```sh
 -e INPX_BOOK_FILENAME_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}' \
 -e INPX_BOOK_TITLE_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}'
 ```
 
-Номер берётся из каталога. Для книги без номера блок с дефисом исчезнет. Для одного названия используйте `'${TITLE}'`. Первая настройка меняет имя файла, вторая — заголовок внутри EPUB/EPUB3/KEPUB/KFX/AZW8 при конвертации FB2. Без настроек сохраняется прежнее поведение. [Все поля шаблонов и настройки fbc](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
+Номер берётся из каталога. Для книги без номера блок с дефисом исчезнет. Для одного названия используйте `'${TITLE}'`. Первая настройка меняет имя файла, вторая — заголовок внутри EPUB/EPUB3/KEPUB/KFX/AZW3/AZW8 при конвертации FB2. Без настроек сохраняется прежнее поведение. [Все поля шаблонов и настройки fbc](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
 
 ### Озвучка Silero
 
@@ -132,7 +132,7 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 - Cover extraction and caching, including WebP and JXL support.
 - Browser-based FB2 reading with themes, fonts, bookmarks, notes, saved positions and a dedicated reader PWA shortcut.
 - Reader profiles, personal lists, read/unread marks, OPDS and profile-specific OPDS links.
-- Conversion to EPUB, EPUB3, KEPUB, KFX, AZW8 and PDF in the main image using fb2cng and MuPDF.
+- Conversion to EPUB, EPUB3, KEPUB, KFX, AZW3, AZW8 and PDF in the main image using fb2cng and MuPDF.
 - Send books through Telegram or email when delivery is configured.
 - Admin dashboard, event log, backup/restore, source management, health checks and Prometheus metrics.
 
@@ -193,14 +193,14 @@ These are `docker run` options; insert them before the image name. Reindex after
 
 ### Filenames and book titles
 
-The main image includes fbc **1.9.0**. Add these launch options to get a filename and Kindle book title such as `02 - Доктор Гарин`:
+The main image includes fbc **2.1.1**. Add these launch options to get a filename and Kindle book title such as `02 - Доктор Гарин`:
 
 ```sh
 -e INPX_BOOK_FILENAME_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}' \
 -e INPX_BOOK_TITLE_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}'
 ```
 
-The series number comes from the catalogue. The number and separator disappear for unnumbered books. Use `'${TITLE}'` for the title alone. The first option changes download filenames; the second changes internal EPUB/EPUB3/KEPUB/KFX/AZW8 titles when converting FB2. Existing behavior is preserved when these options are unset. [Template fields and fbc settings](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
+The series number comes from the catalogue. The number and separator disappear for unnumbered books. Use `'${TITLE}'` for the title alone. The first option changes download filenames; the second changes internal EPUB/EPUB3/KEPUB/KFX/AZW3/AZW8 titles when converting FB2. Existing behavior is preserved when these options are unset. [Template fields and fbc settings](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
 
 ### Silero speech
 

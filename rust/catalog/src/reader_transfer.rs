@@ -541,6 +541,7 @@ pub(super) fn format(value: &Value) -> &'static str {
         "epub3" => "epub3",
         "kepub" => "kepub",
         "kfx" => "kfx",
+        "azw3" => "azw3",
         "azw8" => "azw8",
         "pdf" => "pdf",
         "mobi" => "mobi",

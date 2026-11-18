@@ -18,6 +18,7 @@ const formats = {
     epub3: ['epub','application/epub+zip'],
     kepub: ['kepub.epub','application/epub+zip'],
     kfx: ['kfx','application/vnd.amazon.ebook'],
+    azw3: ['azw3','application/vnd.amazon.ebook'],
     azw8: ['azw8','application/vnd.amazon.ebook'],
     mobi: ['mobi','application/x-mobipocket-ebook'],
     pdf: ['pdf','application/pdf'],
@@ -83,10 +84,18 @@ function pdf(bytes) {
     assert.match(bytes.subarray(-32).toString(),/%%EOF/);
 }
 
+function azw3(bytes) {
+    assert.equal(bytes.toString('ascii',60,68),'BOOKMOBI');
+    const first = bytes.readUInt32BE(78);
+    assert.equal(bytes.toString('ascii',first+16,first+20),'MOBI');
+    assert.equal(bytes.readUInt32BE(first+36),8);
+}
+
 async function checkPackagedConversions(base, uid, directory) {
     await epub(await download(base, uid, 'epub'), directory, 'installed');
+    azw3(await download(base, uid, 'azw3'));
     await mobi(await download(base, uid, 'mobi'), directory, 'installed');
-    console.log('ok installed Rust HTTP server converted FB2 to valid EPUB and dual MOBI');
+    console.log('ok installed Rust HTTP server converted FB2 to valid EPUB, AZW3 and dual MOBI');
 }
 
 async function conversionEpub(directory) {
@@ -153,17 +162,19 @@ async function verify(base, relay, directory, container) {
         const [first, duplicate] = await Promise.all([get('epub'),get('epub')]);
         assert.deepEqual(first,duplicate);
         assert(require('he').decode(await epub(first,directory,'epub')).includes(renderedTitle));
-        for (const format of ['epub3','kepub','kfx','azw8']) {
+        for (const format of ['epub3','kepub','kfx','azw3','azw8']) {
             const bytes = await get(format);
             assert(bytes.length>100);
+            if (format==='azw3') azw3(bytes);
             if (format==='epub3'||format==='kepub') await epub(bytes,directory,format);
         }
         assert((await get('epub3',await find('EPUB original'))).length>100);
         const source = await find('EPUB for conversion');
+        azw3(await get('azw3',source));
         const converted = await docker('exec',container,'sh','-ec',
             'find /data/public-files -name "*.fbc-v1-epub-*.epub" | wc -l');
         assert.equal(Number(converted),1);
-        console.log('ok fb2cng EPUB, EPUB3, KEPUB, KFX, AZW8, EPUB source and shared cache');
+        console.log('ok fb2cng EPUB, EPUB3, KEPUB, KFX, AZW3, AZW8, EPUB source and shared cache');
 
         const [fb2Mobi, sameMobi, fb2Pdf] = await Promise.all([get('mobi'),get('mobi'),get('pdf')]);
         await mobi(fb2Mobi,directory,'from-fb2');

@@ -26,6 +26,7 @@ pub enum Format {
     Epub3,
     Kepub,
     Kfx,
+    Azw3,
     Azw8,
     Mobi,
     Pdf,
@@ -38,6 +39,7 @@ impl Format {
             Self::Epub3 => "epub3",
             Self::Kepub => "kepub",
             Self::Kfx => "kfx",
+            Self::Azw3 => "azw3",
             Self::Azw8 => "azw8",
             Self::Mobi => "mobi",
             Self::Pdf => "pdf",
@@ -53,11 +55,12 @@ impl Format {
     }
 }
 
-const FORMATS: [Format; 7] = [
+const FORMATS: [Format; 8] = [
     Format::Epub,
     Format::Epub3,
     Format::Kepub,
     Format::Kfx,
+    Format::Azw3,
     Format::Azw8,
     Format::Mobi,
     Format::Pdf,
@@ -454,11 +457,18 @@ impl Fb2cng {
         } else {
             format.name()
         };
-        command
-            .args(["convert", "--to", argument, "--overwrite"])
-            .args(&self.arguments)
-            .arg(input)
-            .arg(&output);
+        command.args(["convert", "--to", argument, "--overwrite"]);
+        let mut arguments = self.arguments.iter();
+        while let Some(arg) = arguments.next() {
+            if arg.split('=').next() != Some("--kfx-compression") {
+                command.arg(arg);
+            } else if matches!(format, Format::Kfx | Format::Azw8) {
+                command.arg(arg.replacen("--kfx-compression", "--compression", 1));
+            } else if arg == "--kfx-compression" {
+                arguments.next();
+            }
+        }
+        command.arg(input).arg(&output);
         run(command, deadline)?;
         let suffix = format!(".{}", format.extension());
         let mut found = None;

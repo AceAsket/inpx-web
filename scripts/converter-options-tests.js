@@ -86,7 +86,7 @@ async function testFb2cngArgumentsReachConversionAndSeparateCache() {
         assert.notStrictEqual(prepared.filePath, plain.filePath);
         assert.strictEqual(await fs.readFile(prepared.filePath, 'utf8'), 'converted');
         assert.deepStrictEqual(calls[0], {command: '/custom path/fbc', args: ['--config', configPath, 'dumpconfig']});
-        assert.deepStrictEqual(calls[1].args.slice(0, -2), ['--config', configPath, 'convert', '--to', 'epub2', '--overwrite', ...fb2cngArgs]);
+        assert.deepStrictEqual(calls[1].args.slice(0, -2), ['--config', configPath, 'convert', '--to', 'epub2', '--overwrite', '--no-cover']);
         assert.strictEqual(calls[1].args.at(-2), inputFile);
         assert.strictEqual((await converter.prepareConvertedFile(custom)).created, false);
         assert.strictEqual(calls.length, 2, 'Identical options must reuse the completed conversion');

@@ -101,7 +101,7 @@ async function testMobiPipelineUsesOneSlotAndCachesValidatedOutput() {
 async function testMobiCacheIncludesBothConvertersAndMetadata() {
     const converter = require('../server/core/BookConverter');
     const options = {cacheBasePath:'cache', sourceFileName:'book.fb2', format:'mobi',
-        book:{title:'Книга', serno:2}, config:{mobiEnabled:true, fb2cngVersion:'v1.9.0', kindlingVersion:'v0.45.6', bookTitleTemplate:'${NUMBER_PADDED} - ${TITLE}'}};
+        book:{title:'Книга', serno:2}, config:{mobiEnabled:true, fb2cngVersion:'v2.1.1', kindlingVersion:'v0.45.6', bookTitleTemplate:'${NUMBER_PADDED} - ${TITLE}'}};
     const original = await converter.getConversionCacheInfo(options);
     assert.strictEqual(original.bookTitle, '02 - Книга');
     for (const overrides of [{kindlingVersion:'next'}, {kindlingPath:'/other'}, {fb2cngVersion:'next'}, {fb2cngArgs:['--no-cover']}, {bookTitleTemplate:'${TITLE}'}])
