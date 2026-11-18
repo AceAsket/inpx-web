@@ -185,14 +185,15 @@ async function testBackgroundLibraryWorkWaitsForUser() {
     // the book preparation inside them does not stop other background work.
     const resourceRuntime = require('../server/core/ResourceRuntime');
     let active = 0, maxActive = 0;
-    await Promise.all(Array.from({length: 5}, () => worker.runBackground(async() => {
+    const requests = 5;
+    await Promise.all(Array.from({length: requests}, () => worker.runBackground(async() => {
         assert.ok(resourceRuntime.isBackground());
         await worker.runForeground(async() => {});
         maxActive = Math.max(maxActive, ++active);
         await new Promise(resolve => setTimeout(resolve, 5));
         active--;
     })));
-    assert.strictEqual(maxActive, resourceRuntime.settings.limits.background);
+    assert.strictEqual(maxActive, Math.min(requests, resourceRuntime.settings.limits.background));
     assert.strictEqual(worker.foregroundJobs, 0);
 }
 
