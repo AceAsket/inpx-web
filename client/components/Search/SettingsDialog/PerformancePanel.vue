@@ -15,10 +15,10 @@
             {{ error }}
         </div>
         <template v-if="info">
-            <h3 class="performance-section-title">{{ info.settings.native ? 'Показатели сервера' : 'Действует на сервере' }}</h3>
-            <div v-if="!info.settings.native" class="performance-active" data-testid="performance-active">
+            <h3 class="performance-section-title">Действует на сервере</h3>
+            <div class="performance-active" data-testid="performance-active">
                 <strong>{{ profileName(info.settings.selected) }}</strong>
-                <span>Всего {{ info.settings.limits.total }} · изображения {{ info.settings.limits.images }} · архивы {{ info.settings.limits.reviews }} · конвертация {{ info.settings.limits.conversions }}</span>
+                <span>Всего {{ info.settings.limits.total }} · изображения {{ info.settings.limits.images }} · архивы {{ info.settings.limits.reviews }} · конвертация {{ info.settings.limits.conversions }} · фон {{ info.settings.limits.background }}</span>
             </div>
             <div class="performance-stats">
                 <span>Доступно CPU: <b>{{ number(info.machine.cpu) }}</b></span>
@@ -152,7 +152,7 @@
                     {{ warning }}
                 </div>
             </details>
-            <details v-if="selected !== 'compare' && !info.settings.native" class="performance-details">
+            <details v-if="selected !== 'compare'" class="performance-details">
                 <summary>Параметры следующего запуска · {{ profileName(selected) }}</summary>
                 <pre>{{ compose }}</pre>
                 <div class="performance-copy">
@@ -163,7 +163,7 @@
                     Добавьте параметры к текущему запуску и пересоздайте контейнер. Проверка сама настройки не применяет.
                 </div>
             </details>
-            <div v-else-if="!info.settings.native" class="performance-muted performance-recommendation-note">Для параметров запуска выберите один режим или свои значения. Сервер продолжает работать с текущими лимитами.</div>
+            <div v-else class="performance-muted performance-recommendation-note">Для параметров запуска выберите один режим или свои значения. Сервер продолжает работать с текущими лимитами.</div>
         </template>
         <div v-else-if="!error" class="performance-muted" role="status">
             Загрузка показателей…

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::book_archive::{Directory, Failure, extract_input, input_directory};
-use crate::book_conversion::{Tool, configured, run};
+use crate::book_conversion::{Queue, Tool, configured, run};
 use crate::book_delivery::Book;
 use crate::book_source::{cover_inputs, open_within, within};
 use crate::directory_diagnostics::ordered_entries;
@@ -36,6 +36,7 @@ pub fn reader_lab_source(library: &Path, requested: &str) -> io::Result<File> {
 
 pub struct Covers {
     archives: Mutex<Option<Arc<Archives>>>,
+    decoders: Queue,
     webp: Option<Tool>,
     jxl: Option<Tool>,
 }
@@ -67,10 +68,11 @@ impl std::fmt::Display for MissingDecoder {
 impl std::error::Error for MissingDecoder {}
 
 impl Covers {
-    pub fn new(exec: &Path, config: &Value) -> Self {
+    pub fn new(exec: &Path, config: &Value, images: usize, queue_timeout: Duration) -> Self {
         let paths = &config["converterPaths"];
         Self {
             archives: Mutex::new(None),
+            decoders: Queue::with_limits(images, 16, queue_timeout),
             webp: Tool::find(exec, "dwebp", &configured(paths, &["dwebp", "webp"])),
             jxl: Tool::find(exec, "djxl", &configured(paths, &["djxl", "jxl"])),
         }
@@ -179,6 +181,8 @@ impl Covers {
         };
         let tool = tool.ok_or(MissingDecoder)?;
         let temp = tempfile::tempdir_in(cache)?;
+        // Cover decoding can also be reached from book preparation and gallery requests.
+        let _decoder = self.decoders.enter(temp.path())?;
         let input = temp.path().join(format!("cover.{extension}"));
         let output = temp.path().join("cover.png");
         fs::write(&input, bytes)?;

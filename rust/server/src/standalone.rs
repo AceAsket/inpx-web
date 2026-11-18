@@ -61,6 +61,8 @@ mod metrics;
 mod profile_http;
 #[path = "standalone_remote.rs"]
 pub(crate) mod remote;
+#[path = "standalone_resources.rs"]
+pub(crate) mod resources;
 #[path = "standalone_settings.rs"]
 mod settings;
 #[path = "standalone_smtp.rs"]
@@ -81,6 +83,7 @@ const NAME: &str = "inpx-web";
 
 struct State {
     started: Instant,
+    resources: Arc<resources::Budget>,
     index: index::Index,
     settings: settings::Settings,
     admin_cache: admin_cache::Cache,
@@ -211,7 +214,9 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     let remote = remote::Remote::new(&config, &data)?.map(Arc::new);
     let kosync_enabled = std::env::var("INPX_KOSYNC_ENABLED").as_deref() != Ok("false");
     let epub_reader = epub_reader(&config);
-    let conversion = Conversion::new(&config, exec_dir)?;
+    let (cpu, memory) = diagnostics::hardware();
+    let resources = Arc::new(resources::Budget::new(cpu, memory, &config)?);
+    let conversion = Conversion::new(&config, exec_dir, resources.selected.limits.conversions)?;
     let conversion_formats: Vec<_> = epub_reader
         .then_some("fb2")
         .into_iter()
@@ -316,11 +321,16 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     let downloads = Downloads::new(
         &data,
         prefix,
-        env("INPX_BOOK_FILENAME_TEMPLATE").unwrap_or_default(),
+        resources.clone(),
         epub_reader,
         conversion,
         remote,
-        inpx_catalog::legacy_library_files::Covers::new(exec_dir, &config),
+        inpx_catalog::legacy_library_files::Covers::new(
+            exec_dir,
+            &config,
+            resources.selected.limits.images,
+            resources.timeout,
+        ),
     )?;
     let listener = TcpListener::bind((host, port)).await?;
     let speech = speech::Speech::new(&data, prefix, &config)?;
@@ -333,6 +343,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         &conversion_formats,
         !access.library.protected(),
         speech.enabled(),
+        resources.selected.limits.reviews,
     );
     let metadata = metadata::Routes::new(prefix);
     let exchange = exchange::Exchange::new(&config);
@@ -363,7 +374,8 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         batch,
         delivery,
         downloads,
-        download_slots: Arc::new(Semaphore::new(4)),
+        download_slots: Arc::new(Semaphore::new(resources.selected.limits.total.max(4))),
+        resources,
         kosync: kosync::Routes::new(prefix, kosync_enabled),
         request_access,
         metadata,
@@ -568,6 +580,14 @@ impl State {
     }
 
     fn refresh_index(&self, sources: Arc<Vec<inpx_catalog::library_sources::Source>>, force: bool) {
+        let _permit = match self.resources.acquire(resources::Kind::Background) {
+            Ok(permit) => permit,
+            Err(error) => {
+                self.index
+                    .failed(error.as_ref(), "Индексация не получила ресурсы");
+                return;
+            }
+        };
         if let Some(remote) = self.downloads.remote()
             && let Err(error) = remote.sync_inpx()
         {

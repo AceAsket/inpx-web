@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{Job, SOURCE_CHANGED, State, integer, percentile, process, timestamp};
+use crate::standalone::resources::{Budget, Limits, Profile as Candidate};
 use crate::standalone_access::BrowserProfileRequest;
 
 const MIB: u64 = 1024 * 1024;
@@ -28,23 +29,9 @@ pub(super) struct Benchmark {
     job: Mutex<Option<Arc<Job>>>,
 }
 
-#[derive(Clone)]
-struct Candidate {
-    id: &'static str,
-    name: &'static str,
-    total: usize,
-    archives: usize,
-    contents: usize,
-}
-
-impl Candidate {
-    fn limits(&self) -> Value {
-        json!({"total":self.total,"images":1,"reviews":self.archives,"conversions":self.contents,"background":1})
-    }
-
-    fn view(&self) -> Value {
-        json!({"id":self.id,"name":self.name,"limits":self.limits()})
-    }
+pub(in crate::standalone) fn hardware() -> (usize, Option<u64>) {
+    let machine = Machine::sample();
+    (machine.cpu, machine.limit)
 }
 
 struct Machine {
@@ -142,48 +129,25 @@ impl Machine {
 struct Settings {
     enabled: bool,
     timeout: u64,
-    hard_max: usize,
-    automatic: &'static str,
-    candidates: [Candidate; 3],
+    budget: Arc<Budget>,
 }
 
 impl Settings {
-    fn new(machine: &Machine) -> Self {
-        let hard_max = environment_number("INPX_RESOURCE_MAX_PROCESSES", 8).clamp(1, 16) as usize;
-        let automatic = if machine.cpu < 2 || machine.limit.is_some_and(|limit| limit < 768 * MIB) {
-            "economy"
-        } else if machine.cpu >= 6 && machine.limit.is_some_and(|limit| limit >= 4096 * MIB) {
-            "performance"
-        } else {
-            "balanced"
-        };
-        let candidates = [
-            ("economy", "Бережный", 2, 2, 1),
-            ("balanced", "Сбалансированный", 4, 4, 2),
-            ("performance", "Производительный", 6, 6, 3),
-        ]
-        .map(|(id, name, total, archives, contents)| Candidate {
-            id,
-            name,
-            total: total.min(hard_max),
-            archives: archives.min(hard_max),
-            contents: contents.min(hard_max),
-        });
+    fn new(budget: &Arc<Budget>) -> Self {
         Self {
             enabled: std::env::var("INPX_RESOURCE_BENCH_ENABLED").as_deref() != Ok("false"),
             timeout: environment_number("INPX_RESOURCE_BENCH_TIMEOUT_MS", 60000)
                 .clamp(10000, 180000),
-            hard_max,
-            automatic,
-            candidates,
+            budget: budget.clone(),
         }
     }
 
     fn select(&self, mode: &str, options: &Value) -> Result<Vec<Candidate>> {
         match mode {
-            "compare" => Ok(self.candidates.to_vec()),
+            "compare" => Ok(self.budget.profiles.to_vec()),
             "profile" => Ok(vec![
-                self.candidates
+                self.budget
+                    .profiles
                     .iter()
                     .find(|item| options["profileId"] == item.id)
                     .ok_or("Выберите стандартный профиль для проверки")?
@@ -198,14 +162,18 @@ impl Settings {
                         Err(format!("Укажите целый лимит {field} от 1 до {max}").into())
                     }
                 };
-                let total = value("total", self.hard_max)?;
-                value("images", total)?;
+                let total = value("total", self.budget.hard_max)?;
+                let images = value("images", total)?;
                 Ok(vec![Candidate {
                     id: "custom",
                     name: "Свои значения",
-                    total,
-                    archives: value("reviews", total)?,
-                    contents: value("conversions", total)?,
+                    limits: Limits {
+                        total,
+                        images,
+                        reviews: value("reviews", total)?,
+                        conversions: value("conversions", total)?,
+                        background: 1,
+                    },
                 }])
             }
             _ => Err("Неизвестный режим проверки".into()),
@@ -213,14 +181,10 @@ impl Settings {
     }
 
     fn view(&self) -> Value {
-        let default = self
-            .candidates
-            .iter()
-            .find(|item| item.id == self.automatic)
-            .expect("automatic profile");
-        json!({"native":true,"requested":"auto","selected":self.automatic,"automatic":self.automatic,
-            "limits":default.limits(),"hardMax":self.hard_max,"profiles":self.candidates.iter().map(Candidate::view).collect::<Vec<_>>(),
-            "benchmarkEnabled":self.enabled,"benchmarkTimeoutMs":self.timeout,"launchEnv":{}})
+        let policy = &self.budget;
+        json!({"native":true,"requested":policy.requested,"selected":policy.selected.id,"automatic":policy.automatic,
+            "limits":policy.selected.limits,"hardMax":policy.hard_max,"profiles":policy.profiles,
+            "benchmarkEnabled":self.enabled,"benchmarkTimeoutMs":self.timeout,"launchEnv":policy.launch_env})
     }
 }
 
@@ -265,11 +229,11 @@ impl Benchmark {
 
     pub(super) fn snapshot(&self, state: &State) -> Result<Value> {
         let machine = Machine::sample();
-        let settings = Settings::new(&machine);
+        let settings = Settings::new(&state.resources);
         let sources = state.index.sources();
         let mut report = self.report.lock().expect("benchmark report").clone();
         let mut recommendation = provisional(
-            settings.automatic,
+            settings.budget.automatic,
             "Предварительная оценка по доступным ресурсам. Для замера выберите источник.",
         );
         let mut cache = json!({"available":false,"error":"Каталог недоступен"});
@@ -295,7 +259,7 @@ impl Benchmark {
                 report["stale"] = stale.into();
                 recommendation = if stale {
                     provisional(
-                        settings.automatic,
+                        settings.budget.automatic,
                         "Условия замера изменились. Повторите проверку.",
                     )
                 } else {
@@ -306,7 +270,7 @@ impl Benchmark {
         let process_cpu = process::cpu()
             .map(|(user, system)| json!({"user":user*1_000_000.0,"system":system*1_000_000.0}));
         Ok(
-            json!({"settings":settings.view(),"machine":machine.view(),"runtime":super::super::tasks::resources(state,"",true),
+            json!({"settings":settings.view(),"machine":machine.view(),"runtime":state.resources.runtime(),
             "sources":sources.iter().filter(|source| !source.lib_dir.as_os_str().is_empty())
                 .map(|source| json!({"id":source.id,"name":source.name})).collect::<Vec<_>>(),
             "job":self.view(),"report":report,"recommendation":recommendation,"databaseCache":cache,
@@ -320,8 +284,7 @@ impl Benchmark {
         owner: BrowserProfileRequest<'_>,
         options: &Value,
     ) -> Result<Value> {
-        let machine = Machine::sample();
-        let settings = Settings::new(&machine);
+        let settings = Settings::new(&state.resources);
         if !settings.enabled {
             return Err("Проверка отключена параметром INPX_RESOURCE_BENCH_ENABLED".into());
         }
@@ -348,7 +311,7 @@ impl Benchmark {
         let job = Job::new(
             owner,
             json!({"progress":0,"stage":"Подготовка образцов","startedAt":timestamp(),
-            "sourceName":sources[source].name,"mode":mode,"candidates":candidates.iter().map(Candidate::view).collect::<Vec<_>>()}),
+            "sourceName":sources[source].name,"mode":mode,"candidates":candidates}),
         )?;
         job.owner.authorize(state)?;
         let initial = job.view();
@@ -472,7 +435,7 @@ impl Run<'_> {
             "measuredAt":timestamp(),"source":{"id":source.id,"name":source.name},
             "fingerprint":fingerprint(source,generation,&machine,settings),"machine":machine.view(),"rows":rows,
             "coverage":coverage,"warnings":warnings,"confidence":"partial",
-            "recommendation":provisional(settings.automatic,"Замер охватывает чтение источника и отклик каталога. Серверные лимиты выбираются по общей нагрузке.")}),
+            "recommendation":provisional(settings.budget.automatic,"Замер охватывает чтение источника и отклик каталога. Серверные лимиты выбираются по общей нагрузке.")}),
         )
     }
 
@@ -560,19 +523,13 @@ impl Run<'_> {
         for round in 0..ROUNDS {
             self.check()?;
             let begin = Instant::now();
-            probe.push(self.round(
-                source,
-                files,
-                false,
-                candidate.archives.min(candidate.total),
-                uid,
-            )?);
+            probe.push(self.round(source, files, false, candidate.limits.reviews, uid)?);
             if !contents.is_empty() {
                 probe.push(self.round(
                     source,
                     contents,
                     true,
-                    candidate.contents.min(candidate.total),
+                    candidate.limits.conversions,
                     uid,
                 )?);
             }
@@ -621,7 +578,7 @@ impl Run<'_> {
         let first = rounds[0];
         let repeat = rounds[1];
         Ok(
-            json!({"profile":candidate.id,"limits":candidate.limits(),"completed":true,
+            json!({"profile":candidate.id,"limits":candidate.limits,"completed":true,
             "firstPassMs":first,"repeatPassMs":repeat,"elapsedMs":percentile(&mut rounds[1..],0.5),"rounds":ROUNDS,
             "totalDurationMs":elapsed,"tasksPerPass":ITEMS*(if contents.is_empty(){1}else{2}),"tasksPerStage":ITEMS,
             "probeP95Ms":percentile(&mut probe,0.95),"probeSamples":probe.len(),"probeTimeouts":timeouts,"probeFailures":0,
@@ -648,6 +605,16 @@ impl Run<'_> {
                     thread.spawn(move || {
                         let mut reader = book_audit::Reader::default();
                         for index in (offset..ITEMS).step_by(width) {
+                            self.check().map_err(|error| error.to_string())?;
+                            let _permit = self
+                                .state
+                                .resources
+                                .acquire(if deep {
+                                    crate::standalone::resources::Kind::Conversions
+                                } else {
+                                    crate::standalone::resources::Kind::Archives
+                                })
+                                .map_err(|error| error.to_string())?;
                             self.check().map_err(|error| error.to_string())?;
                             let row = &samples[index % samples.len()];
                             let outcome = reader
@@ -697,7 +664,9 @@ fn fingerprint(
         generation,
         machine.cpu,
         machine.limit,
-        settings.hard_max,
+        settings.budget.selected,
+        settings.budget.profiles,
+        settings.budget.hard_max,
         settings.timeout
     ]);
     Sha256::digest(data.to_string())

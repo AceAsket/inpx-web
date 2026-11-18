@@ -104,6 +104,9 @@ fn run(state: &State, job: &Job, generation: u64, deep: bool) -> Result<()> {
     let mut reader = book_audit::Reader::default();
     loop {
         job.ensure(state, generation)?;
+        let _permit = state
+            .resources
+            .acquire(crate::standalone::resources::Kind::Background)?;
         let (rows, next) = {
             let catalogue = state.index.catalogue.read().expect("open catalogue");
             catalogue

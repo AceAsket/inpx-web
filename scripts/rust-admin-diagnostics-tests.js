@@ -221,7 +221,8 @@ async function browser(base) {
         await page.locator('.profile-bottom .profile-logout').waitFor();
         await page.locator('.library-shell__header').getByRole('button',{name:'Настройки библиотеки',exact:true}).click();
         await page.getByRole('button',{name:/^Администрирование/}).click();
-        await page.getByRole('heading',{name:'Показатели сервера'}).waitFor();
+        await page.getByRole('heading',{name:'Действует на сервере'}).waitFor();
+        await page.getByTestId('performance-active').waitFor();
         await page.getByTestId('performance-result').waitFor();
         await page.getByText('RSS Rust:',{exact:false}).waitFor();
         await page.getByTestId('performance-start').click();

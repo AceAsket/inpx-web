@@ -108,7 +108,7 @@ enum Pdf {
 }
 
 impl Conversion {
-    pub fn new(config: &Value, exec_dir: &Path) -> Result<Option<Self>> {
+    pub fn new(config: &Value, exec_dir: &Path, concurrency: usize) -> Result<Option<Self>> {
         let enabled = std::env::var("INPX_ENABLE_CONVERSION")
             .map_or(config["conversionEnabled"] != false, |value| {
                 value != "false"
@@ -191,7 +191,7 @@ impl Conversion {
                 "conversionTimeoutMs",
                 120_000,
             ),
-            queue: Queue::new(config),
+            queue: Queue::new(config, concurrency),
         }))
     }
 
@@ -211,12 +211,13 @@ impl Conversion {
             && (source.eq_ignore_ascii_case("fb2") || source.eq_ignore_ascii_case("epub"))
     }
 
-    pub fn convert(
+    pub fn convert<P>(
         &self,
         cache: &Path,
         book: &Book,
         cached: &Cached,
         format: Format,
+        acquire: impl FnOnce() -> Result<P>,
     ) -> Result<PathBuf> {
         let source = book
             .extension()
@@ -273,6 +274,7 @@ impl Conversion {
             drop(ticket);
             return Ok(target);
         }
+        let _permit = acquire()?;
         let deadline = Instant::now() + self.timeout;
         let directory = workspace(cache)?;
         let dir = directory.path();
@@ -699,7 +701,7 @@ fn milliseconds(config: &Value, variables: &[&str], key: &str, default: u64) -> 
     Duration::from_millis(limit(config, variables, key, default).clamp(1_000, 3_600_000))
 }
 
-struct Queue {
+pub(crate) struct Queue {
     active: Mutex<(HashSet<PathBuf>, usize)>,
     changed: Condvar,
     limit: usize,
@@ -707,20 +709,13 @@ struct Queue {
     timeout: Duration,
 }
 
-struct Ticket<'a> {
+pub(crate) struct Ticket<'a> {
     queue: &'a Queue,
     path: &'a Path,
 }
 
 impl Queue {
-    fn new(config: &Value) -> Self {
-        let concurrency = limit(
-            config,
-            &["INPX_RESOURCE_CONVERSIONS", "INPX_CONVERSION_CONCURRENCY"],
-            "conversionConcurrency",
-            2,
-        )
-        .clamp(1, 16) as usize;
+    fn new(config: &Value, concurrency: usize) -> Self {
         let max_waiting = limit(
             config,
             &["INPX_CONVERSION_QUEUE_LIMIT"],
@@ -728,21 +723,26 @@ impl Queue {
             16,
         )
         .min(256) as usize;
+        let timeout = milliseconds(
+            config,
+            &["INPX_CONVERSION_QUEUE_TIMEOUT_MS"],
+            "conversionQueueTimeoutMs",
+            120_000,
+        );
+        Self::with_limits(concurrency, max_waiting, timeout)
+    }
+
+    pub(crate) fn with_limits(concurrency: usize, max_waiting: usize, timeout: Duration) -> Self {
         Self {
             active: Mutex::default(),
             changed: Condvar::new(),
             limit: concurrency,
             max_waiting,
-            timeout: milliseconds(
-                config,
-                &["INPX_CONVERSION_QUEUE_TIMEOUT_MS"],
-                "conversionQueueTimeoutMs",
-                120_000,
-            ),
+            timeout,
         }
     }
 
-    fn enter<'a>(&'a self, path: &'a Path) -> Result<Ticket<'a>> {
+    pub(crate) fn enter<'a>(&'a self, path: &'a Path) -> Result<Ticket<'a>> {
         let mut state = self
             .active
             .lock()

@@ -1994,6 +1994,23 @@ async function verifyCacheSettings(binary, root) {
     console.log('ok cache environment defaults, file rotation and live Prometheus limits');
 }
 
+async function verifyResourceProfiles(binary, root) {
+    if (process.platform === 'win32') return;
+    const probe = require('./rust-resource-profile-tests');
+    const library = join(root,'library'), web = join(root,'web.json');
+    await createFixture(library,{nativeJxlCover:true});
+    await bundle(web);
+    for (const [profile, total, expected] of [['economy',6,1],['performance',6,3],['performance',1,1]]) {
+        const dir = join(root,profile+'-'+total);
+        await probe.fixture(dir);
+        const server = await start(binary,['--standalone','--host=127.0.0.1','--data-dir='+dir,
+            '--config='+join(dir,'config.json'),'--lib-dir='+library,'--web-bundle='+web,'--admin-password='+probe.password],
+        {INPX_RESOURCE_PROFILE:profile,INPX_RESOURCE_TOTAL:String(total),INPX_RESOURCE_MAX_PROCESSES:'6'});
+        try { await probe.verify(server.url, dir, profile, expected); }
+        finally { await server.stop(); }
+    }
+}
+
 async function verifyReaderTransfer(binary, root) {
     const library = join(root,'library'), data = join(root,'data');
     await fs.mkdir(library,{recursive:true});
@@ -2477,6 +2494,7 @@ async function verifyJembaUpgrade(binary, root) {
         await verifyReaderTransfer(binary,join(root,'reader-transfer'));
         await verifyProfileCommands(binary,join(root,'profile-commands'));
         await verifyCacheSettings(binary,join(root,'cache-settings'));
+        await verifyResourceProfiles(binary,join(root,'resource-profiles'));
         await verifyMobileEvents(binary,join(root,'mobile-events'));
         await verifyJembaUpgrade(binary,join(root,'jemba-upgrade'));
     }

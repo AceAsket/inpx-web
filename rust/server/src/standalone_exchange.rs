@@ -254,6 +254,9 @@ impl Exchange {
     }
 
     fn load_rating_index(&self, state: &State) -> Result<Arc<RatingIndex>> {
+        let _permit = state
+            .resources
+            .acquire(super::resources::Kind::Background)?;
         if let Some(remote) = state.downloads.remote() {
             let ratings =
                 remote.ratings(|done| self.ratings.lock().expect("rating status").done = done)?;

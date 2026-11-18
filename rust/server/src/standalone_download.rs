@@ -16,12 +16,14 @@ use serde_json::{Value, json};
 use crate::download;
 use crate::http::{Body, body, error};
 use crate::standalone::remote::{Remote, Unavailable};
+use crate::standalone::resources::{Budget, Kind};
 use crate::standalone_access::Access;
 
 pub(crate) struct Downloads {
     root: String,
     cache: PathBuf,
     template: String,
+    resources: Arc<Budget>,
     cover_root: String,
     pub(super) covers: Covers,
     local_books: book_delivery::LocalBooks,
@@ -47,6 +49,13 @@ enum Format {
 }
 
 impl Format {
+    fn resource(self) -> Kind {
+        match self {
+            Self::Converted(_) | Self::Fb2 => Kind::Conversions,
+            _ => Kind::Archives,
+        }
+    }
+
     fn segment(self) -> &'static str {
         match self {
             Self::Raw => "raw",
@@ -79,7 +88,7 @@ impl Downloads {
     pub(crate) fn new(
         data: &Path,
         prefix: &str,
-        template: String,
+        resources: Arc<Budget>,
         epub: bool,
         conversions: Option<Conversion>,
         remote: Option<Arc<Remote>>,
@@ -89,7 +98,8 @@ impl Downloads {
         Ok(Self {
             root: format!("{prefix}/book"),
             cache: book_delivery::cache_directory(data)?,
-            template,
+            template: std::env::var("INPX_BOOK_FILENAME_TEMPLATE").unwrap_or_default(),
+            resources,
             cover_root: format!("{prefix}/cover/by-uid"),
             covers,
             local_books: Default::default(),
@@ -136,6 +146,7 @@ impl Downloads {
     }
 
     pub(super) fn ebook_text(&self, book: &Book, sources: &[Source]) -> CatalogueResult<Vec<u16>> {
+        let _permit = self.resources.acquire(Kind::Archives)?;
         let source = book.source(sources).ok_or_else(missing_book)?;
         let cached = self.local_books.prepare(
             &self.cache,
@@ -163,6 +174,7 @@ impl Downloads {
     }
 
     pub(super) fn raw_book(&self, book: &Book, sources: &[Source]) -> CatalogueResult<PathBuf> {
+        let _permit = self.resources.acquire(Kind::Archives)?;
         let source = book.source(sources).ok_or_else(missing_book)?;
         let cached = self.cache_book(book, source)?;
         cached.file(&self.cache, "", Representation::Raw)
@@ -274,7 +286,10 @@ impl Downloads {
         } else {
             return Err(format!("Неподдерживаемый формат отправки: {format}").into());
         };
-        let cached = self.cache_book(book, source)?;
+        let cached = {
+            let _permit = self.resources.acquire(Kind::Archives)?;
+            self.cache_book(book, source)?
+        };
         let mut name = book
             .filename(&self.template)?
             .replace(|ch: char| ch.is_ascii_control(), "_");
@@ -283,6 +298,7 @@ impl Downloads {
         }
         let mut file = self.variant(book, &cached, &name, Some(variant), false)?;
         if archive {
+            let _permit = self.resources.acquire(Kind::Archives)?;
             file = book_delivery::archive_attachment(&self.cache, &file, &name)?;
             name.push_str(".zip");
         }
@@ -323,13 +339,20 @@ impl Downloads {
         variant: Option<Format>,
         compressed: bool,
     ) -> CatalogueResult<PathBuf> {
-        match variant {
-            Some(Format::Fb2) => cached.reader_file(&self.cache, &book.ext),
-            Some(Format::Converted(format)) => self
+        if let Some(Format::Converted(format)) = variant {
+            return self
                 .conversions
                 .as_ref()
                 .ok_or("Конвертер недоступен")?
-                .convert(&self.cache, book, cached, format),
+                .convert(&self.cache, book, cached, format, || {
+                    self.resources.acquire(Kind::Conversions)
+                });
+        }
+        let _permit = self
+            .resources
+            .acquire(variant.unwrap_or(Format::Raw).resource())?;
+        match variant {
+            Some(Format::Fb2) => cached.reader_file(&self.cache, &book.ext),
             Some(Format::Zip) => cached.file(&self.cache, name, Representation::Zip),
             _ if compressed => cached.file(&self.cache, name, Representation::Gzip),
             _ => cached.file(&self.cache, name, Representation::Raw),
@@ -342,6 +365,7 @@ impl Downloads {
         catalogue: &RwLock<Option<Catalogue>>,
         sources: &[Source],
     ) -> CatalogueResult<Option<serde_json::Value>> {
+        let _permit = self.resources.acquire(Kind::Archives)?;
         let Some(book) = load_book(catalogue, uid)? else {
             return Ok(None);
         };
@@ -367,6 +391,7 @@ impl Downloads {
         card: bool,
         reader_only: bool,
     ) -> CatalogueResult<Option<Value>> {
+        let _permit = self.resources.acquire(Kind::Archives)?;
         let Some(row) = load_row(catalogue, uid)? else {
             return Ok(None);
         };
@@ -415,6 +440,7 @@ impl Downloads {
         catalogue: &RwLock<Option<Catalogue>>,
         sources: &[Source],
     ) -> CatalogueResult<Option<Value>> {
+        let _permit = self.resources.acquire(Kind::Images)?;
         let Some(book) = load_book(catalogue, uid)? else {
             return Ok(None);
         };
@@ -438,6 +464,7 @@ impl Downloads {
         catalogue: &RwLock<Option<Catalogue>>,
         sources: &[Source],
     ) -> CatalogueResult<(PathBuf, String)> {
+        let _permit = self.resources.acquire(Kind::Archives)?;
         let book = load_book(catalogue, uid)?.ok_or("404 Файл не найден")?;
         let epub = book.ext.eq_ignore_ascii_case("epub");
         if !(book.ext.eq_ignore_ascii_case("fb2") || self.epub && epub) {
@@ -472,6 +499,7 @@ impl Downloads {
         book: &Book,
         sources: &[Source],
     ) -> CatalogueResult<Option<PathBuf>> {
+        let _permit = self.resources.acquire(Kind::Archives)?;
         let Some(source) = book.source(sources) else {
             return Ok(None);
         };
@@ -515,6 +543,7 @@ impl Downloads {
         book: &Book,
         sources: &[Source],
     ) -> CatalogueResult<Option<Image>> {
+        let _permit = self.resources.acquire(Kind::Images)?;
         self.source_cover(book, sources, || {
             if (book.ext.eq_ignore_ascii_case("fb2")
                 || self.epub && book.ext.eq_ignore_ascii_case("epub"))
@@ -661,6 +690,7 @@ impl Downloads {
         let cached = match initial {
             Some(cached) if cached.matches(&book, source) => cached,
             _ => {
+                let _permit = self.resources.acquire(Kind::Archives).map_err(failure)?;
                 let cached = self.cache_book(&book, source).map_err(failure)?;
                 if let Target::Hash(hash) = &request.target
                     && *hash != cached.hash
@@ -787,6 +817,12 @@ fn load_row(catalogue: &RwLock<Option<Catalogue>>, uid: &str) -> CatalogueResult
 }
 
 fn failure(error: Box<dyn std::error::Error>) -> StatusCode {
+    if error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|cause| cause.kind() == std::io::ErrorKind::TimedOut)
+    {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
     if error.is::<MissingDecoder>() {
         return StatusCode::SERVICE_UNAVAILABLE;
     }

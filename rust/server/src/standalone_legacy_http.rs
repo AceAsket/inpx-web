@@ -104,6 +104,14 @@ impl Routes {
                 .check(&request, &admission, Resource::Download)
                 .map_err(|rejected| Box::new(rejected.response()))?;
             let sources = state.index.sources();
+            let _resource = state
+                .resources
+                .acquire(if cover {
+                    super::resources::Kind::Images
+                } else {
+                    super::resources::Kind::Archives
+                })
+                .map_err(|_| Box::new(error(StatusCode::SERVICE_UNAVAILABLE)))?;
             let file = match route {
                 Route::Cover(path) => Self::cover_file(
                     &state.downloads.covers,

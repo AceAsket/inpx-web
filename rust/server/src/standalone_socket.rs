@@ -56,6 +56,7 @@ impl Socket {
         conversion_formats: &[&str],
         free_access: bool,
         tts_enabled: bool,
+        archive_slots: usize,
     ) -> Self {
         let root = root.trim_end_matches('/');
         let message_limit = megabytes(&config["wsMessageLimitMb"], 1, 16);
@@ -128,7 +129,7 @@ impl Socket {
             import_limit,
             frame_limit,
             jobs: Arc::new(Semaphore::new(64)),
-            previews: Semaphore::new(2),
+            previews: Semaphore::new(archive_slots),
             external: ExternalDiscovery::new(data),
         }
     }
@@ -808,6 +809,10 @@ impl Socket {
                 }
                 let Ok(_permit) = self.previews.try_acquire() else {
                     return json!({"error":"Preview queue is full","errorCode":"INPX_RESOURCE_IO_QUEUE_FULL"});
+                };
+                let _resource = match state.resources.acquire(super::resources::Kind::Archives) {
+                    Ok(permit) => permit,
+                    Err(error) => return fault(&error.to_string()),
                 };
                 match crate::standalone_download::load_book(&state.index.catalogue, uid) {
                     Ok(book) => book_preview::read(uid, book.as_ref(), &state.index.sources()),

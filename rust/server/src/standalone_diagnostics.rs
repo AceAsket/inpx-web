@@ -15,6 +15,7 @@ use crate::standalone_access::{BrowserAccess, BrowserProfileRequest};
 mod audit;
 #[path = "standalone_benchmark.rs"]
 mod benchmark;
+pub(super) use benchmark::hardware;
 
 const CANCELLED: &str = "Проверка отменена";
 const REVOKED: &str = "Права администратора отозваны";

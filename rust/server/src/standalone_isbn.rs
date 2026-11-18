@@ -42,6 +42,12 @@ fn run(state: &State, generation: &str, build: &mut IsbnBuild) -> Result<bool> {
     let mut after = Some(build.last_id());
     let mut reader = build.reader(state.isbn_limit);
     while !build.cancelled() {
+        let _permit = state
+            .resources
+            .acquire(super::resources::Kind::Background)?;
+        if build.cancelled() {
+            break;
+        }
         let (rows, next) = {
             let lock = state.index.catalogue.read().expect("open catalogue");
             let catalogue = lock

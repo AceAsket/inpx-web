@@ -179,11 +179,15 @@ impl Cache {
             }
             let worker = state.clone();
             let _ = tokio::task::spawn_blocking(move || {
-                if let Err(error) =
-                    worker
-                        .admin_cache
-                        .clean(&config, &worker.downloads, "all", false)
-                {
+                let run = worker
+                    .resources
+                    .acquire(super::resources::Kind::Background)
+                    .and_then(|_permit| {
+                        worker
+                            .admin_cache
+                            .clean(&config, &worker.downloads, "all", false)
+                    });
+                if let Err(error) = run {
                     eprintln!("Cache rotation: {error}");
                 }
             })
