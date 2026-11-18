@@ -318,9 +318,12 @@ function setupServiceWorker() {
     else
         window.addEventListener('load', register, {once: true});
 
+    let controller = navigator.serviceWorker.controller;
     let refreshing = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (refreshing)
+        const previous = controller;
+        controller = navigator.serviceWorker.controller;
+        if (!previous || previous === controller || refreshing)
             return;
 
         refreshing = true;

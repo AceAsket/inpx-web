@@ -48,7 +48,7 @@ async function main() {
 <binary id="cover.png" content-type="image/png">${cover}</binary></FictionBook>`;
         const inputFile = path.join(dir, 'source.fb2'); await fs.writeFile(inputFile, original);
         const config = {conversionEnabled:true, mobiEnabled:true, converterPaths:{fb2cng:fbc}, kindlingPath:kindling,
-            fb2cngVersion:'v1.9.0', kindlingVersion:'v0.45.6', bookTitleTemplate:'${NUMBER_PADDED} - ${TITLE}', bookFilenameTemplate:'${TITLE}'};
+            fb2cngVersion:'v2.1.1', kindlingVersion:'v0.45.6', bookTitleTemplate:'${NUMBER_PADDED} - ${TITLE}', bookFilenameTemplate:'${TITLE}'};
         converter.configure({conversionConcurrency:1});
         const options = {inputFile, cacheBasePath:path.join(dir, 'cached'), sourceFileName:'source.fb2', downFileName:'source.fb2',
             format:'mobi', book:{title:'Книга «ё»', serno:2}, config};

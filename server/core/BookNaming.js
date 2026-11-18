@@ -37,8 +37,12 @@ function filename(book, fallback, ext, config = {}) {
     return value ? `${value}${suffix}` : fallback;
 }
 
+function titleTemplate(config = {}) {
+    return String(process.env.INPX_BOOK_TITLE_TEMPLATE ?? config.bookTitleTemplate ?? '').trim();
+}
+
 function title(book, ext, config = {}) {
-    const template = String(config.bookTitleTemplate || '').trim();
+    const template = titleTemplate(config);
     return template ? render(template, book, ext) || String(book.title || '').trim() || null : null;
 }
 
@@ -60,4 +64,4 @@ async function cachedBook(worker, desc, hash, requestedUid = '') {
     return rows[0] || {};
 }
 
-module.exports = {render, filename, title, cachedBook};
+module.exports = {render, filename, title, titleTemplate, cachedBook};

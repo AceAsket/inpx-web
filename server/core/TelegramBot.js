@@ -4,6 +4,7 @@ const path = require('path');
 const {setTimeout: delay} = require('timers/promises');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const bookFormats = require('../../shared/BookFormats');
+const {formatSettings} = require('./BookConverter');
 const {escapeHtml} = require('../../shared/safeHtml');
 const shelfData = require('./EbookShelves');
 const PAGE_SIZE = 8;
@@ -258,12 +259,13 @@ class TelegramBot {
         if (action === 'book') {
             const book = await this.worker.getBookRecordByUid(payload.uid);
             if (!book || book.del) return this.reply(ctx, 'Книга сейчас недоступна. Повторите поиск.', [this.menu(ctx)]);
-            const preferred = bookFormats.resolve(book.ext, this.config, bookFormats.preference(user, 'telegram')) || 'raw';
+            const conversion = formatSettings(this.config);
+            const preferred = bookFormats.resolve(book.ext, conversion, bookFormats.preference(user, 'telegram')) || 'raw';
             const extension = String(preferred === 'raw' ? book.ext || '' : preferred).toUpperCase();
             const label = extension ? `Получить ${extension}` : 'Получить файл';
             const rows = [[button(label, 'download', {uid: book._uid, format: preferred})]];
             if (preferred !== 'raw') rows.push([button('Оригинал ' + String(book.ext).toUpperCase(), 'download', {uid: book._uid, format: 'raw'})]);
-            const formats = bookFormats.available(book.ext, this.config).filter(format => format !== preferred);
+            const formats = bookFormats.available(book.ext, conversion).filter(format => format !== preferred);
             for (let i = 0; i < formats.length; i += 3) rows.push(formats.slice(i, i + 3).map(format => button(format.toUpperCase(), 'download', {uid: book._uid, format})));
             rows.push([button('Хочу прочитать', 'save', {uid: book._uid}), button('Прочитано', 'read', {uid: book._uid})]);
             if (book.series) rows.push([button(`Серия: ${book.series}`, 'entity', {kind: 'series', name: book.series})]);

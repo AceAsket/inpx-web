@@ -124,7 +124,9 @@ async function testBookPreparationSharesOnlyTheCurrentLibraryGeneration() {
 
 async function testCardBackgroundPreparationRespectsPriorityAndSkipsOldQueue() {
     const worker = Object.create(require('../server/core/WebWorker').prototype);
-    const settings = require('../server/core/ResourcePolicy').resolve({INPX_RESOURCE_MAX_PROCESSES:'2'}, {cpu:4, memoryLimit:8 * 1024 ** 3});
+    const settings = require('../server/core/ResourcePolicy').resolve({
+        INPX_RESOURCE_MAX_PROCESSES: '2', INPX_RESOURCE_BACKGROUND: '1',
+    }, {cpu:4, memoryLimit:8 * 1024 ** 3});
     const native = new resourceRuntime.ResourceRuntime(settings);
     const started = deferred(), release = deferred(), calls = [], events = [];
     worker.getBookLink = async uid => {

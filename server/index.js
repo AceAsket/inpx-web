@@ -31,6 +31,14 @@ function applyEnvSecurityOverrides(targetConfig) {
     targetConfig.reviewIndexMaxEntries = Math.max(1, parseInt(process.env.INPX_REVIEW_INDEX_MAX_ENTRIES || '100000',10) || 100000);
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_LOW_MEMORY_MODE'))
         targetConfig.lowMemoryMode = process.env.INPX_LOW_MEMORY_MODE === 'true';
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_ENABLE_CONVERSION'))
+        targetConfig.conversionEnabled = process.env.INPX_ENABLE_CONVERSION !== 'false';
+    if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_CONVERSION_FORMATS')) {
+        const formats = process.env.INPX_CONVERSION_FORMATS.split(',').map(value => value.trim().toLowerCase())
+            .filter(value => value && value !== 'mobi');
+        formats.push('mobi');
+        targetConfig.conversionFormats = [...new Set(formats)];
+    }
     if (Object.prototype.hasOwnProperty.call(process.env, 'INPX_OPDS_COMPATIBILITY')) {
         const compatibility = process.env.INPX_OPDS_COMPATIBILITY;
         if (!['standard', 'tolino'].includes(compatibility)) throw new Error('INPX_OPDS_COMPATIBILITY: standard или tolino');

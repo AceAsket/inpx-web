@@ -10,6 +10,7 @@ const branchFilename = __dirname + '/application_env';
 
 const propsToSave = [
     'dataDir',
+    'resourceProfile',
     'wsMessageLimitMb',
     'importLimitMb',
     'backupUploadLimitMb',
@@ -64,6 +65,12 @@ const propsToSave = [
     'fullOptimization',
     'converterPaths',
     'fb2cngArgs',
+    'fb2cngConfigPath',
+    'bookTitleTemplate',
+    'kindlingPath',
+    'mobiEnabled',
+    'conversionEnabled',
+    'conversionFormats',
     'conversionConcurrency',
     'conversionQueueLimit',
     'conversionTimeoutMs',
@@ -207,8 +214,6 @@ class ConfigManager {
             throw new Error('not inited');
         const result = _.cloneDeep(this._config);
         Object.assign(result, require('../../shared/TelegramNetwork').environmentPatch(process.env));
-        // Resource policy is launch-only and cannot be replaced by saved settings
-        // or an administrator's imported configuration.
         result.conversionConcurrency = require('../core/ResourceRuntime').settings.limits.conversions;
         result.conversionTimeoutMs = require('../core/ResourceRuntime').settings.taskTimeoutMs;
         result.conversionQueueTimeoutMs = require('../core/ResourceRuntime').settings.taskTimeoutMs;
@@ -269,6 +274,9 @@ class ConfigManager {
                 Object.assign(config,require('../../shared/TelegramNetwork').normalizeProxyConfig({...this._config,...config}));
                 this.config = config;
                 this._config.discovery = discovery;
+                require('../core/ResourceRuntime').configure(require('../core/ResourcePolicy').resolve(
+                    process.env, undefined, this._config.resourceProfile
+                ));
                 this._config.updateChannel = resolveUpdateChannel(this._config);
                 this._config.installMode = await resolveInstallMode(this._config);
 

@@ -233,8 +233,13 @@ function profileRequest(page, payload, session) {
         const downloads = activity.locator('.admin-stat').filter({hasText: 'Скачано книг'}).locator('.admin-stat-value');
         assert.equal(await downloads.innerText(), '0');
         await activity.getByText('По профилям', {exact: true}).click();
-        const profile = activity.getByRole('row', {name: /^[a-f0-9]{12} 1 0$/});
+        const profile = activity.getByRole('row', {name: /^admin\b.* 1 0$/i});
         await profile.waitFor();
+        const disclosure = activity.locator('summary');
+        assert.equal(await disclosure.evaluate(el=>getComputedStyle(el).outlineStyle),'none');
+        await page.keyboard.press('Tab');
+        await page.keyboard.press('Shift+Tab');
+        assert(await disclosure.evaluate(el=>el.matches(':focus-visible') && getComputedStyle(el.querySelector('span')).outlineStyle==='solid'));
         const catalog = await fetch(base + '/ebook?q=Packaged');
         const encodedUid = (await catalog.text()).match(/[?&](?:amp;)?uid=([^"&]+)/)?.[1];
         assert(encodedUid, 'The fixture catalog has a downloadable book');
@@ -243,9 +248,10 @@ function profileRequest(page, payload, session) {
         const guestDownload = await fetch(downloadUrl);
         assert.match(await profileDownload.text(), /<FictionBook/);
         assert.match(await guestDownload.text(), /<FictionBook/);
-        await activity.getByRole('row', {name: /^[a-f0-9]{12} 1 1$/}).waitFor();
+        await activity.getByRole('row', {name: /^admin\b.* 1 1$/i}).waitFor();
         await activity.getByRole('row', {name: 'Гости 0 1', exact: true}).waitFor();
         assert.equal(await downloads.innerText(), '2', 'The panel refreshes live with metrics export and file logging disabled');
+        await activity.screenshot({path: path.join(directory, 'admin-account-activity.png')});
         await activity.getByText('По профилям', {exact: true}).click();
         await page.getByRole('button', {name: 'Задачи и состояние библиотеки', exact: true}).click();
         await page.getByText('Проверка библиотеки', {exact: true}).waitFor();
@@ -253,7 +259,8 @@ function profileRequest(page, payload, session) {
         await page.screenshot({path: path.join(directory, 'admin-tasks.png')});
         await page.getByRole('button', {name: 'Закрыть задачи', exact: true}).click();
         const performancePanel = page.locator('.performance-panel');
-        await performancePanel.getByRole('button', {name: /^Свои значения/}).click();
+        const testMode = performancePanel.getByLabel('Режим проверки',{exact:true});
+        await testMode.selectOption('custom');
         await performancePanel.getByRole('spinbutton', {name: 'Всего одновременно', exact: true}).fill('2');
         await performancePanel.getByRole('spinbutton', {name: 'Изображения', exact: true}).fill('3');
         const runBenchmark = performancePanel.getByTestId('performance-start');
@@ -267,14 +274,12 @@ function profileRequest(page, payload, session) {
         await performancePanel.getByRole('button', {name: 'Остановить', exact: true}).waitFor();
         assert.deepEqual(benchmarkOptions, {sourceId: 'browser-fixture', mode: 'custom', limits: {total: 3, images: 2, reviews: 1, conversions: 1}});
         await performancePanel.getByText(/Проверка своих значений.*40%/).waitFor();
-        assert(!(await performancePanel.innerText()).replace(/\s+/g, ' ').includes('CPU сейчас, ядер: —'), 'CPU is computed from successive counter samples');
-        const profileLabels = await performancePanel.locator('.performance-profile').evaluateAll(nodes => nodes.map(node => {
-            const frame = node.getBoundingClientRect(), label = node.querySelector('strong').getBoundingClientRect();
-            const padding = parseFloat(getComputedStyle(node).paddingRight) || 0;
-            return {name: node.querySelector('strong').textContent, labelRight: label.right, contentRight: frame.right - padding};
-        }));
-        assert(profileLabels.every(label => label.labelRight <= label.contentRight + 1), 'Profile titles must stay inside their card: ' + JSON.stringify(profileLabels));
-        assert(await performancePanel.getByRole('button', {name: /^Свои значения/}).isDisabled(), 'A running benchmark locks the selected profile');
+        const resources = performancePanel.locator('details').filter({has:page.getByText('Ресурсы и лимиты',{exact:true})});
+        await resources.locator('summary').click();
+        const cpu = resources.getByText(/^CPU, ядер/);
+        await cpu.waitFor();
+        assert(!(await cpu.innerText()).includes('—'), 'CPU is computed from successive counter samples');
+        assert(await testMode.isDisabled(), 'A running benchmark locks the selected profile');
         await performancePanel.screenshot({path: path.join(directory, 'performance-custom-run.png')});
         await performancePanel.getByRole('button', {name: 'Остановить', exact: true}).click();
         await runBenchmark.waitFor(); assert.equal(benchmarkState, 'cancelled');
@@ -448,6 +453,7 @@ function profileRequest(page, payload, session) {
         const buttonTops = await listActions.evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().top));
         assert.equal(buttonTops.length, 3);
         assert(Math.max(...buttonTops) - Math.min(...buttonTops) <= 1, 'Mobile list actions stay in one row');
+        await noOverflow(current.locator('.profile-reading-row'));
         const listRow = current.locator('.profile-list-preview-item');
         await listRow.getByRole('checkbox', {name:'Прочитано',exact:true}).waitFor();
         await listRow.getByRole('checkbox', {name:'Прочитано',exact:true}).click();

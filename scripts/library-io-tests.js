@@ -84,7 +84,7 @@ async function testOldDirectoryFailureCannotEvictCurrentGeneration() {
 async function testQueuedBookFromOldLibraryGenerationIsSkipped() {
     const worker = makeWorker(); let release, calls = 0;
     worker.getBookLink = async() => {calls++;};
-    const occupied = worker.runBackground(() => new Promise(resolve => {release = resolve;}));
+    const occupied = worker.runForeground(() => new Promise(resolve => {release = resolve;}));
     const book = worker.prepareBookInBackground('old');
     try {
         await until(() => worker.backgroundWaiters?.length === 1);

@@ -8,6 +8,7 @@ const utils = require('../core/utils');
 const runtimeMetrics = require('../core/RuntimeMetrics');
 const {getReaderSpeech} = require('../core/ReaderSpeech');
 const {withFileTransaction} = require('../core/FilePersistence');
+const ProfileAccess = require('../core/ProfileAccess');
 const clientProtocol = require('../core/ClientProtocol');
 
 const cleanPeriod = 1*60*1000;//1 минута
@@ -23,7 +24,7 @@ class WebSocketController {
 
         this.workerState = new WorkerState();
         this.webWorker = new WebWorker(config);
-        this.profileAccess = security ? new (require('../core/ProfileAccess'))(config, this.webWorker, security) : null;
+        this.profileAccess = security ? new ProfileAccess(config, this.webWorker, security) : null;
 
         this.wss = wss;
         this.activeRequests = 0;
@@ -222,6 +223,8 @@ class WebSocketController {
                     await this.getAdminDashboardMetrics(req, ws); break;
                 case 'get-admin-performance':
                     this.send(await this.webWorker.getAdminPerformance(req.userId, req.profileAccessToken), req, ws); break;
+                case 'set-admin-resource-profile':
+                    this.send(await this.webWorker.setAdminResourceProfile(req.userId, req.profileAccessToken, req.profile), req, ws); break;
                 case 'start-admin-benchmark':
                     this.send(await this.webWorker.startAdminBenchmark(req.userId, req.profileAccessToken, req.options || {}), req, ws); break;
                 case 'cancel-admin-benchmark':
@@ -486,6 +489,7 @@ class WebSocketController {
             'update-shared-discovery-config',
             'update-admin-integrations',
             'update-admin-opds',
+            'set-admin-resource-profile',
             'start-admin-benchmark',
             'cancel-admin-benchmark',
             'update-admin-event-log',
@@ -588,11 +592,13 @@ class WebSocketController {
             return;
         }
         const config = _.pick(this.config, this.config.webConfigParams);
+        if (Array.isArray(config.conversionFormats) && !require('../core/BookConverter').mobiEnabled(this.config))
+            config.conversionFormats = config.conversionFormats.filter(format => format !== 'mobi');
         config.clientApi = clientApi;
         config.libraryProtocol = require('../core/LibraryExchange').protocol;
         config.ttsEnabled = Boolean(this.config.ttsEnabled && this.config.ttsUrl);
         config.ebookReaderEnabled = !this.webWorker.remoteLib;
-        config.profileLoginRequired = this.profileAccess?.loginRequired ?? (this.config.allowAnonymousAccess === false);
+        config.profileLoginRequired = this.profileAccess?.loginRequired ?? ProfileAccess.localLoginRequired(this.config);
         config.profileBoundId = req.profileBoundId || '';
         config.canRememberProfileDevice = canRememberProfileDevice;
         config.trustedBrowserDays = trustedBrowserDays;

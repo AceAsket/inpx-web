@@ -9,6 +9,9 @@
 
         <div class="q-mx-md column settings-dialog-body" style="min-width: min(300px, calc(100vw - 96px)); font-size: 120%;">
             <AppearanceControl @change="dialogVisible = false" />
+            <div v-if="canEditExternalDiscovery" class="row q-mb-sm">
+                <q-btn outline color="primary" dense no-caps icon="la la-tasks" label="Задачи и состояние библиотеки" @click="$emit('open-library-tasks')" />
+            </div>
             <div class="row items-center q-ml-sm">
                 <div class="q-mr-sm">
                     Результатов на странице
@@ -159,7 +162,6 @@
 
                 <div v-show="adminExpanded" class="admin-collapse-body">
                     <div class="admin-toolbar">
-                        <q-btn outline color="primary" dense no-caps icon="la la-tasks" label="Задачи и состояние библиотеки" @click="$emit('open-library-tasks')" />
                         <q-btn outline color="primary" dense no-caps icon="la la-sync" :loading="adminLoading" @click="loadAdminPanel">
                             {{ adminUi.refresh }}
                         </q-btn>
@@ -233,18 +235,21 @@
                                 </div>
                             </div>
                             <details v-if="adminActivity.profiles.length" class="admin-activity-details">
-                                <summary>По профилям</summary>
+                                <summary><span>По профилям</span></summary>
                                 <div class="admin-activity-scroll" role="region" aria-label="Активность по профилям" tabindex="0">
                                     <table class="admin-activity-table">
                                         <thead>
-                                            <tr><th scope="col">Код профиля</th><th scope="col">Входы</th><th scope="col">Книги</th></tr>
+                                            <tr><th scope="col">Учётная запись</th><th scope="col">Входы</th><th scope="col">Скачано книг</th></tr>
                                         </thead>
                                         <tbody>
                                             <tr v-for="row in adminActivity.profiles" :key="row.profile">
                                                 <th scope="row">
                                                     <span v-if="row.profile === 'guest'">Гости</span>
                                                     <span v-else-if="row.profile === 'other'">Остальные профили</span>
-                                                    <code v-else>{{ row.profile }}</code>
+                                                    <template v-else>
+                                                        <span>{{ row.login || row.name || row.profile }}</span>
+                                                        <small v-if="row.login && row.name && row.name !== row.login" class="admin-activity-name">{{ row.name }}</small>
+                                                    </template>
                                                 </th>
                                                 <td>{{ row.logins.toLocaleString('ru-RU') }}</td>
                                                 <td>{{ row.downloads.toLocaleString('ru-RU') }}</td>
@@ -282,7 +287,7 @@
                             </div>
                         </section>
 
-                        <PerformancePanel v-if="dialogVisible && adminExpanded" />
+                        <PerformancePanel v-if="dialogVisible && adminExpanded && adminDashboardAvailable" />
 
                         <section class="admin-dashboard-section admin-dashboard-section--wide">
                             <div class="admin-dashboard-section-title">Качество рекомендаций</div>
@@ -363,7 +368,7 @@
                             <q-select v-model="adminCacheSettings.cacheCleanFrequency" :options="adminCacheFrequencyOptions" outlined dense emit-value map-options label="Периодичность" :disable="!adminCacheSettings.cacheCleanEnabled" />
                             <q-select v-if="adminCacheSettings.cacheCleanFrequency === 'weekly'" v-model="adminCacheSettings.cacheCleanWeekDay" :options="adminCacheWeekDayOptions" outlined dense emit-value map-options label="День недели" :disable="!adminCacheSettings.cacheCleanEnabled" />
                             <q-select v-if="adminCacheSettings.cacheCleanFrequency === 'monthly'" v-model="adminCacheSettings.cacheCleanMonthDay" :options="adminCacheMonthDayOptions" outlined dense emit-value map-options label="Число месяца" :disable="!adminCacheSettings.cacheCleanEnabled" />
-                            <q-input class="admin-cache-time-input" v-model="adminCacheSettings.cacheCleanTime" outlined dense type="time" label="Время запуска" hint="По времени сервера" persistent-hint :disable="!adminCacheSettings.cacheCleanEnabled || adminCacheSettings.cacheCleanFrequency === 'advanced'" />
+                            <q-input v-if="adminCacheSettings.cacheCleanFrequency !== 'interval'" class="admin-cache-time-input" v-model="adminCacheSettings.cacheCleanTime" outlined dense type="time" label="Время запуска" hint="По времени сервера" persistent-hint :disable="!adminCacheSettings.cacheCleanEnabled || adminCacheSettings.cacheCleanFrequency === 'advanced'" />
                             <q-input v-model.number="adminCacheSettings.cacheCleanTargetPercent" outlined dense type="number" min="10" max="100" label="Цель после чистки, %" />
                         </div>
                         <div class="admin-cache-actions">
@@ -513,7 +518,7 @@
                 <button class="admin-collapse-head" type="button" @click="opdsExpanded = !opdsExpanded">
                     <div class="admin-collapse-copy">
                         <div class="admin-mail-title">{{ opdsUi.title }}</div>
-                        <div class="admin-mail-subtitle">{{ opdsUi.subtitle }}</div>
+                        <div class="admin-mail-subtitle">{{ config.adminCache ? 'Путь каталога и общий пароль OPDS применяются сразу после сохранения.' : opdsUi.subtitle }}</div>
                     </div>
                     <q-icon class="admin-collapse-icon" :name="opdsExpanded ? 'la la-angle-up' : 'la la-angle-down'" size="20px" />
                 </button>
@@ -891,6 +896,10 @@ class SettingsDialog {
         {label: 'Кэш', value: 'cache'},
         {label: 'Обложки', value: 'cover'},
         {label: 'Индекс', value: 'index'},
+        {label: 'Аудит', value: 'audit'},
+        {label: 'Замеры', value: 'benchmark'},
+        {label: 'Резервные копии', value: 'backup'},
+        {label: 'Доступ', value: 'security'},
         {label: 'Отправка', value: 'delivery'},
         {label: 'Система', value: 'system'},
     ];
@@ -965,11 +974,17 @@ class SettingsDialog {
         {label: 'Список', value: 'list'},
     ];
 
-    adminCacheFrequencyOptions = [
-        {label: 'Каждый день', value: 'daily'},
-        {label: 'Раз в неделю', value: 'weekly'},
-        {label: 'Раз в месяц', value: 'monthly'},
-    ];
+    get adminCacheFrequencyOptions() {
+        const options = [
+            {label: 'Каждый день', value: 'daily'},
+            {label: 'Раз в неделю', value: 'weekly'},
+            {label: 'Раз в месяц', value: 'monthly'},
+        ];
+        const limits = this.adminDashboard?.limits || this.config.adminCache || {};
+        if (this.hasCacheInterval(limits))
+            options.push({label: this.cacheIntervalLabel(limits), value: 'interval'});
+        return options;
+    }
 
     adminCacheWeekDayOptions = [
         {label: 'Понедельник', value: 1},
@@ -1189,13 +1204,14 @@ class SettingsDialog {
     }
 
     syncAdminCacheSettings() {
-        const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
+        const limits = (this.adminDashboard && this.adminDashboard.limits) || this.config.adminCache || {};
         const toMb = (value, fallback) => {
             const size = Number(value || 0);
             return Math.max(1, Math.round((size > 0 ? size : fallback) / (1024 * 1024)));
         };
         const ratio = Number(limits.cacheCleanTargetRatio || 0.8);
-        const schedule = this.parseDailyCacheSchedule(limits.cacheCleanSchedule || '0 0 * * *');
+        const schedule = this.hasCacheInterval(limits) ? this.makeParsedAdminCacheSchedule({frequency: 'interval'})
+            : this.parseAdminCacheSchedule(limits.cacheCleanSchedule ?? '0 0 * * *');
 
         this.adminCacheSettings = {
             bookCacheSizeMb: toMb(limits.bookCacheSize, 2048 * 1024 * 1024),
@@ -1220,6 +1236,8 @@ class SettingsDialog {
             return this.makeParsedAdminCacheSchedule({advancedSchedule: text});
 
         const [minuteText, hourText, dayOfMonth, month, dayOfWeek] = fields;
+        if (!/^\d+$/.test(minuteText) || !/^\d+$/.test(hourText))
+            return this.makeParsedAdminCacheSchedule({advancedSchedule: text});
         const minute = this.clampAdminCacheNumber(minuteText, 0, 59, 0);
         const hour = this.clampAdminCacheNumber(hourText, 0, 23, 0);
         const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
@@ -1259,13 +1277,19 @@ class SettingsDialog {
         return Math.max(min, Math.min(max, parsed));
     }
 
-    parseDailyCacheSchedule(schedule = '') {
-        return this.parseAdminCacheSchedule(schedule);
+    hasCacheInterval(limits) {
+        return !limits.cacheCleanSchedule && limits.cacheCleanInterval > 0 && Boolean(limits.cacheCleanNextRunAt);
+    }
+
+    cacheIntervalLabel(limits) {
+        return `Каждые ${Number(limits.cacheCleanInterval).toLocaleString('ru-RU')} мин`;
     }
 
     dailyCacheScheduleFromSettings(settings = this.adminCacheSettings) {
         if (!settings.cacheCleanEnabled)
             return '';
+        if (settings.cacheCleanFrequency === 'interval')
+            return undefined; // Omit the cron override to keep using the server interval.
         if (settings.cacheCleanAdvancedSchedule && !['daily', 'weekly', 'monthly'].includes(settings.cacheCleanFrequency))
             return settings.cacheCleanAdvancedSchedule;
 
@@ -1366,6 +1390,8 @@ class SettingsDialog {
 
     adminCacheRotationValue() {
         const limits = (this.adminDashboard && this.adminDashboard.limits) || {};
+        if (this.hasCacheInterval(limits))
+            return this.cacheIntervalLabel(limits);
         const schedule = String(limits.cacheCleanSchedule || '').trim();
         const parsed = this.parseAdminCacheSchedule(schedule);
         if (!parsed.enabled)
@@ -1615,7 +1641,7 @@ class SettingsDialog {
     }
 
     syncAdminSources() {
-        const sources = (this.adminDashboard && this.adminDashboard.sources) || [];
+        const sources = (this.adminDashboard && this.adminDashboard.sources) || this.config.adminLibrarySources || [];
         this.adminSources = sources.map(source => ({
             id: source.id || '',
             name: source.name || '',
@@ -1653,8 +1679,10 @@ class SettingsDialog {
         this.adminLoading = true;
         try {
             await this.refreshAdminDashboard(true);
-            this.refreshAdminEvents();
-            this.startAdminMetricsPolling();
+            if (this.adminDashboardAvailable) {
+                this.refreshAdminEvents();
+                this.startAdminMetricsPolling();
+            }
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
@@ -1663,10 +1691,19 @@ class SettingsDialog {
     }
 
     async refreshAdminDashboard(syncSources = false) {
-        this.adminDashboard = await this.api.getAdminDashboard();
+        if (this.adminDashboardAvailable) {
+            this.adminDashboard = await this.api.getAdminDashboard();
+        } else {
+            const status = await this.api.request({action: 'get-worker-state', workerId: 'server_state'});
+            this.adminDashboard = {index: {...status, ready: status.state === 'normal' && !status.updating}};
+        }
         this.syncAdminCacheSettings();
         if (syncSources)
             this.syncAdminSources();
+    }
+
+    get adminDashboardAvailable() {
+        return !this.config.adminCache || this.config.clientApi?.features?.includes('adminDashboard');
     }
 
     async refreshAdminMetrics() {
@@ -1724,8 +1761,11 @@ class SettingsDialog {
                 if (this.adminIndexBusy) {
                     this.scheduleAdminIndexPolling();
                 } else {
+                    if (this.adminReindexInProgress && this.adminIndex.ready)
+                        await this.api.updateConfig({skipProfileLogin: true});
                     this.adminReindexInProgress = false;
-                    this.refreshAdminEvents();
+                    if (this.adminDashboardAvailable)
+                        this.refreshAdminEvents();
                 }
             } catch (e) {
                 this.adminReindexInProgress = false;
@@ -1938,9 +1978,16 @@ class SettingsDialog {
         try {
             const result = await this.api.adminRebuildCover(bookUid);
             await this.refreshAdminDashboard(false);
-            this.$root.notify.success(this.adminUi.coverRebuildStarted);
-            if (result.coverUrl)
-                window.setTimeout(() => { (new Image()).src = `${result.coverUrl}?t=${Date.now()}`; }, 50);
+            if (result.rebuilt === false) {
+                this.$root.notify.info('В источнике книги не найдена новая обложка.');
+                return;
+            }
+            this.$root.notify.success(result.rebuilt ? 'Обложка пересобрана.' : this.adminUi.coverRebuildStarted);
+            if (result.coverUrl) {
+                const cover = new URL(result.coverUrl, window.location.href);
+                cover.searchParams.set('t', Date.now());
+                (new Image()).src = cover.href;
+            }
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
@@ -1951,7 +1998,9 @@ class SettingsDialog {
     async reindexAdmin() {
         this.adminReindexLoading = true;
         try {
-            await this.api.adminReindex();
+            const result = await this.api.adminReindex();
+            if (result.started === false)
+                throw new Error('Индекс уже обновляется. Повторите после завершения.');
             this.adminSourcesReindexNeeded = false;
             this.adminReindexInProgress = true;
             await this.refreshAdminDashboard(false);
@@ -2092,10 +2141,11 @@ class SettingsDialog {
         this.settingsImportLoading = true;
         try {
             const data = JSON.parse(await file.text());
-            await this.api.importAdminSettings(data);
+            const result = await this.api.importAdminSettings(data);
             await this.api.updateConfig();
             this.loadSettings();
-            this.$root.notify.success('Настройки восстановлены');
+            this.adminSourcesReindexNeeded = this.adminSourcesReindexNeeded || result.reindexRequired === true;
+            this.$root.notify.success(result.restartRequired ? 'Настройки восстановлены. Для части настроек нужен перезапуск сервера.' : 'Настройки восстановлены');
         } catch (e) {
             this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
         } finally {
@@ -2376,6 +2426,21 @@ export default vueComponent(SettingsDialog);
     padding: 8px 10px;
     color: var(--app-primary);
     cursor: pointer;
+}
+
+.admin-activity-details > summary:focus {
+    outline: none;
+}
+
+.admin-activity-details > summary:focus-visible span {
+    outline: 2px solid var(--app-primary);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.admin-activity-name {
+    display: block;
+    color: var(--app-muted);
 }
 
 .admin-activity-scroll {

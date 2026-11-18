@@ -51,7 +51,7 @@ async function testPerformanceDraftReopensAndInvalidLimitsRemainVisible() {
     const memory=storage(),first=component({memory});first.view.restorePreferences();await first.view.refresh();
     assert.equal(first.view.selected,'balanced','Initial test choice follows active server profile, not a recommendation');
     Object.assign(first.view,{selected:'custom',sourceId:'two',customLimits:{total:6,images:1.5,reviews:-1,conversions:''}});
-    first.view.savePreferences();assert.match(first.view.preferenceStatus,/Сохранено/);
+    first.view.savePreferences();assert.equal(first.view.preferenceStatus,'');
     const restored=component({memory,read:async()=>{const value=snapshot();value.settings.hardMax=4;return value;}});
     restored.view.restorePreferences();await restored.view.refresh();
     assert.equal(restored.view.selected,'custom');assert.equal(restored.view.sourceId,'two');

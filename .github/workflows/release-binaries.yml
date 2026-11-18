@@ -25,7 +25,7 @@ env:
   WINDOWS_7ZIP_RELEASE_API: https://api.github.com/repos/ip7z/7zip/releases/latest
   WINDOWS_JXL_URL: https://github.com/libjxl/libjxl/releases/latest/download/jxl-x64-windows-static.zip
   WINDOWS_WEBP_URL: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0-windows-x64.zip
-  FB2CNG_RELEASE_API: https://api.github.com/repos/rupor-github/fb2cng/releases/tags/v1.9.0
+  FB2CNG_RELEASE_API: https://api.github.com/repos/rupor-github/fb2cng/releases/tags/v2.1.1
 
 jobs:
   release-smoke-tests:
@@ -128,14 +128,14 @@ jobs:
 
           $githubHeaders = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; 'X-GitHub-Api-Version' = '2022-11-28' }
           $fb2cngRelease = Invoke-RestMethod -Uri $env:FB2CNG_RELEASE_API -Headers $githubHeaders
-          if ($fb2cngRelease.tag_name -ne 'v1.9.0') {
+          if ($fb2cngRelease.tag_name -ne 'v2.1.1') {
             throw 'Unexpected fb2cng release version'
           }
           $fb2cngAsset = $fb2cngRelease.assets |
             Where-Object { $_.name -eq '${{ matrix.fbc_asset }}' } |
             Select-Object -First 1
           if (-not $fb2cngAsset) {
-            throw 'Unable to find fb2cng asset ${{ matrix.fbc_asset }} in release v1.9.0'
+            throw 'Unable to find fb2cng asset ${{ matrix.fbc_asset }} in release v2.1.1'
           }
 
           $fbcArchive = Join-Path $env:RUNNER_TEMP $fb2cngAsset.name
@@ -163,6 +163,9 @@ jobs:
 
       - name: Bundle pinned Kindling converter
         run: node scripts/bundle-kindling.js ${{ matrix.target }}
+
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y lzip
 
       - name: Archive release payload
         shell: bash

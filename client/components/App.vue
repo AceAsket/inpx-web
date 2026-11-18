@@ -4,7 +4,7 @@
         <Notify ref="notify" />
         <StdDialog ref="stdDialog" />
 
-        <LibraryShell v-if="accessGranted" class="col" :enabled="isShelvesLayout">
+        <LibraryShell v-if="accessGranted || $route.path === '/reader-lab'" class="col" :enabled="isShelvesLayout">
             <router-view v-slot="{ Component }">
                 <keep-alive exclude="Reader,ReaderLab,CatalogBook,CatalogEntity">
                     <component :is="Component" class="col" />
@@ -38,29 +38,23 @@ const componentOptions = {
         darkTheme(newValue) {
             this.applyTheme(newValue);
         },
-        '$route.path'() {
+        '$route.path'(path, previous) {
             this.applyPwaManifest();
             this.applyCatalogAppearance();
+            if (previous === '/reader-lab' && path !== previous && !this.accessGranted)
+                this.$root.api?.updateConfig();
         },
         catalogAppearance() {
             const redirect = appearanceRedirect(this.$route, this.catalogAppearance);
             if (redirect) this.$router.replace(redirect);
             this.applyCatalogAppearance();
         },
-        accessGranted() {this.applyInitialUiDefaults();},
-        config() {this.applyInitialUiDefaults();},
     },
 
 };
 class App {
     _options = componentOptions;
     accessGranted = false;
-
-    applyInitialUiDefaults() {
-        const defaults = this.config.uiDefaults;
-        if (this.accessGranted && !this.settings.defaultsSet && defaults && typeof defaults === 'object' && !Array.isArray(defaults))
-            this.commit('setSettings', {...defaults, defaultsSet: true});
-    }
 
     created() {
         this.commit = this.$store.commit;

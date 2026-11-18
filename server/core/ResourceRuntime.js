@@ -16,10 +16,15 @@ class ResourceRuntime {
         this.waits = []; this.durations = [];
     }
 
+    configure(settings) {
+        this.settings = settings;
+        this.drain();
+    }
+
     run(task, options = {}) {
         const scope = context.getStore() || {};
         const group = scope.group || this.normal;
-        const limits = scope.limits || this.settings.limits;
+        const limits = scope.limits;
         const kind = options.kind || 'conversions';
         const background = scope.priority === 'background' || !!scope.group;
         const signal = options.signal || scope.signal;
@@ -48,10 +53,14 @@ class ResourceRuntime {
     }
 
     drain() {
-        while (this.active < this.settings.hardMax) {
-            const eligible = entry => entry.group.active < entry.limits.total
-                && (entry.group.kinds[entry.kind] || 0) < (entry.limits[entry.kind] || entry.limits.total)
-                && (!entry.background || entry.group !== this.normal || entry.group.background < entry.limits.background);
+        const ceiling = this.settings.selected === 'unlimited' ? this.settings.limits.total : this.settings.hardMax;
+        while (this.active < ceiling) {
+            const eligible = entry => {
+                const limits = entry.limits || this.settings.limits;
+                return entry.group.active < limits.total
+                    && (entry.group.kinds[entry.kind] || 0) < (limits[entry.kind] || limits.total)
+                    && (!entry.background || entry.group !== this.normal || entry.group.background < limits.background);
+            };
             // Benchmark groups may use their candidate's concurrency; background
             // production work remains limited so readers retain available slots.
             const candidates = this.queue.filter(eligible);

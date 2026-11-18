@@ -14,8 +14,8 @@ function api() {
     const localStorage = {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key)};
     const calls = [];
     const socket = {send: async params => {calls.push(params); return params;}, message: async() => ({success: true})};
-    const Api = new Function('require', 'componentOptions', 'profileSessionStorageKey', 'profileLoginHistoryStorageKey', 'localStorage', 'wsc', `${body};return Api;`)(
-        createRequire(file), {}, sessionKey, 'inpx-web-profile-login-history', localStorage, socket);
+    const Api = new Function('require', 'componentOptions', 'profileSessionStorageKey', 'profileLoginHistoryStorageKey', 'localStorage', 'wsc', 'packageJson', `${body};return Api;`)(
+        createRequire(file), {}, sessionKey, 'inpx-web-profile-login-history', localStorage, socket, require('../package.json'));
     const value = new Api();
     value.$store = {state: {settings: {currentUserId: 'admin', profileAccessToken: 'admin-session'}, config: {
         profileAuthorized: true, currentUserId: 'admin', currentUserProfile: {id: 'admin', isAdmin: true}, userProfiles: [{id: 'admin'}],
@@ -86,5 +86,29 @@ async function testLogoutButtonWaitsForRevocationAndReportsFailure() {
     value.$store.state.config = {profileAuthorized: false}; assert.equal(component.computed.canLogout.call(value), false);
 }
 
-module.exports = [testProfileLogoutClearsCredentialsAndStopsOldPageWrites, testFailedLogoutRetainsSessionAndSsoCannotPretendToSignOut,
+async function testInitialUiDefaultsWaitForConfigAndPreserveManualSettings() {
+    const {value} = api();
+    value.commit('setSettings',{defaultsSet:false,langDefault:'en',limit:20});
+    const pending = deferred();
+    value.getConfig = () => pending.promise;
+    const load = value.updateConfig({skipProfileLogin:true});
+    assert.equal(value.accessGranted,false);
+    pending.resolve({profileLoginRequired:true,profileAuthorized:false,uiDefaults:{langDefault:'ru',limit:40}});
+    await load;
+    assert.equal(value.accessGranted,false);
+    assert.equal(value.settings.defaultsSet,false);
+    assert.equal(value.settings.langDefault,'en');
+    value.getConfig = async()=>({profileAuthorized:true,currentUserId:'admin',uiDefaults:{langDefault:'ru',limit:40}});
+    await value.updateConfig();
+    assert.equal(value.accessGranted,true);
+    assert.equal(value.settings.defaultsSet,true);
+    assert.equal(value.settings.langDefault,'ru');
+    assert.equal(value.settings.limit,40);
+    value.commit('setSettings',{langDefault:'de',limit:7});
+    await value.updateConfig();
+    assert.equal(value.settings.langDefault,'de');
+    assert.equal(value.settings.limit,7);
+}
+
+module.exports = [testInitialUiDefaultsWaitForConfigAndPreserveManualSettings, testProfileLogoutClearsCredentialsAndStopsOldPageWrites, testFailedLogoutRetainsSessionAndSsoCannotPretendToSignOut,
     testLateConfigCannotRestoreAdminAfterLogout, testLogoutButtonWaitsForRevocationAndReportsFailure];

@@ -16,6 +16,7 @@ class WebSocketConnection {
         this.ws = null;
 
         this.listeners = [];
+        this.observers = new Set();
         this.messageQueue = [];
         this.messageLifeTime = messageLifeTimeSecs*1000;
         this.openTimeout = openTimeoutSecs*1000;
@@ -61,6 +62,17 @@ class WebSocketConnection {
         return (this.ws && this.ws.readyState == this.WebSocket.OPEN);
     }
 
+    observe(observer) {
+        this.observers.add(observer);
+        return () => this.observers.delete(observer);
+    }
+
+    notify(event, ...args) {
+        for (const observer of this.observers) {
+            try {observer[event]?.(...args);} catch (_) { /* The socket can outlive a view. */ }
+        }
+    }
+
     processMessageQueue() {
         let newMessageQueue = [];
         for (const message of this.messageQueue) {
@@ -103,6 +115,7 @@ class WebSocketConnection {
                 const onopen = () => {
                     this.connecting = false;
                     resolve(this.ws);
+                    this.notify('open', socket);
                 };
 
                 const onmessage = (data) => {
@@ -110,6 +123,10 @@ class WebSocketConnection {
                         if (isBrowser)
                             data = data.data;
                         const mes = JSON.parse(data);
+                        if (mes?.type === 'client-event' && !mes.requestId) {
+                            this.notify('event', mes, socket);
+                            return;
+                        }
                         this.messageQueue.push({regTime: Date.now(), mes});
 
                         this.processMessageQueue();
@@ -118,11 +135,15 @@ class WebSocketConnection {
                     }
                 };
 
+                let disconnected = false;
                 const onDisconnect = (event) => {
                     if (this.ws && this.ws !== socket) return;
+                    if (disconnected) return;
+                    disconnected = true;
                     this.connecting = false;
                     const message = event?.message || 'Соединение с библиотекой по WebSocket не установлено или прервалось.';
                     this.emit(message, true);
+                    this.notify('close', socket);
                     reject(new Error(message));
                 };
 

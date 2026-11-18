@@ -138,7 +138,7 @@ class EbookController {
     }
     downloadSelection(book,format){
         const wanted=formats.normalize(format),native=String(book.ext).toLowerCase(),label=String(wanted==='original'?native:wanted).toUpperCase();
-        const selected=wanted==='original'||wanted===native?'raw':formats.available(native,this.config).includes(wanted)?wanted:null;
+        const selected=wanted==='original'||wanted===native?'raw':formats.available(native,converter.formatSettings(this.config)).includes(wanted)?wanted:null;
         const extension=selected==='raw'?native:converter.getConvertedExtension(wanted);
         const suffix=/^[a-z0-9]{1,12}(?:\.[a-z0-9]{1,12})?$/.test(extension)?'/book.'+extension:'';
         return {selected,label,suffix};
@@ -189,7 +189,7 @@ class EbookController {
         let body=(p.back?`<p><a href="${escape(this.destination(p.back))}">К полке</a></p>`:p.q||p.author?this.link('',p,'К результатам поиска'):'')+`<p>${authors}</p>`+(names.length>20?'<p class="hint">Показаны первые 20 авторов. Полный список — в полной карточке.</p>':'')+
             (book.series?`<p>Серия: ${this.link('',{...p,field:'series',mode:'exact',q:short(book.series,160),page:1},short(book.series,400))}${book.serno?' · '+escape(book.serno):''}</p>`:'');
         body+=`<p class="meta">${escape(String(book.ext).toUpperCase())} · ${Number(book.size)>0?Math.ceil(book.size/1024)+' КБ':''}${book.lang?' · '+escape(book.lang):''}</p>`;
-        const available=[{key:'raw',label:'Оригинал ('+String(book.ext).toUpperCase()+')'},...formats.available(book.ext,this.config).map(format=>({key:format,label:format.toUpperCase()}))];
+        const available=[{key:'raw',label:'Оригинал ('+String(book.ext).toUpperCase()+')'},...formats.available(book.ext,converter.formatSettings(this.config)).map(format=>({key:format,label:format.toUpperCase()}))];
         if(identity)body+=this.formatForm(req,identity,this.url('/book',{...p,uid}),String(book.ext).toLowerCase())+this.downloadButton({...book,_uid:uid},formats.preference(identity.user));
         else {
             const wanted=this.guestFormat(req),selection=this.downloadSelection(book,wanted);

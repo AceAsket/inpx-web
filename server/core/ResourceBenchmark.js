@@ -19,6 +19,7 @@ const criteria = Object.freeze({probeP95Ms:100, probeTimeoutMs:250, timerLagP95M
 const memoryValue = value => Number.isFinite(value) && value >= 0;
 const memorySample = machine => memoryValue(machine.memoryUsed) && Number.isFinite(machine.memoryLimit) && machine.memoryLimit > 0;
 const lowMemoryReserve = machine => memoryValue(machine.memoryAvailable) && machine.memoryAvailable < 128 * 1024 * 1024;
+const tasksPerStage = total => Number.isFinite(total) ? Math.max(6, total) : 12;
 
 function customProfile(limits, settings) {
     const maximum = settings.hardMax;
@@ -80,7 +81,7 @@ class ResourceBenchmark {
         const source = this.sources().find(item => item.id === this.last?.source?.id);
         const stale = !!this.last && (!source || this.last.fingerprint !== policy.fingerprint(this.config, settings, machine, source));
         const legacy = !!this.last && this.last.schema !== 2;
-        return {settings, machine, runtime:this.runtime.snapshot(),
+        return {settings, machine, runtime:this.runtime.snapshot(), benchmarkSampleSize:tasksPerStage(settings.profiles.find(p=>p.id==='unlimited')?.limits.total),
             sources:this.sources().map(({id, name}) => ({id, name})), job:this.job,
             report:this.last ? {...this.last, stale, legacy} : null,
             recommendation:!stale && !legacy && this.last ? this.last.recommendation : {profile:settings.automatic, measured:false,
@@ -100,7 +101,7 @@ class ResourceBenchmark {
         const selected = mode === 'profile' ? this.runtime.settings.profiles.find(item => item.id === options.profileId) : null;
         if (mode === 'profile' && !selected) throw new Error('Выберите стандартный профиль для проверки');
         const candidates = mode === 'custom' ? [customProfile(options.limits, this.runtime.settings)]
-            : mode === 'profile' ? [selected] : this.runtime.settings.profiles;
+            : mode === 'profile' ? [selected] : this.runtime.settings.profiles.filter(p=>p.id !== 'unlimited');
         this.lastError = null;
         this.controller = new AbortController();
         require('events').setMaxListeners(64, this.controller.signal);
@@ -256,7 +257,7 @@ class ResourceBenchmark {
         try {
             for (let round = 0; round < 12; round++) {
                 const before = Date.now();
-                const jobs = stages.flatMap(stage => Array.from({length:Math.max(6, profile.limits.total)}, (_, n) => () => stage.task(`${profile.id}-${round}-${n}`)));
+                const jobs = stages.flatMap(stage => Array.from({length:tasksPerStage(profile.limits.total)}, (_, n) => () => stage.task(`${profile.id}-${round}-${n}`)));
                 const settled = await this.runtime.withBenchmark(profile.limits, signal, () => Promise.allSettled(jobs.map(task => task())));
                 const failure = settled.find(item => item.status === 'rejected');
                 if (failure) throw failure.reason;
@@ -269,14 +270,14 @@ class ResourceBenchmark {
         if (probeError) throw probeError;
         const {metrics} = sample();
         return {profile:profile.id, limits:profile.limits, completed:true, elapsedMs:median(rounds.slice(1)),
-            rounds:rounds.length, totalDurationMs:Date.now() - start, tasksPerStage:Math.max(6, profile.limits.total),
-            tasksPerPass:stages.length * Math.max(6, profile.limits.total), memoryBefore:before.memoryUsed, memoryScope:before.memoryScope,
+            rounds:rounds.length, totalDurationMs:Date.now() - start, tasksPerStage:tasksPerStage(profile.limits.total),
+            tasksPerPass:stages.length * tasksPerStage(profile.limits.total), memoryBefore:before.memoryUsed, memoryScope:before.memoryScope,
             firstPassMs:rounds[0], repeatPassMs:rounds[1], probeP95Ms:percentile(probes), probeSamples:probes.length,
             probeTimeouts, probeFailures, probeSuccessfulSamples:probes.length - probeTimeouts - probeFailures,
             timerLagP95Ms:percentile(lags), ...metrics, memoryRatio:memoryMeasured ? memoryRatio : null, otherWork};
     }
 
-    async execute(source, signal, candidates = this.runtime.settings.profiles, mode = 'compare') {
+    async execute(source, signal, candidates = this.runtime.settings.profiles.filter(p=>p.id !== 'unlimited'), mode = 'compare') {
         this.stopReason = '';
         const settings = this.runtime.settings, machine = this.hardware();
         if ((machine.memoryScope !== 'host' && memorySample(machine) && machine.memoryUsed / machine.memoryLimit >= 0.85)

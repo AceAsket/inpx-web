@@ -17,7 +17,7 @@ const MiB=1024**2;
     try {
         const library=path.join(directory,'library');await createFixture(library);
         await fs.writeJson(path.join(library,'config.json'),{loggingEnabled:false,allowAnonymousAccess:true,adminPassword:'performance-browser-fixture'});
-        const dataDir=path.join(directory,'data');await fs.copy(path.resolve('dist/tmp/public'),path.join(dataDir,'public'));
+        const dataDir=path.join(directory,'data');await fs.copy(path.join(path.resolve('dist'),'tmp/public'),path.join(dataDir,'public'));
         const port=await unusedPort(),base=`http://127.0.0.1:${port}`;
         child=spawn(process.execPath,[path.resolve('server'),`--data-dir=${dataDir}`,`--config=${library}/config.json`,`--lib-dir=${library}`,`--port=${port}`,'--host=127.0.0.1'],
             {windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,INPX_TTS_ENABLED:'false',INPX_LIBRARY_SOURCES:'',LIBRARY_SOURCES:'',
@@ -33,7 +33,7 @@ const MiB=1024**2;
                 draft:{selected:'performance',sourceId:'two',customLimits:{total:9,images:3,reviews:9,conversions:3}}}]}));
         },preferenceKey);
         page=await context.newPage();
-        const errors=[],requests=[];let reads=0,sourceIds=['one','two'],legacy=false,jobState='idle';
+        const errors=[],requests=[];let storedProfile=null,reads=0,sourceIds=['one','two'],legacy=false,compare=false,jobState='idle';
         const report=()=>({schema:legacy ? 1:2,legacy,mode:'custom',measuredAt:'2026-11-07T10:00:00.000Z',source:{id:'one',name:'Первое хранилище'},
             machine:{memoryScope:'cgroup'},confidence:'partial',criteria:{probeP95Ms:100,timerLagP95Ms:100,memoryRatio:.85,minProbeSamples:5},
             recommendation:{profile:'balanced',measured:false},rows:[{profile:'custom',completed:true,limits:{total:8,images:4,reviews:8,conversions:3},
@@ -47,17 +47,25 @@ const MiB=1024**2;
                 let value;
                 if(request.action==='get-admin-performance') {
                     reads++;
+                    const saved = report();
+                    if (compare) {
+                        saved.mode='compare';
+                        saved.rows=['economy','balanced','performance'].map((profile,i)=>({...saved.rows[0],profile,
+                            probeP95Ms:[12,8,19][i],peakMemory:[429,470,526][i]*MiB}));
+                    }
                     value={machine:{cpu:4,memoryLimit:2048*MiB,memoryUsed:700*MiB,memoryScope:'cgroup',cpuUsageUs:reads*100000},
-                        processMemory:{rss:100*MiB},runtime:{active:0,queued:0},databaseCache:{available:true},report:report(),
+                        processMemory:{rss:100*MiB},runtime:{active:0,queued:0},databaseCache:{available:true},report:saved,
                         job:jobState==='idle' ? null:{state:jobState,stage:'Готово',progress:0,message:jobState==='failed' ? 'Предыдущая попытка не завершилась':''},
                         recommendation:{profile:'balanced',measured:false,reason:'Рекомендация не меняет параметры теста.'},
                         sources:sourceIds.map(id=>({id,name:id==='one' ? 'Первое хранилище':'Второе хранилище'})),
-                        settings:{selected:'balanced',limits:{total:4,images:2,reviews:4,conversions:2,background:1},hardMax:12,
+                        settings:{storedProfile,requested:storedProfile || 'balanced',automatic:'balanced',selected:storedProfile && storedProfile !== 'auto' ? storedProfile : 'balanced',limits:{total:4,images:2,reviews:4,conversions:2,background:1},hardMax:12,
                             benchmarkEnabled:true,benchmarkTimeoutMs:60000,launchEnv:{},profiles:[
                                 {id:'economy',name:'Бережный',limits:{total:2,images:1,reviews:2,conversions:1}},
                                 {id:'balanced',name:'Сбалансированный',limits:{total:4,images:2,reviews:4,conversions:2}},
-                                {id:'performance',name:'Производительный',limits:{total:6,images:3,reviews:6,conversions:3}}]}};
-                } else if(request.action==='start-admin-benchmark') {requests.push(request.options);value={job:{state:'completed'}};}
+                                {id:'performance',name:'Производительный',limits:{total:6,images:3,reviews:6,conversions:3}},
+                                {id:'unlimited',name:'Без ограничений',limits:{total:null,images:null,reviews:null,conversions:null}}]}};
+                } else if(request.action==='set-admin-resource-profile') {storedProfile=request.profile;value={success:true};}
+                else if(request.action==='start-admin-benchmark') {requests.push(request.options);value={job:{state:'completed'}};}
                 else if(request.action==='cancel-admin-benchmark')value={job:{state:'cancelled'}};
                 else {server.send(message);return;}
                 socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));socket.send(JSON.stringify({requestId:request.requestId,...value}));
@@ -77,47 +85,74 @@ const MiB=1024**2;
             if(!await panel.count())await page.getByRole('button',{name:/Администрирование/}).click();
             await panel.getByTestId('performance-active').waitFor();
         };
+        const choice=panel.getByLabel('Режим проверки',{exact:true}), source=panel.getByLabel('Хранилище',{exact:true});
         const close=()=>page.getByRole('button',{name:'OK',exact:true}).click();
         await open();
-        assert.equal(await panel.getByRole('button',{name:/^Сбалансированный/}).getAttribute('aria-pressed'),'true','Another profile draft must not become the admin test selection');
-        await panel.getByRole('button',{name:/^Бережный/}).click();await panel.getByTestId('performance-start').click();
+        assert.equal(await choice.inputValue(),'balanced','Another profile draft must not become the admin test selection');
+        await choice.selectOption('economy');await panel.getByTestId('performance-start').click();
         assert.deepEqual(requests.at(-1),{sourceId:'one',mode:'profile',profileId:'economy'});
-        await panel.getByTestId('performance-active').getByText('Сбалансированный',{exact:true}).waitFor();
-        await panel.getByRole('button',{name:/^Сравнить три режима/}).first().click();await panel.getByTestId('performance-start').click();
+        const serverProfile=panel.getByLabel('Режим сервера',{exact:true});
+        assert.equal(await serverProfile.inputValue(),'balanced');
+        assert.deepEqual(await serverProfile.locator('option').evaluateAll(options=>options.map(o=>o.value)),['auto','economy','balanced','performance','unlimited']);
+        await serverProfile.selectOption('auto');
+        await page.waitForFunction(()=>document.querySelector('#performance-server-profile')?.disabled===false);
+        assert.equal(storedProfile,'auto');assert.equal(await choice.inputValue(),'economy');
+        const resources=panel.getByText('Ресурсы и лимиты',{exact:true});
+        await resources.click();
+        await panel.getByRole('button',{name:'Вернуть режим из настроек запуска'}).click();
+        await page.waitForFunction(()=>document.querySelector('#performance-server-profile')?.value==='balanced');
+        assert.equal(storedProfile,null);
+        await resources.click();
+        await choice.selectOption('compare');await panel.getByTestId('performance-start').click();
         assert.deepEqual(requests.at(-1),{sourceId:'one',mode:'compare'});
-        await panel.getByRole('button',{name:/^Свои значения/}).click();
+        await choice.selectOption('custom');
         for(const [label,value] of [['Всего одновременно','8'],['Изображения','3'],['Архивы','5'],['Конвертация','2']])await panel.getByRole('spinbutton',{name:label,exact:true}).fill(value);
-        await panel.locator('.performance-source').click();await page.getByRole('option',{name:'Второе хранилище',exact:true}).click();
-        await panel.getByTestId('performance-save-status').filter({hasText:'Сохранено в этом браузере для текущего профиля.'}).waitFor();
+        await source.selectOption('two');
+        assert.equal(await source.inputValue(),'two');
         await close();await open();
         assert.equal(await panel.getByRole('spinbutton',{name:'Всего одновременно',exact:true}).inputValue(),'8');
-        await panel.locator('.performance-source').getByText('Второе хранилище',{exact:true}).waitFor();
+        assert.equal(await source.inputValue(),'two');
         await close();await page.reload();await page.locator('.profile-controls .profile-logout').waitFor();await open();
-        assert.equal(await panel.getByRole('button',{name:/^Свои значения/}).getAttribute('aria-pressed'),'true');
+        assert.equal(await choice.inputValue(),'custom');
         for(const [label,value] of [['Всего одновременно','8'],['Изображения','3'],['Архивы','5'],['Конвертация','2']])assert.equal(await panel.getByRole('spinbutton',{name:label,exact:true}).inputValue(),value);
         await panel.getByTestId('performance-start').click();assert.deepEqual(requests.at(-1),{sourceId:'two',mode:'custom',limits:{total:8,images:3,reviews:5,conversions:2}});
-        await panel.getByTestId('performance-result').getByText('Свои значения: отклик выше порога проверки',{exact:true}).waitFor();
-        await panel.locator('.performance-result-card').getByText(/Внутренний отклик p95: 168 мс; критерий — меньше 100 мс/).waitFor();
-        await panel.locator('.performance-result-card').getByText('Проверенные лимиты: изображения 4 · архивы 8 · конвертация 3',{exact:true}).waitFor();
-        assert.equal(await panel.locator('.performance-result-card').getAttribute('data-status'),'attention');
+        await panel.getByTestId('performance-result').getByText('Свои значения — отклик 168 мс при пороге 100 мс',{exact:true}).waitFor();
+        const details = panel.locator('details').filter({has:page.getByText('Подробности проверки',{exact:true})});
+        assert.equal(await details.getAttribute('open'),null);
+        await details.locator('summary').click();
+        await details.getByText(/Внутренний отклик p95: 168 мс/).waitFor();
+        await details.getByText('Архивы 8 · конвертация 3 · изображения 4',{exact:true}).waitFor();
+        await details.locator('summary').click();
+        assert.equal(await panel.getByTestId('performance-result').getAttribute('data-status'),'attention');
         await panel.getByTestId('performance-result').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(directory,'performance-result-1280.png')});
         await page.setViewportSize({width:320,height:900});await panel.getByTestId('performance-result').scrollIntoViewIfNeeded();
         const geometry=await panel.evaluate(node=>{const bounds=node.getBoundingClientRect();return {width:node.clientWidth,scroll:node.scrollWidth,view:innerWidth,
-            cards:[...node.querySelectorAll('.performance-result-card')].map(card=>{const r=card.getBoundingClientRect();return {left:r.left,right:r.right};}),
+            cards:[...node.querySelectorAll('select, .performance-result')].map(card=>{const r=card.getBoundingClientRect();return {left:r.left,right:r.right};}),
             overflow:[...node.querySelectorAll('*')].filter(child=>{const r=child.getBoundingClientRect();return r.width && (r.right>bounds.right+1 || r.left<bounds.left-1);})
                 .slice(0,12).map(child=>({tag:child.tagName,class:child.className,text:(child.textContent||'').slice(0,70)}))};});
         assert(geometry.scroll<=geometry.width+1 && geometry.cards.every(card=>card.left>=0 && card.right<=geometry.view),JSON.stringify(geometry));
         await page.screenshot({path:path.join(directory,'performance-result-320.png')});
-        await panel.locator('.performance-result-card').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(directory,'performance-metrics-320.png')});
+        await details.locator('summary').click();await details.locator('table').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(directory,'performance-metrics-320.png')});
         await panel.getByRole('spinbutton',{name:'Изображения',exact:true}).fill('1.5');await close();await open();
         assert.equal(await panel.getByRole('spinbutton',{name:'Изображения',exact:true}).inputValue(),'1.5');assert(await panel.getByTestId('performance-start').isDisabled());
         await panel.getByRole('spinbutton',{name:'Изображения',exact:true}).fill('3');
         sourceIds=['one'];legacy=true;jobState='failed';
         await panel.getByRole('button',{name:'Обновить показатели производительности',exact:true}).click();
-        await panel.getByText(/Сохранённое хранилище недоступно/).waitFor();
-        await panel.getByTestId('performance-result').getByText(/отчёт прежнего формата/).waitFor();
-        await panel.getByTestId('performance-result').getByText(/Сохранённый результат относится к предыдущей завершённой проверке/).waitFor();
+        await panel.getByText(/Хранилище недоступно/).waitFor();
+        await panel.getByTestId('performance-result').getByText('Старый формат отчёта. Повторите проверку.',{exact:true}).waitFor();
+        await panel.getByRole('status').getByText('Предыдущая попытка не завершилась',{exact:true}).waitFor();
         await panel.getByTestId('performance-result').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(directory,'performance-legacy-320.png')});
+        legacy=false;compare=true;jobState='completed';await choice.selectOption('compare');
+        await panel.getByTestId('performance-start').click();
+        await panel.getByRole('button',{name:'Обновить показатели производительности'}).click();
+        await page.evaluate(()=>document.querySelector('#app').__vue_app__.config.globalProperties.$store.commit('setSettings',{darkTheme:true}));
+        const comparison=panel.locator('.performance-comparison');
+        await comparison.getByText('Сбалансированный',{exact:true}).waitFor();
+        for (const width of [320,1280]) {
+            await page.setViewportSize({width,height:width === 320 ? 1400 : 980});
+            assert(await panel.evaluate(node=>node.scrollWidth<=node.clientWidth+1));
+            await panel.screenshot({path:path.join(directory,'performance-compact-'+width+'.png')});
+        }
         const stored=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)),preferenceKey);
         assert.equal(stored.entries.length,2);assert(stored.entries.some(entry=>entry.scope==='["","another-profile"]' && entry.draft.customLimits.total===9));
         for(const entry of stored.entries)assert.deepEqual(Object.keys(entry.draft).sort(),['customLimits','selected','sourceId']);

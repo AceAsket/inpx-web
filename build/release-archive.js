@@ -13,6 +13,7 @@ function executableNames(target, converters = true) {
 
 async function createReleaseArchive(sourceDir, archiveFile, target) {
     const executables = new Set(executableNames(target));
+    if (target.startsWith('linux')) executables.add('bin/djxl');
     await fs.access(path.join(sourceDir, executableNames(target, false)[0]));
     const entries = [];
     async function visit(relative = '') {

@@ -5,6 +5,7 @@ const profilePassword = require('./ProfilePassword');
 const profileTotp = require('./ProfileTotp');
 const trustedDevices = require('./ProfileTrustedDevices');
 const profileAuthPolicy = require('./ProfileAuthPolicy');
+const overviewShelves = require('../../shared/OverviewShelves');
 const bookFormats = require('../../shared/BookFormats');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const progressJournal = require('./ReaderProgressJournal');
@@ -717,6 +718,7 @@ class ReadingListStore {
         normalized.emailAsZip = normalized.emailAsZip === true;
         normalized.telegramAsZip = normalized.telegramAsZip === true;
         normalized.opdsEnabled = (normalized.opdsEnabled !== false);
+        normalized.overviewShelfLayout = overviewShelves.normalize(normalized.overviewShelfLayout);
         normalized.personalRecommendationsEnabled = normalized.personalRecommendationsEnabled !== false;
         normalized.opdsAuthEnabled = (normalized.opdsAuthEnabled === true);
         const appPasswordHash = String(normalized.opdsAppPasswordHash || '');
@@ -1517,6 +1519,7 @@ class ReadingListStore {
             emailAsZip: profile.emailAsZip,
             telegramAsZip: profile.telegramAsZip,
             opdsEnabled: profile.opdsEnabled,
+            overviewShelfLayout: overviewShelves.normalize(profile.overviewShelfLayout),
             personalRecommendationsEnabled: profile.personalRecommendationsEnabled,
             opdsAuthEnabled: profile.opdsAuthEnabled,
             isAdmin: false,
@@ -1573,6 +1576,8 @@ class ReadingListStore {
         }
         if (utilsHasProp(patch, 'opdsEnabled'))
             target.opdsEnabled = (patch.opdsEnabled !== false);
+        if (utilsHasProp(patch, 'overviewShelfLayout'))
+            target.overviewShelfLayout = overviewShelves.normalize(patch.overviewShelfLayout);
         if (utilsHasProp(patch, 'personalRecommendationsEnabled'))
             target.personalRecommendationsEnabled = patch.personalRecommendationsEnabled !== false;
         if (utilsHasProp(patch, 'opdsAuthEnabled'))
@@ -2477,6 +2482,7 @@ class ReadingListStore {
                 emailAsZip: user.emailAsZip === true,
                 telegramAsZip: user.telegramAsZip === true,
                 opdsEnabled: user.opdsEnabled,
+                overviewShelfLayout: overviewShelves.normalize(user.overviewShelfLayout),
                 personalRecommendationsEnabled: user.personalRecommendationsEnabled !== false,
                 opdsAuthEnabled: user.opdsAuthEnabled,
                 readerPreferences: await this.assets.inlinePreferences(user.id, this.normalizeReaderPreferences(user.readerPreferences)),
@@ -2533,6 +2539,8 @@ class ReadingListStore {
             }
             if (utilsHasProp(incomingUser, 'opdsEnabled'))
                 target.opdsEnabled = (incomingUser.opdsEnabled !== false);
+            if (utilsHasProp(incomingUser, 'overviewShelfLayout'))
+                target.overviewShelfLayout = overviewShelves.normalize(incomingUser.overviewShelfLayout);
             if (utilsHasProp(incomingUser, 'personalRecommendationsEnabled'))
                 target.personalRecommendationsEnabled = incomingUser.personalRecommendationsEnabled !== false;
             if (utilsHasProp(incomingUser, 'opdsAuthEnabled'))

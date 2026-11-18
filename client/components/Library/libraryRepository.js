@@ -4,7 +4,7 @@ const READING_TTL = 30000;
 const DISCOVERY_TTL = 15 * 60 * 1000;
 
 function emptyState() {
-    return {revision: 0, reading: null, lists: [], shelves: [], externalShelves: [], recommendations: [], readingLoading: false, shelvesLoading: false,
+    return {revision: 0, readingRevision: 0, reading: null, lists: [], shelves: [], externalShelves: [], recommendations: [], readingLoading: false, shelvesLoading: false,
         readingError: '', listsError: '', shelvesError: '', readingLoginRequired: false, shelvesLoginRequired: false,
         externalShelvesLoading: false, externalShelvesLoaded: false, externalShelvesError: '', externalShelvesLoginRequired: false,
         recommendationsLoading: false, recommendationsLoaded: false, recommendationsError: '', recommendationsLoginRequired: false,
@@ -44,8 +44,8 @@ class LibraryRepository {
             this.discoveryKey = '';
             this.patch({...emptyState(), revision: this.epoch, locked: !personalAccess(config, settings)});
         }
-        const discoveryKey = JSON.stringify([!!config.version, discoveryOptions(settings), config.discovery, settings.showDiscoveryExternal !== false,
-            config.clientApi?.features?.includes('separateExternalDiscovery'), settings.showDiscoverySimilar !== false,
+        const discoveryKey = JSON.stringify([!!config.version, discoveryOptions(settings), config.discovery, this.overviewShelfEnabled('discovery:external-source', settings.showDiscoveryExternal !== false),
+            config.clientApi?.features?.includes('separateExternalDiscovery'), this.overviewShelfEnabled('recommendations', settings.showDiscoverySimilar !== false),
             config.currentUserProfile?.personalRecommendationsEnabled !== false]);
         if (discoveryKey !== this.discoveryKey) {
             this.discoveryKey = discoveryKey;
@@ -58,7 +58,7 @@ class LibraryRepository {
             delete this.pending.externalShelves;
             this.patch({shelvesLoading: false, externalShelves: [], externalShelvesLoading: false, externalShelvesLoaded: false,
                 externalShelvesError: '', externalShelvesLoginRequired: false, recommendationsLoading: false,
-                ...(settings.showDiscoverySimilar === false || config.currentUserProfile?.personalRecommendationsEnabled === false ? {recommendations: []} : {})});
+                ...(!this.overviewShelfEnabled('recommendations', settings.showDiscoverySimilar !== false) || config.currentUserProfile?.personalRecommendationsEnabled === false ? {recommendations: []} : {})});
         }
     }
 
@@ -67,10 +67,11 @@ class LibraryRepository {
         if (this.pending[kind]) return this.pending[kind];
         if (!force && this.loadedAt[kind] !== undefined && this.now() - this.loadedAt[kind] < ttl) return;
         const epoch = this.epoch;
+        const readingRevision = this.state.readingRevision;
         const discoveryRevision = this.discoveryRevision;
         const pinnedShelvesRevision = this.pinnedShelvesRevision;
         const current = () => epoch === this.epoch && (kind === 'pinnedShelves' ? pinnedShelvesRevision === this.pinnedShelvesRevision
-            : kind === 'reading' || discoveryRevision === this.discoveryRevision);
+            : kind === 'reading' ? readingRevision === this.state.readingRevision : discoveryRevision === this.discoveryRevision);
         this.patch({[`${kind}Loading`]: true, [`${kind}Error`]: ''});
         const pending = (async() => {
             try {
@@ -96,9 +97,13 @@ class LibraryRepository {
 
     requireLogin(kind) {
         delete this.loadedAt[kind];
-        if (kind === 'reading') this.invalidatePinnedShelves();
+        if (kind === 'reading') {
+            delete this.pending.reading;
+            this.invalidatePinnedShelves();
+        }
         this.patch({[`${kind}LoginRequired`]: true, [`${kind}Error`]: '', [`${kind}Loaded`]: false,
-            ...(kind === 'reading' ? {reading: null, lists: [], listsError: '', pinnedShelves: [], pinnedShelvesError: ''} : {[kind]: []})});
+            ...(kind === 'reading' ? {readingRevision:this.state.readingRevision+1,readingLoading:false,
+                reading: null, lists: [], listsError: '', pinnedShelves: [], pinnedShelvesError: ''} : {[kind]: []})});
     }
 
     loadReading(force = false) {
@@ -118,6 +123,14 @@ class LibraryRepository {
         });
     }
 
+    refreshReading() {
+        delete this.pending.reading;
+        delete this.loadedAt.reading;
+        this.invalidatePinnedShelves();
+        this.patch({readingRevision:this.state.readingRevision+1,readingLoading:false});
+        return this.loadReading(true);
+    }
+
     loadShelves(force = false) {
         if (this.config.discovery?.enabled === false) {
             this.patch({shelves: [], shelvesLoaded: true});
@@ -131,10 +144,16 @@ class LibraryRepository {
         });
     }
 
+    overviewShelfEnabled(id, fallback) {
+        const rows = this.config.profileAuthorized && this.config.currentUserProfile?.overviewShelfLayout;
+        const row = Array.isArray(rows) && rows.find(item => item.id === id);
+        return row ? !row.hidden : fallback;
+    }
+
     loadExternalShelves(force = false) {
         if (!this.config.clientApi?.features?.includes('separateExternalDiscovery') || this.config.discovery?.enabled === false
             || !this.config.discovery?.externalSource || this.config.discovery.externalSource === 'none'
-            || this.settings.showDiscoveryExternal === false)
+            || !this.overviewShelfEnabled('discovery:external-source', this.settings.showDiscoveryExternal !== false))
             return Promise.resolve();
         return this.run('externalShelves', force, DISCOVERY_TTL, async() => {
             const result = await this.api.getDiscoveryShelves({externalOnly:true, externalLimit:8, forceRefresh:force}, {suppressProfileLogin:true});
@@ -143,7 +162,7 @@ class LibraryRepository {
     }
 
     loadRecommendations(force = false) {
-        if (this.config.discovery?.enabled === false || !this.config.profileAuthorized || this.settings.showDiscoverySimilar === false
+        if (this.config.discovery?.enabled === false || !this.config.profileAuthorized || !this.overviewShelfEnabled('recommendations', this.settings.showDiscoverySimilar !== false)
             || this.config.currentUserProfile?.personalRecommendationsEnabled === false
             || !this.config.clientApi?.features?.includes('overviewRecommendations')) {
             this.patch({recommendations: [], recommendationsLoaded: true});

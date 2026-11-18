@@ -1,15 +1,17 @@
 const formats = require('../../../shared/BookFormats');
+const {formatSettings} = require('../BookConverter');
 
 const mimeTypes = {
     fb2:'application/fb2+xml', epub:'application/epub+zip', epub3:'application/epub+zip', kepub:'application/epub+zip',
-    mobi:'application/x-mobipocket-ebook', pdf:'application/pdf', kfx:'application/vnd.amazon.ebook', azw8:'application/vnd.amazon.ebook',
+    mobi:'application/x-mobipocket-ebook', pdf:'application/pdf', kfx:'application/vnd.amazon.ebook', azw3:'application/vnd.amazon.ebook', azw8:'application/vnd.amazon.ebook',
 };
 
 function forBook(book, config, profile = {}) {
     const ext = String(book.ext || '').toLowerCase();
     const base = `${config.bookPathStatic}/by-uid?uid=${encodeURIComponent(book._uid)}`;
-    const offered = [...new Set([ext, ...(config.conversionEnabled ? formats.available(ext, config) : [])])];
-    const selected = formats.resolve(ext, config, formats.preference(profile, 'opds')) || ext;
+    const conversion = formatSettings(config);
+    const offered = [...new Set([ext, ...(conversion.conversionEnabled ? formats.available(ext, conversion) : [])])];
+    const selected = formats.resolve(ext, conversion, formats.preference(profile, 'opds')) || ext;
     offered.sort((a, b) => Number(b === selected) - Number(a === selected));
     const links = [];
     for (const format of offered) {

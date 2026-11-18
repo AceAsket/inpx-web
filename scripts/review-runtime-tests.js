@@ -89,7 +89,8 @@ async function testReviewReadsShareBudgetWithWarmupAndRatings() {
             ])});
         }
         const value = worker({reviewWarmupEnabled:true,libDir:dirs[0], librarySources:dirs.map(libDir => ({libDir}))});
-        const original = {open:ZipReader.prototype.open, close:ZipReader.prototype.close, cpu:os.availableParallelism};
+        const resources = require('../server/core/ResourceRuntime');
+        const original = {open:ZipReader.prototype.open, close:ZipReader.prototype.close, cpu:os.availableParallelism, settings:resources.settings};
         let active = 0, peak = 0, opened = 0, closed = 0;
         const ratingsReads = [];
         ZipReader.prototype.open = async function(file, entries) {
@@ -105,6 +106,7 @@ async function testReviewReadsShareBudgetWithWarmupAndRatings() {
         };
         try {
             os.availableParallelism = () => 64;
+            resources.configure({...original.settings, limits:{...original.settings.limits, reviews:3}});
             const warming = value.warmReviewIndexes();
             const books = ids.map(file => ({folder:'collection.zip', file, ext:'fb2', sourceLibDir:dirs[0]}));
             const results = await Promise.all([warming, ...books.map(book => value.getBookReviews(book))]);
@@ -122,6 +124,7 @@ async function testReviewReadsShareBudgetWithWarmupAndRatings() {
             assert.strictEqual(runtime.queue.length, 0);
         } finally {
             os.availableParallelism = original.cpu;
+            resources.configure(original.settings);
             ZipReader.prototype.open = original.open;
             ZipReader.prototype.close = original.close;
         }
@@ -208,7 +211,8 @@ async function testReviewWarmupIsBackgroundAndIsolatesSourceFailures() {
 }
 
 async function testReviewPoolDoesNotWaitForImageDecoders() {
-    const images = require('../server/core/ImageRuntime');
+    const {ImageRuntime} = require('../server/core/ImageRuntime');
+    const images = new ImageRuntime(2);
     let release, timer;
     const gate = new Promise(resolve => {release = resolve;});
     const busy = Array.from({length:images.concurrency}, () => images.run(() => gate));

@@ -2,7 +2,7 @@
 
 ARG NODE_IMAGE=node:24-bookworm-slim
 ARG RUNTIME_IMAGE=debian:bookworm-slim
-ARG FB2CNG_VERSION=v1.9.0
+ARG FB2CNG_VERSION=v2.1.1
 ARG FB2CNG_ARCH=linux-amd64
 
 FROM rust:1.99.1-alpine3.23 AS kindling-build
@@ -100,7 +100,7 @@ LABEL org.opencontainers.image.title="inpx-web" \
       org.opencontainers.image.source="https://github.com/AceAsket/inpx-web"
 
 ENV INPX_ENABLE_CONVERSION=true
-ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw8,pdf
+ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw3,azw8,pdf
 ENV INPX_FB2CNG_VERSION=${FB2CNG_VERSION}
 
 COPY --from=fb2cng-tools /fb2cng-runtime/fbc /usr/local/bin/fbc
@@ -120,7 +120,7 @@ LABEL org.opencontainers.image.title="inpx-web-calibre" \
       org.opencontainers.image.source="https://github.com/AceAsket/inpx-web"
 
 ENV QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox
-ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw8,pdf
+ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw3,azw8,pdf
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \

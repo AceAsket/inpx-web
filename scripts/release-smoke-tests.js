@@ -164,6 +164,7 @@ function testConvertedBookFileNames() {
     assert.strictEqual(bookConverter.getConvertedExtension('epub3'), 'epub');
     assert.strictEqual(bookConverter.getConvertedExtension('kepub'), 'kepub.epub');
     assert.strictEqual(bookConverter.getConvertedExtension('KEPUB'), 'kepub.epub');
+    assert.strictEqual(bookConverter.getConvertedExtension('AzW3'), 'azw3');
     assert.strictEqual(bookConverter.getConvertedExtension('AzW8'), 'azw8');
     assert.strictEqual(bookConverter.getConvertedFileName('Book.fb2', 'kepub'), 'Book.kepub.epub');
     assert.strictEqual(bookConverter.getConvertedFileName('Book.fb2', 'KEPUB'), 'Book.kepub.epub');
@@ -171,33 +172,36 @@ function testConvertedBookFileNames() {
 }
 
 async function testFb2cngConfigAndConversionCache() {
-    const baseConfigPath = require.resolve('../server/config/base');
     const ConfigManager = require('../server/config');
     const bookConverter = require('../server/core/BookConverter');
     const envNames = ['INPX_FB2CNG_CONFIG', 'FB2CNG_CONFIG'];
     const previousEnv = Object.fromEntries(envNames.map(name => [name, process.env[name]]));
 
-    try {
-        process.env.INPX_FB2CNG_CONFIG = '/config/inpx.yaml';
-        process.env.FB2CNG_CONFIG = '/config/legacy.yaml';
-        delete require.cache[baseConfigPath];
-        assert.strictEqual(require('../server/config/base').fb2cngConfigPath, '/config/inpx.yaml');
-
-        delete process.env.INPX_FB2CNG_CONFIG;
-        delete require.cache[baseConfigPath];
-        assert.strictEqual(require('../server/config/base').fb2cngConfigPath, '/config/legacy.yaml');
-    } finally {
-        for (const name of envNames) {
-            if (previousEnv[name] === undefined)
-                delete process.env[name];
-            else
-                process.env[name] = previousEnv[name];
+    await withTempDir(async dir => {
+        const overridePath = path.join(dir, 'override.yaml');
+        const legacyPath = path.join(dir, 'legacy.yaml');
+        await fs.writeFile(overridePath, 'document: {}\n');
+        await fs.writeFile(legacyPath, 'document: {}\n');
+        try {
+            process.env.INPX_FB2CNG_CONFIG = overridePath;
+            process.env.FB2CNG_CONFIG = legacyPath;
+            assert.strictEqual((await bookConverter.readFb2cngConfig('/saved.yaml')).path, overridePath);
+            assert.strictEqual(require('../server/config/base').fb2cngConfigPath, '');
+            process.env.INPX_FB2CNG_CONFIG = '';
+            assert.strictEqual((await bookConverter.readFb2cngConfig('/saved.yaml')).path, '');
+            delete process.env.INPX_FB2CNG_CONFIG;
+            assert.strictEqual((await bookConverter.readFb2cngConfig('/saved.yaml')).path, legacyPath);
+        } finally {
+            for (const name of envNames) {
+                if (previousEnv[name] === undefined)
+                    delete process.env[name];
+                else
+                    process.env[name] = previousEnv[name];
+            }
         }
-        delete require.cache[baseConfigPath];
-        require('../server/config/base');
-    }
+    });
 
-    assert.ok(!ConfigManager.propsToSave.includes('fb2cngConfigPath'));
+    assert.ok(ConfigManager.propsToSave.includes('fb2cngConfigPath'));
     assert.strictEqual(typeof(bookConverter.convert), 'function');
     assert.strictEqual(typeof(bookConverter.prepareConvertedFile), 'function');
 

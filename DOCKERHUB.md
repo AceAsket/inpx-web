@@ -141,7 +141,7 @@ After restoring a full backup, restart the container. If library sources changed
 | `INPX_METRICS_ENABLED` | Enable Prometheus metrics when `true`. |
 | `INPX_METRICS_PATH` | Metrics endpoint path. Default: `/metrics`. |
 | `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. On stable and RC21, guests can see the navigation and sign-in form. |
-| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on stable and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. On the Rust branch after RC21, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
+| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on stable and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. In RC22 and the develop branch, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
 | `INPX_AUTH_MODE` | Use `proxy` for Authelia/Authentik/SWAG-style trusted proxy auth. |
 | `INPX_TRUST_PROXY` | Trust reverse proxy headers when `true`. |
 | `INPX_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDR list. |
