@@ -6,12 +6,18 @@ const resourceRuntime = require('./ResourceRuntime');
 const maxConcurrency = 16;
 
 class ReviewRuntime {
-    constructor(concurrency = resourceRuntime.settings.limits.reviews) {
-        this.concurrency = Math.max(1, Math.min(maxConcurrency, Math.floor(Number(concurrency)) || 1));
+    constructor(concurrency) {
+        this.fixedConcurrency = concurrency === undefined || concurrency === Infinity ? concurrency : Math.max(1, Math.min(maxConcurrency, Math.floor(Number(concurrency)) || 1));
         this.active = 0;
         this.backgroundActive = 0;
         this.foregroundStreak = 0;
         this.queue = [];
+    }
+
+    get concurrency() { return this.fixedConcurrency ?? resourceRuntime.settings.limits.reviews; }
+
+    get backgroundConcurrency() {
+        return Math.min(resourceRuntime.settings.limits.background, Math.max(1, this.concurrency - 1));
     }
 
     run(task) {
@@ -23,7 +29,7 @@ class ReviewRuntime {
 
     drain() {
         while (this.active < this.concurrency && this.queue.length) {
-            const background = this.backgroundActive < resourceRuntime.settings.limits.background
+            const background = this.backgroundActive < this.backgroundConcurrency
                 ? this.queue.find(item => item.background) : null;
             const foreground = this.queue.find(item => !item.background);
             const entry = this.foregroundStreak >= 8 && background ? background : foreground || background;

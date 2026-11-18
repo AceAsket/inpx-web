@@ -1,56 +1,27 @@
 <template>
     <div class="library-page library-overview">
         <div class="library-page__body">
-            <form class="overview-search" role="search" aria-label="Поиск в библиотеке" @submit.prevent="search">
-                <q-icon name="la la-search" size="26px" aria-hidden="true" />
-                <input v-model="query" type="search" maxlength="1000" placeholder="Найти книгу в библиотеке" aria-label="Название книги" role="combobox" aria-autocomplete="list"
-                    :aria-controls="suggestionListId" :aria-expanded="suggestionsExpanded" :aria-activedescendant="activeSuggestionId"
-                    @focus="searchFocused = true" @click="searchFocused = true" @input="searchFocused = true" @blur="searchFocused = false" @keydown="completion?.keydown($event)" />
-                <button v-if="query.trim()" type="submit" class="overview-search__submit" aria-label="Найти книгу"><q-icon name="la la-arrow-right" size="22px" /></button>
-                <RouterLink :to="catalogTarget('/books', {}, searchFilters)" class="overview-search__filters" aria-label="Открыть каталог и фильтры"><q-icon name="la la-sliders-h" size="24px" /></RouterLink>
-                <CatalogSuggestions ref="completion" :list-id="suggestionListId" :query="query" kind="title" :filters="searchFilters" :context="suggestionContext"
-                    :focused="searchFocused && active" @choose="chooseSuggestion" @search="search" @dismiss="searchFocused = false" @active="activeSuggestionId = $event" @expanded="suggestionsExpanded = $event" />
-            </form>
+            <div class="overview-toolbar">
+                <form class="overview-search" role="search" aria-label="Поиск в библиотеке" @submit.prevent="search">
+                    <q-icon name="la la-search" size="26px" aria-hidden="true" />
+                    <input v-model="query" type="search" maxlength="1000" placeholder="Найти книгу в библиотеке" aria-label="Название книги" role="combobox" aria-autocomplete="list"
+                        :aria-controls="suggestionListId" :aria-expanded="suggestionsExpanded" :aria-activedescendant="activeSuggestionId"
+                        @focus="searchFocused = true" @click="searchFocused = true" @input="searchFocused = true" @blur="searchFocused = false" @keydown="completion?.keydown($event)" />
+                    <button v-if="query.trim()" type="submit" class="overview-search__submit" aria-label="Найти книгу"><q-icon name="la la-arrow-right" size="22px" /></button>
+                    <RouterLink :to="catalogTarget('/books', {}, searchFilters)" class="overview-search__filters" aria-label="Открыть каталог и фильтры"><q-icon name="la la-sliders-h" size="24px" /></RouterLink>
+                    <CatalogSuggestions ref="completion" :list-id="suggestionListId" :query="query" kind="title" :filters="searchFilters" :context="suggestionContext"
+                        :focused="searchFocused && active" @choose="chooseSuggestion" @search="search" @dismiss="searchFocused = false" @active="activeSuggestionId = $event" @expanded="suggestionsExpanded = $event" />
+                </form>
+                <q-btn v-if="canCustomize" outline no-caps icon="la la-sliders-h" label="Управление полками" @click="managing = true" />
+            </div>
+            <OverviewShelvesDialog v-if="managing && canCustomize" :key="config.currentUserId" :shelves="sections" :saved="savedLayout"
+                :profile-name="config.currentUserProfile?.name" :can-pin="config.clientApi?.features?.includes('overviewPinnedShelves')" :persist="saveLayout"
+                @close="managing = false" @lists="library.openLists()" />
 
             <LibraryNotice v-if="state.locked || state.readingLoginRequired" title="Войдите в свой профиль" message="История чтения, сохранённое место и личные полки появятся после входа." action-label="Войти в профиль" @action="library.login" />
             <template v-if="!state.locked">
                 <LibraryNotice v-if="state.readingError" error title="Не удалось обновить историю" message="Проверьте подключение и попробуйте ещё раз." action-label="Повторить" :busy="state.readingLoading" @action="repository.loadReading(true)" />
-                <div v-if="!state.readingLoginRequired" class="overview-reading" :class="{'overview-reading--paired': books.current && books.recent.length}">
-                    <section v-if="books.current" class="current-book" aria-labelledby="current-book-heading">
-                        <div class="current-book__caption">
-                            <q-icon name="la la-book-open" size="21px" aria-hidden="true" />
-                            <h1 id="current-book-heading">Сейчас читаю</h1>
-                            <button type="button" :aria-label="`Действия с книгой: ${books.current.title}`" @click="library.openActions(books.current)"><q-icon name="la la-ellipsis-v" size="23px" /></button>
-                        </div>
-                        <div class="current-book__body">
-                            <button type="button" class="current-book__cover" :aria-label="`Открыть карточку: ${books.current.title}`" @click="library.openCard(books.current)"><BookCover :book="books.current" /></button>
-                            <div class="current-book__info">
-                                <button type="button" class="current-book__title" @click="library.openCard(books.current)">{{ books.current.title }}</button>
-                                <div class="current-book__author">{{ books.current.author || 'Автор не указан' }}</div>
-                                <div v-if="books.current.series" class="current-book__series">{{ books.current.series }}<span v-if="books.current.serno"> · {{ books.current.serno }}</span></div>
-                                <div v-if="currentGenres.length" class="current-book__genres" :title="currentGenres.join(', ')">Жанр: {{ currentGenres.join(', ') }}</div>
-                                <div v-if="currentYear" class="current-book__year">Год: {{ currentYear }}</div>
-                            </div>
-                        </div>
-                        <div class="current-book__footer">
-                            <div class="current-book__progress">
-                                <span>{{ Math.round((progress(books.current) || 0) * 100) }}% прочитано</span>
-                                <progress :value="progress(books.current) || 0" max="1" aria-label="Прогресс чтения" />
-                            </div>
-                            <q-btn unelevated no-caps color="primary" :label="readable(books.current, config) ? 'Читать' : 'Открыть'" @click="library.openBook(books.current)" />
-                        </div>
-                    </section>
-                    <div v-else-if="state.readingLoading && !state.readingLoaded" class="overview-skeleton overview-skeleton--hero" role="status" aria-label="Загружаем историю чтения" />
-                    <section v-else-if="state.readingLoaded" class="library-empty overview-welcome">
-                        <q-icon name="la la-book-open" size="32px" />
-                        <h2>{{ books.recent.length ? 'Выберите следующую книгу' : 'Ваша следующая история — здесь' }}</h2>
-                        <p>{{ books.recent.length ? 'Вернитесь к недавним книгам или найдите что-нибудь новое в каталоге.' : 'Откройте книгу из каталога. Мы сохраним место, и вы сможете продолжить чтение с главной.' }}</p>
-                        <q-btn unelevated no-caps color="primary" label="Открыть каталог" to="/books" />
-                    </section>
-                    <BookShelf v-if="books.recent.length" title="Недавно читали" :books="books.recent" heading-id="recent-books-heading">
-                        <template #action><RouterLink to="/my-books" class="overview-text-link">Все</RouterLink></template>
-                    </BookShelf>
-                </div>
+
 
                 <LibraryNotice v-if="state.shelvesLoginRequired && !state.readingLoginRequired" title="Подборки доступны после входа" message="Войдите в профиль, чтобы увидеть свои рекомендации." action-label="Войти в профиль" @action="library.login" />
                 <LibraryNotice v-if="state.shelvesError" error title="Не удалось обновить подборки" message="Проверьте подключение и попробуйте ещё раз." action-label="Повторить" :busy="state.shelvesLoading" @action="repository.loadShelves(true)" />
@@ -59,21 +30,53 @@
                     <div class="overview-loading__covers"><div v-for="i in 6" :key="i" class="overview-skeleton" /></div>
                 </div>
                 <div class="overview-shelves">
-                    <BookShelf v-for="shelf in pinnedShelves" :key="`pinned-${shelf.id}`" :title="shelf.title" :books="shelf.books" :heading-id="`shelf-pinned-${shelf.id}`">
-                        <template #action>
-                            <RouterLink :to="{path: '/my-books', query: {list: shelf.id}}" class="overview-text-link" :aria-label="`Открыть полку «${shelf.title}»`">Все книги</RouterLink>
-                        </template>
-                    </BookShelf>
-                    <BookShelf v-for="shelf in pendingFirstPins ? [] : shelves" :key="shelf.id" :title="shelf.title" :books="shelf.books" :heading-id="`shelf-${shelf.id}`" />
-                    <BookShelf v-if="!pendingFirstPins && state.recommendations.length" title="Рекомендуем вам" :books="recommendations" heading-id="recommended-books-heading">
-                        <template #action><RouterLink to="/for-you" class="overview-text-link">Все</RouterLink></template>
-                    </BookShelf>
+                    <template v-for="shelf in visibleRows" :key="shelf.id">
+                        <div v-if="shelf.id === 'current'" class="overview-reading" :class="{'overview-reading--paired': shelf.withRecent && books.current}">
+                            <section v-if="books.current" class="current-book" aria-labelledby="current-book-heading">
+                                <div class="current-book__caption">
+                                    <q-icon name="la la-book-open" size="21px" aria-hidden="true" />
+                                    <h1 id="current-book-heading">Сейчас читаю</h1>
+                                    <button type="button" :aria-label="`Действия с книгой: ${books.current.title}`" @click="library.openActions(books.current)"><q-icon name="la la-ellipsis-v" size="23px" /></button>
+                                </div>
+                                <div class="current-book__body">
+                                    <button type="button" class="current-book__cover" :aria-label="`Открыть карточку: ${books.current.title}`" @click="library.openCard(books.current)"><BookCover :book="books.current" /></button>
+                                    <div class="current-book__info">
+                                        <button type="button" class="current-book__title" @click="library.openCard(books.current)">{{ books.current.title }}</button>
+                                        <div class="current-book__author">{{ books.current.author || 'Автор не указан' }}</div>
+                                        <div v-if="books.current.series" class="current-book__series">{{ books.current.series }}<span v-if="books.current.serno"> · {{ books.current.serno }}</span></div>
+                                        <div v-if="currentGenres.length" class="current-book__genres" :title="currentGenres.join(', ')">Жанр: {{ currentGenres.join(', ') }}</div>
+                                        <div v-if="currentYear" class="current-book__year">Год: {{ currentYear }}</div>
+                                    </div>
+                                </div>
+                                <div class="current-book__footer">
+                                    <div class="current-book__progress">
+                                        <span>{{ Math.round((progress(books.current) || 0) * 100) }}% прочитано</span>
+                                        <progress :value="progress(books.current) || 0" max="1" aria-label="Прогресс чтения" />
+                                    </div>
+                                    <q-btn unelevated no-caps color="primary" :label="readable(books.current, config) ? 'Читать' : 'Открыть'" @click="library.openBook(books.current)" />
+                                </div>
+                            </section>
+                            <div v-else-if="state.readingLoading && !state.readingLoaded" class="overview-skeleton overview-skeleton--hero" role="status" aria-label="Загружаем историю чтения" />
+                            <section v-else-if="state.readingLoaded" class="library-empty overview-welcome">
+                                <q-icon name="la la-book-open" size="32px" />
+                                <h2>{{ books.recent.length ? 'Выберите следующую книгу' : 'Ваша следующая история — здесь' }}</h2>
+                                <p>{{ books.recent.length ? 'Вернитесь к недавним книгам или найдите что-нибудь новое в каталоге.' : 'Откройте книгу из каталога. Мы сохраним место, и вы сможете продолжить чтение с главной.' }}</p>
+                                <q-btn unelevated no-caps color="primary" label="Открыть каталог" to="/books" />
+                            </section>
+                            <BookShelf v-if="shelf.withRecent" title="Недавно читали" :books="books.recent" heading-id="recent-books-heading">
+                                <template #action><RouterLink to="/my-books" class="overview-text-link">Все</RouterLink></template>
+                            </BookShelf>
+                        </div>
+                        <BookShelf v-else :title="shelf.title" :books="shelf.books" :heading-id="shelf.heading">
+                            <template v-if="shelf.to" #action><RouterLink :to="shelf.to" class="overview-text-link" :aria-label="shelf.actionLabel">{{ shelf.link || 'Все' }}</RouterLink></template>
+                        </BookShelf>
+                    </template>
                 </div>
                 <LibraryNotice v-if="state.pinnedShelvesError && config.profileAuthorized && !state.readingLoginRequired" error title="Не удалось загрузить закреплённые полки"
                     action-label="Повторить" :busy="state.pinnedShelvesLoading" @action="repository.loadPinnedShelves(true)" />
                 <div class="overview-footer">
                     <RouterLink to="/books">Весь каталог <q-icon name="la la-arrow-right" /></RouterLink>
-                    <q-btn v-if="config.profileAuthorized && config.clientApi?.features?.includes('overviewPinnedShelves')" flat dense no-caps
+                    <q-btn v-if="!canCustomize && config.profileAuthorized && config.clientApi?.features?.includes('overviewPinnedShelves')" flat dense no-caps
                         icon="la la-bookmark" label="Управление полками" @click="library.openLists()" />
                     <q-btn flat dense no-caps icon="la la-sync" label="Обновить" :loading="state.readingLoading || state.shelvesLoading" @click="refresh" />
                 </div>
@@ -85,6 +88,8 @@
 <script setup>
 import {computed, ref, watch, getCurrentInstance} from 'vue';
 import {useRouter} from 'vue-router';
+import OverviewShelvesDialog from './OverviewShelvesDialog.vue';
+import overviewLayout from '../../../shared/OverviewShelves';
 import BookCover from './BookCover.vue';
 import BookShelf from './BookShelf.vue';
 import LibraryNotice from './LibraryNotice.vue';
@@ -135,20 +140,55 @@ const recommendations = computed(() => {
 const pinnedShelves = computed(() => config.value.profileAuthorized && !state.readingLoginRequired
     && config.value.clientApi?.features?.includes('overviewPinnedShelves') ? state.pinnedShelves : []);
 const pendingFirstPins = computed(() => state.pinnedShelvesLoading && !state.pinnedShelvesLoaded);
-const shelves = computed(() => {
+const managing = ref(false);
+const canCustomize = computed(() => config.value.profileAuthorized && !state.locked && config.value.clientApi?.features?.includes('overviewShelfLayout'));
+const savedLayout = computed(() => canCustomize.value ? config.value.currentUserProfile?.overviewShelfLayout || [] : []);
+watch([active, () => state.revision], () => { managing.value = false; });
+const sections = computed(() => {
+    const items = [
+        {id: 'current', title: 'Сейчас читаю', show: !state.readingLoginRequired},
+        {id: 'recent', title: 'Недавно читали', books: books.value.recent, show: !state.readingLoginRequired, heading: 'recent-books-heading', to: '/my-books'},
+        ...pinnedShelves.value.map(shelf => ({id: 'list:' + shelf.id, title: shelf.title, books: shelf.books,
+            heading: 'shelf-pinned-' + shelf.id, to: {path: '/my-books', query: {list: shelf.id}}, link: 'Все книги', actionLabel: 'Открыть полку «' + shelf.title + '»'})),
+    ];
     const reading = new Map((state.reading?.items || []).map(book => [bookUid(book), book]));
     const flags = {'newest': 'showDiscoveryNewest', 'popular': 'showDiscoveryPopular', 'from-your-lists': 'showDiscoveryFromLists',
         'unfinished-series': 'showDiscoveryUnfinishedSeries', 'external': 'showDiscoveryExternal', 'similar': 'showDiscoverySimilar'};
-    return [...state.shelves, ...state.externalShelves].filter(shelf => {
-        if (shelf.id === 'continue-reading' || shelf.id === 'hidden-books' || !shelf.books?.length) return false;
+    const discovery = [...state.shelves, ...state.externalShelves];
+    if (config.value.discovery?.enabled !== false && config.value.discovery?.externalSource && config.value.discovery.externalSource !== 'none'
+        && !discovery.some(s => s.id === 'external-source')) discovery.push({id: 'external-source', source: 'external', title: 'Внешняя подборка'});
+    for (const shelf of discovery) {
+        if (['continue-reading', 'hidden-books', 'external-error'].includes(shelf.id)) continue;
         const kind = shelf.id.startsWith('newest-') ? 'newest' : shelf.id;
-        return settings.value[flags[shelf.mode] || flags[kind] || flags[shelf.source]] !== false;
-    })
-        .map(shelf => ({...shelf, books: shelf.books.map(book => {
-            const item = reading.get(bookUid(book));
-            return item ? {...book, percent: item.percent} : book;
-        })}));
+        items.push({id: 'discovery:' + shelf.id, title: shelf.title, heading: 'shelf-' + shelf.id, show: !pendingFirstPins.value,
+            hidden: settings.value[flags[shelf.mode] || flags[kind] || flags[shelf.source]] === false,
+            books: (shelf.books || []).map(book => {
+                const item = reading.get(bookUid(book));
+                return item ? {...book, percent: item.percent} : book;
+            })});
+    }
+    if (state.recommendations.length || config.value.clientApi?.features?.includes('overviewRecommendations') && config.value.currentUserProfile?.personalRecommendationsEnabled !== false)
+        items.push({id: 'recommendations', title: 'Рекомендуем вам', books: recommendations.value, heading: 'recommended-books-heading', to: '/for-you',
+            hidden: settings.value.showDiscoverySimilar === false, show: !pendingFirstPins.value});
+    return items;
 });
+const visibleRows = computed(() => {
+    const shown = overviewLayout.arrange(sections.value, savedLayout.value).filter(s => !s.hidden && s.show !== false && (s.id === 'current' || s.books?.length));
+    const rows = [];
+    for (const shelf of shown) {
+        if (shelf.id === 'recent' && rows.at(-1)?.id === 'current') rows[rows.length - 1] = {...rows.at(-1), withRecent: true};
+        else rows.push(shelf);
+    }
+    return rows;
+});
+async function saveLayout(layout) {
+    const owner = config.value.currentUserId;
+    if (!canCustomize.value || !owner) throw new Error('Войдите в профиль.');
+    await library.api.updateUserProfile(owner, {overviewShelfLayout: layout});
+    if (config.value.currentUserId !== owner) return;
+    await library.api.updateConfig({skipProfileLogin: true});
+    if (config.value.currentUserId === owner) void repository.loadHome();
+}
 function search() {
     searchFocused.value = false;
     router.push(catalogTarget('/books', query.value.trim() ? {title: `*${query.value.trim()}`} : {}, searchFilters.value));
@@ -161,12 +201,14 @@ function refresh() {repository.loadHome({freshReading: true, freshShelves: true}
 </script>
 
 <style scoped>
-.overview-search {display: flex; align-items: center; gap: 14px; max-width: 960px; margin-bottom: 24px; padding: 0 17px; height: 54px; border-radius: 16px; background: var(--app-surface); color: var(--app-primary);}
+.overview-toolbar {display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 24px;}
+.overview-search {flex: 1 1 320px; min-width: 0; display: flex; align-items: center; gap: 14px; max-width: 960px; padding: 0 17px; height: 54px; border-radius: 16px; background: var(--app-surface); color: var(--app-primary);}
 .overview-search:focus-within {box-shadow: 0 0 0 2px var(--app-primary);}
 input {min-width: 0; flex: 1; background: transparent; color: var(--app-text); border: 0; outline: 0; font: inherit; font-size: 15px;}
 input::placeholder {color: var(--app-muted); opacity: 1;}
 .overview-search__filters, .overview-search__submit {color: var(--app-muted); border: 0; background: transparent; display: grid; place-items: center; width: 32px; height: 42px; border-radius: 8px; cursor: pointer; flex-shrink: 0;}
 .overview-reading {min-width: 0;}
+.overview-reading + .library-notice-card {margin-block-start: 24px;}
 .current-book {display: flex; flex-direction: column; max-width: 440px; border-radius: 20px; padding: 20px; background: var(--library-hero);}
 .current-book__caption {display: flex; align-items: center; gap: 9px; color: var(--library-on-hero); margin-bottom: 16px;}
 .current-book__caption h1 {font-size: 14px; font-weight: 550; letter-spacing: 0; flex: 1;}
@@ -195,5 +237,5 @@ progress::-webkit-progress-bar {background: var(--app-border);} progress::-webki
 .overview-skeleton {aspect-ratio: 2 / 3; background: var(--app-surface-3); border-radius: 10px;}
 .overview-skeleton--hero {aspect-ratio: auto; height: 295px; max-width: 460px; border-radius: 22px;}
 @media (min-width: 1100px) {.overview-reading--paired {display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 960px); align-items: stretch; gap: 38px;} .overview-reading--paired > :deep(.book-shelf) {margin-top: 0;}}
-@media (max-width: 599px) {.overview-search {height: 54px; gap: 10px; margin-bottom: 24px; padding: 0 12px;} input {font-size: 14px;} .current-book {padding: 18px; max-width: none;} .current-book__body {gap: 15px;} .current-book__cover {width: 76px; flex-basis: 76px;} .current-book__title {font-size: 18px;} .current-book__caption {margin-bottom: 22px;} .current-book__footer {padding-top: 22px;} .overview-loading__covers {grid-template-columns: repeat(6, 112px); gap: 20px;}}
+@media (max-width: 599px) {.overview-search {height: 54px; gap: 10px; padding: 0 12px;} input {font-size: 14px;} .current-book {padding: 18px; max-width: none;} .current-book__body {gap: 15px;} .current-book__cover {width: 76px; flex-basis: 76px;} .current-book__title {font-size: 18px;} .current-book__caption {margin-bottom: 22px;} .current-book__footer {padding-top: 22px;} .overview-loading__covers {grid-template-columns: repeat(6, 112px); gap: 20px;}}
 </style>

@@ -81,6 +81,7 @@ module.exports = {
     dbCacheBudgetMb: numberFromEnv('INPX_DB_CACHE_BUDGET_MB', null),
 
     maxPayloadSize: 500,//in MB
+    resourceProfile: null,
     wsMessageLimitMb: numberFromEnv('INPX_WS_MESSAGE_LIMIT_MB', 1),
     importLimitMb: numberFromEnv('INPX_IMPORT_LIMIT_MB', 16),
     backupUploadLimitMb: numberFromEnv('INPX_BACKUP_UPLOAD_LIMIT_MB', 32),
@@ -94,7 +95,7 @@ module.exports = {
     queryCacheDiskSize: 500,
     queryCacheDiskMb: numberFromEnv('INPX_QUERY_CACHE_DISK_MB', 64),
     cacheCleanInterval: numberFromEnv('INPX_CACHE_CLEAN_INTERVAL_MINUTES', 24*60),//minutes
-    cacheCleanSchedule: '0 0 * * *',
+    cacheCleanSchedule: process.env.INPX_CACHE_CLEAN_INTERVAL_MINUTES ? '' : '0 0 * * *',
     cacheCleanTargetRatio: numberFromEnv('INPX_CACHE_CLEAN_TARGET_RATIO', 0.8),
     adminEventLogEnabled: true,
     adminEventLogSize: 300,
@@ -140,18 +141,18 @@ module.exports = {
     conversionQueueLimit: 16,
     conversionTimeoutMs: 120000,
     conversionQueueTimeoutMs: 120000,
-    conversionFormats: Array.from(new Set(String(process.env.INPX_CONVERSION_FORMATS || 'fb2,epub,epub3,kepub,kfx,azw8,pdf').split(',')
+    conversionFormats: Array.from(new Set(String(process.env.INPX_CONVERSION_FORMATS || 'fb2,epub,epub3,kepub,kfx,azw3,azw8,pdf').split(',')
         .map(item => item.trim().toLowerCase()).filter(item => item && item !== 'mobi')
-        .concat(process.env.INPX_MOBI_ENABLED !== 'false' ? ['mobi'] : []))),
-    mobiEnabled: process.env.INPX_MOBI_ENABLED !== 'false',
-    kindlingPath: process.env.INPX_KINDLING_PATH || '',
+        .concat('mobi'))),
+    mobiEnabled: true,
+    kindlingPath: '',
     kindlingVersion: process.env.INPX_KINDLING_VERSION || 'v0.45.6',
     converterPaths: {},
     fb2cngArgs: [],
-    fb2cngConfigPath: process.env.INPX_FB2CNG_CONFIG || process.env.FB2CNG_CONFIG || '',
-    fb2cngVersion: process.env.INPX_FB2CNG_VERSION || 'v1.9.0',
+    fb2cngConfigPath: '',
+    fb2cngVersion: process.env.INPX_FB2CNG_VERSION || 'v2.1.1',
     bookFilenameTemplate: process.env.INPX_BOOK_FILENAME_TEMPLATE || '',
-    bookTitleTemplate: process.env.INPX_BOOK_TITLE_TEMPLATE || '',
+    bookTitleTemplate: '',
     telegramShareEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN),
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
     telegramBotEnabled: process.env.INPX_TELEGRAM_BOT_ENABLED === 'true',

@@ -33,6 +33,60 @@ function readRenderedPage(page) {
     });
 }
 
+async function checkDesktopOpening(browser, url, progress) {
+    const context = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
+    try {
+        const page = await context.newPage();
+        await page.routeWebSocket('**/ws', socket => {
+            const server = socket.connectToServer();
+            server.onMessage(message => socket.send(message));
+            socket.onMessage(message => {
+                const request = JSON.parse(message);
+                if (request.action !== 'get-reader-state') return server.send(message);
+                socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
+                socket.send(JSON.stringify({requestId: request.requestId, preferences: {readMode: 'paged'}, progress, bookmarks: []}));
+            });
+        });
+        await page.addInitScript(saved => {
+            const sample = () => {
+                const debug = document.querySelector('.reader-debug-panel')?.textContent || '';
+                const live = document.querySelector('.reader-page-sheet--live');
+                const total = Number(/page:\s*\d+\/(\d+)/.exec(debug)?.[1]);
+                const overlay = document.querySelector('.reader-reflow-indicator--strong:not(.reader-reflow-fade-leave-active)');
+                if (live && !overlay && /pagination: (building|cached)/.test(debug) && total >= 1) {
+                    window.__opening = {index: Number(live.dataset.pageIndex), text: live.innerText};
+                    if (!saved) window.dispatchEvent(new KeyboardEvent('keydown', {key: 'PageDown', cancelable: true}));
+                    return;
+                }
+                requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+        }, !!progress.textSnippet);
+        await page.goto(url);
+        await page.waitForFunction(() => /pagination: done/.test(document.querySelector('.reader-debug-panel')?.textContent)
+            && !document.querySelector('.reader-reflow-indicator--strong')
+            && document.querySelectorAll('.reader-page-sheet--live').length === 1);
+        const opening = await page.evaluate(() => window.__opening);
+        assert(opening, 'The book must be readable while subsequent desktop pages are still building');
+        const index = Number(await page.locator('.reader-page-sheet--live').getAttribute('data-page-index'));
+        if (progress.textSnippet) {
+            assert(opening.text.includes(progress.textSnippet), 'Restore the saved text before revealing the book');
+            assert.equal(index, opening.index);
+            await page.reload();
+            await page.waitForFunction(() => /pagination: cached/.test(document.querySelector('.reader-debug-panel')?.textContent)
+                && !document.querySelector('.reader-reflow-indicator--strong')
+                && document.querySelectorAll('.reader-page-sheet--live').length === 1 && window.__opening);
+            assert.equal(await page.evaluate(() => window.__opening.index), index, 'First visible cached page matches the saved text');
+            const restored = page.locator('.reader-page-sheet--live');
+            assert.equal(Number(await restored.getAttribute('data-page-index')), index);
+            assert((await restored.innerText()).includes(progress.textSnippet), 'Reload restores the saved text from persisted pages');
+        } else {
+            assert.equal(opening.index, 0);
+            assert.equal(index, 1, 'Finishing pagination must preserve an early page turn');
+        }
+    } finally {await context.close();}
+}
+
 (async() => {
     const directory = process.env.INPX_ARTIFACT_DIR || await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-reader-footer-'));
     await fs.ensureDir(directory);
@@ -201,7 +255,6 @@ function readRenderedPage(page) {
         await page.locator('.reader-toolbar-quick-actions button:has(.la-compress-arrows-alt)').click();
         await page.waitForFunction(() => !document.fullscreenElement);
         await viewport.send('Emulation.setDeviceMetricsOverride', {width: 1440, height: 740, deviceScaleFactor: 1, mobile: false});
-        await viewport.detach();
         await page.waitForFunction(total => window.__readFooter()?.total === total, after.total);
         await assertReadingPosition('Exiting fullscreen restores the original text');
 
@@ -239,7 +292,13 @@ function readRenderedPage(page) {
         });
         assert.equal(horizontalWidths.measured, horizontalWidths.visible,
             'Horizontal pagination measures text at the visible width after subtracting the side margins');
+        // Detaching also clears the emulated viewport on Windows Chromium.
+        await viewport.detach();
         assert.deepEqual(errors, []);
+        const readerUrl = base + '/#/reader?bookUid=' + encoded + '&debugReader=1';
+        await checkDesktopOpening(browser, readerUrl, {});
+        await checkDesktopOpening(browser, readerUrl, {pageIndex: 4, percent: .1, textOffset: -1,
+            textSnippet: 'Абзац 2.3. Читатель открывает книгу', updatedAt: new Date().toISOString()});
         console.log(`Reader: stable footer (${before.total} → ${after.total} pages) and complete visible text across all ${after.total} pages.`);
     } catch (error) {
         if (page) await page.screenshot({path: path.join(directory, 'failure.png')}).catch(() => {});

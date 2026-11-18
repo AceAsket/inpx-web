@@ -11,10 +11,12 @@ class ServerActivity {
         this.profiles = new Map([['guest', {logins: 0, downloads: 0}]]);
     }
 
+    label(userId) {
+        return crypto.createHmac('sha256', this.key).update('server-activity\0').update(userId).digest('hex').slice(0, 12);
+    }
+
     record(userId, field, count = 1) {
-        const profile = userId
-            ? crypto.createHmac('sha256', this.key).update('server-activity\0').update(userId).digest('hex').slice(0, 12)
-            : 'guest';
+        const profile = userId ? this.label(userId) : 'guest';
         if (this.config.loggingEnabled)
             this.log(`activity event=${events[field]} profile=${profile} count=${count}`);
 
@@ -23,14 +25,16 @@ class ServerActivity {
         this.profiles.get(label)[field] += count;
     }
 
-    snapshot() {
+    snapshot(users = []) {
+        const accounts = new Map(users.map(user => [this.label(user.id), user]));
         const totals = {logins: 0, downloads: 0};
         const profiles = [];
         for (const [profile, counts] of this.profiles) {
             if (!counts.logins && !counts.downloads) continue;
             totals.logins += counts.logins;
             totals.downloads += counts.downloads;
-            profiles.push({profile, ...counts});
+            const account = accounts.get(profile);
+            profiles.push({profile, ...counts, ...(account && {login: account.login, name: account.name})});
         }
         profiles.sort((a, b) => b.downloads - a.downloads || b.logins - a.logins || a.profile.localeCompare(b.profile));
         return {totals, profiles};

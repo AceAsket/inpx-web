@@ -1,4 +1,4 @@
-const formats = ['fb2', 'epub', 'epub3', 'kepub', 'kfx', 'azw8', 'pdf', 'mobi'];
+const formats = ['fb2', 'epub', 'epub3', 'kepub', 'kfx', 'azw3', 'azw8', 'pdf', 'mobi'];
 const preferenceFields = {download:'defaultDownloadFormat', email:'defaultEmailFormat', telegram:'defaultTelegramFormat', opds:'defaultOpdsFormat'};
 
 function normalize(value) {

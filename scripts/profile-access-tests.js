@@ -124,8 +124,12 @@ async function testProxyHeaderRequiredWithOldCookie() {
     });
 }
 
-async function testAnonymousAccessDisabledHttpAndWebSocket() {
-    await fixture({allowAnonymousAccess: false}, async({worker, alice, bob, request, session, connect}) => {
+async function testLocalRequireAuth() {
+    await testAnonymousAccessDisabledHttpAndWebSocket({requireAuth:true,allowAnonymousAccess:true});
+}
+
+async function testAnonymousAccessDisabledHttpAndWebSocket(policy = {allowAnonymousAccess:false}) {
+    await fixture(policy, async({worker, alice, bob, request, session, connect}) => {
         assert.strictEqual((await request('/')).status, 200, 'Login shell stays reachable');
         for (const url of ['/book/fixture.txt', '/cover/123', '/reader-lab-source/example.fb2', '/opds'])
             assert.strictEqual((await request(url)).status, 401, url);
@@ -633,5 +637,5 @@ async function testBlockedProfileCannotUseGuestOrProxyAuthorization() {
     });
 }
 
-module.exports = [testProfileBlockRevokesAuthenticationAndPreservesData,testBlockedProfileCannotUseGuestOrProxyAuthorization,testGlobalProfileTotpOverridesAnonymousAndSharedOpdsAccess,testRequiredTotpEnrollmentBeforePrivateAccess,testAndroidProtocolKeepsLegacyLoginAndRequiresOtpForEnrolledProfile,testOpdsAppPasswordIsProfileScopedRevocableAndCannotCreateWebSession,testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testAnonymousAccessDisabledHttpAndWebSocket,
+module.exports = [testProfileBlockRevokesAuthenticationAndPreservesData,testBlockedProfileCannotUseGuestOrProxyAuthorization,testGlobalProfileTotpOverridesAnonymousAndSharedOpdsAccess,testRequiredTotpEnrollmentBeforePrivateAccess,testAndroidProtocolKeepsLegacyLoginAndRequiresOtpForEnrolledProfile,testOpdsAppPasswordIsProfileScopedRevocableAndCannotCreateWebSession,testAdminLogoutRevokesBrowserTokensAndKeepsOtherDevices, testOpdsScopeCanonicalizesProfileIds, testOpdsScopeNeedsAnOpdsProfile, testProxyHeaderRequiredWithOldCookie, testLocalRequireAuth, testAnonymousAccessDisabledHttpAndWebSocket,
     testProxyProfileBindingAndIdentityChange, testWebSocketCatalogAuthorizationUsesProfileIdentity, testLegacyAccessAndGlobalOpdsCredentials];

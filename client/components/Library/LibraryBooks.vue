@@ -93,7 +93,7 @@ async function load() {
         }
     } finally {running = false; loading.value = false;}
 }
-watch([filter, query], schedule);
+watch([filter, query, () => state.readingRevision], schedule);
 function clearResults() {
     items.value = [];
     count.value = 0;
@@ -108,7 +108,7 @@ watch([listId, favoritesView], ([list, favorites]) => {
 });
 watch(() => state.revision, () => {clearResults(); favoriteCount.value = null;});
 watch(() => state.readingLoginRequired, required => {if (required) {sequence++; clearResults();}});
-watch([active, favoritesView, () => state.revision, favoritesAuthorized], async([enabled, favorites, epoch, authorized], _, cleanup) => {
+watch([active, favoritesView, () => state.revision, favoritesAuthorized, () => state.readingRevision], async([enabled, favorites, epoch, authorized], _, cleanup) => {
     if (!authorized) {favoriteCount.value = null; return;}
     if (!enabled || favorites) return;
     let current = true;

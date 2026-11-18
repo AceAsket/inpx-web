@@ -758,7 +758,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
 
                     const desc = await fs.readJson(bookFileDesc);
                     let downFileName = desc.downFileName;
-                    const book = (config.bookFilenameTemplate || config.bookTitleTemplate)
+                    const book = (config.bookFilenameTemplate || bookNaming.titleTemplate(config))
                         ? await bookNaming.cachedBook(webWorker, desc, fileName, String(req.query.uid || '').trim()) : {};
                     downFileName = bookNaming.filename(book, downFileName, book.ext || path.extname(downFileName).slice(1), config);
                     let gzipped = true;
@@ -822,7 +822,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
             }
         } catch(e) {
             log(LM_ERR, e.message);
-            if (bookConverter.canConvertTo(req.params.fileType) || config.bookFilenameTemplate || config.bookTitleTemplate) {
+            if (bookConverter.canConvertTo(req.params.fileType) || config.bookFilenameTemplate || bookNaming.titleTemplate(config)) {
                 res.status(e.message && e.message.includes('404') ? 404 : 500).send(e.message);
                 return;
             }

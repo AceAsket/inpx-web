@@ -26,13 +26,14 @@ function progress(book = {}) {
     return value === undefined ? null : Math.max(0, Math.min(1, Number(value) || 0));
 }
 
-function coverUrl(book = {}, root = '') {
+function coverUrl(book = {}, root = '', revision = '') {
     if (book.discoveryCoverUrl) return book.discoveryCoverUrl;
     const uid = bookUid(book);
+    const cache = encodeURIComponent(revision || coverCacheVersion);
     root = String(root).replace(/\/$/, '');
-    if (uid) return `${root}/cover/by-uid?uid=${encodeURIComponent(uid)}&cache=${coverCacheVersion}`;
+    if (uid) return `${root}/cover/by-uid?uid=${encodeURIComponent(uid)}&cache=${cache}`;
     if (!book.libid) return '';
-    return `${root}/cover/${book.sourceId ? `${encodeURIComponent(book.sourceId)}/` : ''}${encodeURIComponent(book.libid)}?cache=${coverCacheVersion}`;
+    return `${root}/cover/${book.sourceId ? `${encodeURIComponent(book.sourceId)}/` : ''}${encodeURIComponent(book.libid)}?cache=${cache}`;
 }
 
 function readable(book, config) {

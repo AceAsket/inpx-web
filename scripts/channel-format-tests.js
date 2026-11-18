@@ -190,7 +190,7 @@ async function testDeliveryTransportsReceiveZipAndOriginalWithoutExternalRequest
 
 async function testOpdsOffersIndependentPreferredFormatAndCorrectAcquisitionTypes() {
     const {forBook} = require('../server/core/opds/AcquisitionLinks');
-    const config = {conversionEnabled:true, mobiEnabled:true, conversionFormats:['fb2','epub','epub3','kepub','pdf','mobi','kfx','azw8'], bookPathStatic:'/library/book'};
+    const config = {conversionEnabled:true, mobiEnabled:true, conversionFormats:['fb2','epub','epub3','kepub','pdf','mobi','kfx','azw3','azw8'], bookPathStatic:'/library/book'};
     const book = {_uid:'a+/?=', ext:'fb2'};
     const links = forBook(book, config, choices);
     assert.strictEqual(links[0].type, 'application/epub+zip');
@@ -199,7 +199,7 @@ async function testOpdsOffersIndependentPreferredFormatAndCorrectAcquisitionType
     assert.deepStrictEqual(links.filter(link => link.href.endsWith('format=raw')).map(link => link.type), ['application/fb2+xml', 'application/x-fictionbook+xml']);
     assert(links.every(link => new URL(link.href, 'http://test').searchParams.get('uid') === book._uid));
     const expectedTypes = {epub:'application/epub+zip', epub3:'application/epub+zip', kepub:'application/epub+zip',
-        pdf:'application/pdf', mobi:'application/x-mobipocket-ebook', kfx:'application/vnd.amazon.ebook', azw8:'application/vnd.amazon.ebook'};
+        pdf:'application/pdf', mobi:'application/x-mobipocket-ebook', kfx:'application/vnd.amazon.ebook', azw3:'application/vnd.amazon.ebook', azw8:'application/vnd.amazon.ebook'};
     for (const [format, type] of Object.entries(expectedTypes)) assert(links.some(link => link.href.endsWith('format=' + format) && link.type === type));
     assert.strictEqual(forBook(book, config)[0].type, 'application/fb2+xml');
     assert.strictEqual(forBook(book, {...config, conversionEnabled:false}, choices).length, 2);

@@ -2,6 +2,8 @@ const fs = require('fs-extra');
 const path = require('path');
 const {createReleaseArchive} = require('./release-archive');
 
+const {bundleLinuxDjxl} = require('./linux-djxl');
+
 const pckg = require('../package.json');
 const platform = process.argv[2];
 
@@ -14,6 +16,8 @@ async function makeRelease(target) {
     if (await fs.pathExists(srcDir)) {
         const zipFile = `${outDir}/${pckg.name}-${pckg.version}-${target}.zip`;
 
+        if (target === 'linux' || target === 'linux-arm64')
+            await bundleLinuxDjxl(target, `${srcDir}/bin`);
         await createReleaseArchive(srcDir, zipFile, target);
         console.log(`Release archive: ${zipFile}`);
     }

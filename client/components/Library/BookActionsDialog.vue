@@ -67,7 +67,9 @@
                     </template>
                 </section>
             </div>
-            <q-btn v-if="!bookAvailable && externalUrl" color="primary" no-caps unelevated label="Открыть источник" icon="la la-external-link-alt" :href="externalUrl" target="_blank" rel="noopener noreferrer" />
+            <div v-if="!bookAvailable && externalUrl" class="book-actions-source">
+                <q-btn color="primary" no-caps unelevated label="Открыть источник" icon="la la-external-link-alt" :href="externalUrl" target="_blank" rel="noopener noreferrer" />
+            </div>
             <p v-else-if="!bookAvailable" class="book-actions-unavailable">Книга сейчас недоступна в каталоге.</p>
         </div>
     </DialogSurface>
@@ -274,6 +276,7 @@ h2 {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0 0 10px; over
 .book-actions-primary .q-btn, .book-actions-download {min-height: 42px; border-radius: 12px; padding: 10px 18px; font-size: 14px;}
 .book-actions-download {display: flex; align-items: center; gap: 9px; text-decoration: none; color: var(--app-primary); border: 1px solid var(--app-border);}
 .book-actions-formats {margin-top: 16px; max-width: 340px;}
+.book-actions-source {padding-block-start: 20px;}
 .book-actions-unavailable {margin: 20px 0 0; color: var(--app-muted);}
 .book-actions-annotation {margin: 20px 0 0; padding: 16px 0 0; border-top: 1px solid var(--app-border);}
 .book-actions-annotation h3 {font-size: 14px; font-weight: 600; margin: 0 0 10px;}

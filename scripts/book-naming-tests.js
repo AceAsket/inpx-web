@@ -2,6 +2,8 @@ const assert = require('assert');
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
+const {execFile} = require('node:child_process');
+const {promisify} = require('node:util');
 const naming = require('../server/core/BookNaming');
 const ZipReader = require('../server/core/ZipReader');
 
@@ -13,34 +15,73 @@ async function fixture(fn) {
 async function testBookNamingConditionalTemplatesAndSafeFilenames() {
     const book = {title:'Доктор Гарин', author:'Сорокин Владимир', series:'Доктор Гарин', serno:2, ext:'fb2'};
     const config = {bookFilenameTemplate:'[${NUMBER_PADDED} - ]${TITLE}', bookTitleTemplate:'[${NUMBER_PADDED} - ]${TITLE}'};
-    assert.strictEqual(naming.filename(book, 'old.fb2', 'fb2', config), '02 - Доктор Гарин.fb2');
-    assert.strictEqual(naming.title(book, 'epub', config), '02 - Доктор Гарин');
-    assert.strictEqual(naming.title({...book, serno:0}, 'epub', config), 'Доктор Гарин');
-    assert.strictEqual(naming.title({...book, serno:2.5}, 'epub', config), '02.5 - Доктор Гарин');
-    assert.strictEqual(naming.render('${AUTHOR} / ${SERIES} / ${NUMBER} / ${EXT}', book, 'kepub.epub'), 'Сорокин Владимир / Доктор Гарин / 2 / kepub.epub');
-    assert.strictEqual(naming.filename(book, 'old.fb2', 'fb2', {}), 'old.fb2');
-    assert.strictEqual(naming.title(book, 'epub', {}), null);
-    assert.strictEqual(naming.filename(book, 'old.epub', 'epub', {bookFilenameTemplate:'${TITLE}.${EXT}'}), 'Доктор Гарин.epub');
-    assert.strictEqual(naming.filename({title:'../CON'}, 'old.fb2', 'fb2', {bookFilenameTemplate:'${TITLE}'}), '_CON.fb2');
-    assert.strictEqual(naming.filename({title:'..'}, 'old.fb2', 'fb2', {bookFilenameTemplate:'${TITLE}'}), 'old.fb2');
-    assert.ok(Buffer.byteLength(naming.filename({title:'Я'.repeat(300)}, 'old.epub', 'epub', {bookFilenameTemplate:'${TITLE}'})) <= 205);
-    assert.strictEqual(naming.render('[${NUMBER} ]${TITLE}', {...book, title:'${AUTHOR} {{ test }}'}), '2 ${AUTHOR} {{ test }}');
-    assert.throws(() => naming.render('[${UNKNOWN}]${TITLE}', {...book, serno:0}), /Неизвестное поле/);
-    const basePath = require.resolve('../server/config/base');
     const names = ['INPX_BOOK_FILENAME_TEMPLATE', 'INPX_BOOK_TITLE_TEMPLATE'];
+    const [filenameEnv, titleEnv] = names;
     const previous = names.map(name => process.env[name]);
+    const basePath = require.resolve('../server/config/base');
     try {
-        process.env[names[0]] = config.bookFilenameTemplate;
-        process.env[names[1]] = config.bookTitleTemplate;
+        delete process.env[titleEnv];
+        assert.strictEqual(naming.filename(book, 'old.fb2', 'fb2', config), '02 - Доктор Гарин.fb2');
+        assert.strictEqual(naming.title(book, 'epub', config), '02 - Доктор Гарин');
+        assert.strictEqual(naming.title({...book, serno:0}, 'epub', config), 'Доктор Гарин');
+        assert.strictEqual(naming.title({...book, serno:2.5}, 'epub', config), '02.5 - Доктор Гарин');
+        assert.strictEqual(naming.render('${AUTHOR} / ${SERIES} / ${NUMBER} / ${EXT}', book, 'kepub.epub'), 'Сорокин Владимир / Доктор Гарин / 2 / kepub.epub');
+        assert.strictEqual(naming.filename(book, 'old.fb2', 'fb2', {}), 'old.fb2');
+        assert.strictEqual(naming.title(book, 'epub', {}), null);
+        assert.strictEqual(naming.filename(book, 'old.epub', 'epub', {bookFilenameTemplate:'${TITLE}.${EXT}'}), 'Доктор Гарин.epub');
+        assert.strictEqual(naming.filename({title:'../CON'}, 'old.fb2', 'fb2', {bookFilenameTemplate:'${TITLE}'}), '_CON.fb2');
+        assert.strictEqual(naming.filename({title:'..'}, 'old.fb2', 'fb2', {bookFilenameTemplate:'${TITLE}'}), 'old.fb2');
+        assert.ok(Buffer.byteLength(naming.filename({title:'Я'.repeat(300)}, 'old.epub', 'epub', {bookFilenameTemplate:'${TITLE}'})) <= 205);
+        assert.strictEqual(naming.render('[${NUMBER} ]${TITLE}', {...book, title:'${AUTHOR} {{ test }}'}), '2 ${AUTHOR} {{ test }}');
+        assert.throws(() => naming.render('[${UNKNOWN}]${TITLE}', {...book, serno:0}), /Неизвестное поле/);
+
+        process.env[filenameEnv] = config.bookFilenameTemplate;
+        process.env[titleEnv] = config.bookTitleTemplate;
         delete require.cache[basePath];
         const base = require(basePath);
         assert.strictEqual(base.bookFilenameTemplate, config.bookFilenameTemplate);
-        assert.strictEqual(base.bookTitleTemplate, config.bookTitleTemplate);
-        assert.ok(!require('../server/config').propsToSave.includes('bookTitleTemplate'), 'Launch settings must not be saved to config.json');
+        const saved = {bookTitleTemplate:'${SERIES}: ${TITLE}'};
+        assert.strictEqual(naming.title(book, 'epub', saved), '02 - Доктор Гарин');
+        process.env[titleEnv] = '';
+        assert.strictEqual(naming.title(book, 'epub', saved), null);
     } finally {
         names.forEach((name, index) => { if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index]; });
         delete require.cache[basePath]; require(basePath);
     }
+}
+
+async function testBookTitleTemplateSeparatesLaunchOverrideFromSavedConfig() {
+    await fixture(async dir => {
+        const run = promisify(execFile);
+        await run(process.execPath, ['-e', `
+            const assert = require('node:assert/strict');
+            const fs = require('node:fs/promises');
+            const path = require('node:path');
+            const ConfigManager = require(process.argv[1]);
+            const {title} = require(process.argv[2]);
+            const dir = process.argv[3];
+            const savedTemplate = process.argv[4];
+            const file = path.join(dir, 'config.json');
+            const book = {title:'Title'};
+            const read = async () => JSON.parse(await fs.readFile(file, 'utf8'));
+            (async () => {
+                const manager = new ConfigManager();
+                await manager.init(dir, file);
+                await manager.load();
+                assert.equal(title(book, 'epub', manager.config), 'Launch Title');
+                assert.equal((await read()).bookTitleTemplate, '');
+                manager.config = {bookTitleTemplate:savedTemplate};
+                await manager.save();
+                await manager.load();
+                assert.equal((await read()).bookTitleTemplate, savedTemplate);
+                assert.equal(title(book, 'epub', manager.config), 'Launch Title');
+                delete process.env.INPX_BOOK_TITLE_TEMPLATE;
+                assert.equal(title(book, 'epub', manager.config), 'Saved Title');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+        `, require.resolve('../server/config'), require.resolve('../server/core/BookNaming'), dir, 'Saved ${TITLE}'], {
+            env:{...process.env, INPX_BOOK_TITLE_TEMPLATE:'Launch ${TITLE}'},
+        });
+    });
 }
 
 async function testBookTitleOverrideKeepsConfigAndSeparatesConversionCache() {
@@ -212,5 +253,6 @@ async function testBookDownloadHeadersKeepOneExtensionForLegacyAndUnicodeForMode
     assert(!disposition('bad"\r\nname.mobi',{asciiOnly:true}).includes('\r\n'));
 }
 
-module.exports = [testBookDownloadHeadersKeepOneExtensionForLegacyAndUnicodeForModernBrowsers,testBookNamingConditionalTemplatesAndSafeFilenames, testBookTitleOverrideKeepsConfigAndSeparatesConversionCache,
+module.exports = [testBookDownloadHeadersKeepOneExtensionForLegacyAndUnicodeForModernBrowsers,testBookNamingConditionalTemplatesAndSafeFilenames,
+    testBookTitleTemplateSeparatesLaunchOverrideFromSavedConfig, testBookTitleOverrideKeepsConfigAndSeparatesConversionCache,
     testBookNamingAppliesToLegacyCacheAndSharedHttpDownloads, testBookNamingBatchZipKeepsDistinctNames];

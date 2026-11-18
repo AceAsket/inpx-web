@@ -4027,6 +4027,7 @@ class WebWorker {
                 personalRecommendationsEnabled: user.personalRecommendationsEnabled !== false,
                 opdsEnabled: user.opdsEnabled !== false,
                 opdsAuthEnabled: user.opdsAuthEnabled === true,
+                overviewShelfLayout: profileAuthorized ? user.overviewShelfLayout || [] : [],
                 readerPreferences: (profileAuthorized ? this.readingListStore.normalizeReaderPreferences(user.readerPreferences) : null),
                 currentReading: readingSummary.items,
                 currentReadingCount: readingSummary.count,
@@ -4656,7 +4657,7 @@ class WebWorker {
             },
             runtime: runtimeMetrics.getSnapshot(),
             discovery: await this.readingListStore.getDiscoveryMetrics(),
-            activity: this.serverActivity?.snapshot(),
+            activity: this.serverActivity?.snapshot((await this.readingListStore.getUsers()).users),
             index,
             stats: (dbConfig && dbConfig.stats) || (index && index.stats) || {},
             paths: {
@@ -4781,6 +4782,24 @@ class WebWorker {
         return {...await this.getResourceBenchmark().snapshot(), databaseCache, processMemory:process.memoryUsage(), processCpu:process.cpuUsage(),
             memoryCaches:{queries:{bytes:this.dbSearcher?.memCache?.bytes || 0, entries:this.dbSearcher?.memCache?.size || 0},
                 authors:{bytes:this.authorInfoCache?.bytes || 0, entries:this.authorInfoCache?.size || 0}}};
+    }
+
+    async setAdminResourceProfile(userId, profileAccessToken, profile) {
+        await this.requireAdmin(userId, profileAccessToken);
+        if (profile !== null && (typeof profile !== 'string' || !profile))
+            throw new Error('Выберите профиль сервера');
+        return withFileTransaction(this.config.configFile, async() => {
+            const settings = require('./ResourcePolicy').resolve(process.env, undefined, profile);
+            await this.saveRuntimeConfigPatch({resourceProfile: profile});
+            resourceRuntime.configure(settings);
+            imageRuntime.drain();
+            reviewRuntime.drain();
+            this.config.conversionConcurrency = settings.limits.conversions;
+            bookConverter.configure(this.config);
+            this.wakeBackgroundJobs();
+            this.addAdminEvent('info', 'settings', 'Изменён профиль производительности', {profile: settings.requested});
+            return {success: true};
+        });
     }
 
     async startAdminBenchmark(userId = '', profileAccessToken = '', options = {}) {
@@ -6963,7 +6982,7 @@ class WebWorker {
         let preparedFile = rawFile;
         let preparedFileName = downFileName;
         const sourceFormat = String(book.ext || '').toLowerCase();
-        const selected = bookFormats.resolve(sourceFormat, this.config, preference, format);
+        const selected = bookFormats.resolve(sourceFormat, bookConverter.formatSettings(this.config), preference, format);
         const targetFormat = selected === 'raw' ? '' : selected;
 
         if (targetFormat && targetFormat !== sourceFormat) {

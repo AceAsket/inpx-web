@@ -36,6 +36,7 @@ import wsc from './webSocketConnection';
 import * as utils from '../../share/utils';
 import * as cryptoUtils from '../../share/cryptoUtils';
 import LockQueue from '../../../server/core/LockQueue';
+import {watchReaderEvents} from './readerEvents';
 import packageJson from '../../../package.json';
 
 const rotor = '|/-\\';
@@ -208,6 +209,7 @@ class Api {
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
             if (config.profileLoginRequired && !config.profileAuthorized) {
+                this.accessGranted = false;
                 if (options.skipProfileLogin)
                     return;
                 await this.showProfileLoginDialog('', {required: true});
@@ -228,6 +230,10 @@ class Api {
                 this.profileAccessToken = '';
                 this.writeStoredProfileSession(rememberedUserId, '');
             }
+            const defaults = config.uiDefaults;
+            if (!this.settings.defaultsSet && defaults && typeof defaults === 'object' && !Array.isArray(defaults))
+                this.commit('setSettings', {...defaults, defaultsSet:true});
+            this.accessGranted = true;
         } catch (e) {
             if (this.profileSigningOut) return;
             this.$root.stdDialog.alert(e.message, 'Ошибка');
@@ -352,19 +358,22 @@ class Api {
                     throw new Error('Выполняется выход из профиля');
 
                 if (response && response.error == 'need_access_token') {
+                    if (options.suppressAccessLogin) throw new Error('need_access_token');
                     this.accessGranted = false;
                     await this.showPasswordDialog();
+                    if (params.action !== 'get-config')
+                        await this.updateConfig();
                 } else if (response && response.error == 'need_profile_login') {
+                    if (this.$store.state.config.profileLoginRequired)
+                        this.accessGranted = false;
                     if (options.suppressProfileLogin)
                         throw new Error('need_profile_login');
                     await this.showProfileLoginDialog('', {required: !!this.$store.state.config.profileLoginRequired});
                 } else if (response && response.error == 'server_busy') {
-                    this.accessGranted = true;
                     await this.showBusyDialog();
                 } else if (response && response.error == 'bad_csrf_token') {
                     await this.updateConfig({skipProfileLogin: !!this.profileLoginPromise});
                 } else {
-                    this.accessGranted = true;
                     if (response.error) {
                         throw Object.assign(new Error(response.error), {code: response.errorCode});
                     }
@@ -542,6 +551,10 @@ class Api {
         return await this.request({action:'get-admin-performance'}, 30);
     }
 
+    async setAdminResourceProfile(profile) {
+        return await this.request({action:'set-admin-resource-profile', profile}, 30);
+    }
+
     async startAdminBenchmark(options = {}) {
         return await this.request({action:'start-admin-benchmark', options}, 30);
     }
@@ -663,6 +676,11 @@ class Api {
 
     async getMobileHome(limit = 100, requestOptions = {}) {
         return await this.request({action: 'get-mobile-home', limit}, 120, requestOptions);
+    }
+
+    watchReaderEvents(refresh, expired) {
+        return watchReaderEvents(wsc, signal => this.request({action:'subscribe-client-events'}, 10,
+            {signal,suppressProfileLogin:true,suppressAccessLogin:true}), refresh, expired);
     }
 
     async updateReaderProgress(bookUid, progress = {}, options = {}) {
@@ -801,6 +819,8 @@ class Api {
         this.commit('setSettings', {currentUserId: 'default', profileAccessToken: ''});
         this.commit('setConfig', {...this.$store.state.config,
             profileAuthorized: false, currentUserId: 'default', currentUserProfile: null, userProfiles: []});
+        if (this.$store.state.config.profileLoginRequired)
+            this.accessGranted = false;
     }
 
     async createUserProfile(profile) {
@@ -923,7 +943,7 @@ class Api {
         });
         this.writeStoredProfileSession('', '');
         this.accessGranted = false;
-        await this.request({action: 'test'});
+        await this.updateConfig();
     }
 
     showProfileLoginDialog(prefillLogin = '', opts = {}) {

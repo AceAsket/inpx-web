@@ -90,7 +90,7 @@ function markSeen() {
     }, {suppressProfileLogin:true}));
 }
 
-watch([() => props.active, () => state.revision, authorized], ([active, revision, allowed], previous) => {
+watch([() => props.active, () => state.revision, authorized, () => state.readingRevision], ([active, revision, allowed], previous) => {
     request++;
     busy.value = false;
     if (revision !== previous?.[1] || !allowed) {

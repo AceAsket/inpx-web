@@ -30,7 +30,7 @@ async function main() {
     assert.ok(args.fbc, 'Usage: node scripts/fb2cng-integration-tests.js --fbc /path/to/fbc');
     const fbc = path.resolve(args.fbc);
     const version = execFileSync(fbc, ['--version'], {encoding: 'utf8', windowsHide: true});
-    assert.match(version, /version 1\.9\.0\b/);
+    assert.match(version, /version 2\.1\.1\b/);
     console.log(version.trim());
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-fbc-integration-'));
     try {
@@ -44,7 +44,7 @@ async function main() {
         await fs.writeFile(source, original);
         const book = {title:'Доктор Гарин', author:'Иванов Иван', series:'Каталожная серия', serno:2};
         const config = {
-            conversionEnabled:true, converterPaths:{fb2cng:fbc}, fb2cngVersion:'v1.9.0',
+            conversionEnabled:true, converterPaths:{fb2cng:fbc}, fb2cngVersion:'v2.1.1',
             bookFilenameTemplate:'[${NUMBER_PADDED} - ]${TITLE}',
             bookTitleTemplate:'[${NUMBER_PADDED} - ]${TITLE}',
         };
@@ -52,10 +52,17 @@ async function main() {
             inputFile:source, cacheBasePath:path.join(dir, 'cached'), sourceFileName:'source.fb2',
             downFileName:'Иванов И._Исходное название.fb2', format, config:{...config, ...overrides}, book:metadata,
         });
-        for (const format of ['epub', 'epub3', 'kepub', 'kfx', 'azw8']) {
+        for (const format of ['epub', 'epub3', 'kepub', 'kfx', 'azw3', 'azw8']) {
             const result = await prepare(format);
             assert.ok((await fs.stat(result.filePath)).size > 100);
             assert.strictEqual(result.downloadName, `02 - Доктор Гарин.${converter.getConvertedExtension(format)}`);
+            if (format === 'azw3') {
+                const bytes = await fs.readFile(result.filePath);
+                const first = bytes.readUInt32BE(78);
+                assert.strictEqual(bytes.toString('ascii', 60, 68), 'BOOKMOBI');
+                assert.strictEqual(bytes.toString('ascii', first + 16, first + 20), 'MOBI');
+                assert.strictEqual(bytes.readUInt32BE(first + 36), 8, 'AZW3 must start with KF8');
+            }
             if (['epub', 'epub3', 'kepub'].includes(format)) {
                 const epub = await epubContents(result.filePath);
                 assert.strictEqual(epub.title, '02 - Доктор Гарин');
@@ -95,6 +102,8 @@ async function main() {
         console.log('ok: concurrent custom YAML conversions preserve relative CSS without shared-log conflicts');
 
         const noCover = await prepare('epub', {fb2cngArgs:['--no-cover']});
+        await prepare('kfx', {fb2cngArgs:['--kfx-compression=lzma']});
+        await prepare('azw3', {fb2cngArgs:['--kfx-compression', 'lzma']});
         assert.doesNotMatch((await epubContents(noCover.filePath)).opf, /<meta[^>]*name="cover"/);
         assert.strictEqual(await fs.readFile(source, 'utf8'), original);
         console.log('ok: --no-cover, original FB2 unchanged');

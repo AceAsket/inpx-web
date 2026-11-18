@@ -43,6 +43,11 @@ async function main() {
             if (target !== 'win')
                 assert.equal((await fs.stat(path.join(directory, name))).mode & 0o7777, 0o755, `Extracted mode: ${name}`);
         }
+        if (target.startsWith('linux')) {
+            const decoder = path.join(directory, 'bin', 'djxl');
+            assert.equal((await fs.stat(decoder)).mode & 0o7777, 0o755);
+            execFileSync(decoder, ['--version']);
+        }
         const run = (script, args) => execFileSync(process.execPath, [path.join(__dirname, script), ...args], {stdio:'inherit', windowsHide:true});
         run('binary-smoke-test.js', [path.join(directory, names[0]), ...(!converters ? ['--allow-missing-native-jxl'] : [])]);
         if (converters) {
