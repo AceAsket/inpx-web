@@ -1744,9 +1744,18 @@ async function verifyTwoLibraries(binary, root) {
     await bundle(web);
     const args = ['--standalone', '--host=127.0.0.1', '--data-dir=' + join(root, 'data'),
         '--config=' + join(root, 'config.json'), '--web-bundle=' + web, '--admin-password=' + libraries.password];
-    for (const reindex of [true, false]) {
+    const cache = join(root, 'data', 'db', 'browser-catalogue-v1.cache');
+    for (const phase of ['index', 'restart', 'upgrade', 'repair']) {
+        if (phase === 'upgrade') await fs.unlink(cache);
+        if (phase === 'repair') await fs.writeFile(cache, 'partial cache');
+        const prior = phase === 'restart' ? await fs.stat(cache) : null;
         const server = await start(binary, args);
-        try { await libraries.verify(server.url, state, reindex); }
+        try {
+            const saved = await fs.stat(cache);
+            assert(saved.size > 32, 'Default pages and directories are ready before the first request');
+            if (prior) assert.equal(saved.mtimeMs, prior.mtimeMs, 'Restart reuses the prepared catalogue');
+            await libraries.verify(server.url, state, phase === 'index');
+        }
         finally { await server.stop(); }
     }
     console.log('ok two INPX libraries retain separate books, covers, illustrations and progress after reindex and restart');

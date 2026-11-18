@@ -52,6 +52,14 @@ async function verify(url, state, reindex) {
             const pages = await Promise.all([0, 1].map(offset => search({del:'0', limit:1, offset})));
             assert.deepEqual(pages.map(page => page.totalFound), [2, 2]);
             assert.equal(new Set(pages.map(page => page.found[0]._uid)).size, 2);
+            // The equivalent two-value filter takes the ordinary ranking path.
+            for (const sourceId of ['', ...ids, 'absent']) {
+                const query = {sourceId, offset:0, limit:20};
+                const prepared = await search({...query, del:0});
+                const ordinary = await search({...query, del:'0,0'});
+                assert.equal(prepared.totalFound, ordinary.totalFound);
+                assert.deepEqual(prepared.found, ordinary.found);
+            }
             for (const book of state.books) {
                 const result = await search({sourceId:book.id, del:'0'});
                 assert.equal(result.totalFound, 1);

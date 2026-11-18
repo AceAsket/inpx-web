@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::catalog_update::{FolderInput, Source as UpdateSource, prepare_update_reporting};
+use crate::catalogue_browse_cache::PreparedBrowse;
 use crate::catalogue_lock::CatalogueLease;
 use crate::inpx_filter::Filter as RecordFilter;
 use crate::library_sources::{Kind, Source};
@@ -66,6 +67,7 @@ pub struct Catalogue {
     pub created: bool,
     pub(crate) overview_cache: Mutex<crate::catalog_overview::ShelfCache>,
     pub(crate) search_orders: Mutex<crate::browser_catalogue::SearchOrders>,
+    pub(crate) prepared_browse: Option<PreparedBrowse>,
     pub(crate) recommendation_cache: Mutex<crate::catalog_personal_overview::RecommendationCache>,
     pub(crate) rating_filter: Mutex<Option<Arc<crate::library_media::RatingIndex>>>,
     pub(crate) isbn_index: Option<Arc<crate::isbn_store::IsbnIndex>>,
@@ -101,7 +103,7 @@ impl CatalogueFiles {
         }
         if !directory.try_exists()? {
             let stage = self.build(sources, None, &mut report)?;
-            stage.validate(self.low_memory)?;
+            stage.validate(self.low_memory, &mut report)?;
             if directory.try_exists()? {
                 return Err("Catalogue was published by another process".into());
             }
@@ -109,7 +111,7 @@ impl CatalogueFiles {
             fs::rename(stage.0.path(), &directory)?;
             atomic_file::sync_parent(&directory)?;
             save_folder_caches(&directory);
-            return Catalogue::open(&directory, self.low_memory, true);
+            return Catalogue::open(&directory, self.low_memory, true, &mut report);
         }
         let book_table = directory.join("book");
         if !directory.join(METADATA).try_exists()? && book_table.is_dir() {
@@ -120,7 +122,7 @@ impl CatalogueFiles {
             report(startup_step("publish", "Подключение готового индекса"))?;
             // Directory renames on Windows require closing the lease handle.
             drop(legacy);
-            let catalogue = self.replace(&pending, &directory, &previous, true)?;
+            let catalogue = self.replace(&pending, &directory, &previous, true, &mut report)?;
             return Ok(catalogue);
         }
         let resuming_publication =
@@ -131,7 +133,12 @@ impl CatalogueFiles {
                 "Открываю готовый индекс после прерванного переноса",
             ))?;
         }
-        let catalogue = Catalogue::open(&directory, self.low_memory, resuming_publication)?;
+        let catalogue = Catalogue::open(
+            &directory,
+            self.low_memory,
+            resuming_publication,
+            &mut report,
+        )?;
         if resuming_publication {
             finish_publication(&directory, &previous);
         }
@@ -211,7 +218,7 @@ impl CatalogueFiles {
         sources: &[Source],
         previous_generation: &str,
         previous_store: &BookStore,
-        report: impl FnMut(Value) -> Result<()>,
+        mut report: impl FnMut(Value) -> Result<()>,
     ) -> Result<PreparedCatalogue> {
         let stage = self.build(
             sources,
@@ -219,9 +226,9 @@ impl CatalogueFiles {
                 previous_generation,
                 previous_store,
             )),
-            report,
+            &mut report,
         )?;
-        stage.validate(self.low_memory)?;
+        stage.validate(self.low_memory, &mut report)?;
         Ok(stage)
     }
 
@@ -233,18 +240,28 @@ impl CatalogueFiles {
 
         // Windows cannot rename a catalogue directory while its stores or lease are open.
         drop(active.take());
-        match self.replace(stage.0.path(), &directory, &previous, false) {
+        match self.replace(
+            stage.0.path(),
+            &directory,
+            &previous,
+            false,
+            &mut |_| Ok(()),
+        ) {
             Ok(catalogue) => {
                 *active = Some(catalogue);
                 Ok(())
             }
-            Err(error) => match Catalogue::open(&directory, self.low_memory, false) {
-                Ok(catalogue) => {
-                    *active = Some(catalogue);
-                    Err(error)
+            Err(error) => {
+                match Catalogue::open(&directory, self.low_memory, false, &mut |_| Ok(())) {
+                    Ok(catalogue) => {
+                        *active = Some(catalogue);
+                        Err(error)
+                    }
+                    Err(reopen) => {
+                        Err(format!("{error}; cannot reopen catalogue: {reopen}").into())
+                    }
                 }
-                Err(reopen) => Err(format!("{error}; cannot reopen catalogue: {reopen}").into()),
-            },
+            }
         }
     }
 
@@ -254,6 +271,7 @@ impl CatalogueFiles {
         directory: &Path,
         previous: &Path,
         created: bool,
+        report: &mut impl FnMut(Value) -> Result<()>,
     ) -> Result<Catalogue> {
         fs::rename(directory, previous)?;
         let mut moved = false;
@@ -263,7 +281,7 @@ impl CatalogueFiles {
             moved = true;
             atomic_file::sync_parent(directory)?;
             synced = true;
-            Catalogue::open(directory, self.low_memory, created)
+            Catalogue::open(directory, self.low_memory, created, report)
         })();
         let catalogue = match install {
             Ok(catalogue) => catalogue,
@@ -317,8 +335,12 @@ impl CatalogueFiles {
 }
 
 impl PreparedCatalogue {
-    fn validate(&self, low_memory: bool) -> Result<()> {
-        Catalogue::open(self.0.path(), low_memory, false)?;
+    fn validate(
+        &self,
+        low_memory: bool,
+        report: &mut impl FnMut(Value) -> Result<()>,
+    ) -> Result<()> {
+        Catalogue::open(self.0.path(), low_memory, false, report)?;
         Ok(())
     }
 }
@@ -331,10 +353,15 @@ fn remove_previous(previous: &Path) -> Result<()> {
 }
 
 impl Catalogue {
-    fn open(directory: &Path, low_memory: bool, created: bool) -> Result<Self> {
+    fn open(
+        directory: &Path,
+        low_memory: bool,
+        created: bool,
+        report: &mut impl FnMut(Value) -> Result<()>,
+    ) -> Result<Self> {
         let lease = CatalogueLease::open(directory)?;
         let (store, lookup, header) = Self::load(directory, low_memory)?;
-        Ok(Self {
+        let mut catalogue = Self {
             store: Arc::new(store),
             lookup,
             lookup_generation: header.rust_lookup_generation,
@@ -347,10 +374,32 @@ impl Catalogue {
             overview_cache: Mutex::default(),
             recommendation_cache: Mutex::default(),
             search_orders: Mutex::default(),
+            prepared_browse: None,
             rating_filter: Mutex::default(),
             isbn_index: None,
             _lease: lease,
-        })
+        };
+        catalogue.prepared_browse = PreparedBrowse::load(directory, &catalogue.generation)
+            .unwrap_or_else(|error| {
+                eprintln!("Cannot read prepared browser catalogue: {error}");
+                None
+            });
+        if catalogue.prepared_browse.is_none() {
+            report(startup_step(
+                "browser views",
+                "Подготовка страниц и справочников каталога",
+            ))?;
+            match PreparedBrowse::build(&catalogue) {
+                Ok(prepared) => {
+                    if let Err(error) = prepared.save(directory) {
+                        eprintln!("Cannot persist prepared browser catalogue: {error}");
+                    }
+                    catalogue.prepared_browse = Some(prepared);
+                }
+                Err(error) => eprintln!("Cannot prepare browser catalogue: {error}"),
+            }
+        }
+        Ok(catalogue)
     }
 
     fn load(directory: &Path, low_memory: bool) -> Result<(BookStore, LookupIndex, Header)> {

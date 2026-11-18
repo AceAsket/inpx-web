@@ -337,7 +337,21 @@ impl Catalogue {
 
     pub(crate) fn filtered_shelf_ids(&self, query: &Map<String, Value>) -> Result<Vec<u32>> {
         let search = Search::new(query, "")?;
+        if let Some(ids) = self.prepared_order(&search) {
+            return Ok(ids.to_vec());
+        }
         Ok(self.ordered_books(query, &search)?.as_ref().clone())
+    }
+
+    fn prepared_order(&self, search: &Search) -> Option<&[u32]> {
+        if search.hide_copies
+            || search.ratings.is_some()
+            || search.isbn.is_some()
+            || !search.only_active_filter()
+        {
+            return None;
+        }
+        Some(self.prepared_browse.as_ref()?.active.ids(&search.source))
     }
 
     fn ordered_books(&self, query: &Map<String, Value>, search: &Search) -> Result<Arc<Vec<u32>>> {
@@ -396,7 +410,14 @@ impl Catalogue {
 
     pub fn browser_books(&self, query: &Map<String, Value>) -> Result<Value> {
         let search = Search::new(query, "")?;
-        let ids = self.ordered_books(query, &search)?;
+        let ordered;
+        let ids = match self.prepared_order(&search) {
+            Some(ids) => ids,
+            None => {
+                ordered = self.ordered_books(query, &search)?;
+                &ordered[..]
+            }
+        };
         let total = ids.len();
         let page = ids
             .iter()
@@ -424,6 +445,17 @@ impl Catalogue {
             .ok_or("Некорректный префикс каталога")?;
         let prefix = lower(prefix);
         let selected = self.browse_selection(&options["filters"])?;
+        if prefix.is_empty()
+            && selected.is_none()
+            && let Some(prepared) = &self.prepared_browse
+        {
+            return Ok(if table == Table::Author {
+                &prepared.authors
+            } else {
+                &prepared.series
+            }
+            .clone());
+        }
         let mut results = BrowseResults::default();
         if !selected.as_ref().is_some_and(SelectedBooks::is_empty) {
             self.lookup.visit_name_candidates(
@@ -803,6 +835,9 @@ impl Catalogue {
     }
 
     pub fn browser_facets(&self) -> Result<(Vec<String>, Vec<String>)> {
+        if let Some(prepared) = &self.prepared_browse {
+            return Ok(prepared.facets.clone());
+        }
         Ok((
             self.store.facet_text(Facet::Lang)?,
             self.store.facet_text(Facet::Ext)?,

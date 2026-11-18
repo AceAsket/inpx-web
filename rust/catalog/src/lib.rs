@@ -31,6 +31,7 @@ mod catalog_postings;
 mod catalog_query;
 mod catalog_text;
 mod catalog_update;
+mod catalogue_browse_cache;
 pub mod catalogue_lock;
 pub mod configuration;
 pub mod credentials;

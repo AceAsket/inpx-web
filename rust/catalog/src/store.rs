@@ -527,6 +527,8 @@ impl Match {
         matches
             .entry(key)
             .and_modify(|old| {
+                // Independently ranked sources may be combined in any order.
+                old.order = old.order.min(self.order);
                 if self.score > old.score || self.score == old.score && self.id < old.id {
                     self.order = old.order;
                     std::mem::swap(old, &mut self);
@@ -544,6 +546,12 @@ impl Match {
             .then_with(|| self.title.cmp(&right.title))
             .then_with(|| self.order.cmp(&right.order))
     }
+}
+
+fn sorted_ids(books: HashMap<String, Match>) -> Vec<u32> {
+    let mut ranked: Vec<_> = books.into_values().collect();
+    ranked.sort_unstable_by(Match::catalogue_order);
+    ranked.into_iter().map(|book| book.id).collect()
 }
 
 #[derive(Deserialize)]
@@ -827,12 +835,65 @@ impl BookStore {
         matches: impl Fn(&[u8], Option<i64>, &str) -> Result<bool>,
         merge: bool,
     ) -> Result<Vec<u32>> {
+        let mut ranked = HashMap::new();
+        self.visit_browser_matches(generation, candidates, matches, merge, |_, key, book| {
+            book.retain_best(key, &mut ranked);
+        })?;
+        Ok(sorted_ids(ranked))
+    }
+
+    pub(crate) fn active_browser_orders(
+        &self,
+        generation: &str,
+    ) -> Result<crate::catalogue_browse_cache::ActiveOrders> {
+        let mut sources = HashMap::<String, HashMap<String, Match>>::new();
+        self.visit_browser_matches(
+            generation,
+            None,
+            |_, del, _| Ok(del == Some(0)),
+            false,
+            |source, key, book| {
+                book.retain_best(key, sources.entry(source).or_default());
+            },
+        )?;
+        let mut orders = crate::catalogue_browse_cache::ActiveOrders::default();
+        let mut combined = HashMap::new();
+        let multiple = sources.len() > 1;
+        for (source, books) in sources {
+            let ids = if multiple {
+                let mut ranked: Vec<_> = books.values().collect();
+                ranked.sort_unstable_by(|a, b| a.catalogue_order(b));
+                let ids = ranked.into_iter().map(|book| book.id).collect();
+                if combined.is_empty() {
+                    combined = books;
+                } else {
+                    for (key, book) in books {
+                        book.retain_best(key, &mut combined);
+                    }
+                }
+                ids
+            } else {
+                sorted_ids(books)
+            };
+            orders.by_source.insert(source, ids);
+        }
+        orders.combined = sorted_ids(combined);
+        Ok(orders)
+    }
+
+    fn visit_browser_matches(
+        &self,
+        generation: &str,
+        candidates: Option<&[u32]>,
+        matches: impl Fn(&[u8], Option<i64>, &str) -> Result<bool>,
+        merge: bool,
+        mut visit: impl FnMut(String, String, Match),
+    ) -> Result<()> {
         #[derive(Deserialize)]
         struct Rank {
             score: f64,
             physical: String,
         }
-        let mut ranked = HashMap::new();
         let mut order = 0;
         self.visit_stored_rows(Some(generation), candidates, |id, bytes| {
             let (record, projection) = decode(bytes)?;
@@ -846,23 +907,23 @@ impl BookStore {
             } else {
                 rank.physical
             };
-            Match {
-                id,
-                order,
-                score: rank.score,
-                author: row.author,
-                title: row.title,
-                series: row.series,
-                serno: row.serno,
-                copy: None,
-            }
-            .retain_best(key, &mut ranked);
+            visit(
+                row.source,
+                key,
+                Match {
+                    id,
+                    order,
+                    score: rank.score,
+                    author: row.author,
+                    title: row.title,
+                    series: row.series,
+                    serno: row.serno,
+                    copy: None,
+                },
+            );
             order += 1;
             Ok(())
-        })?;
-        let mut candidates: Vec<_> = ranked.into_values().collect();
-        candidates.sort_unstable_by(Match::catalogue_order);
-        Ok(candidates.into_iter().map(|book| book.id).collect())
+        })
     }
 
     pub(crate) fn order_shelf_volumes(&self, generation: &str, ids: Vec<u32>) -> Result<Vec<u32>> {

@@ -35,6 +35,7 @@ pub(super) fn response(state: &State, request: &Request<Incoming>) -> Response<B
         "load inpx" => "Загрузка записей библиотеки",
         "book save" => "Сохранение книг",
         "book order" => "Сохранение порядка книг",
+        "browser views" => "Подготовка страниц и справочников каталога",
         "postings" => "Сохранение списков поискового индекса",
         "lookup order" => "Сортировка поискового индекса",
         "lookup" => "Запись поискового индекса",

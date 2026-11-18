@@ -65,6 +65,9 @@ pub struct Name {
 
 impl Catalogue {
     pub fn opds_genres(&self) -> Result<Vec<String>> {
+        if let Some(prepared) = &self.prepared_browse {
+            return Ok(prepared.genres.clone());
+        }
         self.store.opds_genres()
     }
 
