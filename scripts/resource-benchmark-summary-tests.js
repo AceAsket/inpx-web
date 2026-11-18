@@ -63,7 +63,10 @@ async function testBenchmarkSummaryDoesNotMixMemoryScopesOrMutateReport() {
     assert.equal(first.status,'pass','Cgroup and Node RSS are distinct scopes, not conflicting measurements');
     assert.equal(JSON.stringify(input),before);first.rows[0].notes.push('modified');first.rows[0].checks.probe.maximum=1;
     const second=summarizeReport(input);assert.equal(second.rows[0].checks.probe.maximum,100);assert(!second.rows[0].notes.includes('modified'));
-    assert(summarizeReport(report({machine:{memoryScope:'process'}})).notes.some(note=>/не охватывают отдельные процессы/.test(note)));
+    for (const [engine,name] of [['rust','Rust'],['node','Node.js']]) {
+        const result = summarizeReport(report({engine,machine:{memoryScope:'process'}}));
+        assert(result.notes.some(note=>note.includes(name) && note.includes('без дочерних конвертеров')));
+    }
 }
 
 module.exports=[testBenchmarkCustomScreenshotExplainsResponseThresholdWithoutSelectingBest,

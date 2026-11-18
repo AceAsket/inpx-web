@@ -1,173 +1,116 @@
 <template>
     <section class="performance-panel">
-        <div class="performance-heading">
-            <div>
-                <div class="performance-title">
-                    Производительность
-                </div>
-                <div class="performance-muted">
-                    {{ info?.settings.native ? 'Сравните параллельное чтение архивов и проверку книг в выбранном источнике.' : 'Выберите параметры проверки и сравните расход ресурсов. Серверные лимиты меняются при следующем запуске контейнера.' }}
-                </div>
-            </div>
+        <header class="performance-heading">
+            <h3>Производительность</h3>
             <q-btn flat dense round icon="la la-sync" aria-label="Обновить показатели производительности" :disable="busy" @click="refresh" />
-        </div>
-        <div v-if="error" class="text-negative" role="alert">
-            {{ error }}
-        </div>
+        </header>
+        <div v-if="error" class="text-negative" role="alert">{{ error }}</div>
         <template v-if="info">
-            <h3 class="performance-section-title">Действует на сервере</h3>
             <div class="performance-active" data-testid="performance-active">
-                <strong>{{ profileName(info.settings.selected) }}</strong>
-                <span>Всего {{ limitLabel(info.settings.limits.total) }} · изображения {{ limitLabel(info.settings.limits.images) }} · архивы {{ limitLabel(info.settings.limits.reviews) }} · конвертация {{ limitLabel(info.settings.limits.conversions) }} · фон {{ limitLabel(info.settings.limits.background) }}</span>
+                <div><span class="performance-muted">Режим сервера</span><strong>{{ profileName(info.settings.selected) }}</strong></div>
+                <span>В работе <b>{{ info.runtime.active }}</b> · в очереди <b>{{ info.runtime.queued }}</b></span>
             </div>
-            <div class="performance-stats">
-                <span>Доступно CPU: <b>{{ number(info.machine.cpu) }}</b></span>
-                <span>CPU сейчас, ядер: <b>{{ number(cpuPercent === null ? null : cpuPercent / 100) }}</b></span>
-                <span>Лимит памяти: <b>{{ bytes(info.machine.memoryLimit) }}</b></span>
-                <span>Память сейчас: <b>{{ bytes(info.machine.memoryUsed) }}</b></span>
-                <span v-if="info.processMemory">RSS {{ info.settings.native ? 'Rust' : 'Node' }}: <b>{{ bytes(info.processMemory.rss) }}</b></span>
-                <span v-if="info.settings.native && info.databaseCache?.available">Кэш чтения каталога: <b>{{ bytes(info.databaseCache.readCacheBytes) }}</b></span>
-                <span v-if="info.databaseCache?.workerHeapUsed">Heap каталога: <b>{{ bytes(info.databaseCache.workerHeapUsed) }}<template v-if="info.databaseCache.workerHeapLimit"> / {{ bytes(info.databaseCache.workerHeapLimit) }}</template></b></span>
-                <span>Задачи: <b>{{ info.runtime.active }}</b> · в очереди {{ info.runtime.queued }}</span>
-            </div>
+            <details class="performance-details">
+                <summary>Ресурсы и лимиты</summary>
+                <div class="performance-stats">
+                    <span>Всего <b>{{ limitLabel(info.settings.limits.total) }}</b></span>
+                    <span>Изображения <b>{{ limitLabel(info.settings.limits.images) }}</b></span>
+                    <span>Архивы <b>{{ limitLabel(info.settings.limits.reviews) }}</b></span>
+                    <span>Конвертация <b>{{ limitLabel(info.settings.limits.conversions) }}</b></span>
+                    <span>Фон <b>{{ limitLabel(info.settings.limits.background) }}</b></span>
+                </div>
+                <div class="performance-stats">
+                    <span>CPU, ядер <b>{{ number(cpuPercent === null ? null : cpuPercent / 100) }} / {{ number(info.machine.cpu) }}</b></span>
+                    <span>Память <b>{{ bytes(info.machine.memoryUsed) }} / {{ bytes(info.machine.memoryLimit) }}</b></span>
+                    <span v-if="info.processMemory">RSS {{ info.settings.native ? 'Rust' : 'Node' }} <b>{{ bytes(info.processMemory.rss) }}</b></span>
+                    <span v-if="info.settings.native && info.databaseCache?.available">Кэш каталога <b>{{ bytes(info.databaseCache.readCacheBytes) }}</b></span>
+                    <span v-if="info.databaseCache?.workerHeapUsed">Heap каталога <b>{{ bytes(info.databaseCache.workerHeapUsed) }} / {{ bytes(info.databaseCache.workerHeapLimit) }}</b></span>
+                </div>
+            </details>
             <div v-if="info.databaseCache?.available === false" class="text-negative" role="alert">
                 {{ info.databaseCache.error || 'Каталог недоступен. Перезапустите сервер для восстановления.' }}
             </div>
-            <div class="performance-muted">Текущая память — {{ memoryScope(info.machine.memoryScope) }}. CPU рассчитан между обновлениями показателей.</div>
-            <h3 class="performance-section-title">Настройки для теста</h3>
-            <p class="performance-muted">Выбор сохраняется в этом браузере для текущего профиля. Он задаёт следующую проверку и не меняет действующие лимиты.</p>
-            <div class="performance-profiles">
-                <button
-                    v-for="profile in info.settings.profiles" :key="profile.id" type="button"
-                    class="performance-profile" :class="{'performance-profile--selected': selected === profile.id}"
-                    :aria-pressed="selected === profile.id" :disabled="running || busy" @click="selected = profile.id"
-                >
-                    <strong>{{ profile.name }}</strong>
-                    <span v-if="selected === profile.id" class="performance-badge">Для теста</span>
-                    <span>Одновременно: {{ limitLabel(profile.limits.total) }}</span>
-                    <small v-if="info.settings.native">Архивы {{ limitLabel(profile.limits.reviews) }} · проверка содержимого {{ limitLabel(profile.limits.conversions) }}</small>
-                    <small v-else>Изображения {{ limitLabel(profile.limits.images) }} · архивы {{ limitLabel(profile.limits.reviews) }} · конвертация {{ limitLabel(profile.limits.conversions) }}</small>
-                </button>
-                <button type="button" class="performance-profile" :class="{'performance-profile--selected': selected === 'custom'}" :aria-pressed="selected === 'custom'" :disabled="running || busy" @click="selected = 'custom'">
-                    <strong>Свои значения</strong>
-                    <span>Задать параллельность</span>
-                    <small>Проверить расход CPU и памяти с выбранными лимитами</small>
-                </button>
-                <button type="button" class="performance-profile" :class="{'performance-profile--selected': selected === 'compare'}" :aria-pressed="selected === 'compare'" :disabled="running || busy" @click="selected = 'compare'">
-                    <strong>Сравнить три режима</strong>
-                    <span>Бережный, сбалансированный и производительный</span>
-                    <small>Одинаковая проверка для выбора подходящего режима</small>
-                </button>
+            <h4>Проверка нагрузки</h4>
+            <div class="performance-form">
+                <div>
+                    <label for="performance-check-mode">Режим проверки</label>
+                    <select id="performance-check-mode" v-model="selected" :disabled="running || busy">
+                        <option v-for="profile in info.settings.profiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
+                        <option value="compare">Сравнить три режима</option>
+                        <option value="custom">Свои значения</option>
+                    </select>
+                </div>
+                <div class="performance-source">
+                    <label for="performance-check-source">Хранилище</label>
+                    <select id="performance-check-source" v-model="sourceId" :disabled="running || busy || !info.sources.length">
+                        <option v-if="!info.sources.length" value="">Нет доступных хранилищ</option>
+                        <option v-for="source in info.sources" :key="source.id" :value="source.id">{{ source.name }}</option>
+                    </select>
+                </div>
             </div>
-            <div class="performance-muted">
-                {{ selected === 'compare' ? 'Будут проверены три стандартных режима.' : `Будет проверен только режим «${profileName(selected)}».` }}
-            </div>
-            <div class="performance-muted" role="status" data-testid="performance-save-status">{{ preferenceStatus }}</div>
             <div v-if="selected === 'custom' && customLimits" class="performance-custom">
                 <q-input v-for="field in editableFields" :key="field.key" v-model.number="customLimits[field.key]" type="number" outlined dense :label="field.label" min="1" :max="info.settings.hardMax" step="1" :disable="running || busy" />
-                <div class="performance-muted">Целые значения от 1 до {{ info.settings.hardMax }}. Лимит каждого вида задач не должен превышать общий.</div>
                 <div v-if="customError" class="text-negative" role="alert">{{ customError }}</div>
             </div>
-            <div class="performance-benchmark">
-                <q-select
-                    v-model="sourceId" :options="info.sources" option-label="name" option-value="id" emit-value map-options
-                    outlined dense label="Хранилище для проверки" :disable="running || busy" class="performance-source"
-                />
-                <q-btn
-                    v-if="!running" color="primary" no-caps :label="selected === 'compare' ? 'Сравнить три режима' : 'Проверить выбранный режим'" :loading="busy" data-testid="performance-start"
-                    :disable="!sourceId || !info.settings.benchmarkEnabled || info.databaseCache?.available === false || !!customError" @click="start"
-                />
-                <q-btn v-else outline no-caps label="Остановить" :loading="busy || info.job.state === 'cancelling'" @click="cancel" />
-            </div>
+            <div v-if="preferenceStatus" class="performance-muted" role="status">{{ preferenceStatus }}</div>
             <div v-if="sourceNotice" class="performance-muted" role="status">{{ sourceNotice }}</div>
-            <div class="performance-muted">
-                До {{ testConcurrency }} одновременных тестовых задач,
-                лимит времени {{ Math.round(info.settings.benchmarkTimeoutMs / 1000) }} с.
-                Библиотека используется для чтения. Проверка создаёт временную нагрузку.
+            <div class="performance-actions">
+                <q-btn v-if="!running" color="primary" no-caps label="Запустить проверку" :loading="busy" data-testid="performance-start"
+                    :disable="!sourceId || !info.settings.benchmarkEnabled || info.databaseCache?.available === false || !!customError" @click="start" />
+                <q-btn v-else outline no-caps label="Остановить" :loading="busy || info.job.state === 'cancelling'" @click="cancel" />
+                <span v-if="!info.settings.benchmarkEnabled" class="performance-muted">Проверка отключена при запуске сервера.</span>
+                <span v-else-if="!running" class="performance-muted">До {{ Math.round(info.settings.benchmarkTimeoutMs / 1000) }} с<template v-if="selected === 'unlimited' && info.benchmarkSampleSize"> · {{ info.benchmarkSampleSize }} операций на этап</template></span>
             </div>
-            <h3 class="performance-section-title">Ход проверки и последний результат</h3>
-            <div v-if="!info.settings.benchmarkEnabled" class="performance-muted">
-                Проверка отключена параметрами запуска.
-            </div>
-            <div v-if="info.job" class="performance-job" role="status" aria-live="polite">
+            <div v-if="info.job && info.job.state !== 'completed'" class="performance-job" role="status">
                 <div>{{ running ? info.job.stage : (info.job.message || info.job.stage) }} <span v-if="running">· {{ Math.round(info.job.progress * 100) }}%</span></div>
                 <q-linear-progress v-if="running" rounded size="6px" :value="info.job.progress" color="primary" />
-                <div v-if="info.job.sample && running" class="performance-muted">
-                    Память {{ bytes(info.job.sample.memoryUsed) }} · пик {{ bytes(info.job.sample.peakMemory) }}
-                    · CPU {{ number(info.job.sample.cpuPercent / 100) }} ядра
-                </div>
+                <div v-if="running && info.job.sample" class="performance-muted">Память {{ bytes(info.job.sample.memoryUsed) }} · CPU {{ number(info.job.sample.cpuPercent / 100) }} ядра</div>
             </div>
-            <div v-if="reportSummary" class="performance-recommendation" :data-status="reportSummary.status" data-testid="performance-result">
-                <div class="performance-muted">Последний завершённый результат <span class="performance-result-status">{{ statusLabel(reportSummary.status) }}</span></div>
-                <strong>{{ reportSummary.title }}</strong>
-                <ul v-if="reportSummary.notes.length"><li v-for="(note,index) in reportSummary.notes" :key="index">{{ note }}</li></ul>
-                <div class="performance-muted">Источник: {{ info.report.source?.name || 'Не указан' }} · {{ date(info.report.measuredAt) }}</div>
-                <div v-if="info.job && info.job.state !== 'completed'" class="performance-muted">Сохранённый результат относится к предыдущей завершённой проверке. Текущий запуск: {{ running ? 'выполняется' : (info.job.message || info.job.state) }}.</div>
-            </div>
-            <div v-else class="performance-muted">Результатов пока нет. Выберите режим и запустите проверку.</div>
-            <div v-if="reportSummary" class="performance-result-cards">
-                <article v-for="(row,index) in info.report.rows" :key="index" class="performance-result-card" :data-status="reportSummary.rows[index]?.status || 'insufficient'">
-                    <div class="performance-result-card-heading"><strong>{{ profileName(row.profile) }}</strong><span>{{ statusLabel(reportSummary.rows[index]?.status || 'insufficient') }}</span></div>
-                    <div v-if="info.settings.native" class="performance-muted">Архивы {{ limitLabel(row.limits?.reviews) }} · проверка содержимого {{ limitLabel(row.limits?.conversions) }}</div>
-                    <div v-else class="performance-muted">Проверенные лимиты: изображения {{ limitLabel(row.limits?.images) }} · архивы {{ limitLabel(row.limits?.reviews) }} · конвертация {{ limitLabel(row.limits?.conversions) }}</div>
-                    <div class="performance-result-metrics">
-                        <span>Лимит задач <b>{{ limitLabel(row.limits?.total) }}</b></span>
-                        <span>Отклик p95 <b>{{ duration(row.probeP95Ms) }}</b></span>
-                        <span>Пик памяти <b>{{ bytes(row.peakMemory) }}</b></span>
-                        <span>Пиковый прирост <b>{{ bytes(row.memoryDelta) }}</b></span>
-                        <span>Средний CPU <b>{{ number(Number.isFinite(row.cpuPercent) ? row.cpuPercent / 100 : null) }} ядра</b></span>
-                    </div>
-                    <ul class="performance-row-notes"><li v-for="(note,noteIndex) in reportSummary.rows[index]?.notes || []" :key="noteIndex">{{ note }}</li></ul>
-                </article>
-            </div>
-            <div class="performance-muted performance-recommendation-note">
-                {{ info.recommendation.measured ? 'Рекомендация по сравнению режимов' : 'Предварительная оценка сервера' }}: <strong>{{ profileName(info.recommendation.profile) }}</strong>.
-                {{ info.recommendation.reason }}
-            </div>
-            <details v-if="info.report" class="performance-details">
-                <summary>Измерения и пояснения{{ info.report.stale ? ' · устаревший результат' : '' }}</summary>
-                <div class="performance-table-wrap">
-                    <table>
-                        <thead><tr><th>Режим</th><th>Лимит задач</th><th>Первый измеряемый проход</th><th>Второй проход</th><th>Медиана повторов</th><th>Внутренний отклик p95</th><th>Пик памяти*</th><th>Пиковый прирост*</th><th>Средний CPU, ядер*</th><th>CPU-время</th></tr></thead>
-                        <tbody>
-                            <tr v-for="row in info.report.rows" :key="row.profile">
-                                <td>{{ profileName(row.profile) }}{{ row.completed ? '' : ' · ошибка проверки' }}</td>
-                                <td>{{ limitLabel(row.limits.total) }}</td>
-                                <td>{{ duration(row.firstPassMs) }}</td><td>{{ duration(row.repeatPassMs) }}</td>
-                                <td>{{ duration(row.elapsedMs) }}<span v-if="row.rounds > 1"> · {{ row.rounds - 1 }} повт.</span></td>
-                                <td>{{ duration(row.probeP95Ms) }}</td><td>{{ bytes(row.peakMemory) }}</td>
-                                <td>{{ bytes(row.memoryDelta) }}</td><td>{{ number(Number.isFinite(row.cpuPercent) ? row.cpuPercent / 100 : null) }}</td><td>{{ duration(row.cpuTimeMs) }}</td>
-                            </tr>
-                        </tbody>
+            <template v-if="reportSummary">
+                <h4>Последняя проверка</h4>
+                <div class="performance-result" :data-status="reportSummary.status" data-testid="performance-result">
+                    <strong>{{ resultHeadline }}</strong>
+                    <span class="performance-muted">{{ [info.report.source?.name, date(info.report.measuredAt)].filter(Boolean).join(' · ') }}</span>
+                    <table v-if="info.report.mode === 'compare' && info.report.rows.length" class="performance-comparison">
+                        <thead><tr><th>Режим</th><th>Отклик p95</th><th>Пик памяти</th></tr></thead>
+                        <tbody><tr v-for="row in info.report.rows" :key="row.profile">
+                            <th scope="row">{{ profileName(row.profile) }}</th><td>{{ duration(row.probeP95Ms) }}</td><td>{{ bytes(row.peakMemory) }}</td>
+                        </tr></tbody>
                     </table>
+                    <span v-if="info.recommendation.measured && !info.report.stale && !info.report.legacy && info.report.schema === 2">Рекомендуемый режим — {{ profileName(info.recommendation.profile) }}</span>
                 </div>
-                <div class="performance-muted">
-                    * Периодическая выборка {{ memoryScope(info.report.machine?.memoryScope) }}. Отклик — внутренняя проверка каталога.
-                    Меньшее время проходов означает более быстрое выполнение этой проверки. p95 — время, в которое укладываются 95% внутренних проб, а не поиска в браузере.
-                    Первый проход выполняется после подготовки инструментов; кэш ОС и NAS не очищается. Пиковый прирост памяти считается от начала режима и не показывает удержание после сборки мусора.
-                    CPU — средняя занятость ядер за тест. {{ info.settings.native ? 'Без метрик контейнера учитывается процесс Rust.' : 'Без метрик контейнера учитывается процесс Node.js без дочерних конвертеров.' }}
-                    Между отдельными запусками могут отличаться число операций, другая нагрузка и состояние кэша. Их время нельзя напрямую сравнивать как одинаковый тест.
-                </div>
-                <div v-for="(warning, i) in info.report.warnings" :key="i" class="performance-muted">
-                    {{ warning }}
-                </div>
-            </details>
+                <details class="performance-details">
+                    <summary>Подробности проверки</summary>
+                    <div class="performance-table-wrap" tabindex="0" role="region" aria-label="Замеры по режимам">
+                        <table>
+                            <thead><tr><th>Режим</th><th>Лимит задач</th><th>Отклик p95</th><th>Пик памяти</th><th>Прирост памяти</th><th>Средний CPU, ядер</th><th>CPU-время</th><th>Первый проход</th><th>Второй проход</th><th>Медиана повторов</th></tr></thead>
+                            <tbody><tr v-for="row in info.report.rows" :key="row.profile">
+                                <th scope="row">{{ profileName(row.profile) }}</th><td>{{ limitLabel(row.limits?.total) }}</td><td>{{ duration(row.probeP95Ms) }}</td>
+                                <td>{{ bytes(row.peakMemory) }}</td><td>{{ bytes(row.memoryDelta) }}</td><td>{{ number(Number.isFinite(row.cpuPercent) ? row.cpuPercent / 100 : null) }}</td>
+                                <td>{{ duration(row.cpuTimeMs) }}</td><td>{{ duration(row.firstPassMs) }}</td><td>{{ duration(row.repeatPassMs) }}</td><td>{{ duration(row.elapsedMs) }}</td>
+                            </tr></tbody>
+                        </table>
+                    </div>
+                    <div v-for="(row,index) in info.report.rows" :key="row.profile" class="performance-row">
+                        <strong>{{ profileName(row.profile) }}</strong> · {{ statusLabel(reportSummary.rows[index]?.status) }}
+                        <div class="performance-muted">Архивы {{ limitLabel(row.limits?.reviews) }} · {{ info.settings.native ? 'проверка содержимого' : 'конвертация' }} {{ limitLabel(row.limits?.conversions) }}<template v-if="!info.settings.native"> · изображения {{ limitLabel(row.limits?.images) }}</template></div>
+                        <ul v-if="reportSummary.rows[index]?.notes.length"><li v-for="note in reportSummary.rows[index].notes" :key="note">{{ note }}</li></ul>
+                    </div>
+                    <ul><li v-for="note in [...reportSummary.notes, ...(info.report.warnings || [])]" :key="note">{{ note }}</li></ul>
+                    <div v-if="info.recommendation.reason" class="performance-muted">{{ info.recommendation.reason }}</div>
+                </details>
+            </template>
             <details v-if="selected !== 'compare'" class="performance-details">
-                <summary>Параметры следующего запуска · {{ profileName(selected) }}</summary>
+                <summary>Параметры запуска · {{ profileName(selected) }}</summary>
+                <p class="performance-muted">Для применения измените окружение и перезапустите сервер.</p>
                 <pre>{{ compose }}</pre>
                 <div class="performance-copy">
                     <q-btn outline no-caps label="Скопировать Compose" :disable="!!customError" @click="copy(compose)" />
-                    <q-btn flat no-caps label="Скопировать параметры docker run" :disable="!!customError" @click="copy(docker)" />
-                </div>
-                <div class="performance-muted">
-                    Добавьте параметры к текущему запуску и пересоздайте контейнер. Проверка сама настройки не применяет.
+                    <q-btn flat no-caps label="Скопировать docker run" :disable="!!customError" @click="copy(docker)" />
                 </div>
             </details>
-            <div v-else class="performance-muted performance-recommendation-note">Для параметров запуска выберите один режим или свои значения. Сервер продолжает работать с текущими лимитами.</div>
         </template>
-        <div v-else-if="!error" class="performance-muted" role="status">
-            Загрузка показателей…
-        </div>
+        <div v-else-if="!error" class="performance-muted" role="status">Загрузка показателей…</div>
     </section>
 </template>
 
@@ -186,13 +129,15 @@ export default {
         preferenceIdentity() {return preferencesModel.preferenceScope(this.$store?.state.config,this.$store?.state.settings);},
         testDraft() {return {selected:this.selected,sourceId:this.sourceId,customLimits:this.customLimits};},
         reportSummary() {return this.info?.report ? summarizeReport(this.info.report):null;},
-        testConcurrency() {
-            const profiles = this.info.settings.profiles;
-            const limit = this.selected === 'custom' ? this.customLimits?.total
-                : this.selected === 'compare' ? Math.max(...profiles.filter(p => p.id !== 'unlimited').map(p => p.limits.total))
-                    : profiles.find(p => p.id === this.selected)?.limits.total;
-            const sample = this.info.benchmarkSampleSize;
-            return sample ? Math.min(limit ?? sample, sample) : limit;
+        resultHeadline() {
+            const {report} = this.info, summary = this.reportSummary;
+            if (report.legacy || report.schema !== 2) return 'Старый формат отчёта. Повторите проверку.';
+            if (report.stale) return 'Параметры сервера изменились. Повторите проверку.';
+            if (summary.status === 'attention') {
+                const slow = summary.rows.find(row => row.checks.probe?.status === 'fail');
+                if (slow) return this.profileName(slow.profile) + ' — отклик ' + this.duration(slow.checks.probe.value) + ' при пороге ' + this.duration(slow.checks.probe.maximum);
+            }
+            return {pass:'Показатели в норме', insufficient:'Предварительный результат', attention:'Есть отклонения', failed:'Проверка завершилась с ошибкой'}[summary.status];
         },
         running() {return ['running','cancelling'].includes(this.info?.job?.state);},
         editableFields() {
@@ -234,14 +179,12 @@ export default {
             const saved=this.preferences.read(this.preferenceContext);
             this.selected=saved?.selected || '';this.sourceId=saved?.sourceId || '';this.customLimits=saved?.customLimits || null;
             this.preferencesReady=true;
-            this.preferenceStatus=!this.preferenceContext ? 'Настройки доступны в текущем сеансе. Войдите в профиль администратора для локального сохранения.'
-                : !this.preferences.available ? 'Локальное хранилище недоступно. Настройки сохранятся только до закрытия панели.'
-                    : saved ? 'Выбор восстановлен из этого браузера для текущего профиля.' : 'Изменения сохраняются автоматически в этом браузере.';
+            this.preferenceStatus = this.preferences.available ? '' : 'Выбор сохранится только на время сеанса.';
         },
         savePreferences(scope=this.preferenceContext) {
             if(!this.preferencesReady || !scope || !this.selected || !this.customLimits)return;
             const saved=this.preferences.write(scope,this.testDraft);
-            if(scope===this.preferenceContext)this.preferenceStatus=saved ? 'Сохранено в этом браузере для текущего профиля.'
+            if(scope===this.preferenceContext)this.preferenceStatus=saved ? ''
                 : 'Не удалось сохранить выбор в браузере. Настройки доступны до закрытия панели.';
         },
         scheduleRefresh() {
@@ -306,59 +249,46 @@ export default {
         number(value) {return Number.isFinite(value) ? value.toLocaleString('ru-RU', {maximumFractionDigits:1}) : '—';},
         bytes(value) {return Number.isFinite(value) ? (value / (1024 * 1024)).toLocaleString('ru-RU', {maximumFractionDigits:0}) + ' МиБ' : '—';},
         duration(value) {return Number.isFinite(value) ? Math.round(value) + ' мс' : '—';},
-        date(value) {return new Date(value).toLocaleString('ru-RU');},
-        memoryScope(value) {
-            return ['cgroup','container'].includes(value) ? 'контейнера / группы процессов'
-                : value === 'host' ? 'общей группы процессов (оценка предварительная)'
-                    : this.info?.settings.native ? 'процесса Rust' : 'процесса Node.js';
-        },
+        date(value) {return value ? new Date(value).toLocaleString('ru-RU', {dateStyle:'short',timeStyle:'short'}) : '';},
     },
 };
 </script>
 
 <style scoped>
-.performance-panel {grid-column: 1 / -1; min-width: 0; padding: 16px; border: 1px solid var(--app-border); border-radius: 8px; color: var(--app-text); background: var(--app-surface);}
-.performance-heading {display: flex; align-items: start; justify-content: space-between; gap: 12px;}
-.performance-heading > div {min-width: 0; overflow-wrap: anywhere;}
-.performance-title {font-size: 16px; font-weight: 700; margin-bottom: 4px;}
-.performance-section-title {font-size: 15px; font-weight: 700; margin: 20px 0 8px;}
-.performance-active {display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 10px 12px; border: 1px solid var(--app-border); border-radius: 6px; background: var(--app-surface-2); font-size: 13px;}
-.performance-muted {font-size: 12px; color: var(--app-muted); line-height: 1.5;}
-.performance-stats {display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 14px 0;}
-.performance-recommendation {padding: 12px; background: var(--app-surface-2); border-radius: 6px;}
-.performance-recommendation ul {padding-left: 20px; margin: 8px 0; font-size: 13px; line-height: 1.6;}
-.performance-recommendation-note, .performance-row-notes {margin: 12px 0; line-height: 1.6;}
-.performance-row-notes {font-size: 12px;}
-.performance-result-cards {display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px; margin: 12px 0;}
-.performance-result-card {border: 1px solid var(--app-border); border-radius: 8px; padding: 12px; min-width: 0;}
-.performance-result-card-heading {display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; font-size: 13px;}
-.performance-result-card-heading > span, .performance-result-status {font-size: 12px; color: var(--app-muted);}
-.performance-result-metrics {display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 12px 0; font-size: 12px;}
-.performance-result-metrics > span {display: grid; gap: 2px;}
-.performance-result-card ul {padding-left: 18px; margin-bottom: 0;}
-[data-status="attention"], [data-status="failed"] {border-left: 3px solid var(--q-negative);}
-[data-status="insufficient"] {border-left: 3px solid var(--q-warning);}
-.performance-profiles {display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 10px; margin: 12px 0 6px;}
-.performance-custom {display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 12px; margin-top: 16px;}
-.performance-custom > .performance-muted, .performance-custom > .text-negative {grid-column: 1 / -1;}
-.performance-profile {
-    display: flex; flex-direction: column; align-items: start; gap: 6px; padding: 12px;
-    border: 1px solid var(--app-border); border-radius: 6px; background: var(--app-surface);
-    color: var(--app-text); font: inherit; text-align: left; cursor: pointer;
-}
-.performance-profile--selected {border-color: var(--app-link); box-shadow: inset 0 0 0 1px var(--app-link);}
-.performance-profile:focus-visible {outline: 2px solid var(--app-link); outline-offset: 3px;}
-.performance-profile small {color: var(--app-muted); line-height: 1.5;}
-.performance-profile strong {overflow-wrap: anywhere;}
-.performance-badge {font-size: 11px; color: var(--app-link); background: var(--app-surface-2); padding: 2px 6px; border-radius: 4px;}
-.performance-benchmark, .performance-copy {display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0 8px;}
-.performance-source {flex: 1 1 220px; min-width: 0;}
-.performance-job {display: grid; gap: 8px; margin-top: 12px;}
-.performance-details {border-top: 1px solid var(--app-border); margin-top: 14px; padding-top: 12px;}
-.performance-details summary {cursor: pointer; font-weight: 600; padding: 4px 0;}
-.performance-details pre {overflow-x: auto; padding: 12px; background: var(--app-surface-3); border-radius: 6px; font-size: 12px;}
-.performance-table-wrap {overflow-x: auto; margin: 10px 0;}
-table {border-collapse: collapse; width: 100%; font-size: 12px;}
-th, td {text-align: left; padding: 8px; border-bottom: 1px solid var(--app-border); white-space: nowrap;}
-@media (max-width: 650px) {.performance-profiles, .performance-custom {grid-template-columns: 1fr;} .performance-panel {padding: 12px;} .performance-benchmark > .q-btn {width: 100%;}}
+.performance-panel {grid-column:1/-1; min-width:0; padding:18px; border:1px solid var(--app-border); border-radius:12px; color:var(--app-text); background:var(--app-surface);}
+.performance-heading,.performance-active,.performance-actions,.performance-copy {display:flex; align-items:center; justify-content:space-between; gap:10px 16px; flex-wrap:wrap;}
+.performance-panel h3,.performance-panel h4 {margin:0; font-weight:700; line-height:1.3; letter-spacing:normal;}
+.performance-panel h3 {font-size:18px;} .performance-panel h4 {font-size:15px; margin:20px 0 10px;}
+.performance-muted {color:var(--app-muted); font-size:13px; line-height:1.45;}
+.performance-active,.performance-result {padding:12px 14px; margin-top:8px; background:var(--app-surface-2); border-radius:8px;}
+.performance-active div,.performance-result {display:grid; gap:3px;}
+.performance-active > span {font-size:13px; color:var(--app-muted);}
+.performance-active b {color:var(--app-text);}
+.performance-details {border-bottom:1px solid var(--app-border); min-width:0; padding:9px 0;}
+.performance-details:last-child {border-bottom:0; padding-bottom:0;}
+.performance-details summary {cursor:pointer; width:fit-content; max-width:100%; padding:4px 0; font-size:13px; color:var(--app-link); font-weight:600;}
+.performance-details :is(summary,pre):focus-visible,.performance-table-wrap:focus-visible {outline:2px solid var(--app-link); outline-offset:2px;}
+.performance-stats,.performance-actions,.performance-copy {display:flex; gap:8px 16px; flex-wrap:wrap; margin:10px 0; justify-content:flex-start;}
+.performance-form,.performance-custom {display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:10px;}
+.performance-form > div {display:grid; min-width:0; gap:4px;}
+.performance-form label {font-size:13px; color:var(--app-muted);}
+.performance-form select {width:100%; min-width:0; min-height:40px; font:inherit; font-size:14px; color:var(--app-text); background:var(--app-surface-2); border:1px solid var(--app-border); border-radius:7px; padding:6px 9px;}
+.performance-form select:focus-visible {outline:2px solid var(--app-link); outline-offset:1px;}
+.performance-custom,.performance-job {margin-top:12px;}
+.performance-custom > .text-negative {grid-column:1/-1;}
+.performance-job {display:grid; gap:6px;}
+.performance-result[data-status="attention"],.performance-result[data-status="failed"] {border-inline-start:3px solid var(--q-negative);}
+.performance-result[data-status="insufficient"] {border-inline-start:3px solid var(--q-warning);}
+.performance-table-wrap,.performance-details pre {max-width:100%; overflow-x:auto; margin:10px 0;}
+.performance-details pre {padding:10px; background:var(--app-surface-2); border-radius:6px; font-size:12px;}
+.performance-details p,.performance-details ul {margin:8px 0;}
+.performance-details ul {padding-inline-start:20px; font-size:13px;}
+.performance-row {margin:10px 0;}
+table {border-collapse:collapse; font-size:13px;}
+th,td {text-align:start; padding:6px 10px; border-bottom:1px solid var(--app-border); white-space:nowrap;}
+.performance-comparison {width:100%; margin-top:6px;}
+.performance-comparison th,.performance-comparison td {padding:5px 3px; white-space:normal; overflow-wrap:anywhere;}
+.performance-comparison th[scope="row"] {font-weight:500;}
+.performance-comparison tr:last-child td,.performance-comparison tr:last-child th[scope="row"] {border:0;}
+@media (max-width:600px) {.performance-panel {padding:12px;} .performance-form {grid-template-columns:1fr;}}
 </style>

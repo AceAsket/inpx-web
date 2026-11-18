@@ -267,7 +267,8 @@ function profileRequest(page, payload, session) {
         await page.screenshot({path: path.join(directory, 'admin-tasks.png')});
         await page.getByRole('button', {name: 'Закрыть задачи', exact: true}).click();
         const performancePanel = page.locator('.performance-panel');
-        await performancePanel.getByRole('button', {name: /^Свои значения/}).click();
+        const testMode = performancePanel.getByLabel('Режим проверки',{exact:true});
+        await testMode.selectOption('custom');
         await performancePanel.getByRole('spinbutton', {name: 'Всего одновременно', exact: true}).fill('2');
         await performancePanel.getByRole('spinbutton', {name: 'Изображения', exact: true}).fill('3');
         const runBenchmark = performancePanel.getByTestId('performance-start');
@@ -281,14 +282,12 @@ function profileRequest(page, payload, session) {
         await performancePanel.getByRole('button', {name: 'Остановить', exact: true}).waitFor();
         assert.deepEqual(benchmarkOptions, {sourceId: 'browser-fixture', mode: 'custom', limits: {total: 3, images: 2, reviews: 1, conversions: 1}});
         await performancePanel.getByText(/Проверка своих значений.*40%/).waitFor();
-        assert(!(await performancePanel.innerText()).replace(/\s+/g, ' ').includes('CPU сейчас, ядер: —'), 'CPU is computed from successive counter samples');
-        const profileLabels = await performancePanel.locator('.performance-profile').evaluateAll(nodes => nodes.map(node => {
-            const frame = node.getBoundingClientRect(), label = node.querySelector('strong').getBoundingClientRect();
-            const padding = parseFloat(getComputedStyle(node).paddingRight) || 0;
-            return {name: node.querySelector('strong').textContent, labelRight: label.right, contentRight: frame.right - padding};
-        }));
-        assert(profileLabels.every(label => label.labelRight <= label.contentRight + 1), 'Profile titles must stay inside their card: ' + JSON.stringify(profileLabels));
-        assert(await performancePanel.getByRole('button', {name: /^Свои значения/}).isDisabled(), 'A running benchmark locks the selected profile');
+        const resources = performancePanel.locator('details').filter({has:page.getByText('Ресурсы и лимиты',{exact:true})});
+        await resources.locator('summary').click();
+        const cpu = resources.getByText(/^CPU, ядер/);
+        await cpu.waitFor();
+        assert(!(await cpu.innerText()).includes('—'), 'CPU is computed from successive counter samples');
+        assert(await testMode.isDisabled(), 'A running benchmark locks the selected profile');
         await performancePanel.screenshot({path: path.join(directory, 'performance-custom-run.png')});
         await performancePanel.getByRole('button', {name: 'Остановить', exact: true}).click();
         await runBenchmark.waitFor(); assert.equal(benchmarkState, 'cancelled');

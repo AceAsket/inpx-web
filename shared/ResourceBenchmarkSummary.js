@@ -13,7 +13,7 @@ function criteriaFor(report) {
     return value;
 }
 
-function summarizeRow(row,criteria) {
+function summarizeRow(row,criteria,engine) {
     const result={profile:typeof row.profile==='string'?row.profile.slice(0,64):'',status:'insufficient',notes:[],checks:{}};
     if(row.completed===false){result.status='failed';result.notes.push('Тестовые операции завершились с ошибкой; этот набор не оценён.');return result;}
     if(row.completed!==true){result.notes.push('Нет завершённого измерения этого набора.');return result;}
@@ -36,7 +36,7 @@ function summarizeRow(row,criteria) {
                 :`Успешных проверок отклика: ${successful}; нужно не меньше ${criteria.minProbeSamples}.`);
         }
         if(probe.status==='fail'){attention=true;result.notes.push(`Внутренний отклик p95: ${number(probe.value)} мс; критерий — меньше ${number(probe.maximum)} мс.`);}
-        if(lag.status==='fail'){attention=true;result.notes.push(`Задержка цикла Node.js p95: ${number(lag.value)} мс; критерий — меньше ${number(lag.maximum)} мс.`);}
+        if(lag.status==='fail'){attention=true;result.notes.push(`Задержка таймера ${engine} p95: ${number(lag.value)} мс; критерий — меньше ${number(lag.maximum)} мс.`);}
         if(memory.status==='fail'){attention=true;result.notes.push(`Пиковая доля памяти: ${number(memory.value*100)}%; критерий — меньше ${number(memory.maximum*100)}%.`);}
         if([probe,lag,memory].some(item=>item.status==='unknown')){insufficient=true;result.notes.push('Не все показатели отклика и запаса памяти измерены.');}
     }
@@ -51,7 +51,8 @@ function summarizeReport(input) {
     const mode=['compare','custom','profile'].includes(report.mode)?report.mode:'unknown';
     const prefix=mode==='custom'?'Свои значения':mode==='profile'?'Выбранный профиль':mode==='compare'?'Сравнение профилей':'Результаты проверки';
     const source=Array.isArray(report.rows)?report.rows.slice(0,16):[];
-    const rows=source.map(row=>summarizeRow(row&&typeof row==='object'?row:{},criteria));
+    const engine=report.engine==='rust'?'Rust':'Node.js';
+    const rows=source.map(row=>summarizeRow(row&&typeof row==='object'?row:{},criteria,engine));
     const notes=[];
     if(mode==='custom')notes.push('Проверен один набор своих значений. Сравнение профилей не выполнялось; действующие настройки не менялись.');
     else if(mode==='profile')notes.push('Проверен один выбранный профиль. Для выбора между профилями запустите их сравнение; действующие настройки не менялись.');
@@ -72,7 +73,7 @@ function summarizeReport(input) {
     const workloads=source.filter(row=>row&&count(row.tasksPerPass)&&count(row.tasksPerStage));
     if(workloads.length===1)notes.push(`За проход: ${workloads[0].tasksPerPass} тестовых операций, по ${workloads[0].tasksPerStage} на вид нагрузки. Для сравнения времени нужен одинаковый объём операций.`);
     const scope=report.machine?.memoryScope;
-    if(scope==='process')notes.push('Память Node.js и CPU процесса не охватывают отдельные процессы конвертеров.');
+    if(scope==='process')notes.push(`Память ${engine} и CPU процесса измерены без дочерних конвертеров.`);
     else if(scope==='host')notes.push('Показатели общей группы процессов могут включать другую работу на машине.');
     let conclusion=status==='pass'?'показатели укладываются в критерии теста'
         :status==='failed'?'тестовые операции завершились с ошибкой'
@@ -81,7 +82,7 @@ function summarizeReport(input) {
         if(rows.some(row=>row.checks.probes?.timeouts>0))conclusion='есть таймауты проверки отклика';
         else if(rows.some(row=>row.checks.probes?.failures>0))conclusion='есть ошибки проверки отклика';
         else if(rows.some(row=>row.checks.probe?.status==='fail'))conclusion='отклик выше порога проверки';
-        else if(rows.some(row=>row.checks.eventLoop?.status==='fail'))conclusion='задержка Node.js выше порога проверки';
+        else if(rows.some(row=>row.checks.eventLoop?.status==='fail'))conclusion=`задержка ${engine} выше порога проверки`;
         else if(rows.some(row=>row.checks.memory?.status==='fail'))conclusion='доля памяти выше порога проверки';
     }
     if(report.stale)conclusion='результаты относятся к прежним условиям';

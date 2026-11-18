@@ -208,8 +208,8 @@ class Api {
             }
             config.webAppVersion = packageJson.version;
             this.commit('setConfig', config);
-            this.accessGranted = !config.profileLoginRequired || !!config.profileAuthorized;
             if (config.profileLoginRequired && !config.profileAuthorized) {
+                this.accessGranted = false;
                 if (options.skipProfileLogin)
                     return;
                 await this.showProfileLoginDialog('', {required: true});
@@ -230,6 +230,10 @@ class Api {
                 this.profileAccessToken = '';
                 this.writeStoredProfileSession(rememberedUserId, '');
             }
+            const defaults = config.uiDefaults;
+            if (!this.settings.defaultsSet && defaults && typeof defaults === 'object' && !Array.isArray(defaults))
+                this.commit('setSettings', {...defaults, defaultsSet:true});
+            this.accessGranted = true;
         } catch (e) {
             if (this.profileSigningOut) return;
             this.$root.stdDialog.alert(e.message, 'Ошибка');

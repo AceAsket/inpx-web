@@ -222,13 +222,14 @@ async function browser(base) {
         await page.locator('.profile-bottom .profile-logout').waitFor();
         await page.locator('.library-shell__header').getByRole('button',{name:'Настройки библиотеки',exact:true}).click();
         await page.getByRole('button',{name:/^Администрирование/}).click();
-        await page.getByRole('heading',{name:'Действует на сервере'}).waitFor();
+        await page.getByRole('heading',{name:'Производительность',exact:true}).waitFor();
         await page.getByTestId('performance-active').waitFor();
         await page.getByTestId('performance-result').waitFor();
-        await page.getByText('RSS Rust:',{exact:false}).waitFor();
+        await page.getByText('Ресурсы и лимиты',{exact:true}).click();
+        await page.getByText('RSS Rust',{exact:false}).waitFor();
         await page.getByTestId('performance-start').click();
         await page.getByRole('button',{name:'Остановить',exact:true}).waitFor();
-        await page.getByText('Проверка завершена',{exact:true}).waitFor();
+        await page.getByTestId('performance-start').waitFor();
         assert.deepEqual(errors,[]);
         console.log('ok admin dashboard and measured performance result in mobile Chromium');
     } finally { await instance.close(); }

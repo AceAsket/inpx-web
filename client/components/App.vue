@@ -43,20 +43,12 @@ const componentOptions = {
             if (previous === '/reader-lab' && path !== previous && !this.accessGranted)
                 this.$root.api?.updateConfig();
         },
-        accessGranted() {this.applyInitialUiDefaults();},
-        config() {this.applyInitialUiDefaults();},
     },
 
 };
 class App {
     _options = componentOptions;
     accessGranted = false;
-
-    applyInitialUiDefaults() {
-        const defaults = this.config.uiDefaults;
-        if (this.accessGranted && !this.settings.defaultsSet && defaults && typeof defaults === 'object' && !Array.isArray(defaults))
-            this.commit('setSettings', {...defaults, defaultsSet: true});
-    }
 
     created() {
         this.commit = this.$store.commit;
