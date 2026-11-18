@@ -57,6 +57,15 @@ async function main() {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-release-extracted-'));
     try {
         await extractArchive(archive, directory);
+        if (target.startsWith('linux')) {
+            for (const program of ['server','catalog','reader']) {
+                const name = rust && program === 'server' ? names[0] : rustProgramEntry(target,program);
+                const binary = path.join(directory,name);
+                if (!rust && !await fs.pathExists(binary)) continue;
+                const elf = execFileSync('readelf',['-lWd',binary],{encoding:'utf8',env:{...process.env,LC_ALL:'C'}});
+                assert.doesNotMatch(elf,/\bINTERP\b|\(NEEDED\)/, `${name} must run without the host's ELF loader and shared libraries`);
+            }
+        }
         if (!rust) {
             const authState = path.join(directory, 'bin', require('../server/core/RustAuthState').fileName);
             assert(WebAssembly.validate(await fs.readFile(authState)), 'Release must include a valid Rust authentication module');

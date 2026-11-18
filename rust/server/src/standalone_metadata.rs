@@ -406,10 +406,7 @@ impl Routes {
             let (_pending, _reader) = (pending, reader);
             match load_book(&state.index.catalogue, &uid) {
                 Ok(None) => failure(StatusCode::NOT_FOUND, "Book not found", head),
-                Ok(Some(book)) => match state
-                    .downloads
-                    .provider_image(&book, &state.index.sources())
-                {
+                Ok(Some(book)) => match state.downloads.book_cover(&book, &state.index.sources()) {
                     Ok(Some(image)) => {
                         if let Err(error) = image.stage(state.downloads.cache()) {
                             eprintln!("Metadata cover cache: {error}");

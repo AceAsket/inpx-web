@@ -1,3 +1,8 @@
+// The INPX parser produces batches on one thread and the Redb writer frees them on another.
+#[cfg(all(target_os = "linux", target_env = "musl"))]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod access_runtime;
 pub mod access_store;
 mod atomic_file;

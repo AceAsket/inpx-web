@@ -1055,7 +1055,7 @@ http://127.0.0.1:12380/#/reader-lab?sample=night-watch.fb2&debugReader=1&debugRe
 
 Этот раздел нужен только для ручной сборки standalone-бинарников. Если нужен готовый локальный запуск без сборки, проще взять assets из GitHub Releases. Для сборки и запуска текущей ветки из исходников требуется Node.js 24 или новее. Бинарники собираются через `@yao-pkg/pkg` со встроенным Node 24.
 
-Сборка на машине с архитектурой целевой платформы предпочтительна; CI использует отдельный ARM64 runner. Для кросс-сборки linux-arm64 на x64 потребуется [QEMU](https://wiki.debian.org/QemuUserEmulation). Linux-бинарники используют glibc; для Alpine используйте Docker-образ на Debian.
+CI собирает Linux x64 и ARM64 на машинах соответствующей архитектуры. В Linux-архивах Rust-сервер и утилиты каталога и чтения статически связаны с musl. В варианте со встроенным Node.js для запуска основного исполняемого файла требуется glibc. Для кросс-сборки linux-arm64 на x64 потребуется [QEMU](https://wiki.debian.org/QemuUserEmulation).
 
 ```sh
 git clone --branch v1.8.2 --single-branch https://github.com/AceAsket/inpx-web.git

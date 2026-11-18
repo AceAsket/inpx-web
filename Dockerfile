@@ -36,6 +36,9 @@ FROM rust-build AS rust-auth-build
 RUN rustup target add wasm32-unknown-unknown \
     && cargo build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
 
+FROM scratch AS rust-linux-programs
+COPY --from=rust-build /src/rust/target/release/inpx-server /src/rust/target/release/inpx-catalog /src/rust/target/release/inpx-reader /
+
 FROM ${NODE_IMAGE} AS build-deps
 
 WORKDIR /app

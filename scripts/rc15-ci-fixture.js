@@ -6,7 +6,7 @@ const {ZipFile} = require('yazl');
 // reindex and one after the regex reindex. The exact-title search adds one.
 const expected = [321, 193, 65];
 
-async function writeFixture(file) {
+async function writeFixture(file, groups = 64) {
     const zip = new ZipFile();
     const output = pipeline(zip.outputStream, createWriteStream(file, {flags:'wx'}));
     const add = (name, text) => zip.addBuffer(Buffer.from(text), name, {
@@ -18,7 +18,7 @@ async function writeFixture(file) {
         [name,'sf:',title,'Серия',1,++id,500,id,del,ext,'2020-01-01',lang,0,''].join('\x04');
     add('collection.info','RC15 compatibility CI\n');
     add('version.info','20200101');
-    for (let part = 0; part < 8; part++) {
+    for (let part = 0; part < groups / 8; part++) {
         const rows = part ? [] : [row(author,'Мастер и Маргарита')];
         for (let i = part * 8; i < (part + 1) * 8; i++) {
             rows.push(row(author,'Театр '+i), row(author,'Письма '+i),
@@ -35,4 +35,5 @@ async function writeFixture(file) {
 }
 
 module.exports = {expected};
-if (require.main === module) writeFixture(process.argv[2]).catch(error=>{console.error(error);process.exitCode=1;});
+if (require.main === module) writeFixture(process.argv[2],process.argv[3]==='--migration' ? 1024 : 64)
+    .catch(error=>{console.error(error);process.exitCode=1;});

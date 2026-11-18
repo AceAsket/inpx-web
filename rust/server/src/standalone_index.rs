@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,7 @@ const CHECKING: u8 = 1;
 const UPDATING: u8 = 2;
 
 pub(super) struct Index {
+    pub(super) starting: AtomicBool,
     pub(super) isbn: Arc<IsbnIndex>,
     files: CatalogueFiles,
     pub(super) catalogue: RwLock<Option<Catalogue>>,
@@ -25,14 +26,31 @@ pub(super) struct Index {
 }
 
 impl Index {
-    pub(super) fn open(files: CatalogueFiles, sources: Arc<Vec<Source>>) -> Result<(Self, bool)> {
+    pub(super) fn new(files: CatalogueFiles, sources: Arc<Vec<Source>>) -> Self {
+        Self {
+            starting: AtomicBool::new(true),
+            isbn: Arc::new(IsbnIndex::new(files.data.join("isbn-index.json"))),
+            files,
+            status: Mutex::new(
+                json!({"ready":false,"updating":true,"job":"open","jobMessage":"Открытие каталога"}),
+            ),
+            catalogue: RwLock::new(None),
+            sources: RwLock::new(sources),
+            job: AtomicU8::new(IDLE),
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    pub(super) fn initialize(&self, recreate: bool) -> Result<bool> {
         let started = Instant::now();
         let mut last_output = started;
         let mut job = String::new();
         let mut message = String::new();
-        let isbn = Arc::new(IsbnIndex::new(files.data.join("isbn-index.json")));
-        let mut catalogue = files.open_or_create(&sources, |patch| {
+        let sources = self.sources();
+        let mut catalogue = self.files.open_or_create(&sources, |patch| {
             let mut phase_changed = false;
+            let leaving_identities = job == "previous identities"
+                && patch["job"].as_str().is_some_and(|next| next != job);
             if let Some(next) = patch["job"].as_str() {
                 phase_changed = next != job
                     || patch["jobMessage"]
@@ -67,9 +85,31 @@ impl Index {
                 );
                 last_output = Instant::now();
             }
+            let mut status = self.status.lock().expect("index status");
+            if leaving_identities {
+                status.as_object_mut().unwrap().remove("recsLoaded");
+            }
+            if matches!(job.as_str(), "migration" | "resume") {
+                status["migration"] = true.into();
+            }
+            if phase_changed {
+                for field in [
+                    "sourceName",
+                    "current",
+                    "totalFiles",
+                    "totalRecords",
+                    "lookupTable",
+                ] {
+                    status.as_object_mut().unwrap().remove(field);
+                }
+            }
+            status
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().expect("progress object").clone());
             Ok(())
         })?;
-        catalogue.attach_isbn_index(isbn.clone());
+        catalogue.attach_isbn_index(self.isbn.clone());
         let created = catalogue.created;
         if created {
             eprintln!(
@@ -78,18 +118,14 @@ impl Index {
                 catalogue.stats["recsLoaded"].as_u64().unwrap_or_default()
             );
         }
-        Ok((
-            Self {
-                isbn,
-                files,
-                status: Mutex::new(status(&catalogue, &sources)),
-                catalogue: RwLock::new(Some(catalogue)),
-                sources: RwLock::new(sources),
-                job: AtomicU8::new(IDLE),
-                generation: AtomicU64::new(0),
-            },
-            created,
-        ))
+        *self.status.lock().expect("index status") = status(&catalogue, &sources);
+        *self.catalogue.write().expect("open catalogue") = Some(catalogue);
+        if recreate && !created {
+            self.start(true);
+            self.refresh(sources, true);
+        }
+        self.starting.store(false, Ordering::Release);
+        Ok(created)
     }
 
     pub(super) fn snapshot(&self) -> Value {

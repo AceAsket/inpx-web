@@ -279,7 +279,7 @@ impl Document {
         Image::from_bytes(self.cover_bytes()?)
     }
 
-    fn cover_bytes(&self) -> Option<Vec<u8>> {
+    pub(crate) fn cover_bytes(&self) -> Option<Vec<u8>> {
         let cover = self.cover_id();
         if cover.is_empty() {
             return None;

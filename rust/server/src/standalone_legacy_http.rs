@@ -21,7 +21,6 @@ pub(super) struct Routes {
     reset_page: Bytes,
     reader_lab: String,
     cover: String,
-    covers: Covers,
 }
 
 pub(super) enum Route {
@@ -36,7 +35,7 @@ enum FileReply {
 }
 
 impl Routes {
-    pub(super) fn new(prefix: &str, exec: &Path, config: &Value) -> Self {
+    pub(super) fn new(prefix: &str) -> Self {
         let root = prefix.trim().trim_matches('/');
         let prefix = if root.is_empty() {
             String::new()
@@ -54,7 +53,6 @@ impl Routes {
             reset_page: page.into(),
             reader_lab: format!("{prefix}/reader-lab-source/"),
             cover: format!("{prefix}/cover/"),
-            covers: Covers::new(exec, config),
         }
     }
 
@@ -101,10 +99,13 @@ impl Routes {
                 .map_err(|rejected| Box::new(rejected.response()))?;
             let sources = state.index.sources();
             let file = match route {
-                Route::Cover(path) => state
-                    .legacy
-                    .cover_file(&path, sources, state.downloads.cache())
-                    .map(FileReply::Cover),
+                Route::Cover(path) => Self::cover_file(
+                    &state.downloads.covers,
+                    &path,
+                    sources,
+                    state.downloads.cache(),
+                )
+                .map(FileReply::Cover),
                 Route::ReaderLab(file) => {
                     let decoded = percent_decode_str(&file).decode_utf8().ok();
                     sources
@@ -167,7 +168,7 @@ impl Routes {
     }
 
     fn cover_file(
-        &self,
+        covers: &Covers,
         path: &str,
         sources: Arc<Vec<inpx_catalog::library_sources::Source>>,
         cache: &Path,
@@ -191,8 +192,7 @@ impl Routes {
             .filter(|id| *id > 0)
             .ok_or(StatusCode::NOT_FOUND)?;
         let source = source.trim();
-        let image = self
-            .covers
+        let image = covers
             .read(sources, (!source.is_empty()).then_some(source), id, cache)
             .map_err(|error| {
                 if error.is::<MissingDecoder>() {

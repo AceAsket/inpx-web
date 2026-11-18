@@ -10,6 +10,7 @@ const {ZipFile} = require('yazl');
 const {chromium} = require(process.env.INPX_PLAYWRIGHT_MODULE || 'playwright');
 const {docker, until, timing} = require('./rust-inpx-filter-tests');
 const {connect, signIn} = require('./rust-events-tests');
+const {coverUrl} = require('../client/components/Library/libraryModel');
 
 const root = '/library';
 const password = 'legacy-http-fixture';
@@ -71,6 +72,9 @@ async function fixture(directory, browser) {
     await fs.writeFile(join(directory,'narrow.png'),main);
     await fs.writeFile(join(directory,'for-jxl.png'),other);
     await Promise.all([
+        zip(join(directory,'main/catalog.zip'),{'none.fb2':fb2}),
+        zip(join(directory,'other/catalog.zip'),{'none.fb2':raw}),
+        zip(join(directory,'other/covers/CATALOG.ZIP'),{'none':main}),
         zip(join(directory,'main/covers/wide-1000-1099.zip'),{'1001':book}),
         zip(join(directory,'other/covers/local-1000-1001.zip'),{'1001':other}),
         zip(join(directory,'covers/shared-3000-3010.zip'),{'3001':other}),
@@ -104,6 +108,8 @@ async function start(name, image, directory, {protectedAccess = false, rootless 
         cjxl /fixture/for-jxl.png /data/encode/cover.jxl -d 0 -e 1 >/dev/null 2>&1
         mv cover.jxl 1102
         7z a /data/library/main/covers/jxl-1102-1102.zip 1102 >/dev/null
+        cp 1102 none
+        7z a /data/library/main/covers/catalog.7z none >/dev/null
         exec inpx-web "$@"`;
     await docker('run','-d','--name',name,'--tmpfs','/data','-p','127.0.0.1::12380',
         '-e','INPX_AUTH_MODE=local','-e','INPX_REQUIRE_AUTH=false',
@@ -224,6 +230,29 @@ async function httpChecks(base, assets, browser) {
         assert.equal((await fetch(base+root+'/reader-lab-source/'+name)).status,404,name);
 
     const results = {};
+    const client = await connect(base,root);
+    try {
+        for (const source of ['other','main']) {
+            const search = await client.send('bookSearch',{query:{title:'=Маршруты '+source,limit:2}});
+            assert.equal(search.found.length,1,source);
+            const url = coverUrl(search.found[0],root);
+            assert(url.startsWith(root+'/cover/by-uid?'),url);
+            const response = await fetch(base+url);
+            assert.equal(response.status,200,source+' catalogue cover');
+            assert.equal(response.headers.get('content-type'),'image/png',source);
+            const data = await bytes(response);
+            assert(!data.equals(assets.book),'Embedded cover must not shadow the source cover: '+source);
+            if (source === 'other') assert.deepEqual(data,assets.main);
+            results['catalogue-'+source] = data;
+            if (source === 'main') {
+                const covers = await Promise.all(Array.from({length:12}, () => fetch(base+url)));
+                for (const cover of covers) {
+                    assert.equal(cover.status,200,'Concurrent catalogue cover');
+                    assert.deepEqual(await bytes(cover),data);
+                }
+            }
+        }
+    } finally { client.close(); }
     for (const [path, expected] of Object.entries({
         '1001':assets.main,'main/1001':assets.main,'other/1001':assets.other,
         '3001':assets.other,'main/2001':assets.book,'main/2002':assets.book,'main/2003':assets.book,

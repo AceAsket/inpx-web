@@ -7,6 +7,7 @@ use hyper::{Request, Response, StatusCode};
 use inpx_catalog::Result as CatalogueResult;
 use inpx_catalog::book_conversion::{Conversion, Error as ConversionError, Format as Converted};
 use inpx_catalog::book_delivery::{self, Book, DownloadError, Representation};
+use inpx_catalog::legacy_library_files::{Covers, MissingDecoder};
 use inpx_catalog::library_sources::Source;
 use inpx_catalog::reader_document::{Document, Image};
 use inpx_catalog::standalone_catalogue::Catalogue;
@@ -22,6 +23,7 @@ pub(crate) struct Downloads {
     cache: PathBuf,
     template: String,
     cover_root: String,
+    pub(super) covers: Covers,
     epub: bool,
     conversions: Option<Conversion>,
     remote: Option<Arc<Remote>>,
@@ -80,6 +82,7 @@ impl Downloads {
         epub: bool,
         conversions: Option<Conversion>,
         remote: Option<Arc<Remote>>,
+        covers: Covers,
     ) -> CatalogueResult<Self> {
         let prefix = prefix.trim_end_matches('/');
         Ok(Self {
@@ -87,6 +90,7 @@ impl Downloads {
             cache: book_delivery::cache_directory(data)?,
             template,
             cover_root: format!("{prefix}/cover/by-uid"),
+            covers,
             epub,
             conversions,
             remote,
@@ -179,11 +183,7 @@ impl Downloads {
         let book: Book = serde_json::from_value(row.clone())?;
         let mut removed = 0;
         let mut rebuilt = false;
-        if (book.ext.eq_ignore_ascii_case("fb2")
-            || self.epub && book.ext.eq_ignore_ascii_case("epub"))
-            && let Some((document, _)) = self.document(&book, sources)?
-            && let Some(image) = document.cover()
-        {
+        if let Some(image) = self.book_cover(&book, sources)? {
             removed += usize::from(image.rebuild(&self.cache)?);
             rebuilt = true;
         }
@@ -378,7 +378,13 @@ impl Downloads {
             return Ok(None);
         };
         let mut cover = String::new();
-        if !card && document.cover().is_some() {
+        if !card
+            && self
+                .source_cover(&book, sources, || {
+                    self.covers.embedded(&document, &self.cache)
+                })?
+                .is_some()
+        {
             let query = url::form_urlencoded::Serializer::new(String::new())
                 .append_pair("uid", uid)
                 .finish();
@@ -477,23 +483,39 @@ impl Downloads {
         })
     }
 
-    pub(crate) fn provider_image(
+    fn source_cover(
         &self,
         book: &Book,
         sources: &[Source],
+        embedded: impl FnOnce() -> CatalogueResult<Option<Image>>,
     ) -> CatalogueResult<Option<Image>> {
         let Some(source) = book.source(sources) else {
             return Ok(None);
         };
-        if let Some(image) = book_delivery::sidecar_cover(book, source)? {
-            return Ok(Some(image));
+        match self.covers.sidecar(book, source, &self.cache) {
+            Ok(None) => embedded(),
+            Err(error) if error.is::<MissingDecoder>() => match embedded() {
+                Ok(Some(image)) => Ok(Some(image)),
+                _ => Err(error),
+            },
+            result => result,
         }
-        if book.ext.eq_ignore_ascii_case("fb2") {
-            return Ok(self
-                .document(book, sources)?
-                .and_then(|(document, _)| document.cover()));
-        }
-        Ok(None)
+    }
+
+    pub(crate) fn book_cover(
+        &self,
+        book: &Book,
+        sources: &[Source],
+    ) -> CatalogueResult<Option<Image>> {
+        self.source_cover(book, sources, || {
+            if (book.ext.eq_ignore_ascii_case("fb2")
+                || self.epub && book.ext.eq_ignore_ascii_case("epub"))
+                && let Some((document, _)) = self.document(book, sources)?
+            {
+                return self.covers.embedded(&document, &self.cache);
+            }
+            Ok(None)
+        })
     }
 
     pub(crate) fn cover(
@@ -505,16 +527,10 @@ impl Downloads {
         let book = load_book(catalogue, uid)
             .map_err(failure)?
             .ok_or(StatusCode::NOT_FOUND)?;
-        if !book.ext.eq_ignore_ascii_case("fb2")
-            && !(self.epub && book.ext.eq_ignore_ascii_case("epub"))
-        {
-            return Err(StatusCode::NOT_FOUND);
-        }
-        let (document, _) = self
-            .document(&book, sources)
+        let image = self
+            .book_cover(&book, sources)
             .map_err(failure)?
             .ok_or(StatusCode::NOT_FOUND)?;
-        let image = document.cover().ok_or(StatusCode::NOT_FOUND)?;
         let path = image.stage(&self.cache).map_err(failure)?;
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -763,6 +779,9 @@ fn load_row(catalogue: &RwLock<Option<Catalogue>>, uid: &str) -> CatalogueResult
 }
 
 fn failure(error: Box<dyn std::error::Error>) -> StatusCode {
+    if error.is::<MissingDecoder>() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
     if error.is::<Unavailable>() {
         return StatusCode::BAD_GATEWAY;
     }

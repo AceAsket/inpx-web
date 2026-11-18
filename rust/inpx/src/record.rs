@@ -48,7 +48,8 @@ fn parse_number(text: &str) -> Value {
 }
 
 pub(crate) fn parse(line: &str, columns: &[&str], default_folder: &str) -> Record {
-    let mut record = Record::with_capacity(columns.len() + 1);
+    // Reserve the folder, numeric defaults and source fields added by the importer as well.
+    let mut record = Record::with_capacity(columns.len() + 8);
     record.insert("_uid".into(), STANDARD.encode(Sha256::digest(line)).into());
     for (name, value) in columns.iter().copied().zip(line.split('\x04')) {
         // This setter does not create an own property on the JS record.

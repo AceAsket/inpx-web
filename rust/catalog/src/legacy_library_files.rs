@@ -9,12 +9,13 @@ use flate2::read::MultiGzDecoder;
 use serde_json::Value;
 
 use crate::Result;
-use crate::book_archive::{Directory, Failure, input_directory};
+use crate::book_archive::{Directory, Failure, extract_input, input_directory};
 use crate::book_conversion::{Tool, configured, run};
-use crate::book_source::{open_within, within};
+use crate::book_delivery::Book;
+use crate::book_source::{cover_inputs, open_within, within};
 use crate::directory_diagnostics::ordered_entries;
 use crate::library_sources::Source;
-use crate::reader_document::{IMAGE_LIMIT, Image, fb2_cover};
+use crate::reader_document::{Document, IMAGE_LIMIT, Image, fb2_cover};
 
 const FB2_LIMIT: u64 = 64 * 1024 * 1024;
 
@@ -112,6 +113,41 @@ impl Covers {
             return Err(MissingDecoder.into());
         }
         Ok(None)
+    }
+
+    pub fn sidecar(&self, book: &Book, source: &Source, cache: &Path) -> Result<Option<Image>> {
+        let mut missing_decoder = false;
+        if !source.remote {
+            for input in cover_inputs(&source.lib_dir, &book.folder, &book.file)? {
+                let mut bytes = Vec::new();
+                if extract_input(input, &mut bytes, IMAGE_LIMIT as u64).is_ok() {
+                    match self.browser_image(bytes, cache) {
+                        Ok(Some(image)) => return Ok(Some(image)),
+                        Err(error) if error.is::<MissingDecoder>() => missing_decoder = true,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if missing_decoder {
+            Err(MissingDecoder.into())
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn embedded(&self, document: &Document, cache: &Path) -> Result<Option<Image>> {
+        match document.cover_bytes() {
+            Some(bytes) => self.browser_image(bytes, cache),
+            None => Ok(None),
+        }
+    }
+
+    fn browser_image(&self, bytes: Vec<u8>, cache: &Path) -> Result<Option<Image>> {
+        if self.webp.is_none() && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+            return Ok(Image::from_bytes(bytes));
+        }
+        self.normalize(bytes, cache)
     }
 
     fn normalize(&self, bytes: Vec<u8>, cache: &Path) -> Result<Option<Image>> {

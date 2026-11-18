@@ -115,8 +115,12 @@ jobs:
         run: |
           rustup toolchain install 1.100.0 --profile minimal --target wasm32-unknown-unknown
           cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
-          cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
           node scripts/rust-auth-state-tests.js rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm
+
+      - if: runner.os == 'Linux'
+        run: docker buildx build --target rust-linux-programs --output type=local,dest=rust/target/release .
+      - if: runner.os != 'Linux'
+        run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
 
       - name: Build binary
         run: npm run ${{ matrix.build_script }}

@@ -69,6 +69,8 @@ mod smtp;
 mod socket;
 #[path = "standalone_speech.rs"]
 mod speech;
+#[path = "standalone_startup.rs"]
+mod startup;
 #[path = "standalone_tasks.rs"]
 mod tasks;
 #[path = "standalone_telegram.rs"]
@@ -257,18 +259,14 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         .map_or_else(|| file.with_file_name("filter.json"), PathBuf::from);
     let low_memory =
         env_bool("INPX_LOW_MEMORY_MODE").unwrap_or(config["lowMemoryMode"] == Value::Bool(true));
-    let (index, created) = index::Index::open(
+    let index = index::Index::new(
         CatalogueFiles {
             data: data.clone(),
             filter,
             low_memory,
         },
-        sources.clone(),
-    )?;
-    if args.recreate && !created {
-        index.start(true);
-        index.refresh(sources, true);
-    }
+        sources,
+    );
     let login = override_string(&args, "--admin-login", "INPX_ADMIN_LOGIN", &Value::Null)
         .unwrap_or_else(|| "admin".into());
     let password = args
@@ -322,6 +320,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         epub_reader,
         conversion,
         remote,
+        inpx_catalog::legacy_library_files::Covers::new(exec_dir, &config),
     )?;
     let listener = TcpListener::bind((host, port)).await?;
     let speech = speech::Speech::new(&data, prefix, &config)?;
@@ -354,7 +353,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         diagnostics: diagnostics::Diagnostics::new(&data),
         backups: backup::Backups::new(&data, &file, prefix, &config),
         assets,
-        legacy: legacy_http::Routes::new(prefix, exec_dir, &config),
+        legacy: legacy_http::Routes::new(prefix),
         opds_slots: Arc::new(Semaphore::new(8)),
         access,
         socket,
@@ -373,6 +372,19 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         metrics,
     });
     println!("{NAME} v{VERSION} listening on {}", listener.local_addr()?);
+    let initializing = state.clone();
+    let mut opening = tokio::task::spawn_blocking(move || {
+        initializing
+            .index
+            .initialize(args.recreate)
+            .map_err(|err| err.to_string())
+    });
+    let created = loop {
+        tokio::select! {
+            result = &mut opening => break result??,
+            connection = listener.accept() => serve_connection(&state,connection?),
+        }
+    };
     delivery::Delivery::start(&state);
     tokio::spawn(admin_cache::Cache::schedule(state.clone()));
     tokio::spawn(diagnostics::Diagnostics::collect_lag(state.clone()));
@@ -407,19 +419,25 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         });
     }
     loop {
-        let (stream, peer) = listener.accept().await?;
-        let state = state.clone();
-        tokio::spawn(async move {
-            let _ = stream.set_nodelay(true);
-            let service = service_fn(|request| state.serve(request, peer.ip()));
-            let _ = http1::Builder::new()
-                .timer(TokioTimer::new())
-                .header_read_timeout(Duration::from_secs(60))
-                .serve_connection(TokioIo::new(stream), service)
-                .with_upgrades()
-                .await;
-        });
+        serve_connection(&state, listener.accept().await?);
     }
+}
+
+fn serve_connection(
+    state: &Arc<State>,
+    (stream, peer): (tokio::net::TcpStream, std::net::SocketAddr),
+) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let _ = stream.set_nodelay(true);
+        let service = service_fn(|request| state.serve(request, peer.ip()));
+        let _ = http1::Builder::new()
+            .timer(TokioTimer::new())
+            .header_read_timeout(Duration::from_secs(60))
+            .serve_connection(TokioIo::new(stream), service)
+            .with_upgrades()
+            .await;
+    });
 }
 
 fn isbn_limit(config: &Value) -> u64 {
@@ -610,7 +628,19 @@ impl State {
             Err(_) => return Ok(error(StatusCode::BAD_REQUEST)),
         };
         let (secure, protected) = (admission.secure, admission.protected);
-        let mut response = if websocket {
+        let mut response = if self
+            .index
+            .starting
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            startup::response(self, &request)
+        } else if self.socket.document(request.uri().path()) && startup::is_poll(&request) {
+            send_bytes(
+                br#"{"ready":true}"#.to_vec(),
+                "application/json; charset=utf-8",
+                head,
+            )
+        } else if websocket {
             self.socket.upgrade(request, self.clone(), admission)
         } else {
             match route {
@@ -767,7 +797,13 @@ impl State {
                 Err(status) => return Ok(error(status)),
             };
             let download = requested.is_some() && !head;
-            let Ok(permit) = self.download_slots.clone().try_acquire_owned() else {
+            let slots = self.download_slots.clone();
+            let permit = if cover.is_some() {
+                slots.acquire_owned().await.ok()
+            } else {
+                slots.try_acquire_owned().ok()
+            };
+            let Some(permit) = permit else {
                 return Ok(error(StatusCode::SERVICE_UNAVAILABLE));
             };
             let state = self.clone();

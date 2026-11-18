@@ -1,4 +1,3 @@
-use std::fmt::Write;
 use std::io;
 use std::ptr::{self, NonNull};
 
@@ -58,8 +57,10 @@ fn digit(value: u8) -> Option<u8> {
 }
 
 pub(crate) fn append_hex(result: &mut String, bytes: &[u8]) {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     for byte in bytes {
-        write!(result, "{byte:02x}").expect("writing to String cannot fail");
+        result.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        result.push(char::from(DIGITS[usize::from(byte & 15)]));
     }
 }
 

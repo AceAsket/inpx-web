@@ -38,3 +38,7 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
+libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
+mimalloc = { version = "0.1", default-features = false }

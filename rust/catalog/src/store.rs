@@ -171,7 +171,7 @@ impl<'a> BookStoreWriter<'a> {
         &mut self,
         id: u32,
         uid: &str,
-        record: &RawValue,
+        record: &str,
         projection: &impl Serialize,
     ) -> Result<()> {
         if uid.is_empty() || uid.encode_utf16().count() > 100 {
@@ -182,7 +182,7 @@ impl<'a> BookStoreWriter<'a> {
             self.replace(id)?;
         }
         self.row.clear();
-        let data = record.get().as_bytes();
+        let data = record.as_bytes();
         self.row
             .extend_from_slice(&u32::try_from(data.len())?.to_le_bytes());
         self.row.extend_from_slice(data);
@@ -247,7 +247,7 @@ fn apply(writer: &mut BookStoreWriter<'_>, input: &mut impl BufRead) -> Result<u
         } else {
             let BookFrame(record, projection) = serde_json::from_str(&line)?;
             let key: BookKey = serde_json::from_str(record.get())?;
-            writer.add(key.id, key.uid, record, &projection)?;
+            writer.add(key.id, key.uid, record.get(), &projection)?;
         }
         total += 1;
     }

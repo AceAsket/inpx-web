@@ -493,6 +493,11 @@ impl CatalogueFiles {
         fs::remove_dir_all(stage.path().join(".postings"))?;
         fs::remove_dir_all(input_directory)?;
         atomic_file::sync_directory(stage.path())?;
+        // Return the indexer's temporary pages before this worker goes idle.
+        #[cfg(all(target_os = "linux", target_env = "musl"))]
+        unsafe {
+            libmimalloc_sys::mi_collect(true);
+        }
         Ok(PreparedCatalogue(stage))
     }
 }

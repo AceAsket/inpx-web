@@ -186,10 +186,14 @@ impl Previous {
             return Err("unsupported book ID or UID in previous catalog".into());
         }
         let uid: Rc<str> = row.uid.as_str().into();
-        let identity: Rc<str> = row
+        let physical = row
             .physical_identity()
-            .ok_or("unsupported physical book identity")?
-            .into();
+            .ok_or("unsupported physical book identity")?;
+        let identity: Rc<str> = if physical == row.uid {
+            uid.clone()
+        } else {
+            physical.into()
+        };
         let index = previous.books.len();
         let legacy_uid = row
             .legacy_uid
@@ -422,9 +426,9 @@ impl Import<'_> {
         if let Some(projection) = &projection {
             serialized.pop();
             write_json_suffix(&mut serialized, &hash, id)?;
-            let raw = RawValue::from_string(serialized)?;
-            store.add(id, &uid, &raw, projection)?;
+            store.add(id, &uid, &serialized, projection)?;
             if changed && !self.request.native_catalogue {
+                let raw = RawValue::from_string(serialized)?;
                 self.changes.insert(id, ChangedBook { uid, raw });
             }
         }
@@ -562,7 +566,13 @@ fn scan_archive(
     let mut file_name = String::new();
     std::thread::scope(|scope| {
         let (sender, receiver) = sync_channel(4);
-        let projection_source = (!store.is_patch()).then_some(source.id.as_str());
+        // With a filter, build the search fields only for books that survive it.
+        let request = import.request;
+        let projection_source = (!store.is_patch()
+            && request.record_filter.is_none()
+            && request.include_authors.is_none()
+            && request.exclude_authors.is_empty())
+        .then_some(source.id.as_str());
         let reading = scope.spawn(move || read_archive_batches(archive, sender, projection_source));
         let imported = (|| -> Result<()> {
             for batch in &receiver {

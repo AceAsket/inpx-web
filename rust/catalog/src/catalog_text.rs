@@ -27,9 +27,12 @@ pub(crate) fn supported_text(value: &str) -> bool {
 }
 
 pub(crate) fn lower(s: &str) -> Cow<'_, str> {
-    if s.chars()
-        .any(|c| c.is_uppercase() || c.to_lowercase().next() != Some(c))
-    {
+    if s.chars().any(|c| match c {
+        'а'..='я' | 'ё' => false,
+        'А'..='Я' | 'Ё' => true,
+        c if c.is_ascii() => c.is_ascii_uppercase(),
+        c => c.is_uppercase() || c.to_lowercase().next() != Some(c),
+    }) {
         Cow::Owned(s.to_lowercase())
     } else {
         Cow::Borrowed(s)

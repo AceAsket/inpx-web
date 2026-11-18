@@ -9,7 +9,6 @@ use crate::book_archive::{Failure, extract_input};
 use crate::book_cache::{self, Descriptor, Staging};
 use crate::book_metadata::Format;
 use crate::library_sources::Source;
-use crate::reader_document::{IMAGE_LIMIT, Image};
 use crate::{Result, book_names, book_source, crypto_support, fb2_prepare, jemba_identity};
 
 const ASSET_VERSION: &str = "rust-original-v1";
@@ -141,18 +140,6 @@ pub fn metadata(book: &Book, source: &Source) -> Result<serde_json::Value> {
         format,
         64 * 1024 * 1024,
     )?)
-}
-
-pub fn sidecar_cover(book: &Book, source: &Source) -> Result<Option<Image>> {
-    for input in book_source::cover_inputs(&source.lib_dir, &book.folder, &book.file)? {
-        let mut bytes = Vec::new();
-        if extract_input(input, &mut bytes, IMAGE_LIMIT as u64).is_ok()
-            && let Some(image) = Image::from_bytes(bytes)
-        {
-            return Ok(Some(image));
-        }
-    }
-    Ok(None)
 }
 
 pub struct Cached {
