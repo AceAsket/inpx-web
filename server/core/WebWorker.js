@@ -3804,6 +3804,7 @@ class WebWorker {
                 personalRecommendationsEnabled: user.personalRecommendationsEnabled !== false,
                 opdsEnabled: user.opdsEnabled !== false,
                 opdsAuthEnabled: user.opdsAuthEnabled === true,
+                overviewShelfLayout: profileAuthorized ? user.overviewShelfLayout || [] : [],
                 readerPreferences: (profileAuthorized ? this.readingListStore.normalizeReaderPreferences(user.readerPreferences) : null),
                 currentReading: readingSummary.items,
                 currentReadingCount: readingSummary.count,

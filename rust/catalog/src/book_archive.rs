@@ -178,11 +178,10 @@ pub(crate) fn read_member<T>(
     member: &str,
     process: impl FnMut(u64, &mut dyn Read) -> Extraction<T>,
 ) -> Extraction<T> {
-    let legacy = encoding_rs::IBM866.encode(member).0;
-    let legacy = String::from_utf8_lossy(&legacy);
+    let legacy = legacy_zip_name(member);
     ArchiveReader::open(path, file)?
         .directory
-        .read(member, Some(&legacy), process)
+        .read(member, legacy.as_deref(), process)
 }
 
 pub(crate) fn metadata_input(
@@ -234,17 +233,16 @@ impl AuditArchive {
             };
         };
         let archive = self.0.open(&path, file)?;
-        let encoded = encoding_rs::IBM866.encode(&member).0;
-        let legacy = String::from_utf8_lossy(&encoded);
+        let legacy = legacy_zip_name(&member);
         let result = if deep {
             archive
                 .directory
-                .read(&member, Some(&legacy), process)
+                .read(&member, legacy.as_deref(), process)
                 .map(Some)
         } else {
             archive
                 .directory
-                .check_member(&member, &legacy)
+                .check_member(&member, legacy.as_deref())
                 .map(|()| None)
         };
         archive.source.detach();
@@ -304,10 +302,9 @@ impl IsbnReader {
                     if cancelled() {
                         break;
                     }
-                    let legacy = encoding_rs::IBM866.encode(&member.name).0;
-                    let legacy = String::from_utf8_lossy(&legacy);
+                    let legacy = legacy_zip_name(&member.name);
                     if let Ok(numbers) =
-                        directory.read(&member.name, Some(&legacy), |size, reader| {
+                        directory.read(&member.name, legacy.as_deref(), |size, reader| {
                             member.numbers(size, reader, limit)
                         })
                     {
@@ -333,7 +330,7 @@ struct ArchiveReader {
 }
 
 pub(crate) enum Directory<R: Read + Seek> {
-    Zip(ZipArchive<R>),
+    Zip(ZipArchive<R>, Option<HashMap<String, usize>>),
     SevenZip(R, Box<SevenZip>),
 }
 
@@ -497,14 +494,72 @@ impl ArchiveReader {
     }
 }
 
+fn legacy_zip_name(name: &str) -> Option<String> {
+    if name.is_ascii() {
+        return None;
+    }
+    // ZIP exposes unflagged names as CP437. Russian archives often store CP866 bytes.
+    const CP437_HIGH: [char; 128] = [
+        'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', 'É', 'æ',
+        'Æ', 'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ', 'á', 'í', 'ó', 'ú',
+        'ñ', 'Ñ', 'ª', 'º', '¿', '⌐', '¬', '½', '¼', '¡', '«', '»', '░', '▒', '▓', '│', '┤', '╡',
+        '╢', '╖', '╕', '╣', '║', '╗', '╝', '╜', '╛', '┐', '└', '┴', '┬', '├', '─', '┼', '╞', '╟',
+        '╚', '╔', '╩', '╦', '╠', '═', '╬', '╧', '╨', '╤', '╥', '╙', '╘', '╒', '╓', '╫', '╪', '┘',
+        '┌', '█', '▄', '▌', '▐', '▀', 'α', 'ß', 'Γ', 'π', 'Σ', 'σ', 'µ', 'τ', 'Φ', 'Θ', 'Ω', 'δ',
+        '∞', 'φ', 'ε', '∩', '≡', '±', '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²',
+        '■', '\u{a0}',
+    ];
+    let (bytes, _, unmappable) = encoding_rs::IBM866.encode(name);
+    (!unmappable).then(|| {
+        bytes
+            .iter()
+            .map(|&b| {
+                if b < 128 {
+                    char::from(b)
+                } else {
+                    CP437_HIGH[usize::from(b - 128)]
+                }
+            })
+            .collect()
+    })
+}
+
+fn zip_member_index<R: Read + Seek>(
+    archive: &ZipArchive<R>,
+    decoded: &mut Option<HashMap<String, usize>>,
+    name: &str,
+    alternate: Option<&str>,
+) -> Option<usize> {
+    archive.index_for_name(name).or_else(|| {
+        if name.is_ascii() {
+            return None;
+        }
+        // index_for_name compares raw UTF-8 bytes. Build the decoded-name index once,
+        // from the central directory only, when a legacy lookup is actually needed.
+        let index = decoded.get_or_insert_with(|| {
+            let mut index = HashMap::new();
+            for (i, display) in archive
+                .file_names()
+                .enumerate()
+                .filter(|(_, n)| !n.is_ascii())
+            {
+                index.entry(display.to_owned()).or_insert(i);
+            }
+            index
+        });
+        index
+            .get(name)
+            .or_else(|| alternate.and_then(|alias| index.get(alias)))
+            .copied()
+    })
+}
+
 impl<R: Read + Seek> Directory<R> {
-    fn check_member(&mut self, member: &str, legacy: &str) -> Extraction<()> {
+    fn check_member(&mut self, member: &str, legacy: Option<&str>) -> Extraction<()> {
         let regular = match self {
-            Self::Zip(archive) => {
-                let index = archive
-                    .index_for_name(member)
-                    .or_else(|| archive.index_for_name(legacy))
-                    .ok_or(Failure::Missing)?;
+            Self::Zip(archive, decoded) => {
+                let index =
+                    zip_member_index(archive, decoded, member, legacy).ok_or(Failure::Missing)?;
                 let entry = archive.by_index_raw(index)?;
                 !entry.is_dir() && !entry.is_symlink()
             }
@@ -526,12 +581,12 @@ impl<R: Read + Seek> Directory<R> {
             let directory = SevenZip::open(&mut source)?;
             return Ok(Self::SevenZip(source, Box::new(directory)));
         }
-        Ok(Self::Zip(ZipArchive::new(source)?))
+        Ok(Self::Zip(ZipArchive::new(source)?, None))
     }
 
     pub(crate) fn find_file(&mut self, predicate: impl Fn(&str) -> bool) -> Option<String> {
         match self {
-            Self::Zip(zip) => (0..zip.len()).find_map(|index| {
+            Self::Zip(zip, _) => (0..zip.len()).find_map(|index| {
                 let entry = zip.by_index_raw(index).ok()?;
                 (!entry.is_dir() && !entry.is_symlink() && predicate(entry.name()))
                     .then(|| entry.name().to_owned())
@@ -552,10 +607,8 @@ impl<R: Read + Seek> Directory<R> {
         mut process: impl FnMut(u64, &mut dyn Read) -> Extraction<T>,
     ) -> Extraction<T> {
         match self {
-            Self::Zip(archive) => {
-                let index = archive
-                    .index_for_name(name)
-                    .or_else(|| legacy_name.and_then(|legacy| archive.index_for_name(legacy)))
+            Self::Zip(archive, decoded) => {
+                let index = zip_member_index(archive, decoded, name, legacy_name)
                     .ok_or(Failure::Missing)?;
                 let mut file = archive.by_index(index)?;
                 if file.is_dir() || file.is_symlink() {
@@ -580,7 +633,7 @@ pub(crate) fn input_directory(path: &Path, file: File) -> Extraction<Directory<i
 impl<R: Read + Seek> Directory<R> {
     pub(crate) fn files(&mut self, mut visit: impl FnMut(&str) -> bool) {
         match self {
-            Self::Zip(archive) => {
+            Self::Zip(archive, _) => {
                 for index in 0..archive.len() {
                     if let Ok(entry) = archive.by_index_raw(index)
                         && !entry.is_dir()
@@ -784,5 +837,43 @@ impl Extract {
             let _ = fs::remove_file(&self.destination);
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    #[test]
+    fn standalone_audit_and_read_find_cp866_members() {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("ABCDE.fb2", SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"content").unwrap();
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let offsets: Vec<_> = bytes
+            .windows(9)
+            .enumerate()
+            .filter_map(|(at, name)| (name == b"ABCDE.fb2").then_some(at))
+            .collect();
+        assert_eq!(offsets.len(), 2);
+        let name = "Книга.fb2";
+        for at in offsets {
+            bytes[at..at + 9].copy_from_slice(&encoding_rs::IBM866.encode(name).0);
+        }
+        let mut directory = Directory::open(Cursor::new(bytes), false).unwrap();
+        let alias = legacy_zip_name(name);
+        directory.check_member(name, alias.as_deref()).unwrap();
+        let mut body = Vec::new();
+        directory
+            .read(name, alias.as_deref(), |_, reader| {
+                reader.read_to_end(&mut body)?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(body, b"content");
     }
 }

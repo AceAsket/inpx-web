@@ -37,6 +37,7 @@ impl ReaderState {
         let snapshot = self.snapshot(stamp)?;
         let user = transfer::user(&snapshot.data, owner)?;
         let mut profile = public_profile(user);
+        profile["overviewShelfLayout"] = transfer::overview_layout(&user["overviewShelfLayout"]);
         profile["readerPreferences"] = preferences::normalize(&user["readerPreferences"]);
         Ok(profile)
     }
@@ -267,6 +268,9 @@ fn apply_settings(user: &mut Value, patch: &Value) {
         if let Some(value) = patch.get(field) {
             user[field] = (value == true).into();
         }
+    }
+    if let Some(layout) = patch.get("overviewShelfLayout") {
+        user["overviewShelfLayout"] = transfer::overview_layout(layout);
     }
     for field in ["opdsEnabled", "personalRecommendationsEnabled"] {
         if let Some(value) = patch.get(field) {

@@ -190,6 +190,7 @@ impl ReaderState {
             "defaultTelegramFormat":channel("defaultTelegramFormat"),"defaultOpdsFormat":format(&user["defaultOpdsFormat"]),
             "emailAsZip":user["emailAsZip"]==true,"telegramAsZip":user["telegramAsZip"]==true,
             "opdsEnabled":user["opdsEnabled"]!=false,"opdsAuthEnabled":user["opdsAuthEnabled"]==true,
+            "overviewShelfLayout":overview_layout(&user["overviewShelfLayout"]),
             "personalRecommendationsEnabled":user["personalRecommendationsEnabled"]!=false,
             "readerPreferences":preferences,"readerProgress":normalize_progress(&user["readerProgress"]),
             "readerBookmarks":bookmarks,"audioProgress":normalize_audio(&user["audioProgress"]),
@@ -395,6 +396,9 @@ fn import_settings(user: &mut Value, incoming: &Value) -> Result<()> {
             user[key] = (value == true).into();
         }
     }
+    if let Some(layout) = incoming.get("overviewShelfLayout") {
+        user["overviewShelfLayout"] = overview_layout(layout);
+    }
     for key in ["opdsEnabled", "personalRecommendationsEnabled"] {
         if let Some(value) = incoming.get(key) {
             user[key] = (value != false).into();
@@ -532,6 +536,29 @@ fn revision(value: &Value) -> u64 {
 fn next_revision(row: Option<&Value>) -> u64 {
     row.map_or(0, |row| revision(&row["revision"]))
         .saturating_add(1)
+}
+
+pub(super) fn overview_layout(value: &Value) -> Value {
+    let mut seen = HashSet::new();
+    Value::Array(
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| {
+                let id = row["id"].as_str()?;
+                if id.is_empty()
+                    || id.encode_utf16().count() > 200
+                    || id.bytes().any(|b| b < 32 || b == 127)
+                    || !seen.insert(id)
+                {
+                    return None;
+                }
+                Some(json!({"id":id, "hidden":row["hidden"] == true}))
+            })
+            .take(256)
+            .collect(),
+    )
 }
 
 pub(super) fn format(value: &Value) -> &'static str {

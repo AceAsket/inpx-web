@@ -109,6 +109,10 @@ async function verifyProfileCommands(base, options = {}) {
         const localConfig = await asAlice('get-config');
         assert.equal(localConfig.currentUserProfile.defaultDownloadFormat,'epub');
         assert.equal(localConfig.currentUserProfile.emailTo,'reader@example.invalid');
+        const layout = [{id:'recommendations',hidden:false},{id:'discovery:external-source',hidden:true}];
+        assert.equal((await asAlice('update-user-profile',{targetUserId:aliceId,profile:{overviewShelfLayout:layout}})).error,undefined);
+        assert.deepEqual((await other.send('get-config',otherIdentity)).currentUserProfile.overviewShelfLayout,layout);
+        assert.deepEqual((await admin('get-config')).currentUserProfile.overviewShelfLayout,[]);
         assert(!Object.hasOwn(localConfig,'profileAuthPolicy'));
         assert.equal((await asAlice('update-user-profile',{targetUserId:aliceId,profile:{password}})).user?.id,aliceId);
         assert.equal((await local.send('resume-user-profile',localIdentity)).error,'need_profile_login');

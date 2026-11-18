@@ -9,6 +9,14 @@ const {unusedPort} = require('./binary-smoke-test');
 const {chromium} = require(process.env.INPX_PLAYWRIGHT_MODULE || 'playwright');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function assertCatalogBottomGap(page) {
+    const gap = await page.evaluate(() => {
+        const bottom = Math.max(...Array.from(document.querySelectorAll('.library-result-card'), card => card.getBoundingClientRect().bottom));
+        return document.querySelector('.bottom-scroller-bar').getBoundingClientRect().top - bottom;
+    });
+    assert(gap >= 15, `Expected a gap above the pagination divider, got ${gap}px`);
+}
+
 async function assertPosition(locator, before) {
     const after = await locator.boundingBox();
     assert(after && before && Math.abs(before.x - after.x) <= 1 && Math.abs(before.y - after.y) <= 1,
@@ -669,6 +677,7 @@ if (require.main === module) (async() => {
         await page.getByRole('link', {name: 'Каталог', exact: true}).click();
         await page.locator('.library-result-card').first().waitFor();
         const catalogBeforePreview = page.url();
+        await assertCatalogBottomGap(page);
         await page.locator('.library-result-card__cover').first().click();
         await page.locator('.library-book-actions').waitFor();
         assert.equal(page.url(), catalogBeforePreview, 'Catalog cover previews preserve the active search URL');
@@ -735,6 +744,7 @@ if (require.main === module) (async() => {
         await page.waitForURL(url => !url.hash.includes('ratingCount'));
         await page.locator('.library-result-card').first().waitFor();
         assert((await page.locator('.library-result-card').first().boundingBox()).height < 320, 'Mobile result is a compact book row');
+        await assertCatalogBottomGap(page);
         for (const width of [320, 390]) {
             await page.setViewportSize({width, height: 844});
             const label = page.locator('.catalog-text-field__input .q-field__label').first();

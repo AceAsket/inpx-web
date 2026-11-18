@@ -108,7 +108,7 @@ impl Socket {
         web_config.extend(json!({
             "name":NAME,"version":VERSION,"branch":"production","dbVersion":"15",
             "rootPathStatic":root,"freeAccess":free_access,
-            "clientApi":{"version":1,"features":["resumeSession","readerEvents","mobileHome","cancelAudio","bookSearchFormats","libraryFollowNews","overviewPinnedShelves","overviewRecommendations","separateExternalDiscovery","catalogSuggest","adminDashboard"]},
+            "clientApi":{"version":1,"features":["resumeSession","readerEvents","mobileHome","cancelAudio","bookSearchFormats","libraryFollowNews","overviewPinnedShelves","overviewShelfLayout","overviewRecommendations","separateExternalDiscovery","catalogSuggest","adminDashboard"]},
             "libraryProtocol":{"version":1,"features":["metadata","ratings"]},
             "opdsRoot":config["opds"]["root"].as_str().unwrap_or("/opds"),
             "extendedSearch":config["extendedSearch"]!=false,
@@ -997,6 +997,7 @@ impl Socket {
                     "defaultOpdsFormat",
                     "emailAsZip",
                     "telegramAsZip",
+                    "overviewShelfLayout",
                     "readerPreferences",
                 ] {
                     if let Some(value) = details.get(key) {

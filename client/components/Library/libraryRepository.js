@@ -44,8 +44,8 @@ class LibraryRepository {
             this.discoveryKey = '';
             this.patch({...emptyState(), revision: this.epoch, locked: !personalAccess(config, settings)});
         }
-        const discoveryKey = JSON.stringify([!!config.version, discoveryOptions(settings), config.discovery, settings.showDiscoveryExternal !== false,
-            config.clientApi?.features?.includes('separateExternalDiscovery'), settings.showDiscoverySimilar !== false,
+        const discoveryKey = JSON.stringify([!!config.version, discoveryOptions(settings), config.discovery, this.overviewShelfEnabled('discovery:external-source', settings.showDiscoveryExternal !== false),
+            config.clientApi?.features?.includes('separateExternalDiscovery'), this.overviewShelfEnabled('recommendations', settings.showDiscoverySimilar !== false),
             config.currentUserProfile?.personalRecommendationsEnabled !== false]);
         if (discoveryKey !== this.discoveryKey) {
             this.discoveryKey = discoveryKey;
@@ -58,7 +58,7 @@ class LibraryRepository {
             delete this.pending.externalShelves;
             this.patch({shelvesLoading: false, externalShelves: [], externalShelvesLoading: false, externalShelvesLoaded: false,
                 externalShelvesError: '', externalShelvesLoginRequired: false, recommendationsLoading: false,
-                ...(settings.showDiscoverySimilar === false || config.currentUserProfile?.personalRecommendationsEnabled === false ? {recommendations: []} : {})});
+                ...(!this.overviewShelfEnabled('recommendations', settings.showDiscoverySimilar !== false) || config.currentUserProfile?.personalRecommendationsEnabled === false ? {recommendations: []} : {})});
         }
     }
 
@@ -144,10 +144,16 @@ class LibraryRepository {
         });
     }
 
+    overviewShelfEnabled(id, fallback) {
+        const rows = this.config.profileAuthorized && this.config.currentUserProfile?.overviewShelfLayout;
+        const row = Array.isArray(rows) && rows.find(item => item.id === id);
+        return row ? !row.hidden : fallback;
+    }
+
     loadExternalShelves(force = false) {
         if (!this.config.clientApi?.features?.includes('separateExternalDiscovery') || this.config.discovery?.enabled === false
             || !this.config.discovery?.externalSource || this.config.discovery.externalSource === 'none'
-            || this.settings.showDiscoveryExternal === false)
+            || !this.overviewShelfEnabled('discovery:external-source', this.settings.showDiscoveryExternal !== false))
             return Promise.resolve();
         return this.run('externalShelves', force, DISCOVERY_TTL, async() => {
             const result = await this.api.getDiscoveryShelves({externalOnly:true, externalLimit:8, forceRefresh:force}, {suppressProfileLogin:true});
@@ -156,7 +162,7 @@ class LibraryRepository {
     }
 
     loadRecommendations(force = false) {
-        if (this.config.discovery?.enabled === false || !this.config.profileAuthorized || this.settings.showDiscoverySimilar === false
+        if (this.config.discovery?.enabled === false || !this.config.profileAuthorized || !this.overviewShelfEnabled('recommendations', this.settings.showDiscoverySimilar !== false)
             || this.config.currentUserProfile?.personalRecommendationsEnabled === false
             || !this.config.clientApi?.features?.includes('overviewRecommendations')) {
             this.patch({recommendations: [], recommendationsLoaded: true});
