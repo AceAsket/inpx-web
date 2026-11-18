@@ -202,7 +202,7 @@ function refresh() {repository.loadHome({freshReading: true, freshShelves: true}
 
 <style scoped>
 .overview-toolbar {display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 24px;}
-.overview-search {flex: 1 1 320px; display: flex; align-items: center; gap: 14px; max-width: 960px; padding: 0 17px; height: 54px; border-radius: 16px; background: var(--app-surface); color: var(--app-primary);}
+.overview-search {flex: 1 1 320px; min-width: 0; display: flex; align-items: center; gap: 14px; max-width: 960px; padding: 0 17px; height: 54px; border-radius: 16px; background: var(--app-surface); color: var(--app-primary);}
 .overview-search:focus-within {box-shadow: 0 0 0 2px var(--app-primary);}
 input {min-width: 0; flex: 1; background: transparent; color: var(--app-text); border: 0; outline: 0; font: inherit; font-size: 15px;}
 input::placeholder {color: var(--app-muted); opacity: 1;}
@@ -237,5 +237,5 @@ progress::-webkit-progress-bar {background: var(--app-border);} progress::-webki
 .overview-skeleton {aspect-ratio: 2 / 3; background: var(--app-surface-3); border-radius: 10px;}
 .overview-skeleton--hero {aspect-ratio: auto; height: 295px; max-width: 460px; border-radius: 22px;}
 @media (min-width: 1100px) {.overview-reading--paired {display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 960px); align-items: stretch; gap: 38px;} .overview-reading--paired > :deep(.book-shelf) {margin-top: 0;}}
-@media (max-width: 599px) {.overview-search {height: 54px; gap: 10px; margin-bottom: 24px; padding: 0 12px;} input {font-size: 14px;} .current-book {padding: 18px; max-width: none;} .current-book__body {gap: 15px;} .current-book__cover {width: 76px; flex-basis: 76px;} .current-book__title {font-size: 18px;} .current-book__caption {margin-bottom: 22px;} .current-book__footer {padding-top: 22px;} .overview-loading__covers {grid-template-columns: repeat(6, 112px); gap: 20px;}}
+@media (max-width: 599px) {.overview-search {height: 54px; gap: 10px; padding: 0 12px;} input {font-size: 14px;} .current-book {padding: 18px; max-width: none;} .current-book__body {gap: 15px;} .current-book__cover {width: 76px; flex-basis: 76px;} .current-book__title {font-size: 18px;} .current-book__caption {margin-bottom: 22px;} .current-book__footer {padding-top: 22px;} .overview-loading__covers {grid-template-columns: repeat(6, 112px); gap: 20px;}}
 </style>
