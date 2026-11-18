@@ -241,8 +241,13 @@ function profileRequest(page, payload, session) {
         const downloads = activity.locator('.admin-stat').filter({hasText: 'Скачано книг'}).locator('.admin-stat-value');
         assert.equal(await downloads.innerText(), '0');
         await activity.getByText('По профилям', {exact: true}).click();
-        const profile = activity.getByRole('row', {name: /^[a-f0-9]{12} 1 0$/});
+        const profile = activity.getByRole('row', {name: /^admin\b.* 1 0$/i});
         await profile.waitFor();
+        const disclosure = activity.locator('summary');
+        assert.equal(await disclosure.evaluate(el=>getComputedStyle(el).outlineStyle),'none');
+        await page.keyboard.press('Tab');
+        await page.keyboard.press('Shift+Tab');
+        assert(await disclosure.evaluate(el=>el.matches(':focus-visible') && getComputedStyle(el.querySelector('span')).outlineStyle==='solid'));
         const catalog = await fetch(base + '/ebook?q=Packaged');
         const encodedUid = (await catalog.text()).match(/[?&](?:amp;)?uid=([^"&]+)/)?.[1];
         assert(encodedUid, 'The fixture catalog has a downloadable book');
@@ -251,9 +256,10 @@ function profileRequest(page, payload, session) {
         const guestDownload = await fetch(downloadUrl);
         assert.match(await profileDownload.text(), /<FictionBook/);
         assert.match(await guestDownload.text(), /<FictionBook/);
-        await activity.getByRole('row', {name: /^[a-f0-9]{12} 1 1$/}).waitFor();
+        await activity.getByRole('row', {name: /^admin\b.* 1 1$/i}).waitFor();
         await activity.getByRole('row', {name: 'Гости 0 1', exact: true}).waitFor();
         assert.equal(await downloads.innerText(), '2', 'The panel refreshes live with metrics export and file logging disabled');
+        await activity.screenshot({path: path.join(directory, 'admin-account-activity.png')});
         await activity.getByText('По профилям', {exact: true}).click();
         await page.getByRole('button', {name: 'Задачи и состояние библиотеки', exact: true}).click();
         await page.getByText('Проверка библиотеки', {exact: true}).waitFor();

@@ -235,18 +235,21 @@
                                 </div>
                             </div>
                             <details v-if="adminActivity.profiles.length" class="admin-activity-details">
-                                <summary>По профилям</summary>
+                                <summary><span>По профилям</span></summary>
                                 <div class="admin-activity-scroll" role="region" aria-label="Активность по профилям" tabindex="0">
                                     <table class="admin-activity-table">
                                         <thead>
-                                            <tr><th scope="col">Код профиля</th><th scope="col">Входы</th><th scope="col">Книги</th></tr>
+                                            <tr><th scope="col">Учётная запись</th><th scope="col">Входы</th><th scope="col">Скачано книг</th></tr>
                                         </thead>
                                         <tbody>
                                             <tr v-for="row in adminActivity.profiles" :key="row.profile">
                                                 <th scope="row">
                                                     <span v-if="row.profile === 'guest'">Гости</span>
                                                     <span v-else-if="row.profile === 'other'">Остальные профили</span>
-                                                    <code v-else>{{ row.profile }}</code>
+                                                    <template v-else>
+                                                        <span>{{ row.login || row.name || row.profile }}</span>
+                                                        <small v-if="row.login && row.name && row.name !== row.login" class="admin-activity-name">{{ row.name }}</small>
+                                                    </template>
                                                 </th>
                                                 <td>{{ row.logins.toLocaleString('ru-RU') }}</td>
                                                 <td>{{ row.downloads.toLocaleString('ru-RU') }}</td>
@@ -2406,6 +2409,21 @@ export default vueComponent(SettingsDialog);
     padding: 8px 10px;
     color: var(--app-primary);
     cursor: pointer;
+}
+
+.admin-activity-details > summary:focus {
+    outline: none;
+}
+
+.admin-activity-details > summary:focus-visible span {
+    outline: 2px solid var(--app-primary);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+.admin-activity-name {
+    display: block;
+    color: var(--app-muted);
 }
 
 .admin-activity-scroll {

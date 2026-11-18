@@ -1523,6 +1523,12 @@ async function verifyServiceRoutes(binary, root) {
             assert(label);
             assert(text.includes(`inpx_web_book_downloads_total{profile="${label}"} 2\n`),text);
             assert(!text.includes(uid) && !text.includes('profile="admin"') && !text.includes(metricsToken));
+            const dashboard = await ws.request({action:'get-admin-dashboard-metrics',csrfToken,
+                userId:login.userId,profileAccessToken:login.profileAccessToken});
+            const account = dashboard.activity?.profiles.find(row=>row.profile===label);
+            assert.equal(account?.login,'admin',dashboard.error);
+            assert(account.name);
+            assert.deepEqual([account.logins,account.downloads],[1,2]);
         } finally { ws.close(); }
     } finally { await server.stop(); }
 

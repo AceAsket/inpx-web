@@ -4351,7 +4351,7 @@ class WebWorker {
             },
             runtime: runtimeMetrics.getSnapshot(),
             discovery: await this.readingListStore.getDiscoveryMetrics(),
-            activity: this.serverActivity?.snapshot(),
+            activity: this.serverActivity?.snapshot((await this.readingListStore.getUsers()).users),
             index,
             stats: (dbConfig && dbConfig.stats) || (index && index.stats) || {},
             paths: {

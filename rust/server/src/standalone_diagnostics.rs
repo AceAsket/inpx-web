@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::{State, admin_cache, metrics::process};
-use crate::standalone_access::BrowserProfileRequest;
+use crate::standalone_access::{BrowserAccess, BrowserProfileRequest};
 
 #[path = "standalone_library_audit.rs"]
 mod audit;
@@ -244,6 +244,7 @@ impl Diagnostics {
         &self,
         state: &Arc<State>,
         owner: BrowserProfileRequest<'_>,
+        access: &BrowserAccess,
         action: &str,
         request: &Value,
     ) -> Result<Value> {
@@ -252,8 +253,8 @@ impl Diagnostics {
                 json!({"audit":self.audit.start(state,owner,request["options"]["deep"] == true)?})
             }
             "cancel-library-audit" => json!({"audit":self.audit.cancel()}),
-            "get-admin-dashboard" => self.dashboard(state, true)?,
-            "get-admin-dashboard-metrics" => self.dashboard(state, false)?,
+            "get-admin-dashboard" => self.dashboard(state, access, true)?,
+            "get-admin-dashboard-metrics" => self.dashboard(state, access, false)?,
             "get-admin-performance" => self.benchmark.snapshot(state)?,
             "start-admin-benchmark" => {
                 json!({"job":self.benchmark.start(state,owner,&request["options"])?})
@@ -416,7 +417,7 @@ impl Diagnostics {
         tasks
     }
 
-    fn dashboard(&self, state: &Arc<State>, full: bool) -> Result<Value> {
+    fn dashboard(&self, state: &Arc<State>, access: &BrowserAccess, full: bool) -> Result<Value> {
         let config = state.settings.snapshot();
         let db = self.data.join("db");
         let book = state.downloads.cache();
@@ -473,7 +474,7 @@ impl Diagnostics {
             .access
             .telegram(|reader, stamp| reader.discovery_metrics(stamp))?;
         let mut view = json!({"generatedAt":timestamp(),"uptime":uptime,"memory":{"rss":process::rss()},"cpu":cpu,
-            "runtime":self.runtime.snapshot(),"discovery":discovery,"activity":state.metrics.activity.as_ref().map(|activity|activity.snapshot()),
+            "runtime":self.runtime.snapshot(),"discovery":discovery,"activity":state.metrics.activity.as_ref().map(|activity|activity.snapshot(access)),
             "index":index,"stats":index["stats"],"paths":{"dataDir":self.data,"db":db,"bookCache":book,"coverCache":book,"tempDir":temp},
             "sizes":sizes,"limits":limits});
         if full {

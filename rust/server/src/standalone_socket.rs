@@ -460,7 +460,7 @@ impl Socket {
                 };
                 state
                     .diagnostics
-                    .dispatch(state, owner, &action, &request)
+                    .dispatch(state, owner, &access, &action, &request)
                     .unwrap_or_else(|error| fault(&error.to_string()))
             }
             "update-admin-integrations"

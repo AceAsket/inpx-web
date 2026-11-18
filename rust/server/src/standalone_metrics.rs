@@ -58,7 +58,13 @@ pub(super) struct Connection {
 }
 
 impl Activity {
-    pub(super) fn snapshot(&self) -> Value {
+    pub(super) fn snapshot(&self, access: &crate::standalone_access::BrowserAccess) -> Value {
+        let accounts: HashMap<_, _> = access
+            .users
+            .iter()
+            .chain(&access.blocked_users)
+            .map(|user| (self.label(&user.id), user))
+            .collect();
         let counts = self.counts.lock().expect("metrics activity");
         let mut totals = [0_u64; 2];
         let profiles = counts
@@ -67,7 +73,13 @@ impl Activity {
             .map(|(profile, stats)| {
                 totals[0] = totals[0].saturating_add(stats[0]);
                 totals[1] = totals[1].saturating_add(stats[1]);
-                serde_json::json!({"profile":profile,"logins":stats[0],"downloads":stats[1]})
+                let mut row =
+                    serde_json::json!({"profile":profile,"logins":stats[0],"downloads":stats[1]});
+                if let Some(user) = accounts.get(profile) {
+                    row["login"] = user.login.as_str().into();
+                    row["name"] = user.name.as_str().into();
+                }
+                row
             })
             .collect::<Vec<_>>();
         serde_json::json!({"totals":{"logins":totals[0],"downloads":totals[1]},"profiles":profiles})
@@ -136,15 +148,20 @@ impl Activity {
         self.record(Some(owner), 0, 1);
     }
 
+    fn label(&self, owner: &str) -> String {
+        let mut mac = self.signer.clone();
+        mac.update(owner.as_bytes());
+        let mut label = String::with_capacity(12);
+        for byte in &mac.finalize().into_bytes()[..6] {
+            write!(label, "{byte:02x}").expect("hex profile");
+        }
+        label
+    }
+
     fn record(&self, owner: Option<&str>, field: usize, amount: u64) {
         let mut counts = self.counts.lock().expect("metrics activity");
         let profile = if let Some(owner) = owner {
-            let mut mac = self.signer.clone();
-            mac.update(owner.as_bytes());
-            let mut label = String::with_capacity(12);
-            for byte in &mac.finalize().into_bytes()[..6] {
-                write!(label, "{byte:02x}").expect("hex profile");
-            }
+            let label = self.label(owner);
             if counts.profiles.contains_key(&label) || counts.profiles.len() <= MAX_PROFILES {
                 label
             } else {
