@@ -178,9 +178,14 @@ jobs:
           INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
         shell: bash
         run: |
-          node build/release.js ${{ matrix.target }}
+          node build/release.js ${{ matrix.target }} --application-only
           version=$(node -p "require('./package.json').version")
           node scripts/release-archive-smoke-test.js ${{ matrix.target }} "dist/release/inpx-web-$version-${{ matrix.target }}.zip" --application-only
+      - name: Check Node.js PDF downloads with and without MuPDF
+        if: matrix.target == 'linux'
+        run: |
+          node scripts/bundle-mutool.js linux
+          node scripts/standalone-pdf-test.js dist/linux
       - name: Test the standalone Rust release archive
         env:
           INPX_BUILD_DIST_DIR: ${{ runner.temp }}/inpx-rust-release

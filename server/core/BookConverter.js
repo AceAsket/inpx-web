@@ -1,6 +1,8 @@
 const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
+const {spawnSync} = require('node:child_process');
+const bookFormats = require('../../shared/BookFormats');
 const {ConversionRuntime, runProcess: run, deadline: conversionDeadline} = require('./ConversionRuntime');
 const epubToFb2 = require('./EpubToFb2');
 const runtime = new ConversionRuntime();
@@ -99,9 +101,30 @@ function mobiEnabled(config = {}) {
     return override === undefined ? config.mobiEnabled !== false : override !== 'false';
 }
 
+let pdfProbe;
+
+function pdfAvailable(converterPaths) {
+    const commands = mutoolCommandCandidates(converterPaths);
+    const key = JSON.stringify([commands, process.env.PATH, process.cwd()]);
+    // OPDS builds links for every book in the feed. Probe once for the whole feed.
+    if (pdfProbe?.key === key && Date.now() < pdfProbe.expires) return pdfProbe.available;
+    let available = false;
+    for (const command of commands) {
+        const result = spawnSync(command, ['-v'], {stdio:'ignore', windowsHide:true, timeout:2000});
+        if (result.error?.code === 'ENOENT') continue;
+        available = result.status === 0;
+        break;
+    }
+    pdfProbe = {key, available, expires:Date.now() + 60_000};
+    return available;
+}
+
 function formatSettings(config = {}) {
-    const {conversionEnabled,conversionFormats} = config;
-    return {conversionEnabled,conversionFormats,mobiEnabled:mobiEnabled(config)};
+    const settings = {conversionEnabled:config.conversionEnabled, mobiEnabled:mobiEnabled(config)};
+    const formats = bookFormats.configured({...settings, conversionFormats:config.conversionFormats});
+    settings.conversionFormats = formats.includes('pdf') && !pdfAvailable(config.converterPaths)
+        ? formats.filter(format => format !== 'pdf') : formats;
+    return settings;
 }
 
 function kindlingPath(configuredPath = '') {

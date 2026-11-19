@@ -73,13 +73,14 @@ function prepare(content, req, page, legacy) {
     const requestedPage = Math.max(1,Number.parseInt(req.query.v2page,10) || 1);
     const selectedPage = Math.min(requestedPage,Math.max(1,Math.ceil(publications.length/limit)));
     const start = isBook ? 0 : (selectedPage-1)*limit;
+    const conversion = require('../BookConverter').formatSettings(page.config);
     return response('1',{
             isBook,root:page.opdsRoot,staticRoot:page.config.rootPathStatic || '',
             bookPath:String(page.config.bookPathStatic),href:req.originalUrl,
             scope:req.query.user ? String(req.query.user) : '',templateScoped:!!page.getScopeUserId(req),
-            conversion:!!page.config.conversionEnabled,
-            formats:Array.isArray(page.config.conversionFormats) ? page.config.conversionFormats.map(String) : undefined,
-            mobi:require('../BookConverter').mobiEnabled(page.config),
+            conversion:!!conversion.conversionEnabled,
+            formats:conversion.conversionFormats,
+            mobi:conversion.mobiEnabled,
             preference:String(req.opdsUser?.defaultOpdsFormat || ''),
             title:text(content.title || page.title || 'Каталог'),
             modified:content.updated ? text(content.updated) : undefined,

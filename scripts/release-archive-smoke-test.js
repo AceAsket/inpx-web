@@ -36,7 +36,7 @@ async function checkArchivePermissions(archive, target, converters = true, rust 
                     assert(entries[name]?.size > 0 && !entries[name].isDirectory, `Missing or empty standalone file: ${name}`);
             }
         }
-        for (const name of executableNames(target, converters)) {
+        for (const name of executableNames(target, converters, rust)) {
             assert(entries[name] && !entries[name].isDirectory, `Missing release executable: ${name}`);
             assert(entries[name].size > 0, `Empty release executable: ${name}`);
             if (target !== 'win')
@@ -62,7 +62,7 @@ async function main() {
     const [target, archive, ...options] = process.argv.slice(2);
     const converters = !options.includes('--application-only');
     const rust = options.includes('--rust');
-    const names = executableNames(target, converters);
+    const names = executableNames(target, converters, rust);
     await checkArchivePermissions(archive, target, converters, rust);
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-release-extracted-'));
     try {
@@ -93,6 +93,7 @@ async function main() {
             ...(rust && target.startsWith('linux') ? ['--bundled-djxl'] : []),
             ...(rust ? ['--rust'] : []), ...(rust && converters ? ['--require-converters'] : [])]);
         if (converters) {
+            if (!rust) run('standalone-pdf-test.js', [directory]);
             run('fb2cng-integration-tests.js', ['--fbc', path.join(directory, names[1])]);
             run('mobi-integration-tests.js', ['--fbc', path.join(directory, names[1]), '--kindling', path.join(directory, names[2])]);
         }

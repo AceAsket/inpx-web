@@ -72,7 +72,7 @@ async function testIncompleteStandaloneConverterBundlesAreRejected() {
         for (const target of ['linux', 'linux-arm64', 'macos', 'win']) {
             const source = path.join(dir, target);
             const archive = path.join(dir, target + '.zip');
-            const programs = executableNames(target);
+            const programs = executableNames(target, true, true);
             const files = [...programs, rustProgramEntry(target, 'reader'), rustProgramEntry(target, 'catalog'),
                 'bin/public.json', 'bin/LICENSE.quickjs', 'bin/LICENSE.kindling'];
             if (target.startsWith('linux')) files.push('bin/djxl', 'bin/djxl-licenses/LICENSE.jpeg-xl');
