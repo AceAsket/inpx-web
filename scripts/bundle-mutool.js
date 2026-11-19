@@ -21,14 +21,16 @@ async function bundleMutool(target, bin, sourceArchive) {
             '--connect-timeout', '20', '--max-time', '600', '--output', archive, sourceUrl], {stdio:'inherit'});
         if (createHash('sha256').update(await fs.readFile(archive)).digest('hex') !== sha256)
             throw new Error('MuPDF source checksum mismatch');
-        execFileSync('tar', ['-xzf', 'source.tar.gz'], {cwd:temp, stdio:'inherit'});
+        // Only these optional examples and language wrappers need symlinks on Windows.
+        const excludes = target === 'win' ? ['--exclude=*/thirdparty/freeglut/progs', '--exclude=*/thirdparty/zxing-cpp/wrappers'] : [];
+        execFileSync('tar', [...excludes, '-xzf', 'source.tar.gz'], {cwd:temp, stdio:'inherit'});
         const cwd = path.join(temp, `mupdf-${version}-source`);
         const jobs = Math.min(os.availableParallelism(), 8);
         const windows = target === 'win';
         const file = windows ? 'mutool.exe' : 'mutool';
         let built;
         if (windows) {
-            execFileSync('msbuild', ['platform/win32/mupdf.sln', '/t:mutool', `/m:${jobs}`,
+            execFileSync('msbuild', ['platform/win32/mupdf.sln', '/t:mutool', '/nr:false', `/m:${jobs}`,
                 '/p:Configuration=Release;Platform=x64;PlatformToolset=v143'], {
                 cwd, stdio:'inherit', env:{...process.env, _CL_:'/MT'},
             });
@@ -54,7 +56,7 @@ async function bundleMutool(target, bin, sourceArchive) {
         }
         await fs.writeFile(path.join(bin, 'mupdf-source.txt'), `MuPDF ${version}\n${sourceUrl}\nSHA256 ${sha256}\n`);
     } finally {
-        await fs.rm(temp, {recursive:true, force:true});
+        await fs.rm(temp, {recursive:true, force:true, maxRetries:8, retryDelay:250});
     }
 }
 
