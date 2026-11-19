@@ -74,6 +74,18 @@ export default vueComponent(Dialog);
 </script>
 
 <style scoped>
+[data-dialog-kind="settings"]:not(.library-dialog-card) {
+    width: min(920px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    overflow: hidden;
+}
+[data-dialog-kind="settings"]:not(.library-dialog-card) > .dialog-body {
+    display: block;
+    min-height: 0;
+    overflow: auto;
+    flex: 1 1 auto;
+}
+[data-dialog-kind="settings"] > .header, [data-dialog-kind="settings"] > .dialog-footer {flex-shrink: 0;}
 .library-dialog-card {width: min(640px, calc(100vw - 40px)); max-width: calc(100vw - 40px) !important; max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); border-radius: 22px; overflow: hidden; color: var(--app-text);}
 .library-dialog-card[data-dialog-kind="settings"], .library-dialog-card[data-dialog-kind="profiles"], .library-dialog-card[data-dialog-kind="reading-lists"] {width: min(920px, calc(100vw - 40px));}
 .library-dialog-card[data-dialog-kind="book"] {width: min(640px, calc(100vw - 40px));}
