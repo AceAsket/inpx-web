@@ -7,7 +7,7 @@
             </div>
         </template>
 
-        <div class="q-mx-md column" style="min-width: 320px; max-width: 720px; font-size: 110%;">
+        <div class="source-fields">
             <div class="row items-center q-mt-sm">
                 <div class="q-mr-sm dialog-label">Тип источника</div>
                 <q-select
@@ -259,8 +259,20 @@ export default vueComponent(DiscoverySourceDialog);
 </script>
 
 <style scoped>
+.source-fields {
+    font-size: 110%;
+}
+
 .dialog-label {
     min-width: 128px;
+}
+
+@media (max-width: 480px) {
+    .source-fields > .row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+    }
 }
 
 </style>

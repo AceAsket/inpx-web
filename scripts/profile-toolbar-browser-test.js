@@ -226,6 +226,7 @@ function profileRequest(page, payload, session) {
         await page.keyboard.press('Enter');
         await page.getByRole('button', {name: 'Закрыть избранное', exact: true}).click();
         await toolbar.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         await page.getByRole('checkbox', {name: 'Ночная тема', exact: true}).click();
         await page.getByRole('button', {name: /Администрирование/}).click();
         const activity = page.getByRole('region', {name: 'Активность пользователей', exact: true});
@@ -258,6 +259,7 @@ function profileRequest(page, payload, session) {
         await pause(350);
         await page.screenshot({path: path.join(directory, 'admin-tasks.png')});
         await page.getByRole('button', {name: 'Закрыть задачи', exact: true}).click();
+        await page.getByRole('button', {name:'Производительность',exact:true}).click();
         const performancePanel = page.locator('.performance-panel');
         const testMode = performancePanel.getByLabel('Режим проверки',{exact:true});
         await testMode.selectOption('custom');
@@ -465,6 +467,19 @@ function profileRequest(page, payload, session) {
         await page.setViewportSize({width:320,height:900});
         await current.getByRole('button', {name: 'Настройки', exact: true}).click();
         assert.equal(await current.locator('.profile-settings-section').count(), 7);
+        const newPassword = current.getByLabel('Новый пароль', {exact:true});
+        const repeatPassword = current.getByLabel('Повторите новый пароль', {exact:true});
+        const saveProfile = current.getByRole('button', {name:'Сохранить изменения',exact:true});
+        await newPassword.fill('confirmation-test');
+        assert(await saveProfile.isDisabled());
+        await repeatPassword.fill('typing-error');
+        await current.getByText('Пароли не совпадают', {exact:true}).waitFor();
+        assert(await saveProfile.isDisabled());
+        await repeatPassword.fill('confirmation-test');
+        assert(await saveProfile.isEnabled());
+        await newPassword.fill('');
+        await repeatPassword.fill('');
+        assert(await saveProfile.isEnabled());
         await noOverflow(current.locator('.profile-settings'));
         const kosync = current.getByRole('region', {name:'Синхронизация с KOReader',exact:true});
         await kosync.getByRole('button', {name:'Подключить KOReader',exact:true}).click();
@@ -621,6 +636,10 @@ function profileRequest(page, payload, session) {
         await remember.waitFor();
         assert.equal(await remember.getAttribute('aria-checked'), 'false');
         await remember.click();
+        await secureOtpDialog.getByLabel('Код из приложения или резервный код', {exact:true}).fill('invalid');
+        await secureOtpDialog.getByRole('button', {name:'OK',exact:true}).click();
+        await secureOtpDialog.getByText('Код не принят.', {exact:false}).waitFor();
+        assert.equal(await remember.getAttribute('aria-checked'), 'true');
         await secureOtpDialog.getByLabel('Код из приложения или резервный код', {exact:true}).fill(currentTotp(requiredSecret));
         await secureOtpDialog.getByRole('button', {name:'OK',exact:true}).click();
         await securePage.locator('.profile-controls .profile-logout').waitFor();

@@ -156,7 +156,10 @@ class ProfileAccess {
                 if (!identity && this.loginRequired)
                     identity = await this.basicIdentity(req);
                 if (!identity && this.loginRequired) {
-                    res.set('WWW-Authenticate', 'Basic realm="inpx-web OPDS", charset="UTF-8"');
+                    const destination = req.headers['sec-fetch-dest'];
+                    const image = destination ? destination === 'image'
+                        : req.headers.referer && /(?:^|,)\s*image\//i.test(req.headers.accept || '');
+                    if (opds || !image) res.set('WWW-Authenticate', 'Basic realm="inpx-web OPDS", charset="UTF-8"');
                     throw denied('Authentication required');
                 }
                 if (identity && identity.user && (identity.bound || this.loginRequired)) {

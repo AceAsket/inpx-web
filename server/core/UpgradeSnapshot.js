@@ -8,7 +8,7 @@ async function prepare(config) {
     const marker = path.join(config.dataDir, '.upgrade-version.json');
     let previous;
     try {previous = await fs.readJson(marker);} catch (error) {if (error.code !== 'ENOENT') throw error;}
-    if (previous?.version === config.version) return previous.snapshot || null;
+    if (previous?.version === config.version && (!previous.runtime || previous.runtime === 'nodejs')) return previous.snapshot || null;
     const targets = {...require('./BackupTransaction').targets(config), public:path.join(config.dataDir, 'public'),
         'reader-backgrounds':path.join(config.dataDir, 'reader-backgrounds')};
     const existing = [];
@@ -39,7 +39,7 @@ async function prepare(config) {
             await fs.rename(stage, snapshot);
         } finally {await fs.remove(stage);}
     }
-    await writeFileAtomic(marker, JSON.stringify({version:config.version, snapshot}));
+    await writeFileAtomic(marker, JSON.stringify({version:config.version, runtime:'nodejs', snapshot}));
     return snapshot;
 }
 

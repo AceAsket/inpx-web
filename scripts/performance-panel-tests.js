@@ -27,6 +27,20 @@ function component({memory=storage(),id='admin',read=async()=>snapshot(),start=a
     return {view,options,timers,memory};
 }
 
+function testUnlimitedConversionLimitSource() {
+    const {view} = component();
+    const source = (conversions, launchEnv, fileConversionLimit, selected='unlimited') => {
+        view.info = {settings:{selected, limits:{conversions}, launchEnv, fileConversionLimit}};
+        return view.conversionLimitSource;
+    };
+    assert.equal(source(null, {}, null), '');
+    assert.equal(source(1, {}, 1), 'config.json · conversionConcurrency');
+    assert.equal(source(2, {INPX_CONVERSION_CONCURRENCY:'2'}), 'INPX_CONVERSION_CONCURRENCY');
+    assert.equal(source(2, {INPX_RESOURCE_CONVERSIONS:'3', INPX_RESOURCE_TOTAL:'2'}), 'INPX_RESOURCE_TOTAL');
+    assert.equal(source(3, {INPX_RESOURCE_CONVERSIONS:'3', INPX_CONVERSION_CONCURRENCY:'2'}), 'INPX_RESOURCE_CONVERSIONS');
+    assert.equal(source(2, {}, null, 'balanced'), '');
+}
+
 async function testPerformancePreferencesAreBoundedWhitelistedAndProfileScoped() {
     const memory=storage(),preferences=new model.PerformancePreferences(()=>memory);
     const a=model.preferenceScope(config('a'),{currentUserId:'a'}),b=model.preferenceScope(config('b'),{currentUserId:'b'});
@@ -92,7 +106,7 @@ async function testPerformanceProfileChangesIgnoreLateMetricsAndActions() {
     assert.equal(page.timers.size,0,'A late action must not revive polling after closing the panel');
 }
 
-module.exports=[testPerformancePreferencesAreBoundedWhitelistedAndProfileScoped,testPerformanceDraftReopensAndInvalidLimitsRemainVisible,
+module.exports=[testUnlimitedConversionLimitSource,testPerformancePreferencesAreBoundedWhitelistedAndProfileScoped,testPerformanceDraftReopensAndInvalidLimitsRemainVisible,
     testPerformancePresetCustomCompareSendExplicitPlansAndErrorsResumePolling,testPerformanceProfileChangesIgnoreLateMetricsAndActions];
 if(require.main===module)(async()=>{for(const test of module.exports){await test();console.log('ok '+test.name);}})()
     .catch(error=>{console.error(error);process.exitCode=1;});

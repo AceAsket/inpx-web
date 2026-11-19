@@ -2,7 +2,7 @@ name: Validate development changes
 
 on:
   push:
-    branches: [develop, master, main]
+    branches: [develop, master, main, nodejs_depr]
   pull_request:
   workflow_dispatch:
     inputs:

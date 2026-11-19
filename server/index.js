@@ -53,7 +53,6 @@ function applyEnvSecurityOverrides(targetConfig) {
         importLimitMb: 'INPX_IMPORT_LIMIT_MB',
         backupUploadLimitMb: 'INPX_BACKUP_UPLOAD_LIMIT_MB',
         backupExpandedLimitMb: 'INPX_BACKUP_EXPANDED_LIMIT_MB',
-        conversionConcurrency: 'INPX_CONVERSION_CONCURRENCY',
         conversionQueueLimit: 'INPX_CONVERSION_QUEUE_LIMIT',
         conversionTimeoutMs: 'INPX_CONVERSION_TIMEOUT_MS',
         conversionQueueTimeoutMs: 'INPX_CONVERSION_QUEUE_TIMEOUT_MS',

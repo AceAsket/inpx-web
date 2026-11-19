@@ -627,7 +627,7 @@ class StdDialog {
             this.type = 'profileOtp';
             this.otpSetup = opts?.setup || null;
             this.trustedBrowserDays = opts?.trustedBrowserDays || 0;
-            this.rememberOtpDevice = false;
+            this.rememberOtpDevice = !!this.trustedBrowserDays && opts?.rememberDevice === true;
             this.inputValidator = value => String(value || '').trim() ? true : 'Введите код';
             this.error = opts?.error || '';
             this.hideTrigger = () => resolve(this.ok ? {code: String(this.inputValue).trim(), rememberDevice: this.rememberOtpDevice} : null);

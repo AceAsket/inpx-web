@@ -67,7 +67,9 @@ async function testUpgradeSnapshotPreservesUserDataSecretsAndCustomReader() {
             'public/version.txt':'old', 'public/custom-reader/index.html':'CUSTOM_READER'};
         for (const [name, data] of Object.entries(initial)) await fs.outputFile(path.join(dir,name), data);
         const {prepare} = require('../server/core/UpgradeSnapshot');
+        await fs.writeJson(path.join(dir,'.upgrade-version.json'), {version:config.version,runtime:'rust',snapshot:null});
         const snapshot = await prepare(config);
+        assert.equal((await fs.readJson(path.join(dir,'.upgrade-version.json'))).runtime,'nodejs');
         for (const [name, data] of Object.entries(initial)) assert.strictEqual(await fs.readFile(path.join(snapshot,name),'utf8'), data);
         const upgraded = JSON.parse(initial['reading-lists.json']);
         upgraded.lists.push({id:'new',filters:{ratingCount:'20..'}});

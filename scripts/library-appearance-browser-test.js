@@ -214,6 +214,7 @@ if (require.main === module) (async() => {
         await api(`const uids=${JSON.stringify(uids)}; for(let i=0;i<4;i++) await root.api.updateReaderProgress(uids[i], {percent:[.34,.14,.01,1][i],sectionId:'chapter'}); return true;`);
 
         await page.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         for (const name of ['Автоматически загружать отзывы и оценки', 'Автоматически загружать сведения об авторе']) {
             const option = page.getByRole('checkbox', {name, exact:true});
             assert.equal(await option.getAttribute('aria-checked'), 'false'); await option.click();
@@ -221,6 +222,7 @@ if (require.main === module) (async() => {
         await page.waitForFunction(() => {const s = JSON.parse(localStorage.getItem('vuex') || '{}').settings; return s?.autoLoadBookReviews && s?.autoLoadAuthorInfo;});
         await page.reload(); await page.locator('.search-list-toggle').waitFor();
         await page.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         for (const name of ['Автоматически загружать отзывы и оценки', 'Автоматически загружать сведения об авторе']) {
             const option = page.getByRole('checkbox', {name, exact:true});
             assert.equal(await option.getAttribute('aria-checked'), 'true', 'Opt-in persists'); await option.click();
@@ -254,6 +256,23 @@ if (require.main === module) (async() => {
         assert.equal(await appPromo.count(),0,'Hiding the app block persists after reload');
         await page.getByRole('button',{name:'Настройки библиотеки',exact:true}).click();
         const appearanceSettings=page.locator('.library-dialog-card[data-dialog-kind="settings"]');
+        await appearanceSettings.getByRole('button', {name:/Внешний источник витрины/}).click();
+        const sourceDialog = page.locator('.library-dialog-card').filter({has:page.getByText('Тип источника', {exact:true})});
+        await sourceDialog.waitFor();
+        for (const source of ['Нет', 'Веб-витрина']) {
+            await sourceDialog.getByRole('combobox').first().click();
+            await page.getByRole('option', {name:source, exact:true}).click();
+            for (const width of [717, 320]) {
+                await page.setViewportSize({width, height:640});
+                const body = sourceDialog.locator('.dialog-body');
+                const dimensions = await body.evaluate(el => ({width:el.clientWidth, content:el.scrollWidth}));
+                assert(dimensions.content <= dimensions.width,
+                    `External source "${source}" overflows at ${width}px: ${JSON.stringify(dimensions)}`);
+            }
+        }
+        await sourceDialog.getByRole('button', {name:'Удалить источник',exact:true}).click();
+        await page.setViewportSize({width:1440, height:1000});
+        await sourceDialog.getByRole('button', {name:'Закрыть окно',exact:true}).click();
         const appSwitch=appearanceSettings.getByRole('checkbox',{name:'QR-код приложения в боковом меню',exact:true});
         assert.equal(await appSwitch.getAttribute('aria-checked'),'false');
         await appearanceSettings.getByRole('button',{name:'Открыть QR',exact:true}).click();await appDialog.waitFor();

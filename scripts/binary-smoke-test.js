@@ -27,7 +27,7 @@ async function isolateNativeJxl(binary, directory) {
     return executable;
 }
 
-async function checkNativeJxlCover(url, uid) {
+async function checkJxlCover(url, uid) {
     const response = await fetch(`${url}/cover/by-uid?${new URLSearchParams({uid})}`, {signal: AbortSignal.timeout(30000)});
     if (response.status !== 200)
         throw new Error(`Packaged native JXL cover returned HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
@@ -36,10 +36,10 @@ async function checkNativeJxlCover(url, uid) {
     assert.deepStrictEqual(png.subarray(0, 16), Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'));
     assert.equal(png.readUInt32BE(16), 192);
     assert.equal(png.readUInt32BE(20), 192);
-    console.log('ok packaged native JXL cover over HTTP without djxl');
+    console.log('ok packaged JXL cover over HTTP');
 }
 
-async function createFixture(dir, {nativeJxlCover = false} = {}) {
+async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = false} = {}) {
     await fs.ensureDir(dir);
     const zip = new yazl.ZipFile();
     const output = fs.createWriteStream(path.join(dir, 'smoke.inpx'));
@@ -70,7 +70,15 @@ async function createFixture(dir, {nativeJxlCover = false} = {}) {
         await fs.ensureDir(coverDir);
         const covers = new yazl.ZipFile();
         const coversDone = require('stream/promises').pipeline(covers.outputStream, fs.createWriteStream(path.join(coverDir, 'smoke.zip')));
-        covers.addBuffer(require('../server/core/benchmarkFixture'), '1');
+        let cover = require('../server/core/benchmarkFixture');
+        if (extendedJxlBox) {
+            // Signature and ftyp, followed by a codestream box with a 64-bit length.
+            const header = Buffer.from('0000000c4a584c200d0a870a00000014667479706a786c20000000006a786c20000000016a786c63', 'hex');
+            const length = Buffer.alloc(8);
+            length.writeBigUInt64BE(BigInt(16 + cover.length));
+            cover = Buffer.concat([header, length, cover]);
+        }
+        covers.addBuffer(cover, '1');
         covers.end();
         await coversDone;
     }
@@ -241,7 +249,7 @@ async function main() {
     try {
         const nativeJxlCover = binary !== null && (!allowMissingNativeJxl
             || await fs.pathExists(path.join(path.dirname(binary), 'bin', 'inpx-jxl.node')));
-        await createFixture(library, {nativeJxlCover});
+        await createFixture(library, {nativeJxlCover:nativeJxlCover || !!imageName, extendedJxlBox:!!imageName});
         const port = await unusedPort();
         let command, cwd;
         let args;
@@ -303,7 +311,7 @@ async function main() {
         assert.strictEqual(home.headers.get('x-robots-tag'),'noindex, nofollow');
         assert.match(await home.text(), /<html/i);
         const bookUid = await checkWebSocket(url);
-        if (nativeJxlCover) await checkNativeJxlCover(url, bookUid);
+        if (nativeJxlCover || imageName) await checkJxlCover(url, bookUid);
         const ebook=await fetch(`${url}/ebook?q=Packaged&lang=en`);
         assert.strictEqual(ebook.status,200);
         const ebookHtml=await ebook.text();

@@ -52,6 +52,12 @@ async function testLaunchResourceProfilesAndOverrides() {
     assert.strictEqual(defaults.requested,'unlimited');
     assert(Object.values(defaults.limits).every(limit=>limit === Infinity));
     assert.deepStrictEqual(policy.resolve({INPX_RESOURCE_PROFILE:'unlimited'},lowSpec).limits,defaults.limits);
+    const legacy = policy.resolve({INPX_CONVERSION_CONCURRENCY:'2'}, lowSpec);
+    assert.strictEqual(legacy.limits.conversions, 2);
+    assert.strictEqual(legacy.launchEnv.INPX_CONVERSION_CONCURRENCY, '2');
+    const modern = policy.resolve({INPX_RESOURCE_CONVERSIONS:'3', INPX_CONVERSION_CONCURRENCY:'2'}, lowSpec);
+    assert.strictEqual(modern.limits.conversions, 3);
+    assert.strictEqual(modern.launchEnv.INPX_CONVERSION_CONCURRENCY, undefined);
     const unbounded = new ResourceRuntime(defaults);
     let release;
     const gate = new Promise(resolve=>{release=resolve;});
