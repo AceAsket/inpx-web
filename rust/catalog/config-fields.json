@@ -2,6 +2,7 @@
     "properties": [
         "dataDir",
         "resourceProfile",
+        "isbnThreads",
         "wsMessageLimitMb",
         "importLimitMb",
         "backupUploadLimitMb",

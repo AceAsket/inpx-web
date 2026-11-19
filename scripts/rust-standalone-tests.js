@@ -2061,6 +2061,7 @@ async function verifyResourceProfiles(binary, root) {
                 }
                 assert((await set(33)).error);
                 assert.equal((await threadStatus(client,identity)).workers,16);
+                assert.equal((await readJson(configFile)).isbnThreads,16);
             } finally {client.close();}
         } finally {await server.stop();}
     }
