@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -871,13 +871,21 @@ fn remaining(deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run(mut command: Command, deadline: Instant) -> Result<()> {
-    remaining(deadline)?;
+pub(crate) fn run(command: Command, deadline: Instant) -> Result<()> {
     let program = Path::new(command.get_program())
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
+    let status = run_status(command, deadline)?;
+    if !status.success() {
+        return Err(format!("{program} завершился с ошибкой ({status})").into());
+    }
+    Ok(())
+}
+
+pub(crate) fn run_status(mut command: Command, deadline: Instant) -> Result<ExitStatus> {
+    remaining(deadline)?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -890,10 +898,7 @@ pub(crate) fn run(mut command: Command, deadline: Instant) -> Result<()> {
         .spawn()?;
     loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => {
-                return Err(format!("{program} завершился с ошибкой ({status})").into());
-            }
+            Ok(Some(status)) => return Ok(status),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
             state => {
                 #[cfg(unix)]

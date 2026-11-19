@@ -59,7 +59,7 @@ async function checkCoverDownload(url, uid, jxlCover) {
     console.log(jxlCover ? 'ok packaged JPEG XL cover decoded over HTTP' : 'ok packaged embedded PNG cover over HTTP');
 }
 
-async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = false, extraEpubs = []} = {}) {
+async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = false, disableDjxl = false, extraEpubs = []} = {}) {
     await fs.ensureDir(dir);
     const zip = new yazl.ZipFile();
     const output = fs.createWriteStream(path.join(dir, 'smoke.inpx'));
@@ -127,6 +127,7 @@ async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = fals
         opds: {enabled: true, auth: false},
         adminPassword: 'local-smoke-fixture',
         onlineReaderEnabled: true,
+        ...(disableDjxl ? {converterPaths:{djxl:path.join(dir,'missing-djxl')}} : {}),
         ...(process.env.INPX_SMOKE_EPUB === 'true' ? {conversionFormats:['fb2','epub']} : {}),
     });
 }
@@ -322,8 +323,9 @@ async function main() {
     try {
         const nativeJxlCover = !rust && binary !== null && (!allowMissingNativeJxl
             || await fs.pathExists(path.join(path.dirname(binary), 'bin', 'inpx-jxl.node')));
-        const jxlCover = nativeJxlCover || options.includes('--bundled-djxl') || Boolean(rust && imageName);
-        await createFixture(library, {nativeJxlCover:jxlCover, extendedJxlBox:rust && Boolean(imageName)});
+        const jxlCover = nativeJxlCover || rust || options.includes('--bundled-djxl');
+        await createFixture(library, {nativeJxlCover:jxlCover, extendedJxlBox:rust && Boolean(imageName),
+            disableDjxl:Boolean(rust && binary)});
         const port = await unusedPort();
         let command, cwd;
         let args;
@@ -361,7 +363,7 @@ async function main() {
         if (nativeJxlCover || rust && binary) {
             for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
             env.PATH = rust ? '' : cwd;
-            if (nativeJxlCover || options.includes('--bundled-djxl')) env.INPX_JXL_DECODER = 'native';
+            env.INPX_JXL_DECODER = 'native';
         }
         if (requireRustCatalogue) {
             delete env.INPX_RUST_READER_BINARY;

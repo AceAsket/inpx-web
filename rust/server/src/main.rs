@@ -3,6 +3,7 @@ mod download;
 mod file_conditions;
 mod http;
 mod library_access;
+mod native_jxl;
 mod opds;
 mod profile_sessions;
 mod receipts;
@@ -85,6 +86,15 @@ impl Config {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let [flag, input, output, limit] = args.as_slice()
+        && flag == inpx_catalog::legacy_library_files::NATIVE_JXL_WORKER
+    {
+        let limit = limit
+            .to_str()
+            .ok_or("invalid JPEG XL output limit")?
+            .parse()?;
+        return native_jxl::worker(input.as_ref(), output.as_ref(), limit);
+    }
     if let [flag, options @ ..] = args.as_slice()
         && flag == "--standalone"
     {

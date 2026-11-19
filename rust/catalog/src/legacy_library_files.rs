@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -10,7 +11,7 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::book_archive::{Directory, Failure, extract_input, input_directory};
-use crate::book_conversion::{Queue, Tool, configured, run};
+use crate::book_conversion::{Queue, Tool, configured, run, run_status};
 use crate::book_delivery::Book;
 use crate::book_source::{cover_inputs, open_within, within};
 use crate::directory_diagnostics::ordered_entries;
@@ -18,6 +19,8 @@ use crate::library_sources::Source;
 use crate::reader_document::{COVER_LIMIT, Document, Image, fb2_cover};
 
 const FB2_LIMIT: u64 = 64 * 1024 * 1024;
+pub const NATIVE_JXL_WORKER: &str = "--inpx-native-jxl-worker";
+pub const NATIVE_JXL_LIMIT: i32 = 42;
 
 pub fn reader_lab_source(library: &Path, requested: &str) -> io::Result<File> {
     let trimmed = requested.trim();
@@ -39,6 +42,7 @@ pub struct Covers {
     decoders: Queue,
     webp: Option<Tool>,
     jxl: Option<Tool>,
+    native_jxl: Option<PathBuf>,
 }
 
 struct Archives {
@@ -79,6 +83,11 @@ impl Covers {
             decoders: Queue::with_limits(images, 16, queue_timeout),
             webp: Tool::find(exec, "dwebp", &configured(paths, &["dwebp", "webp"])),
             jxl: Tool::find(exec, "djxl", &configured(paths, &["djxl", "jxl"])),
+            native_jxl: if std::env::var("INPX_JXL_DECODER").as_deref() == Ok("native") {
+                std::env::current_exe().ok()
+            } else {
+                None
+            },
         }
     }
 
@@ -183,13 +192,32 @@ impl Covers {
             (_, true) => ("jxl", self.jxl.as_ref()),
             _ => return Ok(Image::from_bytes_limited(bytes, limit)),
         };
-        let tool = tool.ok_or(MissingDecoder)?;
+        if tool.is_none() && !(jxl && self.native_jxl.is_some()) {
+            return Err(MissingDecoder.into());
+        }
         let temp = tempfile::tempdir_in(cache)?;
         // Cover decoding can also be reached from book preparation and gallery requests.
         let _decoder = self.decoders.enter(temp.path())?;
         let input = temp.path().join(format!("cover.{extension}"));
         let output = temp.path().join("cover.png");
         fs::write(&input, bytes)?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        if jxl && let Some(executable) = &self.native_jxl {
+            let native_output = temp.path().join("native.png");
+            let mut worker = Command::new(executable);
+            worker
+                .arg(NATIVE_JXL_WORKER)
+                .arg(&input)
+                .arg(&native_output)
+                .arg(limit.to_string());
+            match run_status(worker, deadline) {
+                Ok(status) if status.success() => return read_png(&native_output, limit),
+                Ok(status) if status.code() == Some(NATIVE_JXL_LIMIT) => return Ok(None),
+                Err(error) if tool.is_none() || Instant::now() >= deadline => return Err(error),
+                _ => {}
+            }
+        }
+        let tool = tool.ok_or(MissingDecoder)?;
         let mut command = tool.command(temp.path());
         command.arg(input);
         if webp {
@@ -200,16 +228,19 @@ impl Covers {
             // Separate covers already decode concurrently in the image queue.
             command.arg("--num_threads=1");
         }
-        run(command, Instant::now() + Duration::from_secs(15))?;
-        let mut bytes = Vec::new();
-        let output = File::open(output)?;
-        if output.metadata()?.len() > limit as u64 {
-            return Ok(None);
-        }
-        output.take(limit as u64 + 1).read_to_end(&mut bytes)?;
-        Ok(Image::from_bytes_limited(bytes, limit)
-            .filter(|image| image.content_type == "image/png"))
+        run(command, deadline)?;
+        read_png(&output, limit)
     }
+}
+
+fn read_png(path: &Path, limit: usize) -> Result<Option<Image>> {
+    let output = File::open(path)?;
+    if output.metadata()?.len() > limit as u64 {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    output.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    Ok(Image::from_bytes_limited(bytes, limit).filter(|image| image.content_type == "image/png"))
 }
 
 impl Archives {

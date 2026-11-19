@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 base64 = "0.22"
+bytemuck = "1"
 bytes = "1"
 ctutils = "0.4"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
@@ -18,8 +19,10 @@ hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 inpx-auth-state = { path = "../auth-state" }
 inpx-catalog = { path = "../catalog" }
+jxl = "0.8"
 mail-send = { version = "0.6.1", default-features = false, features = ["ring", "tls12"] }
 percent-encoding = "2"
+png = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = { version = "0.11", default-features = false }
