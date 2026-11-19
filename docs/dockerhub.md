@@ -30,6 +30,8 @@ Android-клиент подключается по QR с адресом без �
 
 ### Образы и версии
 
+При выпуске 1.8.3 теги `1.8.3` и `latest` получат классический Node.js с JembaDB. Для Rust предусмотрен тег `1.8.3-rust`.
+
 | Тег | Назначение |
 | --- | --- |
 | `1.8.2` | Стабильный основной образ с конвертацией книг. |
@@ -148,6 +150,8 @@ Connect Android through a QR containing the server address without credentials. 
 Bundled Kindling converts FB2/EPUB to MOBI7/KF8. The full image enables MOBI by default. Set `INPX_MOBI_ENABLED=false` to disable it. Compatibility depends on the Kindle model. [MOBI configuration](https://github.com/AceAsket/inpx-web/blob/v1.8.2/README.md#лёгкая-конвертация-mobi-181-rc2)
 
 ### Images and versions
+
+For the 1.8.3 release, `1.8.3` and `latest` will run classic Node.js with JembaDB. Select `1.8.3-rust` for the Rust server.
 
 | Tag | Purpose |
 | --- | --- |

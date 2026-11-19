@@ -13,7 +13,9 @@ inpx-web-7z
 > - **Сервер на Rust и новый веб-интерфейс** — все новые возможности.
 > - **1.8.3 — последний запланированный релиз с сервером на Node.js.** До выпуска в эту версию входят исправления ошибок.
 >
-> [Ветка `rust`](https://github.com/AceAsket/inpx-web/tree/rust) · [Сборка Rust-версии](#сборка-с-автономным-rust-сервером)
+> При выпуске 1.8.3 образы `aceasket/inpx-web-7z:1.8.3` и `:latest` будут содержать классический Node.js с JembaDB. Для Rust используйте `aceasket/inpx-web-7z:1.8.3-rust`. Суффикс `-rust` также обозначает архивы и установщик Rust.
+>
+> [Ветка `nodejs_depr`](https://github.com/AceAsket/inpx-web/tree/nodejs_depr) · [Ветка `rust`](https://github.com/AceAsket/inpx-web/tree/rust) · [Сборка Rust-версии](#сборка-с-автономным-rust-сервером)
 
 [![INPX Reader — скачать читалку для Android](https://img.shields.io/badge/INPX_Reader-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK-0F766E?style=for-the-badge&logo=android&logoColor=white)](https://github.com/AceAsket/inpx-reader-releases/releases/latest)
 [![INPX Server — сервер для Android](https://img.shields.io/badge/INPX_Server-%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%20%D0%B4%D0%BB%D1%8F%20Android-455A64?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)

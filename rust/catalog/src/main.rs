@@ -69,7 +69,7 @@ fn run(args: &[OsString]) -> Result<()> {
     {
         let options = serde_json::from_reader(io::stdin().lock())
             .map_err(|_| "Invalid configuration load request")?;
-        let result = inpx_catalog::configuration::load(options)?;
+        let result = inpx_catalog::configuration::load(options, "nodejs-rust")?;
         serde_json::to_writer(io::stdout().lock(), &result)?;
         return Ok(());
     }
@@ -100,8 +100,12 @@ fn run(args: &[OsString]) -> Result<()> {
         && command == "upgrade-snapshot"
     {
         let version = version.to_str().ok_or("invalid upgrade version")?;
-        let result =
-            inpx_catalog::upgrade_data::snapshot(Path::new(data), Path::new(config), version)?;
+        let result = inpx_catalog::upgrade_data::snapshot(
+            Path::new(data),
+            Path::new(config),
+            version,
+            "nodejs-rust",
+        )?;
         println!("{}", serde_json::to_string(&result)?);
         return Ok(());
     }

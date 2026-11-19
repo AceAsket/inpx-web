@@ -40,14 +40,11 @@ jobs:
     name: Release smoke tests
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout release source
         uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-
-      - name: Checkout requested tag
-        if: github.event_name == 'workflow_dispatch'
-        run: git checkout ${{ github.event.inputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -97,14 +94,11 @@ jobs:
             fbc_asset: fbc-darwin-amd64.zip
 
     steps:
-      - name: Checkout
+      - name: Checkout release source
         uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-
-      - name: Checkout requested tag
-        if: github.event_name == 'workflow_dispatch'
-        run: git checkout ${{ github.event.inputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -113,6 +107,16 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Select the Node.js release source
+        id: node
+        if: hashFiles('scripts/checkout-release-node.js') != ''
+        run: node scripts/checkout-release-node.js tmp/classic-node
+
+      - name: Install classic Node.js dependencies
+        if: steps.node.outputs.classic == 'true'
+        working-directory: ${{ steps.node.outputs.directory || '.' }}
         run: npm ci --ignore-scripts
 
       - name: Build Rust server, catalog, reader and authentication state
@@ -127,6 +131,7 @@ jobs:
         run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
 
       - name: Build binary
+        working-directory: ${{ steps.node.outputs.directory || '.' }}
         run: npm run ${{ matrix.build_script }}
 
       - name: Install Inno Setup
@@ -135,11 +140,13 @@ jobs:
         run: choco install innosetup --no-progress -y
 
       - name: Bundle Windows cover tools
+        working-directory: ${{ steps.node.outputs.directory || '.' }}
         if: matrix.target == 'win'
         shell: pwsh
         run: npm run build:win-tools
 
       - name: Bundle fb2cng converter
+        working-directory: ${{ steps.node.outputs.directory || '.' }}
         shell: pwsh
         run: |
           $binDir = Join-Path $PWD "dist/${{ matrix.target }}/bin"
@@ -181,13 +188,14 @@ jobs:
           }
 
       - name: Bundle pinned Kindling converter
+        working-directory: ${{ steps.node.outputs.directory || '.' }}
         run: node scripts/bundle-kindling.js ${{ matrix.target }}
 
       - uses: microsoft/setup-msbuild@v2
         if: runner.os == 'Windows'
 
       - name: Load the selected MuPDF packaging fix for this Windows rebuild
-        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.refresh_windows_mutool_builder
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.refresh_windows_mutool_builder && steps.node.outputs.classic != 'true'
         shell: bash
         env:
           WORKFLOW_SHA: ${{ github.sha }}
@@ -197,6 +205,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y lzip
 
       - name: Archive release payload
+        working-directory: ${{ steps.node.outputs.directory || '.' }}
         shell: bash
         run: |
           node build/release.js ${{ matrix.target }}
@@ -204,17 +213,18 @@ jobs:
           echo "ARCHIVE_PATH=dist/release/inpx-web-$version-${{ matrix.target }}.zip" >> "$GITHUB_ENV"
 
       - name: Load the corrected package smoke test for this rebuild
-        if: github.event_name == 'workflow_dispatch' && inputs.refresh_smoke_test
+        if: github.event_name == 'workflow_dispatch' && inputs.refresh_smoke_test && steps.node.outputs.classic != 'true'
         shell: bash
         run: |
           git fetch --no-tags origin "$GITHUB_WORKFLOW_SHA"
           git show "$GITHUB_WORKFLOW_SHA:scripts/binary-smoke-test.js" > scripts/binary-smoke-test.js
 
       - name: Test extracted release permissions, application and converters
+        working-directory: ${{ steps.node.outputs.directory || '.' }}
         shell: bash
         env:
-          INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
-          INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
+          INPX_SMOKE_REQUIRE_RUST_HTTP: ${{ steps.node.outputs.classic != 'true' }}
+          INPX_SMOKE_REQUIRE_RUST_CATALOG: ${{ steps.node.outputs.classic != 'true' }}
         run: node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$ARCHIVE_PATH"
 
       - name: Build the standalone Rust application
@@ -225,12 +235,12 @@ jobs:
       - name: Stage the Windows Rust converters and Visual C++ runtime
         if: matrix.target == 'win'
         shell: pwsh
-        run: ./scripts/stage-rust-windows-tools.ps1 -ApplicationDir "${{ runner.temp }}/inpx-rust-release/win" -ToolsDir dist/win/bin
+        run: ./scripts/stage-rust-windows-tools.ps1 -ApplicationDir "${{ runner.temp }}/inpx-rust-release/win" -ToolsDir "${{ steps.node.outputs.directory || '.' }}/dist/win/bin"
 
       - name: Include book converters in the Linux and macOS Rust archives
         if: runner.os != 'Windows'
         shell: bash
-        working-directory: dist/${{ matrix.target }}/bin
+        working-directory: ${{ steps.node.outputs.directory || '.' }}/dist/${{ matrix.target }}/bin
         run: cp fbc kindling LICENSE.kindling "${{ runner.temp }}/inpx-rust-release/${{ matrix.target }}/bin/"
 
       - name: Verify the standalone Rust archive on this target
@@ -243,9 +253,10 @@ jobs:
           version=$(node -p "require('./package.json').version")
           archive="$INPX_BUILD_DIST_DIR/release/inpx-web-$version-${{ matrix.target }}.zip"
           node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$archive" --rust
-          cp "$archive" "dist/release/inpx-web-$version-${{ matrix.target }}-rust.zip"
+          cp "$archive" "${{ steps.node.outputs.directory || '.' }}/dist/release/inpx-web-$version-${{ matrix.target }}-rust.zip"
 
       - name: Build Windows installer
+        working-directory: ${{ steps.node.outputs.directory || '.' }}
         if: matrix.target == 'win'
         shell: pwsh
         run: npm run build:win-installer
@@ -260,29 +271,25 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $setup = (Get-Item "$env:INPX_BUILD_DIST_DIR/release/*-win-rust-setup.exe").FullName
           ./scripts/test-rust-windows-installer.ps1 -Installer $setup
-          Copy-Item -LiteralPath $setup -Destination dist/release
+          Copy-Item -LiteralPath $setup -Destination "${{ steps.node.outputs.directory || '.' }}/dist/release"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v6
         with:
           name: release-${{ matrix.target }}
-          path: dist/release/*
+          path: ${{ steps.node.outputs.directory || '.' }}/dist/release/*
           if-no-files-found: error
 
   release:
     name: Upload release assets
-    if: github.event_name != 'workflow_dispatch' || inputs.publish
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Checkout
+      - name: Checkout release source
         uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-
-      - name: Checkout requested tag
-        if: github.event_name == 'workflow_dispatch'
-        run: git checkout ${{ github.event.inputs.tag }}
 
       - name: Download artifacts
         env:
@@ -328,6 +335,7 @@ jobs:
           NODE
 
       - name: Publish to GitHub Release
+        if: github.event_name != 'workflow_dispatch' || inputs.publish
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
@@ -337,4 +345,3 @@ jobs:
             release-assets/**/*.zip
             release-assets/**/*.exe
           overwrite_files: true
-

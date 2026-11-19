@@ -68,7 +68,7 @@ enum ReadConfig {
     Legacy,
 }
 
-pub fn load(options: Load) -> Result<Loaded> {
+pub fn load(options: Load, runtime: &str) -> Result<Loaded> {
     let initial = read(&options.file)?;
     let recovery_dir = match &initial {
         ReadConfig::Missing => &options.default_data_dir,
@@ -101,7 +101,7 @@ pub fn load(options: Load) -> Result<Loaded> {
     let directory = directory.to_path_buf();
     if let Some(version) = &options.version
         && matches!(
-            upgrade_data::snapshot(&directory, &options.file, version)?,
+            upgrade_data::snapshot(&directory, &options.file, version, runtime)?,
             upgrade_data::Upgrade::Legacy
         )
     {

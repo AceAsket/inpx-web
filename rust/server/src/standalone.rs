@@ -189,13 +189,16 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     let configuration::Loaded::Ready {
         config: saved,
         needs_save,
-    } = configuration::load(configuration::Load {
-        file: file.clone(),
-        default_data_dir: default_data.clone(),
-        exec_dir: exec_dir.into(),
-        name: NAME.into(),
-        version: Some(VERSION.into()),
-    })?
+    } = configuration::load(
+        configuration::Load {
+            file: file.clone(),
+            default_data_dir: default_data.clone(),
+            exec_dir: exec_dir.into(),
+            name: NAME.into(),
+            version: Some(VERSION.into()),
+        },
+        "rust",
+    )?
     else {
         return Err("Existing configuration requires the compatibility runtime".into());
     };

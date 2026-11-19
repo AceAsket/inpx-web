@@ -2474,6 +2474,8 @@ async function verifyJembaUpgrade(binary, root) {
     await contents.addReaderBookmark('default',uid,{title:'Legacy bookmark',sectionId:'legacy-section',percent:0.42,textOffset:123});
 
     const exec = require('node:util').promisify(require('node:child_process').execFile);
+    const markerFile = join(data,'.upgrade-version.json');
+    await fs.writeFile(markerFile,JSON.stringify({version:require('../package.json').version,runtime:'nodejs',snapshot:null}));
     const launch = () => exec(binary,args,{env:environment(),encoding:'utf8',timeout:14000,windowsHide:true});
     await legacy.lock({dbPath:db,softLock:true});
     try {
@@ -2511,7 +2513,7 @@ async function verifyJembaUpgrade(binary, root) {
         && /Индекс \[resume/.test(error.stderr) && !/Индекс \[load inpx/.test(error.stderr));
     await fs.unlink(join(db,'__lock'));
     const first = await start(binary,args);
-    let generation;
+    let generation, migrationMarker;
     try {
         const metadata = await readJson(header);
         generation = metadata.rustBookStoreGeneration;
@@ -2540,13 +2542,17 @@ async function verifyJembaUpgrade(binary, root) {
         assert.equal(result.rows[0].id,29);
         const profiles = await readJson(join(data,'reading-lists.json'));
         assert.equal(profiles.lists.find(row=>row.id===shelf.id).books[0].bookUid,uid);
-        const {snapshot} = await readJson(join(data,'.upgrade-version.json'));
-        const backup = await readJson(join(snapshot,'reading-lists.json'));
+        migrationMarker = await readJson(markerFile);
+        assert.equal(migrationMarker.runtime,'rust');
+        const backup = await readJson(join(migrationMarker.snapshot,'reading-lists.json'));
         assert.equal(backup.users.find(row=>row.id==='default').readerProgress[uid].percent,0.42);
     } finally { await first.stop(); }
 
     const restarted = await start(binary,args);
-    try { assert.equal((await readJson(header)).rustBookStoreGeneration,generation); }
+    try {
+        assert.equal((await readJson(header)).rustBookStoreGeneration,generation);
+        assert.deepEqual(await readJson(markerFile),migrationMarker);
+    }
     finally { await restarted.stop(); }
 
     const release = process.env.INPX_STANDALONE_COMPAT_PACKAGE;

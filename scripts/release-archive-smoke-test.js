@@ -6,12 +6,14 @@ const {execFileSync} = require('child_process');
 const StreamZip = require('node-stream-zip');
 const {executableNames,rustProgramEntry} = require('../build/release-archive');
 
-async function checkArchivePermissions(archive, target, converters = true, rust = false) {
+async function checkArchivePermissions(archive, target, converters = true, rust = false, classic = false) {
     const zip = new StreamZip.async({file:archive});
     try {
         const entries = await zip.entries();
+        if (classic) assert(!entries['bin/' + require('../server/core/RustAuthState').fileName], 'Unexpected Rust authentication module in the classic Node.js archive');
         for (const program of ['server','catalog','reader']) {
             const name = rustProgramEntry(target,program);
+            if (classic) assert(!entries[name], 'Unexpected Rust server component in the classic Node.js archive: ' + name);
             if (rust && program === 'server') {
                 assert(!entries[name], 'The standalone Rust executable is the archive entry point');
                 continue;

@@ -1,6 +1,7 @@
 {
   "name": "inpx-web",
-  "version": "1.8.3-rc.29",
+  "version": "1.8.3",
+  "classicNodeRevision": "c37ce953699cd590cc1539470c070cfd854ea82d",
   "author": "AceAsket",
   "license": "CC0-1.0",
   "repository": "AceAsket/inpx-web",

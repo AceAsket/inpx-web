@@ -4,6 +4,8 @@ Self-hosted web catalog and FB2 reader for large `.inpx`, `.zip`, `.7z` and `fLi
 
 This image is built from the [`AceAsket/inpx-web`](https://github.com/AceAsket/inpx-web) fork and is aimed at Docker, Unraid, Proxmox LXC and home-server setups.
 
+For the 1.8.3 release, `1.8.3` and `latest` will run classic Node.js with JembaDB. Select `1.8.3-rust` for the Rust server.
+
 ## What Is Included
 
 - Web catalog with search by authors, series, titles, genres, languages and sources.

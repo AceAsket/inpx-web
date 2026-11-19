@@ -7,7 +7,7 @@ const {name, version} = require('../package.json');
 async function main(directory) {
     for (const target of ['linux', 'linux-arm64', 'macos', 'win']) {
         const prefix = path.join(directory, 'release-' + target, `${name}-${version}-${target}`);
-        await checkArchivePermissions(prefix + '.zip', target);
+        await checkArchivePermissions(prefix + '.zip', target, true, false, version === '1.8.3');
         await checkArchivePermissions(prefix + '-rust.zip', target, true, true);
         if (target === 'win') {
             for (const suffix of ['-setup.exe', '-rust-setup.exe']) {

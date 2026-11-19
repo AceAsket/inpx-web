@@ -131,6 +131,7 @@ async function verifyConfiguration(directory, run) {
     await fs.writeFile(keyFile,'interrupted replacement');
     await fs.writeFile(file,JSON.stringify({dataDir,smtpPass:'uncommitted-config'}));
 
+    await fs.writeFile(join(dataDir,'.upgrade-version.json'),JSON.stringify({version:options.version,snapshot:null}));
     const loaded = await load();
     assert.equal(loaded.state,'ready');
     assert.equal(loaded.needsSave,true);
@@ -144,6 +145,7 @@ async function verifyConfiguration(directory, run) {
     await missing(restore);
     await missing(defaultDataDir);
     const marker = await readJson(join(dataDir,'.upgrade-version.json'));
+    assert.equal(marker.runtime,'nodejs-rust');
     assert.equal(await fs.readFile(join(marker.snapshot,'config.json'),'utf8'),originalBytes);
     assert.deepEqual(await fs.readFile(join(marker.snapshot,'secret.key')),key);
 

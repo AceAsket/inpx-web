@@ -179,6 +179,8 @@ fn milliseconds(seconds: i64, nanos: i64) -> Result<serde_json::Number> {
 #[derive(Deserialize, Serialize)]
 struct UpgradeMarker {
     version: String,
+    #[serde(default)]
+    runtime: String,
     snapshot: Option<PathBuf>,
 }
 
@@ -198,12 +200,14 @@ pub enum Upgrade {
     Legacy,
 }
 
-pub fn snapshot(data: &Path, config_file: &Path, version: &str) -> Result<Upgrade> {
+pub fn snapshot(data: &Path, config_file: &Path, version: &str, runtime: &str) -> Result<Upgrade> {
     let marker_path = data.join(".upgrade-version.json");
     let expected = atomic_file::current_stamp(&marker_path)?;
     if let Some(previous) = read_optional(&marker_path)? {
         let previous: serde_json::Value = serde_json::from_slice(&previous)?;
-        if previous.get("version").and_then(serde_json::Value::as_str) == Some(version) {
+        if previous.get("version").and_then(serde_json::Value::as_str) == Some(version)
+            && previous.get("runtime").and_then(serde_json::Value::as_str) == Some(runtime)
+        {
             return Ok(Upgrade::Ready {
                 snapshot: previous
                     .get("snapshot")
@@ -290,13 +294,14 @@ pub fn snapshot(data: &Path, config_file: &Path, version: &str) -> Result<Upgrad
     };
     let status = UpgradeMarker {
         version: version.into(),
+        runtime: runtime.into(),
         snapshot,
     };
     let mut temp = NamedTempFile::new_in(data)?;
     serde_json::to_writer(&mut temp, &status)?;
     if atomic_file::publish(temp, &marker_path, expected.as_deref())?.is_none() {
         let current: UpgradeMarker = serde_json::from_slice(&fs::read(&marker_path)?)?;
-        if current.version != version {
+        if current.version != version || current.runtime != runtime {
             return Err("Upgrade marker changed during snapshot creation".into());
         }
         return Ok(Upgrade::Ready {

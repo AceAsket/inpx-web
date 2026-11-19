@@ -9,6 +9,10 @@ on:
         description: Git tag to build and publish
         required: true
         default: v1.8.2
+      test_only:
+        description: Build and test a tag or commit without publishing images
+        type: boolean
+        default: false
       metadata_only:
         description: Update Docker Hub description without rebuilding images
         type: boolean
@@ -44,6 +48,10 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Select the Node.js release source
+        id: node
+        if: matrix.component == 'web' && hashFiles('scripts/checkout-release-node.js') != ''
+        run: node scripts/checkout-release-node.js .
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -58,11 +66,12 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           COMPONENT: ${{ matrix.component }}
+          TEST_ONLY: ${{ inputs.test_only }}
         run: |
           node <<'NODE'
           const fs = require('fs');
           const version = require('./package.json').version;
-          if (process.env.RELEASE_TAG !== `v${version}` || !/^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(version)) {
+          if ((process.env.TEST_ONLY !== 'true' && process.env.RELEASE_TAG !== `v${version}`) || !/^\d+\.\d+\.\d+(?:-rc\.\d+)?$/.test(version)) {
             throw new Error('Tag and package version must match');
           }
           const variants = {
@@ -86,7 +95,7 @@ jobs:
           revision=$(git rev-parse HEAD)
           docker build "${args[@]}" --label "org.opencontainers.image.revision=$revision" -t "$IMAGE" "$CONTEXT"
       - name: Load the corrected package smoke test for this rebuild
-        if: github.event_name == 'workflow_dispatch' && inputs.component == matrix.component && matrix.component != 'silero'
+        if: github.event_name == 'workflow_dispatch' && inputs.component == matrix.component && matrix.component != 'silero' && steps.node.outputs.classic != 'true'
         run: |
           git fetch --no-tags origin "$GITHUB_WORKFLOW_SHA"
           git show "$GITHUB_WORKFLOW_SHA:scripts/binary-smoke-test.js" > scripts/binary-smoke-test.js
@@ -94,8 +103,8 @@ jobs:
         if: matrix.component == 'web'
         env:
           IMAGE: ${{ steps.version.outputs.image }}
-          INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
-          INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
+          INPX_SMOKE_REQUIRE_RUST_HTTP: ${{ steps.node.outputs.classic != 'true' }}
+          INPX_SMOKE_REQUIRE_RUST_CATALOG: ${{ steps.node.outputs.classic != 'true' }}
         run: node scripts/binary-smoke-test.js --image "$IMAGE"
       - name: Test packaged Rust application
         if: matrix.component == 'rust'
@@ -132,11 +141,13 @@ jobs:
           done
           node scripts/reader-speech-tests.js --silero-url http://127.0.0.1:18080
       - name: Log in to Docker Hub
+        if: ${{ !inputs.test_only }}
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Publish versioned image
+        if: ${{ !inputs.test_only }}
         env:
           IMAGE: ${{ steps.version.outputs.image }}
         run: docker push "$IMAGE"
@@ -144,7 +155,7 @@ jobs:
   promote-stable:
     name: Promote stable image to latest
     needs: publish
-    if: (github.event_name != 'workflow_dispatch' || (!inputs.metadata_only && inputs.component == 'all')) && !contains(github.event.inputs.tag || github.ref_name, '-')
+    if: (github.event_name != 'workflow_dispatch' || (!inputs.test_only && !inputs.metadata_only && inputs.component == 'all')) && !contains(github.event.inputs.tag || github.ref_name, '-')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -164,7 +175,7 @@ jobs:
           docker push aceasket/inpx-web-7z:latest
 
   metadata:
-    if: github.event_name == 'workflow_dispatch' && inputs.metadata_only
+    if: github.event_name == 'workflow_dispatch' && inputs.metadata_only && !inputs.test_only
     name: Update Docker Hub description and optional RC cleanup
     runs-on: ubuntu-latest
     timeout-minutes: 10
