@@ -217,6 +217,19 @@ if (require.main === module) (async() => {
         await desktopSettings.getByRole('button', {name:/Внешний источник витрины/}).click();
         const sourceDialog = page.locator('.library-dialog-card').filter({has:page.getByText('Тип источника', {exact:true})});
         await sourceDialog.waitFor();
+        for (const source of ['Нет', 'Веб-витрина']) {
+            await sourceDialog.getByRole('combobox').first().click();
+            await page.getByRole('option', {name:source, exact:true}).click();
+            for (const width of [717, 320]) {
+                await page.setViewportSize({width, height:640});
+                const body = sourceDialog.locator('.dialog-body');
+                const dimensions = await body.evaluate(el => ({width:el.clientWidth, content:el.scrollWidth}));
+                assert(dimensions.content <= dimensions.width,
+                    `External source "${source}" overflows at ${width}px: ${JSON.stringify(dimensions)}`);
+            }
+        }
+        await sourceDialog.getByRole('button', {name:'Удалить источник',exact:true}).click();
+        await page.setViewportSize({width:1440, height:1000});
         await sourceDialog.getByRole('button', {name:'Закрыть окно',exact:true}).click();
         await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         for (const name of ['Автоматически загружать отзывы и оценки', 'Автоматически загружать сведения об авторе']) {
