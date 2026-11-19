@@ -55,6 +55,29 @@ async function webp(browser, png) {
     } finally { await page.close(); }
 }
 
+async function assertRenderedCover(browser, png, expected, label) {
+    const page = await browser.newPage();
+    try {
+        const matches = await page.evaluate(async encoded => {
+            async function pixels(base64) {
+                const image = new Image();
+                image.src = 'data:image/png;base64,' + base64;
+                await image.decode();
+                const canvas = document.createElement('canvas');
+                canvas.width = image.naturalWidth;
+                canvas.height = image.naturalHeight;
+                const context = canvas.getContext('2d');
+                context.drawImage(image, 0, 0);
+                return context.getImageData(0, 0, canvas.width, canvas.height);
+            }
+            const [actual, original] = await Promise.all(encoded.map(pixels));
+            return actual.width === original.width && actual.height === original.height
+                && actual.data.every((channel, i) => channel === original.data[i]);
+        }, [png.toString('base64'), expected.toString('base64')]);
+        assert(matches, label + ' must render the original cover');
+    } finally { await page.close(); }
+}
+
 async function fixture(directory, browser) {
     const sources = ['main','other'];
     for (const id of sources) {
@@ -319,7 +342,17 @@ async function main(rust, rc15) {
         const after = await measureRoutes(rustBase);
         await protectedFiles(await start(names[3],rust,directory,{protectedAccess:true}),assets);
         await rootPaths(await start(names[5],rust,directory,{rootless:true}),assets);
-        assert.deepEqual(native,legacy);
+        assert.equal(native.html,legacy.html);
+        assert.deepEqual(Object.keys(native.results).sort(),Object.keys(legacy.results).sort());
+        for (const [route,data] of Object.entries(native.results)) {
+            if (route === '1102' || route === 'catalogue-main') {
+                // The two djxl versions can encode identical pixels into different PNGs.
+                await assertRenderedCover(browser,data,assets.other,'Rust '+route);
+                await assertRenderedCover(browser,legacy.results[route],assets.other,'RC15 '+route);
+            } else {
+                assert(data.equals(legacy.results[route]),'RC15 cover bytes differ at '+route);
+            }
+        }
         for (const [label,median] of before)
             await timing(label+' (11 warm GETs, median)',median,after.get(label),'ms');
         console.log('ok Rust matches RC15 for recovery, FB2, ZIP/7z cover archives, embedded and WebP/JXL covers');
