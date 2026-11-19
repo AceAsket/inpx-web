@@ -92,6 +92,12 @@ function azw3(bytes) {
 }
 
 async function checkPackagedConversions(base, uid, directory) {
+    const client = await connect(base);
+    try {
+        assert.equal(client.config.conversionEnabled, true);
+        for (const format of ['epub', 'azw3', 'mobi'])
+            assert(client.config.conversionFormats.includes(format), 'Missing download menu format: ' + format);
+    } finally { client.close(); }
     await epub(await download(base, uid, 'epub'), directory, 'installed');
     azw3(await download(base, uid, 'azw3'));
     await mobi(await download(base, uid, 'mobi'), directory, 'installed');

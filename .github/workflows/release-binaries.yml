@@ -213,6 +213,12 @@ jobs:
         shell: pwsh
         run: ./scripts/stage-rust-windows-tools.ps1 -ApplicationDir "${{ runner.temp }}/inpx-rust-release/win" -ToolsDir dist/win/bin
 
+      - name: Include book converters in the Linux and macOS Rust archives
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: dist/${{ matrix.target }}/bin
+        run: cp fbc kindling LICENSE.kindling "${{ runner.temp }}/inpx-rust-release/${{ matrix.target }}/bin/"
+
       - name: Verify the standalone Rust archive on this target
         shell: bash
         env:
@@ -222,9 +228,7 @@ jobs:
           node build/release.js ${{ matrix.target }}
           version=$(node -p "require('./package.json').version")
           archive="$INPX_BUILD_DIST_DIR/release/inpx-web-$version-${{ matrix.target }}.zip"
-          options=(--rust)
-          if [[ "${{ matrix.target }}" != win ]]; then options+=(--application-only); fi
-          node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$archive" "${options[@]}"
+          node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$archive" --rust
           cp "$archive" "dist/release/inpx-web-$version-${{ matrix.target }}-rust.zip"
 
       - name: Build Windows installer
