@@ -59,7 +59,7 @@ async function checkCoverDownload(url, uid, jxlCover) {
     console.log(jxlCover ? 'ok packaged JPEG XL cover decoded over HTTP' : 'ok packaged embedded PNG cover over HTTP');
 }
 
-async function createFixture(dir, {nativeJxlCover = false, extraEpubs = []} = {}) {
+async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = false, extraEpubs = []} = {}) {
     await fs.ensureDir(dir);
     const zip = new yazl.ZipFile();
     const output = fs.createWriteStream(path.join(dir, 'smoke.inpx'));
@@ -98,7 +98,15 @@ async function createFixture(dir, {nativeJxlCover = false, extraEpubs = []} = {}
         await fs.ensureDir(coverDir);
         const covers = new yazl.ZipFile();
         const coversDone = require('stream/promises').pipeline(covers.outputStream, fs.createWriteStream(path.join(coverDir, 'smoke.zip')));
-        covers.addBuffer(require('../server/core/benchmarkFixture'), '1');
+        let cover = require('../server/core/benchmarkFixture');
+        if (extendedJxlBox) {
+            // Signature and ftyp, followed by a codestream box with a 64-bit length.
+            const header = Buffer.from('0000000c4a584c200d0a870a00000014667479706a786c20000000006a786c20000000016a786c63', 'hex');
+            const length = Buffer.alloc(8);
+            length.writeBigUInt64BE(BigInt(16 + cover.length));
+            cover = Buffer.concat([header, length, cover]);
+        }
+        covers.addBuffer(cover, '1');
         covers.end();
         await coversDone;
     }
@@ -315,7 +323,7 @@ async function main() {
         const nativeJxlCover = !rust && binary !== null && (!allowMissingNativeJxl
             || await fs.pathExists(path.join(path.dirname(binary), 'bin', 'inpx-jxl.node')));
         const jxlCover = nativeJxlCover || options.includes('--bundled-djxl') || Boolean(rust && imageName);
-        await createFixture(library, {nativeJxlCover:jxlCover});
+        await createFixture(library, {nativeJxlCover:jxlCover, extendedJxlBox:rust && Boolean(imageName)});
         const port = await unusedPort();
         let command, cwd;
         let args;

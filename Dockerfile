@@ -70,6 +70,15 @@ RUN npm run build:rust -- linux
 
 FROM build-${INPX_SERVER_RUNTIME} AS build-app
 
+FROM ${NODE_IMAGE} AS djxl-tools
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates lzip
+COPY build/linux-djxl.js /tools/linux-djxl.js
+RUN node /tools/linux-djxl.js /out
+
 FROM ${NODE_IMAGE} AS webp-tools
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -111,6 +120,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 COPY --from=webp-tools /webp-runtime/bin/dwebp /usr/local/bin/dwebp
 COPY --from=webp-tools /webp-runtime/lib/ /usr/local/lib/
+COPY --from=djxl-tools /out/djxl /usr/bin/djxl
+COPY --from=djxl-tools /out/djxl-licenses/ /usr/local/share/licenses/djxl/
 COPY --from=build-app /app/dist/linux/inpx-web /usr/local/bin/inpx-web
 COPY --from=build-app /app/dist/linux/bin/ /usr/local/bin/bin/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
