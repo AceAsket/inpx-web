@@ -1583,10 +1583,10 @@ sudo service nginx reload
 
 ### Разработка
 
-Для разработки получите ветку `develop` и установите зависимости под Node.js 24 или новее:
+Для разработки классического сервера используйте ветку `nodejs_depr` и Node.js 24 или новее.
 
 ```sh
-git clone --branch develop --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch nodejs_depr --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 npm ci
 npm run dev

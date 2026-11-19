@@ -30,8 +30,11 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.62.1
-      - run: npx playwright install --with-deps chromium
+      - name: Install browser test tools separately from the application
+        run: |
+          npm install --prefix "$RUNNER_TEMP/browser-tools" --no-save --package-lock=false --ignore-scripts playwright@1.62.1
+          "$RUNNER_TEMP/browser-tools/node_modules/.bin/playwright" install --with-deps chromium
+          echo "INPX_PLAYWRIGHT_MODULE=$RUNNER_TEMP/browser-tools/node_modules/playwright" >> "$GITHUB_ENV"
       - run: npm run build:client
       - run: node scripts/library-appearance-browser-test.js
         env:
