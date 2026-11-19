@@ -17,7 +17,7 @@ const EPUB_CONTAINER: &str = "META-INF/container.xml";
 const EPUB_CONTAINER_BYTES: u64 = 1024 * 1024;
 const EPUB_PACKAGE_BYTES: u64 = 4 * 1024 * 1024;
 
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Copy, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Format {
     Fb2,

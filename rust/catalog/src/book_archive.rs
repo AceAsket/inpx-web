@@ -4,6 +4,10 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+mod solid_isbn;
 
 use serde::Deserialize;
 use sevenz_rust2::{Archive, BlockDecoder, Password};
@@ -205,7 +209,10 @@ pub(crate) fn metadata_input(
 struct ArchiveCache(VecDeque<CachedArchive>);
 
 #[derive(Default)]
-pub(crate) struct IsbnReader(ArchiveCache);
+pub(crate) struct IsbnReader {
+    archives: ArchiveCache,
+    solid: Option<solid_isbn::Cursor>,
+}
 
 type IsbnBlock<'a> = (usize, HashMap<usize, Vec<&'a IsbnMember>>);
 
@@ -267,9 +274,11 @@ impl IsbnMember {
         };
         serde_json::from_value(data).map_err(|e| Failure::Other(e.into()))
     }
+}
 
-    fn numbers(&self, size: u64, reader: &mut dyn Read, limit: u64) -> Extraction<Vec<String>> {
-        let raw = book_metadata::read_stream(&self.format, size, reader, limit, true)?;
+impl Format {
+    fn isbn_numbers(self, size: u64, reader: &mut dyn Read, limit: u64) -> Extraction<Vec<String>> {
+        let raw = book_metadata::read_stream(&self, size, reader, limit, true)?;
         serde_json::from_value(raw).map_err(|e| Failure::Other(e.into()))
     }
 }
@@ -280,10 +289,11 @@ impl IsbnReader {
         folder: &Folder,
         members: &[IsbnMember],
         limit: u64,
-        cancelled: &(impl Fn() -> bool + Sync),
+        cancel: &Arc<AtomicBool>,
         spare_workers: &impl Fn(usize) -> Vec<P>,
         mut found: impl FnMut(usize, Vec<String>),
     ) -> Extraction<()> {
+        let cancelled = &|| cancel.load(Ordering::Acquire);
         // Each EPUB may need a full book buffer; reserve parallel readers for FB2.
         let reserve = |units: usize| {
             let extra = members.len().div_ceil(8).min(units).saturating_sub(1);
@@ -294,6 +304,7 @@ impl IsbnReader {
             }
         };
         if !folder.archived {
+            self.solid = None;
             let permits = reserve(members.len());
             let read = |chunk: &[IsbnMember], found: &mut IsbnFound<'_>| {
                 for member in chunk {
@@ -314,11 +325,26 @@ impl IsbnReader {
             );
             return Ok(());
         }
-        let archive = self.0.open(&folder.path, folder.open_archive()?)?;
+        let archive = self.archives.open(&folder.path, folder.open_archive()?)?;
         match &mut archive.directory {
             Directory::SevenZip(source, seven) => {
                 // All members of a solid block must stay on the same decoder.
                 let blocks = seven.isbn_blocks(members, limit, &mut found);
+                if let [block] = blocks.as_slice()
+                    && solid_isbn::read(
+                        &mut self.solid,
+                        seven,
+                        block,
+                        limit,
+                        cancel,
+                        || source.independent_readers(folder, 1).pop(),
+                        &mut found,
+                    )
+                {
+                    archive.source.detach();
+                    return Ok(());
+                }
+                self.solid = None;
                 let permits = reserve(blocks.len());
                 let readers = source.independent_readers(folder, permits.len());
                 let seven = seven.as_ref();
@@ -332,19 +358,31 @@ impl IsbnReader {
                     &mut found,
                 );
             }
-            directory @ Directory::Zip(_, _) => {
+            Directory::Zip(zip, _) => {
+                self.solid = None;
                 let permits = reserve(members.len());
+                let metadata = zip.metadata();
                 let readers = archive
                     .source
                     .independent_readers(folder, permits.len())
                     .into_iter()
-                    .filter_map(|input| ZipArchive::new(input).ok())
-                    .map(|zip| Directory::Zip(zip, None))
+                    .map(|input| {
+                        // independent_readers verifies each open handle against the
+                        // same file stamp that ArchiveCache uses for this directory.
+                        let zip = unsafe {
+                            ZipArchive::unsafe_new_with_metadata(input, metadata.clone())
+                        };
+                        Directory::Zip(zip, None)
+                    })
                     .collect();
                 isbn_chunks(
                     members,
                     readers,
-                    |chunk, found| directory.read_zip_isbns(chunk, limit, cancelled, found),
+                    |chunk, found| {
+                        archive
+                            .directory
+                            .read_zip_isbns(chunk, limit, cancelled, found)
+                    },
                     |mut directory, chunk, found| {
                         directory.read_zip_isbns(chunk, limit, cancelled, found)
                     },
@@ -410,7 +448,7 @@ struct ArchiveReader {
 
 pub(crate) enum Directory<R: Read + Seek> {
     Zip(ZipArchive<R>, Option<HashMap<String, usize>>),
-    SevenZip(R, Box<SevenZip>),
+    SevenZip(R, Arc<SevenZip>),
 }
 
 pub(crate) struct SevenZip {
@@ -678,7 +716,7 @@ impl<R: Read + Seek> Directory<R> {
     pub(crate) fn open(mut source: R, seven_zip: bool) -> Extraction<Self> {
         if seven_zip {
             let directory = SevenZip::open(&mut source)?;
-            return Ok(Self::SevenZip(source, Box::new(directory)));
+            return Ok(Self::SevenZip(source, Arc::new(directory)));
         }
         Ok(Self::Zip(ZipArchive::new(source)?, None))
     }
@@ -712,7 +750,7 @@ impl<R: Read + Seek> Directory<R> {
             }
             let legacy = legacy_zip_name(&member.name);
             if let Ok(numbers) = self.read(&member.name, legacy.as_deref(), |size, reader| {
-                member.numbers(size, reader, limit)
+                member.format.isbn_numbers(size, reader, limit)
             }) {
                 found(member.row, numbers);
             }
@@ -797,7 +835,10 @@ impl SevenZip {
                 continue;
             }
             if !entry.has_stream {
-                if let Ok(numbers) = member.numbers(entry.size, &mut io::empty(), limit) {
+                if let Ok(numbers) = member
+                    .format
+                    .isbn_numbers(entry.size, &mut io::empty(), limit)
+                {
                     found(member.row, numbers);
                 }
             } else if let Some(block) = self.archive.stream_map.file_block_index[index] {
@@ -832,7 +873,7 @@ impl SevenZip {
                 }
                 if let Some(matches) = targets.get(&index) {
                     remaining -= 1;
-                    if let Ok(numbers) = matches[0].numbers(entry.size, reader, limit) {
+                    if let Ok(numbers) = matches[0].format.isbn_numbers(entry.size, reader, limit) {
                         for member in matches {
                             found(member.row, numbers.clone());
                         }

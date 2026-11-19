@@ -300,7 +300,7 @@ impl IsbnBuild {
                     &folder,
                     &members,
                     reader.limit,
-                    &|| self.cancelled(),
+                    &self.cancel,
                     &spare_workers,
                     |row, numbers| {
                         records[row].2 = Outcome::Numbers(numbers);
