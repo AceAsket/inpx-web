@@ -276,6 +276,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: gh run download ${{ github.run_id }} --repo ${{ github.repository }} --dir release-assets
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify the final release assets before publication
+        run: |
+          npm ci --ignore-scripts
+          node scripts/check-release-assets.js release-assets
+
       - name: Prepare release notes
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}

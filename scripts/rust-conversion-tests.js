@@ -95,13 +95,19 @@ async function checkPackagedConversions(base, uid, directory) {
     const client = await connect(base);
     try {
         assert.equal(client.config.conversionEnabled, true);
-        for (const format of ['epub', 'azw3', 'mobi'])
-            assert(client.config.conversionFormats.includes(format), 'Missing download menu format: ' + format);
+        assert.deepEqual(client.config.conversionFormats, ['fb2','epub','epub3','kepub','kfx','azw3','azw8','mobi'],
+            'Default download menu in a clean standalone installation');
     } finally { client.close(); }
-    await epub(await download(base, uid, 'epub'), directory, 'installed');
+    for (const format of ['epub','epub3','kepub'])
+        await epub(await download(base, uid, format), directory, 'installed-' + format);
+    for (const format of ['kfx','azw8']) {
+        const bytes = await download(base, uid, format);
+        assert.equal(bytes.toString('ascii', 0, 4), 'CONT', format + ' container');
+        assert(bytes.length > 100);
+    }
     azw3(await download(base, uid, 'azw3'));
     await mobi(await download(base, uid, 'mobi'), directory, 'installed');
-    console.log('ok installed Rust HTTP server converted FB2 to valid EPUB, AZW3 and dual MOBI');
+    console.log('ok installed Rust HTTP server advertised and delivered all seven bundled conversion formats');
 }
 
 async function conversionEpub(directory) {

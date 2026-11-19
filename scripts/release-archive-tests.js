@@ -6,7 +6,7 @@ const {execFileSync} = require('child_process');
 const {pipeline} = require('stream/promises');
 const {ZipFile} = require('yazl');
 const StreamZip = require('node-stream-zip');
-const {createReleaseArchive, executableNames} = require('../build/release-archive');
+const {createReleaseArchive, executableNames, rustProgramEntry} = require('../build/release-archive');
 const {checkArchivePermissions, extractArchive} = require('./release-archive-smoke-test');
 
 async function temporary(work) {
@@ -67,4 +67,31 @@ async function testReleaseZipRejectsMissingOrNonExecutablePayload() {
     });
 }
 
-module.exports = [testReleaseZipPreservesExecutablesAfterNativeExtraction,testReleaseZipRejectsMissingOrNonExecutablePayload];
+async function testIncompleteStandaloneConverterBundlesAreRejected() {
+    await temporary(async dir => {
+        for (const target of ['linux', 'linux-arm64', 'macos', 'win']) {
+            const source = path.join(dir, target);
+            const archive = path.join(dir, target + '.zip');
+            const programs = executableNames(target);
+            const files = [...programs, rustProgramEntry(target, 'reader'), rustProgramEntry(target, 'catalog'),
+                'bin/public.json', 'bin/LICENSE.quickjs', 'bin/LICENSE.kindling'];
+            if (target.startsWith('linux')) files.push('bin/djxl', 'bin/djxl-licenses/LICENSE.jpeg-xl');
+            if (target === 'win') files.push('bin/7za.exe', 'bin/djxl.exe', 'bin/dwebp.exe', 'vcruntime140.dll', 'bin/vcruntime140.dll');
+            for (const name of files) await fs.outputFile(path.join(source, name), 'payload');
+            await createReleaseArchive(source, archive, target);
+            await checkArchivePermissions(archive, target, true, true);
+
+            for (const name of [...programs.slice(1), 'bin/LICENSE.kindling']) {
+                const file = path.join(source, name);
+                await fs.unlink(file);
+                await createReleaseArchive(source, archive, target);
+                await assert.rejects(checkArchivePermissions(archive, target, true, true),
+                    error => error.message.includes(name), target + ' must reject a missing ' + name);
+                await fs.outputFile(file, 'payload');
+            }
+        }
+    });
+}
+
+module.exports = [testReleaseZipPreservesExecutablesAfterNativeExtraction,testReleaseZipRejectsMissingOrNonExecutablePayload,
+    testIncompleteStandaloneConverterBundlesAreRejected];

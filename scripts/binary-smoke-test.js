@@ -59,7 +59,7 @@ async function checkCoverDownload(url, uid, jxlCover) {
     console.log(jxlCover ? 'ok packaged JPEG XL cover decoded over HTTP' : 'ok packaged embedded PNG cover over HTTP');
 }
 
-async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = false, disableDjxl = false, extraEpubs = []} = {}) {
+async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = false, disableDjxl = false, extraEpubs = [], defaultConversionFormats = false} = {}) {
     await fs.ensureDir(dir);
     const zip = new yazl.ZipFile();
     const output = fs.createWriteStream(path.join(dir, 'smoke.inpx'));
@@ -128,7 +128,7 @@ async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = fals
         adminPassword: 'local-smoke-fixture',
         onlineReaderEnabled: true,
         ...(disableDjxl ? {converterPaths:{djxl:path.join(dir,'missing-djxl')}} : {}),
-        ...(process.env.INPX_SMOKE_EPUB === 'true' ? {conversionFormats:['fb2','epub']} : {}),
+        ...(!defaultConversionFormats && process.env.INPX_SMOKE_EPUB === 'true' ? {conversionFormats:['fb2','epub']} : {}),
     });
 }
 
@@ -325,7 +325,7 @@ async function main() {
             || await fs.pathExists(path.join(path.dirname(binary), 'bin', 'inpx-jxl.node')));
         const jxlCover = nativeJxlCover || rust || options.includes('--bundled-djxl');
         await createFixture(library, {nativeJxlCover:jxlCover, extendedJxlBox:rust && Boolean(imageName),
-            disableDjxl:Boolean(rust && binary)});
+            disableDjxl:Boolean(rust && binary), defaultConversionFormats:requireConverters});
         const port = await unusedPort();
         let command, cwd;
         let args;
@@ -347,6 +347,7 @@ async function main() {
             }
         } else {
             command = binary;
+            if (rust) cwd = dir;
             if (nativeJxlCover) {
                 cwd = path.join(dir, 'standalone');
                 command = await isolateNativeJxl(binary, cwd);
@@ -373,8 +374,8 @@ async function main() {
         if (requireConverters) {
             delete env.INPX_ENABLE_CONVERSION;
             delete env.INPX_MOBI_ENABLED;
-            if (process.env.INPX_SMOKE_EPUB === 'true') env.INPX_CONVERSION_FORMATS = 'fb2,epub,azw3,mobi';
-            else delete env.INPX_CONVERSION_FORMATS;
+            delete env.INPX_CONVERSION_FORMATS;
+            delete env.INPX_KINDLING_PATH;
         }
         child = spawn(command, args, {cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
         exited = new Promise(resolve => {

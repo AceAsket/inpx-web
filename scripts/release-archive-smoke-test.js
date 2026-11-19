@@ -26,9 +26,19 @@ async function checkArchivePermissions(archive, target, converters = true, rust 
             assert(entries['bin/public.json'] && !entries['bin/public.json'].isDirectory,'Missing packaged web application');
             assert(!Object.keys(entries).some(name=>/\.(?:node|wasm)$|(?:^|\/)node(?:\.exe)?$/i.test(name)),
                 'Rust archive must not contain Node runtimes, addons or its authentication module');
+            if (converters) {
+                const required = ['bin/LICENSE.kindling', 'bin/LICENSE.quickjs', 'bin/public.json'];
+                if (target.startsWith('linux'))
+                    required.push('bin/djxl', 'bin/djxl-licenses/LICENSE.jpeg-xl');
+                if (target === 'win')
+                    required.push('bin/7za.exe', 'bin/djxl.exe', 'bin/dwebp.exe', 'vcruntime140.dll', 'bin/vcruntime140.dll');
+                for (const name of required)
+                    assert(entries[name]?.size > 0 && !entries[name].isDirectory, `Missing or empty standalone file: ${name}`);
+            }
         }
         for (const name of executableNames(target, converters)) {
             assert(entries[name] && !entries[name].isDirectory, `Missing release executable: ${name}`);
+            assert(entries[name].size > 0, `Empty release executable: ${name}`);
             if (target !== 'win')
                 assert.equal((entries[name].attr >>> 16) & 0o7777, 0o755, `ZIP must store mode 755 for ${name}`);
         }
