@@ -787,6 +787,25 @@ class Api {
         }
     }
 
+    async promptProfileOtp(login, password, dialogOpts) {
+        const {canRememberProfileDevice, trustedBrowserDays} = this.$store.state.config;
+        let error = '', rememberDevice = false;
+        for (;;) {
+            const answer = await this.$root.stdDialog.profileOtp('Введите текущий код из приложения-аутентификатора или резервный код.', {
+                ...dialogOpts, noEscDismiss: true, noBackdropDismiss: true,
+                trustedBrowserDays: canRememberProfileDevice ? trustedBrowserDays : 0, rememberDevice, error,
+            });
+            if (!answer) return null;
+            rememberDevice = answer.rememberDevice;
+            try {
+                return await this.loginUserProfile(login, password, answer.code, rememberDevice);
+            } catch (failure) {
+                if (failure.code !== 'INPX_INVALID_PROFILE_CREDENTIALS') throw failure;
+                error = 'Код не принят. Введите новый код из приложения или неиспользованный резервный код.';
+            }
+        }
+    }
+
     async profileTotp(operation, payload) {
         return this.request({action: 'profile-totp', operation, payload}, 30, {suppressProfileLogin: true});
     }
@@ -990,11 +1009,7 @@ class Api {
                     if (error.code === 'need_profile_otp_setup')
                         return this.enrollRequiredProfileTotp(login, password, {...dialogOpts, noEscDismiss: true, noBackdropDismiss: true});
                     if (error.code !== 'need_profile_otp' && error.message !== 'need_profile_otp') throw error;
-                    const answer = await this.$root.stdDialog.profileOtp('Введите текущий код из приложения-аутентификатора или резервный код.', {
-                        ...dialogOpts, noEscDismiss: true, noBackdropDismiss: true,
-                        trustedBrowserDays: config.canRememberProfileDevice ? config.trustedBrowserDays : 0,
-                    });
-                    return answer ? this.loginUserProfile(login, password, answer.code, answer.rememberDevice) : null;
+                    return this.promptProfileOtp(login, password, dialogOpts);
                 });
                 if (!result && !opts.required) throw new Error('Вход в профиль отменён');
             } catch (error) {

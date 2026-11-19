@@ -439,7 +439,7 @@
                         <q-toggle v-model="authPolicyDraft.trustedBrowsersEnabled" :disable="authPolicyBusy" label="Разрешить доверенные браузеры по HTTPS" />
                         <q-input v-if="authPolicyDraft.trustedBrowsersEnabled" v-model.number="authPolicyDraft.trustedBrowserDays" type="number" min="1" max="180" step="1"
                             label="Срок доверия в днях" hint="От 1 до 180" outlined dense :disable="authPolicyBusy" />
-                        <p v-if="authPolicyDraft.trustedBrowsersEnabled">Пока действует доверие, для повторного входа в этом браузере достаточно пароля.</p>
+                        <p v-if="authPolicyDraft.trustedBrowsersEnabled">При входе по HTTPS отметьте «Запомнить это устройство» и введите код из приложения. Затем для входа в тот же профиль достаточно пароля.</p>
                         <q-input v-model="authPolicyPassword" name="password" type="password" label="Пароль администратора" autocomplete="current-password" outlined dense :disable="authPolicyBusy" />
                         <q-input v-if="currentProfile.otpEnabled" v-model="authPolicyCode" name="otp" label="Код из приложения или резервный код" autocomplete="one-time-code"
                             autocapitalize="off" spellcheck="false" maxlength="64" outlined dense :disable="authPolicyBusy" />

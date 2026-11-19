@@ -668,6 +668,10 @@ function profileRequest(page, payload, session) {
         await remember.waitFor();
         assert.equal(await remember.getAttribute('aria-checked'), 'false');
         await remember.click();
+        await secureOtpDialog.getByLabel('Код из приложения или резервный код', {exact:true}).fill('invalid');
+        await secureOtpDialog.getByRole('button', {name:'OK',exact:true}).click();
+        await secureOtpDialog.getByText('Код не принят.', {exact:false}).waitFor();
+        assert.equal(await remember.getAttribute('aria-checked'), 'true');
         await secureOtpDialog.getByLabel('Код из приложения или резервный код', {exact:true}).fill(currentTotp(requiredSecret));
         await secureOtpDialog.getByRole('button', {name:'OK',exact:true}).click();
         await profileLogout(securePage).waitFor();
