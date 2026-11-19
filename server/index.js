@@ -10,7 +10,6 @@ const os = require('os');
 
 const express = require('express');
 const http = require('http');
-const WebSocket = require ('ws');
 
 const utils = require('./core/utils');
 const {resolveLibrarySources} = require('./core/LibrarySources');
@@ -53,7 +52,6 @@ function applyEnvSecurityOverrides(targetConfig) {
         importLimitMb: 'INPX_IMPORT_LIMIT_MB',
         backupUploadLimitMb: 'INPX_BACKUP_UPLOAD_LIMIT_MB',
         backupExpandedLimitMb: 'INPX_BACKUP_EXPANDED_LIMIT_MB',
-        conversionConcurrency: 'INPX_CONVERSION_CONCURRENCY',
         conversionQueueLimit: 'INPX_CONVERSION_QUEUE_LIMIT',
         conversionTimeoutMs: 'INPX_CONVERSION_TIMEOUT_MS',
         conversionQueueTimeoutMs: 'INPX_CONVERSION_QUEUE_TIMEOUT_MS',
@@ -191,19 +189,13 @@ async function init() {
         config.resetAdminPassword = true;
     }
 
-    if (argv['library-sources']) {
-        const {parseSourcesFromString} = require('./core/LibrarySources');
-        config.librarySources = parseSourcesFromString(argv['library-sources']);
-    }
-
+    if (config.remoteLib) config.inpxFile = `${config.dataDir}/remote.inpx`;
+    await resolveLibrarySources(config, argv);
     if (config.remoteLib) {
-        config.inpxFile = `${config.dataDir}/remote.inpx`;
         const RemoteLib = require('./core/RemoteLib');//singleton
         const remoteLib = new RemoteLib(config);
         await remoteLib.downloadInpxFile();
     }
-
-    await resolveLibrarySources(config, argv);
 
     config.recreateDb = argv.recreate || false;
     config.inpxFilterFile = config.inpxFilterFile || `${path.dirname(config.configFile)}/filter.json`;
@@ -240,6 +232,21 @@ function logQueries(app) {
 
 async function main() {
     const log = new (require('./core/AppLogger'))().log;//singleton
+    const journal = require('./core/ReaderProgressJournal');
+    const closeJournal = journal.startRustJournal(require('node:path').join(config.dataDir,journal.fileName));
+    if (closeJournal) ayncExit.addAfter(closeJournal);
+    const closeArchive = require('./core/RustBackupZip').start();
+    if (closeArchive) ayncExit.addAfter(closeArchive);
+    const closeBookArchive = require('./core/RustBookArchive').start();
+    if (closeBookArchive) ayncExit.addAfter(closeBookArchive);
+    const closeBookCache = require('./core/RustBookCache').start();
+    if (closeBookCache) ayncExit.addAfter(closeBookCache);
+    const closeDirectoryDiagnostics = require('./core/DirectoryDiagnostics').start({lazy:!config.metricsEnabled});
+    if (closeDirectoryDiagnostics) ayncExit.addAfter(closeDirectoryDiagnostics);
+    const closeKoSync = require('./core/RustKoSync').start();
+    if (closeKoSync) ayncExit.addAfter(closeKoSync);
+    const closeBatchArchive = require('./core/RustBatchArchive').start();
+    if (closeBatchArchive) ayncExit.addAfter(closeBatchArchive);
 
     //server
     const app = express();
@@ -255,12 +262,10 @@ async function main() {
     app.use(security.requiredAuthMiddleware());
 
     const server = http.createServer(app);
-    const wss = new WebSocket.Server({
-        server,
-        maxPayload: require('./core/RequestLimits').transportLimit(config),
-        verifyClient: (info, done) => {
-            done(security.verifyWebSocket(info.req), 403, 'Forbidden');
-        },
+    const maxWebSocketPayload = require('./core/RequestLimits').transportLimit(config);
+    const wss = require('./core/WebSocketListener').attach(server,{
+        maxPayload:maxWebSocketPayload,
+        verify:req => security.verifyWebSocket(req),
     });
 
     let devModule = undefined;
@@ -273,19 +278,22 @@ async function main() {
     if (devModule)
         devModule.logQueries(app);
 
+    const readingListStore = new (require('./core/ReadingListStore'))(config);
+    await readingListStore.initialize();
     const opds = require('./core/opds');
-    opds(app, config, security);
+    opds(app, config, security, readingListStore);
 
-    const webAccess = new (require('./core/WebAccess'))(config);
-    await webAccess.init();
+    const rustPrograms = require('./core/RustPrograms');
+    const nativeLibraryAccess = !!(rustPrograms.executable('server') && rustPrograms.executable('catalog'));
+    const webAccess = new (require('./core/WebAccess'))(config,security.nativeAuth,nativeLibraryAccess);
+    const libraryAccess = await webAccess.init();
 
     const { WebSocketController } = require('./controllers');
-    const webSocketController = new WebSocketController(wss, webAccess, config, security);
+    const webSocketController = new WebSocketController(wss, webAccess, config, security, readingListStore);
     require('./core/ProfileWebLogin').register(app, config, webSocketController.webWorker, security, webAccess, webSocketController.profileAccess);
     const {ServerActivity} = require('./core/ServerActivity');
     webSocketController.webWorker.serverActivity = new ServerActivity(config, security.secret, log);
-    await webSocketController.webWorker.readingListStore.loadSnapshot();
-    await webSocketController.webWorker.readingListStore.warnIfDefaultAdminPassword()
+    await readingListStore.warnIfDefaultAdminPassword()
         .catch(e => log(LM_WARN, `Cannot check the admin password: ${e.message}`));
 
     require('./core/AudiobookshelfProvider').init(app, config, webSocketController.webWorker, security);
@@ -308,14 +316,37 @@ async function main() {
         });
     }
 
-    server.listen(config.server.port, config.server.host, () => {
+    const ready = port => {
         config.server.ready = true;
-        log(`Server accessible at http://127.0.0.1:${config.server.port} (listening on ${config.server.host}:${config.server.port})`);
+        log(`Server accessible at http://127.0.0.1:${port} (listening on ${config.server.host}:${port})`);
+    };
+    const transport = await require('./core/RustHttpServer').start(server,config,{
+        health:!devModule,
+        assets:!devModule,
+        websocket:{maxPayload:maxWebSocketPayload,textOnly:true},
+        websocketRequests:true,
+        libraryAccess,
+        bindLibraryAccess:libraryAccess ? transport=>webAccess.bindNative(transport) : undefined,
+        bindProfileSessions:transport=>{webSocketController.webWorker.profileTransport = transport;},
+        requestAccess:()=>security.requestAccessPolicy(),
+        onWebSocketRejected:(reason,peer)=>security.logNativeWebSocketRejection(reason,peer),
+        onFailure(error) {
+            log(LM_FATAL,error.message);
+            ayncExit.exit(1);
+        },
     });
+    if (transport) {
+        ayncExit.add(()=>transport.stop());
+        ready(transport.port);
+    } else {
+        server.listen(config.server.port,config.server.host,()=>ready(server.address().port));
+    }
 }
 
 (async() => {
     try {
+        const closeCredentials = require('./core/RustCredentials').start();
+        if (closeCredentials) ayncExit.addAfter(closeCredentials);
         await init();
         await main();
     } catch (e) {

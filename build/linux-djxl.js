@@ -39,3 +39,12 @@ async function bundleLinuxDjxl(target, binDir) {
 }
 
 module.exports = {bundleLinuxDjxl};
+
+if (require.main === module) {
+    const target = {x64:'linux', arm64:'linux-arm64'}[process.arch];
+    if (!target || !process.argv[2]) throw new Error('Expected an output directory on Linux x64 or arm64');
+    bundleLinuxDjxl(target, process.argv[2]).catch(error => {
+        console.error(error);
+        process.exitCode = 1;
+    });
+}

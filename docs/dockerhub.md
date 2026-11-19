@@ -16,7 +16,7 @@
 - Обложки и их кэширование, поддержка WebP и JXL.
 - Чтение FB2 в браузере: темы, шрифты, закладки, заметки, сохранение позиции и отдельный PWA-ярлык читалки.
 - Профили читателей, личные списки, отметки «прочитано», OPDS и персональные OPDS-ссылки.
-- Конвертация в EPUB, EPUB3, KEPUB, KFX, AZW8 и PDF в основном образе через fb2cng и MuPDF.
+- Конвертация в EPUB, EPUB3, KEPUB, KFX, AZW3, AZW8 и PDF в основном образе через fb2cng и MuPDF.
 - Отправка книг в Telegram и по электронной почте при настройке доставки.
 - Панель администратора, журнал событий, резервное копирование и восстановление, управление источниками, health checks и метрики Prometheus.
 
@@ -29,6 +29,8 @@ Android-клиент подключается по QR с адресом без �
 Встроенный Kindling конвертирует FB2/EPUB в MOBI7/KF8. В полном образе MOBI включён по умолчанию. Отключение — `INPX_MOBI_ENABLED=false`. Совместимость зависит от модели Kindle. [Настройка MOBI](https://github.com/AceAsket/inpx-web/blob/v1.8.2/README.md#лёгкая-конвертация-mobi-181-rc2)
 
 ### Образы и версии
+
+При выпуске 1.8.3 теги `1.8.3` и `latest` получат классический Node.js с JembaDB. Для Rust предусмотрен тег `1.8.3-rust`.
 
 | Тег | Назначение |
 | --- | --- |
@@ -77,14 +79,14 @@ docker run -d \
 
 ### Имена файлов и заголовки
 
-Основной образ включает fbc **1.9.0**. Добавьте параметры запуска, чтобы получить имя файла и заголовок книги для Kindle вида `02 - Доктор Гарин`:
+Основной образ включает fbc **2.1.1**. Добавьте параметры запуска, чтобы получить имя файла и заголовок книги для Kindle вида `02 - Доктор Гарин`:
 
 ```sh
 -e INPX_BOOK_FILENAME_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}' \
 -e INPX_BOOK_TITLE_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}'
 ```
 
-Номер берётся из каталога. Для книги без номера блок с дефисом исчезнет. Для одного названия используйте `'${TITLE}'`. Первая настройка меняет имя файла, вторая — заголовок внутри EPUB/EPUB3/KEPUB/KFX/AZW8 при конвертации FB2. Без настроек сохраняется прежнее поведение. [Все поля шаблонов и настройки fbc](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
+Номер берётся из каталога. Для книги без номера блок с дефисом исчезнет. Для одного названия используйте `'${TITLE}'`. Первая настройка меняет имя файла, вторая — заголовок внутри EPUB/EPUB3/KEPUB/KFX/AZW3/AZW8 при конвертации FB2. Без настроек сохраняется прежнее поведение. [Все поля шаблонов и настройки fbc](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
 
 ### Озвучка Silero
 
@@ -107,8 +109,9 @@ Silero запускается отдельным CPU-контейнером `ace
 | `INPX`, `LIBDIR` | INPX-индекс и архивы одной библиотеки. |
 | `INPX_LIBRARY_SOURCES` | Несколько источников INPX и папки FB2/EPUB. |
 | `INPX_ADMIN_PASSWORD` | Пароль администратора при создании профиля. |
+| `INPX_RESET_ADMIN_PASSWORD` | Для восстановления доступа задайте `true` и новый `INPX_ADMIN_PASSWORD`. Пересоздайте контейнер с прежним томом данных. После сброса уберите флаг и снова пересоздайте контейнер. |
 | `INPX_ALLOW_ANONYMOUS_ACCESS` | Задайте `false`, чтобы требовать вход в профиль для поиска, книг и обложек. В стабильной версии и RC21 до входа видны меню и форма входа. |
-| `INPX_REQUIRE_AUTH` | Значение `true` включает проверку пользователя доверенного reverse proxy в режиме `INPX_AUTH_MODE=proxy`. Для локального входа в стабильной версии и RC21 задайте `INPX_ALLOW_ANONYMOUS_ACCESS=false`. В RC22 и ветке develop достаточно `INPX_REQUIRE_AUTH=true`: до входа в библиотеку видна только форма входа. |
+| `INPX_REQUIRE_AUTH` | Значение `true` включает проверку пользователя доверенного reverse proxy в режиме `INPX_AUTH_MODE=proxy`. Для локального входа в стабильной версии и RC21 задайте `INPX_ALLOW_ANONYMOUS_ACCESS=false`. Начиная с 1.8.3-rc.22 достаточно `INPX_REQUIRE_AUTH=true`: до входа в библиотеку видна только форма входа. |
 | `INPX_COVER_CACHE_SIZE_MB` | Лимит кэша обложек; по умолчанию `512` МБ. |
 | `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Включение Silero и адрес сервиса. |
 | `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Включение и токен провайдера Audiobookshelf. |
@@ -134,7 +137,7 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 - Cover extraction and caching, including WebP and JXL support.
 - Browser-based FB2 reading with themes, fonts, bookmarks, notes, saved positions and a dedicated reader PWA shortcut.
 - Reader profiles, personal lists, read/unread marks, OPDS and profile-specific OPDS links.
-- Conversion to EPUB, EPUB3, KEPUB, KFX, AZW8 and PDF in the main image using fb2cng and MuPDF.
+- Conversion to EPUB, EPUB3, KEPUB, KFX, AZW3, AZW8 and PDF in the main image using fb2cng and MuPDF.
 - Send books through Telegram or email when delivery is configured.
 - Admin dashboard, event log, backup/restore, source management, health checks and Prometheus metrics.
 
@@ -147,6 +150,8 @@ Connect Android through a QR containing the server address without credentials. 
 Bundled Kindling converts FB2/EPUB to MOBI7/KF8. The full image enables MOBI by default. Set `INPX_MOBI_ENABLED=false` to disable it. Compatibility depends on the Kindle model. [MOBI configuration](https://github.com/AceAsket/inpx-web/blob/v1.8.2/README.md#лёгкая-конвертация-mobi-181-rc2)
 
 ### Images and versions
+
+For the 1.8.3 release, `1.8.3` and `latest` will run classic Node.js with JembaDB. Select `1.8.3-rust` for the Rust server.
 
 | Tag | Purpose |
 | --- | --- |
@@ -195,14 +200,14 @@ These are `docker run` options; insert them before the image name. Reindex after
 
 ### Filenames and book titles
 
-The main image includes fbc **1.9.0**. Add these launch options to get a filename and Kindle book title such as `02 - Доктор Гарин`:
+The main image includes fbc **2.1.1**. Add these launch options to get a filename and Kindle book title such as `02 - Доктор Гарин`:
 
 ```sh
 -e INPX_BOOK_FILENAME_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}' \
 -e INPX_BOOK_TITLE_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}'
 ```
 
-The series number comes from the catalogue. The number and separator disappear for unnumbered books. Use `'${TITLE}'` for the title alone. The first option changes download filenames; the second changes internal EPUB/EPUB3/KEPUB/KFX/AZW8 titles when converting FB2. Existing behavior is preserved when these options are unset. [Template fields and fbc settings](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
+The series number comes from the catalogue. The number and separator disappear for unnumbered books. Use `'${TITLE}'` for the title alone. The first option changes download filenames; the second changes internal EPUB/EPUB3/KEPUB/KFX/AZW3/AZW8 titles when converting FB2. Existing behavior is preserved when these options are unset. [Template fields and fbc settings](https://github.com/AceAsket/inpx-web/blob/develop/README.md#имя-файла-и-заголовок-книги).
 
 ### Silero speech
 
@@ -225,8 +230,9 @@ Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.8.2-silero`. 
 | `INPX`, `LIBDIR` | INPX index and archives for a single library. |
 | `INPX_LIBRARY_SOURCES` | Multiple INPX sources and FB2/EPUB folders. |
 | `INPX_ADMIN_PASSWORD` | Initial admin profile password. |
+| `INPX_RESET_ADMIN_PASSWORD` | To recover access, set this to `true` and supply a new `INPX_ADMIN_PASSWORD`. Recreate the container with the existing data volume. After the reset, remove the flag and recreate the container again. |
 | `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. On stable and RC21, guests can see the navigation and sign-in form. |
-| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on stable and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. In RC22 and the develop branch, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
+| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on stable and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. Starting with 1.8.3-rc.22, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
 | `INPX_COVER_CACHE_SIZE_MB` | Cover cache limit; defaults to `512` MB. |
 | `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Enable Silero and set its service URL. |
 | `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Enable the Audiobookshelf provider and set its token. |

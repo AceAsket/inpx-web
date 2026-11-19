@@ -197,16 +197,6 @@ async function testLibraryHomePinsIgnoreOutdatedRepliesAndClearOnProfileChange()
     assert.deepEqual(repository.state.pinnedShelves, []);
 }
 
-async function testLibraryAppearancePreservesCatalogLinksAndReaderRoutes() {
-    for (const path of ['/reader', '/reader-lab', '/books', '/title', '/extended'])
-        assert.equal(model.appearanceRedirect({path, query: {title: 'test'}}, 'shelves'), '');
-    assert.equal(model.appearanceRedirect({path: '/', query: {}}, 'shelves'), '/overview');
-    assert.equal(model.appearanceRedirect({path: '/', query: {author: 'Толстой'}}, 'shelves'), '');
-    assert.equal(model.appearanceRedirect({path: '/overview'}, 'classic'), '/for-you');
-    assert.equal(model.appearanceRedirect({path: '/profile'}, 'invalid-old-setting'), '/books');
-    assert.equal(model.appearance('unknown'), 'classic');
-}
-
 async function testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability() {
     const items = [
         {bookUid: 'read', state: 'read', percent: 1, updatedAt: '2026-11-05'},
@@ -330,7 +320,7 @@ module.exports = [testLibraryHomeCachesExpensiveShelvesAndRefreshesReadingIndepe
     testLibraryHomeShowsSignInForExpiredHistoryAndRecoversWithNewSession, testLibraryHomeRejectsLateLoginFailureAndClearsProtectedShelves,
     testLibraryHomeRejectsLateShelvesAfterOptionsChange, testLibraryHomeDisabledDiscoveryAndProtectedProfileAvoidRequests,
     testLibraryHomePinsIgnoreOutdatedRepliesAndClearOnProfileChange,
-    testLibraryAppearancePreservesCatalogLinksAndReaderRoutes, testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability,
+    testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability,
     testLibrarySearchPreservesMatchingModesAndNeverSearchesBlankWildcards, testOverviewSearchUsesEffectiveCatalogLanguageScope,
     testLibraryDialogsSupportLazyInitialOpening,
     testLibraryPaginationHandlesLargeCatalogsWithoutUnboundedButtons, testLibraryBookActionsHideUnsupportedReadingAndUnknownSize];

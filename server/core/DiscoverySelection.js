@@ -1,3 +1,49 @@
+function copyKey(row) {
+    const sourceKey = row.sourceId || '';
+    if (row.libid)
+        return 'libid:' + sourceKey + ':' + row.libid;
+
+    const parts = [
+        sourceKey,
+        row.folder || '',
+        row.file || '',
+        row.ext || '',
+        String(row.insno || 0),
+    ];
+    if (parts.some(Boolean))
+        return 'file:' + parts.join('|');
+
+    return [
+        'meta',
+        sourceKey,
+        row.author || '',
+        row.series || '',
+        String(row.serno || 0),
+        row.title || '',
+        String(row.size || 0),
+        row.ext || '',
+    ].join('|');
+}
+
+function rowQuality(row) {
+    let score = 0;
+    if (!row.del)
+        score += 1000;
+    if (row.ext === 'fb2')
+        score += 120;
+    else if (row.ext === 'epub')
+        score += 90;
+    else if (row.ext === 'mobi')
+        score += 70;
+    else if (row.ext === 'pdf')
+        score += 50;
+    if (row.librate)
+        score += row.librate * 10;
+    if (row.size)
+        score += Math.min(row.size, 50000000) / 1000000;
+    return score;
+}
+
 function createTopRanked(limit, compare) {
     const heap = [];
     function moveDown() {
@@ -68,4 +114,4 @@ const selectDiverseBestSource = `(() => {
     return ${selectDiverseBest.toString()};
 })()`;
 
-module.exports = {createTopRanked, selectDiverseBest, selectDiverseBestSource};
+module.exports = {copyKey, rowQuality, createTopRanked, selectDiverseBest, selectDiverseBestSource};

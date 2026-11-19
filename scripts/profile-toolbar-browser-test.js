@@ -100,10 +100,12 @@ function profileRequest(page, payload, session) {
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1280, height: 900}}), errors = [];
         let benchmarkOptions = null, benchmarkState = 'idle', performanceReads = 0;
+        let isbnWorkers = null;
         const integrationUpdates = [], integrationReplies = [], telegramProbeModes = [];
         let lastSavedIntegrations = {};
         await page.routeWebSocket('**/ws', socket => {
             const server = socket.connectToServer(), integrationRequests = new Set();
+            const taskRequests = new Set();
             socket.onMessage(message => {
                 let request;
                 try {request = JSON.parse(String(message));} catch {server.send(message); return;}
@@ -111,6 +113,11 @@ function profileRequest(page, payload, session) {
                     integrationRequests.add(request.requestId); integrationUpdates.push(request.integrations);
                 }
                 let response;
+                if (request.action === 'get-background-tasks') taskRequests.add(request.requestId);
+                if (request.action === 'set-admin-isbn-threads') {
+                    isbnWorkers = request.workers;
+                    response = {success:true};
+                }
                 if (request.action === 'get-admin-performance') {
                     performanceReads++;
                     response = {machine: {cpu: 2, memoryLimit: 512 * 1048576, memoryUsed: 128 * 1048576, memoryScope: 'cgroup', cpuUsageUs: performanceReads * 200000},
@@ -137,6 +144,10 @@ function profileRequest(page, payload, session) {
             });
             server.onMessage(message => {
                 const body = JSON.parse(String(message));
+                if (!body._rok && taskRequests.delete(body.requestId) && body.isbnIndex) {
+                    Object.assign(body.isbnIndex,{workers:isbnWorkers,workerLimit:Math.min(isbnWorkers ?? 8,8)});
+                    return socket.send(JSON.stringify(body));
+                }
                 if (integrationRequests.has(body.requestId) && !body._rok) {
                     integrationRequests.delete(body.requestId);
                     lastSavedIntegrations = body.integrations || {};
@@ -174,8 +185,21 @@ function profileRequest(page, payload, session) {
                 assert.equal(colors.label, '1');
             } finally {await session.detach();}
         };
+        const openProfile = async(target) => {
+            if (!target.url().endsWith('/#/profile'))
+                await target.getByRole('link', {name: 'Профиль', exact: true}).click();
+            await target.getByRole('region', {name: 'Текущий профиль'}).waitFor();
+        };
+        const profileLogin = target => target.getByRole('region', {name: 'Текущий профиль'}).getByRole('button', {name: 'Войти', exact: true});
+        const profileLogout = target => target.locator('.profile-bottom .profile-logout');
+        const openProfiles = async(target) => {
+            await openProfile(target);
+            await target.getByRole('button', {name: /^Профили и личные настройки/}).click();
+        };
+        const openSettings = () => page.locator('.library-shell__header').getByRole('button', {name: 'Настройки библиотеки', exact: true}).click();
         const login = async({autofill = false} = {}) => {
-            await page.locator('.profile-login-action,.profile-status-chip').first().click();
+            await openProfile(page);
+            await profileLogin(page).click();
             const dialog = page.getByRole('dialog');
             const username = dialog.getByRole('textbox', {name: 'Логин', exact: true});
             const password = dialog.getByRole('textbox', {name: 'Пароль', exact: true});
@@ -200,32 +224,28 @@ function profileRequest(page, payload, session) {
                 await password.evaluate(input => {input.value = 'profile-toolbar-test';});
                 await submit.click();
             }
-            await page.locator('.profile-controls .profile-logout').waitFor({state: 'visible'});
+            await profileLogout(page).waitFor({state: 'visible'});
         };
         await login({autofill: true});
-        const toolbar = page.getByRole('toolbar', {name: 'Действия библиотеки'});
+        await page.getByRole('link', {name: 'Каталог', exact: true}).click();
+        const searchPanel = page.getByRole('region', {name: 'Поиск книг'});
+        const saveSearch = searchPanel.getByRole('button', {name: 'Сохранить поиск', exact: true});
         for (const width of [1280, 760, 514, 390, 320]) {
-            await page.setViewportSize({width, height: 900}); await pause(350);
-            await toolbar.getByRole('button', {name: 'Сохранить поиск как полку', exact: true}).waitFor({state: 'visible'});
-            assert.equal(await page.getByRole('button', {name: 'Задачи и состояние библиотеки', exact: true}).count(), 0);
-            const geometry = await toolbar.evaluate(node => ({width: node.clientWidth, scroll: node.scrollWidth,
-                buttons: Array.from(node.querySelectorAll('.button[role="button"]')).map(button => {
-                    const r = button.getBoundingClientRect(); return {x: r.x, y: r.y, width: r.width, height: r.height};
-                }), pageWidth: document.documentElement.scrollWidth, viewport: window.innerWidth}));
-            assert.equal(geometry.buttons.length, 5);
-            const axis = width > 900 ? 'x' : 'y';
-            assert(Math.max(...geometry.buttons.map(button => button[axis])) - Math.min(...geometry.buttons.map(button => button[axis])) < 2, JSON.stringify({width, geometry}));
-            assert(geometry.scroll <= geometry.width + 1, 'Actions must fit without scrolling at width ' + width);
-            assert(geometry.pageWidth <= geometry.viewport + 1, 'No document overflow at width ' + width);
-            await page.screenshot({path: path.join(directory, `toolbar-${width}.png`)});
+            await page.setViewportSize({width, height: 900});
+            await saveSearch.waitFor();
+            assert(await searchPanel.evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'Search actions must fit at width ' + width);
+            assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'No document overflow at width ' + width);
+            await page.screenshot({path: path.join(directory, 'catalog-' + width + '.png')});
         }
-        await page.setViewportSize({width: 1280, height: 900}); await pause(350);
-        await toolbar.getByRole('button', {name: 'Сохранить поиск как полку', exact: true}).click();
+        await page.setViewportSize({width: 1280, height: 900});
+        await saveSearch.click();
         await page.getByRole('button', {name: 'Отмена', exact: true}).click();
-        await toolbar.getByRole('button', {name: 'Избранные авторы и серии', exact: true}).focus();
+        await openProfile(page);
+        await page.getByRole('button', {name: /^Избранные авторы и серии/}).focus();
         await page.keyboard.press('Enter');
         await page.getByRole('button', {name: 'Закрыть избранное', exact: true}).click();
-        await toolbar.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await openSettings();
+        await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         await page.getByRole('checkbox', {name: 'Ночная тема', exact: true}).click();
         await page.getByRole('button', {name: /Администрирование/}).click();
         const activity = page.getByRole('region', {name: 'Активность пользователей', exact: true});
@@ -255,9 +275,15 @@ function profileRequest(page, payload, session) {
         await activity.getByText('По профилям', {exact: true}).click();
         await page.getByRole('button', {name: 'Задачи и состояние библиотеки', exact: true}).click();
         await page.getByText('Проверка библиотеки', {exact: true}).waitFor();
+        const threads = page.getByRole('combobox',{name:/Потоки чтения/});
+        await threads.selectOption('16');
+        await page.waitForFunction(()=>document.querySelector('.task-isbn-workers select')?.value==='16' && !document.querySelector('.task-isbn-workers select').disabled);
+        assert.equal(isbnWorkers,16);
+        await threads.selectOption('auto');
         await pause(350);
         await page.screenshot({path: path.join(directory, 'admin-tasks.png')});
         await page.getByRole('button', {name: 'Закрыть задачи', exact: true}).click();
+        await page.getByRole('button', {name: 'Производительность', exact: true}).click();
         const performancePanel = page.locator('.performance-panel');
         const testMode = performancePanel.getByLabel('Режим проверки',{exact:true});
         await testMode.selectOption('custom');
@@ -336,8 +362,8 @@ function profileRequest(page, payload, session) {
         await page.getByRole('button', {name: 'OK', exact: true}).click();
         await page.locator('.q-dialog').waitFor({state: 'hidden'});
         await page.reload();
-        await page.locator('.profile-controls .profile-logout').waitFor();
-        await toolbar.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await profileLogout(page).waitFor();
+        await openSettings();
         await page.getByRole('button', {name: /^Отправка книг/}).click();
         await deliverySettings.getByText('Только IPv6', {exact: true}).waitFor();
         await telegramSettings.getByText('Прокси окружения сервера', {exact:true}).waitFor();
@@ -350,16 +376,22 @@ function profileRequest(page, payload, session) {
         await page.setViewportSize({width: 1280, height: 900}); await pause(350);
         const oldToken = await page.evaluate(() => JSON.parse(localStorage.getItem('inpx-web-profile-session')).profileAccessToken);
         assert(oldToken);
-        await page.locator('.user-profiles-btn').click();
+        await openProfiles(page);
         const dialogLogout = page.locator('.profile-session-actions .profile-logout');
         await dialogLogout.waitFor({state: 'visible'});
         await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), dialogLogout.click()]);
-        await page.locator('.profile-controls').waitFor();
-        assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0);
-        for (const name of ['Избранные авторы и серии', 'Сохранить поиск как полку'])
-            assert.equal(await toolbar.getByRole('button', {name, exact: true}).count(), 0, 'Private actions disappear after logout');
-        await toolbar.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await openProfile(page);
+        assert.equal(await profileLogout(page).count(), 0);
+        assert.equal(await page.getByRole('button', {name: /^Избранные авторы и серии/}).count(), 0);
+        await page.getByRole('link', {name: 'Каталог', exact: true}).click();
+        await searchPanel.waitFor();
+        assert.equal(await saveSearch.count(), 0, 'Guests cannot save a search as a private shelf');
+        await openProfile(page);
+        await openSettings();
         assert.equal(await page.getByRole('button', {name: /Администрирование/}).count(), 0, 'Guests cannot see administration');
+        assert.equal(await page.getByRole('button', {name:'Производительность',exact:true}).count(), 0);
+        assert.equal(await page.getByRole('heading', {name:'Управление библиотекой'}).count(), 0);
+        assert.equal(await page.getByRole('button', {name:/Внешний источник витрины/}).count(), 0);
         await page.getByRole('button', {name: 'OK', exact: true}).click();
         assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('inpx-web-profile-session') || '{}').profileAccessToken || ''), '');
         const response = await page.evaluate(token => new Promise((resolve, reject) => {
@@ -369,8 +401,8 @@ function profileRequest(page, payload, session) {
             socket.onmessage = event => {const body = JSON.parse(event.data); if (!body._rok) {clearTimeout(timer); socket.close(); resolve(body);}};
         }), oldToken);
         assert.equal(response.error, 'need_profile_login');
-        await page.reload(); await page.locator('.profile-controls').waitFor();
-        assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0, 'Reload cannot restore an admin session');
+        await page.reload(); await openProfile(page);
+        assert.equal(await profileLogout(page).count(), 0, 'Reload cannot restore an admin session');
         await login();
 
         const reader = {name:'Профиль для восстановления', login:'otp-recovery-reader', password:'recovery-reader-fixture', opdsEnabled:true};
@@ -378,7 +410,7 @@ function profileRequest(page, payload, session) {
         assert(created.user?.id, created.error);
         const readerPage = await browser.newPage({serviceWorkers:'block'});
         await readerPage.goto(base + '/#/books?title=Packaged&lang=en');
-        await readerPage.locator('.profile-controls').waitFor();
+        await openProfile(readerPage);
         const readerRequest = (payload, session) => profileRequest(readerPage, payload, session);
         const loginReader = otp => readerRequest({action:'login-user-profile', login:reader.login, password:reader.password, otp});
         const readerTotp = (operation, session, code) => readerRequest({action:'profile-totp', operation, payload:{password:reader.password, code}}, session);
@@ -394,7 +426,7 @@ function profileRequest(page, payload, session) {
         const resetButton = page.getByRole('button', {name:`Сбросить OTP: ${reader.name}`, exact:true});
         const resetDialog = page.getByRole('dialog').filter({hasText:'Сброс двухфакторной авторизации'});
         const resetReader = async otp => {
-            await page.locator('.user-profiles-btn').click();
+            await openProfiles(page);
             await resetButton.click();
             await resetDialog.waitFor();
             assert.equal(await page.locator('body.body--dark').count(), 1);
@@ -437,7 +469,7 @@ function profileRequest(page, payload, session) {
         assert(list?.id);
         assert.equal((await profileRequest(page, {action:'update-reading-list-book', listId:list.id, bookUid, enabled:true})).error, undefined);
         assert.equal((await profileRequest(page, {action:'update-reader-progress', bookUid, progress:{percent:.29}})).error, undefined);
-        await page.locator('.user-profiles-btn').click();
+        await openProfiles(page);
         const current = page.locator('.profile-card--current');
         const noOverflow = async locator => assert(await locator.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
         await page.setViewportSize({width:320,height:900});
@@ -465,6 +497,19 @@ function profileRequest(page, payload, session) {
         await page.setViewportSize({width:320,height:900});
         await current.getByRole('button', {name: 'Настройки', exact: true}).click();
         assert.equal(await current.locator('.profile-settings-section').count(), 7);
+        const newPassword = current.getByLabel('Новый пароль', {exact:true});
+        const repeatPassword = current.getByLabel('Повторите новый пароль', {exact:true});
+        const saveProfile = current.getByRole('button', {name:'Сохранить изменения',exact:true});
+        await newPassword.fill('confirmation-test');
+        assert(await saveProfile.isDisabled());
+        await repeatPassword.fill('typing-error');
+        await current.getByText('Пароли не совпадают', {exact:true}).waitFor();
+        assert(await saveProfile.isDisabled());
+        await repeatPassword.fill('confirmation-test');
+        assert(await saveProfile.isEnabled());
+        await newPassword.fill('');
+        await repeatPassword.fill('');
+        assert(await saveProfile.isEnabled());
         await noOverflow(current.locator('.profile-settings'));
         const kosync = current.getByRole('region', {name:'Синхронизация с KOReader',exact:true});
         await kosync.getByRole('button', {name:'Подключить KOReader',exact:true}).click();
@@ -489,7 +534,7 @@ function profileRequest(page, payload, session) {
         await page.setViewportSize({width:1280,height:900});
         await current.getByRole('heading', {name:'Профиль',exact:true}).scrollIntoViewIfNeeded();
         await page.screenshot({path:path.join(directory,'profile-settings-1280.png')});
-        const otpSection = page.getByRole('region', {name: 'Двухфакторная авторизация', exact: true});
+        const otpSection = page.locator('.profiles-dialog').getByRole('region', {name: 'Двухфакторная авторизация', exact: true});
         await otpSection.getByRole('button', {name: 'Двухфакторная авторизация', exact: true}).click();
         await otpSection.getByRole('button', {name: 'Настроить OTP', exact: true}).click();
         const otpPassword = otpSection.getByLabel('Текущий пароль профиля');
@@ -515,17 +560,18 @@ function profileRequest(page, payload, session) {
         assert(await page.evaluate(values => !Object.values(localStorage).some(value => values.some(secret => value.includes(secret))), [setupSecret, recovery]));
         await otpSection.getByRole('button', {name: 'Коды сохранены', exact: true}).click();
         await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), page.locator('.profile-session-actions .profile-logout').click()]);
-        await page.locator('.profile-login-action,.profile-status-chip').first().click();
+        await openProfile(page);
+        await profileLogin(page).click();
         const otpLogin = page.getByRole('dialog');
         await otpLogin.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
         await otpLogin.getByLabel('Пароль', {exact: true}).fill('profile-toolbar-test');
         await otpLogin.getByRole('button', {name: 'OK', exact: true}).click();
         const otpCode = otpLogin.getByLabel('Код из приложения или резервный код', {exact: true});
         await otpCode.waitFor();
-        assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0);
+        assert.equal(await profileLogout(page).count(), 0);
         await otpCode.fill(recovery);
         await otpLogin.getByRole('button', {name: 'OK', exact: true}).click();
-        await page.locator('.profile-controls .profile-logout').waitFor();
+        await profileLogout(page).waitFor();
         await resetReader(adminResetRecovery);
         await assertReaderSession(readerSession, false);
         await assertReaderSession(anotherReaderSession, false);
@@ -533,7 +579,7 @@ function profileRequest(page, payload, session) {
         await assertReaderSession(unprotectedSession, true);
 
         const updatePolicy = async(label, code, expected) => {
-            await page.locator('.user-profiles-btn').click();
+            await openProfiles(page);
             await page.getByRole('button', {name:`${label}: ${reader.name}`, exact:true}).click();
             const dialog = page.getByRole('dialog').filter({has:page.getByRole('heading', {name:label, exact:true})});
             const passwordField = dialog.getByLabel('Пароль администратора', {exact:true});
@@ -550,7 +596,7 @@ function profileRequest(page, payload, session) {
         assert.equal((await loginReader()).errorCode, 'need_profile_otp_setup');
 
         const updateAuthPolicy = async(code, change, expected) => {
-            await page.locator('.user-profiles-btn').click();
+            await openProfiles(page);
             await page.getByRole('button', {name:'Настроить безопасность входа',exact:true}).click();
             const dialog = page.getByRole('dialog').filter({has:page.getByRole('heading', {name:'Безопасность входа',exact:true})});
             await change(dialog);
@@ -580,14 +626,15 @@ function profileRequest(page, payload, session) {
             await dialog.getByRole('button', {name:'OK',exact:true}).click();
         };
         const secureLogin = async() => {
-            await securePage.locator('.profile-login-action,.profile-status-chip').first().click();
+            await openProfile(securePage);
+            await profileLogin(securePage).click();
             await submitSecureCredentials();
         };
         const signOutSecure = async(required = false) => {
             await Promise.all([securePage.waitForNavigation({waitUntil:'domcontentloaded'}),
-                securePage.locator('.profile-controls .profile-logout').click()]);
+                profileLogout(securePage).click()]);
             if (required) await securePage.getByRole('dialog').getByLabel('Пароль', {exact:true}).waitFor();
-            else await securePage.locator('.profile-login-action,.profile-status-chip').first().waitFor();
+            else await profileLogin(securePage).waitFor();
         };
         await securePage.goto(secureBase + '/#/books?title=Packaged&lang=en');
         await secureLogin();
@@ -595,7 +642,7 @@ function profileRequest(page, payload, session) {
         await setupDialog.getByRole('img', {name:'QR-код настройки аутентификатора'}).waitFor();
         const requiredSecret = await setupDialog.locator('code').innerText();
         assert.match(requiredSecret, /^[A-Z2-7]{32}$/);
-        assert.equal(await securePage.locator('.profile-controls .profile-logout').count(), 0);
+        assert.equal(await profileLogout(securePage).count(), 0);
         await setupDialog.getByLabel('Код из приложения', {exact:true}).fill('incorrect');
         await setupDialog.getByRole('button', {name:'Включить OTP',exact:true}).click();
         await setupDialog.getByText('Не удалось подтвердить код. Проверьте код из приложения.').waitFor();
@@ -605,10 +652,10 @@ function profileRequest(page, payload, session) {
         await recoveryDialog.locator('li code').first().waitFor();
         const revokeTrustCode = await recoveryDialog.locator('li code').first().innerText();
         await recoveryDialog.getByRole('button', {name:'Коды сохранены'}).click();
-        await securePage.locator('.profile-controls .profile-logout').waitFor();
-        await securePage.locator('.user-profiles-btn').click();
+        await profileLogout(securePage).waitFor();
+        await openProfiles(securePage);
         await securePage.locator('.profile-card--current').getByRole('button', {name:'Настройки',exact:true}).click();
-        const secureOtp = securePage.getByRole('region', {name:'Двухфакторная авторизация',exact:true});
+        const secureOtp = securePage.locator('.profiles-dialog').getByRole('region', {name: 'Двухфакторная авторизация', exact: true});
         await secureOtp.getByRole('button', {name:'Двухфакторная авторизация',exact:true}).click();
         await secureOtp.getByText('Для этого профиля администратор требует двухфакторный вход.').waitFor();
         assert.equal(await secureOtp.getByRole('button', {name:'Отключить OTP',exact:true}).count(), 0);
@@ -621,19 +668,23 @@ function profileRequest(page, payload, session) {
         await remember.waitFor();
         assert.equal(await remember.getAttribute('aria-checked'), 'false');
         await remember.click();
+        await secureOtpDialog.getByLabel('Код из приложения или резервный код', {exact:true}).fill('invalid');
+        await secureOtpDialog.getByRole('button', {name:'OK',exact:true}).click();
+        await secureOtpDialog.getByText('Код не принят.', {exact:false}).waitFor();
+        assert.equal(await remember.getAttribute('aria-checked'), 'true');
         await secureOtpDialog.getByLabel('Код из приложения или резервный код', {exact:true}).fill(currentTotp(requiredSecret));
         await secureOtpDialog.getByRole('button', {name:'OK',exact:true}).click();
-        await securePage.locator('.profile-controls .profile-logout').waitFor();
+        await profileLogout(securePage).waitFor();
         const trustCookie = (await secureContext.cookies(secureBase)).find(cookie => cookie.name === 'inpx_web_trusted_device');
         assert(trustCookie?.httpOnly && trustCookie.secure && trustCookie.sameSite === 'Strict');
         const trustRemaining = trustCookie.expires - Math.floor(Date.now() / 1000);
         assert(Math.abs(trustRemaining - 180 * 86400) < 60, 'Browser trust must use the administrator’s configured duration');
         await signOutSecure();
         await secureLogin();
-        await securePage.locator('.profile-controls .profile-logout').waitFor();
+        await profileLogout(securePage).waitFor();
         assert.equal(await remember.count(), 0);
 
-        await securePage.locator('.user-profiles-btn').click();
+        await openProfiles(securePage);
         await securePage.locator('.profile-card--current').getByRole('button', {name:'Настройки',exact:true}).click();
         await secureOtp.getByRole('button', {name:'Двухфакторная авторизация',exact:true}).click();
         await secureOtp.getByRole('button', {name:'Отозвать доверие к устройствам (1)',exact:true}).click();
@@ -662,10 +713,10 @@ function profileRequest(page, payload, session) {
         await remember.click();
         await secureOtpDialog.getByLabel('Код из приложения или резервный код', {exact:true}).fill(currentTotp(requiredSecret, 1));
         await secureOtpDialog.getByRole('button', {name:'OK',exact:true}).click();
-        await securePage.locator('.profile-controls .profile-logout').waitFor();
+        await profileLogout(securePage).waitFor();
         await signOutSecure(true);
         await submitSecureCredentials();
-        await securePage.locator('.profile-controls .profile-logout').waitFor();
+        await profileLogout(securePage).waitFor();
         assert.equal(await remember.count(), 0);
         await updateAuthPolicy(allowOptionalOtpRecovery, async dialog => {
             await dialog.getByLabel('Требовать пароль и OTP для всех', {exact:true}).click();
@@ -674,7 +725,7 @@ function profileRequest(page, payload, session) {
             const stored = JSON.parse(localStorage.getItem('inpx-web-profile-session'));
             return {userId:stored.currentUserId, profileAccessToken:stored.profileAccessToken};
         });
-        await page.locator('.user-profiles-btn').click();
+        await openProfiles(page);
         const readerCard = page.locator('.profile-card').filter({has:page.getByText(reader.name, {exact:true})});
         const blockReader = readerCard.getByRole('button', {name:`Заблокировать профиль: ${reader.name}`,exact:true});
         const unblockReader = readerCard.getByRole('button', {name:`Разблокировать профиль: ${reader.name}`,exact:true});
@@ -693,16 +744,16 @@ function profileRequest(page, payload, session) {
         await page.getByRole('button', {name:'Закрыть окно',exact:true}).click();
         await secureContext.close();
         await readerPage.close();
-        await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), page.locator('.profile-controls .profile-logout').click()]);
-        await page.locator('.profile-controls').waitFor();
-        assert.equal(await page.locator('.profile-controls .profile-logout').count(), 0);
+        await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), profileLogout(page).click()]);
+        await openProfile(page);
+        assert.equal(await profileLogout(page).count(), 0);
         await page.goto(base + '/#/reader');
         await page.locator('.reader-home-theme').getByRole('button', {name:'Сепия', exact:true}).click();
         await page.locator('.reader-home-actions .reader-home-action-btn--primary').click();
         await page.locator('.std-dialog-card--reader .credentials-form input[name="password"]').waitFor();
         await checkAutofillColors('.std-dialog-card--reader .credentials-form input[name="password"]');
         assert.deepEqual(errors, []);
-        console.log('Profile UI: OTP, HTTPS browser trust, block and unblock, session revocation, responsive toolbar, activity, performance, shelves and favorites passed.');
+        console.log('Profile UI: OTP, HTTPS browser trust, block and unblock, session revocation, responsive catalog and profile actions, activity, performance, shelves and favorites passed.');
         console.log(`Screenshots: ${directory}`);
     } catch (error) {
         const page = browser?.contexts().flatMap(context => context.pages())[0];

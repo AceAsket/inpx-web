@@ -17,7 +17,7 @@ async function fixture(dir){
     let rows='';
     for(let i=0;i<25;i++){
         const title='Книга для электронной книги '+String(i).padStart(2,'0');
-        const xml='<?xml version="1.0" encoding="UTF-8"?><FictionBook><description><title-info><book-title>'+title+'</book-title><annotation><p>Аннотация для электронной книги.</p><p>&lt;img src=x onerror=alert(1)&gt;</p></annotation></title-info></description><body><section><title><p>Первая глава</p></title>'+Array.from({length:65},(_,n)=>'<p>Абзац '+n+'. '+'Текст для спокойного чтения на электронной книге. '.repeat(5)+'</p>').join('')+'</section></body></FictionBook>';
+        const xml='<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><book-title>'+title+'</book-title><annotation><p>Аннотация для электронной книги.</p><p>&lt;img src=x onerror=alert(1)&gt;</p></annotation><lang>ru</lang></title-info></description><body><section><title><p>Первая глава</p></title>'+Array.from({length:65},(_,n)=>'<p>Абзац '+n+'. '+'Текст для спокойного чтения на электронной книге. '.repeat(5)+'</p>').join('')+'</section></body></FictionBook>';
         books.addBuffer(Buffer.from(xml),(i+1)+'.fb2');
         rows+=['Тестовый,Автор:','sf:',title,'Цикл устройства','1',String(i+1),String(Buffer.byteLength(xml)),String(i+1),'0','fb2','2026-11-07','ru','0',''].join('\x04')+'\n';
     }
@@ -99,7 +99,7 @@ async function checkGuestFormats(browser,directory){
     }finally{if(context)await context.close();child.kill();}
 }
 
-(async()=>{
+if(require.main===module)(async()=>{
     const directory=process.env.INPX_ARTIFACT_DIR||await fs.mkdtemp(path.join(os.tmpdir(),'inpx-ebook-browser-'));await fs.ensureDir(directory);
     let child,browser,page,output='';
     try{
@@ -226,3 +226,5 @@ async function checkGuestFormats(browser,directory){
     }catch(error){if(page)await page.screenshot({path:path.join(directory,'failure.png'),fullPage:true}).catch(()=>{});console.error(output);throw error;}
     finally{if(browser)await browser.close();if(child)child.kill();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+module.exports={fixture};

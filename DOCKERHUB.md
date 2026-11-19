@@ -4,6 +4,8 @@ Self-hosted web catalog and FB2 reader for large `.inpx`, `.zip`, `.7z` and `fLi
 
 This image is built from the [`AceAsket/inpx-web`](https://github.com/AceAsket/inpx-web) fork and is aimed at Docker, Unraid, Proxmox LXC and home-server setups.
 
+For the 1.8.3 release, `1.8.3` and `latest` will run classic Node.js with JembaDB. Select `1.8.3-rust` for the Rust server.
+
 ## What Is Included
 
 - Web catalog with search by authors, series, titles, genres, languages and sources.
@@ -13,7 +15,7 @@ This image is built from the [`AceAsket/inpx-web`](https://github.com/AceAsket/i
 - Built-in FB2 reader with profiles, progress, bookmarks, themes, fonts, Wake Lock and separate PWA mode.
 - Personal reading lists, read/unread marks, OPDS and profile-level OPDS links.
 - Book sending by Telegram and email when configured.
-- Conversion to `epub`, `epub3`, `kepub`, `kfx`, `azw8` and `pdf` in the default image.
+- Conversion to `epub`, `epub3`, `kepub`, `kfx`, `azw3`, `azw8` and `pdf` in the default image.
 - Admin dashboard, event log, backup/restore, source management, health checks and Prometheus metrics.
 
 ## Tags
@@ -141,7 +143,7 @@ After restoring a full backup, restart the container. If library sources changed
 | `INPX_METRICS_ENABLED` | Enable Prometheus metrics when `true`. |
 | `INPX_METRICS_PATH` | Metrics endpoint path. Default: `/metrics`. |
 | `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. On stable and RC21, guests can see the navigation and sign-in form. |
-| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on stable and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. In RC22 and the develop branch, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
+| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on stable and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. Starting with 1.8.3-rc.22, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
 | `INPX_AUTH_MODE` | Use `proxy` for Authelia/Authentik/SWAG-style trusted proxy auth. |
 | `INPX_TRUST_PROXY` | Trust reverse proxy headers when `true`. |
 | `INPX_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDR list. |

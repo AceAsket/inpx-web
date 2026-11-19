@@ -3,6 +3,8 @@ const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
 const formats = require('../shared/BookFormats');
+// Channel tests mock conversion. Use an executable with a working -v probe on every test host.
+const converterPaths = {mutool:process.execPath};
 
 async function temporary(fn) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-channel-formats-'));
@@ -105,7 +107,7 @@ async function testDeliveryZipContainsTheSelectedFormatAndIsIndependentPerChanne
         const utils = require('../server/core/utils');
         const source = path.join(dir, 'input.fb2'); await fs.writeFile(source, 'Original FB2');
         await utils.gzipFile(source, path.join(dir, 'cached'));
-        worker.config = {bookDir:dir, conversionFormats:['epub','pdf','mobi']};
+        worker.config = {bookDir:dir, conversionFormats:['epub','pdf','mobi'], converterPaths};
         worker.getBookLink = async() => ({link:'/book/cached', downFileName:'Книга.fb2', size:12});
         worker.db = {esc:JSON.stringify, select:async() => [{_uid:'book', ext:'fb2'}]}; worker.scheduleCacheClean = () => {};
         const calls = [];
@@ -190,7 +192,7 @@ async function testDeliveryTransportsReceiveZipAndOriginalWithoutExternalRequest
 
 async function testOpdsOffersIndependentPreferredFormatAndCorrectAcquisitionTypes() {
     const {forBook} = require('../server/core/opds/AcquisitionLinks');
-    const config = {conversionEnabled:true, mobiEnabled:true, conversionFormats:['fb2','epub','epub3','kepub','pdf','mobi','kfx','azw3','azw8'], bookPathStatic:'/library/book'};
+    const config = {conversionEnabled:true, mobiEnabled:true, conversionFormats:['fb2','epub','epub3','kepub','pdf','mobi','kfx','azw3','azw8'], bookPathStatic:'/library/book', converterPaths};
     const book = {_uid:'a+/?=', ext:'fb2'};
     const links = forBook(book, config, choices);
     assert.strictEqual(links[0].type, 'application/epub+zip');
@@ -210,6 +212,9 @@ async function testOpdsOffersIndependentPreferredFormatAndCorrectAcquisitionType
     assert(epub.some(link => link.href.endsWith('format=raw') && link.type === 'application/epub+zip'));
     assert(!epub.some(link => /format=epub$/.test(link.href)), 'The original EPUB is not offered twice');
     assert.strictEqual(forBook({...book, ext:'pdf'}, config, choices)[0].type, 'application/pdf');
+    const missing = {...config, converterPaths:{mutool:path.join(__dirname, 'missing-mutool')}};
+    assert(!forBook(book, missing, {defaultOpdsFormat:'pdf'}).some(link => link.type === 'application/pdf'));
+    assert(forBook({...book, ext:'pdf'}, missing).some(link => link.type === 'application/pdf' && link.href.endsWith('format=raw')));
 }
 
 async function testOpdsScopesApplyPreferencesPerRequestWithoutCrossProfileState() {
@@ -223,7 +228,7 @@ async function testOpdsScopesApplyPreferencesPerRequestWithoutCrossProfileState(
         const worker = {readingListStore:store, getGenreMap:async() => new Map(), getGenreTree:async() => ({genreTree:[]}),
             getBookRecordByUid:async() => ({_uid:'book', ext:'epub', title:'Book', author:'Author', lang:'ru'}), applyMetadataOverridesToSearchResult:async() => {}};
         const page = Object.create(BookPage.prototype);
-        Object.assign(page, {config:{opdsRoot:'/opds', bookPathStatic:'/book', conversionEnabled:true, conversionFormats:['pdf']},
+        Object.assign(page, {config:{opdsRoot:'/opds', bookPathStatic:'/book', conversionEnabled:true, conversionFormats:['pdf'], converterPaths},
             webWorker:worker, opdsRoot:'/opds', id:'book', title:'Book', rootTag:'feed'});
         const app = express(); app.use('/opds', require('../server/core/opds').scopeGuard(() => worker));
         app.get('/opds/book', async(req, res, next) => {try {res.send(await page.body(req));} catch (error) {next(error);}});

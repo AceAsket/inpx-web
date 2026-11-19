@@ -122,41 +122,67 @@ function gunzipFile(inputFile, outputFile) {
     return pipeline(fs.createReadStream(inputFile), zlib.createGunzip(), fs.createWriteStream(outputFile));
 }
 
-function prepareCachedFile(outputFile, writer, expectedSize = 0) {
+function shareCachePreparation(outputFile, prepare) {
     const key = path.resolve(outputFile);
-    if (!pendingCacheFiles.has(key)) {
-        const prepare = async() => {
-            const valid = async file => {
-                try {
-                    const stat = await fs.stat(file);
-                    return stat.isFile() && stat.size > 0 && (!(expectedSize > 0) || stat.size === expectedSize);
-                } catch (error) {
-                    if (error.code !== 'ENOENT')
-                        throw error;
-                    return false;
-                }
-            };
-            if (await valid(outputFile))
-                return false;
-            const temporaryFile = `${outputFile}.cache-tmp-${randomHexString(12)}`;
-            try {
-                await writer(temporaryFile);
-                if (!await valid(temporaryFile))
-                    throw new Error('Подготовленный файл кэша пуст или имеет неверный размер');
-                // Only the completed file becomes visible to downloads.
-                await fs.rename(temporaryFile, outputFile);
-                return true;
-            } finally {
-                await fs.remove(temporaryFile);
-            }
-        };
-        pendingCacheFiles.set(key, prepare().finally(() => pendingCacheFiles.delete(key)));
-    }
+    if (!pendingCacheFiles.has(key))
+        pendingCacheFiles.set(key,prepare().finally(()=>pendingCacheFiles.delete(key)));
     return pendingCacheFiles.get(key);
 }
 
+async function validCachedFile(file,expectedSize = 0) {
+    try {
+        const stat = await fs.stat(file);
+        return stat.isFile() && stat.size > 0 && (!(expectedSize > 0) || stat.size === expectedSize);
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        return false;
+    }
+}
+
+function prepareCachedFile(outputFile, writer, expectedSize = 0) {
+    return shareCachePreparation(outputFile,async()=>{
+        if (await validCachedFile(outputFile,expectedSize))
+            return false;
+        const temporaryFile = `${outputFile}.cache-tmp-${randomHexString(12)}`;
+        try {
+            await writer(temporaryFile);
+            if (!await validCachedFile(temporaryFile,expectedSize))
+                throw new Error('Подготовленный файл кэша пуст или имеет неверный размер');
+            // Only the completed file becomes visible to downloads.
+            await fs.rename(temporaryFile, outputFile);
+            return true;
+        } finally {
+            await fs.remove(temporaryFile);
+        }
+    });
+}
+
 function ensureGunzipFile(inputFile, outputFile, expectedSize = 0) {
+    const native = require('./RustBookCache');
+    const binary = native.executable();
+    if (binary) return shareCachePreparation(outputFile,()=>native.materialize(binary,'inflate',inputFile,outputFile,{expectedSize:expectedSize || 0}));
     return prepareCachedFile(outputFile, temporaryFile => gunzipFile(inputFile, temporaryFile), expectedSize);
+}
+
+function ensureBookZipFile(inputFile,outputFile,name) {
+    const native = require('./RustBookCache');
+    const binary = native.executable();
+    if (binary) return shareCachePreparation(outputFile,()=>native.materialize(binary,'zip',inputFile,outputFile,{name}));
+    return prepareCachedFile(outputFile,async temporary=>{
+        const zip = new (require('yazl').ZipFile)();
+        const complete = pipeline(zip.outputStream,fs.createWriteStream(temporary));
+        complete.catch(()=>{});
+        zip.on('error',error=>zip.outputStream.destroy(error));
+        try {
+            zip.addFile(inputFile,name);
+            zip.end();
+            await complete;
+        } catch (error) {
+            zip.outputStream.destroy(error);
+            await complete.catch(()=>{});
+            throw error;
+        }
+    });
 }
 
 function gzipBuffer(buf) {
@@ -293,7 +319,9 @@ module.exports = {
     gzipFile,
     gunzipFile,
     prepareCachedFile,
+    validCachedFile,
     ensureGunzipFile,
+    ensureBookZipFile,
     gzipBuffer,
     gunzipBuffer,
     toUnixPath,

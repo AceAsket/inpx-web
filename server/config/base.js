@@ -82,6 +82,7 @@ module.exports = {
 
     maxPayloadSize: 500,//in MB
     resourceProfile: null,
+    isbnThreads: null,
     wsMessageLimitMb: numberFromEnv('INPX_WS_MESSAGE_LIMIT_MB', 1),
     importLimitMb: numberFromEnv('INPX_IMPORT_LIMIT_MB', 16),
     backupUploadLimitMb: numberFromEnv('INPX_BACKUP_UPLOAD_LIMIT_MB', 32),
@@ -95,7 +96,7 @@ module.exports = {
     queryCacheDiskSize: 500,
     queryCacheDiskMb: numberFromEnv('INPX_QUERY_CACHE_DISK_MB', 64),
     cacheCleanInterval: numberFromEnv('INPX_CACHE_CLEAN_INTERVAL_MINUTES', 24*60),//minutes
-    cacheCleanSchedule: process.env.INPX_CACHE_CLEAN_INTERVAL_MINUTES ? '' : '0 0 * * *',
+    cacheCleanSchedule: '0 0 * * *',
     cacheCleanTargetRatio: numberFromEnv('INPX_CACHE_CLEAN_TARGET_RATIO', 0.8),
     adminEventLogEnabled: true,
     adminEventLogSize: 300,
@@ -137,7 +138,7 @@ module.exports = {
     adminPassword: process.env.INPX_ADMIN_PASSWORD || '',
     resetAdminPassword: process.env.INPX_RESET_ADMIN_PASSWORD === 'true',
     conversionEnabled: process.env.INPX_ENABLE_CONVERSION !== 'false',
-    conversionConcurrency: 2,
+    conversionConcurrency: null,
     conversionQueueLimit: 16,
     conversionTimeoutMs: 120000,
     conversionQueueTimeoutMs: 120000,

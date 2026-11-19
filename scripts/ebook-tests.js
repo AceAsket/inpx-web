@@ -22,7 +22,11 @@ async function fixture(options,work) {
         bookSearch:async query=>{calls.push(query);return {totalFound:23,found:[book]};},getBookRecordByUid:async uid=>uid==='known'?book:null,
         getBookPreview:async uid=>{calls.push('preview');return {bookPreview:{bookUid:uid,annotation:'Описание <img src=x onerror=alert(1)>',annotationStatus:'ready',annotationLimited:false}};},
         buildUserReadingSummary:async()=>{calls.push('history');return {items:[{...book,bookUid:'known',percent:.5}]};}};
-    const access={freeAccess:!config.accessPassword,newToken:()=>{access.expected=require('../server/core/utils').getBufHash(config.accessPassword+'salt','sha256','hex');return 'salt';},hasAccess:async token=>!!access.expected&&token===access.expected};
+    const access={freeAccess:!config.accessPassword,async loginPassword(password,req,security) {
+        if (!await security.withLoginAttempt(req,'access',()=>password===config.accessPassword)) return null;
+        access.expected=require('../server/core/utils').getBufHash(config.accessPassword+'salt','sha256','hex');
+        return access.expected;
+    },hasAccess:async token=>!!access.expected&&token===access.expected};
     const app=express();app.use(security.middleware());const controller=new EbookController(config,worker,security,access).register(app);
     const server=await new Promise(resolve=>{const value=app.listen(0,'127.0.0.1',()=>resolve(value));});
     let cookie='';

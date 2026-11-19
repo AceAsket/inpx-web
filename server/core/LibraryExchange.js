@@ -9,8 +9,11 @@ async function respond(worker, request) {
         const index = await worker.dbSearcher.ratingIndex.load();
         if (request.revision && request.revision !== index.signature) throw new Error('Индекс оценок обновился. Повторите синхронизацию');
         const slice = index.entries.slice(offset, offset + 1000);
-        const rows = slice.length ? await worker.db.select({table:'book', where:`@@id(${worker.db.esc(slice.map(entry => entry[1]))})`, map:'row => ({id:row.id, uid:row._uid})'}) : [];
-        const ids = new Map(rows.map(row => [row.id, row.uid]));
+        const db = worker.db;
+        const keys = slice.map(entry=>entry[1]);
+        const rows = !keys.length ? [] : db.nativeCatalogue ? await db.booksByIds(keys,['id','_uid'])
+            : await db.select({table:'book',where:`@@id(${db.esc(keys)})`,map:'row => ({id:row.id, uid:row._uid})'});
+        const ids = new Map(rows.map(row=>[row.id,row._uid ?? row.uid]));
         return {revision:index.signature, items:slice.map(([count, id]) => [ids.get(id), count]).filter(([uid]) => uid),
             next:offset + slice.length < index.entries.length ? offset + slice.length : null};
     }

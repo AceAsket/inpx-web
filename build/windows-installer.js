@@ -5,9 +5,11 @@ const { spawnSync } = require('child_process');
 const pckg = require('../package.json');
 
 const rootDir = path.resolve(__dirname, '..');
-const sourceDir = path.join(rootDir, 'dist', 'win');
-const outputDir = path.join(rootDir, 'dist', 'release');
+const distDir = require('./dist-dir');
+const sourceDir = path.join(distDir, 'win');
+const outputDir = path.join(distDir, 'release');
 const scriptFile = path.join(__dirname, 'windows-installer.iss');
+const rust = process.argv.includes('--rust') || fs.existsSync(path.join(sourceDir, 'bin', 'public.json'));
 
 function quoteDefine(value) {
     return String(value).replace(/"/g, '\\"');
@@ -50,7 +52,13 @@ function findCompiler() {
 function ensureInputFiles() {
     const exeFile = path.join(sourceDir, 'inpx-web.exe');
     if (!fs.existsSync(exeFile))
-        throw new Error(`Windows build output is missing: ${exeFile}. Run "npm run build:win" first.`);
+        throw new Error(`Windows build output is missing: ${exeFile}. Run "npm run build:win" or "npm run build:rust -- win" first.`);
+    if (rust) {
+        for (const file of ['vcruntime140.dll', 'bin/vcruntime140.dll', 'bin/inpx-catalog.exe',
+            'bin/inpx-reader.exe', 'bin/public.json', 'bin/LICENSE.quickjs', 'bin/7za.exe',
+            'bin/djxl.exe', 'bin/dwebp.exe', 'bin/fbc.exe', 'bin/kindling.exe', 'bin/LICENSE.kindling'])
+            fs.accessSync(path.join(sourceDir, file));
+    }
 }
 
 function main() {
@@ -71,6 +79,7 @@ function main() {
         `/DRepoRoot=${quoteDefine(rootDir)}`,
         `/DSourceDir=${quoteDefine(sourceDir)}`,
         `/DOutputDir=${quoteDefine(outputDir)}`,
+        ...(rust ? ['/DRustRuntime=1'] : []),
         scriptFile,
     ];
 
@@ -80,7 +89,7 @@ function main() {
     if (result.status !== 0)
         process.exit(result.status || 1);
 
-    const installerFile = path.join(outputDir, `inpx-web-${pckg.version}-win-setup.exe`);
+    const installerFile = path.join(outputDir, `inpx-web-${pckg.version}-win${rust ? '-rust' : ''}-setup.exe`);
     console.log(`Windows installer: ${installerFile}`);
 }
 

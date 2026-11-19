@@ -2,7 +2,7 @@ name: Validate development changes
 
 on:
   push:
-    branches: [develop, master, main]
+    branches: [develop, master, main, rust]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -19,8 +19,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust-catalog:
+    name: Rust reader and catalog
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.browser_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install 1.100.0 --profile minimal --component rustfmt --component clippy
+      - run: cargo +1.100.0 fmt --manifest-path rust/Cargo.toml --all --check
+      - run: cargo +1.100.0 clippy --manifest-path rust/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo +1.100.0 test --manifest-path rust/Cargo.toml --locked --release
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-catalog -p inpx-server
+      - run: node scripts/rust-http-tests.js rust/target/release/inpx-server
+      - run: node scripts/rust-opds-http-tests.js rust/target/release/inpx-server
+      - run: node scripts/rust-download-http-tests.js rust/target/release/inpx-server
+      - run: |
+          if ! command -v 7z && ! command -v 7zz; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends p7zip-full
+          fi
+          node scripts/rust-book-archive-tests.js rust/target/release/inpx-catalog
+          node scripts/rust-book-prepare-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-book-cache-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-directory-diagnostics-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-startup-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-standalone-tests.js rust/target/release/inpx-server
+      - run: node scripts/rust-book-export-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-book-metadata-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-kosync-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-catalogue-lock-tests.js rust/target/release/inpx-catalog
+      - run: rustup target add wasm32-unknown-unknown --toolchain 1.100.0
+      - run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
+      - run: node scripts/rust-auth-state-tests.js rust/target/wasm32-unknown-unknown/release/inpx_auth_state.wasm
+      - run: node scripts/rust-jemba-compat-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-web-access-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-progress-journal-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-backup-archive-tests.js rust/target/release/inpx-catalog
+      - run: node scripts/rust-credentials-tests.js rust/target/release/inpx-catalog
+
   browser-ui:
-    name: Classic and shelves UI
+    name: Library and reader UI
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -119,20 +163,103 @@ jobs:
       - run: npm audit --omit=dev --audit-level=moderate
       - run: npm run test:release
       - run: npm run test:tts
+      - name: Build Rust HTTP server and authentication state
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal --target wasm32-unknown-unknown
+          cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release --target wasm32-unknown-unknown -p inpx-auth-state
+      - if: runner.os == 'Linux'
+        run: docker buildx build --target rust-linux-programs --output type=local,dest=rust/target/release .
+      - if: runner.os != 'Linux'
+        run: cargo +1.100.0 build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
       - run: npm run build:${{ matrix.target }}
       - name: Test extracted release application and permissions
+        env:
+          INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
+          INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
         shell: bash
         run: |
-          node build/release.js ${{ matrix.target }}
+          node build/release.js ${{ matrix.target }} --application-only
           version=$(node -p "require('./package.json').version")
           node scripts/release-archive-smoke-test.js ${{ matrix.target }} "dist/release/inpx-web-$version-${{ matrix.target }}.zip" --application-only
+      - name: Check Node.js PDF downloads with and without MuPDF
+        if: matrix.target == 'linux'
+        run: |
+          node scripts/bundle-mutool.js linux
+          node scripts/standalone-pdf-test.js dist/linux
+      - name: Test the standalone Rust release archive
+        env:
+          INPX_BUILD_DIST_DIR: ${{ runner.temp }}/inpx-rust-release
+          INPX_SMOKE_EPUB: 'true'
+        shell: bash
+        run: |
+          npm run build:rust -- ${{ matrix.target }}
+          node build/release.js ${{ matrix.target }}
+          version=$(node -p "require('./package.json').version")
+          node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$INPX_BUILD_DIST_DIR/release/inpx-web-$version-${{ matrix.target }}.zip" --application-only --rust
       - if: matrix.target == 'linux'
         run: docker build --target runtime-lite -t inpx-web:ci .
       - if: matrix.target == 'linux'
         run: node scripts/binary-smoke-test.js --image inpx-web:ci
+        env:
+          INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
+          INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
       - name: Build full image with static MOBI converter
         if: matrix.target == 'linux'
         run: docker build --target runtime -t inpx-web:ci-full .
       - name: Test real image converters
         if: matrix.target == 'linux'
         run: bash scripts/test-image-converters.sh inpx-web:ci-full
+  rc15-compatibility:
+    name: Rust container and RC15 compatibility
+    if: github.event_name != 'workflow_dispatch' || !inputs.browser_only
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      RC15_IMAGE: aceasket/inpx-web-7z:1.8.3-rc.15@sha256:3c6da61758971eedbc130d3e52e3147254c01596d7c63aa6f1fb8764cb9da2f5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.62.1
+      - run: npx playwright install --with-deps chromium
+      - name: Prepare release images and deterministic INPX
+        run: |
+          docker pull "$RC15_IMAGE"
+          docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-rust -t inpx-web:ci-rust .
+          mkdir -p "$RUNNER_TEMP/parity/library" "$RUNNER_TEMP/parity/results"
+          node scripts/rc15-ci-fixture.js "$RUNNER_TEMP/parity/library/library.inpx"
+      - name: Compare catalogues and measure indexing and search
+        shell: bash
+        run: |
+          echo '| Operation | RC15 | Rust | Unit |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---:|---:|---|' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/rust-inpx-filter-tests.js inpx-web:ci-rust "$RC15_IMAGE" "$RUNNER_TEMP/parity/library/library.inpx" --ci-fixture 2>&1 | tee "$RUNNER_TEMP/parity/results/catalogue.log"
+      - name: Compare legacy HTTP routes in Chromium
+        shell: bash
+        run: |
+          echo '| Operation | RC15 | Rust | Unit |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---:|---:|---|' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/rust-legacy-http-tests.js inpx-web:ci-rust "$RC15_IMAGE" 2>&1 | tee "$RUNNER_TEMP/parity/results/http.log"
+      - name: Verify and measure RC15 upgrade and rollback
+        shell: bash
+        run: |
+          echo '| Operation | RC15 | Rust | Unit |' >> "$GITHUB_STEP_SUMMARY"
+          echo '|---|---:|---:|---|' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/rust-upgrade-rollback-tests.js inpx-web:ci-rust "$RC15_IMAGE" "$RUNNER_TEMP/parity/library/library.inpx" --ci-fixture 2>&1 | tee "$RUNNER_TEMP/parity/results/upgrade.log"
+      - name: Watch a two-source RC15 migration in Chromium
+        run: |
+          node scripts/rc15-ci-fixture.js "$RUNNER_TEMP/parity/library/migration.inpx" --migration
+          node scripts/rust-migration-browser-test.js inpx-web:ci-rust "$RC15_IMAGE" "$RUNNER_TEMP/parity/library/migration.inpx" "$RUNNER_TEMP/parity/results"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: rc15-compatibility-results
+          path: ${{ runner.temp }}/parity/results/
+          if-no-files-found: ignore
+      - name: Test packaged Rust application and converters
+        run: |
+          node scripts/binary-smoke-test.js --image inpx-web:ci-rust --rust
+          node scripts/rust-conversion-tests.js inpx-web:ci-rust

@@ -1,4 +1,5 @@
 const assert = require('assert');
+const crypto = require('node:crypto');
 const fs = require('fs-extra');
 const os = require('os');
 const path = require('path');
@@ -226,6 +227,9 @@ async function testWebAppUpdatesPreserveCustomFilesAndCleanOnlyManagedAssets() {
         assert.strictEqual((await fs.stat(path.join(config.publicDir,'index.html'))).mtimeMs,before);
         await assert.rejects(install({...config,version:'bad'},{bundle:{data:Buffer.from('bad ZIP').toString('base64')}}));
         assert.strictEqual(await fs.readFile(path.join(config.publicDir,'index.html'),'utf8'),'Second');
+        const collision = await bundle({'index.html':'Partial upgrade','file':'leaf','file/child.js':'conflict'});
+        await assert.rejects(install({...config,version:'collision'},{bundle:collision}));
+        assert.strictEqual(await fs.readFile(path.join(config.publicDir,'index.html'),'utf8'),'Second');
         assert.deepStrictEqual(await fs.readdir(config.tempDir),[]);
         for (const bad of ['../file','/absolute','a/../../x','C:/file','a\\b','.inpx-web-managed.json'])
             assert.strictEqual(require('../server/core/WebAppFiles').safeName(bad),false);
@@ -233,6 +237,18 @@ async function testWebAppUpdatesPreserveCustomFilesAndCleanOnlyManagedAssets() {
         await fs.symlink(outside,path.join(config.publicDir,'linked'),process.platform === 'win32' ? 'junction' : 'dir');
         await assert.rejects(install({...config,version:'link'},{bundle:await bundle({'linked/evil.txt':'Bad'})}), /Символическая ссылка/);
         assert.strictEqual(await fs.pathExists(path.join(outside,'evil.txt')),false);
+        const app = require('../build/appdir'), target = path.join(config.publicDir,'index.html');
+        const html = '<script src="/'+app+'/chunk.js"></script>';
+        const prefixed = await bundle({'index.html':html,[app+'/chunk.js']:'payload'});
+        await install({...config,version:'prefixed',rootPathStatic:'/library'},{bundle:prefixed});
+        assert.strictEqual(await fs.readFile(target,'utf8'),html.replace('/'+app,'/library/'+app));
+        assert.strictEqual(await fs.pathExists(target+'.replaced'),true);
+        const manifest = await fs.readJson(path.join(config.publicDir,'.inpx-web-managed.json'));
+        const digest = crypto.createHash('sha256').update(prefixed.data).digest('hex');
+        assert.deepStrictEqual(manifest,{version:'prefixed:/library:'+digest+':prefixed-v1',files:['index.html',app+'/chunk.js']});
+        await install({...config,version:'prefixed'},{bundle:prefixed});
+        assert.strictEqual(await fs.readFile(target,'utf8'),html);
+        assert.strictEqual(await fs.pathExists(target+'.replaced'),false);
     });
 }
 

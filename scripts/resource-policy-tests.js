@@ -19,39 +19,18 @@ async function temporary(task) {
     try {await task(dir);} finally {await fs.remove(dir);}
 }
 
-async function testClassicConfigLoadsSavedResourceProfile() {
-    await temporary(async dir => {
-        const script = `
-            const assert = require('node:assert/strict');
-            const ConfigManager = require('./server/config');
-            const runtime = require('./server/core/ResourceRuntime');
-            const manager = new ConfigManager();
-            (async () => {
-                await manager.init(process.argv[1], process.argv[2]);
-                await manager.load();
-                if (process.argv[3]) {
-                    manager.config = {resourceProfile: process.argv[3]};
-                    await manager.save();
-                }
-                assert.equal(runtime.settings.requested, process.argv[4]);
-            })().catch(error => { console.error(error); process.exitCode = 1; });
-        `;
-        const file = path.join(dir, 'config.json');
-        const run = (save, expected) => require('node:child_process').execFileSync(process.execPath,
-            ['-e', script, dir, file, save, expected], {cwd:path.join(__dirname, '..'),
-                env:{...process.env, INPX_RESOURCE_PROFILE:'balanced'}, windowsHide:true});
-        run('economy', 'balanced');
-        assert.strictEqual((await fs.readJson(file)).resourceProfile, 'economy');
-        run('', 'economy');
-    });
-}
-
 async function testLaunchResourceProfilesAndOverrides() {
     const lowSpec = {...machine(), cpu:0.5, memoryLimit:512 * 1024 * 1024};
     const defaults = policy.resolve({}, lowSpec);
     assert.strictEqual(defaults.requested,'unlimited');
     assert(Object.values(defaults.limits).every(limit=>limit === Infinity));
     assert.deepStrictEqual(policy.resolve({INPX_RESOURCE_PROFILE:'unlimited'},lowSpec).limits,defaults.limits);
+    const legacy = policy.resolve({INPX_CONVERSION_CONCURRENCY:'2'}, lowSpec);
+    assert.strictEqual(legacy.limits.conversions, 2);
+    assert.strictEqual(legacy.launchEnv.INPX_CONVERSION_CONCURRENCY, '2');
+    const modern = policy.resolve({INPX_RESOURCE_CONVERSIONS:'3', INPX_CONVERSION_CONCURRENCY:'2'}, lowSpec);
+    assert.strictEqual(modern.limits.conversions, 3);
+    assert.strictEqual(modern.launchEnv.INPX_CONVERSION_CONCURRENCY, undefined);
     const unbounded = new ResourceRuntime(defaults);
     let release;
     const gate = new Promise(resolve=>{release=resolve;});
@@ -558,7 +537,7 @@ async function testBenchmarkDatabaseFailureStopsBeforeFurtherCandidates() {
     });
 }
 
-module.exports = [testClassicConfigLoadsSavedResourceProfile, testLaunchResourceProfilesAndOverrides, testCgroupV2InheritedCpuAndMemoryLimits, testCgroupV1QuotasAndEscapedMountPaths,
+module.exports = [testLaunchResourceProfilesAndOverrides, testCgroupV2InheritedCpuAndMemoryLimits, testCgroupV1QuotasAndEscapedMountPaths,
     testGlobalResourceAdmissionAndForegroundPriority, testChangingResourceProfileDrainsWaitingWork,
     testResourceQueueCancellationAndCallerContext, testRuntimeFailureDiagnosticsAreBoundedAndExcludePayloads, testNativeOutputCaptureLimitsAndAbortTree,
     testRecommendationPrefersSmallestSafeNearBestProfile, testBenchmarkPercentileKeepsRareSlowProbesVisible,

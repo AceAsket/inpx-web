@@ -8,17 +8,7 @@
         <!-- Формирование списка ------------------------------------------------------------------------>
         <div v-for="item in tableData" :key="item.key" class="column author-group">
             <div class="catalog-group-heading row items-center q-ml-md q-mr-xs no-wrap">
-                <q-btn v-if="shelvesAppearance" flat dense round :icon="isExpandedAuthor(item) ? 'la la-angle-down' : 'la la-angle-right'" :aria-label="`${isExpandedAuthor(item) ? 'Свернуть' : 'Развернуть'} автора: ${item.name}`" :aria-expanded="isExpandedAuthor(item)" @click="expandAuthor(item)" />
-                <div v-else class="row items-center clickable2 q-py-xs no-wrap" @click="expandAuthor(item)">
-                    <div style="min-width: 30px">
-                        <div v-if="!isExpandedAuthor(item)">
-                            <q-icon name="la la-plus-square" size="28px" />
-                        </div>
-                        <div v-else>
-                            <q-icon name="la la-minus-square" size="28px" />
-                        </div>
-                    </div>
-                </div>
+                <q-btn flat dense round :icon="isExpandedAuthor(item) ? 'la la-angle-down' : 'la la-angle-right'" :aria-label="`${isExpandedAuthor(item) ? 'Свернуть' : 'Развернуть'} автора: ${item.name}`" :aria-expanded="isExpandedAuthor(item)" @click="expandAuthor(item)" />
 
                 <div class="clickable2 q-ml-xs q-py-sm text-green-10 text-bold" @click="selectAuthor(item.author)">
                     {{ item.name }}                            
@@ -29,22 +19,10 @@
                 </div>
             </div>
 
-            <LoadingState v-if="item.bookLoading && shelvesAppearance" class="book-row q-mb-md" label="Загружаем книги автора" />
-            <div v-else-if="item.bookLoading" class="book-row row items-center">
-                <q-icon class="la la-spinner icon-rotate text-blue-8" size="28px" />
-                <div class="q-ml-xs">
-                    Обработка...
-                </div>
-            </div>
+            <LoadingState v-if="item.bookLoading" class="book-row q-mb-md" label="Загружаем книги автора" />
 
             <div v-if="isExpandedAuthor(item) && item.books">
-                <LoadingState v-if="item.authorInfoLoading && shelvesAppearance" class="book-row q-mb-md" label="Загружаем сведения об авторе" />
-                <div v-else-if="item.authorInfoLoading" class="book-row row items-center q-mb-md author-info-loading">
-                    <q-icon class="la la-spinner icon-rotate text-green-8" size="24px" />
-                    <div class="q-ml-xs">
-                        Загрузка информации об авторе...
-                    </div>
-                </div>
+                <LoadingState v-if="item.authorInfoLoading" class="book-row q-mb-md" label="Загружаем сведения об авторе" />
 
                 <div v-else-if="item.authorInfo" class="book-row q-mb-md">
                     <div class="author-info-card row no-wrap">
@@ -81,17 +59,7 @@
                     <!-- серия книг -->
                     <div v-if="book.type == 'series'" class="column">
                         <div class="catalog-group-heading row items-center q-mr-xs no-wrap text-grey-9">
-                            <q-btn v-if="shelvesAppearance" flat dense round :icon="isExpandedSeries(book) ? 'la la-angle-down' : 'la la-angle-right'" :aria-label="`${isExpandedSeries(book) ? 'Свернуть' : 'Развернуть'} серию: ${book.series}`" :aria-expanded="isExpandedSeries(book)" @click="expandSeries(book)" />
-                            <div v-else class="row items-center clickable2 q-py-xs no-wrap" @click="expandSeries(book)">
-                                <div style="min-width: 30px">
-                                    <div v-if="!isExpandedSeries(book)">
-                                        <q-icon name="la la-plus-square" size="28px" />
-                                    </div>
-                                    <div v-else>
-                                        <q-icon name="la la-minus-square" size="28px" />
-                                    </div>
-                                </div>
-                            </div>
+                            <q-btn flat dense round :icon="isExpandedSeries(book) ? 'la la-angle-down' : 'la la-angle-right'" :aria-label="`${isExpandedSeries(book) ? 'Свернуть' : 'Развернуть'} серию: ${book.series}`" :aria-expanded="isExpandedSeries(book)" @click="expandSeries(book)" />
 
                             <div class="clickable2 q-ml-xs q-py-sm text-bold" @click="selectSeries(book.series)">
                                 Серия: {{ book.series }}
@@ -107,16 +75,14 @@
                                 <BookView
                                     v-for="seriesBook in book.allBooks" :key="seriesBook.id"
                                     :book="seriesBook"
-                                    mode="series"
-                                    :genre-map="genreMap" :show-read-link="showReadLink"
-                                    :title-color="isFoundSeriesBook(book, seriesBook) ? 'text-blue-10' : 'text-red'"
+                                    :genre-map="genreMap"
                                     @book-event="bookEvent"
                                 />
                             </div>
                             <div v-else class="book-row column">
                                 <BookView 
                                     v-for="seriesBook in book.seriesBooks" :key="seriesBook.key"
-                                    :book="seriesBook" mode="author" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
+                                    :book="seriesBook" :genre-map="genreMap" @book-event="bookEvent"
                                 />
                             </div>
 
@@ -147,7 +113,7 @@
                         </div>
                     </div>
                     <!-- книга без серии -->
-                    <BookView v-else :book="book" mode="author" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent" />
+                    <BookView v-else :book="book" :genre-map="genreMap" @book-event="bookEvent" />
                 </div>
 
                 <!--div v-if="isExpandedAuthor(item) && item.books && !item.books.length" class="book-row row items-center">
@@ -203,14 +169,6 @@ class AuthorList extends BaseList {
         return `${this.list.totalFound} автор${utils.wordEnding(this.list.totalFound)}`;
     }    
 
-    isFoundSeriesBook(seriesItem, seriesBook) {
-        if (!seriesItem.booksSet) {
-            seriesItem.booksSet = new Set(seriesItem.seriesBooks.map(b => b.id));
-        }
-
-        return seriesItem.booksSet.has(seriesBook.id);
-    }
-
     getBookCount(item) {
         let result = '';
         if (!this.showCounts || item.count === undefined)
@@ -253,8 +211,6 @@ class AuthorList extends BaseList {
     }
 
     async expandAuthor(item) {
-        this.$emit('listEvent', {action: 'ignoreScroll'});
-
         const expanded = _.cloneDeep(this.expandedAuthor);
         const key = item.author;
 

@@ -1,0 +1,13 @@
+[package]
+name = "inpx-auth-state"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+ctutils = "0.4"
+hmac = "0.13"
+sha2 = { version = "0.11", default-features = false }

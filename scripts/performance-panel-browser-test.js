@@ -17,7 +17,7 @@ const MiB=1024**2;
     try {
         const library=path.join(directory,'library');await createFixture(library);
         await fs.writeJson(path.join(library,'config.json'),{loggingEnabled:false,allowAnonymousAccess:true,adminPassword:'performance-browser-fixture'});
-        const dataDir=path.join(directory,'data');await fs.copy(path.join(path.resolve('dist'),'tmp/public'),path.join(dataDir,'public'));
+        const dataDir=path.join(directory,'data');await fs.copy(path.join(require('../build/dist-dir'),'tmp/public'),path.join(dataDir,'public'));
         const port=await unusedPort(),base=`http://127.0.0.1:${port}`;
         child=spawn(process.execPath,[path.resolve('server'),`--data-dir=${dataDir}`,`--config=${library}/config.json`,`--lib-dir=${library}`,`--port=${port}`,'--host=127.0.0.1'],
             {windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,INPX_TTS_ENABLED:'false',INPX_LIBRARY_SOURCES:'',LIBRARY_SOURCES:'',
@@ -72,18 +72,18 @@ const MiB=1024**2;
             });server.onMessage(message=>socket.send(message));
         });
         page.on('pageerror',error=>errors.push(error.message));
-        await page.goto(base+'/#/books?title=Packaged');
+        await page.goto(base+'/#/profile');
         const login=async()=>{
-            await page.locator('.profile-login-action,.profile-status-chip').first().click();
+            await page.getByRole('region', {name:'Текущий профиль'}).getByRole('button', {name:'Войти', exact:true}).click();
             await page.getByRole('textbox',{name:'Логин',exact:true}).fill('admin');await page.getByRole('textbox',{name:'Пароль',exact:true}).fill('performance-browser-fixture');
-            await page.getByRole('button',{name:'OK',exact:true}).click();await page.locator('.profile-controls .profile-logout').waitFor();
+            await page.getByRole('button',{name:'OK',exact:true}).click();await page.locator('.profile-bottom .profile-logout').waitFor();
         };
         await login();
         const panel=page.locator('.performance-panel');
         const open=async()=>{
-            await page.getByRole('toolbar',{name:'Действия библиотеки'}).getByRole('button',{name:'Настройки',exact:true}).click();
-            if(!await panel.count())await page.getByRole('button',{name:/Администрирование/}).click();
-            await panel.getByTestId('performance-active').waitFor();
+            await page.locator('.library-shell__header').getByRole('button',{name:'Настройки библиотеки',exact:true}).click();
+            if(!await panel.count())await page.getByRole('button',{name:'Производительность',exact:true}).click();
+            await panel.getByLabel('Режим сервера',{exact:true}).waitFor();
         };
         const choice=panel.getByLabel('Режим проверки',{exact:true}), source=panel.getByLabel('Хранилище',{exact:true});
         const close=()=>page.getByRole('button',{name:'OK',exact:true}).click();
@@ -112,7 +112,7 @@ const MiB=1024**2;
         await close();await open();
         assert.equal(await panel.getByRole('spinbutton',{name:'Всего одновременно',exact:true}).inputValue(),'8');
         assert.equal(await source.inputValue(),'two');
-        await close();await page.reload();await page.locator('.profile-controls .profile-logout').waitFor();await open();
+        await close();await page.reload();await page.locator('.profile-bottom .profile-logout').waitFor();await open();
         assert.equal(await choice.inputValue(),'custom');
         for(const [label,value] of [['Всего одновременно','8'],['Изображения','3'],['Архивы','5'],['Конвертация','2']])assert.equal(await panel.getByRole('spinbutton',{name:label,exact:true}).inputValue(),value);
         await panel.getByTestId('performance-start').click();assert.deepEqual(requests.at(-1),{sourceId:'two',mode:'custom',limits:{total:8,images:3,reviews:5,conversions:2}});

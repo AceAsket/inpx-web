@@ -327,7 +327,7 @@ class TelegramBot {
                 .sort((a, b) => String(b[1].updatedAt).localeCompare(String(a[1].updatedAt))).map(([uid]) => uid);
             const totalPages = Math.max(1, Math.ceil(uids.length / PAGE_SIZE)), page = Math.min(totalPages, Math.max(1, Math.floor(Number(payload.page) || 1)));
             const slice = uids.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), db = this.worker.db;
-            const books = slice.length ? await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(slice)})`}) : [];
+            const books = slice.length ? await require('./CatalogueRows').byUids(db,slice) : [];
             const byUid = new Map(books.map(book => [book._uid, book]));
             const rows = slice.filter(uid => byUid.has(uid)).map(uid => [button(byUid.get(uid).title, 'book', {uid})]);
             const pages = [];

@@ -34,7 +34,12 @@ async function fixture(task) {
         const worker = {config,db,libraryAssetGeneration:1,resolveLibraryArchivePath:async folder => folder};
         searcher.isbnIndex = new (require('../server/core/LibraryIsbnIndex'))(worker);
         await task({worker,searcher,index:searcher.isbnIndex,libDir,xml});
-    } finally {if (searcher) await searcher.close(); await db.unlock(); await fs.remove(dir);}
+    } finally {
+        await searcher?.isbnIndex?.close();
+        await searcher?.close();
+        await db.unlock();
+        await fs.remove(dir);
+    }
 }
 
 async function testIsbnSearchUsesPersistedIndexAndFiltersGroupedBooks() {

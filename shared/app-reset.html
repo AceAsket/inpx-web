@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Обновление INPX Web</title>
+  <style>
+    body{margin:0;background:#f4ede2;color:#2d2925;font:16px/1.5 system-ui,sans-serif}
+    main{box-sizing:border-box;max-width:560px;margin:12vh auto;padding:24px}
+    h1{font-size:24px;margin:0 0 12px}a{color:#8f5725;font-weight:600}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Обновляем приложение</h1>
+    <p id="status">Очищаем только файлы приложения. Настройки читалки, прогресс и закладки сохраняются.</p>
+    <noscript>Включите JavaScript и <a href="./">вернитесь в приложение</a>.</noscript>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+    const BASE_PATH = __INPX_APP_BASE_PATH__;
+    const RECOVERY_KEY_PREFIX = 'inpx-web-build-reload:';
+
+    async function clearKnownCaches() {
+      if (!('caches' in window)) return;
+      const keys = await window.caches.keys();
+      await Promise.allSettled(keys
+        .filter((key) => key.startsWith('inpx-web-'))
+        .map((key) => window.caches.delete(key)));
+    }
+
+    async function unregisterScopedWorkers() {
+      if (!('serviceWorker' in navigator)) return;
+      const currentScope = new URL(BASE_PATH, window.location.origin).href;
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.allSettled(registrations
+        .filter((registration) => registration.scope === currentScope)
+        .map((registration) => registration.unregister()));
+    }
+
+    function clearRecoveryMarkers() {
+      try {
+        const keys = [];
+        for (let i = 0; i < window.sessionStorage.length; i += 1)
+          keys.push(window.sessionStorage.key(i));
+        keys.filter((key) => key && key.startsWith(RECOVERY_KEY_PREFIX))
+          .forEach((key) => window.sessionStorage.removeItem(key));
+      } catch (e) {
+        // Preserve all user storage and continue when sessionStorage is unavailable.
+      }
+    }
+
+    function returnTarget() {
+      const requested = new URLSearchParams(window.location.search).get('return') || BASE_PATH;
+      let target;
+      try {
+        target = new URL(requested, window.location.origin);
+      } catch (e) {
+        target = new URL(BASE_PATH, window.location.origin);
+      }
+
+      const baseRoot = BASE_PATH === '/' ? '/' : BASE_PATH.slice(0, -1);
+      const insideBase = BASE_PATH === '/'
+        || target.pathname === baseRoot
+        || target.pathname.startsWith(BASE_PATH);
+      if (
+        target.origin !== window.location.origin
+        || target.username
+        || target.password
+        || !insideBase
+        || target.pathname === BASE_PATH + 'app-reset'
+      ) target = new URL(BASE_PATH, window.location.origin);
+
+      for (const key of ['clearAppCache', 'appBuild', 'appReloadAttempt', 'appReloadAt', 'appCacheReset'])
+        target.searchParams.delete(key);
+
+      const hashQueryIndex = target.hash.indexOf('?');
+      if (hashQueryIndex >= 0) {
+        const hashPath = target.hash.substring(0, hashQueryIndex);
+        const hashParams = new URLSearchParams(target.hash.substring(hashQueryIndex + 1));
+        hashParams.delete('clearAppCache');
+        const nextHashQuery = hashParams.toString();
+        target.hash = hashPath + (nextHashQuery ? '?' + nextHashQuery : '');
+      }
+
+      target.searchParams.set('appCacheReset', Date.now().toString());
+      return target;
+    }
+
+    async function reset() {
+      const target = returnTarget();
+      await Promise.allSettled([
+        clearKnownCaches(),
+        unregisterScopedWorkers(),
+      ]);
+      clearRecoveryMarkers();
+      window.location.replace(target.toString());
+    }
+
+    reset().catch(() => {
+      const status = document.getElementById('status');
+      status.textContent = 'Автоматическая очистка не удалась. Вернитесь в приложение и обновите страницу.';
+      const link = document.createElement('a');
+      link.href = BASE_PATH;
+      link.textContent = 'Вернуться в приложение';
+      status.append(document.createElement('br'), link);
+    });
+  })();
+  </script>
+</body>
+</html>

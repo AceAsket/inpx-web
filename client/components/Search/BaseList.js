@@ -165,7 +165,6 @@ export default class BaseList {
                     await this.updateTableData(current);
                     if (!this.isCurrentSearch(current)) continue;
                     this.scrollToTop();
-                    this.highlightPageScroller(current.query);
                 } catch (error) {
                     if (!this.isCurrentSearch(current)) continue;
                     this.prevQuery = null;
@@ -212,16 +211,8 @@ export default class BaseList {
         return this.$store.state.settings;
     }
 
-    get shelvesAppearance() {
-        return this.settings.catalogAppearance === 'shelves';
-    }
-
     get currentSearch() {
         return (this.isExtendedSearch ? this.extSearch : this.search);
-    }
-
-    get showReadLink() {
-        return !!(this.config.onlineReaderEnabled || this.config.bookReadLink != '' || this.list.liberamaReady);
     }
 
     get ratingFilterOptions() {
@@ -254,20 +245,11 @@ export default class BaseList {
     }
 
     selectAuthor(author) {
-        if (this.settings.catalogAppearance === 'shelves') {
-            this.$router.push(catalogTarget('/author-details', {name:author}, this.currentSearch)); return;
-        }
-        const search = (this.isExtendedSearch ? this.extSearch : this.search);
-        search.author = `=${author}`;
-        this.scrollToTop();
+        this.$router.push(catalogTarget('/author-details', {name:author}, this.currentSearch));
     }
 
     selectSeries(series) {
-        if (this.settings.catalogAppearance === 'shelves') {
-            this.$router.push(catalogTarget('/series-details', {name:series}, this.currentSearch)); return;
-        }
-        const search = (this.isExtendedSearch ? this.extSearch : this.search);
-        search.series = `=${series}`;
+        this.$router.push(catalogTarget('/series-details', {name:series}, this.currentSearch));
     }
 
     selectTitle(title) {
@@ -523,13 +505,10 @@ export default class BaseList {
     }
 
     bookEvent(event) {
-        if (this.settings.catalogAppearance === 'shelves' && ['bookInfo', 'authorClick', 'seriesClick'].includes(event.action)) {
-            const kind = {bookInfo: 'book', authorClick: 'author', seriesClick: 'series'}[event.action];
-            this.$router.push(catalogTarget(kind === 'book' ? '/book' : `/${kind}-details`,
-                kind === 'book' ? {bookUid:this.getBookUid(event.book)} : {name:event.book[kind]}, this.currentSearch));
-            return;
-        }
         switch (event.action) {
+            case 'bookInfo':
+                this.$router.push(catalogTarget('/book', {bookUid:this.getBookUid(event.book)}, this.currentSearch));
+                break;
             case 'authorClick':
                 this.selectAuthor(event.book.author);
                 break;
@@ -555,7 +534,6 @@ export default class BaseList {
             case 'download':
             case 'copyLink':
             case 'readBook':
-            case 'bookInfo':
             case 'authorInfo':
             case 'sendTelegram':
             case 'sendEmail':
@@ -576,13 +554,7 @@ export default class BaseList {
         this.commit('setSettings', {[name]: _.cloneDeep(newValue)});
     }
 
-    highlightPageScroller(query) {
-        this.$emit('listEvent', {action: 'highlightPageScroller', query});
-    }
-
     async expandSeries(seriesItem) {
-        this.$emit('listEvent', {action: 'ignoreScroll'});
-
         const expandedSeries = _.cloneDeep(this.expandedSeries);
         const key = seriesItem.key;
 

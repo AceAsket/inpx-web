@@ -5,11 +5,14 @@ const repository = 'aceasket/inpx-web-7z';
 const hub = 'https://hub.docker.com';
 const repositoryPath = `/v2/repositories/${repository}/`;
 const shortDescription = 'Каталог и читалка / Ebook catalog & FB2 reader. OPDS, Docker, Silero TTS.';
+const rcTag = /^(\d+)\.(\d+)\.(\d+)-rc\.(\d+)(?:-(?:rust|silero))?$/;
+// The CI migration and rollback tests pull this exact pre-Rust image.
+const compatibilityImage = '1.8.3-rc.15';
 
 function cleanupPlan(tags) {
     const versions = new Map();
     for (const tag of tags) {
-        const match = /^(\d+)\.(\d+)\.(\d+)-rc\.(\d+)(?:-silero)?$/.exec(tag.name);
+        const match = rcTag.exec(tag.name);
         if (!match) continue;
         const numbers = match.slice(1, 5).map(Number);
         versions.set(numbers.join('.'), numbers);
@@ -26,8 +29,8 @@ function cleanupPlan(tags) {
         if (!tags.some(tag => tag.name === version))
             throw new Error(`Main image missing for retained RC: ${version}`);
     }
-    const remove = tags.filter(tag => /^\d+\.\d+\.\d+-rc\.\d+(?:-silero)?$/.test(tag.name)
-        && !keepVersions.has(tag.name.replace(/-silero$/, ''))).map(tag => tag.name);
+    const remove = tags.filter(tag => rcTag.test(tag.name) && tag.name !== compatibilityImage
+        && !keepVersions.has(tag.name.replace(/-(?:rust|silero)$/, ''))).map(tag => tag.name);
     return {keep: tags.filter(tag => !remove.includes(tag.name)).map(tag => tag.name), remove};
 }
 

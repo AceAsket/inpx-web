@@ -158,7 +158,18 @@ class BasePage {
         return result;
     }
 
-    makeBody(content, req) {
+    makeBody(content, req, legacy = false) {
+        if (!legacy) {
+            const native = require('./RustFeed');
+            if (req?.[native.requested]) {
+                const fallback = ()=>this.makeBody(content,req,true);
+                if (this.config?.opdsVersion === 2) {
+                    const base = this.makeEntry({id:this.id,title:this.title});
+                    return native.prepare(Object.assign(base,content),req,this,fallback);
+                }
+                return require('./RustAtom').prepare(this.atomDocument(content,req),req,this,fallback);
+            }
+        }
         // Keep the checked profile when following any catalog/book navigation.
         // Some legacy page builders omit req when constructing their links.
         if(this.getScopeUserId(req)) {
@@ -177,9 +188,15 @@ class BasePage {
         }
         content = require('./Progress').decorate(content,req,this.id==='reading-progress');
         if (this.config?.opdsVersion !== 2) content = require('./Compatibility').decorate(content, this.config);
-        const base = this.makeEntry({id: this.id, title: this.title});
-        if (this.config?.opdsVersion === 2)
-            return require('./JsonFeed').makeFeed(Object.assign(base,content), req, this);
+        if (this.config?.opdsVersion === 2) {
+            const base = this.makeEntry({id:this.id,title:this.title});
+            return require('./JsonFeed').makeFeed(Object.assign(base,content),req,this);
+        }
+        return new XmlParser().fromObject(this.atomDocument(content,req)).toString({format:true});
+    }
+
+    atomDocument(content,req) {
+        const base = this.makeEntry({id:this.id,title:this.title});
         base['*ATTRS'] = {
             'xmlns': 'http://www.w3.org/2005/Atom',
             'xmlns:dc': 'http://purl.org/dc/terms/',
@@ -189,13 +206,7 @@ class BasePage {
         if (!content.link)
             base.link = this.baseLinks(req);
 
-        const xml = new XmlParser();
-        const xmlObject = {};        
-        xmlObject[this.rootTag] = Object.assign(base, content);
-
-        xml.fromObject(xmlObject);
-
-        return xml.toString({format: true});
+        return {[this.rootTag]:Object.assign(base,content)};
     }
 
     async body() {

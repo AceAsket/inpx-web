@@ -1,6 +1,7 @@
 {
   "name": "inpx-web",
-  "version": "1.8.3-rc.15",
+  "version": "1.8.3",
+  "classicNodeRevision": "c37ce953699cd590cc1539470c070cfd854ea82d",
   "author": "AceAsket",
   "license": "CC0-1.0",
   "repository": "AceAsket/inpx-web",
@@ -10,6 +11,7 @@
   "scripts": {
     "dev": "nodemon --inspect --ignore server/.inpx-web --ignore client --exec 'node --expose-gc server --lib-dir=server/.inpx-web/lib'",
     "build:client": "webpack --config build/webpack.prod.config.js",
+    "build:rust": "npm run build:client && node build/prepkg.js --rust",
     "build:linux": "npm run build:client && node build/prepkg.js linux && pkg -t node24-linux-x64 -C GZip --options max-old-space-size=4096,expose-gc -o dist/linux/inpx-web .",
     "build:linux-arm64": "npm run build:client && node build/prepkg.js linux-arm64 && pkg -t node24-linux-arm64 -C GZip --options max-old-space-size=4096,expose-gc -o dist/linux-arm64/inpx-web .",
     "build:win": "npm run build:client && node build/prepkg.js win && pkg -t node24-win-x64 -C GZip --options max-old-space-size=4096,expose-gc -o dist/win/inpx-web .",
@@ -23,15 +25,15 @@
     "release": "npm run build:all && node build/release.js",
     "release:linux": "npm run build:linux && node build/release.js linux",
     "release:win": "npm run build:win && node build/release.js win",
-    "release:win-installer": "npm run build:win && npm run build:win-tools && npm run build:win-installer",
+    "release:win-installer": "npm run build:win && npm run build:win-tools && node scripts/bundle-mutool.js win && npm run build:win-installer",
     "release:macos": "npm run build:macos && node build/release.js macos",
-    "release:arm64": "npm run build:linux-arm64 && node build/release.js arm64",
+    "release:arm64": "npm run build:linux-arm64 && node build/release.js linux-arm64",
     "postinstall": "npm run build:client-dev"
   },
   "bin": "server/index.js",
   "pkg": {
     "scripts": "server/config/*.js",
-    "assets": "dist/public.json"
+    "assets": ["dist/public.json", "shared/ebook.css", "shared/app-reset.html"]
   },
   "devDependencies": {
     "@babel/core": "^7.24.3",

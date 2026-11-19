@@ -23,6 +23,7 @@
                 <summary>Настроить рекомендации</summary>
                 <div><button v-for="option in feedbackOptions" :key="option.value" type="button" @click="$emit('feedback', option.value)">{{ option.label }}</button></div>
             </details>
+            <slot />
         </div>
     </article>
 </template>

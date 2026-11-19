@@ -147,12 +147,12 @@ async function fixture(directory) {
             assert.equal(await page.locator('q-menu,q-file,q-pagination').count(), 0, 'Quasar components must be registered');
         };
         await page.goto(base + '/#/books');
-        await page.locator('.profile-login-action,.profile-status-chip').first().click();
+        await page.getByRole('link', {name:'Профиль', exact:true}).click();
+        await page.getByRole('region', {name:'Текущий профиль'}).getByRole('button', {name:'Войти', exact:true}).click();
         await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
         await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('discovery-browser-test');
         await page.getByRole('button', {name: 'OK', exact: true}).click();
-        await page.locator('.profile-controls .profile-logout').waitFor();
-        await page.getByRole('button', {name: 'Переключить дизайн', exact: true}).click();
+        await page.locator('.profile-bottom .profile-logout').waitFor();
         await page.getByRole('navigation', {name: 'Разделы библиотеки'}).waitFor();
         await page.goto(base + '/#/');
         await page.waitForURL(url => url.hash === '#/overview');
@@ -170,11 +170,6 @@ async function fixture(directory) {
             const params=new URLSearchParams(page.url().split('?')[1]);
             for(const other of ['author','series','title'].filter(name=>name!==field))assert(!params.get(other),'Switching a single query must clear the previous field');
             await input.press('Escape');
-            await page.getByRole('button',{name:'Настройки библиотеки',exact:true}).click();
-            await page.getByRole('button',{name:/^Классический/}).click();
-            await page.locator('.search-list-toggle').waitFor();
-            await page.getByRole('button',{name:'Настройки',exact:true}).click();
-            await page.getByRole('button',{name:/^Новый дизайн/}).click();
             await page.getByRole('navigation',{name:'Разделы библиотеки'}).waitFor();
             assert.equal(await input.getAttribute('aria-label'),label);
             assert.equal(await input.inputValue(),'Туман');

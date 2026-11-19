@@ -19,7 +19,7 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
         const library = path.join(directory, 'library'); await fixture(library);
         const config = path.join(library, 'config.json');
         await fs.writeJson(config, {...await fs.readJson(config), adminPassword: password});
-        const dataDir = path.join(directory, 'data'); await fs.copy(path.join(path.resolve('dist'),'tmp/public'), path.join(dataDir, 'public'));
+        const dataDir = path.join(directory, 'data'); await fs.copy(path.join(require('../build/dist-dir'),'tmp/public'), path.join(dataDir, 'public'));
         const port = await unusedPort(), base = `http://127.0.0.1:${port}`;
         child = spawn(process.execPath, [path.resolve('server'), `--data-dir=${dataDir}`, `--config=${config}`, `--lib-dir=${library}`, `--port=${port}`, '--host=127.0.0.1'],
             {windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: {...process.env, INPX_TTS_ENABLED: 'false', INPX_LIBRARY_SOURCES: '', LIBRARY_SOURCES: '',
@@ -57,31 +57,31 @@ const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR
             try {csrfToken = (await request({action: 'get-config'})).csrfToken; return await request(payload);} finally {socket.close();}
         }, payload);
         const login = async(login, secret) => {
-            await page.locator('.profile-login-action,.profile-status-chip').first().click();
+            await page.getByRole('region', {name:'Текущий профиль'}).getByRole('button', {name:'Войти', exact:true}).click();
             await page.getByRole('textbox', {name: 'Логин', exact: true}).fill(login);
             await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill(secret);
             await page.getByRole('button', {name: 'OK', exact: true}).click();
-            await page.locator('.profile-controls .profile-logout').waitFor();
+            await page.locator('.profile-bottom .profile-logout').waitFor();
         };
         const logout = async() => {
-            await page.goto(base + '/#/books');
-            await page.locator('.profile-controls .profile-logout').waitFor();
-            await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), page.locator('.profile-controls .profile-logout').click()]);
-            await page.locator('.profile-controls').waitFor();
+            await page.goto(base + '/#/profile');
+            await page.locator('.profile-bottom .profile-logout').waitFor();
+            await Promise.all([page.waitForNavigation({waitUntil: 'domcontentloaded'}), page.locator('.profile-bottom .profile-logout').click()]);
+            await page.locator('.profile-page').waitFor();
         };
         const openReader = async uid => {
             await page.goto(base + '/#/reader?bookUid=' + encodeURIComponent(uid));
             await page.locator('.reader-body').waitFor();
             await page.waitForFunction(() => !document.querySelector('.reader-loading') && document.querySelector('.reader-html')?.textContent.trim());
         };
-        await page.goto(base + '/#/books'); await page.locator('.profile-controls').waitFor();
+        await page.goto(base + '/#/profile'); await page.locator('.profile-page').waitFor();
         await page.waitForFunction(() => !!navigator.serviceWorker.controller);
         assert.equal(await page.evaluate(() => performance.getEntriesByType('navigation')[0].type), 'navigate');
         await fs.appendFile(path.join(dataDir, 'public', 'sw.js'), '\n// Updated fixture worker\n');
         await page.evaluate(() => { void navigator.serviceWorker.ready.then(registration => registration.update()); });
         await page.waitForFunction(() => navigator.serviceWorker.controller
             && performance.getEntriesByType('navigation')[0]?.type === 'reload');
-        await page.locator('.profile-controls').waitFor();
+        await page.locator('.profile-page').waitFor();
         await login('admin', password);
         await api({action: 'create-user-profile', profile: {name: 'Bob', login: 'bob', password: 'bob-browser-password'}});
         const catalog = await api({action: 'bookSearch', query: {lang: 'ru', limit: 1}}), uid = catalog.found[0]._uid;

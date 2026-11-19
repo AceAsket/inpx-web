@@ -5,6 +5,8 @@ const {pipeline} = require('stream/promises');
 const {crc32} = require('node:zlib');
 const yazl = require('yazl');
 const ZipReader = require('./ZipReader');
+const native = require('./RustBookCache');
+const {randomBytes} = require('node:crypto');
 
 const imageIndexName = 'FLibraryImageIndex.json';
 const mimetype = 'application/epub+zip';
@@ -67,6 +69,49 @@ async function unpackSolid(reader, entries, directory, bytes) {
 }
 
 async function restore(bookFile, config = {}, loadImage = async() => null, prepareImages = null) {
+    const binary = native.executable();
+    if (binary) {
+        let output = path.join(path.dirname(bookFile),`.epub-${randomBytes(16).toString('hex')}`);
+        let imageDirectory;
+        try {
+            const result = await native.prepareEpub(binary,bookFile,output);
+            if (result.kind==='unchanged') {
+                output = null;
+                return false;
+            }
+            if (result.kind==='repacked') {
+                const {images,remaining} = result;
+                if (images.length) {
+                    if (prepareImages && images.length>=3) await prepareImages(images);
+                    imageDirectory = await fs.mkdtemp(path.join(config.tempDir || path.dirname(bookFile),'epub-images-'));
+                    const files = [];
+                    let budget = remaining;
+                    for (const image of images) {
+                        const data = await loadImage(image.num,image.name);
+                        if (!data?.length) throw new Error(`Не найдено изображение EPUB: ${image.name} (номер ${image.num})`);
+                        if (data.length > imageLimit || data.length > budget) throw sizeError();
+                        budget -= data.length;
+                        const file = path.join(imageDirectory,String(files.length));
+                        await fs.writeFile(file,data);
+                        files.push(image.name);
+                    }
+                    const manifest = path.join(imageDirectory,'images.json');
+                    await fs.writeJson(manifest,files);
+                    await native.appendEpubImages(binary,output,manifest,remaining);
+                }
+                await fs.rename(output,bookFile);
+                output = null;
+                return true;
+            }
+        } finally {
+            if (output) await fs.remove(output);
+            if (imageDirectory) await fs.remove(imageDirectory);
+        }
+    }
+    return restoreCompatibility(bookFile,config,loadImage,prepareImages);
+}
+
+async function restoreCompatibility(bookFile, config, loadImage, prepareImages) {
     const reader = new ZipReader({...config, resourceMaxListingBytes:16 * MiB, resourceMaxOutputBytes:entryLimit});
     let stagingDir = '';
     try {

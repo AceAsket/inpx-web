@@ -38,13 +38,12 @@
         <div class="title-grid q-mx-md" :class="{'title-grid--list': bookCardListMode}">
             <template v-for="item in tableData" :key="item.key">
                 <BookView
-                    :book="item.book" mode="title" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
+                    :book="item.book" :genre-map="genreMap" @book-event="bookEvent"
                 />
                 <BookView
                     v-for="book in item.books" :key="book.id"
                     :book="book"
-                    mode="title"
-                    :genre-map="genreMap" :show-read-link="showReadLink"
+                    :genre-map="genreMap"
                     @book-event="bookEvent"
                 />
             </template>

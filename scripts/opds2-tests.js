@@ -78,6 +78,36 @@ async function testOpds2FullPublicationKeepsEpubMetadataPathAndRejectsMissingBoo
     await assert.rejects(page.body({...req,query:{uid:'missing'}}),error=>error.status===404);
 }
 
+async function testOpdsSearchOnlyFetchesGroupsNeededForThePage() {
+    const SearchPage = require('../server/core/opds/SearchPage');
+    const {page,req,book} = fixture();
+    Object.setPrototypeOf(page,SearchPage.prototype);
+    page.id = 'search';
+    const first = Array.from({length:120},(_,index)=>({...book,_uid:String(index)}));
+    const second = Array.from({length:120},(_,index)=>({...book,_uid:String(index+100)}));
+    const seen = [];
+    page.webWorker = {bookSearch:async query=>{
+        const order = ['title','series','author'].find(key=>Object.hasOwn(query,key));
+        seen.push(order);
+        return {found:order==='title' ? first : order==='series' ? second : []};
+    }};
+    const run = number=>page.body({...req,query:{type:'title',term:'Книга',page:number}});
+    const one = await run(1);
+    assert.equal(one.publications.length,100);
+    assert(one.links.some(link=>link.rel==='next'));
+    assert.deepEqual(seen.splice(0),['title']);
+    const two = await run(2);
+    assert.equal(two.publications.length,100);
+    assert.equal(two.publications[0].metadata.identifier,'urn:inpx:book:100');
+    assert(two.links.some(link=>link.rel==='next'));
+    assert.deepEqual(seen.splice(0),['title','series']);
+    const three = await run(3);
+    assert.equal(three.publications.length,20);
+    assert(!three.links.some(link=>link.rel==='next'));
+    assert.deepEqual(seen,['title','series','author']);
+}
+
 module.exports=[testOpds2NativePublicationsPreserveProfileFormatsProgressAndMetadata,testOpds2SearchAndPaginationStayInJsonCatalogAndBoundPublicationWork,
-    testOpds2EntrySanitizesDescriptionsAndLeavesAtomUnchanged,testOpds2FullPublicationKeepsEpubMetadataPathAndRejectsMissingBooks];
+    testOpds2EntrySanitizesDescriptionsAndLeavesAtomUnchanged,testOpds2FullPublicationKeepsEpubMetadataPathAndRejectsMissingBooks,
+    testOpdsSearchOnlyFetchesGroupsNeededForThePage];
 module.exports.fixture=fixture;

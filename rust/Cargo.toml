@@ -1,0 +1,3 @@
+[workspace]
+members = ["auth-state", "catalog", "inpx", "server"]
+resolver = "3"

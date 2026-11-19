@@ -162,7 +162,7 @@ async function testCardIgnoresLateSuccessAndErrorsAcrossCloseAndReopen() {
     const method = base.slice(base.indexOf('    async openBookCard('), base.indexOf('    getBookUid('));
     const List = new Function(`let nextBookCardRequestId = 0; return class {${method}}`)();
     const source = await fs.readFile(path.join(__dirname, '../client/components/Search/Search.vue'), 'utf8');
-    const Search = new Function(`return class {${source.slice(source.indexOf('    listEvent(event)'), source.indexOf('    openReaderLibrary()'))}}`)();
+    const Search = new Function(`return class {${source.slice(source.indexOf('    listEvent(event)'), source.indexOf('    openReadingLists('))}}`)();
     const parent = new Search(), requests = [], alerts = [];
     parent.$root = {stdDialog:{alert:(...args) => alerts.push(args)}};
     const list = new List();
@@ -232,24 +232,6 @@ async function testBookRequestsSharePendingWorkWithoutRetainingDocuments() {
     });
 }
 
-async function testLookupWaitingForReaderDoesNotReserveBackgroundResources() {
-    const worker = Object.create(require('../server/core/WebWorker').prototype);
-    worker.db = {close: async() => {}}; worker.libraryAssetGeneration = 1;
-    const lookup = new (require('../server/core/CatalogLookupIndex'))(worker);
-    const release = deferred();
-    const foreground = worker.runForeground(() => release.promise);
-    const lookupJob = resourceRuntime.withBackground(() => lookup.background(async() => 'indexed'));
-    try {
-        await new Promise(resolve => setTimeout(resolve, 10));
-        assert.strictEqual(resourceRuntime.snapshot().background, 0, 'A lookup waiting for foreground I/O must not occupy a background resource slot');
-        let completed = false;
-        const preparedBook = resourceRuntime.withBackground(() => resourceRuntime.run(async() => {completed = true;}, {kind: 'images'}));
-        await new Promise(resolve => setTimeout(resolve, 10));
-        assert(completed, 'An existing background book needed by the reader can finish while the lookup waits');
-        await preparedBook;
-    } finally {release.resolve(); await foreground; await lookupJob; await lookup.close();}
-}
-
 async function testLazyCardsDoNotLoadReviewsOrPrepareReaderAndEpub() {
     await temporary(async dir => {
         const fixture = cardFixture(dir), {worker, record} = fixture;
@@ -284,5 +266,4 @@ async function testRequestedReviewsShareWorkAndInvalidateDiskCache() {
 module.exports = [testLazyCardsDoNotLoadReviewsOrPrepareReaderAndEpub, testRequestedReviewsShareWorkAndInvalidateDiskCache,
     testCardCacheTracksIndexRecordAndSourceAcrossRestarts, testLateCardCannotOverwriteTheNewIndexCache,
     testBookPreparationSharesOnlyTheCurrentLibraryGeneration, testCardBackgroundPreparationRespectsPriorityAndSkipsOldQueue,
-    testCardIgnoresLateSuccessAndErrorsAcrossCloseAndReopen, testBookRequestsSharePendingWorkWithoutRetainingDocuments,
-    testLookupWaitingForReaderDoesNotReserveBackgroundResources];
+    testCardIgnoresLateSuccessAndErrorsAcrossCloseAndReopen, testBookRequestsSharePendingWorkWithoutRetainingDocuments];

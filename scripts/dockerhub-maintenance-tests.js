@@ -16,6 +16,13 @@ const next = cleanupPlan([...tags, {name: '1.8.0-rc.1'}, {name: '1.8.0-rc.1-sile
 assert(next.keep.includes('1.7.9-rc.12-silero'));
 assert(next.keep.includes('1.8.0-rc.1'));
 assert(next.remove.includes('1.7.9-rc.11'));
+const rustTags = ['latest', '1.8.2', '1.8.3-rc.15', '1.8.3-rc.15-silero',
+    '1.8.3-rc.24', '1.8.3-rc.24-rust', '1.8.3-rc.24-silero', '1.8.3-rc.24-custom',
+    '1.8.3-rc.25', '1.8.3-rc.25-rust', '1.8.3-rc.25-silero',
+    '1.8.3-rc.26', '1.8.3-rc.26-rust', '1.8.3-rc.26-silero'];
+const rustPlan = cleanupPlan(rustTags.map(name => ({name})));
+assert.deepStrictEqual(rustPlan.remove, ['1.8.3-rc.15-silero', '1.8.3-rc.24', '1.8.3-rc.24-rust', '1.8.3-rc.24-silero']);
+assert(rustPlan.keep.includes('1.8.3-rc.15'));
 const readme = fs.readFileSync('docs/dockerhub.md', 'utf8');
 assert(Buffer.byteLength(readme) <= 25000);
 assert(readme.includes('## Русский') && readme.includes('## English'));

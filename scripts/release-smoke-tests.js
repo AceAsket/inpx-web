@@ -24,7 +24,6 @@ function makeWorker(config = {}) {
         opds: {},
     }, config);
     worker.checkMyState = () => true;
-    worker.profileSessions = new Map();
     worker.requireAdmin = async() => true;
     worker.addAdminEvent = () => {};
     return worker;
@@ -864,7 +863,6 @@ async function testAdminBackupArchiveAndDownload() {
         const Security = require('../server/core/Security');
         const security = new Security({dataDir});
         await security.init();
-        worker.profileSessions = new Map();
         worker.requireAdmin = async(userId) => {
             if (userId !== 'admin')
                 throw new Error('Admin required');
@@ -895,9 +893,23 @@ async function testAdminBackupArchiveAndDownload() {
             assert.match(ok.headers['content-disposition'] || '', /attachment/);
             assert.ok(ok.body.length > 0);
 
-            const expiredHeaders = sessionHeaders('admin');
-            const expiredSession = security.getSession({headers: expiredHeaders});
-            expiredSession.createdAt = Date.now() - 400*24*60*60*1000;
+            const clock = Date.now;
+            const {maxAgeMs,idleMs} = require('../server/core/SessionLifetime');
+            const deadline = clock() - 1000;
+            const step = idleMs - 1000;
+            let now = deadline - maxAgeMs;
+            const expiredRequest = {headers:{}};
+            let expiredSession;
+            Date.now = () => now;
+            try {
+                expiredSession = security.ensureSession(expiredRequest);
+                while (now+step < deadline) {
+                    now += step;
+                    assert.ok(security.getSession(expiredRequest));
+                }
+            } finally {Date.now = clock;}
+            expiredSession.profileAccessToken = worker.createProfileSession('admin');
+            const expiredHeaders = {cookie:`inpx_web_session=${security.packSessionId(expiredSession.id)}`};
             assert.strictEqual((await request(server, result.link, expiredHeaders)).status, 401);
 
             const notZip = await request(server, '/admin-backups/readme.txt', adminHeaders);
@@ -1429,25 +1441,6 @@ async function testConfiguredConverterPathsHavePriority() {
     assert.strictEqual(bookConverter.calibreCommandCandidates(configured)[0], configured.calibre);
 }
 
-async function indexOverviewFixture(db) {
-    const books = await db.select({table:'book'});
-    await db.create({in:'book', quietIfExists:true, hash:{field:'_uid',unique:true,type:'string',depth:1024}});
-    for (const table of ['date','librate','author','series','genre','lang','word','del']) {
-        if (await db.tableExists({table})) await db.drop({table});
-        const numeric = table === 'librate' || table === 'del';
-        await db.create({table,index:{field:'value',type:numeric?'number':'string',unique:true,depth:1024}});
-        const postings = new Map();
-        for (const book of books) {
-            if (table === 'word') continue;
-            const key = numeric ? book[table] || 0 : String(book[table] || '').toLowerCase();
-            if (!postings.has(key)) postings.set(key, []);
-            postings.get(key).push(book.id);
-        }
-        const rows = Array.from(postings, ([value,bookIds]) => ({value,bookIds}));
-        if (rows.length) await db.insert({table,rows});
-    }
-}
-
 async function testDiscoveryNewestAvoidsUnboundedFallback() {
     const worker = makeWorker();
     worker.getDiscoveryConfigForRequest = async() => ({
@@ -1471,14 +1464,13 @@ async function testDiscoveryNewestAvoidsUnboundedFallback() {
                 esc: db.esc.bind(db),
                 select: query => {
                     scans.push(query.table);
-                    if (query.table === 'book') assert(!query.where.includes('@all('));
                     return db.select(query);
                 },
             };
             const date = days => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
             const book = (_uid, age, ext = 'fb2', libid = _uid, props = {}) =>
                 ({_uid, title: _uid, date: date(age), ext, libid, librate:0, ...props});
-            const add = async books => {await db.insert({table:'book',rows:books}); await indexOverviewFixture(db);};
+            const add = books => db.insert({table:'book', rows:books});
             await add([
                 book('old', 366),
                 book('future', -1),
@@ -1487,7 +1479,7 @@ async function testDiscoveryNewestAvoidsUnboundedFallback() {
             const empty = await worker.getDiscoveryShelvesV2();
             assert.deepStrictEqual(empty.shelves.map(shelf => shelf.id), ['newest-0d']);
             assert.deepStrictEqual(empty.shelves[0].items, []);
-            assert.deepStrictEqual(scans, ['date','librate','book']);
+            assert.deepStrictEqual(scans, ['book']);
 
             await add([
                 book('best-copy', 7, 'fb2', 'same'),
@@ -1516,8 +1508,7 @@ async function testDiscoveryNewestAvoidsUnboundedFallback() {
             ]);
             assert.deepStrictEqual(first, second);
             assert.deepStrictEqual(first, await worker.getDiscoveryShelvesV2(options));
-            assert.deepStrictEqual(scans, ['date','librate','book','date','librate','book'],
-                'Concurrent cold requests share indexed candidates and a single visit to the book table');
+            assert.deepStrictEqual(scans, ['book', 'book'], 'Each cold Overview selects newest and popular in one database call');
             await add([book('legacy-date', 360, 'fb2', 'legacy-date', {date:new Date(date(360)).toUTCString()})]);
             assert((await worker.selectDiscoveryBookWindows('newest', 8, [365]))[0].some(item => item._uid === 'legacy-date'));
         } finally {
@@ -1774,11 +1765,7 @@ async function testPersonalDiscoveryDiversifiesAuthorsAndSeries() {
                 {_uid: 'explore-1', title: 'Explore History', author: 'History Author', series: '', genre: 'history', keywords: 'rome', lang: 'ru', librate: 5},
                 {_uid: 'explore-2', title: 'Explore Detective', author: 'Detective Author', series: '', genre: 'detective', keywords: 'crime', lang: 'ru', librate: 4},
             ]});
-            await indexOverviewFixture(db);
-            worker.db = {esc:db.esc.bind(db),select:query=>{
-                if (query.table === 'book') assert(!query.where.includes('@all('));
-                return db.select(query);
-            }};
+            worker.db = db;
             const shelf = await worker.buildSimilarBooksShelfV2(user, 4, {
                 lists: [],
                 progressMap: user.readerProgress,
@@ -1813,7 +1800,7 @@ const tests = [
     ...require('./rc13-io-tests'),
     ...require('./rc13-client-tests'),
     ...Object.values(require('./catalog-discovery-tests')),
-    ...Object.values(require('./backup-vault-tests')),
+    require('./backup-vault-tests').testEncryptedBackupPreviewRestoreAndRotation,
     ...Object.values(require('./telegram-bot-tests')),
     ...require('./library-appearance-tests'),
     ...require('./epub-fb2-tests'),

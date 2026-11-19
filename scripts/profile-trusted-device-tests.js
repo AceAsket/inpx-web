@@ -21,7 +21,7 @@ async function fixture(run) {
     const config = {dataDir, adminPassword, adminEventLogEnabled:false, rootPathStatic:'/lib',
         trustProxy:true, trustedProxyCidrs:['127.0.0.1/32']};
     const Worker = require('../server/core/WebWorker');
-    const makeWorker = () => Object.assign(Object.create(Worker.prototype), {config, myState:'normal', profileSessions:new Map(),
+    const makeWorker = () => Object.assign(Object.create(Worker.prototype), {config, myState:'normal',
         readingListStore:new ReadingListStore(config)});
     const worker = makeWorker();
     const store = worker.readingListStore;

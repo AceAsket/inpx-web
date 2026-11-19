@@ -48,7 +48,8 @@ class LibraryAudit {
     }
     async run(job) {
         const worker = this.worker, db = worker.db, generation = worker.libraryAssetGeneration;
-        const [{rawResult:ids}] = await db.select({table:'book',rawResult:true,where:'return Array.from(@all());'});
+        const {byIds,orderedIds} = require('./CatalogueRows');
+        const ids = await orderedIds(db);
         job.total = ids.length;
         tasks.update(job.id, {total:ids.length, phase:job.deep ? 'Файлы и содержимое' : 'Наличие файлов'});
         const cache = new Map();
@@ -56,7 +57,7 @@ class LibraryAudit {
             for (let offset = 0; offset < ids.length; offset += 250) {
                 job.controller.signal.throwIfAborted();
                 if (worker.db !== db || worker.libraryAssetGeneration !== generation) throw new Error('Библиотека обновилась. Запустите проверку заново');
-                const books = await db.select({table:'book',where:`@@id(${db.esc(ids.slice(offset,offset + 250))})`});
+                const books = await byIds(db,ids.slice(offset,offset + 250));
                 for (const book of books) {
                     job.controller.signal.throwIfAborted();
                     if (!book.del) {

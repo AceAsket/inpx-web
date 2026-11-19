@@ -13,6 +13,8 @@ const ReadingProgressPage = require('./ReadingProgressPage');
 const OpensearchPage = require('./OpensearchPage');
 const SearchPage = require('./SearchPage');
 const SearchHelpPage = require('./SearchHelpPage');
+const rustFeed = require('./RustFeed');
+const {opdsModelRequested} = require('../RustHttpServer');
 
 const log = new (require('../AppLogger'))().log;//singleton
 
@@ -117,10 +119,12 @@ function mountCatalog(app, config, security, catalogRoot, version) {
                     req.query.term = String(req.query.query || '');
                     if (!req.query.type) req.query.type = 'title';
                 }
+                if (opdsModelRequested(req)) req[rustFeed.requested] = true;
 
                 const result = await page.body(req, res);
 
-                if (result !== false)
+                if (result?.[rustFeed.prepared]) rustFeed.send(result,res);
+                else if (result !== false)
                     res.send(result);
             } else {
                 if (version === 2) res.status(404).json({error:'Каталог не найден'});
@@ -144,13 +148,13 @@ function mountCatalog(app, config, security, catalogRoot, version) {
     } else require('./Compatibility').mount(app, opdsPaths, opds, catalogConfig);
 }
 
-module.exports = function(app, config, security = new (require('../Security'))(config)) {
+module.exports = function(app, config, security = new (require('../Security'))(config), readingListStore) {
     if (!config.opds || !config.opds.enabled) return;
     const opdsRoot = config.opds.root || '/opds';
     config.opdsRoot = opdsRoot;
     // WebWorker is shared: its first construction must use the server config,
     // never the presentation config whose catalog root points to OPDS 2.
-    new (require('../WebWorker'))(config);
+    new (require('../WebWorker'))(config, readingListStore);
 
     // The more specific routes must precede the OPDS 1 wildcard and its guards.
     mountCatalog(app, config, security, `${opdsRoot}/v2`, 2);

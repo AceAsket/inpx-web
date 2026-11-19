@@ -9,8 +9,8 @@
         </template>
 
         <div ref="box" class="fit column q-mt-xs overflow-auto no-wrap info-box" :class="{'info-box--embedded': embedded}">
-            <div v-if="!hideSummary" :class="{'book-info-summary': shelvesAppearance}">
-                <button v-if="shelvesAppearance" type="button" class="book-info-cover" :aria-label="`Обложка: ${book.title || 'Книга'}`" @click="posterClick"><BookCover :book="book" @error="onCoverError" /></button>
+            <div v-if="!hideSummary" class="book-info-summary">
+                <button type="button" class="book-info-cover" :aria-label="`Обложка: ${book.title || 'Книга'}`" @click="posterClick"><BookCover :book="book" @error="onCoverError" /></button>
                 <div>
             <div v-if="bookAuthor" class="text-green-10 info-link" @click.stop.prevent="emitNavigate('author', book.author)">
                 {{ bookAuthor }}
@@ -28,26 +28,9 @@
                 </div>
             </div>
 
-            <div v-if="shelvesAppearance && selectedTab == 'fb2' && annotation" class="book-info-annotation" v-html="annotation" />
+            <div v-if="selectedTab == 'fb2' && annotation" class="book-info-annotation" v-html="annotation" />
 
             <div class="row q-mt-sm no-wrap book-info-data">
-                <div v-if="!shelvesAppearance" class="poster-size">
-                    <div class="column justify-center items-center" :class="{'poster': coverSrc, 'no-poster': !coverSrc}" @click.stop.prevent="posterClick">
-                        <img v-if="coverSrc" :src="coverSrc" class="poster-image fit row justify-center items-center" @error="onCoverError" />
-                        <div v-else class="poster-placeholder">
-                            <div class="poster-letter">
-                                {{ posterLetter }}
-                            </div>
-                            <div class="poster-title">
-                                {{ posterTitle }}
-                            </div>
-                            <div class="poster-ext">
-                                {{ posterExt }}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
                 <div class="col column q-ml-sm info-panel">
                     <div class="book-info-tabs-wrap">
                         <q-tabs
@@ -62,8 +45,8 @@
                             mobile-arrows
                             class="info-tabs"
                         >
-                            <q-tab v-if="fb2.length || detailsLoading" name="fb2" :label="shelvesAppearance ? 'Сведения FB2' : 'Fb2 info'" />
-                            <q-tab name="inpx" :label="shelvesAppearance ? 'Данные книги' : 'Inpx info'" />
+                            <q-tab v-if="fb2.length || detailsLoading" name="fb2" label="Сведения FB2" />
+                            <q-tab name="inpx" label="Данные книги" />
                             <q-tab v-if="contents.length" name="contents" label="Содержание" />
                             <q-tab v-if="hasAuthorTab" name="author" :label="authorTabLabel" />
                             <q-tab name="reviews" label="Отзывы и оценки" />
@@ -204,7 +187,6 @@
                 </div>
             </div>
 
-        <div v-if="!shelvesAppearance && selectedTab == 'fb2' && annotation" class="q-mt-md" v-html="annotation" />
         <div v-if="selectedTab == 'fb2' && hasAnnotationMeta" class="annotation-meta q-mt-md">
             <div class="text-blue section-label q-mb-sm">
                 Аннотация и статистика
@@ -393,10 +375,6 @@ class BookInfoDialog {
         this.api = this.$root.api;
     }
 
-    get shelvesAppearance() {
-        return this.embedded || this.$store.state.settings.catalogAppearance === 'shelves';
-    }
-
     mounted() {
         if (this.modelValue) {
             this.dialogVisible = true;
@@ -520,18 +498,6 @@ class BookInfoDialog {
         }
 
         return '';
-    }
-
-    get posterTitle() {
-        return this.book.title || this.bookAuthor || 'Без названия';
-    }
-
-    get posterLetter() {
-        return this.posterTitle.substring(0, 1).toUpperCase();
-    }
-
-    get posterExt() {
-        return (this.book.ext || 'book').toUpperCase();
     }
 
     get seriesLabel() {
@@ -1101,12 +1067,6 @@ export default vueComponent(BookInfoDialog);
     min-height: min(74vh, 760px);
 }
 
-.poster-size {
-    height: 300px;
-    width: 200px;
-    min-width: 100px;
-}
-
 .info-link {
     cursor: pointer;
 }
@@ -1311,87 +1271,6 @@ export default vueComponent(BookInfoDialog);
     text-decoration: underline;
 }
 
-.poster,
-.no-poster {
-    width: 100%;
-    height: 100%;
-}
-
-.poster {
-    border-radius: 8px;
-    overflow: hidden;
-}
-
-.no-poster {
-    border: 1px solid color-mix(in srgb, var(--app-border) 82%, var(--app-primary));
-    border-radius: 8px;
-    overflow: hidden;
-}
-
-.poster-image {
-    object-fit: contain;
-}
-
-.poster:hover {
-    position: relative;
-    top: -1%;
-    left: -1%;
-    width: 102%;
-    height: 102%;
-    cursor: pointer;
-}
-
-.poster-placeholder {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 14px;
-    padding: 18px;
-    text-align: center;
-    color: var(--app-text);
-    background:
-        radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.56), transparent 28%),
-        linear-gradient(145deg, rgba(15, 159, 143, 0.22), rgba(232, 93, 117, 0.16)),
-        var(--app-surface-2);
-}
-
-.poster-letter {
-    width: 76px;
-    height: 76px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.72);
-    color: var(--app-primary);
-    font-size: 42px;
-    font-weight: 800;
-    box-shadow: 0 12px 26px rgba(23, 32, 38, 0.12);
-}
-
-.poster-title {
-    font-size: 14px;
-    font-weight: 750;
-    line-height: 1.3;
-    display: -webkit-box;
-    -webkit-line-clamp: 4;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-}
-
-.poster-ext {
-    padding: 4px 10px;
-    border-radius: 8px;
-    background: rgba(15, 23, 26, 0.08);
-    color: var(--app-muted);
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0;
-}
-
 .author-info-panel {
     padding: 18px;
     border: 1px solid var(--app-border);
@@ -1482,12 +1361,6 @@ export default vueComponent(BookInfoDialog);
         flex-wrap: wrap;
     }
 
-    .poster-size {
-        width: 140px;
-        height: 210px;
-        min-width: 140px;
-    }
-
     .info-panel {
         min-width: 0;
         width: 100%;
@@ -1532,21 +1405,6 @@ export default vueComponent(BookInfoDialog);
         font-size: 12px;
         line-height: 1.15;
         white-space: nowrap;
-    }
-
-    .poster-size {
-        width: 100%;
-        height: auto;
-        min-width: 0;
-    }
-
-    .poster,
-    .no-poster {
-        min-height: 220px;
-    }
-
-    .poster-title {
-        font-size: 13px;
     }
 
     .info-panel {

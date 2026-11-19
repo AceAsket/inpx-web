@@ -180,7 +180,7 @@ async function testRc13FullBackupRestoresAllProfileImagesOnAnotherServer() {
         const makeWorker=(workerConfig,readingListStore)=>{
             const worker=Object.create(WebWorker.prototype);
             Object.assign(worker,{config:{name:'inpx-web',version:'rc13-test',...workerConfig},readingListStore,
-                checkMyState:()=>{},requireAdmin:async()=>true,profileSessions:new Map(),addAdminEvent:()=>{}});
+                checkMyState:()=>{},requireAdmin:async()=>true,addAdminEvent:()=>{}});
             return worker;
         };
         const source=makeWorker(config,store);

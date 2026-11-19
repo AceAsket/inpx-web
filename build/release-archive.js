@@ -3,17 +3,24 @@ const path = require('path');
 const {randomUUID} = require('crypto');
 const {pipeline} = require('stream/promises');
 const {ZipFile} = require('yazl');
+const {fileName} = require('../server/core/RustPrograms');
 
-function executableNames(target, converters = true) {
+function executableNames(target, converters = true, rust = false) {
     if (!['linux', 'linux-arm64', 'macos', 'win'].includes(target))
         throw new Error(`Unknown release target: ${target}`);
     const suffix = target === 'win' ? '.exe' : '';
-    return ['inpx-web' + suffix, ...(converters ? ['bin/fbc' + suffix, 'bin/kindling' + suffix] : [])];
+    const tools = rust ? ['fbc', 'kindling'] : ['fbc', 'kindling', 'mutool'];
+    return ['inpx-web' + suffix, ...(converters ? tools.map(name => 'bin/' + name + suffix) : [])];
+}
+
+function rustProgramEntry(target, program) {
+    return `bin/${fileName(program,target==='win')}`;
 }
 
 async function createReleaseArchive(sourceDir, archiveFile, target) {
     const executables = new Set(executableNames(target));
     if (target.startsWith('linux')) executables.add('bin/djxl');
+    for (const program of ['server','catalog','reader']) executables.add(rustProgramEntry(target,program));
     await fs.access(path.join(sourceDir, executableNames(target, false)[0]));
     const entries = [];
     async function visit(relative = '') {
@@ -53,4 +60,4 @@ async function createReleaseArchive(sourceDir, archiveFile, target) {
     return archiveFile;
 }
 
-module.exports = {createReleaseArchive, executableNames};
+module.exports = {createReleaseArchive, executableNames, rustProgramEntry};

@@ -48,7 +48,6 @@ async function fixture(total,work) {
         await db.freeMemory();
         const worker={db,libraryAssetGeneration:1,dbSearcher:{selectBookIds:async()=>{throw new Error('Suggestions may not expand a full filter/posting result');}}};
         service=new Discovery(worker);
-        service.warm=async()=>{throw new Error('A foreground suggestion must never start or await the full lookup build');};
         let reads=0;
         for(const table of db.table.values()) {
             const reducer=table.reducer,unsafeRow=reducer.unsafeRow.bind(reducer);

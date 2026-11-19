@@ -5,7 +5,7 @@ const path = require('path');
 const resourceRuntime = require('./ResourceRuntime');
 
 const context = new AsyncLocalStorage();
-const defaults = {concurrency: 2, queueLimit: 16, timeoutMs: 120000, queueTimeoutMs: 120000, stderrBytes: 65536};
+const defaults = {queueLimit: 16, timeoutMs: 120000, queueTimeoutMs: 120000, stderrBytes: 65536};
 
 function limit(value, fallback, min, max) {
     if (value === undefined || value === null || value === '')

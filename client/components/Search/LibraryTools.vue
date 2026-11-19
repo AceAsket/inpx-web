@@ -80,6 +80,14 @@
                                 Индекс готовится на сервере с исходными книгами.
                             </p>
                             <template v-else>
+                                <label v-if="isbnIndex.workerLimit" class="task-isbn-workers">
+                                    <span>Потоки чтения</span>
+                                    <select :value="isbnIndex.workers ?? 'auto'" :disabled="!!taskAction" @change="setIsbnThreads($event)">
+                                        <option value="auto">Автоматически</option>
+                                        <option v-for="n in [1, 2, 4, 8, 16, 32]" :key="n" :value="n">{{ n }}</option>
+                                    </select>
+                                    <small>Доступно до {{ isbnIndex.workerLimit }}</small>
+                                </label>
                                 <dl v-if="isbnIndex.total || isbnIndex.checked || isbnIndex.state !== 'empty'" class="task-metrics">
                                     <div><dt>Обработано</dt><dd>{{ count(isbnIndex.checked) }} / {{ count(isbnIndex.total) }}</dd></div>
                                     <div><dt>С ISBN</dt><dd>{{ count(isbnIndex.found) }}</dd></div>
@@ -248,6 +256,12 @@ export default {
         manageIsbn(operation, force = false) {
             return this.runTaskAction('isbn', () => this.$root.api.manageIsbnIndex(operation, {force}));
         },
+        async setIsbnThreads(event) {
+            const select = event.target;
+            const workers = select.value === 'auto' ? null : Number(select.value);
+            await this.runTaskAction('isbn-threads', () => this.$root.api.setIsbnThreads(workers));
+            select.value = this.isbnIndex?.workers ?? 'auto';
+        },
         manageAudit(operation) {
             return this.runTaskAction('audit', () => operation === 'start'
                 ? this.$root.api.startLibraryAudit({deep:this.deep}) : this.$root.api.cancelLibraryAudit());
@@ -329,6 +343,9 @@ export default {
 .task-queue__counts dd, .task-metrics dd {margin: 0; font-weight: 650; font-variant-numeric: tabular-nums;}
 .task-queue__counts dd {font-size: 18px;}
 .task-description, .task-error {margin: 0;}
+.task-isbn-workers {display:flex; align-items:center; gap:6px 12px; flex-wrap:wrap;}
+.task-isbn-workers select {max-width:100%; padding:6px 10px; border:1px solid var(--app-border); border-radius:8px; background:var(--app-surface); color:var(--app-text); font:inherit;}
+.task-isbn-workers small {color:var(--app-muted);}
 .task-queue__summary p {margin-top: 3px;}
 .task-queue__hint {margin-top: 10px;}
 .task-list {list-style: none; margin: 12px 0 0; padding: 0;}

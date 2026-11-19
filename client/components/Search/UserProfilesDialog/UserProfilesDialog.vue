@@ -8,7 +8,7 @@
             </div>
         </template>
 
-        <div class="dialog-box profiles-dialog" :class="{'profiles-dialog--new': shelvesAppearance}">
+        <div class="dialog-box profiles-dialog profiles-dialog--new">
             <template v-if="canManageProfiles && showCreateProfileForm">
                 <p class="profile-form-intro">У каждого профиля свои книги, прогресс и настройки. Логин и пароль нужны для входа с другого устройства.</p>
                 <form class="profile-grid create-grid" @submit.prevent="createProfile">
@@ -300,6 +300,11 @@
                                             @click="editableProfilePasswordVisible = !editableProfilePasswordVisible" />
                                     </template>
                                 </q-input>
+                                <q-input v-if="editableProfile.password || passwordConfirmation"
+                                    v-model="passwordConfirmation" outlined dense clearable
+                                    :type="editableProfilePasswordVisible ? 'text' : 'password'"
+                                    autocomplete="section-edit-profile new-password" label="Повторите новый пароль"
+                                    :error="!!passwordConfirmation && !passwordsMatch" error-message="Пароли не совпадают" hide-bottom-space />
                                 <ProfileTotpPanel v-if="config.profileAuthorized && config.clientApi?.features?.includes('profileTotp')" />
                             </section>
                             <section class="profile-settings-section">
@@ -343,7 +348,7 @@
                             </section>
                             <KoSyncSettings class="profile-settings-section" :user-id="currentUserId" />
                             <div class="profile-submit-row">
-                                <q-btn v-if="config.profileAuthorized" unelevated no-caps color="primary" label="Сохранить изменения" :loading="savingProfile" @click="saveCurrentProfile" />
+                                <q-btn v-if="config.profileAuthorized" unelevated no-caps color="primary" label="Сохранить изменения" :disable="!passwordsMatch" :loading="savingProfile" @click="saveCurrentProfile" />
                             </div>
                         </div>
 
@@ -434,7 +439,7 @@
                         <q-toggle v-model="authPolicyDraft.trustedBrowsersEnabled" :disable="authPolicyBusy" label="Разрешить доверенные браузеры по HTTPS" />
                         <q-input v-if="authPolicyDraft.trustedBrowsersEnabled" v-model.number="authPolicyDraft.trustedBrowserDays" type="number" min="1" max="180" step="1"
                             label="Срок доверия в днях" hint="От 1 до 180" outlined dense :disable="authPolicyBusy" />
-                        <p v-if="authPolicyDraft.trustedBrowsersEnabled">Пока действует доверие, для повторного входа в этом браузере достаточно пароля.</p>
+                        <p v-if="authPolicyDraft.trustedBrowsersEnabled">При входе по HTTPS отметьте «Запомнить это устройство» и введите код из приложения. Затем для входа в тот же профиль достаточно пароля.</p>
                         <q-input v-model="authPolicyPassword" name="password" type="password" label="Пароль администратора" autocomplete="current-password" outlined dense :disable="authPolicyBusy" />
                         <q-input v-if="currentProfile.otpEnabled" v-model="authPolicyCode" name="otp" label="Код из приложения или резервный код" autocomplete="one-time-code"
                             autocapitalize="off" spellcheck="false" maxlength="64" outlined dense :disable="authPolicyBusy" />
@@ -503,6 +508,11 @@ class UserProfilesDialog {
     showCreateProfileForm = false;
     newProfilePasswordVisible = false;
     editableProfilePasswordVisible = false;
+    passwordConfirmation = '';
+
+    get passwordsMatch() {
+        return (this.editableProfile.password || '') === (this.passwordConfirmation || '');
+    }
     creatingProfile = false;
     savingProfile = false;
     profileBlockPendingId = '';
@@ -556,7 +566,6 @@ class UserProfilesDialog {
         return this.otpAdminAction === 'reset' ? 'Сбросить OTP' : this.otpPolicyLabel(this.otpAdminTarget);
     }
 
-    get shelvesAppearance() {return this.$store.state.settings.catalogAppearance === 'shelves';}
 
     get displayProfiles() {
         return [...this.profiles].sort((a, b) => Number(b.id === this.currentUserId) - Number(a.id === this.currentUserId));
@@ -717,6 +726,7 @@ class UserProfilesDialog {
     syncEditableProfile() {
         const current = this.config.currentUserProfile || {};
         this.editableProfilePasswordVisible = false;
+        this.passwordConfirmation = '';
         this.editableProfile = {
             name: current.name || '',
             login: current.login || '',
@@ -1067,11 +1077,12 @@ class UserProfilesDialog {
     }
 
     async saveCurrentProfile() {
-        if (this.savingProfile) return;
+        if (this.savingProfile || !this.passwordsMatch) return;
         this.savingProfile = true;
         try {
             await this.api.updateUserProfile(this.currentUserId, this.editableProfile);
             this.editableProfile.password = '';
+            this.passwordConfirmation = '';
             await this.loadProfiles({preserveState: true});
             this.$root.notify.success(this.uiText.profileSaved);
         } catch (e) {

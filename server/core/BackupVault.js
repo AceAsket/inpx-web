@@ -1,10 +1,20 @@
 const path = require('path');
 const fs = require('fs-extra');
 const crypto = require('crypto');
-const {withFileTransactions, withFileTransaction, writeFileAtomic} = require('./FilePersistence');
+const {withFileTransactions, withFileTransaction} = require('./FilePersistence');
+const {openBackupStore, namePattern} = require('./BackupVaultStore');
+const {executable} = require('./RustLookupIndex');
 const SecretStore = require('./SecretStore');
 const encryption = require('./BackupCrypto');
-const namePattern = /^inpx-web-(?:auto-)?backup-\d{4}-\d{2}-\d{2}T[\d-]+Z-[a-f0-9]{8}\.zip(?:\.enc)?$/;
+
+function scheduleWindow(now) {
+    const start = new Date(now);
+    start.setHours(0,0,0,0);
+    const end = new Date(now);
+    end.setDate(now.getDate()+1);
+    end.setHours(0,0,0,0);
+    return {hour:now.getHours(), dayStart:start.getTime(), nextDay:end.getTime()};
+}
 
 class BackupVault {
     constructor(worker) {
@@ -12,15 +22,10 @@ class BackupVault {
         this.policyFile = path.join(this.config.dataDir, 'backup-vault.json');
         this.directory = path.join(this.config.dataDir, 'backups');
         this.secret = new SecretStore(this.config);
+        this.store = openBackupStore(this.config.dataDir);
         this.running = false;
     }
-    async policy() {
-        let value;
-        try {value = await fs.readJson(this.policyFile);} catch (e) {if (e.code !== 'ENOENT') throw e; value = {};}
-        return {version: 1, enabled: value.enabled === true, hour: Number.isInteger(value.hour) && value.hour >= 0 && value.hour <= 23 ? value.hour : 3,
-            keep: Number.isInteger(value.keep) && value.keep >= 1 && value.keep <= 60 ? value.keep : 7,
-            key: value.key || '', salt: value.salt || '', lastScheduledAt: value.lastScheduledAt || '', lastError: value.lastError || ''};
-    }
+    policy() {return this.store.policy();}
     async status() {
         const policy = await this.policy();
         return {enabled: policy.enabled, hour: policy.hour, keep: policy.keep, passwordSet: !!policy.key,
@@ -31,56 +36,35 @@ class BackupVault {
     }
     async update(options = {}) {
         await withFileTransaction(this.policyFile, async() => {
-            const policy = await this.policy();
+            let replacement = null;
             if (options.password !== undefined && options.password !== '') {
                 const salt = crypto.randomBytes(16), key = await encryption.derive(options.password, salt);
-                try {policy.key = await this.secret.encrypt(key.toString('base64')); policy.salt = salt.toString('base64');}
+                try {replacement = {key:await this.secret.encrypt(key.toString('base64')), salt:salt.toString('base64')};}
                 finally {key.fill(0);}
             }
-            if (options.clearPassword === true) {policy.key = ''; policy.salt = ''; policy.enabled = false;}
-            if (options.hour !== undefined) {
-                if (!Number.isInteger(options.hour) || options.hour < 0 || options.hour > 23) throw new Error('Укажите час от 0 до 23');
-                policy.hour = options.hour;
-            }
-            if (options.keep !== undefined) {
-                if (!Number.isInteger(options.keep) || options.keep < 1 || options.keep > 60) throw new Error('Можно хранить от 1 до 60 автоматических копий');
-                policy.keep = options.keep;
-            }
-            if (options.enabled !== undefined) policy.enabled = options.enabled === true;
-            if (policy.enabled && !policy.key) throw new Error('Для автоматических копий сначала задайте пароль');
-            await writeFileAtomic(this.policyFile, JSON.stringify(policy, null, 2));
+            const {clearPassword,hour,keep,enabled} = options;
+            await this.store.update({clearPassword,hour,keep,enabled},replacement);
         });
         return this.status();
     }
     async path(name) {
-        if (typeof name !== 'string' || !namePattern.test(name)) throw new Error('Некорректное имя резервной копии');
-        const file = path.join(this.directory, name), stat = await fs.lstat(file);
-        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Резервная копия недоступна');
-        return file;
+        await this.store.inspect(name);
+        return path.join(this.directory,name);
     }
     async list(scheduledOnly = false) {
-        let names;
-        try {names = await fs.readdir(this.directory);} catch (e) {if (e.code === 'ENOENT') return []; throw e;}
-        const result = [];
-        const timestamp = name => name.replace(/^inpx-web-(?:auto-)?backup-/, '');
-        for (const name of names.filter(name => namePattern.test(name) && (!scheduledOnly || name.includes('-auto-')))
-            .sort((a, b) => timestamp(b).localeCompare(timestamp(a))).slice(0, 500)) {
-            try {
-                const file = await this.path(name), stat = await fs.stat(file);
-                result.push({name, size: stat.size, createdAt: stat.mtime.toISOString(), encrypted: name.endsWith('.enc'), scheduled: name.includes('-auto-'),
-                    link: `${String(this.config.rootPathStatic || '').replace(/\/$/, '')}/admin-backups/${encodeURIComponent(name)}`});
-            } catch (e) {if (e.code !== 'ENOENT') throw e;}
-        }
-        return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        const prefix = `${String(this.config.rootPathStatic || '').replace(/\/$/, '')}/admin-backups/`;
+        return (await this.store.list(scheduledOnly)).map(({modifiedMs,...row}) => ({
+            ...row, createdAt:new Date(modifiedMs).toISOString(), link:prefix+encodeURIComponent(row.name),
+        }));
     }
-    async create({scheduled = false} = {}) {
+    async create({scheduled = false, window} = {}) {
         if (this.running) throw new Error('Резервная копия уже создаётся');
         this.running = true;
         try {
             const files = Object.values(require('./BackupTransaction').targets(this.config));
             return await withFileTransactions(files, async() => {
-                const policy = await this.policy();
-                if (scheduled && (!policy.enabled || !policy.key)) return null;
+                const policy = await this.store.policy(window);
+                if (scheduled && (!policy?.enabled || !policy.key)) return null;
                 let key = null, salt;
                 if (policy.key) {
                     key = Buffer.from(await this.secret.decrypt(policy.key), 'base64'); salt = Buffer.from(policy.salt, 'base64');
@@ -93,58 +77,58 @@ class BackupVault {
                     if ((await fs.stat(source)).size > require('./RequestLimits').limits(this.config).backup)
                         throw new Error('Резервная копия превышает лимит восстановления. Увеличьте backupUploadLimitMb');
                     result.encrypted = !!key;
-                    if (scheduled) {
-                        policy.lastScheduledAt = new Date().toISOString(); policy.lastError = '';
-                        await writeFileAtomic(this.policyFile, JSON.stringify(policy, null, 2));
-                    }
+                    if (scheduled) await this.store.markCreated(new Date().toISOString());
                 } catch (e) {
                     if (result?.fileName) await fs.remove(path.join(this.directory, result.fileName)).catch(() => {});
                     throw e;
                 } finally {if (key) key.fill(0);}
                 this.worker.addAdminEvent('info', 'backup', scheduled ? 'Создана автоматическая резервная копия' : 'Создана резервная копия');
-                if (scheduled) {
-                    const automatic = await this.list(true);
-                    for (const row of automatic.slice(policy.keep)) await fs.remove(await this.path(row.name));
-                }
+                if (scheduled) await this.store.rotate(policy.keep);
                 return result;
             });
         } finally {this.running = false;}
     }
     async payload(name, password) {
-        const file = await this.path(name), stat = await fs.stat(file);
-        if (stat.size > require('./RequestLimits').limits(this.config).backup) throw new Error('Превышен размер резервной копии');
+        const size = await this.store.inspect(name);
+        if (size > require('./RequestLimits').limits(this.config).backup) throw new Error('Превышен размер резервной копии');
+        const file = path.join(this.directory,name);
         return {contentBase64: (await fs.readFile(file)).toString('base64'), password};
+    }
+    restoreSource(name, password) {
+        if (!executable()) return this.payload(name,password);
+        return {password,[require('./BackupArchive').savedBackup]:name};
     }
     async remove(name) {
         if (this.running) throw new Error('Дождитесь окончания создания резервной копии');
-        await fs.remove(await this.path(name)); return this.status();
+        await this.store.remove(name); return this.status();
     }
     async tick(now = new Date()) {
         if (this.running || this.worker.myState !== 'normal') return;
-        const policy = await this.policy();
-        if (!policy.enabled || now.getHours() < policy.hour) return;
-        const previous = new Date(policy.lastScheduledAt);
-        if (Number.isFinite(previous.getTime()) && previous.toDateString() === now.toDateString()) return;
-        try {await this.create({scheduled: true});}
+        const window = scheduleWindow(now);
+        if (!await this.store.due(window)) return;
+        try {await this.create({scheduled:true,window});}
         catch (e) {
             this.worker.addAdminEvent('error', 'backup', `Не удалось создать автоматическую копию: ${e.message}`);
-            await withFileTransaction(this.policyFile, async() => {
-                const fresh = await this.policy(); fresh.lastError = 'Не удалось создать копию. Проверьте журнал и место на диске.';
-                await writeFileAtomic(this.policyFile, JSON.stringify(fresh, null, 2));
-            });
+            await withFileTransaction(this.policyFile, () => this.store.markFailed());
             // A failed disk or password must not cause a retry loop every minute.
             this.retryAfter = Date.now() + 60 * 60 * 1000;
         }
     }
     start() {
         if (this.timer) return;
+        this.store.start?.().catch(error => this.worker.addAdminEvent('error','backup',error.message));
         this.timer = setInterval(() => {
             if (Date.now() < (this.retryAfter || 0) || this.ticking) return;
             this.ticking = this.tick().catch(e => this.worker.addAdminEvent('error', 'backup', e.message)).finally(() => {this.ticking = null;});
         }, 60000);
         this.timer.unref();
     }
-    stop() {clearInterval(this.timer); this.timer = null;}
+    async stop() {
+        clearInterval(this.timer);
+        this.timer = null;
+        await this.ticking;
+        await this.store.stop?.();
+    }
 }
 module.exports = BackupVault;
 module.exports.namePattern = namePattern;

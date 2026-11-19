@@ -5,7 +5,7 @@ const {targets} = require('./BackupTransaction');
 const {fileName: progressJournal} = require('./ReaderProgressJournal');
 
 const databaseDirectories = ['db', 'db.previous', 'web-access'];
-const databaseLocks = new Set(['__lock', '__softlock', '__softlockcheck']);
+const databaseLocks = new Set(['__lock', '__softlock', '__softlockcheck', '__inpx_lock']);
 const stateEntries = [
     'session-secret', 'reader-backgrounds', progressJournal, 'public', 'backups',
     'kosync.json', 'kosync', 'telegram-bot-state.json', 'resource-benchmark.json',
@@ -15,6 +15,8 @@ const stateEntries = [
 
 async function copyWorkingDirectory(source, destination, config) {
     const configFile = path.resolve(config.configFile);
+    const native = await require('./RustStartup').run('migrate-data', [destination, source, configFile]);
+    if (typeof native?.directory === 'string') return native.directory;
     const entries = Object.keys(targets({...config, dataDir: source})).filter(name => name !== 'config.json');
     const existing = [];
     for (const entry of [...entries, ...stateEntries]) {

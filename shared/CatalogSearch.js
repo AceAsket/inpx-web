@@ -40,4 +40,4 @@ function matcherSource(escapedQuery) {
         return createMatcher(${escapedQuery});
     })()`;
 }
-module.exports = {normalize, words, root, match, expression, matcherSource};
+module.exports = {normalize, words, root, createMatcher, match, expression, matcherSource};

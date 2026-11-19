@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const {BookMetadata} = require('./BookMetadata');
+const {wasServiceAuthorized} = require('./RustHttpServer');
 const genreNames = new Map(require('./genres').flatMap(section => section.value).map(genre => [genre.value, genre.name]));
 const coverLifetime = 24 * 60 * 60 * 1000;
 // Audiobookshelf's CustomProviderAdapter stops waiting after 10 seconds.
@@ -24,12 +25,16 @@ function isAuthorizedRequest(req, config) {
     if (!config.absEnabled || !config.absToken)
         return false;
     const pathname = String(req.path || '').replace(/\/+$/, '');
-    if (![rootPath(config), `${rootPath(config)}/search`, `${rootPath(config)}/cover`].includes(pathname) || !['GET', 'HEAD'].includes(req.method))
+    const root = rootPath(config);
+    const cover = pathname === `${root}/cover`;
+    if ((!cover && pathname !== root && pathname !== `${root}/search`) || !['GET', 'HEAD'].includes(req.method))
         return false;
+    if (wasServiceAuthorized(req, 'metadata') || (cover && wasServiceAuthorized(req, 'cover')))
+        return true;
     const supplied = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
     if (equal(supplied, config.absToken))
         return true;
-    if (pathname !== `${rootPath(config)}/cover`)
+    if (!cover)
         return false;
     const {uid, expires, signature} = req.query || {};
     if (typeof uid !== 'string' || !uid || uid.length > 256 || typeof expires !== 'string' || typeof signature !== 'string')

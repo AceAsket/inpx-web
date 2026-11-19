@@ -195,37 +195,56 @@ if (require.main === module) (async() => {
             } finally {socket.close();}
         }, source);
         await page.goto(base + '/#/?lang=ru');
-        await page.locator('.search-list-toggle').waitFor();
-        assert.equal(await page.locator('.library-shell--active').count(), 0, 'Classic is the default');
-        await page.getByRole('note', {name: 'Новое оформление библиотеки'}).waitFor();
-        await page.getByRole('button', {name: 'Скрыть подсказку об оформлении', exact: true}).click();
-        await page.reload(); await page.locator('.search-list-toggle').waitFor();
-        assert.equal(await page.locator('.appearance-hint').count(), 0, 'Hint dismissal persists in this browser');
-        assert.equal(await page.locator('.author-group').count(), 0, 'Default catalog displays books, not authors');
-        await page.locator('.profile-login-action,.profile-status-chip').first().click();
+        await page.locator('.catalog-search-panel').waitFor();
+        await page.waitForURL(url => /^#\/(?:books)?(?:\?|$)/.test(url.hash));
+        await page.getByRole('link', {name: 'Профиль', exact: true}).click();
+        await page.getByRole('region', {name: 'Текущий профиль'}).getByRole('button', {name: 'Войти', exact: true}).click();
         await page.getByRole('textbox', {name: 'Логин', exact: true}).fill('admin');
         await page.getByRole('textbox', {name: 'Пароль', exact: true}).fill('appearance-local-test');
         await page.getByRole('button', {name: 'OK', exact: true}).click();
-        await page.locator('.profile-controls .profile-logout').waitFor();
+        await page.locator('.profile-bottom .profile-logout').waitFor();
         const indexedBooks = await api(`const response = await root.api.search('title', {lang:'ru',limit:40}); return response.found.flatMap(item=>item.books||[]);`);
         const uids = indexedBooks.map(book => book._uid);
         assert(uids.length >= 9, 'Fixture must contain real indexed books');
         recommendationBook = {...indexedBooks[8], libraryRating:{value:4.63,count:128}};
         await api(`const uids=${JSON.stringify(uids)}; for(let i=0;i<4;i++) await root.api.updateReaderProgress(uids[i], {percent:[.34,.14,.01,1][i],sectionId:'chapter'}); return true;`);
 
-        await page.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await page.getByRole('button', {name: 'Настройки библиотеки', exact: true}).click();
+        const desktopSettings = page.locator('.library-dialog-card[data-dialog-kind="settings"]');
+        await desktopSettings.waitFor();
+        assert.equal(await desktopSettings.locator('.settings-group[open]').count(), 0);
+        await desktopSettings.screenshot({path:path.join(directory,'settings-desktop.png')});
+        await desktopSettings.getByRole('button', {name:/Внешний источник витрины/}).click();
+        const sourceDialog = page.locator('.library-dialog-card').filter({has:page.getByText('Тип источника', {exact:true})});
+        await sourceDialog.waitFor();
+        for (const source of ['Нет', 'Веб-витрина']) {
+            await sourceDialog.getByRole('combobox').first().click();
+            await page.getByRole('option', {name:source, exact:true}).click();
+            for (const width of [717, 320]) {
+                await page.setViewportSize({width, height:640});
+                const body = sourceDialog.locator('.dialog-body');
+                const dimensions = await body.evaluate(el => ({width:el.clientWidth, content:el.scrollWidth}));
+                assert(dimensions.content <= dimensions.width,
+                    `External source "${source}" overflows at ${width}px: ${JSON.stringify(dimensions)}`);
+            }
+        }
+        await sourceDialog.getByRole('button', {name:'Удалить источник',exact:true}).click();
+        await page.setViewportSize({width:1440, height:1000});
+        await sourceDialog.getByRole('button', {name:'Закрыть окно',exact:true}).click();
+        await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         for (const name of ['Автоматически загружать отзывы и оценки', 'Автоматически загружать сведения об авторе']) {
             const option = page.getByRole('checkbox', {name, exact:true});
             assert.equal(await option.getAttribute('aria-checked'), 'false'); await option.click();
         }
         await page.waitForFunction(() => {const s = JSON.parse(localStorage.getItem('vuex') || '{}').settings; return s?.autoLoadBookReviews && s?.autoLoadAuthorInfo;});
-        await page.reload(); await page.locator('.search-list-toggle').waitFor();
-        await page.getByRole('button', {name: 'Настройки', exact: true}).click();
+        await page.reload(); await page.getByRole('navigation', {name: 'Разделы библиотеки'}).waitFor();
+        await page.getByRole('button', {name: 'Настройки библиотеки', exact: true}).click();
+        await page.locator('summary').filter({hasText:'Каталог и карточки'}).click();
         for (const name of ['Автоматически загружать отзывы и оценки', 'Автоматически загружать сведения об авторе']) {
             const option = page.getByRole('checkbox', {name, exact:true});
             assert.equal(await option.getAttribute('aria-checked'), 'true', 'Opt-in persists'); await option.click();
         }
-        await page.getByRole('button', {name: /^Новый дизайн/}).click();
+        await page.locator('.library-dialog-card[data-dialog-kind="settings"]').getByRole('button', {name: 'Закрыть окно', exact: true}).click();
         await page.getByRole('navigation', {name: 'Разделы библиотеки'}).waitFor();
         const appPromo = page.getByRole('button',{name:'Скачать или подключить INPX Reader',exact:true});
         await appPromo.waitFor();
@@ -254,6 +273,7 @@ if (require.main === module) (async() => {
         assert.equal(await appPromo.count(),0,'Hiding the app block persists after reload');
         await page.getByRole('button',{name:'Настройки библиотеки',exact:true}).click();
         const appearanceSettings=page.locator('.library-dialog-card[data-dialog-kind="settings"]');
+        await appearanceSettings.locator('summary').filter({hasText:'Приложение и загрузки'}).click();
         const appSwitch=appearanceSettings.getByRole('checkbox',{name:'QR-код приложения в боковом меню',exact:true});
         assert.equal(await appSwitch.getAttribute('aria-checked'),'false');
         await appearanceSettings.getByRole('button',{name:'Открыть QR',exact:true}).click();await appDialog.waitFor();
@@ -802,20 +822,19 @@ if (require.main === module) (async() => {
         }
         await page.getByRole('button', {name: 'Настройки библиотеки', exact: true}).click();
         await page.locator('.library-dialog-card[data-dialog-kind="settings"]').waitFor();
+        const settingsCard = page.locator('.library-dialog-card[data-dialog-kind="settings"]');
+        assert(await settingsCard.locator('.settings-group > summary').evaluateAll(rows => rows.every(row =>
+            row.getBoundingClientRect().right <= row.parentElement.getBoundingClientRect().right)));
+        await settingsCard.screenshot({path:path.join(directory,'settings-sections-mobile.png')});
+        const shelfSettings = settingsCard.locator('details').filter({has:page.locator('summary').filter({hasText:'Полки и витрины'})});
+        assert.equal(await shelfSettings.evaluate(node => node.open), false);
+        await shelfSettings.locator('summary').focus();
+        await page.keyboard.press('Enter');
+        await shelfSettings.getByRole('checkbox',{name:'Новинки',exact:true}).waitFor();
+        await settingsCard.screenshot({path:path.join(directory,'settings-mobile.png')});
         const settingsBounds = await page.locator('.library-dialog-card[data-dialog-kind="settings"]').evaluate(node => ({width: node.clientWidth, scroll: node.scrollWidth, height: node.getBoundingClientRect().height}));
         assert(settingsBounds.scroll <= settingsBounds.width + 1 && settingsBounds.height <= 844 - 24, 'Settings must fit a phone');
         await page.getByRole('button', {name: 'OK', exact: true}).click();
-        await page.getByRole('link', {name: 'Профиль', exact: true}).click();
-        await page.getByRole('button', {name: /^Классический/}).click();
-        await page.locator('.search-list-toggle').waitFor();
-        assert.equal(await page.locator('.library-shell--active').count(), 0);
-        assert.equal(await page.locator('.appearance-hint').count(), 0, 'Users who tried the new design do not see the hint again');
-        await page.reload(); await page.locator('.search-list-toggle').waitFor();
-        assert.equal(await page.locator('.library-shell--active').count(), 0, 'Classic selection persists');
-        await screenshot('classic-dark-390');
-
-        await page.getByRole('button', {name: 'Настройки', exact: true}).click();
-        await page.getByRole('button', {name: /^Новый дизайн/}).click();
         await page.getByRole('link', {name: 'Профиль', exact: true}).click();
         await page.locator('.profile-card').waitFor();
         await page.locator('.profile-bottom .profile-logout').click();
@@ -827,17 +846,23 @@ if (require.main === module) (async() => {
         assert.equal(await recommendations.count(), 0, 'Logout clears private recommendations');
         assert.equal(await shelves.count(), 0, 'Logout clears pinned private shelves');
         await page.reload(); await page.locator('.overview-welcome').waitFor();
-        assert.equal(await page.locator('.library-shell--active').count(), 1, 'Shelves selection persists');
+        assert.equal(await page.locator('.library-shell--active').count(), 1, 'The library still uses the new shell after reloading');
+        // This context checks the saved appearance across an explicit reload.
+        // A first-time service worker claim can reload the document concurrently.
         const fresh = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers:'block'});
+        await fresh.addInitScript(() => {
+            if (!localStorage.getItem('vuex'))
+                localStorage.setItem('vuex', JSON.stringify({settings: {catalogAppearance: 'classic'}}));
+        });
         await fresh.goto(base + '/#/');
-        await fresh.getByRole('button', {name: 'Переключить дизайн', exact: true}).click();
+        await fresh.waitForURL('**/#/overview');
         await fresh.getByRole('navigation', {name: 'Разделы библиотеки'}).waitFor();
         await fresh.reload(); await fresh.locator('.library-shell--active').waitFor();
         assert.equal(await fresh.locator('.appearance-hint').count(), 0);
         await fresh.close();
         assert.deepEqual(errors, []);
         await fs.writeJson(path.join(directory, 'result.json'), {base, artifacts, errors, actions}, {spaces: 2});
-        console.log(`Library appearance: classic/shelves, persistence, mobile/tablet/desktop, light/dark, reading progress, catalog query, pinned shelves, favorites and logout passed. Artifacts: ${directory}`);
+        console.log(`Library appearance: shelves, saved settings, mobile/tablet/desktop, light/dark, reading progress, catalog query, pinned shelves, favorites and logout passed. Artifacts: ${directory}`);
     } catch (error) {
         if (browser) {const pages = browser.contexts().flatMap(context => context.pages()); if (pages[0]) {await pages[0].screenshot({path: path.join(directory, 'failure.png')}).catch(() => {}); await fs.writeFile(path.join(directory, 'failure.html'), await pages[0].content());}}
         console.error(output); throw error;

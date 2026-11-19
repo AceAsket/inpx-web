@@ -24,7 +24,6 @@ import StdDialog from './share/StdDialog.vue';
 
 import Api from './Api/Api.vue';
 import LibraryShell from './Library/LibraryShell.vue';
-import {appearance, appearanceRedirect} from './Library/libraryModel';
 
 const componentOptions = {
     components: {
@@ -40,14 +39,9 @@ const componentOptions = {
         },
         '$route.path'(path, previous) {
             this.applyPwaManifest();
-            this.applyCatalogAppearance();
+            this.applyLibraryLayout();
             if (previous === '/reader-lab' && path !== previous && !this.accessGranted)
                 this.$root.api?.updateConfig();
-        },
-        catalogAppearance() {
-            const redirect = appearanceRedirect(this.$route, this.catalogAppearance);
-            if (redirect) this.$router.replace(redirect);
-            this.applyCatalogAppearance();
         },
     },
 
@@ -110,7 +104,7 @@ class App {
 
         this.applyTheme(this.darkTheme);
         this.applyPwaManifest();
-        this.applyCatalogAppearance();
+        this.applyLibraryLayout();
         this.setAppTitle();
     }
 
@@ -134,17 +128,11 @@ class App {
         return !!this.settings.darkTheme;
     }
 
-    get catalogAppearance() {
-        return appearance(this.settings.catalogAppearance);
-    }
-
     get isShelvesLayout() {
-        return this.catalogAppearance === 'shelves' && !this.$route.path.startsWith('/reader');
+        return !this.$route.path.startsWith('/reader');
     }
 
-    applyCatalogAppearance() {
-        if (this.catalogAppearance === 'shelves' && !this.settings.shelvesHintDismissed)
-            this.commit('setSettings', {shelvesHintDismissed: true});
+    applyLibraryLayout() {
         if (this.isShelvesLayout) document.body.dataset.catalogAppearance = 'shelves';
         else delete document.body.dataset.catalogAppearance;
     }

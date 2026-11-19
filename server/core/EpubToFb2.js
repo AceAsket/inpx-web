@@ -6,6 +6,7 @@ const sax = require('sax');
 const he = require('he');
 const iconv = require('iconv-lite');
 const {crc32} = require('zlib');
+const rustCache = require('./RustBookCache');
 
 const version = 'epub-fb2-v1';
 const MB = 1024 * 1024;
@@ -91,7 +92,12 @@ function xml(data, check) {
     return root;
 }
 
-async function convert(input, output, options = {}) {
+function convert(input, output, options) {
+    const binary = rustCache.executable();
+    return binary ? rustCache.convertEpub(binary,input,output,options) : convertLegacy(input,output,options);
+}
+
+async function convertLegacy(input, output, options = {}) {
     const deadline = Math.min(options.deadline || Infinity, Date.now() + (options.timeoutMs || 120000)), signal = options.signal;
     const maxOutput = Math.min(256 * MB, Number(options.maxOutputBytes) || 256 * MB);
     const check = () => {

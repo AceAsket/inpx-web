@@ -1,5 +1,6 @@
 const {MemoryCache} = require('./MemoryCache');
 const {withFileTransaction} = require('./FilePersistence');
+const {byIds,byUids} = require('./CatalogueRows');
 
 const listLimit = 200;
 const compareNewest = (a, b) => String(b.date || '').localeCompare(String(a.date || ''))
@@ -21,9 +22,8 @@ class LibraryFollows {
         const ids = await this.worker.dbSearcher.selectBookIds({[kind]:'=' + value.trim(),del:'0'});
         if (ids.length > 5000) throw new Error('Слишком много книг для одной подписки (лимит 5000)');
         const books = [];
-        for (let offset = 0; offset < ids.length; offset += 1000) books.push(...await db.select({table:'book',
-            where:`@@id(${db.esc(Array.from(ids.slice(offset,offset + 1000)))})`,
-            map:'row => ({_uid:row._uid,title:row.title,author:row.author,series:row.series,ext:row.ext,del:row.del})'}));
+        for (let offset = 0; offset < ids.length; offset += 1000) books.push(...await byIds(db,
+            Array.from(ids.slice(offset,offset+1000)),['_uid','title','author','series','ext','del']));
         return books.filter(book => book._uid && !book.del);
     }
     async change(userId, operation, payload = {}, authorize = null) {
@@ -95,8 +95,7 @@ class LibraryFollows {
         const wanted = [...new Set(follows.flatMap(row => row.newUids))];
         const available = new Map();
         for (let offset = 0; offset < wanted.length; offset += 1000) {
-            const rows = await db.select({table:'book',where:`@@hash('_uid', ${db.esc(wanted.slice(offset,offset + 1000))})`,
-                map:'row => ({_uid:row._uid,title:row.title,author:row.author,series:row.series,ext:row.ext,date:row.date,del:row.del})'});
+            const rows = await byUids(db,wanted.slice(offset,offset+1000),['_uid','title','author','series','ext','date','del']);
             for (const {del,...book} of rows) if (!del) available.set(book._uid,book);
             assertCurrent();
         }

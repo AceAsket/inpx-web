@@ -100,13 +100,16 @@ async function testUpgradeRelocatesWorkingDirectoryWithoutLosingProfiles() {
         await fs.outputFile(path.join(destination, 'reading-lists.json'), 'separate installation');
         await fs.outputFile(path.join(dir, 'public', 'custom-reader', 'index.html'), 'custom reader');
         await fs.outputFile(path.join(dir, 'db', '__softlock'), 'old lock');
+        await fs.outputFile(path.join(dir, 'db', '__inpx_lock'), '');
         await fs.outputFile(path.join(dir, 'tmp', 'old-cache'), 'temporary data');
         await fs.outputFile(path.join(dir, 'inpx-web'), 'binary fixture');
 
         const execFile = require('util').promisify(require('child_process').execFile);
         const configModule = require.resolve('../server/config');
         const fsModule = require.resolve('fs-extra');
-        const run = async(failSave = false) => {
+        const run = async(failSave = false, useNative = true) => {
+            const env = {...process.env};
+            if (!useNative) delete env.INPX_RUST_CATALOG_BINARY;
             const result = await execFile(process.execPath, ['-e', `
                 const path = require('path');
                 const [configModule, fsModule, failSave] = process.argv.slice(1);
@@ -127,11 +130,12 @@ async function testUpgradeRelocatesWorkingDirectoryWithoutLosingProfiles() {
                     const {dataDir, logDir, tempDir, opds, server} = manager.config;
                     console.log(JSON.stringify({dataDir, logDir, tempDir, password: opds.password, port: server.port}));
                 })().catch(error => {console.error(error.message); process.exitCode = 1;});
-            `, configModule, fsModule, String(failSave)], {cwd: dir});
+            `, configModule, fsModule, String(failSave)], {cwd: dir, env});
             return JSON.parse(result.stdout);
         };
 
-        await assert.rejects(run(true), /injected config save failure/);
+        // Resume the published directory after a failed save in the previous release.
+        await assert.rejects(run(true, false), /injected config save failure/);
         assert.deepStrictEqual(await fs.readJson(configFile), saved);
         const afterFailure = await fs.readdir(destination);
         const complete = afterFailure.find(entry => entry.startsWith('migrated-data-'));
@@ -147,7 +151,7 @@ async function testUpgradeRelocatesWorkingDirectoryWithoutLosingProfiles() {
         assert.strictEqual((await fs.readJson(configFile)).dataDir, dataDir);
         assert.strictEqual(await fs.readFile(path.join(destination, 'reading-lists.json'), 'utf8'), 'separate installation');
         assert.strictEqual(await fs.readFile(path.join(dataDir, 'public', 'custom-reader', 'index.html'), 'utf8'), 'custom reader');
-        for (const entry of ['db/__softlock', 'tmp', 'inpx-web'])
+        for (const entry of ['db/__softlock', 'db/__inpx_lock', 'tmp', 'inpx-web'])
             assert(!await fs.pathExists(path.join(dataDir, entry)));
         assert(!await fs.pathExists(path.join(dir, '.upgrade-version.json')));
         const {snapshot} = await fs.readJson(path.join(dataDir, '.upgrade-version.json'));

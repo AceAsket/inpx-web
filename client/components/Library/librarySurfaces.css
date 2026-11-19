@@ -1,15 +1,7 @@
 /* Shared surfaces for existing catalog screens. The reader and classic layout keep their own styles. */
 body[data-catalog-appearance="shelves"] summary {display: list-item; list-style-position: inside;}
 body[data-catalog-appearance="shelves"] summary:focus-visible {outline: 2px solid var(--app-primary); outline-offset: -2px;}
-body[data-catalog-appearance="shelves"] .library-dialog-card .settings-dialog-body {
-    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 14px;
-    min-width: 0 !important; width: 100%; font-size: 14px !important; margin: 0;
-}
-body[data-catalog-appearance="shelves"] .settings-dialog-body > :not(.q-checkbox) {grid-column: 1 / -1;}
-body[data-catalog-appearance="shelves"] .settings-dialog-body > .q-checkbox {min-width: 0; align-items: flex-start; margin: 0;}
-body[data-catalog-appearance="shelves"] .settings-dialog-body .q-checkbox__label {line-height: 1.5; padding-top: 8px;}
-body[data-catalog-appearance="shelves"] .settings-dialog-body .appearance-control {margin: 0 0 18px;}
-body[data-catalog-appearance="shelves"] .library-dialog-card .q-field--outlined .q-field__control {background: var(--app-surface) !important; border-radius: 12px;}
+body[data-catalog-appearance="shelves"] .library-dialog-card .q-field--outlined .q-field__control {--field-autofill-bg: var(--app-surface); background: var(--field-autofill-bg) !important; border-radius: 12px;}
 body[data-catalog-appearance="shelves"] .library-dialog-card .dialog-box {width: 100%; max-width: none; min-width: 0; padding: 0;}
 body[data-catalog-appearance="shelves"] .library-dialog-card .dialog-body > [style*="width"] {width: 100% !important; max-width: 100% !important; min-width: 0 !important;}
 body[data-catalog-appearance="shelves"] .library-dialog-card .info-box {height: auto !important; min-height: 0; padding: 0; margin-top: 0; overflow: visible;}
@@ -75,7 +67,6 @@ body[data-catalog-appearance="shelves"] .std-dialog-card:not(.std-dialog-card--r
 body[data-catalog-appearance="shelves"] .std-dialog-card:not(.std-dialog-card--reader) .buttons .q-btn {border-radius: 10px; min-height: 38px; font-weight: 550;}
 body[data-catalog-appearance="shelves"] .search--shelves .catalog-footer {font-size: 12px; padding: 14px 24px;}
 @media (max-width: 599px) {
-    body[data-catalog-appearance="shelves"] .library-dialog-card .settings-dialog-body {grid-template-columns: minmax(0, 1fr);}
     body[data-catalog-appearance="shelves"] .library-dialog-card .poster-size {width: 80px; min-width: 80px; height: 120px;}
     body[data-catalog-appearance="shelves"] .library-dialog-card .book-info-summary {gap: 14px;}
     body[data-catalog-appearance="shelves"] .library-dialog-card .book-info-cover {width: 72px; flex-basis: 72px;}

@@ -1,13 +1,14 @@
 const fs = require('fs-extra');
-const path = require('path');
 const {createReleaseArchive} = require('./release-archive');
-
 const {bundleLinuxDjxl} = require('./linux-djxl');
+const {bundleMutool, nativeTarget} = require('../scripts/bundle-mutool');
 
 const pckg = require('../package.json');
-const platform = process.argv[2];
+const args = process.argv.slice(2);
+const platform = args.find(arg => arg !== '--application-only');
+const applicationOnly = args.includes('--application-only');
 
-const distDir = path.resolve(__dirname, '../dist');
+const distDir = require('./dist-dir');
 const outDir = `${distDir}/release`;
 
 async function makeRelease(target) {
@@ -16,6 +17,12 @@ async function makeRelease(target) {
     if (await fs.pathExists(srcDir)) {
         const zipFile = `${outDir}/${pckg.name}-${pckg.version}-${target}.zip`;
 
+        const bin = `${srcDir}/bin`;
+        if (!applicationOnly && !await fs.pathExists(`${bin}/public.json`)) {
+            if (target === nativeTarget) await bundleMutool(target, bin);
+            else if (!await fs.pathExists(`${bin}/mutool${target === 'win' ? '.exe' : ''}`))
+                throw new Error(`Stage the ${target} MuPDF files in ${bin} before cross-packaging, or pass --application-only.`);
+        }
         if (target === 'linux' || target === 'linux-arm64')
             await bundleLinuxDjxl(target, `${srcDir}/bin`);
         await createReleaseArchive(srcDir, zipFile, target);

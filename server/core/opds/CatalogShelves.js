@@ -94,8 +94,9 @@ async function selection(worker, shelf) {
             for (const id of ids) for (const tableId of tableIds(mapping, id)) counts.set(tableId, (counts.get(tableId) || 0) + 1);
             const groupIds = [...counts.keys()].filter(id => id !== 0);
             for (let offset = 0; offset < groupIds.length; offset += 1000) {
-                const rows = await db.select({table:kind, where:`@@id(${db.esc(groupIds.slice(offset, offset + 1000))})`,
-                    map:'(row) => ({id:row.id, name:row.name})'});
+                const keys = groupIds.slice(offset,offset+1000);
+                const rows = db.nativeCatalogue ? await searcher.readNameRows(kind,keys)
+                    : await db.select({table:kind,where:`@@id(${db.esc(keys)})`,map:'(row) => ({id:row.id, name:row.name})'});
                 current();
                 for (const row of rows) {
                     // The author index also contains joint-author strings for exact book searches.
@@ -143,7 +144,11 @@ async function page(worker, shelf, query) {
             if (!found) throw Object.assign(new Error('Группа не найдена'), {status:404});
             groupTitle = found.group;
             ids = ids.filter(id => tableIds(selected.mapping, id).includes(Number(group)));
-            if (shelf.grouping === 'series' && ids.length) {
+            if (shelf.grouping==='series' && ids.length && selected.db.nativeCatalogue) {
+                const rows = await selected.db.booksByIds(ids,['id','serno','title']);
+                rows.sort((a,b)=>(a.serno || 0)-(b.serno || 0) || String(a.title || '').localeCompare(String(b.title || ''),'ru') || a.id-b.id);
+                ids = Uint32Array.from(rows,row=>row.id);
+            } else if (shelf.grouping === 'series' && ids.length) {
                 const sorted = await selected.db.select({table:'book', rawResult:true, where:`
                     const ids = ${selected.db.esc(Array.from(ids))};
                     const keys = new Map();
@@ -163,7 +168,7 @@ async function page(worker, shelf, query) {
         }
         total = ids.length;
         const slice = Array.from(ids.slice(offset, offset + PAGE_SIZE));
-        const rows = slice.length ? await selected.db.select({table:'book', where:`@@id(${selected.db.esc(slice)})`}) : [];
+        const rows = slice.length ? await require('../CatalogueRows').byIds(selected.db,slice) : [];
         selected.current();
         const byId = new Map(rows.map(row => [row.id, row]));
         entries = slice.map(id => byId.get(id)).filter(Boolean);

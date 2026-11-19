@@ -1,7 +1,5 @@
 const fs = require('fs-extra');
 const path = require('path');
-const yazl = require('yazl');
-const {pipeline} = require('stream/promises');
 
 const express = require('express');
 const utils = require('./core/utils');
@@ -11,6 +9,7 @@ const bookConverter = require('./core/BookConverter');
 const bookNaming = require('./core/BookNaming');
 const bookDownloadHeaders = require('./core/BookDownloadHeaders');
 const {countDownload} = require('./core/ServerActivity');
+const {deliverFile} = require('./core/RustHttpServer');
 const crypto = require('crypto');
 const webAppDir = require('../build/appdir');
 const externalTools = require('./core/ExternalTools');
@@ -63,15 +62,6 @@ function getBookDownloadMimeType(fileName) {
     default:
         return null;
     }
-}
-
-function generateZip(zipFile, dataFile, dataFileInZip) {
-    const zip = new yazl.ZipFile();
-    const complete = pipeline(zip.outputStream, fs.createWriteStream(zipFile));
-    zip.on('error', error => zip.outputStream.destroy(error));
-    zip.addFile(dataFile, dataFileInZip);
-    zip.end();
-    return complete;
 }
 
 function normalizeLibraryDir(dir = '') {
@@ -235,7 +225,7 @@ async function sendCachedCover(res, cacheDir, cacheKey, checkState = () => {}) {
         checkState();
         res.set('Cache-Control', 'private, no-cache');
         res.type(item.type);
-        res.sendFile(cacheFile);
+        if (!deliverFile(res.req,res,'cover',cacheFile)) res.sendFile(cacheFile);
         return true;
     }
 
@@ -258,119 +248,8 @@ function normalizeWebAppBasePath(rootPathStatic = '') {
 
 function appResetPage(rootPathStatic = '') {
     const basePath = JSON.stringify(normalizeWebAppBasePath(rootPathStatic)).replace(/</g, '\\u003c');
-    return `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="robots" content="noindex,nofollow">
-  <title>Обновление INPX Web</title>
-  <style>
-    body{margin:0;background:#f4ede2;color:#2d2925;font:16px/1.5 system-ui,sans-serif}
-    main{box-sizing:border-box;max-width:560px;margin:12vh auto;padding:24px}
-    h1{font-size:24px;margin:0 0 12px}a{color:#8f5725;font-weight:600}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Обновляем приложение</h1>
-    <p id="status">Очищаем только файлы приложения. Настройки читалки, прогресс и закладки сохраняются.</p>
-    <noscript>Включите JavaScript и <a href="./">вернитесь в приложение</a>.</noscript>
-  </main>
-  <script>
-  (() => {
-    'use strict';
-    const BASE_PATH = ${basePath};
-    const RECOVERY_KEY_PREFIX = 'inpx-web-build-reload:';
-
-    async function clearKnownCaches() {
-      if (!('caches' in window)) return;
-      const keys = await window.caches.keys();
-      await Promise.allSettled(keys
-        .filter((key) => key.startsWith('inpx-web-'))
-        .map((key) => window.caches.delete(key)));
-    }
-
-    async function unregisterScopedWorkers() {
-      if (!('serviceWorker' in navigator)) return;
-      const currentScope = new URL(BASE_PATH, window.location.origin).href;
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.allSettled(registrations
-        .filter((registration) => registration.scope === currentScope)
-        .map((registration) => registration.unregister()));
-    }
-
-    function clearRecoveryMarkers() {
-      try {
-        const keys = [];
-        for (let i = 0; i < window.sessionStorage.length; i += 1)
-          keys.push(window.sessionStorage.key(i));
-        keys.filter((key) => key && key.startsWith(RECOVERY_KEY_PREFIX))
-          .forEach((key) => window.sessionStorage.removeItem(key));
-      } catch (e) {
-        // Preserve all user storage and continue when sessionStorage is unavailable.
-      }
-    }
-
-    function returnTarget() {
-      const requested = new URLSearchParams(window.location.search).get('return') || BASE_PATH;
-      let target;
-      try {
-        target = new URL(requested, window.location.origin);
-      } catch (e) {
-        target = new URL(BASE_PATH, window.location.origin);
-      }
-
-      const baseRoot = BASE_PATH === '/' ? '/' : BASE_PATH.slice(0, -1);
-      const insideBase = BASE_PATH === '/'
-        || target.pathname === baseRoot
-        || target.pathname.startsWith(BASE_PATH);
-      if (
-        target.origin !== window.location.origin
-        || target.username
-        || target.password
-        || !insideBase
-        || target.pathname === BASE_PATH + 'app-reset'
-      ) target = new URL(BASE_PATH, window.location.origin);
-
-      for (const key of ['clearAppCache', 'appBuild', 'appReloadAttempt', 'appReloadAt', 'appCacheReset'])
-        target.searchParams.delete(key);
-
-      const hashQueryIndex = target.hash.indexOf('?');
-      if (hashQueryIndex >= 0) {
-        const hashPath = target.hash.substring(0, hashQueryIndex);
-        const hashParams = new URLSearchParams(target.hash.substring(hashQueryIndex + 1));
-        hashParams.delete('clearAppCache');
-        const nextHashQuery = hashParams.toString();
-        target.hash = hashPath + (nextHashQuery ? '?' + nextHashQuery : '');
-      }
-
-      target.searchParams.set('appCacheReset', Date.now().toString());
-      return target;
-    }
-
-    async function reset() {
-      const target = returnTarget();
-      await Promise.allSettled([
-        clearKnownCaches(),
-        unregisterScopedWorkers(),
-      ]);
-      clearRecoveryMarkers();
-      window.location.replace(target.toString());
-    }
-
-    reset().catch(() => {
-      const status = document.getElementById('status');
-      status.textContent = 'Автоматическая очистка не удалась. Вернитесь в приложение и обновите страницу.';
-      const link = document.createElement('a');
-      link.href = BASE_PATH;
-      link.textContent = 'Вернуться в приложение';
-      status.append(document.createElement('br'), link);
-    });
-  })();
-  </script>
-</body>
-</html>`;
+    return fs.readFileSync(path.join(__dirname, '../shared/app-reset.html'), 'utf8')
+        .trimEnd().replace('__INPX_APP_BASE_PATH__', () => basePath);
 }
 
 function fb2EntryCandidates(zipReader, libid) {
@@ -471,12 +350,12 @@ module.exports = (app, config, webWorker = null, security = null) => {
         const guard = new (require('./core/ProfileAccess'))(config, webWorker, security).httpGuard();
         app.use([config.bookPathStatic, `${webAppRoutePrefix}/cover`, `${webAppRoutePrefix}/reader-lab-source`, `${webAppRoutePrefix}/admin-backups`], guard);
     }
-    const trackDownload = (req, res, count = 1) => {
+    const recordDownload = async (req, count = 1) => {
         const activity = webWorker?.serverActivity;
         if (!activity || req.method !== 'GET') return;
         const userId = req.profileAccessIdentity?.user?.id
-            || webWorker.getProfileSessionUser(security?.getSession(req)?.profileAccessToken);
-        countDownload(res, () => activity.record(userId, 'downloads', count));
+            || await webWorker.getProfileSessionUser(security?.getSession(req)?.profileAccessToken);
+        return () => activity.record(userId, 'downloads', count);
     };
     app.get(`${webAppRoutePrefix}/app-reset`, (req, res) => {
         res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -669,10 +548,9 @@ module.exports = (app, config, webWorker = null, security = null) => {
         const session = security && security.getSession(req);
         const identity = req.profileAccessIdentity;
         const token = identity ? identity.token : session && session.profileAccessToken;
-        const userId = token && webWorker && webWorker.getProfileSessionUser(token);
-        if (!userId)
-            return res.sendStatus(401);
         try {
+            const userId = token && webWorker && await webWorker.getProfileSessionUser(token);
+            if (!userId) return res.sendStatus(401);
             await webWorker.requireAdmin(userId, token);
         } catch (e) {
             return res.sendStatus(403);
@@ -693,7 +571,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
         }
     });
 
-    require('./core/BatchDownload').register(app, config, trackDownload);
+    require('./core/BatchDownload').register(app, config, recordDownload);
     app.get([`${config.bookPathStatic}/by-uid`, `${config.bookPathStatic}/by-uid/:downloadName`], async(req, res) => {
         if (!webWorker) {
             res.sendStatus(404);
@@ -749,24 +627,19 @@ module.exports = (app, config, webWorker = null, security = null) => {
             // Cache names are hex hashes; anything else (an encoded "..") must never reach fs.remove below.
             if (/^[0-9a-f]+$/i.test(fileName)) {//восстановление файлов {hash}.raw, {hash}.zip
                 let bookFile = `${config.bookDir}/${fileName}`;
-                const bookFileDesc = `${bookFile}.d.json`;
-
-                //восстановим из json-файла описания
-                if (await fs.pathExists(bookFile) && await fs.pathExists(bookFileDesc)) {
-                    await utils.touchFile(bookFile);
-                    await utils.touchFile(bookFileDesc);
-
-                    const desc = await fs.readJson(bookFileDesc);
+                const needsRaw = !req.acceptsEncodings('gzip') || !!fileType;
+                const desc = await require('./core/BookFileCache').inspect(config.bookDir,fileName,{touch:true,probeRaw:needsRaw});
+                if (desc) {
                     let downFileName = desc.downFileName;
                     const book = (config.bookFilenameTemplate || bookNaming.titleTemplate(config))
                         ? await bookNaming.cachedBook(webWorker, desc, fileName, String(req.query.uid || '').trim()) : {};
                     downFileName = bookNaming.filename(book, downFileName, book.ext || path.extname(downFileName).slice(1), config);
                     let gzipped = true;
 
-                    if (!req.acceptsEncodings('gzip') || fileType) {
+                    if (needsRaw) {
                         const rawFile = `${bookFile}.raw`;
                         //не принимает gzip, тогда распакуем
-                        await utils.ensureGunzipFile(bookFile, rawFile, desc.size);
+                        if (!desc.rawReady) await utils.ensureGunzipFile(bookFile, rawFile, desc.size);
 
                         gzipped = false;
 
@@ -777,7 +650,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
                             // Older ZIP caches may contain an incomplete download.
                             const nameHash = crypto.createHash('sha256').update(downFileName).digest('hex').slice(0, 16);
                             bookFile += `.download-v3-${nameHash}.zip`;
-                            await utils.prepareCachedFile(bookFile, outputFile => generateZip(outputFile, rawFile, downFileName));
+                            await utils.ensureBookZipFile(rawFile,bookFile,downFileName);
                             downFileName += '.zip';
                         } else if (bookConverter.canConvertTo(fileType)) {
                             const prepared = await bookConverter.prepareConvertedFile({
@@ -812,13 +685,13 @@ module.exports = (app, config, webWorker = null, security = null) => {
                             await webWorker.koSync.linkDownload(syncFile, desc.bookUid, path.extname(downFileName).slice(1).toLowerCase());
                         } catch (error) { log(LM_WARN, `KOSync: не удалось связать скачанный файл: ${error.message}`); }
                     }
-                    trackDownload(req, res);
-                    res.sendFile(bookFile);
+                    const record = await recordDownload(req);
+                    if (!deliverFile(req,res,'book',bookFile,record && (complete=>{if (complete) record();}))) {
+                        if (record) countDownload(res,record);
+                        res.sendFile(bookFile);
+                    }
                     return;
-                } else {
-                    await fs.remove(bookFile);
-                    await fs.remove(bookFileDesc);
-                }
+                } else return res.sendStatus(404);
             }
         } catch(e) {
             log(LM_ERR, e.message);
@@ -834,6 +707,7 @@ module.exports = (app, config, webWorker = null, security = null) => {
     //иначе просто отдаем запрошенный файл из /public-files
     app.use(config.bookPathStatic, express.static(config.bookDir));
 
+    app.use(require('./core/RustHttpServer').assetProbe);
     if (config.rootPathStatic) {
         //подмена rootPath в файлах статики WebApp при необходимости
         app.use(config.rootPathStatic, async(req, res, next) => {

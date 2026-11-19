@@ -9,24 +9,28 @@ const FormData = require('form-data');
 const telegramNetwork = require('../../shared/TelegramNetwork');
 const telegramTransport = require('./TelegramTransport');
 const nodemailer = require('nodemailer');
-const yazl = require('yazl');
 
 const ZipReader = require('./ZipReader');
+const RustBookArchive = require('./RustBookArchive');
+const directoryDiagnostics = require('./DirectoryDiagnostics');
+const bookFileCache = require('./BookFileCache');
 const LockQueue = require('./LockQueue');
 const WorkerState = require('./WorkerState');//singleton
-const { JembaDb } = require('jembadb');
 const DbSearcher = require('./DbSearcher');
 const InpxHashCreator = require('./InpxHashCreator');
 const RemoteLib = require('./RemoteLib');//singleton
 const FileDownloader = require('./FileDownloader');
 const ReadingListStore = require('./ReadingListStore');
+const readerProgressJournal = require('./ReaderProgressJournal');
 const {withFileTransaction, writeFileAtomic} = require('./FilePersistence');
 const profilePassword = require('./ProfilePassword');
 const profileTotp = require('./ProfileTotp');
 const profileAuthPolicy = require('./ProfileAuthPolicy');
 const trustedDevices = require('./ProfileTrustedDevices');
 const SecretStore = require('./SecretStore');
-const sessionLifetime = require('./SessionLifetime');
+const ProfileSessions = require('./ProfileSessions');
+const {ProfileTotpAttempts} = require('./ProfileTotpAttempts');
+const ProfileTotpEnrollments = require('./ProfileTotpEnrollments');
 const imageUtils = require('./ImageUtils');
 const imageRuntime = require('./ImageRuntime');
 const epubRestorer = require('./EpubRestorer');
@@ -57,14 +61,18 @@ const {relativeName, relativeToRoot, realPathWithin} = require('./LibraryPaths')
 const ssNormal = 'normal';
 const ssDbLoading = 'db_loading';
 const ssDbCreating = 'db_creating';
-const profileTotpSetupLifetimeMs = 5 * 60 * 1000;
-const profileTotpSetupLimit = 128;
-const profileTotpAttemptLimit = 8;
-const profileTotpAttemptsLifetimeMs = 5 * 60 * 1000;
-const profileTotpAttemptProfiles = 4096;
+const profileSessionTokenBytes = 24;
 
 function invalidProfileCredentials() {
     return Object.assign(new Error('Неверный логин, пароль или код'), {code:'INPX_INVALID_PROFILE_CREDENTIALS'});
+}
+
+function needProfileOtp() {
+    return Object.assign(new Error('Введите код двухфакторной защиты'), {code:'need_profile_otp'});
+}
+
+function needProfileOtpSetup() {
+    return Object.assign(new Error('Настройте обязательный OTP в веб-интерфейсе INPX Web'), {code:'need_profile_otp_setup'});
 }
 
 const stateToText = {
@@ -77,7 +85,6 @@ const checkReleaseInterval = 7*60*60*1000;//каждые 7 часов
 const discoveryCacheTtl = 15*60*1000;//15 minutes
 const discoveryCacheBytes = 8 * 1024 ** 2;
 const discoveryNewestWindows = [7, 30, 90, 180, 365];
-const overviewCandidates = require('./OverviewCandidates');
 const discoveryStaleGrace = 24 * 60 * 60 * 1000;
 const externalDiscoveryCacheVersion = 'v4';
 const bookAssetVersion = 'fblibrary-assets-v5';
@@ -679,7 +686,7 @@ function getAuthorArchiveEntryHash(entryName = '') {
 let instance = null;
 
 class WebWorker {
-    constructor(config) {
+    constructor(config, readingListStore) {
         if (!instance) {
             this.config = config;
             this.workerState = new WorkerState();
@@ -690,9 +697,8 @@ class WebWorker {
             }
             
             this.inpxHashCreator = new InpxHashCreator(config);
-            this.readingListStore = new ReadingListStore(config);
+            this.readingListStore = readingListStore || new ReadingListStore(config);
             this.fb2Helper = new Fb2Helper();
-            this.profileSessions = new Map();
             this.inpxFileHash = '';
             this.discoveryCache = new Map();
             this.sharedDiscoveryConfig = null;
@@ -866,9 +872,8 @@ class WebWorker {
                 if (hasDb && iteration === 0) {
                     // A second server sharing the data directory must not move
                     // another process's active catalogue during --recreate.
-                    const guard = new JembaDb();
-                    await guard.lock({dbPath, softLock:true});
-                    await guard.unlock();
+                    const release = await require('./CatalogueLock').lock(dbPath);
+                    await release();
                 }
                 const staging = `${dbPath}.building-${utils.randomHexString(8)}`;
                 const previous = `${dbPath}.previous`;
@@ -951,14 +956,33 @@ class WebWorker {
 
     async openCatalogue(dbPath) {
         const config = this.config;
-        const db = new (require('./DatabaseThread'))(config);
+        const db = new (require('./DatabaseThread'))(config,error=>{
+            log(LM_FATAL,error.message);
+            asyncExit.exit(1);
+        });
+        if (config.rustServiceCacheEnabled!==false) require('./CatalogueServiceCache').CatalogueServiceCache.attach(db,dbPath);
         let searcher;
         try {
+            const nativeConfig = path.join(dbPath,'catalogue.json');
+            if (await fs.pathExists(nativeConfig)) {
+                const metadata = await fs.readJson(nativeConfig);
+                if (metadata?.format!==1 || !metadata.rustBookStoreGeneration || !metadata.rustLookupGeneration)
+                    throw new Error('Invalid Rust catalogue header');
+                await db.openNative(dbPath,metadata,config.dbCacheSize);
+                searcher = new DbSearcher(config,db,dbPath);
+                await searcher.init();
+                await searcher.rustLookup.run(process=>process.query({op:'probe'}),()=>{throw new Error('Rust lookup is unavailable');});
+                db.wwCache = {config:searcher.dbConfig};
+                return {db,searcher};
+            }
             await db.lock({dbPath, softLock:true, tableDefaults:{cacheSize:config.dbCacheSize}});
-            await db.openAll({exclude:['author_id', 'series_id', 'title_id', 'book', 'catalog_lookup']});
-            await db.open({table:'book', cacheSize:config.dbCacheSize});
+            const {executable,fileName}=require('./RustLookupIndex');
+            const names=executable() && await fs.pathExists(path.join(dbPath,fileName)) ? ['author','series','title','word'] : [];
+            if (names.length) db.deferNameTables(names,config.dbCacheSize);
+            await db.openAll({exclude:['author_id','series_id','title_id','book','catalog_lookup',...names]});
             searcher = new DbSearcher(config, db, dbPath);
             await searcher.init();
+            await db.configureBookStore(dbPath,searcher.dbConfig.rustBookStoreGeneration,config.dbCacheSize);
             db.wwCache = {config:searcher.dbConfig};
             return {db, searcher};
         } catch (error) {
@@ -1212,12 +1236,12 @@ class WebWorker {
 
             //добавим к жанрам те, что нашлись при парсинге
             const genreParsed = new Set();
-            let rows = await db.select({table: 'genre', map: `(r) => ({value: r.value})`});
-            for (const row of rows) {
-                genreParsed.add(row.value);
+            const values = await this.dbSearcher.facetValues('genre');
+            for (const value of values) {
+                genreParsed.add(value);
 
-                if (!genreValues.has(row.value))
-                    last.value.push({name: row.value, value: row.value});
+                if (!genreValues.has(value))
+                    last.value.push({name:value,value});
             }
 
             //уберем те, которые не нашлись при парсинге
@@ -1234,12 +1258,10 @@ class WebWorker {
             }
 
             // langs
-            rows = await db.select({table: 'lang', map: `(r) => ({value: r.value})`});
-            const langs = rows.map(r => r.value);            
+            const langs = await this.dbSearcher.facetValues('lang');
 
             // exts
-            rows = await db.select({table: 'ext', map: `(r) => ({value: r.value})`});
-            const exts = rows.map(r => r.value);            
+            const exts = await this.dbSearcher.facetValues('ext');
 
             result = {
                 genreTree: genres,
@@ -1599,72 +1621,37 @@ class WebWorker {
         return result;
     }
 
-    async selectDiscoveryBookWindows(mode, limit, daysWindows = [], popularityMap = {}, popularLimit = 0) {
+    async selectDiscoveryBookWindows(mode, limit, daysWindows = [], popularityMap = {}, popularLimit = 0, now = Date.now()) {
         const db = this.db;
         const generation = this.libraryAssetGeneration;
-        const now = Date.now();
-        const activityLimit = Math.max(limit, popularLimit) * 64;
-        const scores = Object.fromEntries(Object.entries(popularityMap)
-            .filter(([,activity]) => activity.score > 0)
-            .sort((a,b) => b[1].score - a[1].score)
-            .slice(0,activityLimit).map(([uid,activity]) => [uid,activity.score]));
-        const [recent, rated] = await Promise.all([
-            mode === 'newest' ? overviewCandidates.dates(db,now,daysWindows,Math.max(128,limit*24)) : [],
-            mode === 'popular' || popularLimit ? overviewCandidates.postings(db,'librate',[5,4,3,2,1],activityLimit) : [],
-        ]);
-        const rows = await db.select({
-            table: 'book',
-            rawResult: true,
-            where: `
+        const selection = require('./DiscoverySelection');
+        const scores = Object.fromEntries(Object.entries(popularityMap).map(([uid, activity]) => [uid, activity.score]));
+        if (mode === 'newest' && daysWindows.length) {
+            let indexed;
+            try {
+                indexed = await require('./RustShelfIndex').selectShelfBooks(db, this.dbSearcher?.dbConfig, {
+                    nowMs:now, daysWindows, newestLimit:limit, popularLimit, scores,
+                },{directory:this.dbSearcher?.dbPath});
+            } catch (error) {
+                if (resourceRuntime.signal()?.aborted) throw error;
+                this.checkLibraryAssetState(generation, db);
+                this.addAdminEvent('warn', 'search', 'Ошибка запроса к Rust-индексу полок. Используется каталог JembaDB.', {
+                    reason:String(error.code || error.message).slice(0, 300),
+                });
+            }
+            if (indexed) {
+                this.checkLibraryAssetState(generation, db);
+                return indexed;
+            }
+        }
+        const rows = await require('./CatalogueScan').scanBooks(db, (scanLoop,loadSelected) => `
                 const mode = ${db.esc(mode)};
                 const limit = ${db.esc(limit)};
                 const daysWindows = ${db.esc(daysWindows)};
                 const scores = ${db.esc(scores)};
-                const selectBest = ${require('./DiscoverySelection').selectDiverseBestSource};
-                const dedupeKey = (row) => {
-                    const sourceKey = row.sourceId || '';
-                    if (row.libid)
-                        return 'libid:' + sourceKey + ':' + row.libid;
-
-                    const parts = [
-                        sourceKey,
-                        row.folder || '',
-                        row.file || '',
-                        row.ext || '',
-                        String(row.insno || 0),
-                    ];
-                    if (parts.some(Boolean))
-                        return 'file:' + parts.join('|');
-
-                    return [
-                        'meta',
-                        sourceKey,
-                        row.author || '',
-                        row.series || '',
-                        String(row.serno || 0),
-                        row.title || '',
-                        String(row.size || 0),
-                        row.ext || '',
-                    ].join('|');
-                };
-                const rowQuality = (row) => {
-                    let score = 0;
-                    if (!row.del)
-                        score += 1000;
-                    if (row.ext === 'fb2')
-                        score += 120;
-                    else if (row.ext === 'epub')
-                        score += 90;
-                    else if (row.ext === 'mobi')
-                        score += 70;
-                    else if (row.ext === 'pdf')
-                        score += 50;
-                    if (row.librate)
-                        score += row.librate * 10;
-                    if (row.size)
-                        score += Math.min(row.size, 50000000) / 1000000;
-                    return score;
-                };
+                const selectBest = ${selection.selectDiverseBestSource};
+                const dedupeKey = ${selection.copyKey.toString()};
+                const rowQuality = ${selection.rowQuality.toString()};
                 const pickBetterRow = (current, next) => {
                     if (next.quality !== current.quality)
                         return (next.quality > current.quality ? next : current);
@@ -1675,9 +1662,7 @@ class WebWorker {
                     date:row.date, librate:row.librate, quality:rowQuality(row),
                 });
                 const loadSelected = async (selected) => {
-                    const books = [];
-                    for (const row of selected) books.push(@unsafeRow(row.id));
-                    return books;
+                    ${loadSelected}
                 };
 
                 const deduped = new Map();
@@ -1699,15 +1684,10 @@ class WebWorker {
                 };
                 const popularLimit = ${db.esc(popularLimit)};
                 const popular = popularLimit ? new Map() : null;
-                const ids = new Set(${db.esc([...recent,...rated])});
-                for (const uid of Object.keys(scores))
-                    for (const id of @hash('_uid',uid)) ids.add(id);
-                const readOrder = ${overviewCandidates.bookReadOrder.toString()};
                 let visited = 0;
-                for (const id of readOrder(ids, __tr._rowsInterface.blockIndex)) {
+                ${scanLoop}
                     if (++visited % 1024 === 0)
                         await new Promise(resolve => setImmediate(resolve));
-                    const row = @unsafeRow(id);
                     if (!row || row.del || !row.title)
                         continue;
                     const isPopular = row.librate > 0 || scores[row._uid] > 0;
@@ -1780,43 +1760,10 @@ class WebWorker {
                 if (popular)
                     windows.push(await loadSelected(selectBest(popular, compare.bind(null, 'popular'), popularLimit)));
                 return windows;
-            `
-        });
+            `,{fields:['id','_uid','author','title','series','serno','date','librate','del','sourceId','libid','folder','file','ext','insno','size']});
 
         this.checkLibraryAssetState(generation, db);
         return rows[0].rawResult;
-    }
-
-    async buildLocalDiscoveryShelf(kind = 'newest', limit = 8, options = {}) {
-        const shelfConfig = {
-            newest: {
-                id: `newest-${options.daysWindow || 0}d`,
-                title: 'Новинки библиотеки',
-                subtitle: 'Последние поступления в индекс',
-                mode: 'newest',
-            },
-            popular: {
-                id: 'popular',
-                title: 'Популярное в библиотеке',
-                subtitle: 'Пилот по локальной оценке библиотеки',
-                mode: 'popular',
-            },
-        }[kind];
-
-        if (!shelfConfig)
-            return null;
-
-        const [items] = await this.selectDiscoveryBookWindows(shelfConfig.mode, limit);
-        if (!items.length)
-            return null;
-
-        return {
-            id: shelfConfig.id,
-            title: shelfConfig.title,
-            subtitle: shelfConfig.subtitle,
-            source: 'local',
-            items,
-        };
     }
 
     parseExternalFeedItemsFromNextData(html = '', sourceUrl = '', limit = 8) {
@@ -2173,57 +2120,6 @@ class WebWorker {
         return {sourceUrl, items, hasMore, genreOptions};
     }
 
-    pickDiscoveryBookMatch(item, books = []) {
-        const title = normalizeDiscoveryText(item.title || '');
-        if (!title)
-            return null;
-
-        const authorTokens = extractDiscoveryAuthorTokens(item.author || '');
-        let best = null;
-        let bestScore = -Infinity;
-
-        for (const book of books) {
-            const bookTitle = normalizeDiscoveryText(book.title || '');
-            if (!bookTitle)
-                continue;
-
-            let score = -Infinity;
-            if (bookTitle === title) {
-                score = 1000;
-            } else if (bookTitle.startsWith(title) || title.startsWith(bookTitle)) {
-                score = 700;
-            } else if (bookTitle.includes(title) || title.includes(bookTitle)) {
-                score = 450;
-            } else {
-                continue;
-            }
-
-            const bookAuthor = normalizeDiscoveryText(book.author || '');
-            let authorScore = 0;
-            for (const token of authorTokens) {
-                if (bookAuthor.includes(token))
-                    authorScore += 90;
-            }
-
-            if (authorTokens.length && !authorScore)
-                score -= 180;
-
-            score += authorScore;
-            if (!book.del)
-                score += 15;
-            if (String(book.ext || '').toLowerCase() === 'fb2')
-                score += 12;
-            score += parseInt(book.librate || '0', 10) || 0;
-
-            if (score > bestScore) {
-                bestScore = score;
-                best = book;
-            }
-        }
-
-        return (bestScore >= 450 ? best : null);
-    }
-
     externalDiscoverySearchQueries(item = {}, limit = 32) {
         const title = String(item.title || '').trim();
         if (!title)
@@ -2260,120 +2156,6 @@ class WebWorker {
         }
 
         return found;
-    }
-
-    async matchExternalItemsToLocalBooks(items = [], limit = 8) {
-        const result = [];
-        const seenBookUids = new Set();
-        const seenExternalItems = new Set();
-
-        for (const item of items) {
-            const externalKey = buildExternalFeedIdentity(item);
-            if (externalKey && seenExternalItems.has(externalKey))
-                continue;
-            if (externalKey)
-                seenExternalItems.add(externalKey);
-
-            const candidates = await this.findExternalDiscoveryCandidates(item, 32);
-            const match = this.pickDiscoveryBookMatch(item, candidates);
-
-            if (match && !seenBookUids.has(match._uid)) {
-                seenBookUids.add(match._uid);
-                result.push(Object.assign({}, match, {
-                    discoveryUrl: item.url,
-                    discoveryRating: item.rating,
-                    discoveryFlags: {
-                        bestseller: !!item.isBestseller,
-                        isNew: !!item.isNew,
-                    },
-                }));
-            }
-
-            if (result.length >= limit)
-                break;
-
-            await utils.processLoop();
-        }
-
-        return result;
-    }
-
-    async buildExternalDiscoveryShelf(limit = 8) {
-        const discovery = this.getDiscoveryConfig();
-        if (discovery.externalSource === 'none')
-            return null;
-
-        if (discovery.externalSource !== 'web-page')
-            throw new Error(`Неизвестный источник витрины: ${discovery.externalSource}`);
-
-        const feed = await this.fetchExternalFeedItems(discovery.externalLimit, discovery.externalUrl);
-        const items = await this.matchExternalItemsToLocalBooks(feed.items || [], limit);
-        const sourceName = (discovery.externalName || 'Внешний источник');
-
-        return {
-            id: 'external-source',
-            title: sourceName,
-            subtitle: `Совпадений ${items.length} из ${feed.items.length}`,
-            source: 'external',
-            sourceName,
-            sourceUrl: feed.sourceUrl,
-            items,
-            emptyMessage: 'Совпадений с локальной библиотекой пока не нашлось.',
-        };
-    }
-
-    async getDiscoveryShelves(options = {}) {
-        this.checkMyState();
-
-        const discovery = this.getDiscoveryConfig();
-        if (!discovery.enabled)
-            return {shelves: []};
-
-        const newestLimit = Math.max(1, Math.min(parseInt(options.newestLimit, 10) || discovery.shelfLimit, 24));
-        const popularLimit = Math.max(1, Math.min(parseInt(options.popularLimit, 10) || discovery.shelfLimit, 24));
-        const externalShelfLimit = Math.max(1, Math.min(parseInt(options.externalLimit, 10) || discovery.shelfLimit, 120));
-
-        const dbConfig = await this.dbConfig();
-        const inpxHash = String(dbConfig.inpxHash || '').trim();
-        const shelves = [];
-
-        const newestShelf = await this.rememberDiscovery(
-            `discovery:${inpxHash}:newest:${newestLimit}`,
-            () => this.buildLocalDiscoveryShelf('newest', newestLimit),
-        );
-        if (newestShelf)
-            shelves.push(newestShelf);
-
-        const popularShelf = await this.rememberDiscovery(
-            `discovery:${inpxHash}:popular:${popularLimit}`,
-            () => this.buildLocalDiscoveryShelf('popular', popularLimit),
-        );
-        if (popularShelf)
-            shelves.push(popularShelf);
-
-        if (discovery.externalSource !== 'none') {
-            try {
-                const externalShelf = await this.rememberDiscovery(
-                    `discovery:${inpxHash}:external:${discovery.externalSource}:${discovery.externalLimit}:${externalShelfLimit}:${discovery.externalUrl}`,
-                    () => this.buildExternalDiscoveryShelf(externalShelfLimit),
-                );
-                if (externalShelf)
-                    shelves.push(externalShelf);
-            } catch (e) {
-                shelves.push({
-                    id: 'external-error',
-                    title: (discovery.externalName || 'Внешний источник'),
-                    subtitle: 'Внешний источник временно недоступен',
-                    source: 'external',
-                    sourceName: (discovery.externalName || 'Внешний источник'),
-                    sourceUrl: (discovery.externalUrl || ''),
-                    items: [],
-                    emptyMessage: e.message,
-                });
-            }
-        }
-
-        return {shelves};
     }
 
     buildLocalDiscoveryShelfV2(kind, books, {daysWindow = 0, popularityMap = {}} = {}) {
@@ -3391,16 +3173,7 @@ class WebWorker {
             .split('')
             .reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) % 9973, Math.floor(Date.now() / 86400000));
 
-        const db = this.db;
-        const generation = this.libraryAssetGeneration;
-        const candidates = await overviewCandidates.recommendations(db, {
-            authors:preferredAuthors, series:preferredSeries, genres:preferredGenres,
-            languages:preferredLanguages, keywords:preferredKeywords,
-        }, displayLimit, rotationSeed, Date.now());
-        const rows = await db.select({
-            table: 'book',
-            rawResult: true,
-            where: `
+        const rows = await require('./CatalogueScan').scanBooks(this.db, scanLoop => `
                 const knownBookUids = new Set(${this.db.esc(Array.from(profile.knownBookUids))});
                 const preferredAuthors = ${this.db.esc(preferredAuthors)};
                 const preferredSeries = ${this.db.esc(preferredSeries)};
@@ -3423,11 +3196,9 @@ class WebWorker {
                 let order = 0;
                 let readCount = 0;
                 const now = Date.now();
-                const readOrder = ${overviewCandidates.bookReadOrder.toString()};
-                for (const id of readOrder(${db.esc(candidates)}, __tr._rowsInterface.blockIndex)) {
+                ${scanLoop}
                     if (++readCount % 1024 === 0)
                         await new Promise(resolve => setImmediate(resolve));
-                    const row = @unsafeRow(id);
                     if (!row || row.del || !row.title || !row._uid || knownBookUids.has(row._uid))
                         continue;
 
@@ -3495,9 +3266,7 @@ class WebWorker {
                 const ranked = (top, explore) => top.ranked().map(({row, score}) =>
                     ({...row, _similarityScore: score, _discoveryExplore: explore}));
                 return ranked(affinity, false).concat(ranked(exploration, true));
-            `
-        });
-        this.checkLibraryAssetState(generation, db);
+            `);
 
         const rawItems = ((rows[0] && rows[0].rawResult) ? rows[0].rawResult : [])
             .map(book => Object.assign({}, book, {
@@ -3651,7 +3420,7 @@ class WebWorker {
         if (!user || user.blocked)
             return [];
 
-        if (user.passwordHash && this.getProfileSessionUser(profileAccessToken) !== user.id)
+        if (user.passwordHash && await this.getProfileSessionUser(profileAccessToken) !== user.id)
             return [];
 
         const lists = await this.readingListStore.getLists(user.id, {});
@@ -3678,7 +3447,8 @@ class WebWorker {
     }
 
     async getBookRecordByUid(bookUid) {
-        const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
+        const rows = this.db.booksByUids ? await this.db.booksByUids([bookUid])
+            : await this.db.select({table:'book',where:`@@hash('_uid', ${this.db.esc(bookUid)})`});
         return (rows.length ? rows[0] : null);
     }
 
@@ -3841,11 +3611,11 @@ class WebWorker {
         };
     }
 
-    async getUserProfiles(currentUserId = '', {includeTotpStatus = false, profileAccessToken = ''} = {}) {
+    async getUserProfiles(currentUserId = '', {includeTotpStatus = false, profileAccessToken = '', profileProof} = {}) {
         this.checkMyState();
 
         const {users, currentUser} = await this.readingListStore.getUsers(currentUserId);
-        const sessionUserId = profileAccessToken && this.getProfileSessionUser(profileAccessToken);
+        const sessionUserId = profileAccessToken && await this.getProfileSessionUser(profileAccessToken,profileProof);
         const includeAdminDetails = includeTotpStatus || !!sessionUserId && users.some(user => user.id === sessionUserId && user.isAdmin && !user.blocked);
         return {
             users: users
@@ -3873,38 +3643,45 @@ class WebWorker {
         return require('./ProfilePassword').hash(password);
     }
 
+    get profileSessions() {
+        return this.profileSessionStore ||= new ProfileSessions();
+    }
+
     createProfileSession(userId) {
-        sessionLifetime.makeRoom(this.profileSessions);
-        const token = utils.randomHexString(24);
-        this.profileSessions.set(token, {
-            userId,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-        });
+        if (this.profileTransport)
+            return this.profileTransport.profileRequest('issue',{user:userId}).then(token=>{
+                this.serverActivity?.record(userId, 'logins');
+                return token;
+            });
+        const token = utils.randomHexString(profileSessionTokenBytes);
+        this.profileSessions.create(token,userId);
         this.serverActivity?.record(userId, 'logins');
         return token;
     }
 
-    getProfileSessionUser(token = '') {
-        const rec = this.profileSessions.get(String(token || '').trim());
-        if (sessionLifetime.expired(rec)) {
-            this.closeProfileSession(token);
-            return '';
+    getProfileSessionUser(token = '', proof) {
+        const key = String(token || '').trim();
+        if (this.profileTransport) {
+            if (!/^[0-9a-f]{48}$/.test(key)) return '';
+            return this.profileTransport.profileProofUser(key,proof) ?? this.profileTransport.profileRequest('check',{token:key});
         }
-
-        rec.updatedAt = Date.now();
-        return rec.userId || '';
+        const user = key.length === profileSessionTokenBytes*2 ? this.profileSessions.user(key) : '';
+        if (!user) this.pendingProfileTotp?.delete(key);
+        return user;
     }
 
     closeProfileSession(token = '') {
         const key = String(token || '').trim();
-        this.profileSessions.delete(key);
+        if (this.profileTransport)
+            return /^[0-9a-f]{48}$/.test(key) ? this.profileTransport.profileRequest('close',{token:key}).then(()=>({success:true}))
+                : {success:true};
+        if (key.length === profileSessionTokenBytes*2) this.profileSessions.delete(key);
         this.pendingProfileTotp?.delete(key);
         return {success: true};
     }
 
-    async getEffectiveUser(userId = '', profileAccessToken = '') {
-        const sessionUserId = this.getProfileSessionUser(profileAccessToken);
+    async getEffectiveUser(userId = '', profileAccessToken = '', profileProof) {
+        const sessionUserId = await this.getProfileSessionUser(profileAccessToken,profileProof);
         if (sessionUserId)
             return await this.readingListStore.getUser(sessionUserId);
 
@@ -3915,7 +3692,7 @@ class WebWorker {
         return requestedUser;
     }
 
-    async requireAuthorizedUser(userId = '', profileAccessToken = '', {identityOnly = false, exactId = false} = {}) {
+    async requireAuthorizedUser(userId = '', profileAccessToken = '', {identityOnly = false, exactId = false, profileProof} = {}) {
         const requestedUser = exactId && userId ? await this.readingListStore.getUserIdentity(userId, 'id')
             : identityOnly ? await this.readingListStore.getUserIdentity(userId)
             : await this.readingListStore.getUser(userId);
@@ -3923,7 +3700,7 @@ class WebWorker {
         if (!this.readingListStore.profileAuthPolicy?.otpRequired && !requestedUser.passwordHash && (!exactId || !profileAccessToken))
             return requestedUser;
 
-        const sessionUserId = this.getProfileSessionUser(profileAccessToken);
+        const sessionUserId = await this.getProfileSessionUser(profileAccessToken,profileProof);
         if (!sessionUserId || sessionUserId !== requestedUser.id)
             throw new Error('need_profile_login');
 
@@ -3963,7 +3740,7 @@ class WebWorker {
     async personalLibraryUser(userId, token) {
         const user = userId && await this.readingListStore.getExactProfileIdentity(userId);
         if (!user || user.blocked || isAnonymousDefaultUser(user)
-            || (user.passwordHash || token || this.readingListStore.profileAuthPolicy?.otpRequired) && this.getProfileSessionUser(token) !== user.id)
+            || (user.passwordHash || token || this.readingListStore.profileAuthPolicy?.otpRequired) && await this.getProfileSessionUser(token) !== user.id)
             throw new Error('need_profile_login');
         return user;
     }
@@ -3995,14 +3772,14 @@ class WebWorker {
         return user;
     }
 
-    async getCurrentUserProfile(userId = '', profileAccessToken = '') {
+    async getCurrentUserProfile(userId = '', profileAccessToken = '', profileProof) {
         this.checkMyState();
 
-        const requestedUser = await this.getEffectiveUser(userId, profileAccessToken);
+        const requestedUser = await this.getEffectiveUser(userId, profileAccessToken,profileProof);
         const user = !requestedUser || requestedUser.blocked ? await this.readingListStore.getUser('default') : requestedUser;
         const anonymousProfile = isAnonymousDefaultUser(user);
         const otpPolicyRequired = this.readingListStore.profileAuthPolicy?.otpRequired === true;
-        const profileAuthorized = (!user.blocked && !anonymousProfile && (!user.passwordHash && !otpPolicyRequired || this.getProfileSessionUser(profileAccessToken) === user.id));
+        const profileAuthorized = (!user.blocked && !anonymousProfile && (!user.passwordHash && !otpPolicyRequired || await this.getProfileSessionUser(profileAccessToken,profileProof) === user.id));
         const readingSummary = (profileAuthorized ? await this.buildUserReadingSummary(user, 48) : {count: 0, items: []});
         return {
             currentUserId: user.id,
@@ -4035,37 +3812,86 @@ class WebWorker {
         };
     }
 
-    async loginUserProfile(login = '', password = '', otp = '', {trustedDeviceToken = '', rememberDevice = false} = {}) {
+    async loginUserProfile(login = '', password = '', otp = '', options = {}) {
         this.checkMyState();
         const store = this.readingListStore;
         return withFileTransaction(store.file, async() => {
-            const user = await store.getProfileCredentials(store.normalizeLogin(login), true);
-            if (!user?.passwordHash || user.blocked || !await profilePassword.verify(user.passwordHash, user.login, password))
-                throw invalidProfileCredentials();
-            if (user.otpRequired && !user.profileTotp)
-                throw Object.assign(new Error('Настройте обязательный OTP в веб-интерфейсе INPX Web'), {code:'need_profile_otp_setup'});
-            const patch = {};
-            const canUseTrust = trustedDevices.available(user.profileAuthPolicy);
-            const trusted = canUseTrust && trustedDevices.recognizes(user.profileTrustedDevices, trustedDeviceToken);
-            let deviceGrant;
-            if (user.profileTotp && (otp !== '' || !trusted)) {
-                if (otp === '')
-                    throw Object.assign(new Error('Введите код двухфакторной защиты'), {code:'need_profile_otp'});
-                patch.profileTotp = await this.verifyProfileTotp(user, otp);
-                // Recovery codes are for signing back in after a lost authenticator.
-                if (canUseTrust && rememberDevice && /^\d{6}$/.test(otp)) {
-                    deviceGrant = trustedDevices.issue(user.profileTrustedDevices, trustedDeviceToken, user.profileAuthPolicy.trustedBrowserDays);
-                    patch.profileTrustedDevices = deviceGrant.devices;
-                }
+            const username = store.normalizeLogin(login);
+            let authenticated;
+            if (this.profileTransport) {
+                if (username.length > 64) throw invalidProfileCredentials();
+                authenticated = await this.authenticateNativeProfile({
+                    source:'registry',file:path.resolve(store.file),login:username.toWellFormed(),
+                },password,otp,options);
             }
-            if (profilePassword.isLegacy(user.passwordHash)) patch.passwordHash = await profilePassword.hash(password);
-            if (Object.keys(patch).length) await store.updateProfileCredentials(user.id, patch);
+            if (!authenticated || authenticated.state === 'legacy') {
+                const user = await store.getProfileCredentials(username, true);
+                if (!user?.passwordHash || user.blocked) throw invalidProfileCredentials();
+                const result = this.profileTransport
+                    ? await this.authenticateNativeProfile({source:'profile',profile:{...user,id:user.id.toWellFormed()}},password,otp,options)
+                    : await this.authenticateProfile(user,password,otp,options);
+                authenticated = {...result,userId:user.id};
+            }
+            const {userId,patch,deviceGrant} = authenticated;
+            if (patch && Object.keys(patch).length) await store.updateProfileCredentials(userId, patch);
             return {
-                userId: user.id,
-                profileAccessToken: this.createProfileSession(user.id),
+                userId,
+                profileAccessToken: await this.createProfileSession(userId),
                 ...(deviceGrant ? {trustedDeviceToken:deviceGrant.token, trustedDeviceMaxAge:deviceGrant.maxAgeSeconds} : {}),
             };
         });
+    }
+
+    async authenticateNativeProfile(source, password, otp, {trustedDeviceToken, rememberDevice}) {
+        password = String(password || '').toWellFormed();
+        if (Buffer.byteLength(password) > profilePassword.maxPasswordBytes) throw invalidProfileCredentials();
+        const keyFile = path.resolve(new SecretStore(this.readingListStore.config).keyFile);
+        const result = await profilePassword.withScrypt(()=>this.profileTransport.profileLogin({
+            ...source,keyFile,password,
+            otp:typeof otp === 'string' && otp.length <= 64 ? otp.toWellFormed() : null,
+            trustedDeviceToken:typeof trustedDeviceToken === 'string' && trustedDeviceToken.length === 64
+                ? trustedDeviceToken.toWellFormed() : '',
+            rememberDevice:!!rememberDevice,
+        }));
+        switch (result.state) {
+            case 'accepted': return result;
+            case 'legacy': return result;
+            case 'denied': throw invalidProfileCredentials();
+            case 'needOtp': throw needProfileOtp();
+            case 'needOtpSetup': throw needProfileOtpSetup();
+            default: throw new Error('Некорректный ответ проверки входа в профиль');
+        }
+    }
+
+    async authenticateProfile(user, password, otp, {trustedDeviceToken, rememberDevice}) {
+        if (!await profilePassword.verify(user.passwordHash, user.login, password))
+            throw invalidProfileCredentials();
+        if (user.otpRequired && !user.profileTotp) throw needProfileOtpSetup();
+        const patch = {};
+        const canUseTrust = trustedDevices.available(user.profileAuthPolicy);
+        let deviceGrant;
+        if (user.profileTotp && otp === '') {
+            const trusted = canUseTrust && await trustedDevices.recognizes(user.profileTrustedDevices,trustedDeviceToken);
+            if (!trusted) throw needProfileOtp();
+        } else if (user.profileTotp) {
+            const remember = canUseTrust && rememberDevice && /^\d{6}$/.test(otp)
+                ? trustedDevices.remember(user.profileTrustedDevices,trustedDeviceToken,user.profileAuthPolicy.trustedBrowserDays)
+                : undefined;
+            const result = await this.verifyProfileSecondFactor(user,otp,remember);
+            patch.profileTotp = result.state;
+            deviceGrant = result.grant;
+            if (deviceGrant) patch.profileTrustedDevices = deviceGrant.devices;
+        }
+        if (profilePassword.isLegacy(user.passwordHash)) patch.passwordHash = await profilePassword.hash(password);
+        return {patch,deviceGrant};
+    }
+
+    async saveProfileCredentials(userId, patch, authorize = () => {}) {
+        const store = this.readingListStore;
+        if (this.profileTransport && await readerProgressJournal.writeProfileCredentials(
+            store.file,store.progressFile,userId,patch,authorize,
+        )) return;
+        await store.updateProfileCredentials(userId,patch,authorize);
     }
 
     async enrollRequiredProfileTotp(operation, {login = '', password = '', enrollmentId, code} = {}) {
@@ -4077,116 +3903,109 @@ class WebWorker {
                 throw invalidProfileCredentials();
             if (!user.otpRequired || user.profileTotp)
                 throw new Error('Войдите в профиль заново');
-            const pending = this.pendingRequiredProfileTotp ??= new Map();
+            const pending = this.pendingRequiredProfileTotp ??= new ProfileTotpEnrollments(this.profileSessions,true,this.profileTransport);
             if (operation === 'start') {
                 const now = Date.now();
-                for (const [key, setup] of pending)
-                    if (setup.expiresAt <= now || setup.userId === user.id) pending.delete(key);
-                if (pending.size >= profileTotpSetupLimit) throw new Error('Повторите настройку позже');
+                if (!await pending.prepare(user.id,now)) throw new Error('Повторите настройку позже');
                 const id = utils.randomHexString(24);
-                const params = profileTotp.start(user.login);
-                pending.set(id, {userId:user.id, secret:params.secret, expiresAt:now + profileTotpSetupLifetimeMs, attempts:0});
+                const params = await profileTotp.start(user.login);
+                await pending.create(id,user.id,params.secret,now);
                 return {...params, enrollmentId:id};
             }
             if (operation !== 'enable') throw new Error('Неизвестное действие с двухфакторной защитой');
             const {state, recoveryCodes} = await this.confirmProfileTotpSetup(pending, enrollmentId, user.id, code);
             const patch = {profileTotp:state};
             if (profilePassword.isLegacy(user.passwordHash)) patch.passwordHash = await profilePassword.hash(password);
-            await store.updateProfileCredentials(user.id, patch);
-            this.revokeUserSessions(user.id);
-            return {userId:user.id, profileAccessToken:this.createProfileSession(user.id), recoveryCodes};
+            await this.saveProfileCredentials(user.id, patch);
+            await this.revokeUserSessions(user.id);
+            return {userId:user.id, profileAccessToken:await this.createProfileSession(user.id), recoveryCodes};
         });
     }
 
     async confirmProfileTotpSetup(pending, key, userId, code) {
-        const setup = pending.get(key);
-        if (!setup || setup.userId !== userId || setup.expiresAt <= Date.now() || setup.attempts >= profileTotpAttemptLimit) {
-            if (setup?.userId === userId) pending.delete(key);
+        const secret = typeof key === 'string' && key.length === profileSessionTokenBytes*2
+            ? await pending.secret(key,userId,Date.now()) : undefined;
+        if (!secret)
             throw new Error('Начните настройку двухфакторной защиты заново');
-        }
-        const lastStep = profileTotp.verify(setup.secret, code);
-        if (lastStep === null) {
-            setup.attempts++;
+        const accepted = await profileTotp.confirm(new SecretStore(this.readingListStore.config),userId,secret,code);
+        if (!accepted) {
+            await pending.failed(key,userId);
             throw invalidProfileCredentials();
         }
-        return profileTotp.enable(new SecretStore(this.readingListStore.config), userId, setup.secret, lastStep);
+        return accepted;
     }
 
     async verifyProfileTotp(user, code) {
-        if (!this.profileTotpAttempts) this.profileTotpAttempts = new Map();
+        return (await this.verifyProfileSecondFactor(user,code)).state;
+    }
+
+    get profileTotpAttempts() {
+        return this.profileTotpAttemptStore ??= new ProfileTotpAttempts(
+            this.profileTransport ? null : this.profileSessions.native,this.profileTransport,
+        );
+    }
+
+    async verifyProfileSecondFactor(user, code, remember) {
         const attempts = this.profileTotpAttempts;
         const now = Date.now();
-        let record = attempts.get(user.id);
-        if (record?.expiresAt > now && record.count >= profileTotpAttemptLimit)
-            throw invalidProfileCredentials();
-        if (!record || record.expiresAt <= now) {
-            if (attempts.size >= profileTotpAttemptProfiles) {
-                for (const [id, value] of attempts)
-                    if (value.expiresAt <= now) attempts.delete(id);
-                if (attempts.size >= profileTotpAttemptProfiles) throw invalidProfileCredentials();
-            }
-            record = {count:0, expiresAt:now + profileTotpAttemptsLifetimeMs};
-        }
-        const state = await profileTotp.consume(new SecretStore(this.readingListStore.config), user.id, user.profileTotp, code, now);
-        if (!state) {
-            record.count++;
-            attempts.set(user.id, record);
+        if (!await attempts.allows(user.id,now)) throw invalidProfileCredentials();
+        const accepted = await profileTotp.consumeWithTrust(new SecretStore(this.readingListStore.config),user.id,user.profileTotp,code,now,remember);
+        if (!accepted) {
+            await attempts.failed(user.id,now);
             throw invalidProfileCredentials();
         }
-        attempts.delete(user.id);
-        return state;
+        await attempts.delete(user.id);
+        return accepted;
     }
 
     async profileTotpAction(userId, profileAccessToken, operation, payload = {}) {
         const token = String(profileAccessToken || '').trim();
         const store = this.readingListStore;
-        const authorize = () => {
-            if (!token || !userId || this.getProfileSessionUser(token) !== userId)
+        const authorize = async () => {
+            if (!token || !userId || await this.getProfileSessionUser(token) !== userId)
                 throw new Error('need_profile_login');
         };
         if (operation === 'status') {
             return withFileTransaction(store.file, async() => {
                 const identity = await this.personalLibraryUser(userId, token);
                 const user = await store.getProfileCredentials(identity.id);
-                if (token) authorize();
+                if (token) await authorize();
                 return {otpEnabled:!!user.profileTotp, otpRequired:user.otpRequired, recoveryCodesRemaining:user.profileTotp?.recoveryHashes.length || 0,
                     opdsAppPasswordSet:user.opdsAppPasswordSet, hasPassword:!!(user.passwordHash && user.login),
                     trustedDeviceCount:user.profileTrustedDevices.length};
             });
         }
-        authorize();
+        await authorize();
         return withFileTransaction(store.file, async() => {
             const user = await store.getProfileCredentials(userId);
-            authorize();
+            await authorize();
             if (!user?.passwordHash || !user.login) throw new Error('Для защиты нужен локальный профиль с логином и паролем');
             const status = {otpEnabled:!!user.profileTotp, otpRequired:user.otpRequired, recoveryCodesRemaining:user.profileTotp?.recoveryHashes.length || 0,
                 opdsAppPasswordSet:user.opdsAppPasswordSet, trustedDeviceCount:user.profileTrustedDevices.length};
             if (!await profilePassword.verify(user.passwordHash, user.login, payload?.password))
                 throw invalidProfileCredentials();
-            authorize();
+            await authorize();
             if (operation === 'start' || operation === 'enable') {
                 if (status.otpEnabled) throw new Error('Двухфакторная защита уже включена');
-                if (!this.pendingProfileTotp) this.pendingProfileTotp = new Map();
-                const pending = this.pendingProfileTotp;
+                const pending = this.pendingProfileTotp ??= new ProfileTotpEnrollments(this.profileSessions,false,this.profileTransport);
                 if (operation === 'start') {
-                    for (const [key, item] of pending)
-                        if (item.expiresAt <= Date.now() || !this.profileSessions.has(key)) pending.delete(key);
-                    if (pending.size >= profileTotpSetupLimit && !pending.has(token)) throw new Error('Повторите настройку позже');
-                    const params = profileTotp.start(user.login);
-                    pending.set(token, {userId, secret:params.secret, expiresAt:Date.now() + profileTotpSetupLifetimeMs, attempts:0});
+                    if (!await pending.prepare(token,Date.now())) throw new Error('Повторите настройку позже');
+                    const params = await profileTotp.start(user.login);
+                    await authorize();
+                    await pending.create(token,userId,params.secret,Date.now());
                     return params;
                 }
                 const {state, recoveryCodes} = await this.confirmProfileTotpSetup(pending, token, userId, payload?.code);
-                await store.updateProfileCredentials(userId, {profileTotp:state}, authorize);
-                pending.delete(token);
-                this.revokeUserSessions(userId, token);
-                authorize();
+                await this.saveProfileCredentials(userId, {profileTotp:state}, authorize);
+                await pending.delete(token);
+                await this.revokeUserSessions(userId, token);
+                await authorize();
                 return {...status, otpEnabled:true, recoveryCodesRemaining:recoveryCodes.length, recoveryCodes};
             }
             if (operation === 'create-opds-password' || operation === 'revoke-opds-password') {
                 const state = user.profileTotp ? await this.verifyProfileTotp(user, payload?.code) : null;
                 const result = await store.manageOpdsAppPassword(userId, operation, {profileTotp:state, authorize});
-                authorize();
+                await authorize();
                 return {...status, recoveryCodesRemaining:state?.recoveryHashes.length ?? status.recoveryCodesRemaining, ...result};
             }
             if (!['disable', 'regenerate-recovery', 'revoke-trusted-devices'].includes(operation))
@@ -4195,41 +4014,41 @@ class WebWorker {
             if (operation === 'disable' && status.otpRequired) throw new Error('OTP обязателен по настройке администратора');
             const state = await this.verifyProfileTotp(user, payload?.code);
             if (operation === 'revoke-trusted-devices') {
-                await store.updateProfileCredentials(userId, {profileTotp:state, profileTrustedDevices:[]}, authorize);
-                this.revokeUserSessions(userId, token);
-                authorize();
+                await this.saveProfileCredentials(userId, {profileTotp:state, profileTrustedDevices:[]}, authorize);
+                await this.revokeUserSessions(userId, token);
+                await authorize();
                 return {...status, recoveryCodesRemaining:state.recoveryHashes.length, trustedDeviceCount:0};
             }
             if (operation === 'disable') {
-                await store.updateProfileCredentials(userId, {profileTotp:null}, authorize);
-                this.revokeUserSessions(userId, token);
-                authorize();
+                await this.saveProfileCredentials(userId, {profileTotp:null}, authorize);
+                await this.revokeUserSessions(userId, token);
+                await authorize();
                 return {...status, otpEnabled:false, recoveryCodesRemaining:0, trustedDeviceCount:0};
             }
-            const {recoveryCodes, recoveryHashes} = profileTotp.newRecoveryCodes(userId);
-            await store.updateProfileCredentials(userId, {profileTotp:{...state, recoveryHashes}, profileTrustedDevices:[]}, authorize);
-            this.revokeUserSessions(userId, token);
-            authorize();
+            const {recoveryCodes, recoveryHashes} = await profileTotp.newRecoveryCodes(userId);
+            await this.saveProfileCredentials(userId, {profileTotp:{...state, recoveryHashes}, profileTrustedDevices:[]}, authorize);
+            await this.revokeUserSessions(userId, token);
+            await authorize();
             return {...status, recoveryCodesRemaining:recoveryCodes.length, recoveryCodes, trustedDeviceCount:0};
         });
     }
 
     async withAdminProfileTotpChange(adminId, adminToken, targetUserId, password, otp, change) {
         this.checkMyState();
-        const authorize = () => {
-            if (!adminId || this.getProfileSessionUser(adminToken) !== adminId)
+        const authorize = async () => {
+            if (!adminId || await this.getProfileSessionUser(adminToken) !== adminId)
                 throw new Error('need_profile_login');
         };
-        authorize();
+        await authorize();
         const store = this.readingListStore;
         return withFileTransaction(store.file, async() => {
             const admin = await store.getProfileCredentials(adminId);
-            authorize();
+            await authorize();
             if (!admin?.isAdmin) throw new Error('Только администратор может управлять профилями');
             if (admin.id === targetUserId) throw new Error('Свою двухфакторную защиту можно отключить в настройках своего профиля');
             if (!admin.login || !admin.passwordHash || !await profilePassword.verify(admin.passwordHash, admin.login, password))
                 throw invalidProfileCredentials();
-            authorize();
+            await authorize();
             const adminTotp = admin.profileTotp ? await this.verifyProfileTotp(admin, otp) : null;
             return change(store, admin, adminTotp, authorize);
         });
@@ -4238,12 +4057,8 @@ class WebWorker {
     async resetUserProfileTotp(adminId, adminToken, targetUserId, password, otp) {
         return this.withAdminProfileTotpChange(adminId, adminToken, targetUserId, password, otp, async(store, admin, adminTotp, authorize) => {
             const result = await store.resetProfileTotp(admin.id, targetUserId, adminTotp, authorize);
-            this.revokeUserSessions(result.userId);
-            this.profileTotpAttempts?.delete(result.userId);
-            if (this.pendingProfileTotp) {
-                for (const [token, setup] of this.pendingProfileTotp)
-                    if (setup.userId === result.userId) this.pendingProfileTotp.delete(token);
-            }
+            await this.revokeUserSessions(result.userId);
+            await this.profileTotpAttempts.delete(result.userId);
             this.addAdminEvent('warn', 'security', 'Сброшена двухфакторная защита профиля',
                 {adminId:admin.id, userId:result.userId});
             return result;
@@ -4255,8 +4070,8 @@ class WebWorker {
         return this.withAdminProfileTotpChange(adminId, adminToken, targetUserId, password, otp, async(store, admin, adminTotp, authorize) => {
             const {changed, ...result} = await store.setProfileTotpRequired(admin.id, targetUserId, required, adminTotp, authorize);
             if (changed) {
-                this.clearRequiredProfileTotpEnrollment(result.userId);
-                if (required) this.revokeUserSessions(result.userId);
+                await this.clearRequiredProfileTotpEnrollment(result.userId);
+                if (required) await this.revokeUserSessions(result.userId);
                 this.addAdminEvent('warn', 'security', required ? 'OTP обязателен для профиля' : 'Требование OTP для профиля снято',
                     {adminId:admin.id, userId:result.userId});
             }
@@ -4270,11 +4085,9 @@ class WebWorker {
             const {activatingOtp, ...result} = await store.setProfileAuthPolicy(admin.id, policy, adminTotp, authorize, isAnonymousDefaultUser);
             if (activatingOtp) {
                 const keep = String(adminToken || '').trim();
-                for (const token of this.profileSessions.keys()) {
-                    if (token !== keep) this.closeProfileSession(token);
-                }
+                await this.clearProfileSessions(keep);
             }
-            if (!policy.otpRequired) this.pendingRequiredProfileTotp?.clear();
+            if (!policy.otpRequired) await this.pendingRequiredProfileTotp?.clear();
             this.addAdminEvent('warn', 'security', 'Изменены правила входа в профили', {adminId:admin.id, ...result.profileAuthPolicy});
             return result;
         });
@@ -4293,7 +4106,7 @@ class WebWorker {
             const user = await this.readingListStore.updateUser(userId, patch);
             if(previous.telegramChatId!==user.telegramChatId)this.telegramBot?.cancelDeliveries(userId);
             if (previous.passwordHash !== user.passwordHash || previous.login !== user.login)
-                this.revokeUserSessions(userId);
+                await this.revokeUserSessions(userId);
             return {user:_.omit(user, ['passwordHash', 'profileTotp', 'opdsAppPasswordHash', 'profileTrustedDevices'])};
         });
     }
@@ -4302,7 +4115,7 @@ class WebWorker {
         this.checkMyState();
         return withFileTransaction(this.readingListStore.file, async() => {
             const result = await this.readingListStore.deleteUser(userId);
-            this.revokeUserSessions(userId);
+            await this.revokeUserSessions(userId);
             return result;
         });
     }
@@ -4313,14 +4126,14 @@ class WebWorker {
         const store = this.readingListStore;
         return withFileTransaction(store.file, async() => {
             const admin = await this.requireAdmin(adminId, adminToken);
-            const authorize = () => {
-                if (this.getProfileSessionUser(adminToken) !== admin.id) throw new Error('need_profile_login');
+            const authorize = async () => {
+                if (await this.getProfileSessionUser(adminToken) !== admin.id) throw new Error('need_profile_login');
             };
             const {changed, ...result} = await store.setUserBlocked(admin.id, targetUserId, blocked, authorize);
             if (changed) {
                 if (blocked) {
-                    this.revokeUserSessions(result.userId);
-                    this.profileTotpAttempts?.delete(result.userId);
+                    await this.revokeUserSessions(result.userId);
+                    await this.profileTotpAttempts.delete(result.userId);
                     this.telegramBot?.cancelDeliveries(result.userId);
                 }
                 this.addAdminEvent('warn', 'security', blocked ? 'Профиль заблокирован' : 'Профиль разблокирован',
@@ -4331,17 +4144,21 @@ class WebWorker {
     }
 
     revokeUserSessions(userId, keepToken = '') {
-        for (const [token, session] of this.profileSessions) {
-            if (session.userId === userId && token !== keepToken)
-                this.closeProfileSession(token);
-        }
+        if (this.profileTransport) return this.profileTransport.profileRequest('revoke',{user:userId,keep:keepToken});
+        this.profileSessions.revoke(userId,keepToken);
+        this.pendingProfileTotp?.revoke(userId,keepToken);
         this.clearRequiredProfileTotpEnrollment(userId);
     }
 
     clearRequiredProfileTotpEnrollment(userId) {
-        if (!this.pendingRequiredProfileTotp) return;
-        for (const [key, setup] of this.pendingRequiredProfileTotp)
-            if (setup.userId === userId) this.pendingRequiredProfileTotp.delete(key);
+        return this.pendingRequiredProfileTotp?.revoke(userId);
+    }
+
+    clearProfileSessions(keep = '') {
+        if (this.profileTransport) return this.profileTransport.profileRequest('clear',{keep});
+        this.profileSessions.clear(keep);
+        this.pendingProfileTotp?.clear(keep);
+        if (!keep) this.pendingRequiredProfileTotp?.clear();
     }
 
     async getOpdsUsers() {
@@ -4459,139 +4276,14 @@ class WebWorker {
         return event;
     }
 
-    async dirSize(dir = '', maxFiles = 20000) {
-        const result = {path: dir, exists: false, size: 0, files: 0, truncated: false};
-        if (!dir || !await fs.pathExists(dir))
-            return result;
-
-        result.exists = true;
-        const stack = [dir];
-        while (stack.length) {
-            const current = stack.pop();
-            let list = [];
-            try {
-                list = await fs.readdir(current);
-            } catch (e) {
-                continue;
-            }
-
-            for (const name of list) {
-                const filePath = path.join(current, name);
-                let stat = null;
-                try {
-                    stat = await fs.stat(filePath);
-                } catch (e) {
-                    continue;
-                }
-
-                if (stat.isDirectory()) {
-                    stack.push(filePath);
-                } else {
-                    result.files++;
-                    result.size += stat.size;
-                    if (result.files >= maxFiles) {
-                        result.truncated = true;
-                        return result;
-                    }
-                }
-            }
-        }
-
-        return result;
-    }
-
-    async findFilesByExt(dir = '', exts = [], maxFiles = 200) {
-        const result = [];
-        const normalizedExts = new Set(exts.map(ext => String(ext || '').toLowerCase()));
-        if (!dir || !await fs.pathExists(dir))
-            return result;
-
-        const stack = [dir];
-        while (stack.length && result.length < maxFiles) {
-            const current = stack.pop();
-            let list = [];
-            try {
-                list = await fs.readdir(current, {withFileTypes: true});
-            } catch (e) {
-                continue;
-            }
-
-            for (const entry of list) {
-                const filePath = path.join(current, entry.name);
-                if (entry.isDirectory()) {
-                    stack.push(filePath);
-                    continue;
-                }
-
-                if (normalizedExts.has(path.extname(entry.name).toLowerCase()))
-                    result.push(filePath);
-
-                if (result.length >= maxFiles)
-                    break;
-            }
-        }
-
-        return result;
-    }
-
-    async countArchives(dir = '', maxFiles = 20000) {
-        const result = {count: 0, truncated: false};
-        if (!dir || !await fs.pathExists(dir))
-            return result;
-
-        const stack = [dir];
-        while (stack.length) {
-            const current = stack.pop();
-            let list = [];
-            try {
-                list = await fs.readdir(current, {withFileTypes: true});
-            } catch (e) {
-                continue;
-            }
-
-            for (const entry of list) {
-                const filePath = path.join(current, entry.name);
-                if (entry.isDirectory()) {
-                    stack.push(filePath);
-                    continue;
-                }
-
-                if (['.zip', '.7z', '.fb2', '.epub'].includes(path.extname(entry.name).toLowerCase()))
-                    result.count++;
-
-                if (result.count >= maxFiles) {
-                    result.truncated = true;
-                    return result;
-                }
-            }
-        }
-
-        return result;
-    }
-
-    async getLibrarySourceDiagnostics(source = {}) {
-        const libDir = String(source.libDir || '').trim();
-        const inpx = String(source.inpx || source.inpxFile || '').trim();
-        const foundInpx = libDir ? await this.findFilesByExt(libDir, ['.inpx'], 20) : [];
-        const archiveInfo = libDir ? await this.countArchives(libDir) : {count: 0, truncated: false};
-        const exists = async(name) => !!(libDir && await fs.pathExists(path.join(libDir, name)));
-
-        return {
-            inpxExists: !!inpx && await fs.pathExists(inpx),
-            libDirExists: !!libDir && await fs.pathExists(libDir),
-            foundInpx,
-            archiveCount: archiveInfo.count,
-            archiveCountTruncated: archiveInfo.truncated,
-            hasCovers: await exists('covers'),
-            hasEtc: await exists('etc'),
-            hasImages: await exists('images'),
-            hasBin: await exists('bin'),
-        };
-    }
-
     async cleanBrokenCoverCacheFiles(dir = '') {
         const result = {dir, removed: 0, checked: 0};
-        if (!dir || !await fs.pathExists(dir))
+        if (!dir)
+            return result;
+        const native = await directoryDiagnostics.purgeBrokenCovers(dir);
+        if (native)
+            return {...result,...native};
+        if (!await fs.pathExists(dir))
             return result;
 
         const allowed = new Set(['.png', '.jpg', '.gif']);
@@ -4624,7 +4316,10 @@ class WebWorker {
         index = index || await this.getIndexStatus();
         dbConfig = dbConfig || (index.ready ? await this.dbConfig() : {});
         const coverDir = this.config.coverDir || `${this.config.publicFilesDir}/cover`;
-        const coverSize = await this.dirSize(coverDir);
+        const [dbSize,bookSize,coverSize,tempSize] = await directoryDiagnostics.sizes([
+            {path:`${this.config.dataDir}/db`},{path:this.config.bookDir},{path:coverDir},
+            {path:this.config.tempDir,maxFiles:5000},
+        ]);
         const bookCacheSize = this.effectiveBookCacheSize();
         const coverCacheSize = cleanDirMaxSize(this.config.coverCacheSize);
         const cacheCleanTargetRatio = this.cacheCleanTargetRatio();
@@ -4668,10 +4363,10 @@ class WebWorker {
                 tempDir: this.config.tempDir,
             },
             sizes: {
-                db: await this.dirSize(`${this.config.dataDir}/db`),
-                bookCache: await this.dirSize(this.config.bookDir),
+                db: dbSize,
+                bookCache: bookSize,
                 coverCache: coverSize,
-                tempDir: await this.dirSize(this.config.tempDir, 5000),
+                tempDir: tempSize,
             },
             limits: {
                 maxFilesDirSize: this.config.maxFilesDirSize,
@@ -4705,7 +4400,7 @@ class WebWorker {
             enabled: source.enabled !== false,
             inpx: source.inpx || source.inpxFile || '',
             libDir: source.libDir || '',
-        }, await this.getLibrarySourceDiagnostics(source))));
+        }, await directoryDiagnostics.source(source))));
         const coverErrors = (this.config.adminEventLogEnabled === false ? [] : this.adminEvents.slice().reverse())
             .filter(event => {
                 if (event.level !== 'error')
@@ -4767,7 +4462,7 @@ class WebWorker {
             // Jemba applies limit after reading/mapping the selected rows. A
             // limit-only probe materializes the entire library. An ID lookup
             // bounds the work even if that ID was removed from the catalogue.
-            probe:async() => {this.checkMyState(); await this.db.select({table:'book', where:'@@id(1)', limit:1});},
+            probe:async() => {this.checkMyState(); await require('./CatalogueRows').byIds(this.db,1);},
         });
         this.resourceBenchmark.config = this.config;
         return this.resourceBenchmark;
@@ -4900,7 +4595,7 @@ class WebWorker {
 
     async diagnoseLibrarySource(userId = '', profileAccessToken = '', source = {}) {
         await this.requireAdmin(userId, profileAccessToken);
-        return await this.getLibrarySourceDiagnostics(source);
+        return await directoryDiagnostics.source(source);
     }
 
     effectiveBookCacheSize() {
@@ -5156,6 +4851,7 @@ class WebWorker {
         return withFileTransaction(this.config.configFile, async() => {
             const configManager = new ConfigManager();
             const previous = _.cloneDeep(this.config);
+            const resumeRoutes = await require('./RustHttpServer').pauseDirectRoutes(this.config,patch);
             try {
                 Object.assign(this.config, patch);
                 configManager.config = this.config;
@@ -5166,6 +4862,8 @@ class WebWorker {
                 Object.assign(this.config, previous);
                 configManager.config = this.config;
                 throw error;
+            } finally {
+                await resumeRoutes?.();
             }
         });
     }
@@ -5460,21 +5158,6 @@ class WebWorker {
         };
     }
 
-    async addBackupPath(zipFile, sourcePath, zipPath) {
-        if (!sourcePath || !await fs.pathExists(sourcePath))
-            return;
-
-        const stat = await fs.stat(sourcePath);
-        if (stat.isDirectory()) {
-            const entries = await fs.readdir(sourcePath);
-            for (const entry of entries)
-                await this.addBackupPath(zipFile, path.join(sourcePath, entry), `${zipPath}/${entry}`);
-            return;
-        }
-
-        zipFile.addFile(sourcePath, zipPath);
-    }
-
     async createAdminBackup(userId = '', profileAccessToken = '') {
         this.checkMyState();
         await this.requireAdmin(userId, profileAccessToken);
@@ -5495,7 +5178,7 @@ class WebWorker {
         if (operation === 'preview' || operation === 'restore') {
             return withFileTransaction(path.join(this.config.dataDir, '.backup-import-queue'), async() => {
                 await this.requireAdmin(userId, token);
-                const data = await vault.payload(options.name, options.password);
+                const data = await vault.restoreSource(options.name, options.password);
                 return this.importAdminBackup(userId, token, {...data, preview: operation === 'preview', fingerprint: options.fingerprint});
             });
         }
@@ -5517,42 +5200,29 @@ class WebWorker {
         const stamp = createdAt.toISOString().replace(/[:.]/g, '-');
         const fileName = `inpx-web-${options.scheduled ? 'auto-' : ''}backup-${stamp}-${utils.randomHexString(4)}.zip${options.encryption ? '.enc' : ''}`;
         const outFile = path.join(backupDir, fileName);
-        const temporary = outFile + '.tmp';
-        const zipFile = new yazl.ZipFile();
-        const done = options.encryption
-            ? require('./BackupCrypto').encryptStream(zipFile.outputStream, outFile, options.encryption.key, options.encryption.salt)
-            : require('stream/promises').pipeline(zipFile.outputStream, fs.createWriteStream(temporary, {flags: 'wx', mode: 0o600}));
-        // Attach immediately: a missing source file can fail while the ZIP is still being assembled.
-        done.catch(() => {});
-        try {
-        zipFile.addBuffer(Buffer.from(JSON.stringify({
+        const info = Buffer.from(JSON.stringify({
             app: this.config.name,
             version: this.config.version,
             createdAt: createdAt.toISOString(),
             note: 'Backup includes runtime config, secrets, user profiles, reading lists, reader progress and bookmarks. It does not include source book archives, generated search DB or caches.',
-        }, null, 4)), 'backup-info.json');
-
-        await this.addBackupPath(zipFile, this.config.configFile, 'config.json');
+        }, null, 4));
+        const files = [
+            {name:'backup-info.json', data:info},
+            {name:'config.json', path:this.config.configFile},
+        ];
         // Portable backups embed image bytes; normal profile reads keep only URLs.
         await withFileTransaction(this.readingListStore.file, async() => {
             if (await fs.pathExists(this.readingListStore.file))
-                zipFile.addBuffer(Buffer.from(JSON.stringify(await this.readingListStore.exportSnapshot(), null, 2)), 'reading-lists.json');
+                files.push({name:'reading-lists.json', data:Buffer.from(JSON.stringify(await this.readingListStore.exportSnapshot(), null, 2))});
             const key = await fs.readFile(path.join(this.config.dataDir, 'secret.key')).catch(error => {
                 if (error.code !== 'ENOENT') throw error;
                 return null;
             });
-            if (key) zipFile.addBuffer(key, 'secret.key');
+            if (key) files.push({name:'secret.key', data:key});
         });
-        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'discovery-cache.json'), 'discovery-cache.json');
-        await this.addBackupPath(zipFile, path.join(this.config.dataDir, 'backup-vault.json'), 'backup-vault.json');
-
-        zipFile.end();
-        await done;
-        if (!options.encryption) await fs.rename(temporary, outFile);
-        } catch (error) {
-            zipFile.outputStream.destroy(error); await done.catch(() => {});
-            await fs.remove(temporary).catch(() => {}); await fs.remove(outFile).catch(() => {}); throw error;
-        }
+        for (const name of ['discovery-cache.json', 'backup-vault.json'])
+            files.push({name, path:path.join(this.config.dataDir, name)});
+        await require('./BackupArchive').write(outFile, files, createdAt, options.encryption);
 
         return {
             success: true,
@@ -5637,14 +5307,17 @@ class WebWorker {
                         sources: (archive['config.json']?.librarySources || []).map(source => ({name: String(source.name || source.id || '').slice(0, 200)})),
                         restartRecommended: true};
                 }
-                await transaction.commit(this.config, content);
-                if (normalized) this.readingListStore.updateCachedProfileAuthPolicy(normalized.profileAuthPolicy, {invalidateSnapshot:true});
-                if (runtimePatch)
-                    Object.assign(this.config, runtimePatch);
-                this.profileSessions.clear();
-                this.pendingProfileTotp?.clear();
-                this.pendingRequiredProfileTotp?.clear();
-                this.profileTotpAttempts?.clear();
+                const resumeRoutes = await require('./RustHttpServer').pauseDirectRoutes(this.config,runtimePatch);
+                try {
+                    await transaction.commit(this.config, content);
+                    if (normalized) this.readingListStore.updateCachedProfileAuthPolicy(normalized.profileAuthPolicy, {invalidateSnapshot:true});
+                    if (runtimePatch)
+                        Object.assign(this.config, runtimePatch);
+                } finally {
+                    await resumeRoutes?.();
+                }
+                await this.clearProfileSessions();
+                await this.profileTotpAttempts.clear();
                 if (this.telegramBot) {this.telegramBot.signature = null; this.telegramBot.configure();}
                 if (archive['discovery-cache.json']) {
                     this.discoveryCache = new Map();
@@ -5750,7 +5423,8 @@ class WebWorker {
         for (let offset = 0; offset < uids.length; offset += candidateLimit) {
             this.checkLibraryAssetState(generation, db);
             const batch = uids.slice(offset, offset + candidateLimit);
-            const books = await db.select({table:'book', where:`@@hash('_uid', ${db.esc(batch)})`});
+            const books = db.booksByUids ? await db.booksByUids(batch)
+                : await db.select({table:'book',where:`@@hash('_uid', ${db.esc(batch)})`});
             for (const book of books) if (!book.del) byUid.set(book._uid, book);
         }
         for (const item of pinned) {
@@ -5793,7 +5467,9 @@ class WebWorker {
         for (let offset = 0; offset < listEntries.length; offset += 500) {
             const chunk = listEntries.slice(offset, offset + 500);
             const read = new Map(chunk.map(entry => [entry.bookUid, !!entry.read]));
-            const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(chunk.map(entry => entry.bookUid))})`});
+            const uids = chunk.map(entry => entry.bookUid);
+            const rows = this.db.booksByUids ? await this.db.booksByUids(uids)
+                : await this.db.select({table:'book',where:`@@hash('_uid', ${this.db.esc(uids)})`});
             for (const book of rows) {
                 book._readingListRead = read.get(book._uid);
                 const progress = progressByBook[book._uid];
@@ -5829,7 +5505,9 @@ class WebWorker {
         const ids = await this.dbSearcher.bookSearchIds(require('./SmartShelf').query(filters));
         const entries = [];
         for (let offset = 0; offset < ids.length; offset += 1000) {
-            const rows = await this.db.select({table: 'book', where: `@@id(${this.db.esc(Array.from(ids.slice(offset, offset + 1000)))})`, map: '(row) => ({_uid: row._uid})'});
+            const page = Array.from(ids.slice(offset, offset + 1000));
+            const rows = this.db.booksByIds ? await this.db.booksByIds(page,['_uid'])
+                : await this.db.select({table:'book',where:`@@id(${this.db.esc(page)})`,map:'(row) => ({_uid: row._uid})'});
             for (const book of rows) {
                 if (!filters.unreadOnly || !read.has(book._uid)) entries.push({bookUid: book._uid, read: read.has(book._uid)});
             }
@@ -5958,11 +5636,32 @@ class WebWorker {
         };
     }
 
+    async resolveBookInput(libFolder, libFile, sourceLibDir = '') {
+        const name = relativeName(libFile);
+        const folderName = relativeName(libFolder);
+        const libDir = path.resolve(sourceLibDir || this.config.libDir);
+        const root = await fs.realpath(libDir);
+        const candidate = await this.resolveLibraryArchivePath(path.join(libDir, folderName), libDir, root);
+        const folder = await realPathWithin(root, candidate);
+        const folderStat = await fs.stat(folder);
+        if (folderStat.isDirectory()) {
+            const fullPath = path.join(folder, name);
+            const resolved = name && await this.resolveExistingPath(fullPath, root);
+            if (!resolved) throw new Error(`file not found: ${fullPath}`);
+            if (!(await fs.stat(resolved)).isFile()) throw new Error('Недопустимый тип файла книги');
+            return {source:resolved,name:null};
+        }
+        if (!folderStat.isFile()) throw new Error('Недопустимый тип архива книги');
+        return {source:folder,name:name || null};
+    }
+
     async extractBook(libFolder, libFile, sourceLibDir = '', {maxOutputBytes = 0, prefixBytes = 0, signal, timeoutMs} = {}) {
         if (prefixBytes && (!Number.isSafeInteger(prefixBytes) || prefixBytes < 1)) throw new Error('Invalid book prefix limit');
         if (prefixBytes && maxOutputBytes && prefixBytes > maxOutputBytes) throw new Error('Book prefix exceeds maxOutputBytes');
         const outFile = `${this.config.tempDir}/${utils.randomHexString(30)}`;
+        const nativeOptions = {maxOutputBytes,prefixBytes,signal,timeoutMs};
         const copy = async file => {
+            if (await RustBookArchive.extract(file,null,outFile,nativeOptions)) return;
             if (prefixBytes) {
                 const {pipeline}=require('stream/promises');
                 try {await pipeline(fs.createReadStream(file,{start:0,end:prefixBytes-1,signal}),fs.createWriteStream(outFile),{signal});}
@@ -5980,27 +5679,12 @@ class WebWorker {
             } catch (error) {await fs.remove(outFile); throw error;}
         };
 
-        const name = relativeName(libFile);
-        const folderName = relativeName(libFolder);
-        const libDir = path.resolve(sourceLibDir || this.config.libDir);
-        const root = await fs.realpath(libDir);
-        const candidate = await this.resolveLibraryArchivePath(path.join(libDir, folderName), libDir, root);
-        const folder = await realPathWithin(root, candidate);
-        const folderStat = await fs.stat(folder);
-        if (folderStat.isDirectory()) {
-            const fullPath = path.join(folder, name);
-            const resolved = name && await this.resolveExistingPath(fullPath, root);
-            if (!resolved) throw new Error(`file not found: ${fullPath}`);
-            if (!(await fs.stat(resolved)).isFile()) throw new Error('Недопустимый тип файла книги');
-            await copy(resolved);
-            return outFile;
-        }
-
-        if (!folderStat.isFile()) throw new Error('Недопустимый тип архива книги');
+        const {source:folder,name} = await this.resolveBookInput(libFolder,libFile,sourceLibDir);
         if (!name) {
             await copy(folder);
             return outFile;
         } else {// файл в zip-архиве
+            if (await RustBookArchive.extract(folder,name,outFile,nativeOptions)) return outFile;
             const zipReader = new ZipReader({resourceMaxOutputBytes:maxOutputBytes || (prefixBytes ? 32*1024**2:0),
                 ...(prefixBytes || signal || timeoutMs ? {resourceSignal:signal,converterPaths:this.config.converterPaths,resourceTimeoutMs:timeoutMs}:{})});
             await zipReader.open(folder, false);
@@ -6654,9 +6338,9 @@ class WebWorker {
     async getAuthorInfo(authorId, author) {
         let authorName = author || '';
         if (!authorName && authorId) {
-            const rows = await this.db.select({table: 'author', where: `@@id(${this.db.esc(authorId)})`});
-            if (rows.length)
-                authorName = rows[0].value;
+            const rows = this.db.nativeCatalogue ? await this.dbSearcher.readNameRows('author',[authorId])
+                : await this.db.select({table:'author',where:`@@id(${this.db.esc(authorId)})`});
+            if (rows.length) authorName = rows[0].value ?? rows[0].name.toLowerCase();
         }
 
         const normalized = normalizeAuthorText(authorName);
@@ -6746,9 +6430,10 @@ class WebWorker {
         return (binaries.length > 0 || coverLinked);
     }
 
-    async shouldInjectFblibraryImages(bookFile, libFolder = '') {
+    async shouldInjectFblibraryImages(bookFile, libFolder = '', hasBinary) {
         if (path.extname(String(libFolder || '')).toLowerCase() === '.7z')
             return true;
+        if (typeof hasBinary==='boolean') return !hasBinary;
 
         let data = await fs.readFile(bookFile);
         data = this.fb2Helper.checkEncoding(data);
@@ -6762,20 +6447,25 @@ class WebWorker {
         const epub = path.extname(libFile).toLowerCase() === '.epub';
 
         let extractedFile = '';
-        let hash = '';
+        let cached;
+        const assetVersion = assetVersionFor(path.extname(libFile).slice(1));
+        const descriptor = {bookUid, libFolder, libFile, sourceLibDir, downFileName, assetVersion};
 
         if (!this.remoteLib) {
             extractedFile = await this.extractBook(libFolder, libFile, sourceLibDir);
             if (path.extname(libFile).toLowerCase() === '.fb2') {
                 try {
-                    const data = await fs.readFile(extractedFile);
-                    const normalized = this.fb2Helper.checkEncoding(await this.fb2Helper.decompressIfNeeded(data));
-                    if (!normalized.equals(data))
-                        await fs.writeFile(extractedFile, normalized);
+                    const native = await require('./RustBookCache').normalizeFb2(extractedFile);
+                    if (!native) {
+                        const data = await fs.readFile(extractedFile);
+                        const normalized = this.fb2Helper.checkEncoding(await this.fb2Helper.decompressIfNeeded(data));
+                        if (!normalized.equals(data)) await fs.writeFile(extractedFile, normalized);
+                    }
                     const libid = parseInt(path.basename(libFile, path.extname(libFile)), 10);
-                    if (libid && await this.shouldInjectFblibraryImages(extractedFile, libFolder))
-                        await this.injectFblibraryImages(extractedFile, libid, sourceLibDir, libFolder);
-                    await require('./Fb2Images').normalizeEmbeddedImages(extractedFile, this.config, this.libraryToolDirs(sourceLibDir));
+                    const injected = libid && await this.shouldInjectFblibraryImages(extractedFile,libFolder,native?.hasBinary)
+                        && await this.injectFblibraryImages(extractedFile,libid,sourceLibDir,libFolder);
+                    if (native?.hasBinary!==false || injected)
+                        await require('./Fb2Images').normalizeEmbeddedImages(extractedFile, this.config, this.libraryToolDirs(sourceLibDir));
                 } catch (error) {
                     await fs.remove(extractedFile);
                     throw error;
@@ -6795,53 +6485,19 @@ class WebWorker {
                     await Promise.all([...readerCache.values()].map(reader => reader.close()));
                 }
             }
-            hash = await utils.getFileHash(extractedFile, 'sha256', 'hex');
+            try {
+                cached = await bookFileCache.publish(this.config.bookDir,this.config.tempDir,extractedFile,descriptor,epub);
+            } finally {await fs.remove(extractedFile);}
         } else {
-            hash = await this.remoteLib.downloadBook(bookUid);
+            const hash = await this.remoteLib.downloadBook(bookUid);
+            await bookFileCache.registerRemote(this.config.bookDir,hash,descriptor);
+            cached = {hash,size:0};
         }
 
-        const link = `${this.config.bookPathStatic}/${hash}`;
-        const bookFile = `${this.config.bookDir}/${hash}`;
-        const bookFileDesc = `${bookFile}.d.json`;
-        const size = extractedFile ? (await fs.stat(extractedFile)).size : 0;
-
-        try {
-            if (!await fs.pathExists(bookFile) || !await fs.pathExists(bookFileDesc)) {
-                if (!await fs.pathExists(bookFile) && extractedFile) {
-                    const tmpFile = `${this.config.tempDir}/${utils.randomHexString(30)}`;
-                    try {
-                        await utils.gzipFile(extractedFile, tmpFile, 4);
-                        await fs.move(tmpFile, bookFile, {overwrite: true});
-                    } finally { await fs.remove(tmpFile); }
-                } else {
-                    await utils.touchFile(bookFile);
-                }
-            } else {
-                await utils.touchFile(bookFile);
-                await utils.touchFile(bookFileDesc);
-            }
-            // Converters and uncompressed downloads need the local EPUB that
-            // we just prepared. Publish the existing bytes before exposing the
-            // descriptor, so they need not immediately read and inflate gzip.
-            if (epub && extractedFile && size)
-                await utils.prepareCachedFile(`${bookFile}.raw`, temporary => fs.move(extractedFile, temporary), size);
-        } finally {
-            if (extractedFile) await fs.remove(extractedFile);
-        }
-
-        const assetVersion = assetVersionFor(path.extname(libFile).slice(1));
-        await writeFileAtomic(bookFileDesc, JSON.stringify({bookUid, libFolder, libFile, sourceLibDir, downFileName, size, assetVersion}));
         this.scheduleCacheClean('после подготовки книги');
-
-        await db.insert({
-            table: 'file_hash',
-            replace: true,
-            rows: [
-                {id: bookUid, hash, size, assetVersion},
-            ]
-        });
-
-        return link;
+        const {hash,size} = cached;
+        await require('./CatalogueServiceCache').saveFileHash(db,{id:bookUid,hash,size,assetVersion});
+        return `${this.config.bookPathStatic}/${hash}`;
     }
 
     //одновременные запросы одной книги (карточка в фоне, «Читать», «Скачать»)
@@ -6883,7 +6539,7 @@ class WebWorker {
             let size = 0;
 
             //найдем downFileName, libFolder, libFile
-            let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
+            let rows = await require('./CatalogueRows').byUids(db,bookUid);
             if (!rows.length)
                 throw new Error('404 Файл не найден');
 
@@ -6916,22 +6572,13 @@ class WebWorker {
             const sourceLibDir = book.sourceLibDir || this.config.libDir;
 
             //найдем хеш
-            rows = await db.select({table: 'file_hash', where: `@@id(${db.esc(bookUid)})`});
+            rows = await require('./CatalogueServiceCache').fileHashesByIds(db,bookUid);
             if (rows.length) {//хеш найден по bookUid
                 const hash = rows[0].hash;
-                const bookFile = `${this.config.bookDir}/${hash}`;
-                const bookFileDesc = `${bookFile}.d.json`;
-
-                if (await fs.pathExists(bookFile) && await fs.pathExists(bookFileDesc)) {
-                    try {
-                        const desc = JSON.parse(await fs.readFile(bookFileDesc, 'utf8'));
-                        if (desc.assetVersion === assetVersionFor(book.ext)) {
-                            link = `${this.config.bookPathStatic}/${hash}`;
-                            size = desc.size || 0;
-                        }
-                    } catch(e) {
-                        link = '';
-                    }
+                const desc = await bookFileCache.inspect(this.config.bookDir,hash,{assetVersion:assetVersionFor(book.ext)});
+                if (desc) {
+                    link = `${this.config.bookPathStatic}/${hash}`;
+                    size = desc.size || 0;
                 }
             }
 
@@ -6963,7 +6610,7 @@ class WebWorker {
 
     async getPreparedBookFile(bookUid, format = '', preference = 'original') {
         const bookLink = await this.getBookLink(bookUid);
-        const rows = await this.db.select({table: 'book', where: `@@hash('_uid', ${this.db.esc(bookUid)})`});
+        const rows = await require('./CatalogueRows').byUids(this.db,bookUid);
         if (!rows.length)
             throw new Error('404 Файл не найден');
         return await this.prepareBookFile(bookLink, rows[0], format, preference);
@@ -7319,7 +6966,7 @@ class WebWorker {
             return;
         const ids = Array.from(new Set(books.map(book => this.metadataBookUid(book))));
         const versions = new Map(books.map(book => [this.metadataBookUid(book), assetVersionFor(book.ext)]));
-        const hashes = await this.db.select({table: 'file_hash', where: `@@id(${this.db.esc(ids)})`});
+        const hashes = await require('./CatalogueServiceCache').fileHashesByIds(this.db,ids);
         const sizes = new Map();
         if (!this.preparedBookSizes)
             this.preparedBookSizes = new Map();
@@ -7570,7 +7217,7 @@ class WebWorker {
             const bookFile = `${this.config.bookDir}/${hash}`;
             const bookFileInfo = `${bookFile}.i.json`;
 
-            let rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
+            let rows = await require('./CatalogueRows').byUids(db,bookUid);
             if (!rows.length)
                 throw new Error('404 Файл не найден');
             const book = {...rows[0]};
@@ -7714,7 +7361,7 @@ class WebWorker {
 
         const db = this.db;
         const generation = this.libraryAssetGeneration;
-        const rows = await db.select({table: 'book', where: `@@hash('_uid', ${db.esc(bookUid)})`});
+        const rows = await require('./CatalogueRows').byUids(db,bookUid);
         if (!rows.length)
             throw new Error('404 Файл не найден');
         const book = {...rows[0]};
@@ -7798,7 +7445,7 @@ class WebWorker {
         const result = await this.runForeground(() => this.shareBookJob('reviews', [bookUid], async() => {
             const db = this.db, generation = this.libraryAssetGeneration;
             load.progress.update('reviews',{phase:'Проверка кэша отзывов',done:0,total:null});
-            const rows = await db.select({table:'book', where:`@@hash('_uid', ${db.esc(bookUid)})`});
+            const rows = await require('./CatalogueRows').byUids(db,bookUid);
             if (!rows.length) throw new Error('404 Файл не найден');
             const book = rows[0], state = await this.getReviewArchiveState(book.sourceLibDir,
                 progress => load.progress.update('ratings',progress));
@@ -7966,6 +7613,15 @@ class WebWorker {
         if (!dir || maxSize === null)
             return result;
 
+        const native = await directoryDiagnostics.rotateCache(dir,maxSize,targetSize,result.forceTarget);
+        if (native) {
+            const {failed,failures,...summary} = native;
+            for (const {name,error} of failures)
+                log(LM_ERR, `clean dir ${dir}, remove ${path.join(dir,name)}: ${error}`);
+            if (failed > failures.length)
+                log(LM_ERR, `clean dir ${dir}, ${failed-failures.length} more removal errors`);
+            return this.reportCacheRotation({...result,...summary});
+        }
         if (!await fs.pathExists(dir))
             return result;
 
@@ -8004,13 +7660,17 @@ class WebWorker {
             i++;
         }
 
-        if (i) {
-            log(LM_WARN, `clean dir ${dir}, maxSize=${maxSize}, targetSize=${targetSize}, found ${files.length} files, total size=${initialSize}, after=${size}`);
-            log(LM_WARN, `removed ${i} files`);
-        }
-
         result.removed = i;
         result.after = size;
+        return this.reportCacheRotation(result);
+    }
+
+    reportCacheRotation(result) {
+        if (result.removed) {
+            const {dir,maxSize,targetSize,found,size,after,removed} = result;
+            log(LM_WARN, `clean dir ${dir}, maxSize=${maxSize}, targetSize=${targetSize}, found ${found} files, total size=${size}, after=${after}`);
+            log(LM_WARN, `removed ${removed} files`);
+        }
         return result;
     }
 

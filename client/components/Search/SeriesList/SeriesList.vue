@@ -8,17 +8,7 @@
         <!-- Формирование списка ------------------------------------------------------------------------>
         <div v-for="item in tableData" :key="item.key" class="column series-group">
             <div class="catalog-group-heading row items-center q-ml-md q-mr-xs no-wrap">
-                <q-btn v-if="shelvesAppearance" flat dense round :icon="isExpandedSeries(item) ? 'la la-angle-down' : 'la la-angle-right'" :aria-label="`${isExpandedSeries(item) ? 'Свернуть' : 'Развернуть'} серию: ${item.series}`" :aria-expanded="isExpandedSeries(item)" @click="expandSeries(item)" />
-                <div v-else class="row items-center clickable2 q-py-xs no-wrap" @click="expandSeries(item)">
-                    <div style="min-width: 30px">
-                        <div v-if="!isExpandedSeries(item)">
-                            <q-icon name="la la-plus-square" size="28px" />
-                        </div>
-                        <div v-else>
-                            <q-icon name="la la-minus-square" size="28px" />
-                        </div>
-                    </div>
-                </div>
+                <q-btn flat dense round :icon="isExpandedSeries(item) ? 'la la-angle-down' : 'la la-angle-right'" :aria-label="`${isExpandedSeries(item) ? 'Свернуть' : 'Развернуть'} серию: ${item.series}`" :aria-expanded="isExpandedSeries(item)" @click="expandSeries(item)" />
 
                 <div class="clickable2 q-ml-xs q-py-sm text-bold" @click="selectSeries(item.series)">
                     Серия: {{ item.series }}
@@ -28,7 +18,7 @@
                     {{ getBookCount(item) }}
                 </div>
 
-                <div v-if="!shelvesAppearance || isExpandedSeries(item)" class="series-read-actions">
+                <div v-if="isExpandedSeries(item)" class="series-read-actions">
                     <q-btn outline dense no-caps icon="la la-download" label="ZIP серии" :loading="batchSeries === item.series" :disable="!!batchSeries" @click.stop="downloadSeries(item)" />
                     <q-btn flat dense no-caps icon="la la-check-circle" @click.stop="markSeriesRead(item, true)">
                         Прочитана
@@ -39,29 +29,21 @@
                 </div>
             </div>
 
-            <LoadingState v-if="item.bookLoading && shelvesAppearance" class="book-row q-mb-md" label="Загружаем книги серии" />
-            <div v-else-if="item.bookLoading" class="book-row row items-center">
-                <q-icon class="la la-spinner icon-rotate text-blue-8" size="28px" />
-                <div class="q-ml-xs">
-                    Обработка...
-                </div>
-            </div>
+            <LoadingState v-if="item.bookLoading" class="book-row q-mb-md" label="Загружаем книги серии" />
 
             <div v-if="isExpandedSeries(item) && item.books">
                 <div v-if="item.showAllBooks" class="book-row column">
                     <BookView
                         v-for="seriesBook in item.allBooks" :key="seriesBook.id"
                         :book="seriesBook" 
-                        mode="series"
-                        :genre-map="genreMap" :show-read-link="showReadLink"
-                        :title-color="isFoundSeriesBook(item, seriesBook) ? 'text-blue-10' : 'text-red'"
+                        :genre-map="genreMap"
                         @book-event="bookEvent"
                     />
                 </div>
                 <div v-else class="book-row column">
                     <BookView 
                         v-for="seriesBook in item.books" :key="seriesBook.key"                        
-                        :book="seriesBook" mode="series" :genre-map="genreMap" :show-read-link="showReadLink" @book-event="bookEvent"
+                        :book="seriesBook" :genre-map="genreMap" @book-event="bookEvent"
                     />
                 </div>
 
@@ -129,14 +111,6 @@ class SeriesList extends BaseList {
     batchSeries = '';
     get foundCountMessage() {
         return `${this.list.totalFound} сери${utils.wordEnding(this.list.totalFound, 1)}`;
-    }
-
-    isFoundSeriesBook(seriesItem, seriesBook) {
-        if (!seriesItem.booksSet) {
-            seriesItem.booksSet = new Set(seriesItem.books.map(b => b.id));
-        }
-
-        return seriesItem.booksSet.has(seriesBook.id);
     }
 
     getBookCount(item) {

@@ -70,26 +70,31 @@ async function testLoginRateReservesAttemptsDuringCredentialVerification() {
 
 async function testLibraryAccessChallengesExpireAndPromoteOnlyOnUse() {
     const WebAccess = require('../server/core/WebAccess');
-    const access = Object.assign(Object.create(WebAccess.prototype), {
-        config:{accessPassword:'library-fixture'}, accessTimeout:0, freeAccess:false,
-        accessMap:new Map(), pendingChallenges:new Map(), challengeCounts:new Map(),
-        db:{insert:async () => {}, delete:async () => {}, esc:JSON.stringify},
-    });
+    const {lifetime} = require('../server/core/WebAccessChallenges');
+    const access = new WebAccess({accessPassword:'library-fixture',accessTimeout:0});
+    access.store = {apply:async()=>{},close:async()=>{}};
     const client = '192.0.2.7';
-    const salts = Array.from({length:16}, () => access.newToken(client));
-    assert.throws(() => access.newToken(client), {code:'INPX_LOGIN_RATE_LIMIT'});
-    assert.equal(access.accessMap.size, 0);
-    const token = salt => require('../server/core/utils').getBufHash(access.config.accessPassword + salt,'sha256','hex');
-    assert.equal(await access.hasAccess(token(salts[0])), true);
-    assert.equal(access.accessMap.size, 1);
-    assert.equal(access.pendingChallenges.size, 15);
-    assert.doesNotThrow(() => access.newToken(client));
-    for (const challenge of access.pendingChallenges.values()) challenge.expiresAt = 0;
-    assert.equal(await access.hasAccess(token(salts[1])), false);
-    assert.doesNotThrow(() => access.newToken(client));
-    assert.equal(access.pendingChallenges.size, 1);
-    assert.equal(access.challengeCounts.get(client), 1);
-    assert.equal(await access.hasAccess(token(salts[0])), true);
+    try {
+        const salts = Array.from({length:16}, () => access.newToken(client));
+        assert.throws(() => access.newToken(client), {code:'INPX_LOGIN_RATE_LIMIT'});
+        assert.equal(access.sessions.size, 0);
+        const token = salt => require('../server/core/utils').getBufHash(access.config.accessPassword + salt,'sha256','hex');
+        assert.equal(await access.hasAccess(token(salts[0])), true);
+        assert.equal(access.sessions.size, 1);
+        assert.equal(access.pendingChallenges.size, 15);
+        assert.doesNotThrow(() => access.newToken(client));
+        const clock = Date.now;
+        const expiredAt = clock()+lifetime+1000;
+        Date.now = () => expiredAt;
+        try {
+            assert.equal(await access.hasAccess(token(salts[1])), false);
+            assert.doesNotThrow(() => access.newToken(client));
+            assert.equal(access.pendingChallenges.size, 1);
+            for (let i=1;i<16;i++) access.newToken(client);
+            assert.throws(() => access.newToken(client), {code:'INPX_LOGIN_RATE_LIMIT'});
+        } finally {Date.now = clock;}
+        assert.equal(await access.hasAccess(token(salts[0])), true);
+    } finally {await access.closeDb();}
 }
 
 async function temporary(fn) {
@@ -163,12 +168,15 @@ async function testAtomicConfigSave() {
         const disk = await fs.readFile(manager._config.configFile, 'utf8');
         assert.strictEqual(await new SecretStore({dataDir}).decrypt(JSON.parse(disk).smtpPass), 'two');
         const rename = fs.rename;
+        const binary = process.env.INPX_RUST_CATALOG_BINARY;
+        delete process.env.INPX_RUST_CATALOG_BINARY;
         fs.rename = async() => { throw new Error('simulated replacement failure'); };
         try {
             manager._config.smtpPass = 'three';
             await assert.rejects(manager.save(), /simulated replacement failure/);
         } finally {
             fs.rename = rename;
+            if (binary !== undefined) process.env.INPX_RUST_CATALOG_BINARY = binary;
         }
         assert.strictEqual(await fs.readFile(manager._config.configFile, 'utf8'), disk);
         assert.ok(!(await fs.readdir(dataDir)).some(name => name.includes('.tmp-')));
@@ -193,11 +201,22 @@ async function testSessionLifetimeAndMalformedCookies() {
     const request = {headers: {cookie}};
     const session = security.getSession(request);
     assert.ok(session);
-    session.updatedAt = Date.now() - lifetime.idleMs - 1;
-    assert.strictEqual(security.getSession(request), null);
-    const absolute = security.ensureSession({headers: {}});
-    absolute.createdAt = Date.now() - lifetime.maxAgeMs - 1;
-    assert.strictEqual(security.getSession({headers: {}, securitySession: absolute}), null);
+    const realNow = Date.now;
+    let now = realNow() + lifetime.idleMs + 1;
+    Date.now = () => now;
+    try {
+        assert.strictEqual(security.getSession(request), null);
+        const absolute = {headers: {}};
+        security.ensureSession(absolute);
+        const start = now;
+        const day = 24*60*60*1000;
+        while (now-start+day < lifetime.maxAgeMs) {
+            now += day;
+            assert.ok(security.getSession(absolute));
+        }
+        now = start+lifetime.maxAgeMs;
+        assert.strictEqual(security.getSession(absolute), null);
+    } finally {Date.now = realNow;}
     assert.deepStrictEqual(security.parseCookies('bad=%ZZ; good=value'), {good: 'value'});
     assert.strictEqual(security.unpackSessionId(`id.${'я'.repeat(64)}`), '');
     assert.strictEqual(security.hasValidCsrf({headers: {}}, 'я'.repeat(64)), false);
@@ -269,8 +288,7 @@ async function testProfileCredentialChangesRevokeSessions() {
         const Worker = require('../server/core/WebWorker');
         const worker = Object.create(Worker.prototype);
         worker.checkMyState = () => {};
-        worker.profileSessions = new Map();
-        worker.readingListStore = new ReadingListStore({dataDir});
+        worker.readingListStore = new ReadingListStore({dataDir,adminPassword:'session-regression-fixture'});
         const user = await worker.readingListStore.createUser({name: 'Reader', login: 'reader',
             passwordHash: require('../server/core/ProfilePassword').legacy('reader', 'old')});
         await assert.rejects(worker.updateUserProfile(user.id, {login: 'renamed'}), /пароль заново/);
@@ -286,8 +304,10 @@ async function testProfileCredentialChangesRevokeSessions() {
         await worker.updateUserProfile(user.id, {login: 'renamed'});
         assert.strictEqual(worker.getProfileSessionUser(current.profileAccessToken), '');
         const renamed = await worker.loginUserProfile('renamed', 'new');
-        worker.profileSessions.get(renamed.profileAccessToken).updatedAt = Date.now() - lifetime.idleMs - 1;
-        assert.strictEqual(worker.getProfileSessionUser(renamed.profileAccessToken), '');
+        const realNow = Date.now, expiredAt = realNow() + lifetime.idleMs + 1;
+        Date.now = () => expiredAt;
+        try {assert.strictEqual(worker.getProfileSessionUser(renamed.profileAccessToken), '');}
+        finally {Date.now = realNow;}
         const deleted = await worker.loginUserProfile('renamed', 'new');
         await worker.deleteUserProfile(user.id);
         assert.strictEqual(worker.getProfileSessionUser(deleted.profileAccessToken), '');

@@ -148,7 +148,6 @@ async function testProgressReauthorizesAfterAQueuedProfileChange() {
         const worker = Object.create(require('../server/core/WebWorker').prototype);
         worker.readingListStore = store;
         worker.checkMyState = () => {};
-        worker.profileSessions = new Map();
         const user = await store.createUser({name:'Reader', login:'reader', passwordHash:'initial'});
         const controller = Object.create(require('../server/controllers/WebSocketController').prototype);
         controller.webWorker = worker;
