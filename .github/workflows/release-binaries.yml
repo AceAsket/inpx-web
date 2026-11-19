@@ -18,6 +18,10 @@ on:
         description: 'Use the package smoke-test script from the selected workflow revision'
         type: boolean
         default: false
+      refresh_windows_mutool_builder:
+        description: 'Use the Windows MuPDF packaging script from the selected workflow revision'
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -181,6 +185,13 @@ jobs:
 
       - uses: microsoft/setup-msbuild@v2
         if: runner.os == 'Windows'
+
+      - name: Load the selected MuPDF packaging fix for this Windows rebuild
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.refresh_windows_mutool_builder
+        shell: bash
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: git restore --source="$WORKFLOW_SHA" -- scripts/bundle-mutool.js
 
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lzip
