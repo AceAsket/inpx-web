@@ -242,7 +242,7 @@ pub(crate) fn read_epub(
     }))
 }
 
-fn bounded(size: u64, limit: u64, input: &mut dyn Read) -> Result<Vec<u8>, Failure> {
+pub(crate) fn bounded(size: u64, limit: u64, input: &mut dyn Read) -> Result<Vec<u8>, Failure> {
     if size > limit {
         return Err(Failure::Limit);
     }

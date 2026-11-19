@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -195,9 +195,14 @@ pub(crate) fn metadata_input(
 ) -> Extraction<serde_json::Value> {
     let crate::book_source::Input { file, path, member } = input;
     if let Some(member) = member {
-        read_member(&path, file, &member, |size, reader| {
-            book_metadata::read_stream(&format, size, reader, limit, false)
-        })
+        let legacy = legacy_zip_name(&member);
+        ArchiveReader::open(&path, file)?.directory.metadata(
+            &member,
+            legacy.as_deref(),
+            format,
+            limit,
+            false,
+        )
     } else if format == Format::Epub {
         book_metadata::read_epub(BufReader::with_capacity(READER_BYTES, file), false)
     } else {
@@ -557,9 +562,14 @@ fn run(cache: &mut ArchiveCache, request: &Request) -> Extraction<Option<serde_j
     let mut file = File::open(&request.source)?;
     if let Some(name) = &request.name {
         let archive = cache.open(&request.source, file)?;
-        let result = archive
-            .directory
-            .read(name, request.legacy_zip_name.as_deref(), process);
+        let legacy = request.legacy_zip_name.as_deref();
+        let result = match &request.operation {
+            Operation::Inspect(s) => archive
+                .directory
+                .metadata(name, legacy, s.metadata, s.limit, s.isbn_only)
+                .map(Some),
+            Operation::Extract(_) => archive.directory.read(name, legacy, process),
+        };
         archive.source.detach();
         result
     } else {
@@ -757,6 +767,28 @@ impl<R: Read + Seek> Directory<R> {
         }
     }
 
+    fn metadata(
+        &mut self,
+        name: &str,
+        legacy: Option<&str>,
+        format: Format,
+        limit: u64,
+        isbn_only: bool,
+    ) -> Extraction<serde_json::Value> {
+        if format == Format::Epub {
+            let bytes = self.read(name, legacy, |size, reader| {
+                if size > limit && !isbn_only {
+                    return Err(Failure::Unsupported);
+                }
+                book_metadata::bounded(size, limit, reader)
+            })?;
+            return book_metadata::read_epub(Cursor::new(bytes), isbn_only);
+        }
+        self.read(name, legacy, |size, reader| {
+            book_metadata::read_stream(&format, size, reader, limit, isbn_only)
+        })
+    }
+
     pub(crate) fn read<T>(
         &mut self,
         name: &str,
@@ -867,13 +899,30 @@ impl SevenZip {
                 break;
             }
             let mut index = self.archive.stream_map.block_first_file_index[*block];
-            let _ = self.visit_block(source, *block, |entry, reader| {
+            let mut epubs = Vec::new();
+            let _ = self.visit_block(source, *block, |entry, reader, large| {
                 if cancelled() {
                     return Ok(false);
                 }
                 if let Some(matches) = targets.get(&index) {
                     remaining -= 1;
-                    if let Ok(numbers) = matches[0].format.isbn_numbers(entry.size, reader, limit) {
+                    let format = matches[0].format;
+                    if large && format == Format::Epub {
+                        // EPUB members may themselves be 7z archives. Parse them only after
+                        // releasing the outer decoder permit. Spill multi-book solid blocks
+                        // to disk so the batch never buffers a whole shelf of EPUBs in RAM.
+                        let memory = if targets.len() == 1 {
+                            entry.size as usize
+                        } else {
+                            0
+                        };
+                        let mut file = tempfile::spooled_tempfile(memory);
+                        if io::copy(&mut reader.take(entry.size.saturating_add(1)), &mut file)
+                            .is_ok_and(|n| n == entry.size)
+                        {
+                            epubs.push((index, file));
+                        }
+                    } else if let Ok(numbers) = format.isbn_numbers(entry.size, reader, limit) {
                         for member in matches {
                             found(member.row, numbers.clone());
                         }
@@ -882,6 +931,19 @@ impl SevenZip {
                 index += 1;
                 Ok(remaining != 0)
             });
+            for (index, mut file) in epubs {
+                if cancelled() {
+                    break;
+                }
+                if file.rewind().is_ok()
+                    && let Ok(data) = book_metadata::read_epub(BufReader::new(file), true)
+                    && let Ok(numbers) = serde_json::from_value::<Vec<String>>(data)
+                {
+                    for member in &targets[&index] {
+                        found(member.row, numbers.clone());
+                    }
+                }
+            }
         }
     }
 
@@ -928,7 +990,7 @@ impl SevenZip {
         }
         let block = self.archive.stream_map.file_block_index[index].ok_or(Failure::Missing)?;
         let mut result = Err(Failure::Missing);
-        self.visit_block(source, block, |candidate, reader| {
+        self.visit_block(source, block, |candidate, reader, _large| {
             if !std::ptr::eq(entry, candidate) {
                 return Ok(true);
             }
@@ -945,6 +1007,7 @@ impl SevenZip {
         mut visit: impl FnMut(
             &sevenz_rust2::ArchiveEntry,
             &mut dyn Read,
+            bool,
         ) -> std::result::Result<bool, sevenz_rust2::Error>,
     ) -> Extraction<()> {
         let mut decode = |limit| {
@@ -956,7 +1019,9 @@ impl SevenZip {
                 &self.password,
                 &mut *source,
             );
-            decoder.for_each_entries(&mut visit)
+            decoder.for_each_entries(&mut |entry, reader| {
+                visit(entry, reader, limit == LARGE_DECODER_KIB)
+            })
         };
         match decode(SEVEN_ZIP_MEMORY_KIB) {
             Err(sevenz_rust2::Error::MaxMemLimited { .. }) => {
@@ -1016,6 +1081,57 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use zip::{ZipWriter, write::SimpleFileOptions};
+
+    #[test]
+    fn nested_high_memory_epubs_release_the_outer_decoder() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use std::{sync::mpsc, time::Duration};
+        // Two EPUBs in one solid block. Both the outer block and the EPUB
+        // packages use PPMd with a 256 MiB model.
+        let encoded = concat!(
+            "N3q8ryccAASXDnfLgQEAAAAAAAAhAAAAAAAAAFvBid0AN0ULYgmdpFnSjWgR+/vA2gJGYes3Dc6fbRwzmcp0pZlVBi9a",
+            "IOvgWchIcSj4JQO4vCMmVFjPZJgBjhQyvDlsD8/ZFj0exdfPJx+r0TmfqcDQmMLecu7Su0qSnfosrQIfF7N+bHwMxedr",
+            "AqjD3oy8DCt7l8JnlAi1i4yXQWOG4u9Cp1hzbrQE3sTS+n+egtIdpNtMk3KFZTJbe0w8jrdb4THnAnBdlhGIRxv8woKD",
+            "scTPK1uo0tsNKk/qEsy/KzBd//GsjBs72FyI/3XcBDs0xJfzw5vtYobco1/E9mJH631nVSzKT6BDoFZH1GOz3QlYgf0z",
+            "K64AT7cRb7mOK/Lf7318kEhGbFXa9BwUKRpNKgbF7yIjH4tvh9AVRVTzNwAAAAAAAAAAAAAAAAAAgTMHrg/VOMW/1yTT",
+            "/rN+MfOgfQi9PDL8+uX85MWnFCjRKruayzUbn8qTRc0Q6TOK1oSo6O5B6D51AdPX0tByCcnsJNRc2ee9ahhZI9HP2+2Y",
+            "0eYAFwaBKwEJVgAHCwEAASMDAQEFXQAQAAAMcgoBXLv88QAA",
+        );
+        let bytes = STANDARD.decode(encoded).unwrap();
+        let (done, result) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut input = Cursor::new(bytes);
+            let archive = SevenZip::open(&mut input).unwrap();
+            let members = ["one.epub", "two.epub"].map(|name| IsbnMember {
+                name: name.to_owned(),
+                row: usize::from(name == "two.epub"),
+                format: Format::Epub,
+            });
+            let mut found = Vec::new();
+            let blocks = archive.isbn_blocks(&members, 65536, |_, _| unreachable!());
+            archive.read_isbn_blocks(&mut input, &blocks, 65536, &|| false, &mut |row, values| {
+                found.push((row, values))
+            });
+            found.sort();
+            assert_eq!(
+                found,
+                [
+                    (0, vec!["9780306406157".to_owned()]),
+                    (1, vec!["9780306406157".to_owned()])
+                ]
+            );
+            let mut directory = Directory::SevenZip(input, Arc::new(archive));
+            let data = directory
+                .metadata("one.epub", None, Format::Epub, 65536, false)
+                .unwrap();
+            assert_eq!(data["isbns"], serde_json::json!(["9780306406157"]));
+            done.send(()).unwrap();
+        });
+        result
+            .recv_timeout(Duration::from_secs(30))
+            .expect("nested EPUB decoder did not finish");
+        worker.join().unwrap();
+    }
 
     #[test]
     fn standalone_audit_and_read_find_cp866_members() {

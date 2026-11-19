@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::book_archive::{Failure, read_member};
 use crate::book_delivery::Book;
-use crate::book_metadata::{self, FB2_PREFIX, Format, trim_incomplete_utf8};
+use crate::book_metadata::{self, FB2_PREFIX, trim_incomplete_utf8};
 use crate::library_sources::Source;
 use crate::{book_source, fb2_prepare};
 
@@ -44,36 +44,40 @@ fn preview(book: &Book, source: &Source, ext: &str) -> Result<Value, Failure> {
         &book.folder,
         &format!("{}.{extension}", book.file),
     )?;
-    let process = |size, input: &mut dyn Read| {
-        if ext == "fb2" {
-            return fb2(BufReader::new(input));
+    if ext == "fb2" {
+        if let Some(member) = input.member {
+            return read_member(&input.path, input.file, &member, |_, reader| {
+                fb2(BufReader::new(reader))
+            });
         }
-        if size > EPUB_BYTES {
+        return fb2(BufReader::new(input.file));
+    }
+    let data = if let Some(member) = input.member {
+        let bytes = read_member(&input.path, input.file, &member, |size, reader| {
+            book_metadata::bounded(size, EPUB_BYTES, reader)
+        })?;
+        book_metadata::read_epub(std::io::Cursor::new(bytes), false)?
+    } else {
+        if input.file.metadata()?.len() > EPUB_BYTES {
             return Err(Failure::Limit);
         }
-        let data = book_metadata::read_stream(&Format::Epub, size, input, EPUB_BYTES, false)?;
-        let mut result = annotation(data["description"].as_str().unwrap_or_default(), false);
-        let tags = tokens(
-            data["tags"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str),
-        );
-        details(
-            &mut result,
-            year(data["publishedYear"].as_str().unwrap_or_default()),
-            tags,
-            Vec::new(),
-        );
-        Ok(result)
+        book_metadata::read_epub(BufReader::new(input.file), false)?
     };
-    if let Some(member) = input.member {
-        read_member(&input.path, input.file, &member, process)
-    } else {
-        let mut file = input.file;
-        process(file.metadata()?.len(), &mut file)
-    }
+    let mut result = annotation(data["description"].as_str().unwrap_or_default(), false);
+    let tags = tokens(
+        data["tags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str),
+    );
+    details(
+        &mut result,
+        year(data["publishedYear"].as_str().unwrap_or_default()),
+        tags,
+        Vec::new(),
+    );
+    Ok(result)
 }
 
 fn fb2(mut input: impl BufRead) -> Result<Value, Failure> {
