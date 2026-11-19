@@ -226,14 +226,15 @@ pub(super) fn purge_filtered(directory: &Path, native: bool) -> io::Result<Cover
                 .any(|kind| ext.eq_ignore_ascii_case(kind))
         });
         let invalid = if native {
+            use crate::reader_document::{COVER_LIMIT, Image};
             use sha2::{Digest, Sha256};
-            metadata.len() > crate::reader_document::IMAGE_LIMIT as u64
+            metadata.len() > COVER_LIMIT as u64
                 || fs::read(directory.join(&name)).ok().and_then(|bytes| {
-                    crate::reader_document::Image::from_bytes(bytes.clone())?;
+                    let image = Image::from_bytes_limited(bytes, COVER_LIMIT)?;
                     Some(
                         name == format!(
                             "{}.reader-cover",
-                            crate::crypto_support::hex(&Sha256::digest(bytes))
+                            crate::crypto_support::hex(&Sha256::digest(&image.bytes))
                         ),
                     )
                 }) != Some(true)
@@ -274,6 +275,40 @@ mod tests {
         fs::write(&path, b"new cover")?;
         assert!(matches!(original.remove(dir.path())?, Removed::Changed));
         assert_eq!(fs::read(path)?, b"new cover");
+        Ok(())
+    }
+
+    #[test]
+    fn cover_above_gallery_limit_survives_cache_repair() -> crate::Result<()> {
+        use crate::reader_document::{Document, IMAGE_LIMIT};
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        // Extend a valid one-pixel GIF with comment blocks past the gallery budget.
+        let mut gif = STANDARD.decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==")?;
+        assert_eq!(gif.pop(), Some(0x3b));
+        gif.extend([0x21, 0xfe]);
+        while gif.len() <= IMAGE_LIMIT {
+            gif.push(255);
+            gif.extend([b'x'; 255]);
+        }
+        gif.extend([0, 0x3b]);
+        let encoded = STANDARD.encode(&gif);
+        let dir = tempfile::tempdir()?;
+        let fb2 = dir.path().join("book.fb2");
+        fs::write(
+            &fb2,
+            format!(
+                r##"<FictionBook><description><title-info><coverpage><image href="#cover"/></coverpage></title-info></description><binary id="cover" content-type="image/gif">{encoded}</binary><binary id="illustration" content-type="image/gif">{encoded}</binary></FictionBook>"##
+            ),
+        )?;
+        let document = Document::read(&fb2)?;
+        let cover = document.cover().expect("full-size cover");
+        assert_eq!(cover.bytes, gif);
+        assert_eq!(document.gallery()["omitted"], 1);
+        let file = cover.stage(dir.path())?;
+        let repair = purge_filtered(dir.path(), true)?;
+        assert_eq!((repair.checked, repair.removed), (1, 0));
+        assert!(file.is_file());
         Ok(())
     }
 

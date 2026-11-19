@@ -11,7 +11,7 @@ async function fixture(directory, runtimePath = directory) {
     await fs.mkdir(directory, {recursive:true});
     await fs.writeFile(join(directory,'sample.png'), png);
     await fs.writeFile(join(directory,'djxl'), [
-        '#!/bin/sh','set -eu','dir=${0%/*}','echo start >> "$dir/events"',
+        '#!/bin/sh','set -eu','test "$3" = "--num_threads=1"','dir=${0%/*}','echo start >> "$dir/events"',
         'while [ -f "$dir/hold" ]; do /bin/sleep 0.05; done',
         '/bin/cp "$dir/sample.png" "$2"','echo finish >> "$dir/events"','',
     ].join('\n'), {mode:0o755});

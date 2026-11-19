@@ -15,7 +15,7 @@ use crate::book_delivery::Book;
 use crate::book_source::{cover_inputs, open_within, within};
 use crate::directory_diagnostics::ordered_entries;
 use crate::library_sources::Source;
-use crate::reader_document::{Document, IMAGE_LIMIT, Image, fb2_cover};
+use crate::reader_document::{COVER_LIMIT, Document, Image, fb2_cover};
 
 const FB2_LIMIT: u64 = 64 * 1024 * 1024;
 
@@ -107,7 +107,7 @@ impl Covers {
                     && source.is_none_or(|id| id == archives.sources[archive.source].id)
             }) {
                 if let Ok(Some(bytes)) = archive.read(&name, covers) {
-                    match self.normalize(bytes, cache, IMAGE_LIMIT) {
+                    match self.normalize(bytes, cache, COVER_LIMIT) {
                         Ok(Some(image)) => return Ok(Some(image)),
                         Err(error) if error.is::<MissingDecoder>() => missing_decoder = true,
                         _ => {}
@@ -126,7 +126,7 @@ impl Covers {
             return self.read_sidecars(
                 cover_inputs(&source.lib_dir, &book.folder, &book.file)?,
                 cache,
-                IMAGE_LIMIT,
+                COVER_LIMIT,
             );
         }
         Ok(None)
@@ -158,7 +158,7 @@ impl Covers {
 
     pub fn embedded(&self, document: &Document, cache: &Path) -> Result<Option<Image>> {
         match document.cover_bytes() {
-            Some(bytes) => self.browser_image(bytes, cache, IMAGE_LIMIT),
+            Some(bytes) => self.browser_image(bytes, cache, COVER_LIMIT),
             None => Ok(None),
         }
     }
@@ -196,11 +196,17 @@ impl Covers {
             command.arg("-o");
         }
         command.arg(&output);
+        if jxl {
+            // Separate covers already decode concurrently in the image queue.
+            command.arg("--num_threads=1");
+        }
         run(command, Instant::now() + Duration::from_secs(15))?;
         let mut bytes = Vec::new();
-        File::open(output)?
-            .take(limit as u64 + 1)
-            .read_to_end(&mut bytes)?;
+        let output = File::open(output)?;
+        if output.metadata()?.len() > limit as u64 {
+            return Ok(None);
+        }
+        output.take(limit as u64 + 1).read_to_end(&mut bytes)?;
         Ok(Image::from_bytes_limited(bytes, limit)
             .filter(|image| image.content_type == "image/png"))
     }
@@ -289,7 +295,7 @@ impl Archive {
         let file = open_within(&self.root, &path)?;
         let mut archive = input_directory(&self.path, file)?;
         if covers {
-            return Ok(Some(read_member(&mut archive, name, IMAGE_LIMIT as u64)?));
+            return Ok(Some(read_member(&mut archive, name, COVER_LIMIT as u64)?));
         }
         Ok(embedded(&mut archive, name, true))
     }

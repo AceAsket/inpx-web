@@ -22,6 +22,9 @@ pub use speech::{SpeechMode, SpeechPart, speech_anchor_key};
 const MAX_BYTES: u64 = 500 * 1024 * 1024;
 const GALLERY_LIMIT: usize = 18;
 pub(crate) const IMAGE_LIMIT: usize = 2 * 1024 * 1024;
+// A full cover is served on its own. A decoded JPEG XL cover can be much
+// larger than a gallery thumbnail, particularly when encoded as PNG.
+pub(crate) const COVER_LIMIT: usize = 16 * 1024 * 1024;
 const GALLERY_BYTES: usize = 8 * 1024 * 1024;
 
 enum Node {
@@ -276,7 +279,7 @@ impl Document {
     }
 
     pub fn cover(&self) -> Option<Image> {
-        Image::from_bytes(self.cover_bytes()?)
+        Image::from_bytes_limited(self.cover_bytes()?, COVER_LIMIT)
     }
 
     pub(crate) fn cover_bytes(&self) -> Option<Vec<u8>> {
@@ -287,7 +290,7 @@ impl Document {
         self.root
             .children("binary")
             .find(|node| node.attr("id") == cover)
-            .and_then(image_bytes)
+            .and_then(|node| image_bytes(node, COVER_LIMIT))
     }
 
     fn images(&self) -> impl Iterator<Item = &Element> {
@@ -406,7 +409,7 @@ impl Image {
 }
 
 fn decode_image(node: &Element) -> Option<Image> {
-    Image::from_bytes(image_bytes(node)?)
+    Image::from_bytes(image_bytes(node, IMAGE_LIMIT)?)
 }
 
 pub(crate) fn fb2_cover(bytes: &[u8]) -> Option<Vec<u8>> {
@@ -415,8 +418,8 @@ pub(crate) fn fb2_cover(bytes: &[u8]) -> Option<Vec<u8>> {
         .cover_bytes()
 }
 
-fn image_bytes(node: &Element) -> Option<Vec<u8>> {
-    let maximum = IMAGE_LIMIT.div_ceil(3) * 4;
+fn image_bytes(node: &Element, limit: usize) -> Option<Vec<u8>> {
+    let maximum = limit.div_ceil(3) * 4;
     let mut encoded = String::new();
     node.text_chunks(&mut |text| {
         if encoded.len() <= maximum {
@@ -433,7 +436,7 @@ fn image_bytes(node: &Element) -> Option<Vec<u8>> {
     STANDARD
         .decode(encoded)
         .ok()
-        .filter(|bytes| bytes.len() <= IMAGE_LIMIT)
+        .filter(|bytes| bytes.len() <= limit)
 }
 
 fn parse(xml: &str) -> Result<Document> {
