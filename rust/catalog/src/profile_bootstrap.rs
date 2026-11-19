@@ -245,11 +245,11 @@ pub(crate) fn run(path: &Path, expected: Option<&str>, options: Options) -> Resu
     if expected.is_none() {
         fs::create_dir_all(path.parent().ok_or("missing profile directory")?)?;
     }
-    let Some(file) = publish_users(path, expected, root, &users)? else {
+    let Some(installed) = publish_users(path, expected, root, &users)? else {
         return Ok(Outcome::Changed);
     };
     Ok(Outcome::Ready {
-        stamp: stamp(&file)?.to_string(),
+        stamp: installed,
         generated_password,
     })
 }

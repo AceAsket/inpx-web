@@ -201,9 +201,9 @@ impl Store {
         patch: Option<&impl Serialize>,
     ) -> Result<String> {
         if let Some(patch) = patch {
-            let file = publish_credentials(path, &position, patch, &[])?.ok_or(CHANGED)?;
+            let installed = publish_credentials(path, &position, patch, &[])?.ok_or(CHANGED)?;
             self.cached = None;
-            return Ok(stamp(&file)?.to_string());
+            return Ok(installed);
         } else if atomic_file::current_stamp(path)?.as_deref() != Some(&position.stamp) {
             return Err(CHANGED.into());
         }
@@ -275,7 +275,7 @@ fn publish_credentials(
     position: &Position,
     patch: &impl Serialize,
     remove: &[&str],
-) -> Result<Option<File>> {
+) -> Result<Option<String>> {
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
@@ -312,7 +312,7 @@ pub(crate) fn publish_users(
     expected: Option<&str>,
     root: IndexMap<String, &RawValue>,
     users: &[&RawValue],
-) -> Result<Option<File>> {
+) -> Result<Option<String>> {
     let mut staged = profile_snapshot::stage(path)?;
     {
         let mut output = BufWriter::new(staged.as_file_mut());
@@ -332,7 +332,18 @@ pub(crate) fn publish_users(
         document.end()?;
         output.flush()?;
     }
-    atomic_file::publish(staged, path, expected)
+    // On Docker Desktop bind mounts the open descriptor can report ENOENT
+    // after replacement. Keep our own file's identity for that case; reopening
+    // the pathname could instead pick up a concurrent writer's credentials.
+    let staged_stamp = stamp(staged.as_file())?;
+    let Some(installed) = atomic_file::publish(staged, path, expected)? else {
+        return Ok(None);
+    };
+    let installed_stamp = match stamp(&installed) {
+        Err(error) if error.kind() == ErrorKind::NotFound => staged_stamp,
+        result => result?,
+    };
+    Ok(Some(installed_stamp.to_string()))
 }
 
 #[cfg(test)]

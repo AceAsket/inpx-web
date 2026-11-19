@@ -107,6 +107,7 @@ Silero запускается отдельным CPU-контейнером `ace
 | `INPX`, `LIBDIR` | INPX-индекс и архивы одной библиотеки. |
 | `INPX_LIBRARY_SOURCES` | Несколько источников INPX и папки FB2/EPUB. |
 | `INPX_ADMIN_PASSWORD` | Пароль администратора при создании профиля. |
+| `INPX_RESET_ADMIN_PASSWORD` | Для восстановления доступа задайте `true` и новый `INPX_ADMIN_PASSWORD`. Пересоздайте контейнер с прежним томом данных. После сброса уберите флаг и снова пересоздайте контейнер. |
 | `INPX_ALLOW_ANONYMOUS_ACCESS` | Задайте `false`, чтобы требовать вход в профиль для поиска, книг и обложек. В стабильной версии и RC21 до входа видны меню и форма входа. |
 | `INPX_REQUIRE_AUTH` | Значение `true` включает проверку пользователя доверенного reverse proxy в режиме `INPX_AUTH_MODE=proxy`. Для локального входа в стабильной версии и RC21 задайте `INPX_ALLOW_ANONYMOUS_ACCESS=false`. Начиная с 1.8.3-rc.22 достаточно `INPX_REQUIRE_AUTH=true`: до входа в библиотеку видна только форма входа. |
 | `INPX_COVER_CACHE_SIZE_MB` | Лимит кэша обложек; по умолчанию `512` МБ. |
@@ -225,6 +226,7 @@ Run Silero as a separate CPU service using `aceasket/inpx-web-7z:1.8.2-silero`. 
 | `INPX`, `LIBDIR` | INPX index and archives for a single library. |
 | `INPX_LIBRARY_SOURCES` | Multiple INPX sources and FB2/EPUB folders. |
 | `INPX_ADMIN_PASSWORD` | Initial admin profile password. |
+| `INPX_RESET_ADMIN_PASSWORD` | To recover access, set this to `true` and supply a new `INPX_ADMIN_PASSWORD`. Recreate the container with the existing data volume. After the reset, remove the flag and recreate the container again. |
 | `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. On stable and RC21, guests can see the navigation and sign-in form. |
 | `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on stable and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. Starting with 1.8.3-rc.22, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
 | `INPX_COVER_CACHE_SIZE_MB` | Cover cache limit; defaults to `512` MB. |
