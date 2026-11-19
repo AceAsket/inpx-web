@@ -162,9 +162,13 @@ class EbookController {
         return {redirect:this.root+'/book/by-uid'+suffix+'?'+new URLSearchParams({uid,format:selected,filename:'ascii'})};
     }
     formatForm(req,identity,next,ext=''){
-        const selected=formats.preference(identity.user),values=[...new Set(['original',...formats.configured(this.config),...(formats.formats.includes(ext)?[ext]:[]),selected])];
+        const selected = formats.preference(identity.user);
+        const {conversionFormats} = converter.formatSettings(this.config);
+        const values = new Set(['original', ...conversionFormats]);
+        if (formats.formats.includes(ext)) values.add(ext);
+        if (selected !== 'pdf') values.add(selected);
         const originalLabel=ext?String(ext).toUpperCase()+' · Оригинал':'Исходный формат';
-        return `<form class="shelf-options" method="post" action="${escape(this.url('/format'))}">${this.hidden('csrf',this.security.getCsrfToken(req))}${this.hidden('next',next)}<label for="format">Формат скачивания</label><select id="format" name="format">${values.map(value=>option(value,value==='original'?originalLabel:value.toUpperCase(),selected)).join('')}</select><p class="hint">Применяется ко всем скачиваниям в вашем профиле.</p><button>Сохранить формат</button></form>`;
+        return `<form class="shelf-options" method="post" action="${escape(this.url('/format'))}">${this.hidden('csrf',this.security.getCsrfToken(req))}${this.hidden('next',next)}<label for="format">Формат скачивания</label><select id="format" name="format">${[...values].map(value=>option(value,value==='original'?originalLabel:value.toUpperCase(),selected)).join('')}</select><p class="hint">Применяется ко всем скачиваниям в вашем профиле.</p><button>Сохранить формат</button></form>`;
     }
     navigation(p,page,total,path='') {
         return `<nav class="pagination" aria-label="Страницы">${page>1?this.link(path,{...p,page:page-1},'Предыдущая'):''} Страница ${page} из ${total} ${page<total?this.link(path,{...p,page:page+1},'Следующая'):''}</nav>`;

@@ -164,6 +164,9 @@ jobs:
       - name: Bundle pinned Kindling converter
         run: node scripts/bundle-kindling.js ${{ matrix.target }}
 
+      - uses: microsoft/setup-msbuild@v2
+        if: runner.os == 'Windows'
+
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lzip
 

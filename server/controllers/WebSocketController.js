@@ -592,8 +592,7 @@ class WebSocketController {
             return;
         }
         const config = _.pick(this.config, this.config.webConfigParams);
-        if (Array.isArray(config.conversionFormats) && !require('../core/BookConverter').mobiEnabled(this.config))
-            config.conversionFormats = config.conversionFormats.filter(format => format !== 'mobi');
+        config.conversionFormats = require('../core/BookConverter').formatSettings(this.config).conversionFormats;
         config.clientApi = clientApi;
         config.libraryProtocol = require('../core/LibraryExchange').protocol;
         config.ttsEnabled = Boolean(this.config.ttsEnabled && this.config.ttsUrl);

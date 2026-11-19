@@ -51,6 +51,7 @@ async function main() {
         const run = (script, args) => execFileSync(process.execPath, [path.join(__dirname, script), ...args], {stdio:'inherit', windowsHide:true});
         run('binary-smoke-test.js', [path.join(directory, names[0]), ...(!converters ? ['--allow-missing-native-jxl'] : [])]);
         if (converters) {
+            run('standalone-pdf-test.js', [directory]);
             run('fb2cng-integration-tests.js', ['--fbc', path.join(directory, names[1])]);
             run('mobi-integration-tests.js', ['--fbc', path.join(directory, names[1]), '--kindling', path.join(directory, names[2])]);
         }

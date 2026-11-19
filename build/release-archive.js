@@ -8,7 +8,7 @@ function executableNames(target, converters = true) {
     if (!['linux', 'linux-arm64', 'macos', 'win'].includes(target))
         throw new Error(`Unknown release target: ${target}`);
     const suffix = target === 'win' ? '.exe' : '';
-    return ['inpx-web' + suffix, ...(converters ? ['bin/fbc' + suffix, 'bin/kindling' + suffix] : [])];
+    return ['inpx-web' + suffix, ...(converters ? ['fbc', 'kindling', 'mutool'].map(name => 'bin/' + name + suffix) : [])];
 }
 
 async function createReleaseArchive(sourceDir, archiveFile, target) {
