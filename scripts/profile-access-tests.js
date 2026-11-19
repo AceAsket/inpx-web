@@ -132,6 +132,12 @@ async function testAnonymousAccessDisabledHttpAndWebSocket(policy = {allowAnonym
         assert.strictEqual((await request('/')).status, 200, 'Login shell stays reachable');
         for (const url of ['/book/fixture.txt', '/cover/123', '/reader-lab-source/example.fb2', '/opds'])
             assert.strictEqual((await request(url)).status, 401, url);
+        for (const headers of [{'sec-fetch-dest':'image'},{referer:'http://localhost/',accept:'image/webp,image/*'}]) {
+            const cover = await request('/cover/123', headers);
+            assert.equal(cover.status, 401);
+            assert.equal(cover.headers.get('www-authenticate'), null);
+        }
+        assert.match((await request('/opds')).headers.get('www-authenticate'), /^Basic /);
         const browser = session();
         const call = await connect({cookie: browser.cookie});
         const config = await call({action: 'get-config', userId: bob.id, profileLoginRequired: false});

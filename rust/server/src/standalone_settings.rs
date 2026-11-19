@@ -18,7 +18,7 @@ use super::{
 use crate::opds::standalone::Opds;
 use crate::standalone_access::LiveOpds;
 
-const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch bookReadLink
+const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch bookReadLink isbnThreads
     loggingEnabled logServerStats logQueries loginRateLimitEnabled loginRateLimitWindowMs loginRateLimitMaxAttempts
     requireAuth allowAnonymousAccess proxyBindProfile authMode trustProxy proxyAuthHeader trustedProxyCidrs authExemptHealth
     metricsEnabled metricsPath metricsExemptAuth dbCacheSize dbCacheBudgetMb queryCacheMemMb queryCacheDiskMb
@@ -97,6 +97,11 @@ impl Settings {
 
     pub(super) fn extended_search(&self) -> bool {
         self.extended_search.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn isbn_threads(&self) -> Option<usize> {
+        super::isbn::thread_setting(&self.config.lock().expect("settings")["isbnThreads"])
+            .unwrap_or_default()
     }
 
     pub(super) fn event_policy(&self) -> (bool, usize) {
@@ -285,6 +290,10 @@ impl Settings {
                             .ok_or("Выберите профиль сервера")?;
                         json!({"resourceProfile":profile})
                     }
+                    "set-admin-isbn-threads" => {
+                        let value = request.get("workers").ok_or("Укажите число потоков ISBN")?;
+                        json!({"isbnThreads":super::isbn::thread_setting(value)?})
+                    }
                     "update-admin-cache" => Cache::patch(&current, &request["cache"])?,
                     "import-admin-settings" => import(&current, &request["data"], import_limit)?,
                     _ => return Err("Неизвестная операция с настройками".into()),
@@ -347,7 +356,9 @@ impl Settings {
                     "update-admin-library-sources" => {
                         json!({"sources":current["librarySources"],"reindexRequired":true})
                     }
-                    "set-admin-resource-profile" => json!({"success":true}),
+                    "set-admin-resource-profile" | "set-admin-isbn-threads" => {
+                        json!({"success":true})
+                    }
                     "update-admin-cache" => json!({"cache":Cache::settings(&current)}),
                     _ => {
                         json!({"success":true,"importedKeys":fields.keys().collect::<Vec<_>>(), "settings":export(&current,state),
@@ -715,6 +726,9 @@ fn import(current: &Value, data: &Value, limit: usize) -> Result<Value> {
         return Err("Файл настроек имеет неверный формат".into());
     }
     let mut patch = pick(body);
+    if let Some(value) = patch.get("isbnThreads") {
+        super::isbn::thread_setting(value)?;
+    }
     if patch.as_object().is_none_or(|patch| patch.is_empty()) {
         return Err("В файле не найдены настройки для восстановления".into());
     }

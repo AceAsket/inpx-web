@@ -100,10 +100,12 @@ function profileRequest(page, payload, session) {
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
         const page = await browser.newPage({viewport: {width: 1280, height: 900}}), errors = [];
         let benchmarkOptions = null, benchmarkState = 'idle', performanceReads = 0;
+        let isbnWorkers = null;
         const integrationUpdates = [], integrationReplies = [], telegramProbeModes = [];
         let lastSavedIntegrations = {};
         await page.routeWebSocket('**/ws', socket => {
             const server = socket.connectToServer(), integrationRequests = new Set();
+            const taskRequests = new Set();
             socket.onMessage(message => {
                 let request;
                 try {request = JSON.parse(String(message));} catch {server.send(message); return;}
@@ -111,6 +113,11 @@ function profileRequest(page, payload, session) {
                     integrationRequests.add(request.requestId); integrationUpdates.push(request.integrations);
                 }
                 let response;
+                if (request.action === 'get-background-tasks') taskRequests.add(request.requestId);
+                if (request.action === 'set-admin-isbn-threads') {
+                    isbnWorkers = request.workers;
+                    response = {success:true};
+                }
                 if (request.action === 'get-admin-performance') {
                     performanceReads++;
                     response = {machine: {cpu: 2, memoryLimit: 512 * 1048576, memoryUsed: 128 * 1048576, memoryScope: 'cgroup', cpuUsageUs: performanceReads * 200000},
@@ -137,6 +144,10 @@ function profileRequest(page, payload, session) {
             });
             server.onMessage(message => {
                 const body = JSON.parse(String(message));
+                if (!body._rok && taskRequests.delete(body.requestId) && body.isbnIndex) {
+                    Object.assign(body.isbnIndex,{workers:isbnWorkers,workerLimit:Math.min(isbnWorkers ?? 8,8)});
+                    return socket.send(JSON.stringify(body));
+                }
                 if (integrationRequests.has(body.requestId) && !body._rok) {
                     integrationRequests.delete(body.requestId);
                     lastSavedIntegrations = body.integrations || {};
@@ -264,6 +275,11 @@ function profileRequest(page, payload, session) {
         await activity.getByText('По профилям', {exact: true}).click();
         await page.getByRole('button', {name: 'Задачи и состояние библиотеки', exact: true}).click();
         await page.getByText('Проверка библиотеки', {exact: true}).waitFor();
+        const threads = page.getByRole('combobox',{name:/Потоки чтения/});
+        await threads.selectOption('16');
+        await page.waitForFunction(()=>document.querySelector('.task-isbn-workers select')?.value==='16' && !document.querySelector('.task-isbn-workers select').disabled);
+        assert.equal(isbnWorkers,16);
+        await threads.selectOption('auto');
         await pause(350);
         await page.screenshot({path: path.join(directory, 'admin-tasks.png')});
         await page.getByRole('button', {name: 'Закрыть задачи', exact: true}).click();
@@ -481,6 +497,19 @@ function profileRequest(page, payload, session) {
         await page.setViewportSize({width:320,height:900});
         await current.getByRole('button', {name: 'Настройки', exact: true}).click();
         assert.equal(await current.locator('.profile-settings-section').count(), 7);
+        const newPassword = current.getByLabel('Новый пароль', {exact:true});
+        const repeatPassword = current.getByLabel('Повторите новый пароль', {exact:true});
+        const saveProfile = current.getByRole('button', {name:'Сохранить изменения',exact:true});
+        await newPassword.fill('confirmation-test');
+        assert(await saveProfile.isDisabled());
+        await repeatPassword.fill('typing-error');
+        await current.getByText('Пароли не совпадают', {exact:true}).waitFor();
+        assert(await saveProfile.isDisabled());
+        await repeatPassword.fill('confirmation-test');
+        assert(await saveProfile.isEnabled());
+        await newPassword.fill('');
+        await repeatPassword.fill('');
+        assert(await saveProfile.isEnabled());
         await noOverflow(current.locator('.profile-settings'));
         const kosync = current.getByRole('region', {name:'Синхронизация с KOReader',exact:true});
         await kosync.getByRole('button', {name:'Подключить KOReader',exact:true}).click();

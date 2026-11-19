@@ -485,6 +485,7 @@ class Api {
         return this.request(operation === 'list' ? {action:'get-library-follows',options:payload} : {action:'change-library-follow',operation,payload},30);
     }
     async manageIsbnIndex(operation, options = {}) {return this.request({action:operation === 'cancel' ? 'cancel-isbn-index' : 'start-isbn-index',options},15);}
+    async setIsbnThreads(workers) {return this.request({action:'set-admin-isbn-threads', workers},15);}
     async startLibraryAudit(options) {return this.request({action:'start-library-audit',options},15);}
     async cancelLibraryAudit() {return this.request({action:'cancel-library-audit'},15);}
 

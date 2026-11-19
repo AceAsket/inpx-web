@@ -207,6 +207,8 @@ struct ArchiveCache(VecDeque<CachedArchive>);
 #[derive(Default)]
 pub(crate) struct IsbnReader(ArchiveCache);
 
+type IsbnBlock<'a> = (usize, HashMap<usize, Vec<&'a IsbnMember>>);
+
 pub(crate) struct IsbnMember {
     pub row: usize,
     pub name: String,
@@ -273,49 +275,126 @@ impl IsbnMember {
 }
 
 impl IsbnReader {
-    pub(crate) fn read_group(
+    pub(crate) fn read_group<P>(
         &mut self,
         folder: &Folder,
         members: &[IsbnMember],
         limit: u64,
-        cancelled: &impl Fn() -> bool,
+        cancelled: &(impl Fn() -> bool + Sync),
+        spare_workers: &impl Fn(usize) -> Vec<P>,
         mut found: impl FnMut(usize, Vec<String>),
     ) -> Extraction<()> {
-        if !folder.archived {
-            for member in members {
-                if cancelled() {
-                    break;
-                }
-                if let Ok(numbers) = member.loose(folder, limit) {
-                    found(member.row, numbers);
-                }
+        // Each EPUB may need a full book buffer; reserve parallel readers for FB2.
+        let reserve = |units: usize| {
+            let extra = members.len().div_ceil(8).min(units).saturating_sub(1);
+            if extra > 0 && members.iter().all(|m| m.format == Format::Fb2) {
+                spare_workers(extra)
+            } else {
+                Vec::new()
             }
+        };
+        if !folder.archived {
+            let permits = reserve(members.len());
+            let read = |chunk: &[IsbnMember], found: &mut IsbnFound<'_>| {
+                for member in chunk {
+                    if cancelled() {
+                        break;
+                    }
+                    if let Ok(numbers) = member.loose(folder, limit) {
+                        found(member.row, numbers);
+                    }
+                }
+            };
+            isbn_chunks(
+                members,
+                vec![(); permits.len()],
+                read,
+                |(), chunk, found| read(chunk, found),
+                &mut found,
+            );
             return Ok(());
         }
         let archive = self.0.open(&folder.path, folder.open_archive()?)?;
         match &mut archive.directory {
             Directory::SevenZip(source, seven) => {
-                seven.read_isbn_blocks(source, members, limit, cancelled, found)
+                // All members of a solid block must stay on the same decoder.
+                let blocks = seven.isbn_blocks(members, limit, &mut found);
+                let permits = reserve(blocks.len());
+                let readers = source.independent_readers(folder, permits.len());
+                let seven = seven.as_ref();
+                isbn_chunks(
+                    &blocks,
+                    readers,
+                    |chunk, found| seven.read_isbn_blocks(source, chunk, limit, cancelled, found),
+                    |mut reader, chunk, found| {
+                        seven.read_isbn_blocks(&mut reader, chunk, limit, cancelled, found)
+                    },
+                    &mut found,
+                );
             }
-            directory => {
-                for member in members {
-                    if cancelled() {
-                        break;
-                    }
-                    let legacy = legacy_zip_name(&member.name);
-                    if let Ok(numbers) =
-                        directory.read(&member.name, legacy.as_deref(), |size, reader| {
-                            member.numbers(size, reader, limit)
-                        })
-                    {
-                        found(member.row, numbers);
-                    }
-                }
+            directory @ Directory::Zip(_, _) => {
+                let permits = reserve(members.len());
+                let readers = archive
+                    .source
+                    .independent_readers(folder, permits.len())
+                    .into_iter()
+                    .filter_map(|input| ZipArchive::new(input).ok())
+                    .map(|zip| Directory::Zip(zip, None))
+                    .collect();
+                isbn_chunks(
+                    members,
+                    readers,
+                    |chunk, found| directory.read_zip_isbns(chunk, limit, cancelled, found),
+                    |mut directory, chunk, found| {
+                        directory.read_zip_isbns(chunk, limit, cancelled, found)
+                    },
+                    &mut found,
+                );
             }
         }
         archive.source.detach();
         Ok(())
     }
+}
+
+type IsbnFound<'a> = dyn FnMut(usize, Vec<String>) + 'a;
+
+// The calling thread owns its cached archive directory. Helpers return results by
+// catalogue row so only the caller publishes progress and ordered checkpoints.
+fn isbn_chunks<T: Sync, R: Send>(
+    items: &[T],
+    readers: Vec<R>,
+    mut primary: impl FnMut(&[T], &mut IsbnFound<'_>),
+    read: impl Fn(R, &[T], &mut IsbnFound<'_>) + Sync,
+    found: &mut IsbnFound<'_>,
+) {
+    if readers.is_empty() || items.is_empty() {
+        primary(items, found);
+        return;
+    }
+    let size = items.len().div_ceil(readers.len() + 1);
+    let (first, rest) = items.split_at(size);
+    let read = &read;
+    std::thread::scope(|scope| {
+        let mut jobs = Vec::new();
+        for (reader, chunk) in readers.into_iter().zip(rest.chunks(size)) {
+            let job = std::thread::Builder::new().spawn_scoped(scope, move || {
+                let mut result = Vec::with_capacity(chunk.len());
+                read(reader, chunk, &mut |i, numbers| result.push((i, numbers)));
+                result
+            });
+            match job {
+                Ok(job) => jobs.push(job),
+                Err(_) => primary(chunk, found),
+            }
+        }
+        primary(first, found);
+        for job in jobs {
+            for (row, numbers) in job.join().expect("ISBN worker") {
+                found(row, numbers);
+            }
+        }
+    });
 }
 
 struct CachedArchive {
@@ -356,6 +435,26 @@ impl ArchiveFile {
                 .as_mut()
                 .ok_or_else(|| io::Error::other("Архив закрыт"))?,
         )
+    }
+
+    // A cloned file descriptor shares a seek position. Open independent handles
+    // and verify that none points to a replacement of the indexed archive.
+    fn independent_readers(&self, folder: &Folder, count: usize) -> Vec<BufReader<File>> {
+        let mut readers = Vec::with_capacity(count);
+        if count > 0
+            && let Ok(original) = self.use_reader(|r| stamp(r.get_ref()))
+        {
+            for _ in 0..count {
+                let Ok(file) = folder.open_archive() else {
+                    break;
+                };
+                if stamp(&file).ok().as_ref() != Some(&original) {
+                    break;
+                }
+                readers.push(BufReader::with_capacity(READER_BYTES, file));
+            }
+        }
+        readers
     }
 
     fn attach(&self, file: File) {
@@ -600,6 +699,26 @@ impl<R: Read + Seek> Directory<R> {
         }
     }
 
+    fn read_zip_isbns(
+        &mut self,
+        members: &[IsbnMember],
+        limit: u64,
+        cancelled: &impl Fn() -> bool,
+        found: &mut IsbnFound<'_>,
+    ) {
+        for member in members {
+            if cancelled() {
+                break;
+            }
+            let legacy = legacy_zip_name(&member.name);
+            if let Ok(numbers) = self.read(&member.name, legacy.as_deref(), |size, reader| {
+                member.numbers(size, reader, limit)
+            }) {
+                found(member.row, numbers);
+            }
+        }
+    }
+
     pub(crate) fn read<T>(
         &mut self,
         name: &str,
@@ -661,14 +780,12 @@ impl<R: Read + Seek> Directory<R> {
 }
 
 impl SevenZip {
-    fn read_isbn_blocks(
+    fn isbn_blocks<'a>(
         &self,
-        source: &mut (impl Read + Seek),
-        members: &[IsbnMember],
+        members: &'a [IsbnMember],
         limit: u64,
-        cancelled: &impl Fn() -> bool,
         mut found: impl FnMut(usize, Vec<String>),
-    ) {
+    ) -> Vec<IsbnBlock<'a>> {
         let mut blocks =
             std::collections::BTreeMap::<usize, HashMap<usize, Vec<&IsbnMember>>>::new();
         for member in members {
@@ -692,24 +809,37 @@ impl SevenZip {
                     .push(member);
             }
         }
-        for (block, mut targets) in blocks {
+        blocks.into_iter().collect()
+    }
+
+    fn read_isbn_blocks(
+        &self,
+        source: &mut (impl Read + Seek),
+        blocks: &[IsbnBlock<'_>],
+        limit: u64,
+        cancelled: &impl Fn() -> bool,
+        mut found: impl FnMut(usize, Vec<String>),
+    ) {
+        for (block, targets) in blocks {
+            let mut remaining = targets.len();
             if cancelled() {
                 break;
             }
-            let mut index = self.archive.stream_map.block_first_file_index[block];
-            let _ = self.visit_block(source, block, |entry, reader| {
+            let mut index = self.archive.stream_map.block_first_file_index[*block];
+            let _ = self.visit_block(source, *block, |entry, reader| {
                 if cancelled() {
                     return Ok(false);
                 }
-                if let Some(matches) = targets.remove(&index)
-                    && let Ok(numbers) = matches[0].numbers(entry.size, reader, limit)
-                {
-                    for member in matches {
-                        found(member.row, numbers.clone());
+                if let Some(matches) = targets.get(&index) {
+                    remaining -= 1;
+                    if let Ok(numbers) = matches[0].numbers(entry.size, reader, limit) {
+                        for member in matches {
+                            found(member.row, numbers.clone());
+                        }
                     }
                 }
                 index += 1;
-                Ok(!targets.is_empty())
+                Ok(remaining != 0)
             });
         }
     }

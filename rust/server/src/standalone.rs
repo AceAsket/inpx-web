@@ -106,6 +106,7 @@ struct State {
     metadata: metadata::Routes,
     exchange: exchange::Exchange,
     isbn_limit: u64,
+    isbn_worker_capacity: usize,
     metrics: metrics::Monitor,
 }
 
@@ -382,6 +383,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         metadata,
         exchange,
         isbn_limit: isbn_limit(&config),
+        isbn_worker_capacity: isbn::capacity(cpu, memory),
         metrics,
     });
     println!("{NAME} v{VERSION} listening on {}", listener.local_addr()?);
@@ -865,7 +867,7 @@ impl State {
                     }
                     response
                 }
-                Err(rejected) => rejected.response(),
+                Err(rejected) => rejected.content_response(&conditions),
             });
         }
         let path = request.uri().path().trim_end_matches('/');

@@ -300,6 +300,11 @@
                                             @click="editableProfilePasswordVisible = !editableProfilePasswordVisible" />
                                     </template>
                                 </q-input>
+                                <q-input v-if="editableProfile.password || passwordConfirmation"
+                                    v-model="passwordConfirmation" outlined dense clearable
+                                    :type="editableProfilePasswordVisible ? 'text' : 'password'"
+                                    autocomplete="section-edit-profile new-password" label="Повторите новый пароль"
+                                    :error="!!passwordConfirmation && !passwordsMatch" error-message="Пароли не совпадают" hide-bottom-space />
                                 <ProfileTotpPanel v-if="config.profileAuthorized && config.clientApi?.features?.includes('profileTotp')" />
                             </section>
                             <section class="profile-settings-section">
@@ -343,7 +348,7 @@
                             </section>
                             <KoSyncSettings class="profile-settings-section" :user-id="currentUserId" />
                             <div class="profile-submit-row">
-                                <q-btn v-if="config.profileAuthorized" unelevated no-caps color="primary" label="Сохранить изменения" :loading="savingProfile" @click="saveCurrentProfile" />
+                                <q-btn v-if="config.profileAuthorized" unelevated no-caps color="primary" label="Сохранить изменения" :disable="!passwordsMatch" :loading="savingProfile" @click="saveCurrentProfile" />
                             </div>
                         </div>
 
@@ -503,6 +508,11 @@ class UserProfilesDialog {
     showCreateProfileForm = false;
     newProfilePasswordVisible = false;
     editableProfilePasswordVisible = false;
+    passwordConfirmation = '';
+
+    get passwordsMatch() {
+        return (this.editableProfile.password || '') === (this.passwordConfirmation || '');
+    }
     creatingProfile = false;
     savingProfile = false;
     profileBlockPendingId = '';
@@ -716,6 +726,7 @@ class UserProfilesDialog {
     syncEditableProfile() {
         const current = this.config.currentUserProfile || {};
         this.editableProfilePasswordVisible = false;
+        this.passwordConfirmation = '';
         this.editableProfile = {
             name: current.name || '',
             login: current.login || '',
@@ -1066,11 +1077,12 @@ class UserProfilesDialog {
     }
 
     async saveCurrentProfile() {
-        if (this.savingProfile) return;
+        if (this.savingProfile || !this.passwordsMatch) return;
         this.savingProfile = true;
         try {
             await this.api.updateUserProfile(this.currentUserId, this.editableProfile);
             this.editableProfile.password = '';
+            this.passwordConfirmation = '';
             await this.loadProfiles({preserveState: true});
             this.$root.notify.success(this.uiText.profileSaved);
         } catch (e) {

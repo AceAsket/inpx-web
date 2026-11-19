@@ -890,6 +890,26 @@ pub(crate) fn private(headers: &mut HeaderMap) {
 }
 
 impl Rejection {
+    pub(crate) fn content_response(self, headers: &HeaderMap) -> Response<Body> {
+        let mut response = self.response();
+        // HTTP LAN pages may have no Fetch Metadata headers. Image requests still
+        // send an image Accept header and the referring page.
+        let image = match headers.get("sec-fetch-dest") {
+            Some(destination) => destination == "image",
+            None => {
+                headers.contains_key(header::REFERER)
+                    && headers
+                        .get(header::ACCEPT)
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|s| s.split(',').any(|t| t.trim_start().starts_with("image/")))
+            }
+        };
+        if image {
+            response.headers_mut().remove(header::WWW_AUTHENTICATE);
+        }
+        response
+    }
+
     pub(crate) fn response(self) -> Response<Body> {
         let status = match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,

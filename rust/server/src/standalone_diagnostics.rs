@@ -328,6 +328,7 @@ impl Diagnostics {
             "update-admin-integrations"
             | "update-admin-opds"
             | "set-admin-resource-profile"
+            | "set-admin-isbn-threads"
             | "update-admin-cache"
             | "import-admin-settings" => ("settings", "Обновлены настройки администратора"),
             "admin-clean-cache" => ("cache", "Очистка кэша завершена"),

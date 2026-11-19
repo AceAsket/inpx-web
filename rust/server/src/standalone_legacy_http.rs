@@ -102,7 +102,7 @@ impl Routes {
             let grant = state
                 .access
                 .check(&request, &admission, Resource::Download)
-                .map_err(|rejected| Box::new(rejected.response()))?;
+                .map_err(|rejected| Box::new(rejected.content_response(request.headers())))?;
             let sources = state.index.sources();
             let _resource = state
                 .resources

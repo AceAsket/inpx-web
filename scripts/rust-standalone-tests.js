@@ -922,6 +922,15 @@ async function verifyAccess(binary, args, data, settings, config, detail) {
         await check(restricted,'/health',200);
         await check(restricted,jsonRoot,401);
         await check(restricted,byUid,401);
+        for (const path of ['/reader/cover/123', byUid.replace('/book/', '/cover/')]) {
+            for (const headers of [{'sec-fetch-dest':'image'},{referer:restricted.url+'/',accept:'image/webp,image/*'}]) {
+                const image = await fetch(restricted.url+path,{headers});
+                assert.equal(image.status,401);
+                assert.equal(image.headers.get('www-authenticate'),null);
+                assert.equal(image.headers.get('cache-control'),'no-store');
+            }
+            await check(restricted,path,401);
+        }
         const cookie = await browserCookie(restricted.url);
         const browser = await wsClient(restricted.url,cookie);
         try {
@@ -1775,7 +1784,7 @@ async function verifyLibraryMedia(binary, root) {
     Object.assign(epubRow,{2:'ISBN in EPUB',4:'2',5:'3',6:String(epub.length),7:'552',9:'epub'});
     const padding = Array.from({length:550},(_,index)=>{
         const fields = [...row];
-        Object.assign(fields,{2:'Slow ISBN sample '+index,3:'',4:'0',5:'2',7:String(index+2)});
+        Object.assign(fields,{2:'Slow ISBN sample '+index,3:'',4:'0',5:index<72 ? String(1000+index) : '2',7:String(index+2)});
         return fields.join('\x04');
     });
     const index = await zip([
@@ -1783,8 +1792,10 @@ async function verifyLibraryMedia(binary, root) {
     ]);
     await fs.writeFile(inpx,index);
     const fb2 = (name,isbn,extra='')=>`<FictionBook><description><title-info><book-title>${name}</book-title><lang>en</lang><annotation><p>${extra}</p></annotation></title-info><publish-info><isbn>${isbn}</isbn></publish-info></description><body><section><p>Sample text.</p></section></body></FictionBook>`;
+    const independent = Array.from({length:72}, (_,i)=>[(1000+i)+'.fb2', fb2('Sample '+i,'')]);
     await fs.writeFile(join(library,'smoke.zip'),await zip([
         ['1.fb2',fb2('Packaged smoke book','0-306-40615-2')],
+        ...independent,
         ['2.fb2',fb2('Slow ISBN sample','','a'.repeat(512*1024))],
         ['3.epub',epub],
     ]));
@@ -1932,13 +1943,19 @@ async function verifyLibraryMedia(binary, root) {
                 await fs.writeFile(join(input,'1.fb2'),fb2('Packaged smoke book','0-306-40615-2'));
                 await fs.writeFile(join(input,'2.fb2'),fb2('Slow ISBN sample',''));
                 await fs.writeFile(join(input,'3.epub'),epub);
-                const solid = join(library,'smoke.7z');
-                execFileSync(sevenZip,['a','-t7z','-ms=on','-mmt=1',solid,'1.fb2','2.fb2','3.epub'],{cwd:input,windowsHide:true,stdio:'ignore'});
+                for (const [name, contents] of independent) await fs.writeFile(join(input,name),contents);
+                await fs.writeFile(join(input,'1071.fb2'),fb2('Sample 71','9780131103627'));
+                const archive = join(library,'smoke.7z');
                 await fs.rename(join(library,'smoke.zip'),join(input,'original.zip'));
-                await send('start-isbn-index',{options:{force:true}});
-                const rebuilt = await waitFor(async()=>(await send('get-background-tasks')).isbnIndex,'ready');
-                assert.deepEqual([rebuilt.checked,rebuilt.found,rebuilt.errors],[552,2,0]);
-                assert.equal((await send('bookSearch',{query:{isbn:'9783161484100'}})).found?.[0]?.title,'ISBN in EPUB');
+                for (const solid of ['on','4k','off']) {
+                    if (solid !== 'on') await fs.unlink(archive);
+                    execFileSync(sevenZip,['a','-t7z','-ms='+solid,'-mmt=1',archive,'*.fb2','3.epub'],{cwd:input,windowsHide:true,stdio:'ignore'});
+                    await send('start-isbn-index',{options:{force:true}});
+                    const rebuilt = await waitFor(async()=>(await send('get-background-tasks')).isbnIndex,'ready');
+                    assert.deepEqual([rebuilt.checked,rebuilt.found,rebuilt.errors],[552,3,0]);
+                    assert.equal((await send('bookSearch',{query:{isbn:'9780131103627'}})).found?.[0]?.title,'Slow ISBN sample 71');
+                    assert.equal((await send('bookSearch',{query:{isbn:'9783161484100'}})).found?.[0]?.title,'ISBN in EPUB');
+                }
             }
             const found = await send('bookSearch',{query:{isbn:'9780306406157'}});
             assert.equal(found.found?.[0]._uid,uid,found.error);
@@ -2023,6 +2040,27 @@ async function verifyResourceProfiles(binary, root) {
                 assert.equal(settings.fileConversionLimit,saved === 1 ? 1 : null);
                 if (overrides.INPX_CONVERSION_CONCURRENCY && !overrides.INPX_RESOURCE_CONVERSIONS)
                     assert.equal(settings.launchEnv.INPX_CONVERSION_CONCURRENCY, '2');
+            } finally {client.close();}
+        } finally {await server.stop();}
+    }
+    const threadStatus = async (client,identity)=>(await client.send('get-background-tasks',identity)).isbnIndex;
+    for (const restart of [false,true]) {
+        const server = await start(binary,args,{INPX_RESOURCE_BACKGROUND:'2'});
+        try {
+            const client = await connect(server.url);
+            try {
+                assert((await client.send('set-admin-isbn-threads',{workers:8})).error);
+                const identity = await signIn(client,'admin',probe.password);
+                const set = workers=>client.send('set-admin-isbn-threads',{...identity,workers});
+                assert.equal((await threadStatus(client,identity)).workers,restart ? 16 : null);
+                for (const workers of [4,8,32,1,null,16]) {
+                    assert.equal((await set(workers)).success,true);
+                    const status = await threadStatus(client,identity);
+                    assert.equal(status.workers,workers);
+                    assert(status.workerLimit >= 1 && status.workerLimit <= Math.min(workers ?? 8,2));
+                }
+                assert((await set(33)).error);
+                assert.equal((await threadStatus(client,identity)).workers,16);
             } finally {client.close();}
         } finally {await server.stop();}
     }

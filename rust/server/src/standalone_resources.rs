@@ -227,6 +227,21 @@ impl Budget {
         self.changed.notify_all();
     }
 
+    /// Optional workers only take idle slots and never queue ahead of user requests.
+    pub(crate) fn spare_background(&self, count: usize) -> Vec<Permit<'_>> {
+        let mut q = self.queue.lock().expect("resource queue");
+        if !q.waiting.is_empty() {
+            return Vec::new();
+        }
+        let limits = q.policy.selected.limits;
+        let kind = Kind::Background;
+        let count = count
+            .min(limits.total.saturating_sub(q.active.iter().sum()))
+            .min(limits.background.saturating_sub(q.active[kind as usize]));
+        q.active[kind as usize] += count;
+        (0..count).map(|_| Permit(self, kind)).collect()
+    }
+
     pub(crate) fn acquire(&self, kind: Kind) -> Result<Permit<'_>> {
         let mut queue = self.queue.lock().expect("resource queue");
         let timeout = queue.policy.timeout;
@@ -340,6 +355,7 @@ mod tests {
         policy.timeout = Duration::from_millis(10);
         let budget = Budget::new(policy);
         let background = budget.acquire(Kind::Background).unwrap();
+        assert!(budget.spare_background(3).is_empty());
         let image = budget.acquire(Kind::Images).unwrap();
         assert!(budget.acquire(Kind::Conversions).is_err());
         drop(image);
@@ -350,6 +366,10 @@ mod tests {
             json!({"active":2,"queued":0,"foreground":1,"background":1})
         );
         drop((background, archive));
+        let spare = budget.spare_background(3);
+        assert_eq!(spare.len(), 1);
+        assert!(budget.spare_background(1).is_empty());
+        drop(spare);
         assert!(budget.acquire(Kind::Conversions).is_ok());
     }
 }

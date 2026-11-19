@@ -240,11 +240,12 @@ impl IsbnBuild {
         }
     }
 
-    pub fn record_batch(
+    pub fn record_batch<P>(
         &mut self,
         rows: Vec<Value>,
         sources: &[Source],
         reader: &mut BookIsbnReader,
+        spare_workers: impl Fn(usize) -> Vec<P>,
     ) -> Result<()> {
         enum Outcome {
             Numbers(Vec<String>),
@@ -300,6 +301,7 @@ impl IsbnBuild {
                     &members,
                     reader.limit,
                     &|| self.cancelled(),
+                    &spare_workers,
                     |row, numbers| {
                         records[row].2 = Outcome::Numbers(numbers);
                     },
