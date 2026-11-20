@@ -7,7 +7,9 @@
 inpx-web-7z
 ===========
 
-Классический сервер на Node.js использует JembaDB и поддерживается в ветке `nodejs_depr`. Для проверки версии 1.8.3 используйте Docker-образ `aceasket/inpx-web-7z:1.8.3-rc.30` или standalone из того же выпуска. Тег Docker `latest` обновляет сервер до Rust 2.0.0. Для стабильного классического Node.js закрепите `1.8.2`. [Скачать RC30](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3-rc.30) · [Сервер Rust 2.0.0](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.0)
+Чтобы ускорить работу с большими библиотеками, мы перенесли разработку сервера с Node.js на Rust. **Node.js 1.8.3** — последняя ветка классического сервера. Она будет получать только исправления ошибок. Все новые функции будут выходить только в **Rust 2.x**.
+
+Классический сервер с JembaDB поддерживается в ветке `nodejs_depr`. Для проверки версии 1.8.3 используйте Docker-образ `aceasket/inpx-web-7z:1.8.3-rc.30` или standalone из того же выпуска. Тег Docker `latest` обновляет сервер до Rust 2.0.0. Для стабильного классического Node.js закрепите `1.8.2`. [Скачать RC30](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3-rc.30) · [Сервер Rust 2.0.0](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.0)
 
 [![INPX Reader — скачать читалку для Android](https://img.shields.io/badge/INPX_Reader-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK-0F766E?style=for-the-badge&logo=android&logoColor=white)](https://github.com/AceAsket/inpx-reader-releases/releases/latest)
 [![INPX Server — сервер для Android](https://img.shields.io/badge/INPX_Server-%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%20%D0%B4%D0%BB%D1%8F%20Android-455A64?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
