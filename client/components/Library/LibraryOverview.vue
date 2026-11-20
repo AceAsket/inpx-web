@@ -12,7 +12,11 @@
                     <CatalogSuggestions ref="completion" :list-id="suggestionListId" :query="query" kind="title" :filters="searchFilters" :context="suggestionContext"
                         :focused="searchFocused && active" @choose="chooseSuggestion" @search="search" @dismiss="searchFocused = false" @active="activeSuggestionId = $event" @expanded="suggestionsExpanded = $event" />
                 </form>
-                <q-btn v-if="canCustomize" outline no-caps icon="la la-sliders-h" label="Управление полками" @click="managing = true" />
+                <q-btn v-if="canCustomize" flat round class="overview-toolbar__shelves" aria-label="Управление полками"
+                    aria-haspopup="dialog" @click="managing = true">
+                    <q-icon name="la la-layer-group" size="22px" aria-hidden="true" />
+                    <q-tooltip :delay="400">Управление полками</q-tooltip>
+                </q-btn>
             </div>
             <OverviewShelvesDialog v-if="managing && canCustomize" :key="config.currentUserId" :shelves="sections" :saved="savedLayout"
                 :profile-name="config.currentUserProfile?.name" :can-pin="config.clientApi?.features?.includes('overviewPinnedShelves')" :persist="saveLayout"
@@ -201,7 +205,8 @@ function refresh() {repository.loadHome({freshReading: true, freshShelves: true}
 </script>
 
 <style scoped>
-.overview-toolbar {display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 24px;}
+.overview-toolbar {display: flex; align-items: center; gap: 8px; margin-bottom: 24px;}
+.overview-toolbar__shelves {flex: 0 0 44px; height: 44px; color: var(--app-muted);}
 .overview-search {flex: 1 1 320px; min-width: 0; display: flex; align-items: center; gap: 14px; max-width: 960px; padding: 0 17px; height: 54px; border-radius: 16px; background: var(--app-surface); color: var(--app-primary);}
 .overview-search:focus-within {box-shadow: 0 0 0 2px var(--app-primary);}
 input {min-width: 0; flex: 1; background: transparent; color: var(--app-text); border: 0; outline: 0; font: inherit; font-size: 15px;}
