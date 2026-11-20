@@ -473,9 +473,10 @@ function profileRequest(page, payload, session) {
         const current = page.locator('.profile-card--current');
         const noOverflow = async locator => assert(await locator.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
         await page.setViewportSize({width:320,height:900});
-        await current.getByRole('button', {name:'Развернуть',exact:true}).click();
-        const readingRow = current.locator('.profile-reading-row');
-        await readingRow.getByRole('button', {name:'Читать',exact:true}).waitFor();
+        const readingRow = current.getByRole('region', {name:'Книги в чтении'}).getByRole('listitem')
+            .filter({has:page.getByRole('button', {name:testBook.title,exact:true})});
+        await readingRow.getByRole('button', {name:'Убрать из чтения: '+testBook.title,exact:true}).waitFor();
+        await readingRow.getByText(/29%/).waitFor();
         await noOverflow(readingRow);
         await readingRow.screenshot({path:path.join(directory,'profile-reading-320.png')});
         await current.getByRole('button', {name:'Списки',exact:true}).click();
