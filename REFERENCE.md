@@ -1,6 +1,6 @@
 # Справочник INPX Web
 
-Сервер Rust 2.0.0, классический Node.js и варианты установки перечислены на [главной странице](./README.md).
+Сервер Rust 2.0.1, классический Node.js и варианты установки перечислены на [главной странице](./README.md).
 
 В гостевом режиме `/ebook` для Kindle сначала выберите
 «Применить формат», затем «Скачать MOBI» по ссылке с расширением файла.
@@ -131,7 +131,7 @@
 
 ## Сборка Docker-контейнера
 
-Docker-образ Rust 2.0.0 для Linux x64 доступен по тегу `aceasket/inpx-web-7z:2.0.0`. Тег `latest` указывает на этот же образ Rust. Для Linux ARM64 используйте standalone-архив. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
+Docker-образ Rust 2.0.1 для Linux x64 доступен по тегу `aceasket/inpx-web-7z:2.0.1`. Тег `latest` указывает на этот же образ Rust. Для Linux ARM64 используйте standalone-архив. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
 
 Готовые YAML-примеры:
 
@@ -144,7 +144,7 @@ Docker-образ Rust 2.0.0 для Linux x64 доступен по тегу `ac
 Для самостоятельной сборки сначала получите исходники релиза:
 
 ```sh
-git clone --branch v2.0.0 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v2.0.1 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 ```
 
@@ -218,7 +218,7 @@ docker run -d \
   -v /path/on/host/fb2cng:/config/fb2cng:ro \
   -v /path/on/host/library:/library:ro \
   -v /path/on/host/data:/usr/local/bin/.inpx-web \
-  aceasket/inpx-web-7z:2.0.0
+  aceasket/inpx-web-7z:2.0.1
 ```
 
 В fb2cng 2.1.1 настройки Markdown-изображений находятся в `document.markdown.images`. При обновлении собственного YAML перенесите туда параметры из `document.images.markdown`. Прежний флаг `--kfx-compression` в настройках приложения сохраняет своё действие для KFX и AZW8.
@@ -284,7 +284,7 @@ docker run -d \
 Для обновления сначала скачайте новый образ, затем пересоздайте контейнер. Повторите свою исходную команду `docker run`, заменив только тег образа: сохраните все переменные окружения, порты и тома, включая `INPX_LIBRARY_SOURCES`, настройки авторизации и отправки книг. Ниже пример для одной библиотеки; замените пути на свои. Команды соединены через `&&`, чтобы не удалять работающий контейнер при ошибке скачивания образа.
 
 ```sh
-docker pull aceasket/inpx-web-7z:2.0.0 &&
+docker pull aceasket/inpx-web-7z:2.0.1 &&
 docker rm -f inpx-web &&
 docker run -d \
   --name=inpx-web \
@@ -297,7 +297,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:2.0.0
+  aceasket/inpx-web-7z:2.0.1
 ```
 
 При локальной сборке используйте имя своего образа. Если сервис запущен через Compose, сохраните настройки в YAML, укажите нужный тег в `image` и выполните `docker compose pull && docker compose up -d`.
@@ -318,7 +318,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:2.0.0
+  aceasket/inpx-web-7z:2.0.1
 ```
 
 Важно:
@@ -459,17 +459,20 @@ fLibrary и LightLib. Формат сжатия архива и формат к�
 | ZIP PPMd, метод 98, начиная с RC19 | 7-Zip CLI |
 | Архивы 7z | 7-Zip CLI |
 | Изображения WebP | `dwebp` |
-| Изображения JPEG XL / JXL | `djxl` по умолчанию, встроенный декодер при `INPX_JXL_DECODER=native` |
+| Изображения JPEG XL / JXL | Rust — встроенный декодер, резервный — `djxl`. Node.js — `djxl` по умолчанию |
 
 Полный Docker-образ и Windows-поставка содержат эти инструменты. Для других
 standalone-поставок установите нужные CLI в системе или укажите пути в
 настройках конвертеров.
 
-В Rust-сервере `INPX_JXL_DECODER=native` включает декодер JPEG XL, встроенный в
-бинарник. Он обрабатывает обложки и иллюстрации в отдельном процессе. Для CMYK
-и при ошибке декодирования сервер использует резервный `djxl`. Без переменной
-сервер сразу запускает `djxl`. Docker и Linux standalone поставляются с одной
-версией этой утилиты. В Linux standalone распакуйте
+В Rust-сервере встроенный декодер JPEG XL обрабатывает обложки и иллюстрации
+в отдельном процессе. Он используется по умолчанию и при `INPX_JXL_DECODER=native`.
+Для CMYK и при ошибке декодирования сервер пробует резервный `djxl`.
+Чтобы сразу использовать внешнюю утилиту, задайте `INPX_JXL_DECODER=djxl`.
+В версии 2.0.0 встроенный декодер нужно включать явно
+через `INPX_JXL_DECODER=native`.
+
+Docker и Linux standalone поставляются с одной версией `djxl`. В Linux standalone распакуйте
 каталог `bin` рядом с `inpx-web`. Для старого архива без `bin/djxl` установите
 `djxl` в `PATH` до запуска сервера или укажите `converterPaths.djxl`.
 Лимит отдельной обложки в Rust составляет 16 МиБ, в том числе после декодирования
@@ -692,7 +695,7 @@ docker run -d \
   -e EMAIL_FROM=user@example.com \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:2.0.0
+  aceasket/inpx-web-7z:2.0.1
 ```
 
 Переменные для Telegram:
@@ -877,7 +880,7 @@ http://<ваш_хост>:12380/opds/v2?user=<profileId>
 
 Начиная с **1.7.9-rc.1**, сервер поддерживает нативный [Custom metadata provider Audiobookshelf](https://audiobookshelf.org/docs/documentation/community/community-providers/). Он позволяет подбирать метаданные для аудиокниги по электронным книгам в INPX-библиотеке, включая самостоятельно озвученные книги.
 
-Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:2.0.0` и добавьте к своей команде запуска:
+Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:2.0.1` и добавьте к своей команде запуска:
 
 ```sh
 -e INPX_ABS_ENABLED=true \

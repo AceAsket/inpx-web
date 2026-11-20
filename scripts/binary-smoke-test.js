@@ -364,7 +364,12 @@ async function main() {
         if (nativeJxlCover || rust && binary) {
             for (const key of Object.keys(env)) if (key.toLowerCase() === 'path') delete env[key];
             env.PATH = rust ? '' : cwd;
-            env.INPX_JXL_DECODER = 'native';
+            if (rust) {
+                // Standalone must decode this sidecar with no decoder flag or djxl.
+                delete env.INPX_JXL_DECODER;
+            } else {
+                env.INPX_JXL_DECODER = 'native';
+            }
         }
         if (requireRustCatalogue) {
             delete env.INPX_RUST_READER_BINARY;

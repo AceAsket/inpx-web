@@ -78,12 +78,13 @@ impl Covers {
 
     pub fn new(exec: &Path, config: &Value, images: usize, queue_timeout: Duration) -> Self {
         let paths = &config["converterPaths"];
+        let jxl_mode = std::env::var("INPX_JXL_DECODER").unwrap_or_default();
         Self {
             archives: Mutex::new(None),
             decoders: Queue::with_limits(images, 16, queue_timeout),
             webp: Tool::find(exec, "dwebp", &configured(paths, &["dwebp", "webp"])),
             jxl: Tool::find(exec, "djxl", &configured(paths, &["djxl", "jxl"])),
-            native_jxl: if std::env::var("INPX_JXL_DECODER").as_deref() == Ok("native") {
+            native_jxl: if matches!(jxl_mode.trim(), "" | "native") {
                 std::env::current_exe().ok()
             } else {
                 None

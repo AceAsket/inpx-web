@@ -17,7 +17,7 @@
 
 | Редакция | Docker-образ | ZIP и установщик Windows |
 | --- | --- | --- |
-| Rust 2.0.0 · стабильная | `aceasket/inpx-web-7z:2.0.0` или `:latest` | [Скачать Rust 2.0.0](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.0) |
+| Rust 2.0.1 · стабильная | `aceasket/inpx-web-7z:2.0.1` или `:latest` | [Скачать Rust 2.0.1](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.1) |
 | Классический Node.js 1.8.3 RC30 · для проверки | `aceasket/inpx-web-7z:1.8.3-rc.30` | [Скачать Node.js RC30](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3-rc.30) |
 | Классический Node.js 1.8.2 · стабильная | `aceasket/inpx-web-7z:1.8.2` | [Скачать Node.js 1.8.2](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) |
 
@@ -36,7 +36,7 @@ docker run -d --name inpx-web --restart unless-stopped \
   -e LIBDIR=/library \
   -v inpx-web-data:/usr/local/bin/.inpx-web \
   -v /path/to/library:/library:ro \
-  aceasket/inpx-web-7z:2.0.0
+  aceasket/inpx-web-7z:2.0.1
 ```
 
 Откройте `http://localhost:12380` на сервере или укажите его адрес вместо `localhost`. Профили и настройки сохраняются в томе `inpx-web-data`. [Пример Docker Compose](./docker-compose.full.yml) · [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
