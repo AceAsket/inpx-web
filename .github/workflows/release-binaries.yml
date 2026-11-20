@@ -247,6 +247,7 @@ jobs:
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
           prerelease: ${{ contains(github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name, '-rc') }}
+          make_latest: false
           body_path: release-notes.md
           files: |
             release-assets/**/*.zip
