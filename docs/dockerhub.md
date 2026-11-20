@@ -99,7 +99,7 @@ docker run -d \
 
 Silero запускается отдельным CPU-контейнером `aceasket/inpx-web-7z:2.0.0-silero`. Оба контейнера должны находиться в одной пользовательской Docker-сети. Смонтируйте постоянный том в `/models`; модели загружаются при первом синтезе. Расстановка ударений через silero-stress включена по умолчанию. Текст передаётся вашему сервису Silero.
 
-[Готовые команды и Compose для Silero](https://github.com/AceAsket/inpx-web/blob/v2.0.0/docs/silero-tts.md).
+[Готовые команды и Compose для Silero](https://github.com/AceAsket/inpx-web/blob/main/docs/silero-tts.md).
 
 ### Полезные настройки
 
@@ -220,7 +220,7 @@ Speech is **disabled by default**. Enable it through the main container's startu
 
 Run Silero as a separate CPU service using `aceasket/inpx-web-7z:2.0.0-silero`. Place both containers on the same user-defined Docker network. Mount a persistent volume at `/models`; models are downloaded on the first synthesis request. Stress placement with silero-stress is enabled by default. Book text is sent to your own Silero service.
 
-[Silero commands and Compose instructions](https://github.com/AceAsket/inpx-web/blob/v2.0.0/docs/silero-tts.md).
+[Silero commands and Compose instructions](https://github.com/AceAsket/inpx-web/blob/main/docs/silero-tts.md).
 
 ### Useful settings
 
@@ -247,4 +247,4 @@ Book collections are not included in the image. Full application backups exclude
 - [Source code and documentation](https://github.com/AceAsket/inpx-web)
 - [Release downloads](https://github.com/AceAsket/inpx-web/releases)
 - [Report an issue](https://github.com/AceAsket/inpx-web/issues)
-- [Silero setup](https://github.com/AceAsket/inpx-web/blob/v2.0.0/docs/silero-tts.md)
+- [Silero setup](https://github.com/AceAsket/inpx-web/blob/main/docs/silero-tts.md)
