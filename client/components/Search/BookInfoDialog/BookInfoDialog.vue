@@ -10,7 +10,7 @@
 
         <div ref="box" class="fit column q-mt-xs overflow-auto no-wrap info-box" :class="{'info-box--embedded': embedded}">
             <div v-if="!hideSummary" class="book-info-summary">
-                <button type="button" class="book-info-cover" :aria-label="`Обложка: ${book.title || 'Книга'}`" @click="posterClick"><BookCover :book="book" @error="onCoverError" /></button>
+                <button type="button" class="book-info-cover" :aria-label="`Обложка: ${book.title || 'Книга'}`" @click="posterClick"><BookCover :book="book" @load="onCoverLoad" @error="onCoverError" /></button>
                 <div>
             <div v-if="bookAuthor" class="text-green-10 info-link" @click.stop.prevent="emitNavigate('author', book.author)">
                 {{ bookAuthor }}
@@ -1018,6 +1018,13 @@ class BookInfoDialog {
 
     okClick() {
         this.dialogVisible = false;
+    }
+
+    onCoverLoad(src) {
+        if (!this.coverSrc || this.coverSrc === this.fallbackCoverSrc) {
+            this.coverError = false;
+            this.coverSrc = src;
+        }
     }
 
     onCoverError() {

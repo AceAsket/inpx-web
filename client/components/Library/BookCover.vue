@@ -1,7 +1,7 @@
 <template>
     <span ref="element" class="book-cover" :style="{'--cover-color': color}">
         <img v-if="src && visible && !failed" :key="src" :src="src" :alt="`Обложка: ${book.title || 'Без названия'}`"
-            loading="lazy" decoding="async" @load="emit('load')" @error="failed = true; emit('error')" />
+            loading="lazy" decoding="async" @load="loaded" @error="failed = true; emit('error')" />
         <span v-else class="book-cover__placeholder" aria-hidden="true">
             <span>{{ letter }}</span><small>{{ (book.ext || 'КНИГА').toUpperCase() }}</small>
         </span>
@@ -30,7 +30,32 @@ const color = computed(() => {
     return colors[Array.from(seed).reduce((sum, c) => sum + c.codePointAt(0), 0) % colors.length];
 });
 let observer;
-watch(src, () => {failed.value = false;});
+let retried = false;
+function loaded() {
+    retried = false;
+    emit('load', src.value);
+}
+watch(src, () => {
+    retried = false;
+    failed.value = false;
+});
+watch(failed, (needsRetry, _, onCleanup) => {
+    if (!needsRetry) return;
+    function retry() {
+        if (document.hidden || navigator.onLine === false) return;
+        retried = true;
+        failed.value = false;
+    }
+    // One retry for a brief failure. After that, wait for the reader to return or reconnect.
+    const timer = retried ? undefined : setTimeout(retry, 1500);
+    window.addEventListener('online', retry);
+    document.addEventListener('visibilitychange', retry);
+    onCleanup(() => {
+        clearTimeout(timer);
+        window.removeEventListener('online', retry);
+        document.removeEventListener('visibilitychange', retry);
+    });
+});
 onMounted(() => {
     if (!window.IntersectionObserver) {visible.value = true; return;}
     observer = new IntersectionObserver(entries => {

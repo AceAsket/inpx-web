@@ -17,6 +17,54 @@ async function assertCatalogBottomGap(page) {
     assert(gap >= 15, `Expected a gap above the pagination divider, got ${gap}px`);
 }
 
+async function assertCoverRecovery(page, base) {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64');
+    const counts = new Map();
+    const unavailable = new Map();
+    let brief;
+    await page.route('**/cover/by-uid?**', async route => {
+        const url = route.request().url();
+        counts.set(url, (counts.get(url) || 0) + 1);
+        const status = unavailable.get(url) || 200;
+        if (url === brief) unavailable.delete(brief);
+        await route.fulfill({status, contentType: 'image/png', body: status === 200 ? png : Buffer.alloc(0)});
+    });
+    await page.goto(base + '/#/books');
+    const covers = page.locator('.library-result-card .book-cover');
+    await covers.nth(3).locator('img').waitFor();
+    const urls = await covers.evaluateAll(nodes => nodes.slice(0, 4).map(node => node.querySelector('img').src));
+    assert.equal(new Set(urls).size, 4);
+    const [first, sleeping, missing, healthy] = urls;
+    brief = first;
+    const decoded = url => page.waitForFunction(src => [...document.images].some(img => img.src === src && img.naturalWidth > 0), url, {timeout: 6500});
+    await Promise.all(urls.map(decoded));
+    unavailable.set(brief, 503);
+    unavailable.set(sleeping, 503);
+    unavailable.set(missing, 404);
+    counts.clear();
+    await Promise.all([
+        ...[sleeping, missing].map(url => page.waitForResponse(r => r.url() === url && counts.get(url) === 2, {timeout: 6500})),
+        page.reload(),
+    ]);
+    await Promise.all([decoded(brief), decoded(healthy)]);
+    await covers.nth(1).locator('.book-cover__placeholder').waitFor();
+    await covers.nth(2).locator('.book-cover__placeholder').waitFor();
+    const healthyRequests = counts.get(healthy);
+    await pause(2500);
+    assert.equal(counts.get(missing), 2, 'A missing cover must not poll the server');
+    unavailable.delete(sleeping);
+    await Promise.all([
+        page.waitForResponse(r => r.url() === missing && r.status() === 404),
+        page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))),
+    ]);
+    await decoded(sleeping);
+    await covers.nth(2).locator('.book-cover__placeholder').waitFor();
+    unavailable.delete(missing);
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await decoded(missing);
+    assert.equal(counts.get(healthy), healthyRequests, 'A healthy cover stays loaded during recovery');
+}
+
 async function assertPosition(locator, before) {
     const after = await locator.boundingBox();
     assert(after && before && Math.abs(before.x - after.x) <= 1 && Math.abs(before.y - after.y) <= 1,
@@ -88,6 +136,8 @@ if (require.main === module) (async() => {
         }
         assert(ready, output);
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
+        const coverPage = await browser.newPage({viewport: {width: 1440, height: 1000}, serviceWorkers: 'block'});
+        try {await assertCoverRecovery(coverPage, base);} finally {await coverPage.close();}
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [], actions = [];
         let readingFailure = '', recommendationMode = 'full', recommendationBook = null, heldRecommendation = null;
         let favoritesFixture = null, readingReplies = null;
@@ -899,4 +949,4 @@ if (require.main === module) (async() => {
         console.error(output); throw error;
     } finally {if (browser) await browser.close(); if (child) child.kill();}
 })().catch(error => {console.error(error); process.exitCode = 1;});
-module.exports = {fixture, archive};
+module.exports = {fixture, archive, assertCoverRecovery};
