@@ -16,9 +16,25 @@ use zip::{
 use crate::Result;
 use crate::framed_protocol::{Frames, complete, header, with_body};
 
-pub const MAX_BOOKS: usize = 200;
-const INPUT_LIMIT: u64 = 512 * 1024 * 1024;
-const OUTPUT_LIMIT: u64 = 1024 * 1024 * 1024;
+#[derive(Clone, Copy)]
+pub struct BatchLimits {
+    pub books: usize,
+    pub output_bytes: u64,
+    input_bytes: u64,
+}
+
+impl BatchLimits {
+    pub const STANDARD: Self = Self {
+        books: 200,
+        input_bytes: 512 << 20,
+        output_bytes: 1 << 30,
+    };
+    pub const UNLIMITED: Self = Self {
+        books: usize::MAX,
+        input_bytes: u64::MAX,
+        output_bytes: u64::MAX,
+    };
+}
 const INLINE_LIMIT: u64 = 8 * 1024 * 1024;
 const FULL: &str = "Кэш пакетных ZIP заполнен. Повторите через 15 минут.";
 
@@ -69,16 +85,17 @@ pub struct Batch {
     zip: Option<ZipWriter<StreamWriter<BudgetWriter>>>,
     names: HashSet<String>,
     expanded: u64,
+    limits: BatchLimits,
     published: bool,
     exceeded: Rc<Cell<bool>>,
 }
 
 impl Batch {
-    pub fn open(path: PathBuf, limit: u64) -> Result<Self> {
+    pub fn open(path: PathBuf, limits: BatchLimits, output_budget: u64) -> Result<Self> {
         let exceeded = Rc::new(Cell::new(false));
         let output = BudgetWriter {
             output: BufWriter::with_capacity(128 * 1024, File::create_new(&path)?),
-            remaining: limit.min(OUTPUT_LIMIT),
+            remaining: output_budget.min(limits.output_bytes),
             written: 0,
             exceeded: Rc::clone(&exceeded),
         };
@@ -87,13 +104,14 @@ impl Batch {
             zip: Some(ZipWriter::new_stream(output)),
             names: HashSet::new(),
             expanded: 0,
+            limits,
             published: false,
             exceeded,
         })
     }
 
     fn add(&mut self, entry: Entry, reader: impl Read) -> Result<()> {
-        if self.names.len() >= MAX_BOOKS
+        if self.names.len() >= self.limits.books
             || !safe_name(&entry.name)
             || !self.names.insert(entry.name.to_lowercase())
         {
@@ -102,10 +120,12 @@ impl Batch {
         self.expanded = self
             .expanded
             .checked_add(entry.size)
-            .filter(|&bytes| bytes <= INPUT_LIMIT)
-            .ok_or("ZIP превышает лимит 512 МБ")?;
+            .filter(|&bytes| bytes <= self.limits.input_bytes)
+            .ok_or("Общий размер книг в ZIP превышает лимит 512 МиБ")?;
         let [year, month, day, hour, minute, second] = entry.mtime;
         let mut options = SimpleFileOptions::default()
+            // Leave room for deflate overhead when an entry approaches the ZIP32 limit.
+            .large_file(entry.size >= 1 << 31)
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(6))
             .unix_permissions(entry.mode);
@@ -121,7 +141,7 @@ impl Batch {
         }
         let zip = self.zip.as_mut().expect("active batch writer");
         zip.start_file(entry.name, options)?;
-        if io::copy(&mut reader.take(entry.size + 1), zip)? != entry.size {
+        if io::copy(&mut reader.take(entry.size.saturating_add(1)), zip)? != entry.size {
             return Err("Размер книги изменился при создании ZIP".into());
         }
         zip.flush()?;
@@ -244,7 +264,7 @@ pub fn serve(mut input: impl BufRead, mut output: impl Write) -> Result<()> {
         let exceeded = batch.as_ref().map(|session| Rc::clone(&session.exceeded));
         let result = match request {
             Request::Begin { output, limit } if batch.is_none() => {
-                Batch::open(output, limit).map(|session| {
+                Batch::open(output, BatchLimits::STANDARD, limit).map(|session| {
                     batch = Some(session);
                     None
                 })
@@ -307,4 +327,34 @@ pub fn serve(mut input: impl BufRead, mut output: impl Write) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn archive_limits_follow_the_selected_profile() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let source = dir.path().join("last.txt");
+        fs::write(&source, b"book")?;
+        for (name, limits) in [
+            ("balanced", BatchLimits::STANDARD),
+            ("unlimited", BatchLimits::UNLIMITED),
+        ] {
+            let path = dir.path().join(format!("{name}.zip"));
+            let mut archive = Batch::open(path.clone(), limits, limits.output_bytes)?;
+            archive.expanded = BatchLimits::STANDARD.input_bytes;
+            let result = archive.add_file(&source, "last.txt".into());
+            if name == "balanced" {
+                assert!(result.unwrap_err().to_string().contains("512"));
+                drop(archive);
+                assert!(!path.exists());
+            } else {
+                result?;
+                assert!(archive.finish()? > 0);
+            }
+        }
+        Ok(())
+    }
 }

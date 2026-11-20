@@ -481,31 +481,20 @@ impl Catalogue {
         Ok(result)
     }
 
-    pub fn browser_entity(&self, options: &Value, reading: &CatalogueReading) -> Result<Value> {
-        let kind = options["kind"].as_str().unwrap_or_default();
-        let table = match kind {
-            "author" => Table::Author,
-            "series" => Table::Series,
-            _ => return Err("Укажите автора или серию".into()),
-        };
-        let original = options["name"]
-            .as_str()
-            .filter(|value| value.chars().count() <= 500)
-            .ok_or("Укажите автора или серию")?;
+    fn entity_books(
+        &self,
+        table: Table,
+        original: &str,
+        scoped: Option<&SelectedBooks>,
+    ) -> Result<(String, Vec<EntityBook>)> {
         let name = normalize_entity_text(original);
-        if name.is_empty() {
+        if name.is_empty() || original.chars().count() > 500 {
             return Err("Укажите автора или серию".into());
         }
-        let page = query_number(&options["page"]).max(1.0) as u64;
-        let limit = match query_number(&options["limit"]) {
-            0.0 => 40,
-            value => value.clamp(1.0, 100.0) as usize,
-        };
-        let scoped = self.browse_selection(&options["filters"])?;
         let mut ids: Vec<_> = self
             .entity_candidates(table, original, &name)?
             .into_iter()
-            .filter(|&id| scoped.as_ref().is_none_or(|scope| scope.contains(id)))
+            .filter(|&id| scoped.is_none_or(|scope| scope.contains(id)))
             .collect();
         ids.sort_unstable();
         let mut rows = Vec::with_capacity(ids.len());
@@ -517,6 +506,30 @@ impl Catalogue {
                 }
                 Ok(())
             })?;
+        Ok((name, rows))
+    }
+
+    pub fn batch_series(&self, name: &str) -> Result<Vec<String>> {
+        let (_, mut rows) = self.entity_books(Table::Series, name, None)?;
+        order_entity(&mut rows, false)?;
+        Ok(rows.into_iter().map(|row| row.uid).collect())
+    }
+
+    pub fn browser_entity(&self, options: &Value, reading: &CatalogueReading) -> Result<Value> {
+        let kind = options["kind"].as_str().unwrap_or_default();
+        let table = match kind {
+            "author" => Table::Author,
+            "series" => Table::Series,
+            _ => return Err("Укажите автора или серию".into()),
+        };
+        let original = options["name"].as_str().ok_or("Укажите автора или серию")?;
+        let page = query_number(&options["page"]).max(1.0) as u64;
+        let limit = match query_number(&options["limit"]) {
+            0.0 => 40,
+            value => value.clamp(1.0, 100.0) as usize,
+        };
+        let scoped = self.browse_selection(&options["filters"])?;
+        let (name, mut rows) = self.entity_books(table, original, scoped.as_ref())?;
         let series = order_entity(&mut rows, table == Table::Author)?;
         let ordered: Vec<_> = rows.iter().map(|row| row.id).collect();
         let progress = |uid: &str| {

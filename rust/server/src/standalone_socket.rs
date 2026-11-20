@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use hyper::{Request, Response, StatusCode, body::Incoming, header};
@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{
     Semaphore,
     broadcast::{Receiver, error::RecvError},
+    mpsc,
 };
 use tokio::task::JoinSet;
 use tokio::time::timeout;
@@ -189,12 +190,13 @@ impl Socket {
         state: &Arc<State>,
         browser: &str,
         admission: &Admission,
-        (connection, events_connection): (Option<u64>, u64),
+        context: DispatchContext<'_>,
         mut request: Value,
         subscription: &mut Change,
     ) -> Value {
         let peer = admission.client;
         let proxy_login = admission.proxy_login.as_deref();
+        let connection = context.connection;
         if let (Some(activity), Some(id)) = (&state.metrics.activity, connection) {
             activity.seen(id, None);
         }
@@ -397,7 +399,12 @@ impl Socket {
             "get-rating-index-status" => super::exchange::Exchange::rating_status(state),
             "prepare-batch-download" => state
                 .batch
-                .prepare(state, profile_request, &request["selection"])
+                .prepare(
+                    state,
+                    profile_request,
+                    &request["selection"],
+                    context.batch_progress,
+                )
                 .unwrap_or_else(|failure| fault(&failure.to_string())),
             "send-book-telegram" | "send-book-email" => state
                 .delivery
@@ -898,7 +905,7 @@ impl Socket {
         {
             state.events.send(
                 kind,
-                Some(events_connection),
+                Some(context.events_connection),
                 owner,
                 text(&request, "bookUid"),
             );
@@ -1294,6 +1301,12 @@ impl Socket {
     }
 }
 
+struct DispatchContext<'a> {
+    connection: Option<u64>,
+    events_connection: u64,
+    batch_progress: &'a dyn Fn(usize, usize),
+}
+
 async fn run(
     client: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     state: Arc<State>,
@@ -1315,6 +1328,7 @@ async fn run(
     let events_connection = state.events.connect();
     let mut subscribed = None::<(Arc<Subscription>, Receiver<Arc<Event>>)>;
     let mut running = JoinSet::new();
+    let (replies, mut incoming) = mpsc::channel(16);
     loop {
         tokio::select! {
             message = timeout(IDLE, socket.next()) => {
@@ -1365,22 +1379,37 @@ async fn run(
                 let state = state.clone();
                 let browser = browser.clone();
                 let admission = admission.clone();
+                let replies = replies.clone();
                 running.spawn(async move {
                     let _permit = permit;
+                    let progress_replies = replies.clone();
+                    let progress_id = id.clone();
                     let (response, change) = tokio::task::spawn_blocking(move || {
                         let mut change = Change::Unchanged;
+                        let enabled = request["wantProgress"] == true;
+                        let last = std::cell::Cell::new(None::<Instant>);
+                        let batch_progress = |done, total| {
+                            if enabled && (done == total || last.get().is_none_or(|time| time.elapsed() >= Duration::from_millis(200))) {
+                                let update = json!({"_progress":true,"progress":{"done":done,"total":total}});
+                                if progress_replies.try_send((update, progress_id.clone(), Change::Unchanged)).is_ok() {
+                                    last.set(Some(Instant::now()));
+                                }
+                            }
+                        };
                         let response = state.socket.dispatch(&state, &browser, &admission,
-                            (connection, events_connection), request, &mut change);
+                            DispatchContext {connection, events_connection, batch_progress: &batch_progress}, request, &mut change);
                         (response, change)
                     }).await.unwrap_or_else(|_| (fault("server_busy"), Change::Unchanged));
                     if response["error"] == "need_access_token" {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
-                    (response, id, change)
+                    let _ = replies.send((response, id, change)).await;
                 });
             }
             result = running.join_next(), if !running.is_empty() => {
-                let Some(Ok((result,id,change))) = result else { return; };
+                if !matches!(result, Some(Ok(()))) { return; }
+            }
+            Some((result,id,change)) = incoming.recv() => {
                 match change {
                     Change::Unchanged => (),
                     Change::Clear => subscribed = None,

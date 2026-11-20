@@ -15,6 +15,9 @@ async function fixture(directory) {
         ['Тургенев Иван', 'Ася', '', 0, 'ru'],
         ['Толстой Лев', 'Childhood', 'Рассказы', 3, 'en'],
         ['Туман Автор', 'Туман над рекой', 'Туман серия', 1, 'ru'],
+        ['Alpha', 'Латинское имя автора', 'Alpha', 1, 'ru'],
+        ['7 авторов', 'Числовое имя автора', '7 томов', 1, 'ru'],
+        ['Δέλτα', 'Ελληνικό', 'Δέλτα', 1, 'el'],
         ...Array.from({length: 240}, (_, i) => [`Корнеев Автор${String(i).padStart(4, '0')}`, `Книга указателя ${i}`, `Коллекция ${i}`, 1, 'ru']),
     ];
     const rows = [], files = [], date = new Date().toISOString().slice(0, 10);
@@ -70,10 +73,14 @@ async function fixture(directory) {
         const profilePreferenceReplies = [];
         const invalidBookRequests = [];
         const inactiveReaderRequests = [];
+        let releaseBatch;
+        const batchGate = new Promise(resolve => {releaseBatch = resolve;});
         await page.routeWebSocket('**', socket => {
+            let batchRequest;
             const server = socket.connectToServer(), suggestions = new Map(), configs = new Set(), galleries = new Set();
             socket.onMessage(message => {
                 const request = JSON.parse(String(message));
+                if (request.action === 'prepare-batch-download' && request.wantProgress) batchRequest = request.requestId;
                 if (request.query && /search/i.test(request.action)) searchRequests.push({action:request.action,from:request.from,query:request.query});
                 if (request.action === 'get-book-info' && !request.bookUid) invalidBookRequests.push({card: request.card, readerOnly: request.readerOnly, url: page.url()});
                 if (request.action === 'get-book-info' && request.readerOnly && !page.url().includes('#/reader')) inactiveReaderRequests.push(request.bookUid);
@@ -100,6 +107,12 @@ async function fixture(directory) {
             });
             server.onMessage(message => {
                 const response = JSON.parse(String(message));
+                if (batchRequest != null && response.requestId === batchRequest && !response._rok &&
+                    !(response._progress && response.progress.done === 0)) {
+                    if (!response._progress) batchRequest = undefined;
+                    batchGate.then(() => socket.send(message));
+                    return;
+                }
                 if (configs.has(response.requestId) && !response._rok) {
                     configs.delete(response.requestId);
                     if (response.currentUserProfile) profilePreferenceReplies.push(response.currentUserProfile.personalRecommendationsEnabled);
@@ -275,7 +288,11 @@ async function fixture(directory) {
         await page.getByRole('heading', {name: 'Рассказы', exact: true}).waitFor();
         await page.locator('.catalog-book-grid .book-tile').first().waitFor();
         assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
-        const [download] = await Promise.all([page.waitForEvent('download'), seriesZip.click()]);
+        const nextDownload = page.waitForEvent('download');
+        await seriesZip.click();
+        try {await page.getByRole('button', {name:'ZIP · 0 из 3 · 0%', exact:true}).waitFor();}
+        finally {releaseBatch();}
+        const download = await nextDownload;
         const archive = new (require('node-stream-zip').async)({file: await download.path()});
         try {
             const entries = Object.values(await archive.entries()).filter(entry => !entry.isDirectory);
@@ -341,6 +358,17 @@ async function fixture(directory) {
         assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
         await page.getByRole('link', {name:'Авторы', exact:true}).click();
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Alphabet navigation retains the scope');
+        await page.goto(base + '/#/authors?lang=ru');
+        const language = page.locator('.catalog-index-filters .q-select').first();
+        await language.click();
+        const languageMenu = page.getByRole('listbox');
+        await languageMenu.getByRole('option',{name:'EL',exact:true}).waitFor();
+        assert.deepEqual((await languageMenu.getByRole('option').allTextContents()).map(label=>label.trim()), ['RU','EN','Все языки','EL']);
+        await page.keyboard.press('Escape');
+        const letters = page.locator('.catalog-page[aria-busy="false"] .catalog-alphabet strong');
+        await letters.first().waitFor();
+        const labels = await letters.allTextContents();
+        assert(/^[А-ЯЁ]/u.test(labels[0]) && labels.indexOf('A') > 0 && labels.indexOf('7') > labels.indexOf('A'));
         await page.goto(base + '/#/authors');
         await page.locator('.catalog-alphabet button').first().waitFor();
         const readyAlphabet = page.locator('.catalog-page[aria-busy="false"]');

@@ -3,6 +3,24 @@ const fs = require('fs-extra');
 const os = require('os');
 const path = require('path');
 const {distance, relevance, scope} = require('../shared/CatalogDiscovery');
+const {languageOptions, sortIndexRows} = require('../client/components/Library/catalogLanguages');
+
+function testCatalogLanguages() {
+    const options = languageOptions(['ar','en','am','ru','ja','en'],true);
+    assert.deepEqual(options.map(option=>option.value),['ru','en','','am','ar','ja']);
+    assert.deepEqual(languageOptions(['am','ar']).map(option=>option.value),['am','ar']);
+    const prefixes = ['9','Я','Ж','Ё','Е','B','A','@','م','ج','カ','あ','山','Ї'];
+    const groups = prefixes.map(prefix=>({prefix}));
+    const ordered = lang=>sortIndexRows(groups,'prefix','',lang).map(group=>group.prefix);
+    assert.deepEqual(ordered('ru').slice(0,4),['Е','Ё','Ж','Я']);
+    assert.deepEqual(ordered('en').slice(0,2),['A','B']);
+    assert.deepEqual(ordered('ar').slice(0,2),['ج','م']);
+    assert.deepEqual(new Set(ordered('ja').slice(0,3)),new Set(['カ','あ','山']));
+    assert.deepEqual(ordered('ru').slice(-2),['9','@']);
+    assert.deepEqual(ordered('').slice(0,6),['Е','Ё','Ж','Я','A','B']);
+    assert.deepEqual(sortIndexRows([{name:'Том B'},{name:'Том Ж'}],'name','том','ru').map(row=>row.name),['Том Ж','Том B']);
+    assert.deepEqual(groups.map(group=>group.prefix),prefixes);
+}
 
 async function fixture(work) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inpx-discovery-'));
@@ -123,7 +141,7 @@ async function testTelegramShortSearchUsesActualIndexedCatalog() {
         }finally{bot.stop();}
     });
 }
-module.exports = {testCatalogDiscoveryIndexedSuggestionsAndScopedAlphabet, testCatalogDiscoveryCoalescedCache,
+module.exports = {testCatalogLanguages, testCatalogDiscoveryIndexedSuggestionsAndScopedAlphabet, testCatalogDiscoveryCoalescedCache,
     testTelegramShortSearchUsesActualIndexedCatalog};
 if (require.main === module) (async() => {for (const test of Object.values(module.exports)) {await test(); console.log(test.name + ': OK');}})()
     .catch(error => {console.error(error); process.exitCode = 1;});

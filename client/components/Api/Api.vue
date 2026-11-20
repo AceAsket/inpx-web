@@ -704,8 +704,8 @@ class Api {
         return await this.request({action: progress ? 'update-audio-position' : 'get-audio-position', bookUid, variant, progress}, 30);
     }
 
-    async downloadBatch(selection) {
-        const result = await this.request({action: 'prepare-batch-download', selection}, 600);
+    async downloadBatch(selection, onProgress) {
+        const result = await this.request({action: 'prepare-batch-download', selection, wantProgress:!!onProgress}, 600, {onProgress});
         const link = document.createElement('a');
         link.href = result.url; link.download = 'books.zip'; document.body.appendChild(link); link.click(); link.remove();
         return result;

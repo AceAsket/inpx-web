@@ -34,7 +34,7 @@ function safeName(value, fallback) {
     return name || fallback;
 }
 
-async function* entries(worker,uids,checkOutput = ()=>{}) {
+async function* entries(worker,uids,checkOutput = ()=>{}, added = ()=>{}) {
     let bytes = 0;
     const names = new Set();
     for (const [index,uid] of uids.entries()) {
@@ -56,10 +56,11 @@ async function* entries(worker,uids,checkOutput = ()=>{}) {
         }
         names.add(entry.toLowerCase());
         yield {source:rawFile,name:entry,stat};
+        added(index + 1);
     }
 }
 
-async function writeLegacy(output,limit,worker,uids) {
+async function writeLegacy(output,limit,worker,uids,added) {
     const zip = new yazl.ZipFile();
     let outputBytes = 0;
     const limiter = new Transform({transform(chunk,encoding,callback) {
@@ -78,11 +79,12 @@ async function writeLegacy(output,limit,worker,uids) {
     complete.catch(abort);
     zip.on('error',abort);
     try {
+        let done = 0;
         for await (const {source,name,stat} of entries(worker,uids,check)) {
             const input = Readable.from((async function*() {
                 const stream = fs.createReadStream(source);
                 inputs.add(stream); stream.once('close',()=>inputs.delete(stream));
-                try {for await (const chunk of stream) yield chunk;}
+                try {for await (const chunk of stream) yield chunk; added(++done);}
                 finally {stream.destroy();}
             })());
             inputs.add(input);
@@ -102,7 +104,7 @@ async function writeLegacy(output,limit,worker,uids) {
     }
 }
 
-async function create(worker, userId, selection) {
+async function create(worker, userId, selection, onProgress) {
     if (running) throw new Error('Другой ZIP уже готовится. Повторите позже.');
     running = true;
     let output;
@@ -136,7 +138,17 @@ async function create(worker, userId, selection) {
         output = path.join(worker.config.tempDir, `batch-${token}.zip`);
         const binary = native.executable();
         const limit = cacheLimit-retained;
-        const outputBytes = binary ? await native.write(binary,output,limit,entries(worker,uids)) : await writeLegacy(output,limit,worker,uids);
+        let last = 0;
+        const progress = done => {
+            const now = Date.now();
+            if (onProgress && (done === uids.length || now - last >= 200)) {
+                last = now;
+                onProgress({done,total:uids.length});
+            }
+        };
+        progress(0);
+        const outputBytes = binary ? await native.write(binary,output,limit,entries(worker,uids,undefined,progress))
+            : await writeLegacy(output,limit,worker,uids,progress);
         tickets.set(token, {file: output, userId, count: uids.length, bytes:outputBytes, readers:0, expires: Date.now() + lifetime});
         return {url: `${worker.config.bookPathStatic}/batch/${token}`, count: uids.length};
     } catch (error) { if (output) await fs.remove(output); throw error; }

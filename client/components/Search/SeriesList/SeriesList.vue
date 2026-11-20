@@ -19,7 +19,8 @@
                 </div>
 
                 <div v-if="isExpandedSeries(item)" class="series-read-actions">
-                    <q-btn outline dense no-caps icon="la la-download" label="ZIP серии" :loading="batchSeries === item.series" :disable="!!batchSeries" @click.stop="downloadSeries(item)" />
+                    <SeriesZipButton dense label="ZIP серии" :series="item.series" :api="api" :disabled="!!batchSeries"
+                                     @busy="batchSeries = $event ? item.series : ''" />
                     <q-btn flat dense no-caps icon="la la-check-circle" @click.stop="markSeriesRead(item, true)">
                         Прочитана
                     </q-btn>
@@ -178,13 +179,6 @@ class SeriesList extends BaseList {
         } catch (e) {
             this.$root.stdDialog.alert(e.message, 'Ошибка');
         }
-    }
-
-    async downloadSeries(item) {
-        this.batchSeries = item.series;
-        try { await this.api.downloadBatch({series: item.series}); }
-        catch (error) { this.$root.stdDialog.alert(error.message, 'Ошибка'); }
-        finally { this.batchSeries = ''; }
     }
 
     async updateTableData(request = null) {

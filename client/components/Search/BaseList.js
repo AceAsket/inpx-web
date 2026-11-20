@@ -7,6 +7,7 @@ import authorBooksStorage from './authorBooksStorage';
 import BookView from './BookView/BookView.vue';
 import LoadingMessage from './LoadingMessage/LoadingMessage.vue';
 import LoadingState from '../share/LoadingState.vue';
+import SeriesZipButton from '../Library/SeriesZipButton.vue';
 import * as utils from '../../share/utils';
 const {match: catalogMatch} = require('../../../shared/CatalogSearch');
 const bookFormats = require('../../../shared/BookFormats');
@@ -22,6 +23,7 @@ const componentOptions = {
         BookView,
         LoadingMessage,
         LoadingState,
+        SeriesZipButton,
     },
     watch: {
         settings() {

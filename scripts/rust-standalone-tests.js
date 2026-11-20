@@ -93,20 +93,24 @@ async function wsClient(url, cookie, headers) {
             request.ack = true;
             return;
         }
+        if (value._progress) {
+            request.onProgress?.(value.progress);
+            return;
+        }
         pending.delete(value.requestId);
         clearTimeout(request.timeout);
         if (!request.ack) request.reject(new Error('Missing _rok for '+value.requestId));
         else request.resolve(value);
     });
     return {
-        request(message) {
+        request(message, onProgress) {
             const requestId = 'ws-fixture-'+(++sequence);
             return new Promise((resolve,reject)=>{
                 const timeout = setTimeout(()=>{
                     pending.delete(requestId);
                     reject(new Error('WebSocket timeout for '+message.action));
                 },12000);
-                pending.set(requestId,{resolve,reject,timeout,ack:false});
+                pending.set(requestId,{resolve,reject,timeout,ack:false,onProgress});
                 socket.send(JSON.stringify({...message,requestId}));
             });
         },
@@ -1968,6 +1972,56 @@ async function verifyLibraryMedia(binary, root) {
     console.log('ok Rust author archives, reviews and rating exchange, INPX hash and access, metadata overrides, ISBN cancel/resume and restart');
 }
 
+async function verifySeriesZip(binary, root) {
+    const series = 'Тестовая серия';
+    await fs.mkdir(root);
+    const entries = [], rows = [];
+    for (let i=1; i<=201; i++) {
+        const text = 'Book '+i;
+        entries.push([i+'.txt',text]);
+        rows.push(['Tester:', 'sf:', text, series, i, i, text.length, i, 0, 'txt', '2026-01-01', 'ru', 0, ''].join('\x04'));
+    }
+    await fs.writeFile(join(root,'books.zip'),await zip(entries));
+    const inpx = join(root,'books.inpx');
+    await fs.writeFile(inpx,await zip([['collection.info','Series'],['version.info','20260101'],['books.inp',rows.join('\n')+'\n']]));
+    const config = join(root,'config.json'), web = join(root,'web.json');
+    await fs.writeFile(config,JSON.stringify({server:{host:'127.0.0.1',root:'/reader'},librarySources:[{id:'main',inpx}]}));
+    await bundle(web);
+    const password = 'series-zip-fixture';
+    const server = await start(binary,['--standalone','--data-dir='+join(root,'data'),'--config='+config,'--web-bundle='+web,'--admin-password='+password]);
+    try {
+        const cookie = await browserCookie(server.url);
+        const ws = await wsClient(server.url,cookie);
+        try {
+            const {csrfToken} = await ws.request({action:'get-config'});
+            const {userId,profileAccessToken} = await ws.request({action:'login-user-profile',login:'admin',password,csrfToken});
+            const auth = {userId,profileAccessToken,csrfToken};
+            const prepare = {action:'prepare-batch-download',selection:{series},wantProgress:true,...auth};
+            assert((await ws.request({action:'set-admin-resource-profile',profile:'balanced',...auth})).success);
+            assert.match((await ws.request(prepare)).error,/200 книг/);
+            assert((await ws.request({action:'set-admin-resource-profile',profile:'unlimited',...auth})).success);
+            const progress = [];
+            const result = await ws.request(prepare, update=>progress.push(update));
+            assert.equal(result.count,201,result.error);
+            assert.deepEqual(progress[0],{done:0,total:201});
+            assert.deepEqual(progress.at(-1),{done:201,total:201});
+            assert(progress.every((step,i)=>step.total===201 && (!i || step.done>progress[i-1].done)));
+            const response = await fetch(server.url+result.url,{headers:{cookie}});
+            assert.equal(response.status,200);
+            const file = join(root,'received.zip');
+            await fs.writeFile(file,await bytes(response));
+            const archive = new (require('node-stream-zip').async)({file});
+            try {
+                const names = Object.keys(await archive.entries());
+                assert.equal(names.length,201);
+                assert.equal((await archive.entryData(names[0])).toString(),'Book 1');
+                assert.equal((await archive.entryData(names.at(-1))).toString(),'Book 201');
+            } finally {await archive.close();}
+        } finally {ws.close();}
+    } finally {await server.stop();}
+    console.log('ok whole-series ZIP with per-request progress and live resource profile limits');
+}
+
 async function verifyMobileEvents(binary, root) {
     const library=join(root,'library'), data=join(root,'data'), web=join(root,'web.json'), config=join(root,'config.json');
     const events = require('./rust-events-tests');
@@ -2635,6 +2689,7 @@ async function verifyJembaUpgrade(binary, root) {
         await verifyLibraryMedia(binary,join(root,'library-media'));
         await verifyReaderTransfer(binary,join(root,'reader-transfer'));
         await verifyProfileCommands(binary,join(root,'profile-commands'));
+        await verifySeriesZip(binary,join(root,'series-zip'));
         await verifyCacheSettings(binary,join(root,'cache-settings'));
         await verifyResourceProfiles(binary,join(root,'resource-profiles'));
         await verifyMobileEvents(binary,join(root,'mobile-events'));

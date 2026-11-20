@@ -216,9 +216,6 @@ impl ReaderState {
             .find(|row| row["id"] == id && owned(row, owner))
             .ok_or(NOT_FOUND)?;
         let entries = computed_entries(row, &read_uids(data, user, owner), catalogue)?;
-        if entries.len() > crate::book_batch::MAX_BOOKS {
-            return Err("В одном ZIP может быть не больше 200 книг".into());
-        }
         Ok(json!(
             entries
                 .into_iter()

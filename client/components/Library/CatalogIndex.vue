@@ -46,6 +46,7 @@ import {computed, ref, watch, onBeforeUnmount, onDeactivated} from 'vue';
 import {useRoute, useRouter} from 'vue-router';
 import {useLibraryPage} from './useLibraryPage';
 import {catalogScope, catalogTarget} from './catalogSearchModel';
+import {languageOptions, sortIndexRows} from './catalogLanguages';
 import LibraryNotice from './LibraryNotice.vue';
 import './catalogPages.css';
 const route = useRoute(), router = useRouter(), data = ref(null), loading = ref(false), error = ref('');
@@ -56,7 +57,7 @@ const prefixParts = computed(() => fullPrefix.value.length <= 3 ? fullPrefix.val
 const prefixOptions = computed(() => fullPrefix.value.map(value => ({label: value.toUpperCase(), value})));
 const language = computed({get: () => String(route.query.lang || ''), set: lang => router.push({path: route.path, query: {...route.query, lang: lang || undefined, prefix: undefined}})});
 const source = computed({get: () => String(route.query.sourceId || ''), set: sourceId => router.push({path: route.path, query: {...route.query, sourceId: sourceId || undefined, prefix: undefined}})});
-const languages = ref([{label: 'Все языки', value: ''}]);
+const languages = ref(languageOptions([], true));
 const {library, active} = useLibraryPage('Каталог', load);
 const sources = computed(() => [{label: 'Все библиотеки', value: ''}, ...(library.config.value.librarySources || []).map(item => ({label: item.name, value: item.id}))]);
 const resultScope = ref({});
@@ -66,7 +67,7 @@ function loadLanguages(revision) {
     languagesPending = revision;
     library.api.getGenreTree().then(result => {
         if (revision !== library.state.revision) return;
-        languages.value = [{label:'Все языки', value:''}, ...(result.langList || []).map(value => ({label:value.toUpperCase(), value}))];
+        languages.value = languageOptions(result.langList || [], true);
         languageRevision = revision;
     }).catch(() => {}).finally(() => {
         if (languagesPending === revision) languagesPending = undefined;
@@ -86,7 +87,9 @@ async function load() {
         const result = await library.api.catalogBrowse({kind:group, prefix:prefix.value, filters:scope});
         if (!current()) return;
         resultScope.value = scope;
-        data.value = result;
+        data.value = {...result,
+            groups:sortIndexRows(result.groups, 'prefix', result.prefix, scope.lang),
+            items:sortIndexRows(result.items, 'name', result.prefix, scope.lang)};
         document.title = `${group === 'author' ? 'Авторы' : 'Серии'} · INPX Web`;
     } catch (e) {if (current()) error.value = e.message;}
     finally {if (current()) loading.value = false;}

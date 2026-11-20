@@ -16,7 +16,7 @@
                 </p>
                 <q-linear-progress v-if="kind === 'series' && data.read !== null && data.total" :value="data.read / data.total" rounded color="primary" class="q-mb-md" />
                 <div class="catalog-page__actions">
-                    <q-btn v-if="kind === 'series' && data.total" outline no-caps icon="la la-download" label="Скачать всю серию в ZIP" :loading="downloading" @click="downloadSeries" />
+                    <SeriesZipButton v-if="kind === 'series' && data.total" :key="name" :series="name" :api="library.api" />
                     <q-btn v-if="data.next && canRead(data.next)" no-caps unelevated color="primary" icon="la la-book-open" :label="data.read ? (kind === 'series' ? 'Продолжить серию' : 'Продолжить чтение') : 'Начать читать'" @click="library.openBook(data.next)" /><q-btn v-if="library.config.value.profileAuthorized" outline no-caps icon="la la-star" :label="following ? 'В избранном' : 'Следить за новинками'" :disable="!followingReady" :loading="followBusy" @click="toggleFollow" /><q-btn v-if="kind === 'series' && data.total && library.config.value.profileAuthorized" outline no-caps icon="la la-check-circle" label="Отметить серию прочитанной" :loading="marking" @click="markAll" />
                 </div>
             </template>
@@ -54,6 +54,7 @@ import {useLibraryPage} from './useLibraryPage';
 import {catalogScope, catalogTarget} from './catalogSearchModel';
 import {readable} from './libraryModel';
 import BookTile from './BookTile.vue';
+import SeriesZipButton from './SeriesZipButton.vue';
 import LibraryNotice from './LibraryNotice.vue';
 import './catalogPages.css';
 const route = useRoute(), router = useRouter(), root = getCurrentInstance().proxy.$root;
@@ -62,18 +63,6 @@ const kind = computed(() => route.path === '/author-details' ? 'author' : 'serie
 const {library, active} = useLibraryPage('Каталог', load);
 let request = 0, followRevision = 0, dataKey = '';
 const canRead = book => readable(book, library.config.value);
-const downloading = ref(false);
-async function downloadSeries() {
-    if (downloading.value) return;
-    downloading.value = true;
-    try {
-        await library.api.downloadBatch({series: name.value});
-    } catch (error) {
-        root.stdDialog.alert(error.message, 'Скачать серию');
-    } finally {
-        downloading.value = false;
-    }
-}
 async function load() {
     const id = ++request, revision = library.state.revision, entity = {kind:kind.value,name:name.value}, filters = catalogScope(route.query);
     const key = JSON.stringify([revision,entity,filters]);

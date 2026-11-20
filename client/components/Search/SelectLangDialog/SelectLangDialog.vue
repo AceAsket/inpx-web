@@ -11,20 +11,13 @@
         <div ref="box" class="column q-mt-xs overflow-auto no-wrap" style="width: 370px; padding: 0px 10px 10px 10px;">
             <div v-show="langList.length" class="checkbox-tick-all">
                 <div class="row items-center">
-                    <q-option-group
-                        v-model="ticked"
-                        :options="optionsPre"
-                        type="checkbox"
-                        inline
-                    />
-
+                    <q-checkbox v-model="tickAll" label="Выбрать/снять все" toggle-order="ft" @update:model-value="makeTickAll" />
                     <div class="col" />
                     <div v-show="lang != langDefault" class="clickable" @click="setAsDefaults">
                         Установить по умолчанию
                     </div>
                 </div>
 
-                <q-checkbox v-model="tickAll" label="Выбрать/снять все" toggle-order="ft" @update:model-value="makeTickAll" />
             </div>
 
             <q-option-group
@@ -54,6 +47,7 @@
 import vueComponent from '../../vueComponent.js';
 
 import Dialog from '../../share/Dialog.vue';
+import {languageOptions} from '../../Library/catalogLanguages';
 
 const componentOptions = {
     components: {
@@ -104,25 +98,7 @@ class SelectLangDialog {
     }
 
     get options() {
-        const result = [];
-
-        for (const lang of this.langList) {
-            result.push({label: lang, value: lang});
-        }
-
-        return result;
-    }
-
-    get optionsPre() {
-        const result = [];
-
-        for (const lang of this.langList) {
-            if (['ru', 'en'].includes(lang)) {
-                result.push({label: lang, value: lang});
-            }
-        }
-
-        return result.reverse();
+        return languageOptions(this.langList || []);
     }
 
     makeTickAll() {

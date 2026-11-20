@@ -319,7 +319,8 @@ class WebSocketController {
                 }
                 case 'prepare-batch-download': {
                     const user = await this.webWorker.requireAuthorizedUser(req.userId, req.profileAccessToken);
-                    this.send(await require('../core/BatchDownload').create(this.webWorker, user.id, req.selection || {}), req, ws);
+                    const progress = req.wantProgress === true ? value => this.send({_progress:true, progress:value},req,ws) : null;
+                    this.send(await require('../core/BatchDownload').create(this.webWorker, user.id, req.selection || {}, progress), req, ws);
                     break;
                 }
                 case 'delete-reader-progress':

@@ -7,7 +7,7 @@ use http_body_util::BodyExt;
 use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::{Request, Response, StatusCode, body::Incoming};
 use inpx_catalog::Result;
-use inpx_catalog::book_batch::{self, Batch, MAX_BOOKS};
+use inpx_catalog::book_batch::{self, Batch, BatchLimits};
 use serde_json::{Value, json};
 
 use super::{State, delivery::Queue};
@@ -17,7 +17,6 @@ use crate::standalone_access::BrowserProfileRequest;
 use crate::standalone_download::{self, Prepared, load_book};
 
 const LIFE: Duration = Duration::from_secs(15 * 60);
-const LIMIT: u64 = 1024 * 1024 * 1024;
 const FULL: &str = "Кэш пакетных ZIP заполнен. Повторите через 15 минут.";
 
 pub(super) struct Downloads {
@@ -64,28 +63,35 @@ impl Downloads {
         state: &State,
         profile: BrowserProfileRequest<'_>,
         selection: &Value,
+        notify: &dyn Fn(usize, usize),
     ) -> Result<Value> {
         let owner = state
             .access
             .with_profile(profile, |_, owner, _| Ok(owner.into()))?;
         let owner = owner.as_str().ok_or("need_profile_login")?;
         let task = self.queue.enter(owner)?;
-        let uids = select(state, profile, selection)?;
+        let limits = if state.resources.policy().selected.id == "unlimited" {
+            BatchLimits::UNLIMITED
+        } else {
+            BatchLimits::STANDARD
+        };
+        let uids = select(state, profile, selection, limits)?;
         let output_budget = {
             let mut tickets = self.tickets.lock().expect("batch tickets");
             prune(&mut tickets);
             let retained: u64 = tickets.values().map(|ticket| ticket.bytes).sum();
-            if tickets.len() >= 256 || retained >= LIMIT {
+            if tickets.len() >= 256 || retained >= limits.output_bytes {
                 return Err(FULL.into());
             }
-            LIMIT - retained
+            limits.output_bytes - retained
         };
         std::fs::create_dir_all(&self.directory)?;
         let token = super::delivery::random_id()?;
         let path = self.directory.join(format!("batch-{token}.zip"));
-        let mut archive = Batch::open(path.clone(), output_budget)?;
+        let mut archive = Batch::open(path.clone(), limits, output_budget)?;
         let mut names = HashSet::new();
         task.progress("Подготовка ZIP", 0, uids.len());
+        notify(0, uids.len());
         for (index, uid) in uids.iter().enumerate() {
             let mut add = || -> Result<()> {
                 let book =
@@ -105,6 +111,7 @@ impl Downloads {
                 );
             }
             task.progress("Подготовка ZIP", index + 1, uids.len());
+            notify(index + 1, uids.len());
         }
         let bytes = archive.finish()?;
         let ticket = Arc::new(Ticket {
@@ -214,6 +221,7 @@ fn select(
     state: &State,
     profile: BrowserProfileRequest<'_>,
     selection: &Value,
+    limits: BatchLimits,
 ) -> Result<Vec<String>> {
     let list = selection["listId"].as_str().unwrap_or_default().trim();
     let series = selection["series"].as_str().unwrap_or_default();
@@ -228,43 +236,21 @@ fn select(
         store.batch_shelf(owner, stamp, list, catalogue)
     })?;
     let values = if list.is_empty() && !series.is_empty() {
-        if series.encode_utf16().count() > 100 {
-            return Err("Для длинного названия серии выберите книги вручную".into());
-        }
-        let query =
-            json!({"series":format!("={series}"),"del":"0","limit":MAX_BOOKS,"hideCopies":false});
         let catalogue = state.index.catalogue.read().expect("open catalogue");
         let catalogue = catalogue
             .as_ref()
             .ok_or("Каталог недоступен. Перезапустите сервер.")?;
-        let mut result = catalogue.browser_books(query.as_object().expect("series query"))?;
-        if result["totalFound"].as_u64().unwrap_or_default() > MAX_BOOKS as u64 {
-            return Err("В одном ZIP может быть не больше 200 книг".into());
-        }
-        let mut rows = result["found"]
-            .take()
-            .as_array_mut()
-            .map(std::mem::take)
-            .unwrap_or_default();
-        rows.sort_by(|a, b| {
-            a["serno"]
-                .as_f64()
-                .unwrap_or_default()
-                .total_cmp(&b["serno"].as_f64().unwrap_or_default())
-                .then_with(|| a["title"].as_str().cmp(&b["title"].as_str()))
-        });
-        Value::Array(
-            rows.into_iter()
-                .map(|mut book| book["_uid"].take())
-                .collect(),
-        )
+        json!(catalogue.batch_series(series)?)
     } else {
         values
     };
     let values = values
         .as_array()
-        .filter(|uids| (1..=MAX_BOOKS).contains(&uids.len()))
-        .ok_or("Выберите от 1 до 200 книг")?;
+        .filter(|uids| !uids.is_empty())
+        .ok_or("Выберите хотя бы одну книгу")?;
+    if values.len() > limits.books {
+        return Err(format!("В одном ZIP может быть не больше {} книг", limits.books).into());
+    }
     let mut unique = HashSet::new();
     let mut uids = Vec::with_capacity(values.len());
     for value in values {
