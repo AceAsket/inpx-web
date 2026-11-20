@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {sessionCookieHeader} = require('./test-session-cookie');
 const {on,once} = require('node:events');
 const WebSocket = require('ws');
 const {hotp} = require('../server/core/ProfileTotp');
@@ -14,7 +15,7 @@ async function withBrowser(url, run) {
     const signal = AbortSignal.timeout(15000);
     const response = await fetch(`${url}/ebook/login`,{signal});
     assert.equal(response.status,200);
-    const session = response.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session='));
+    const session = sessionCookieHeader(response);
     await response.body.cancel();
     assert(session,'Profile session test requires a browser cookie');
     const socket = new WebSocket(url.replace(/^http/,'ws')+'/ws',{

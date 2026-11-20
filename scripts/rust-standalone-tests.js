@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {sessionCookieHeader} = require('./test-session-cookie');
 const {spawn,spawnSync,execFileSync} = require('node:child_process');
 const {createHash} = require('node:crypto');
 const fs = require('node:fs/promises');
@@ -119,7 +120,7 @@ async function browserCookie(url) {
     assert.equal(page.status,200);
     const header = page.headers.get('set-cookie');
     assert.equal(page.headers.get('cache-control'),'private, no-store');
-    assert.match(header,/^inpx_web_session=[a-f\d]{48}\.[a-f\d]{64}; HttpOnly; SameSite=Lax; Path=\/reader;/);
+    assert.match(header,/^inpx_web_session_\d+=[a-f\d]{48}\.[a-f\d]{64}; HttpOnly; SameSite=Lax; Path=\/reader;/);
     return header.split(';')[0];
 }
 
@@ -1400,7 +1401,7 @@ async function verifyLibraryPassword(binary, root) {
         try {
             const view = await fetch(legacy.url+'/reader/');
             assert.equal(view.status,200);
-            const cookie = view.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session='));
+            const cookie = sessionCookieHeader(view);
             assert(cookie);
             const ws = await wsClient(legacy.url,cookie.split(';')[0]);
             try {
@@ -1984,12 +1985,19 @@ async function verifyProfileCommands(binary, root) {
     const library = join(root,'library'), data = join(root,'data'), config = join(root,'config.json'), web = join(root,'web.json');
     await createFixture(library);
     await bundle(web);
-    await fs.writeFile(config,JSON.stringify({server:{host:'127.0.0.1',root:'/reader'},inpxCheckInterval:0,
-        librarySources:[{id:'main',inpx:join(library,'smoke.inpx')}]}));
+    const otherConfig = join(root,'other-config.json');
+    const settings = JSON.stringify({server:{host:'127.0.0.1',root:'/reader'},inpxCheckInterval:0,
+        librarySources:[{id:'main',inpx:join(library,'smoke.inpx')}]});
+    await fs.writeFile(config,settings);
+    await fs.writeFile(otherConfig,settings);
     const adminPassword = 'profile-commands-fixture-admin';
-    const args = ['--standalone','--data-dir='+data,'--config='+config,'--web-bundle='+web,'--admin-password='+adminPassword];
-    const server = await start(binary,args,{INPX_ALLOW_ANONYMOUS_ACCESS:'false',INPX_TRUST_PROXY:'true',INPX_TRUSTED_PROXY_CIDRS:'127.0.0.1/32'});
+    const args = (dir, file) => ['--standalone','--data-dir='+dir,'--config='+file,'--web-bundle='+web,'--admin-password='+adminPassword];
+    const server = await start(binary,args(data,config),{INPX_ALLOW_ANONYMOUS_ACCESS:'false',INPX_TRUST_PROXY:'true',INPX_TRUSTED_PROXY_CIDRS:'127.0.0.1/32'});
     try {
+        const other = await start(binary, args(join(root,'other-data'),otherConfig),
+            {INPX_ALLOW_ANONYMOUS_ACCESS:'false'});
+        try {await verifyCoverSessions(server.url, other.url, adminPassword);}
+        finally {await other.stop();}
         await require('./rust-profile-tests')(server.url,{root:'/reader',adminPassword,trust:true});
         const profiles = await readJson(join(data,'reading-lists.json'));
         assert(profiles.lists.every(list=>list.name!=='Profile deletion fixture'));
@@ -1997,6 +2005,41 @@ async function verifyProfileCommands(binary, root) {
         assert(admin.profileTotp.secret.startsWith('enc:v1:'));
         assert.equal(admin.profileTotp.recoveryHashes.length,3);
     } finally { await server.stop(); }
+}
+
+async function verifyCoverSessions(first, second, password) {
+    // A browser shares its cookie jar across ports on one host and path.
+    const jar = new Map();
+    const headers = () => ({cookie:[...jar].map(([k,v]) => k+'='+v).join('; ')});
+    const covers = [];
+    for (const url of [first,second]) {
+        const page = await fetch(url+'/reader/',{headers:headers()});
+        const pair = sessionCookieHeader(page).split(';')[0];
+        await page.body.cancel();
+        const [name, value] = pair.split('=');
+        jar.set(name,value);
+        const ws = await wsClient(url,headers().cookie);
+        try {
+            const config = await ws.request({action:'get-config'});
+            assert.equal(config.profileAuthorized,false);
+            const login = await ws.request({action:'login-user-profile', login:'admin',password,csrfToken:config.csrfToken});
+            assert.equal(login.userId,'admin',login.error);
+            const books = await ws.request({action:'bookSearch',userId:login.userId,profileAccessToken:login.profileAccessToken,query:{limit:1}});
+            assert.ok(books.found?.length,books.error);
+            covers.push(url+'/reader/cover/by-uid?uid='+encodeURIComponent(books.found[0]._uid));
+        } finally {ws.close();}
+        for (const cover of covers) {
+            const response = await fetch(cover,{headers:headers()});
+            assert.equal(response.status,200,'Both instances must keep their signed-in browser session');
+            assert.equal(response.headers.get('content-type'),'image/png');
+            await response.body.cancel();
+        }
+    }
+    for (const cover of covers) {
+        const guest = await fetch(cover);
+        assert.equal(guest.status,401,'Guest access to a cached private cover must still require login');
+        await guest.body.cancel();
+    }
 }
 
 async function verifyCacheSettings(binary, root) {

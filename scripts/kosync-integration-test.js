@@ -1,4 +1,5 @@
 const assert = require('assert/strict');
+const {sessionCookieHeader} = require('./test-session-cookie');
 const fs = require('fs-extra');
 const path = require('path');
 const crypto = require('crypto');
@@ -12,7 +13,7 @@ module.exports = async function checkKoSync(url, directory, {
     secondSnippet = 'Второй абзац книги для синхронизации.',
 } = {}) {
     const response = await fetch(url + sessionPath);
-    const session = response.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session='));
+    const session = sessionCookieHeader(response);
     assert(session,'KOSync integration requires a web session');
     const cookie = session.split(';')[0];
     const socket = new WebSocket(url.replace(/^http/, 'ws') + '/ws', {headers: {cookie, origin: url}});

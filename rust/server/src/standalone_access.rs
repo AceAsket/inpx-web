@@ -135,13 +135,18 @@ impl Access {
         (self.policy.enabled, metrics)
     }
 
-    pub(crate) fn download_profile(&self, headers: &HeaderMap, grant: &Grant) -> Option<String> {
+    pub(crate) fn download_profile(
+        &self,
+        headers: &HeaderMap,
+        port: u16,
+        grant: &Grant,
+    ) -> Option<String> {
         if grant.authenticated
             && let Some(scope) = &grant.scope
         {
             return Some(scope.id.clone());
         }
-        let (_, owner) = self.sessions.http_owner(headers)?;
+        let (_, owner) = self.sessions.http_owner(headers, port)?;
         let profiles = self
             .state
             .lock()
@@ -298,7 +303,7 @@ impl Access {
             .browser_profiles(&self.file)
             .map_err(report)?;
         let bound = bound_profile(&profiles, admission.proxy_login.as_deref())?;
-        let identity = self.sessions.http_owner(headers);
+        let identity = self.sessions.http_owner(headers, admission.cookie_port);
         let profile = bound
             .or_else(|| {
                 identity.as_ref().and_then(|(_, identity)| {
@@ -337,7 +342,9 @@ impl Access {
             .get("x-inpx-profile-token")
             .and_then(|header| header.to_str().ok())
             .unwrap_or_default();
-        let identity = self.sessions.http_profile(headers, token);
+        let identity = self
+            .sessions
+            .http_profile(headers, admission.cookie_port, token);
         let mut state = self.state.lock().map_err(|_| Rejection::Unavailable)?;
         let profiles = state
             .profiles
@@ -752,7 +759,9 @@ impl Access {
             Some(&[][..])
         };
         let mut state = self.state.lock().map_err(|_| Rejection::Unavailable)?;
-        let local = self.sessions.http_owner(request.headers());
+        let local = self
+            .sessions
+            .http_owner(request.headers(), admission.cookie_port);
         if local.is_some() || admission.proxy_login.is_some() {
             let profiles = state
                 .profiles

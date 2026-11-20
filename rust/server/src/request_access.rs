@@ -127,6 +127,7 @@ pub(crate) struct Admission {
     pub(crate) client: IpAddr,
     pub(crate) proxy_login: Option<String>,
     pub(crate) secure: bool,
+    pub(crate) cookie_port: u16,
     pub(crate) protected: bool,
     pub(crate) service: ServiceAccess,
     pub(crate) forwarded_host: Option<String>,
@@ -261,19 +262,44 @@ impl Standalone {
         } else {
             None
         };
+        let forwarded_host = trusted
+            .then(|| first(headers, &HeaderName::from_static("x-forwarded-host")).ok())
+            .flatten()
+            .filter(|host| !host.is_empty());
+        let forwarded_port = trusted
+            .then(|| first(headers, &HeaderName::from_static("x-forwarded-port")).ok())
+            .flatten()
+            .and_then(|port| port.parse().ok());
+        let cookie_port = public_port(headers, secure, forwarded_host, forwarded_port);
         Ok(Admission {
             client,
             proxy_login,
             secure,
+            cookie_port,
             protected: self.policy.settings.require_proxy,
             service,
-            forwarded_host: (trusted && route == ServiceRoute::Metadata)
-                .then(|| first(headers, &HeaderName::from_static("x-forwarded-host")).ok())
-                .flatten()
-                .filter(|host| !host.is_empty())
+            forwarded_host: forwarded_host
+                .filter(|_| route == ServiceRoute::Metadata)
                 .map(str::to_owned),
         })
     }
+}
+
+// Cookies have no port scope in a browser. Use the public listener port in their names.
+fn public_port(
+    headers: &HeaderMap,
+    secure: bool,
+    forwarded_host: Option<&str>,
+    forwarded_port: Option<u16>,
+) -> u16 {
+    let port = |host: &str| host.parse::<hyper::http::uri::Authority>().ok()?.port_u16();
+    let default = if secure { 443 } else { 80 };
+    if let Some(host) = forwarded_host {
+        return port(host).or(forwarded_port).unwrap_or(default);
+    }
+    forwarded_port
+        .or_else(|| headers.get(header::HOST)?.to_str().ok().and_then(port))
+        .unwrap_or(default)
 }
 
 impl Policy {
@@ -702,5 +728,29 @@ impl Denial {
             .header(header::CONNECTION, "close")
             .body(body(Bytes::from_static(b"Forbidden")))
             .expect("static WebSocket access rejection")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_cookie_uses_the_public_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("[::1]:12380"));
+        assert_eq!(public_port(&headers, false, None, None), 12380);
+        assert_eq!(public_port(&headers, true, Some("books.test"), None), 443);
+        assert_eq!(
+            public_port(&headers, true, Some("books.test"), Some(8443)),
+            8443
+        );
+        assert_eq!(
+            public_port(&headers, true, Some("books.test:9443"), Some(8443)),
+            9443
+        );
+        assert_eq!(public_port(&headers, true, None, Some(8443)), 8443);
+        headers.insert(header::HOST, HeaderValue::from_static("books.test"));
+        assert_eq!(public_port(&headers, false, None, None), 80);
     }
 }

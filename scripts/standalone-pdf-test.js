@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {sessionCookieHeader} = require('./test-session-cookie');
 const {execFileSync, spawn} = require('node:child_process');
 const {once, on} = require('node:events');
 const fs = require('fs-extra');
@@ -58,7 +59,7 @@ async function check(directory, temp, tool, present) {
         }
         assert(ready, 'Packaged Node.js server must become ready');
         const login = await fetch(url + '/ebook/login');
-        const cookie = login.headers.getSetCookie().find(value => value.startsWith('inpx_web_session='))?.split(';')[0];
+        const cookie = sessionCookieHeader(login)?.split(';')[0];
         await login.body.cancel();
         assert(cookie, 'Expected a browser session');
         const formats = await menuFormats(url, cookie);

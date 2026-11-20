@@ -169,11 +169,7 @@ impl Socket {
         if response.status() != StatusCode::SWITCHING_PROTOCOLS {
             return response;
         }
-        let Ok(session) = state
-            .access
-            .sessions
-            .open(request.headers(), admission.secure)
-        else {
+        let Ok(session) = state.access.sessions.open(request.headers(), &admission) else {
             return error(StatusCode::SERVICE_UNAVAILABLE);
         };
         if let Some(cookie) = session.cookie {

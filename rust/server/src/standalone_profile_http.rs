@@ -19,7 +19,10 @@ pub(super) async fn login(
     request: Request<Incoming>,
     admission: &Admission,
 ) -> Response<Body> {
-    let browser = state.access.sessions.existing_browser(request.headers());
+    let browser = state
+        .access
+        .sessions
+        .existing_browser(request.headers(), admission.cookie_port);
     let Some(browser) = browser.filter(|_| {
         admission.secure
             && !state.request_access.profile_binding()

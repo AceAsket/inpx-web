@@ -152,9 +152,11 @@ impl Downloads {
                 &admission,
                 inpx_catalog::opds_access::Resource::Download,
             )?;
-            Ok::<_, crate::standalone_access::Rejection>(
-                server.access.download_profile(request.headers(), &grant),
-            )
+            Ok::<_, crate::standalone_access::Rejection>(server.access.download_profile(
+                request.headers(),
+                admission.cookie_port,
+                &grant,
+            ))
         })
         .await;
         match grant {

@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {sessionCookieHeader} = require('./test-session-cookie');
 const fs = require('node:fs/promises');
 const {once} = require('node:events');
 const {join} = require('node:path');
@@ -39,7 +40,7 @@ async function connect(base, root = '', cookie) {
     if (!cookie) {
         const page = await fetch(base+root+'/');
         assert.equal(page.status,200);
-        cookie = page.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session='))?.split(';')[0];
+        cookie = sessionCookieHeader(page)?.split(';')[0];
         await page.body.cancel();
     }
     assert(cookie,'Test requires a browser session');

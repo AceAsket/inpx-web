@@ -166,11 +166,7 @@ impl Ebook {
         let Ok(permit) = permit else {
             return self.early(Failure::busy(), head);
         };
-        let Ok(browser) = state
-            .access
-            .sessions
-            .open(request.headers(), admission.secure)
-        else {
+        let Ok(browser) = state.access.sessions.open(request.headers(), &admission) else {
             return self.early(Failure::busy(), head);
         };
         let form = if method == Method::POST {

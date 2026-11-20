@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const {sessionCookieHeader} = require('./test-session-cookie');
 const {once} = require('node:events');
 const WebSocket = require('ws');
 const {hotp} = require('../server/core/ProfileTotp');
@@ -31,7 +32,7 @@ async function verifyProfileCommands(base, options = {}) {
         const headers = {origin,...forwarded};
         const page = await fetch(base+root+'/',{headers});
         assert.equal(page.status,200);
-        const cookie = page.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session='))?.split(';')[0];
+        const cookie = sessionCookieHeader(page)?.split(';')[0];
         await page.body.cancel();
         assert(cookie,'Missing profile browser cookie');
         const socket = new WebSocket(base.replace(/^http/,'ws')+root+'/ws',{headers:{...headers,cookie}});

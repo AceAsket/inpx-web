@@ -87,9 +87,14 @@ impl Sessions {
         })
     }
 
-    pub(crate) fn open(&self, headers: &HeaderMap, secure: bool) -> Result<Browser> {
+    pub(crate) fn open(
+        &self,
+        headers: &HeaderMap,
+        admission: &crate::request_access::Admission,
+    ) -> Result<Browser> {
         let mut shared = self.shared.lock().expect("browser sessions");
-        if let Some(id) = unpack(&mut shared.browsers, headers) {
+        let port = admission.cookie_port;
+        if let Some(id) = unpack(&mut shared.browsers, headers, port) {
             return Ok(Browser { id, cookie: None });
         }
         let id = random_hex::<24>()?;
@@ -97,9 +102,9 @@ impl Sessions {
         shared.browsers.create(&id, &csrf, now_ms());
         let signature = shared.browsers.signature(&id);
         let signature = std::str::from_utf8(&signature).expect("hex cookie signature");
-        let transport = if secure { "; Secure" } else { "" };
+        let transport = if admission.secure { "; Secure" } else { "" };
         let cookie = HeaderValue::from_str(&format!(
-            "{COOKIE}={id}.{signature}; HttpOnly; SameSite=Lax; Path={}; Max-Age=2592000{transport}",
+            "{COOKIE}_{port}={id}.{signature}; HttpOnly; SameSite=Lax; Path={}; Max-Age=2592000{transport}",
             self.path
         ))?;
         Ok(Browser {
@@ -157,17 +162,18 @@ impl Sessions {
         Some(Valid { csrf, profile })
     }
 
-    pub(crate) fn http_owner(&self, headers: &HeaderMap) -> Option<(String, Identity)> {
-        self.http_profile(headers, "")
+    pub(crate) fn http_owner(&self, headers: &HeaderMap, port: u16) -> Option<(String, Identity)> {
+        self.http_profile(headers, port, "")
     }
 
     pub(crate) fn http_profile(
         &self,
         headers: &HeaderMap,
+        port: u16,
         supplied: &str,
     ) -> Option<(String, Identity)> {
         let mut shared = self.shared.lock().expect("browser sessions");
-        let browser = unpack(&mut shared.browsers, headers)?;
+        let browser = unpack(&mut shared.browsers, headers, port)?;
         let token = if supplied.is_empty() {
             shared.browsers.field(&browser, PROFILE_TOKEN)?.to_owned()
         } else {
@@ -241,10 +247,11 @@ impl Sessions {
             });
     }
 
-    pub(crate) fn existing_browser(&self, headers: &HeaderMap) -> Option<String> {
+    pub(crate) fn existing_browser(&self, headers: &HeaderMap, port: u16) -> Option<String> {
         unpack(
             &mut self.shared.lock().expect("browser sessions").browsers,
             headers,
+            port,
         )
     }
 
@@ -296,7 +303,8 @@ fn profile(sessions: &mut SessionTable<Identity>, token: &str) -> Option<Identit
     sessions.with_session(token, now_ms(), |identity| Some(identity.clone()))
 }
 
-fn unpack(browsers: &mut BrowserSessions, headers: &HeaderMap) -> Option<String> {
+fn unpack(browsers: &mut BrowserSessions, headers: &HeaderMap, port: u16) -> Option<String> {
+    let cookie_name = format!("{COOKIE}_{port}");
     let mut cookies = headers
         .get_all(header::COOKIE)
         .iter()
@@ -304,7 +312,7 @@ fn unpack(browsers: &mut BrowserSessions, headers: &HeaderMap) -> Option<String>
         .flat_map(|header| header.split(';'))
         .filter_map(|cookie| {
             let (name, value) = cookie.split_once('=')?;
-            (name.trim() == COOKIE).then_some(value.trim())
+            (name.trim() == cookie_name).then_some(value.trim())
         });
     let (id, signature) = cookies.next()?.split_once('.')?;
     if cookies.next().is_some()

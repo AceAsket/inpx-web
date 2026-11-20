@@ -1,4 +1,5 @@
 const assert = require('assert');
+const {sessionCookieHeader} = require('./test-session-cookie');
 const fs = require('fs-extra');
 const os = require('os');
 const path = require('path');
@@ -248,7 +249,7 @@ async function checkCachedBookDownload(url,link,directory) {
 
 async function checkEbookProfileDownload(url,html,password='local-smoke-fixture',format=process.env.INPX_SMOKE_EPUB==='true'?'epub':'fb2'){
     const login=await fetch(url+'/ebook/login');
-    const cookie=login.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session=')).split(';')[0];
+    const cookie=sessionCookieHeader(login).split(';')[0];
     const csrf=(await login.text()).match(/name="csrf" value="([^"]+)"/)[1];
     const post=(path,body)=>fetch(url+path,{method:'POST',redirect:'manual',headers:{cookie,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(body)});
     assert.equal((await post('/ebook/login',{csrf,login:'admin',password})).status,303);
@@ -286,7 +287,7 @@ async function checkEbookGuestDownload(url,html,format='fb2'){
     assert(text.includes('guest-format-form'),'This check uses a guest, not the configured profile');
     assert(!text.includes('action="'+new URL(url).pathname+'/book/by-uid"'),'The guest form must apply an HTML selection before downloading');
     const href=text.match(/class="button" href="([^\"]*\/ebook\/download\/[^\"]+)"/)?.[1];assert(href);
-    const cookie=card.headers.getSetCookie().find(value=>value.startsWith('inpx_web_session='))?.split(';')[0]||'';
+    const cookie=sessionCookieHeader(card)?.split(';')[0]||'';
     let next=new URL(href.replace(/&amp;/g,'&'),url),response;
     assert(next.pathname.endsWith('.'+format),'The first guest download URL includes the actual extension');
     for(let redirects=0;redirects<4;redirects++){

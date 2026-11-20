@@ -859,7 +859,13 @@ impl State {
                     )
                 };
                 let owner = (download && state.metrics.activity.is_some())
-                    .then(|| state.access.download_profile(request.headers(), &grant))
+                    .then(|| {
+                        state.access.download_profile(
+                            request.headers(),
+                            admission.cookie_port,
+                            &grant,
+                        )
+                    })
                     .flatten();
                 Ok((prepared, grant.private(), owner))
             })
@@ -899,11 +905,7 @@ impl State {
                     |asset| {
                         let mut response = asset.response(None);
                         if !head && self.socket.document(request.uri().path()) {
-                            match self
-                                .access
-                                .sessions
-                                .open(request.headers(), admission.secure)
-                            {
+                            match self.access.sessions.open(request.headers(), &admission) {
                                 Ok(session) => {
                                     if let Some(cookie) = session.cookie {
                                         standalone_access::private(response.headers_mut());
