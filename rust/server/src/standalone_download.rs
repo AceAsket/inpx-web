@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+
+mod cover_cache;
+use cover_cache::{CoverCache, CoverFile};
 
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{self, HeaderMap, HeaderValue};
@@ -26,6 +29,7 @@ pub(crate) struct Downloads {
     resources: Arc<Budget>,
     cover_root: String,
     pub(super) covers: Covers,
+    recent_covers: Mutex<CoverCache>,
     local_books: book_delivery::LocalBooks,
     epub: bool,
     conversions: Option<Conversion>,
@@ -109,6 +113,7 @@ impl Downloads {
             resources,
             cover_root: format!("{prefix}/cover/by-uid"),
             covers,
+            recent_covers: Mutex::default(),
             local_books: Default::default(),
             epub,
             conversions,
@@ -195,6 +200,10 @@ impl Downloads {
         self.cache.with_file_name("cover")
     }
 
+    pub(super) fn clear_cover_lookup(&self) {
+        self.recent_covers.lock().expect("cover cache").clear();
+    }
+
     pub(super) fn rebuild_cover(
         &self,
         uid: &str,
@@ -255,6 +264,7 @@ impl Downloads {
         let query = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("uid", uid)
             .finish();
+        self.clear_cover_lookup();
         Ok(
             json!({"success":true,"bookUid":uid,"libid":row["libid"],"sourceId":row["sourceId"],
             "removed":removed,"rebuilt":rebuilt,"coverUrl":format!("{}?{query}",self.cover_root)}),
@@ -566,20 +576,39 @@ impl Downloads {
         &self,
         uid: &str,
         catalogue: &RwLock<Option<Catalogue>>,
+        generation: u64,
         sources: &[Source],
     ) -> Result<Prepared, StatusCode> {
-        let book = load_book(catalogue, uid)
-            .map_err(failure)?
-            .ok_or(StatusCode::NOT_FOUND)?;
-        let image = self
-            .book_cover(&book, sources)
-            .map_err(failure)?
-            .ok_or(StatusCode::NOT_FOUND)?;
-        let path = image.stage(&self.cache).map_err(failure)?;
+        let (epoch, hit) = {
+            let cache = self.recent_covers.lock().expect("cover cache");
+            (cache.epoch, cache.get(generation, uid))
+        };
+        let file = match hit {
+            Some(Some(file)) if file.available() => file,
+            Some(None) => return Err(StatusCode::NOT_FOUND),
+            _ => {
+                let book = load_book(catalogue, uid)
+                    .map_err(failure)?
+                    .ok_or(StatusCode::NOT_FOUND)?;
+                let file = self
+                    .book_cover(&book, sources)
+                    .map_err(failure)?
+                    .map(|image| CoverFile::stage(image, &self.cache))
+                    .transpose()
+                    .map_err(failure)?;
+                self.recent_covers.lock().expect("cover cache").put(
+                    epoch,
+                    generation,
+                    uid,
+                    file.clone(),
+                );
+                file.ok_or(StatusCode::NOT_FOUND)?
+            }
+        };
         let mut headers = HeaderMap::new();
         headers.insert(
             header::CONTENT_TYPE,
-            HeaderValue::from_static(image.content_type),
+            HeaderValue::from_static(file.content_type),
         );
         headers.insert(
             header::CACHE_CONTROL,
@@ -589,7 +618,10 @@ impl Downloads {
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
         );
-        Ok(Prepared::File { path, headers })
+        Ok(Prepared::File {
+            path: file.path,
+            headers,
+        })
     }
 
     pub(crate) fn request(

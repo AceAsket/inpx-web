@@ -2014,7 +2014,7 @@ async function verifyCacheSettings(binary, root) {
 async function verifyResourceProfiles(binary, root) {
     const probe = require('./rust-resource-profile-tests');
     const library = join(root,'library'), web = join(root,'web.json');
-    await createFixture(library,{nativeJxlCover:true});
+    await probe.library(library);
     await bundle(web);
     const {connect,signIn} = require('./rust-events-tests');
     const data = join(root,'converted');
@@ -2083,7 +2083,10 @@ async function verifyResourceProfiles(binary, root) {
             ...(total ? {INPX_RESOURCE_TOTAL:String(total),INPX_RESOURCE_MAX_PROCESSES:'6'} : {})});
         const server = await launch();
         const hotSwitch = profile === 'economy' && total === null;
-        try { await probe.verify(server.url, dir, profile || 'unlimited', expected, !profile && !total ? 1 : undefined, hotSwitch); }
+        try {
+            await probe.verify(server.url, dir, {libraryDir:library, profile:profile || 'unlimited', expected,
+                conversions:!profile && !total ? 1 : undefined, switchToUnlimited:hotSwitch});
+        }
         finally { await server.stop(); }
         if (hotSwitch) {
             const restarted = await launch();

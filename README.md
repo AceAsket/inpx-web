@@ -18,6 +18,7 @@
 | Редакция | Docker-образ | ZIP и установщик Windows |
 | --- | --- | --- |
 | Rust 2.0.1 · стабильная | `aceasket/inpx-web-7z:2.0.1` или `:latest` | [Скачать Rust 2.0.1](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.1) |
+| Rust 2.0.2 RC1 · для проверки | `aceasket/inpx-web-7z:2.0.2-rc.1` | [Скачать Rust RC1](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.2-rc.1) |
 | Классический Node.js 1.8.3 RC30 · для проверки | `aceasket/inpx-web-7z:1.8.3-rc.30` | [Скачать Node.js RC30](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3-rc.30) |
 | Классический Node.js 1.8.2 · стабильная | `aceasket/inpx-web-7z:1.8.2` | [Скачать Node.js 1.8.2](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) |
 

@@ -2,10 +2,21 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const {join} = require('node:path');
 const {setTimeout: delay} = require('node:timers/promises');
-const {connect, signIn} = require('./rust-events-tests');
+const {connect, signIn, zip} = require('./rust-events-tests');
 
 const password = 'resource-profile-fixture';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64');
+
+async function library(dir) {
+    const ids = Array.from({length:20}, (_, i) => String(i+1));
+    const rows = ids.map(id => ['Tester,Smoke:', 'sf:', 'JXL '+id, '', '0', id, '100', id, '0',
+        'fb2', '2026-09-14', 'en', '0', ''].join('\x04'));
+    await fs.mkdir(join(dir,'covers'),{recursive:true});
+    await zip(join(dir,'smoke.inpx'),[['collection.info','Cover probes'],['smoke.inp',rows.join('\n')+'\n']]);
+    await zip(join(dir,'smoke.zip'),ids.map(id=>[id+'.fb2','<FictionBook><body/></FictionBook>']));
+    const jxl = require('../server/core/benchmarkFixture');
+    await zip(join(dir,'covers','smoke.zip'),ids.map(id=>[id,jxl]));
+}
 
 async function fixture(directory, runtimePath = directory) {
     await fs.mkdir(directory, {recursive:true});
@@ -18,7 +29,7 @@ async function fixture(directory, runtimePath = directory) {
     await fs.writeFile(join(directory,'config.json'), JSON.stringify({converterPaths:{djxl:runtimePath+'/djxl'}}));
 }
 
-async function verify(base, directory, profile, expected, conversions, switchToUnlimited = false) {
+async function verify(base, directory, {libraryDir, profile, expected, conversions, switchToUnlimited}) {
     const client = await connect(base);
     try {
         const identity = await signIn(client, 'admin', password);
@@ -27,16 +38,15 @@ async function verify(base, directory, profile, expected, conversions, switchToU
         assert.equal(performance.settings.selected, profile);
         assert.equal(performance.settings.limits.images, expected);
         if (conversions !== undefined) assert.equal(performance.settings.limits.conversions, conversions);
-        const result = await client.send('bookSearch',{...identity,query:{del:'0',limit:5}});
-        const book = result.found.find(b => b.title === 'JXL' || b.title === 'Packaged smoke book');
-        assert(book);
-        const url = base+'/cover/by-uid?uid='+encodeURIComponent(book._uid);
+        const result = await client.send('bookSearch',{...identity,query:{del:'0',limit:20}});
+        const urls = result.found.map(book => base+'/cover/by-uid?uid='+encodeURIComponent(book._uid));
+        assert.equal(new Set(urls).size,20);
         // Hold the first wave until all available slots are occupied, even on slow CI hosts.
         const requests = expected === null || switchToUnlimited ? 20 : 6;
         const target = switchToUnlimited ? requests : expected ?? requests;
         const hold = join(directory,'hold');
         await fs.writeFile(hold,'');
-        const responses = Promise.all(Array.from({length:requests}, async () => {
+        const responses = Promise.all(urls.slice(0,requests).map(async url => {
             const response = await fetch(url,{headers:{cookie:client.cookie}});
             assert.equal(response.status,200);
             assert.deepEqual(Buffer.from(await response.arrayBuffer()),png);
@@ -73,8 +83,38 @@ async function verify(base, directory, profile, expected, conversions, switchToU
         assert.equal(active,0);
         assert.equal(peak,target);
         assert.equal(switched,switchToUnlimited);
+        const again = await fetch(urls[0],{headers:{cookie:client.cookie}});
+        assert.equal(again.status,200);
+        assert.deepEqual(Buffer.from(await again.arrayBuffer()),png);
+        assert.equal((await fs.readFile(join(directory,'events'),'utf8')).trim().split(/\s+/).length,events.length,
+            'A repeat request must serve the staged cover without invoking djxl again');
+        if (switchToUnlimited) {
+            const archive = join(libraryDir,'covers','smoke.zip');
+            await fs.rename(archive,archive+'.offline');
+            try {
+                const offline = await fetch(urls[0],{headers:{cookie:client.cookie}});
+                assert.equal(offline.status,200);
+                assert.deepEqual(Buffer.from(await offline.arrayBuffer()),png);
+            } finally {
+                await fs.rename(archive+'.offline',archive);
+            }
+            const cached = join(directory,'public-files','source-verified-v1','book');
+            const name = (await fs.readdir(cached)).find(file=>file.endsWith('.reader-cover'));
+            assert(name);
+            await fs.unlink(join(cached,name));
+            const image = await fetch(urls[0],{headers:{cookie:client.cookie}});
+            assert.equal(image.status,200);
+            assert.deepEqual(Buffer.from(await image.arrayBuffer()),png);
+            const updated = await fs.readFile(join(__dirname,'../client/assets/pwa-icon-192.png'));
+            await fs.writeFile(join(directory,'sample.png'),updated);
+            const rebuilt = await client.send('admin-rebuild-cover',{...identity,bookUid:result.found[0]._uid});
+            assert.equal(rebuilt.rebuilt,true,rebuilt.error);
+            const refreshed = await fetch(urls[0],{headers:{cookie:client.cookie}});
+            assert.equal(refreshed.status,200);
+            assert.deepEqual(Buffer.from(await refreshed.arrayBuffer()),updated);
+        }
         console.log(`ok ${switchToUnlimited ? profile+' -> unlimited' : profile}: ${peak} simultaneous cover decoders for ${requests} HTTP requests`);
     } finally { client.close(); }
 }
 
-module.exports = {password, fixture, verify};
+module.exports = {password, library, fixture, verify};

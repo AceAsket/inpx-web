@@ -840,9 +840,12 @@ impl State {
                     .access
                     .check(&request, &admission, Resource::Download)?;
                 let prepared = if let Some(uid) = cover {
-                    state
-                        .downloads
-                        .cover(&uid, &state.index.catalogue, &state.index.sources())
+                    state.downloads.cover(
+                        &uid,
+                        &state.index.catalogue,
+                        state.index.generation(),
+                        &state.index.sources(),
+                    )
                 } else {
                     state.downloads.prepare(
                         requested.expect("download request"),

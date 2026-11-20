@@ -138,6 +138,9 @@ impl Cache {
                     |_| true,
                 );
             }
+            if force {
+                downloads.clear_cover_lookup();
+            }
         }
         Ok(json!({"cleaned":cleaned}))
     }
@@ -153,6 +156,7 @@ impl Cache {
         checked_directory(&legacy)?;
         let a = directory_diagnostics::purge_cover_cache(native, true)?;
         let b = directory_diagnostics::purge_cover_cache(&legacy, false)?;
+        downloads.clear_cover_lookup();
         let sum =
             |key: &str| a[key].as_u64().unwrap_or_default() + b[key].as_u64().unwrap_or_default();
         Ok(json!({"dir":native,"checked":sum("checked"),"removed":sum("removed")}))
