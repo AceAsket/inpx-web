@@ -189,6 +189,9 @@ jobs:
         run: |
           node scripts/bundle-mutool.js linux
           node scripts/standalone-pdf-test.js dist/linux
+      - name: Set up MSBuild for MuPDF
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
       - name: Test the standalone Rust release archive
         env:
           INPX_BUILD_DIST_DIR: ${{ runner.temp }}/inpx-rust-release
