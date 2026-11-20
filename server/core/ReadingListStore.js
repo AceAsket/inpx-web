@@ -2016,13 +2016,13 @@ class ReadingListStore {
         });
     }
 
-    async deleteReaderProgress(userId = '', bookUid = '') {
+    async deleteReaderProgress(userId = '', bookUid = '', ifHidden) {
         return await this.withProgressMutation(
-            async() => await this.deleteReaderProgressNow(userId, bookUid)
+            async() => await this.deleteReaderProgressNow(userId, bookUid, ifHidden)
         );
     }
 
-    async deleteReaderProgressNow(userId = '', bookUid = '') {
+    async deleteReaderProgressNow(userId = '', bookUid = '', ifHidden) {
         const data = await this.load();
         const target = this.findProgressUser(data.users, userId);
 
@@ -2030,6 +2030,15 @@ class ReadingListStore {
         if (!normalizedBookUid)
             throw new Error('bookUid is empty');
 
+        const current = target.readerProgress?.[normalizedBookUid];
+        if (ifHidden != null) {
+            if (!current) return target.readerBookmarks?.[normalizedBookUid]?.length
+                ? {success:false, conflict:true} : {success:true};
+            if (current.hidden !== true || ifHidden?.revision !== (current.revision || 0) ||
+                ifHidden?.generation !== (target.readerProgressGeneration || 0))
+                return {success:false, conflict:true};
+            if (target.readerBookmarks) delete target.readerBookmarks[normalizedBookUid];
+        }
         if (target.readerProgress && typeof(target.readerProgress) === 'object')
             delete target.readerProgress[normalizedBookUid];
 

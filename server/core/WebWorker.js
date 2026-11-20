@@ -5353,9 +5353,9 @@ class WebWorker {
         return {progress};
     }
 
-    async deleteReaderProgress(userId = '', bookUid = '') {
+    async deleteReaderProgress(userId = '', bookUid = '', ifHidden) {
         this.checkMyState();
-        return await this.readingListStore.deleteReaderProgress(userId, bookUid);
+        return await this.readingListStore.deleteReaderProgress(userId, bookUid, ifHidden);
     }
 
     async clearReaderProgress(userId = '') {

@@ -1609,11 +1609,11 @@ import he from 'he';
 import ReaderAudio from './ReaderAudio.vue';
 import ReaderBrowserSpeech from './ReaderBrowserSpeech.vue';
 import readerPreferencesStorage from './readerPreferencesStorage';
+import {clearStoredReaderProgress, readerProgressStorageKey} from './readerProgressStorage';
 import * as pageCache from './readerPageCache';
 import {createLocator} from '../../../shared/SpeechAnchor';
 import {findTextRect} from '../../../shared/VisibleTextAnchor';
 
-const readerProgressStorageKey = 'inpx.reader.progress.v1';
 const speechPageLocations = new WeakMap();
 const readerPreferencesVersion = 3;
 const readerDeviceProfileKeys = ['regularProfile', 'compactProfile'];
@@ -9187,9 +9187,12 @@ class Reader {
         ) || Object.assign({}, emptyProgress);
         const serverProgress = this.normalizeReaderProgress(stateProgress);
         this.readerProgressRevision = Number(stateProgress.revision) || 0;
-        const profileProgress = this.readerProgressAfterReset(this.getCurrentProfileBookProgress(), progressResetAt, progressGeneration);
+        const emptyOnServer = !this.isStandaloneMode && stateResponse?.progressGeneration != null &&
+            !stateProgress.updatedAt && !serverProgress.revision && !this.hasReaderProgressPlace(stateProgress);
+        const profileProgress = emptyOnServer ? null : this.readerProgressAfterReset(this.getCurrentProfileBookProgress(), progressResetAt, progressGeneration);
         const storedProgress = this.readStoredReaderProgress();
-        const usableStoredProgress = serverProgress.revision > 0 && Number(storedProgress && storedProgress.revision) !== serverProgress.revision
+        const checkRevision = serverProgress.revision > 0 || (emptyOnServer && storedProgress?.revision > 0);
+        const usableStoredProgress = checkRevision && Number(storedProgress && storedProgress.revision) !== serverProgress.revision
             ? null : this.readerProgressAfterReset(storedProgress, progressResetAt, progressGeneration);
         if (storedProgress && !usableStoredProgress)
             this.clearStoredReaderProgress(this.bookUid);
@@ -11074,42 +11077,7 @@ class Reader {
     }
 
     clearStoredReaderProgress(bookUid = '', options = {}) {
-        if (typeof localStorage === 'undefined')
-            return;
-
-        try {
-            const raw = localStorage.getItem(readerProgressStorageKey);
-            if (!raw)
-                return;
-
-            const parsed = JSON.parse(raw);
-            const byUser = (parsed && parsed.byUser && typeof parsed.byUser === 'object') ? parsed.byUser : {};
-            const globalProgress = (parsed && parsed.progress && typeof parsed.progress === 'object') ? parsed.progress : {};
-            const userId = String(this.currentUserId || '').trim();
-            const clearAll = options && options.all === true;
-            const normalizedBookUid = String(bookUid || '').trim();
-            const knownBookUids = Array.isArray(options && options.bookUids)
-                ? options.bookUids.map((uid) => String(uid || '').trim()).filter(Boolean)
-                : [];
-
-            if (clearAll) {
-                if (!userId) Object.keys(globalProgress).forEach((uid) => delete globalProgress[uid]);
-                if (userId)
-                    byUser[userId] = {};
-                if (!userId) knownBookUids.forEach((uid) => delete globalProgress[uid]);
-            } else if (normalizedBookUid) {
-                if (!userId) delete globalProgress[normalizedBookUid];
-                if (userId && byUser[userId] && typeof byUser[userId] === 'object')
-                    delete byUser[userId][normalizedBookUid];
-            }
-
-            localStorage.setItem(readerProgressStorageKey, JSON.stringify({
-                progress: globalProgress,
-                byUser,
-            }));
-        } catch (e) {
-            // ignore storage failures
-        }
+        clearStoredReaderProgress(this.currentUserId, bookUid, options);
     }
 
     writeStoredReaderPreferences() {

@@ -275,6 +275,7 @@ impl Socket {
                 | "add-admin-test-event"
                 | "relink-reader-book"
                 | "delete-reader-progress"
+                | "forget-hidden-book"
                 | "clear-reader-progress"
                 | "update-reader-preferences"
                 | "subscribe-client-events"
@@ -750,12 +751,17 @@ impl Socket {
                     store.relink_progress(owner, stamp, source, target, &request["baseRevision"])
                 })
                 .unwrap_or_else(|failure| fault(&failure.to_string())),
-            "delete-reader-progress" | "clear-reader-progress" => state
+            "delete-reader-progress" | "forget-hidden-book" | "clear-reader-progress" => state
                 .access
                 .with_profile(profile_request, |store, owner, stamp| {
                     let uid =
-                        (action == "delete-reader-progress").then(|| text(&request, "bookUid"));
-                    store.delete_progress(owner, stamp, uid)
+                        (action != "clear-reader-progress").then(|| text(&request, "bookUid"));
+                    store.delete_progress(
+                        owner,
+                        stamp,
+                        uid,
+                        (action == "forget-hidden-book").then_some(&request),
+                    )
                 })
                 .unwrap_or_else(|failure| fault(&failure.to_string())),
             "update-reader-preferences" | "export-reading-lists" | "import-reading-lists" => state
@@ -1626,6 +1632,7 @@ fn reader_change(action: &str) -> bool {
             "update-reader-progress"
                 | "relink-reader-book"
                 | "delete-reader-progress"
+                | "forget-hidden-book"
                 | "clear-reader-progress"
                 | "update-reader-preferences"
                 | "add-reader-bookmark"

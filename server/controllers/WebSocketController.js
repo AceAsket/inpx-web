@@ -324,6 +324,7 @@ class WebSocketController {
                     break;
                 }
                 case 'delete-reader-progress':
+                case 'forget-hidden-book':
                     await this.deleteReaderProgress(req, ws); break;
                 case 'clear-reader-progress':
                     await this.clearReaderProgress(req, ws); break;
@@ -518,6 +519,7 @@ class WebSocketController {
             'cancel-reader-audio',
             'preview-reader-voice',
             'delete-reader-progress',
+            'forget-hidden-book',
             'clear-reader-progress',
             'update-reader-preferences',
             'add-reader-bookmark',
@@ -961,7 +963,8 @@ class WebSocketController {
         if (!utils.hasProp(req, 'bookUid'))
             throw new Error('bookUid is empty');
 
-        await this.withAuthorizedReaderProgress(req, ws, id => this.webWorker.deleteReaderProgress(id, req.bookUid));
+        const ifHidden = req.action === 'forget-hidden-book' ? {revision:req.revision, generation:req.generation} : undefined;
+        await this.withAuthorizedReaderProgress(req, ws, id => this.webWorker.deleteReaderProgress(id, req.bookUid, ifHidden));
     }
 
     async clearReaderProgress(req, ws) {

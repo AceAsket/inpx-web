@@ -705,6 +705,11 @@ class Api {
         return await this.request({action: 'delete-reader-progress', bookUid}, 120);
     }
 
+    forgetHiddenBook(book, generation, userId) {
+        return this.request({action:'forget-hidden-book', bookUid:book.bookUid, revision:book.revision, generation}, 120,
+            {userId, suppressProfileLogin:true});
+    }
+
     async audioPosition(bookUid, variant, progress = null) {
         return await this.request({action: progress ? 'update-audio-position' : 'get-audio-position', bookUid, variant, progress}, 30);
     }

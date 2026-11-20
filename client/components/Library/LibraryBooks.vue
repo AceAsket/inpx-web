@@ -25,9 +25,12 @@
                         <div v-for="book in items" :key="bookUid(book)">
                             <BookTile :book="book" />
                             <q-btn v-if="!listId && config.profileAuthorized && (book.state === 'reading' || book.state === 'hidden')"
-                                flat dense no-caps class="books-history-action" :label="book.hidden ? 'Вернуть в историю' : 'Убрать из чтения'"
+                                flat dense no-caps align="left" class="books-history-action" :label="book.hidden ? 'Вернуть в историю' : 'Убрать из чтения'"
                                 :aria-label="(book.hidden ? 'Вернуть в историю: ' : 'Убрать из чтения: ') + book.title"
-                                :disable="!!changingBook" :loading="changingBook === book.bookUid" @click="changeVisibility(book)" />
+                                :disable="!!changingBook" @click="changeHistory(book)" />
+                            <q-btn v-if="!listId && filter === 'hidden' && book.hidden && config.profileAuthorized"
+                                flat dense no-caps align="left" class="books-history-action" color="negative" label="Удалить из истории"
+                                :aria-label="'Удалить из истории: ' + book.title" :disable="!!changingBook" @click="changeHistory(book, true)" />
                         </div>
                     </div>
                     <div v-else-if="!error" class="library-empty">
@@ -48,7 +51,9 @@
 </template>
 
 <script setup>
-import {ref, computed, watch, onBeforeUnmount, onDeactivated} from 'vue';
+import {ref, computed, watch, getCurrentInstance, onBeforeUnmount, onDeactivated} from 'vue';
+import escape from 'lodash/escape';
+import {clearStoredReaderProgress} from '../Reader/readerProgressStorage';
 import {useRoute} from 'vue-router';
 import BookTile from './BookTile.vue';
 import LibraryNotice from './LibraryNotice.vue';
@@ -58,6 +63,7 @@ import {useLibraryPage} from './useLibraryPage';
 
 const {library, active} = useLibraryPage('Мои книги', () => {library.repository.loadReading(true); load();});
 const {state, config} = library;
+const root = getCurrentInstance().proxy.$root;
 const route = useRoute(), filter = ref('reading'), query = ref(''), items = ref([]), count = ref(0), error = ref(''), loading = ref(false), loaded = ref(false);
 const favoritesSupported = computed(() => config.value.clientApi?.features?.includes('libraryFollowNews') === true);
 const favoritesView = computed(() => favoritesSupported.value && route.path === '/my-books' && route.query.view === 'favorites');
@@ -75,16 +81,26 @@ function tabCount(id) {
     if (!counters) return '';
     return id === 'all' ? (counters.reading || 0) + (counters.read || 0) : counters[id] || 0;
 }
-async function changeVisibility(book) {
+async function changeHistory(book, remove = false) {
     const owner = config.value.currentUserId, epoch = state.revision;
     if (!owner || !config.value.profileAuthorized || changingBook.value) return;
     const hidden = !book.hidden;
+    const generation = resultGeneration;
     changingBook.value = book.bookUid;
     visibilityError.value = '';
     try {
-        const result = await library.api.setReadingHistoryHidden(book, hidden, resultGeneration, owner);
+        if (remove) {
+            const confirmed = await root.stdDialog.confirm(
+                `Удалить «${escape(book.title)}» из истории? Позиция чтения и все ваши закладки в этой книге будут удалены. Сама книга останется в библиотеке.`,
+                'Удалить из истории', {okLabel:'Удалить'});
+            if (!confirmed || epoch !== state.revision || !active.value) return;
+        }
+        const result = remove
+            ? await library.api.forgetHiddenBook(book, generation, owner)
+            : await library.api.setReadingHistoryHidden(book, hidden, generation, owner);
+        if (remove && result.success) clearStoredReaderProgress(owner, book.bookUid);
         if (epoch !== state.revision) return;
-        if (result.progress?.hidden === hidden) {
+        if (remove ? result.success : result.progress?.hidden === hidden) {
             if (!listId.value && items.value.includes(book)) {
                 items.value = items.value.filter(item => item !== book);
                 count.value--;
@@ -195,7 +211,7 @@ onBeforeUnmount(() => clearTimeout(timer));
 .books-grid {display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 28px 24px;}
 .books-grid :deep(.book-cover) {max-height: 230px;}
 .books-grid > div {min-width: 0;}
-.books-history-action {margin-top: 4px; color: var(--app-link); font-size: 12px; text-align: start;}
+.books-history-action {display: flex; width: fit-content; max-width: 100%; margin-top: 4px; padding-inline: 0; color: var(--app-link); font-size: 12px; text-align: start;}
 .books-placeholder {aspect-ratio: 2 / 3; max-height: 230px; border-radius: 9px; background: var(--app-surface-3);}
 @media (max-width: 599px) {.books-heading .q-btn {font-size: 12px; padding-left: 0;} .books-tabs button {padding: 10px;} .books-search {max-width: none;} .books-grid {gap: 24px 18px; grid-template-columns: repeat(3, minmax(0, 1fr));}}
 @media (max-width: 359px) {.books-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} .books-placeholder:nth-child(3) {display: none;}}

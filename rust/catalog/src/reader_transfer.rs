@@ -72,7 +72,13 @@ impl ReaderState {
         Ok(json!({"progress":current}))
     }
 
-    pub fn delete_progress(&self, owner: &str, stamp: &str, uid: Option<&str>) -> Result<Value> {
+    pub fn delete_progress(
+        &self,
+        owner: &str,
+        stamp: &str,
+        uid: Option<&str>,
+        if_hidden: Option<&Value>,
+    ) -> Result<Value> {
         let mut snapshot = self.snapshot(stamp)?;
         let user = user_mut(&mut snapshot.data, owner)?;
         let time = now();
@@ -80,6 +86,26 @@ impl ReaderState {
             let uid = bounded(uid, 512)?;
             if uid.is_empty() {
                 return Err("bookUid is empty".into());
+            }
+            let current = &user["readerProgress"][uid];
+            if let Some(expected) = if_hidden {
+                if current.is_null() {
+                    return Ok(if items(&user["readerBookmarks"][uid]).is_empty() {
+                        json!({"success":true})
+                    } else {
+                        json!({"success":false,"conflict":true})
+                    });
+                }
+                if current["hidden"] != true
+                    || expected["revision"].as_u64() != Some(revision(&current["revision"]))
+                    || expected["generation"].as_u64()
+                        != Some(revision(&user["readerProgressGeneration"]))
+                {
+                    return Ok(json!({"success":false,"conflict":true}));
+                }
+                if let Some(bookmarks) = user["readerBookmarks"].as_object_mut() {
+                    bookmarks.remove(uid);
+                }
             }
             if let Some(progress) = user["readerProgress"].as_object_mut() {
                 progress.remove(uid);
