@@ -2079,7 +2079,8 @@ async function verifyResourceProfiles(binary, root) {
         }
         const launch = () => start(binary,['--standalone','--host=127.0.0.1','--data-dir='+dir,
             '--config='+config,'--lib-dir='+library,'--web-bundle='+web,'--admin-password='+probe.password],
-        {...(profile ? {INPX_RESOURCE_PROFILE:profile} : {}),...(total ? {INPX_RESOURCE_TOTAL:String(total),INPX_RESOURCE_MAX_PROCESSES:'6'} : {})});
+        {INPX_JXL_DECODER:'djxl', ...(profile ? {INPX_RESOURCE_PROFILE:profile} : {}),
+            ...(total ? {INPX_RESOURCE_TOTAL:String(total),INPX_RESOURCE_MAX_PROCESSES:'6'} : {})});
         const server = await launch();
         const hotSwitch = profile === 'economy' && total === null;
         try { await probe.verify(server.url, dir, profile || 'unlimited', expected, !profile && !total ? 1 : undefined, hotSwitch); }
