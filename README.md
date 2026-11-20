@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://t.me/inpxweb">
+    <img src="./docs/images/telegram-community.svg" width="420" alt="Наше сообщество в Telegram — @inpxweb">
+  </a>
+</p>
+
 # inpx-web-7z
 
 Веб-каталог и читалка для домашней библиотеки в формате INPX с архивами ZIP и 7z. Есть поиск по каталогу, личные полки, закладки, OPDS, синхронизация с KOReader и отправка книг через Telegram или почту.
