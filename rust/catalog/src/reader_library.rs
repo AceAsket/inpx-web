@@ -67,6 +67,7 @@ pub(super) fn reading_library(
     let query = string(&options["query"]).trim().to_lowercase();
     let sort = string(&options["sort"]).trim();
     let sort = if sort.is_empty() { "updatedDesc" } else { sort };
+    let offset = options["offset"].as_u64().unwrap_or(0) as usize;
     let limit = match number(&options["limit"]) {
         0.0 => 200,
         value => value.clamp(1.0, 500.0).trunc() as usize,
@@ -103,6 +104,7 @@ pub(super) fn reading_library(
             let order = string(&left.1["updatedAt"]).cmp(string(&right.1["updatedAt"]));
             if descending { order.reverse() } else { order }
         });
+        selected.drain(..offset.min(count));
         selected.truncate(limit);
         Some(count)
     } else {
@@ -178,6 +180,9 @@ pub(super) fn reading_library(
         }
     });
     let count = limited_count.unwrap_or(items.len());
+    if limited_count.is_none() {
+        items.drain(..offset.min(count));
+    }
     items.truncate(limit);
     Ok(json!({"state":state,"query":query,"sort":sort,
             "progressGeneration":number(&user["readerProgressGeneration"]).max(0.0) as u64,

@@ -170,51 +170,7 @@
                             </q-btn>
                         </div>
 
-                        <div v-else-if="currentProfileTab === 'reading'" class="reading-progress-box">
-                            <div v-if="currentReadingItems.length">
-                                <div class="reading-progress-header">
-                                    <div class="reading-progress-summary">
-                                        <span class="reading-progress-summary-badge">{{ currentReadingItems.length }}</span>
-                                        <span class="reading-progress-summary-text">книг в чтении</span>
-                                    </div>
-                                    <q-btn
-                                        flat
-                                        dense
-                                        no-caps
-                                        color="primary"
-                                        class="reading-progress-toggle-btn"
-                                        :icon="expandedReadingSection ? 'la la-angle-up' : 'la la-angle-down'"
-                                        :aria-expanded="expandedReadingSection"
-                                        :label="expandedReadingSection ? uiText.collapseList : uiText.expandList"
-                                        @click="toggleReadingSectionExpanded"
-                                    />
-                                </div>
-                                <div v-if="expandedReadingSection" class="reading-progress-list">
-                                    <div v-for="book in currentReadingItems" :key="book.bookUid" class="reading-progress-item profile-reading-row">
-                                        <div class="profile-reading-copy">
-                                            <div class="reading-progress-head">
-                                                <div class="reading-progress-book">{{ book.title }}</div>
-                                                <div class="reading-progress-percent">{{ formatPercent(book.percent) }}%</div>
-                                            </div>
-                                            <div v-if="book.author || book.series" class="reading-progress-meta profile-reading-meta">
-                                                <span v-if="book.author">{{ book.author }}</span>
-                                                <span v-if="book.series">{{ uiText.series }}: {{ book.series }}<template v-if="book.serno"> #{{ book.serno }}</template></span>
-                                            </div>
-                                            <div class="reading-progress-bar" aria-hidden="true">
-                                                <div class="reading-progress-bar-fill" :style="{width: `${formatPercent(book.percent)}%`}"></div>
-                                            </div>
-                                        </div>
-                                        <div class="reading-progress-actions profile-reading-actions">
-                                            <q-btn flat dense no-caps color="primary" icon="la la-book-open" label="Читать" @click="openReader(book)" />
-                                            <q-btn flat dense no-caps color="negative" icon="la la-times" label="Убрать" @click="removeReadingBook(book)" />
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div v-else class="reading-empty">
-                                {{ uiText.noReadingProgress }}
-                            </div>
-                        </div>
+                        <CurrentReadingList v-else-if="currentProfileTab === 'reading'" @read="openReader" />
 
                         <div v-else-if="currentProfileTab === 'lists'" class="reading-progress-box">
                             <div class="reading-progress-actions profile-list-toolbar">
@@ -464,11 +420,13 @@ import TelegramAccountPanel from '../../Library/TelegramAccountPanel.vue';
 import ReadingListsDialog from '../ReadingListsDialog/ReadingListsDialog.vue';
 import KoSyncSettings from './KoSyncSettings.vue';
 import ProfileLogout from '../../share/ProfileLogout.vue';
+import CurrentReadingList from '../../Library/CurrentReadingList.vue';
 const bookFormats = require('../../../../shared/BookFormats');
 
 const componentOptions = {
     components: {
         TelegramAccountPanel,
+        CurrentReadingList,
         ProfileTotpPanel: defineAsyncComponent(() => import('../../Library/ProfileTotpPanel.vue')),
         Dialog,
         ReadingListsDialog,
@@ -476,6 +434,12 @@ const componentOptions = {
         ProfileLogout,
     },
     watch: {
+        'currentProfile.telegramChatId'(chatId) {
+            const next = chatId || '';
+            if (this.editableProfile.telegramChatId === this.savedTelegramChatId)
+                this.editableProfile.telegramChatId = next;
+            this.savedTelegramChatId = next;
+        },
         modelValue(newValue) {
             this.dialogVisible = newValue;
             if (newValue)
@@ -501,7 +465,6 @@ class UserProfilesDialog {
     profiles = [];
     currentProfileTab = 'reading';
     currentReadingLists = [];
-    expandedReadingSection = false;
     expandedReadingLists = {};
     profileBackupLoading = false;
     readingListsDialogVisible = false;
@@ -517,6 +480,7 @@ class UserProfilesDialog {
     savingProfile = false;
     profileBlockPendingId = '';
     editableProfile = this.makeEmptyEditable();
+    savedTelegramChatId = '';
     newProfile = this.makeEmptyNew();
     otpAdminTarget = null;
     otpAdminAction = '';
@@ -605,11 +569,6 @@ class UserProfilesDialog {
         return !!this.currentProfile.anonymousProfile;
     }
 
-    get currentReadingItems() {
-        const rows = this.currentProfile.currentReading;
-        return (Array.isArray(rows) ? rows : []);
-    }
-
     get uiText() {
         return {
             dialogTitle: '\u041f\u0440\u043e\u0444\u0438\u043b\u0438 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u0439',
@@ -648,7 +607,6 @@ class UserProfilesDialog {
             loginToEdit: '\u0414\u043b\u044f \u0440\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u0432\u043e\u0439\u0434\u0438\u0442\u0435 \u043f\u043e \u043b\u043e\u0433\u0438\u043d\u0443 \u0438 \u043f\u0430\u0440\u043e\u043b\u044e.',
             loginAction: '\u0412\u043e\u0439\u0442\u0438',
             series: '\u0421\u0435\u0440\u0438\u044f',
-            noReadingProgress: '\u0414\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u043e\u0444\u0438\u043b\u044f \u043f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u043e\u0433\u043e \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441\u0430 \u0447\u0442\u0435\u043d\u0438\u044f.',
             read: '\u0427\u0438\u0442\u0430\u0442\u044c',
             remove: '\u0423\u0431\u0440\u0430\u0442\u044c',
             manageLists: '\u0423\u043f\u0440\u0430\u0432\u043b\u044f\u0442\u044c \u0441\u043f\u0438\u0441\u043a\u0430\u043c\u0438',
@@ -663,9 +621,6 @@ class UserProfilesDialog {
             listCollapsedHint: '\u0421\u043f\u0438\u0441\u043e\u043a \u0441\u0432\u0435\u0440\u043d\u0443\u0442, \u0432\u043d\u0443\u0442\u0440\u0438 {count} \u043a\u043d\u0438\u0433',
             untitledBook: '\u0411\u0435\u0437 \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044f',
             errorTitle: '\u041e\u0448\u0438\u0431\u043a\u0430',
-            currentReadingTitle: '\u0422\u0435\u043a\u0443\u0449\u0435\u0435 \u0447\u0442\u0435\u043d\u0438\u0435',
-            removeReadingConfirm: 'Скрыть книгу «{title}»? Её можно будет вернуть из главного экрана читалки.',
-            removeReadingSuccess: 'Книга перемещена в «Скрыто»',
             removeBookFromListConfirm: '\u0423\u0431\u0440\u0430\u0442\u044c \u043a\u043d\u0438\u0433\u0443 \u00ab{title}\u00bb \u0438\u0437 \u0441\u043f\u0438\u0441\u043a\u0430 \u00ab{list}\u00bb?',
             removeBookFromListSuccess: '\u041a\u043d\u0438\u0433\u0430 \u0443\u0431\u0440\u0430\u043d\u0430 \u0438\u0437 \u0441\u043f\u0438\u0441\u043a\u0430',
             readStatus: '\u041f\u0440\u043e\u0447\u0438\u0442\u0430\u043d\u043e',
@@ -725,6 +680,7 @@ class UserProfilesDialog {
 
     syncEditableProfile() {
         const current = this.config.currentUserProfile || {};
+        this.savedTelegramChatId = current.telegramChatId || '';
         this.editableProfilePasswordVisible = false;
         this.passwordConfirmation = '';
         this.editableProfile = {
@@ -765,11 +721,9 @@ class UserProfilesDialog {
             opdsEnabled: item.opdsEnabled !== false,
             opdsAuthEnabled: item.opdsAuthEnabled === true,
             anonymousProfile: !!item.anonymousProfile,
-            currentReadingCount: Number(item.currentReadingCount || 0) || 0,
         }));
         if (!preserveState) {
             this.currentProfileTab = 'reading';
-            this.expandedReadingSection = false;
         }
         this.newProfilePasswordVisible = false;
         this.syncEditableProfile();
@@ -840,10 +794,6 @@ class UserProfilesDialog {
         };
     }
 
-    formatPercent(value) {
-        return Math.max(0, Math.min(100, Math.round((Number(value || 0) || 0) * 100)));
-    }
-
     formatBookCountLabel(value) {
         const count = Math.max(0, Math.round(Number(value || 0) || 0));
         const mod10 = count % 10;
@@ -855,10 +805,6 @@ class UserProfilesDialog {
             noun = 'книги';
 
         return `${count} ${noun}`;
-    }
-
-    toggleReadingSectionExpanded() {
-        this.expandedReadingSection = !this.expandedReadingSection;
     }
 
     downloadJson(data, fileName) {
@@ -940,31 +886,6 @@ class UserProfilesDialog {
 
         this.dialogVisible = false;
         this.$router.push({path: '/reader', query: {bookUid}});
-    }
-
-    async removeReadingBook(book = {}) {
-        const bookUid = String(book.bookUid || '').trim();
-        if (!bookUid)
-            return;
-
-        const confirmed = await this.$root.stdDialog.confirm(
-            this.uiText.removeReadingConfirm.replace('{title}', String(book.title || '')),
-            this.uiText.currentReadingTitle,
-        );
-        if (!confirmed)
-            return;
-
-        try {
-            await this.api.updateReaderProgress(bookUid, {
-                hidden: true,
-                percent: Number(book.percent || 0) || 0,
-                sectionId: String(book.sectionId || '').trim(),
-            });
-            await this.loadProfiles({preserveState: true});
-            this.$root.notify.success(this.uiText.removeReadingSuccess);
-        } catch (e) {
-            this.$root.stdDialog.alert(e.message, this.uiText.errorTitle);
-        }
     }
 
     async renameList(item) {
@@ -1080,7 +1001,11 @@ class UserProfilesDialog {
         if (this.savingProfile || !this.passwordsMatch) return;
         this.savingProfile = true;
         try {
-            await this.api.updateUserProfile(this.currentUserId, this.editableProfile);
+            const profile = {...this.editableProfile};
+            // The bot can bind or unbind the chat while this form is open.
+            if ((profile.telegramChatId || '') === this.savedTelegramChatId)
+                delete profile.telegramChatId;
+            await this.api.updateUserProfile(this.currentUserId, profile);
             this.editableProfile.password = '';
             this.passwordConfirmation = '';
             await this.loadProfiles({preserveState: true});
@@ -1579,54 +1504,6 @@ export default vueComponent(UserProfilesDialog);
     min-width: 0;
 }
 
-.reading-progress-title {
-    margin-bottom: 10px;
-    font-size: 14px;
-    font-weight: 700;
-}
-
-.reading-progress-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 10px;
-    flex-wrap: wrap;
-}
-
-.reading-progress-summary {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    padding: 6px 10px;
-    border: 1px solid rgba(15, 159, 143, 0.2);
-    border-radius: 999px;
-    background: rgba(15, 159, 143, 0.08);
-    color: var(--app-text);
-}
-
-.reading-progress-summary-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 24px;
-    height: 24px;
-    padding: 0 8px;
-    border-radius: 999px;
-    background: rgba(15, 159, 143, 0.18);
-    color: var(--app-link);
-    font-size: 12px;
-    font-weight: 800;
-}
-
-.reading-progress-summary-text {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--app-muted);
-    white-space: nowrap;
-}
-
 .reading-progress-list {
     display: flex;
     flex-direction: column;
@@ -1718,10 +1595,6 @@ export default vueComponent(UserProfilesDialog);
 
 .profile-list-toolbar {
     margin: 0 0 10px;
-}
-
-.reading-progress-toggle-btn {
-    flex: 0 0 auto;
 }
 
 .profile-list-preview {

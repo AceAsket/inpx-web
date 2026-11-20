@@ -501,6 +501,7 @@ if (require.main === module) (async() => {
             const panel = page.locator(`.library-dialog-card[data-dialog-kind="${kind}"]`);
             await panel.waitFor(); await pause(350);
             if (kind === 'profiles') {
+                await panel.getByRole('region', {name:'Книги в чтении'}).getByRole('listitem').first().waitFor();
                 assert.equal(await panel.locator('.profile-card--current').getByRole('button', {name: 'Выбрать', exact: true}).count(), 0, 'Current profile cannot be selected again');
                 assert.equal(await panel.locator('.opds-link').count(), 0, 'Admin profile is not offered as a public OPDS profile');
                 await panel.getByRole('button', {name: 'Новый профиль', exact: true}).click();
@@ -750,7 +751,24 @@ if (require.main === module) (async() => {
         const hiddenUid = JSON.stringify(uids[2]);
         const bookmark = {title:'Вернуться к цитате', sectionId:'chapter', percent:.52};
         await api(`return root.api.request({action:'add-reader-bookmark', bookUid:${hiddenUid}, bookmark:${JSON.stringify(bookmark)}});`);
-        await page.getByRole('button', {name: 'Убрать из «Сейчас читаю»', exact:true}).click();
+        await page.getByRole('button', {name: 'Открыть список «Сейчас читаю»'}).click();
+        const inProgress = page.getByRole('region', {name: 'Книги в чтении'});
+        const removeReading = inProgress.getByRole('button', {name: 'Убрать из чтения: '+hiddenTitle, exact:true});
+        await removeReading.waitFor();
+        const beforeHide = await inProgress.getByRole('listitem').count();
+        assert(beforeHide >= 2, 'The list includes books other than the one on the overview');
+        await removeReading.click();
+        await removeReading.waitFor({state:'detached'});
+        assert.equal(await inProgress.getByRole('listitem').count(), beforeHide - 1);
+        const nextReading = inProgress.getByRole('listitem').first();
+        const nextTitle = await nextReading.locator('.reading-title').innerText();
+        await nextReading.getByRole('button', {name:'Убрать из чтения: '+nextTitle, exact:true}).click();
+        await inProgress.getByRole('button', {name:'Убрать из чтения: '+nextTitle, exact:true}).waitFor({state:'detached'});
+        assert.equal(await inProgress.getByRole('listitem').count(), beforeHide - 2);
+        await page.keyboard.press('Escape');
+        await api(`const hidden = await root.api.request({action:'get-user-reading-library',options:{state:'hidden'}});
+            const book = hidden.items.find(row => row.title === ${JSON.stringify(nextTitle)});
+            return root.api.updateReaderProgress(book.bookUid,{hidden:false});`);
         await page.waitForFunction(title => document.querySelector('.current-book__title')?.textContent !== title, hiddenTitle);
         await page.reload();
         await page.locator('.current-book__title').waitFor();

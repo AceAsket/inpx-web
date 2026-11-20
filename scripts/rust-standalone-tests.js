@@ -295,6 +295,14 @@ async function verifyShelves(url, readingUid, shelfUid) {
         assert.deepEqual(history.counters,{all:2,reading:1,read:1,hidden:0},history.error);
         assert.equal(history.count,2);
         assert.deepEqual(history.items.map(book=>[book.bookUid,book.state]),[[shelfUid,'read']]);
+        for (const sort of ['progressDesc','updatedDesc']) {
+            const page = offset => change('get-user-reading-library',{options:{state:'all',sort,limit:1,offset}});
+            const first = await page(0), second = await page(1), end = await page(2);
+            assert.equal(second.count,2);
+            assert.deepEqual(new Set([first.items[0].bookUid,second.items[0].bookUid]),new Set([readingUid,shelfUid]));
+            assert.equal(end.count,2);
+            assert.deepEqual(end.items,[]);
+        }
         const historySearch = await change('get-user-reading-library',{options:{state:'reading',query:'PACKAGED smoke'}});
         assert.equal(historySearch.items[0].bookUid,readingUid);
         assert.equal(historySearch.items[0].percent,0.35);

@@ -1,6 +1,10 @@
 <template>
     <div class="library-page library-overview">
         <div class="library-page__body">
+            <DialogSurface v-if="readingListOpen && config.profileAuthorized" v-model="readingListOpen" variant="current-reading">
+                <template #header>Сейчас читаю</template>
+                <CurrentReadingList class="overview-reading-list" @changed="repository.refreshReading()" @read="book => { readingListOpen = false; library.openBook(book); }" />
+            </DialogSurface>
             <div class="overview-toolbar">
                 <form class="overview-search" role="search" aria-label="Поиск в библиотеке" @submit.prevent="search">
                     <q-icon name="la la-search" size="26px" aria-hidden="true" />
@@ -40,7 +44,7 @@
                                 <div class="current-book__caption">
                                     <q-icon name="la la-book-open" size="21px" aria-hidden="true" />
                                     <h1 id="current-book-heading">Сейчас читаю</h1>
-                                    <button v-if="config.profileAuthorized" type="button" aria-label="Убрать из «Сейчас читаю»" title="Убрать из «Сейчас читаю»" :disabled="hidingCurrent" @click="hideCurrent"><q-icon name="la la-eye-slash" size="21px" /></button>
+                                    <button v-if="config.profileAuthorized" type="button" class="current-book__list" aria-haspopup="dialog" aria-label="Открыть список «Сейчас читаю»" @click="readingListOpen = true">Все книги</button>
                                     <button type="button" :aria-label="`Действия с книгой: ${books.current.title}`" @click="library.openActions(books.current)"><q-icon name="la la-ellipsis-v" size="23px" /></button>
                                 </div>
                                 <div class="current-book__body">
@@ -94,6 +98,8 @@
 import {computed, ref, watch, getCurrentInstance} from 'vue';
 import {useRouter} from 'vue-router';
 import OverviewShelvesDialog from './OverviewShelvesDialog.vue';
+import DialogSurface from '../share/DialogSurface.vue';
+import CurrentReadingList from './CurrentReadingList.vue';
 import overviewLayout from '../../../shared/OverviewShelves';
 import BookCover from './BookCover.vue';
 import BookShelf from './BookShelf.vue';
@@ -115,24 +121,8 @@ const searchFilters = computed(() => effectiveCatalogScope({}, settings.value, c
 const suggestionContext = computed(() => String(state.revision));
 watch(() => [active.value, state.revision], () => {searchFocused.value = false; activeSuggestionId.value = undefined; suggestionsExpanded.value = false;});
 const books = computed(() => homeBooks(state.reading?.items || []));
-const root = getCurrentInstance().proxy.$root;
-const hidingCurrent = ref(false);
-async function hideCurrent() {
-    const book = books.value.current;
-    const owner = config.value.currentUserId;
-    if (!book || !owner || !config.value.profileAuthorized || hidingCurrent.value) return;
-    hidingCurrent.value = true;
-    try {
-        const result = await library.api.updateReaderProgress(bookUid(book),
-            {hidden: true, generation: state.reading?.progressGeneration, baseRevision: book.revision},
-            {userId: owner, suppressProfileLogin: true});
-        if (config.value.currentUserId !== owner) return;
-        await repository.refreshReading();
-        if (!result.progress?.hidden) throw new Error('Позиция чтения изменилась. Попробуйте ещё раз.');
-    } catch (error) {
-        if (config.value.currentUserId === owner) root.stdDialog.alert(error.message, 'Сейчас читаю');
-    } finally { hidingCurrent.value = false; }
-}
+const readingListOpen = ref(false);
+watch([active, () => state.revision], () => {readingListOpen.value = false;});
 const currentDetails = ref({});
 const currentGenres = computed(() => previewMetadata.tokens(books.value.current?.genre || currentDetails.value.genres)
     .map(code => library.genreMap.value.get(code) || code));
@@ -238,6 +228,8 @@ input::placeholder {color: var(--app-muted); opacity: 1;}
 .current-book__caption h1 {font-size: 14px; font-weight: 550; letter-spacing: 0; flex: 1;}
 .current-book__caption button {border: 0; color: var(--library-on-hero); background: transparent; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; margin: -4px -7px -4px 0;}
 .current-book__body {display: flex; align-items: flex-start; gap: 18px;}
+.current-book__caption .current-book__list {width: auto; margin: 0; font: inherit; font-size: 13px; color: var(--app-primary);}
+.overview-reading-list {padding: 0 20px 16px;}
 .current-book__cover {width: 86px; flex: 0 0 86px; padding: 0; border: 0; background: transparent; border-radius: 9px; cursor: pointer;}
 .current-book__info {min-width: 0;}
 .current-book__title {display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; padding: 0; background: transparent; color: var(--app-text); border: 0; text-align: left; font: inherit; font-weight: 550; font-size: 19px; line-height: 1.4; cursor: pointer; overflow-wrap: anywhere;}

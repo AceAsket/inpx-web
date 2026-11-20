@@ -3522,6 +3522,7 @@ class WebWorker {
         const query = String(options.query || '').trim().toLowerCase();
         const sort = String(options.sort || 'updatedDesc').trim();
         const limit = Math.max(1, Math.min(500, Number(options.limit || 200) || 200));
+        const offset = Math.max(0, Math.trunc(Number(options.offset) || 0));
 
         const counters = {
             all: 0,
@@ -3607,7 +3608,7 @@ class WebWorker {
             progressGeneration: Math.max(0, parseInt(user && user.readerProgressGeneration, 10) || 0),
             counters,
             count: items.length,
-            items: items.slice(0, limit),
+            items: items.slice(offset, offset + limit),
         };
     }
 

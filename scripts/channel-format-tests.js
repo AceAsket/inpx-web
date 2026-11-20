@@ -263,6 +263,18 @@ async function testChannelFormatSettingsKeepIndependentValuesOnSave() {
     let saved; dialog.api = {updateUserProfile:async(id, profile) => {saved = {...profile};}};
     dialog.loadProfiles = async() => {}; dialog.$root = {notify:{success:() => {}}, stdDialog:{alert:message => {throw new Error(message);}}};
     await dialog.saveCurrentProfile();
+    assert.equal(Object.hasOwn(saved, 'telegramChatId'),false, 'Saving other fields preserves a Telegram link completed outside the form');
+    const updateChat = dialog._options.watch['currentProfile.telegramChatId'].bind(dialog);
+    updateChat('12345');
+    assert.equal(dialog.editableProfile.telegramChatId,'12345');
+    dialog.editableProfile.telegramChatId = '67890';
+    updateChat('23456');
+    assert.equal(dialog.editableProfile.telegramChatId,'67890', 'A refresh preserves an explicit edit');
+    await dialog.saveCurrentProfile();
+    assert.equal(saved.telegramChatId,'67890');
+    dialog.editableProfile.telegramChatId = '';
+    await dialog.saveCurrentProfile();
+    assert.equal(saved.telegramChatId,'', 'An explicit clear is still sent');
     assert.strictEqual(saved.defaultEmailFormat, 'epub'); assert.strictEqual(saved.defaultDownloadFormat, 'epub');
     assert.strictEqual(saved.defaultTelegramFormat, 'mobi'); assert.strictEqual(saved.defaultOpdsFormat, 'kepub');
     assert.strictEqual(saved.emailAsZip, true); assert.strictEqual(saved.telegramAsZip, true);
