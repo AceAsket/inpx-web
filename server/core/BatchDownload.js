@@ -143,7 +143,7 @@ async function create(worker, userId, selection) {
     finally { running = false; }
 }
 function register(app, config, recordDownload) {
-    app.get(`${config.bookPathStatic}/batch/:token`, (req, res) => {
+    app.get(`${config.bookPathStatic}/batch/:token`, async (req, res, next) => {
         const ticket = tickets.get(req.params.token);
         if (!ticket || ticket.expires <= Date.now()) {cleanup().catch(() => {}); return res.sendStatus(404);}
         if (req.profileAccessIdentity && req.profileAccessIdentity.user && req.profileAccessIdentity.user.id !== ticket.userId)
@@ -152,14 +152,22 @@ function register(app, config, recordDownload) {
         ticket.readers++;
         let finished = false;
         const finish = () => {if (finished) return; finished = true; ticket.readers--; cleanup().catch(() => {});};
-        const record = recordDownload?.(req,ticket.count);
+        res.once('close', finish);
+        let record;
+        try {
+            record = await recordDownload?.(req, ticket.count);
+        } catch (error) {
+            finish();
+            return next(error);
+        }
+        if (res.destroyed) return;
         res.set('Content-Disposition','attachment; filename="books.zip"');
         res.type('application/zip');
         if (deliverFile(req,res,'batch',ticket.file,complete=>{
             finish();
             if (complete) record?.();
         })) return;
-        res.once('finish', finish); res.once('close', finish);
+        res.once('finish', finish);
         if (record) countDownload(res,record);
         res.download(ticket.file, 'books.zip', error => {finish(); if (error && !res.headersSent) res.sendStatus(500);});
     });

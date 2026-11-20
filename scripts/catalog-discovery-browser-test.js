@@ -261,6 +261,8 @@ async function fixture(directory) {
         await page.locator('.book-actions-author').click();
         await page.getByRole('heading', {name: 'Толстой Лев', exact: true}).waitFor();
         await page.locator('.catalog-book-grid .book-tile').first().waitFor();
+        const seriesZip = page.getByRole('button', {name: 'Скачать всю серию в ZIP', exact: true});
+        assert.equal(await seriesZip.count(), 0);
         assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru');
         const authorUrl = page.url();
@@ -273,6 +275,20 @@ async function fixture(directory) {
         await page.getByRole('heading', {name: 'Рассказы', exact: true}).waitFor();
         await page.locator('.catalog-book-grid .book-tile').first().waitFor();
         assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
+        const [download] = await Promise.all([page.waitForEvent('download'), seriesZip.click()]);
+        const archive = new (require('node-stream-zip').async)({file: await download.path()});
+        try {
+            const entries = Object.values(await archive.entries()).filter(entry => !entry.isDirectory);
+            assert.equal(entries.length, 3, 'The whole series includes the volume outside the current language filter');
+            const titles = [];
+            for (const entry of entries) {
+                const fb2 = await archive.entryData(entry.name);
+                titles.push(fb2.toString().match(/<book-title>([^<]+)<\/book-title>/)[1]);
+            }
+            assert.deepEqual(titles.sort(), ['Childhood', 'Косточка', 'После бала']);
+        } finally {
+            await archive.close();
+        }
         await page.getByRole('button', {name: 'Следить за новинками', exact: true}).click();
         await page.getByRole('button', {name: 'В избранном', exact: true}).waitFor();
         await page.getByRole('button', {name: 'Прочитано до этого тома', exact: true}).first().click();
