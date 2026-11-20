@@ -30,7 +30,7 @@ assert.deepStrictEqual(cleanupPlan([{name: '1.8.2'}, {name: 'lite'}], {lite: tru
 assert.deepStrictEqual(cleanupPlan(retired, {lite: true}).remove.sort(), [...plan.remove, 'lite', '1.7.2-lite', 'dev-lite'].sort());
 const readme = fs.readFileSync('docs/dockerhub.md', 'utf8');
 const stableTag = readme.match(/^\| `(\d+\.\d+\.\d+)`, `latest` \|/m);
-assert(!readme.includes('`lite`') && stableTag && readme.includes('`1.8.3-rc.30`'));
+assert(!readme.includes('`lite`') && stableTag && readme.includes('| `1.8.3` |'));
 const {version} = require('../package.json');
 if (!version.includes('-')) assert.equal(stableTag[1], version);
 assert(Buffer.byteLength(readme) <= 25000);

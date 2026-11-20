@@ -19,10 +19,9 @@
 | --- | --- | --- |
 | Rust 2.0.1 · стабильная | `aceasket/inpx-web-7z:2.0.1` или `:latest` | [Скачать Rust 2.0.1](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.1) |
 | Rust 2.0.2 RC1 · для проверки | `aceasket/inpx-web-7z:2.0.2-rc.1` | [Скачать Rust RC1](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.2-rc.1) |
-| Классический Node.js 1.8.3 RC30 · для проверки | `aceasket/inpx-web-7z:1.8.3-rc.30` | [Скачать Node.js RC30](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3-rc.30) |
-| Классический Node.js 1.8.2 · стабильная | `aceasket/inpx-web-7z:1.8.2` | [Скачать Node.js 1.8.2](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) |
+| Классический Node.js 1.8.3 · стабильная | `aceasket/inpx-web-7z:1.8.3` | [Скачать Node.js 1.8.3](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3) |
 
-Ветка `main` содержит сервер Rust. При обновлении контейнера с тегом `latest` он перейдёт на Rust. Чтобы продолжить использовать стабильный Node.js, закрепите тег `1.8.2`. Классический сервер с JembaDB поддерживается в ветке [nodejs_depr](https://github.com/AceAsket/inpx-web/tree/nodejs_depr).
+Ветки `main` и `develop` содержат сервер Rust. При обновлении контейнера с тегом `latest` он перейдёт на Rust. Чтобы продолжить использовать стабильный Node.js, закрепите тег `1.8.3`. Классический сервер с JembaDB поддерживается в ветке [nodejs_depr](https://github.com/AceAsket/inpx-web/tree/nodejs_depr).
 
 Перед переходом с Node.js остановите прежний сервер и сохраните копию каталога данных, включая `db` и внешний файл фильтра, если он используется. При первом запуске Rust сохраняет снимок пользовательских данных и строит новый индекс с сохранением идентификаторов книг, полок, закладок и прогресса. [Переход и откат](./docs/upgrade-rollback.md)
 
@@ -69,7 +68,7 @@ INPX Server запускает библиотеку с локальной пап
 - [Справочник по установке и настройке](./REFERENCE.md) · [Сборка Rust из исходников](./REFERENCE.md#сборка-с-автономным-rust-сервером)
 - [Обновление и откат](./docs/upgrade-rollback.md) · [Профили ресурсов](./docs/resource-profiles.md)
 - [OPDS 2.0](./docs/opds-v2.md) · [Синхронизация с KOReader](./docs/koreader-sync.md) · [Озвучка Silero](./docs/silero-tts.md)
-- [Справочник классического Node.js 1.8.2](https://github.com/AceAsket/inpx-web/blob/v1.8.2/README.md) · [Справочник 1.8.1](./docs/reference-1.8.1.md)
+- [Справочник классического Node.js 1.8.3](https://github.com/AceAsket/inpx-web/blob/v1.8.3/README.md) · [Справочник 1.8.1](./docs/reference-1.8.1.md)
 
 ## Обратная связь
 

@@ -4,7 +4,7 @@ Self-hosted web catalog and FB2 reader for large `.inpx`, `.zip`, `.7z` and `fLi
 
 This image is built from the [`AceAsket/inpx-web`](https://github.com/AceAsket/inpx-web) fork and is aimed at Docker, Unraid, Proxmox LXC and home-server setups.
 
-`latest` runs Rust 2.0.1. Pin `1.8.2` to keep classic Node.js or use `1.8.3-rc.30` to test its release candidate. Before upgrading from Node.js, stop the server and back up the data directory. [Migration and rollback](https://github.com/AceAsket/inpx-web/blob/v2.0.1/docs/upgrade-rollback.md)
+`latest` runs Rust 2.0.1. Pin `1.8.3` to keep classic Node.js. Before upgrading from Node.js, stop the server and back up the data directory. [Migration and rollback](https://github.com/AceAsket/inpx-web/blob/v2.0.1/docs/upgrade-rollback.md)
 
 ## What Is Included
 
@@ -25,8 +25,8 @@ We moved the server from Node.js to Rust to improve performance with large libra
 | Tag | Purpose |
 | --- | --- |
 | `2.0.1`, `latest` | Stable Rust server. |
-| `1.8.3-rc.30` | Classic Node.js with JembaDB for testing. |
-| `1.8.2` | Stable classic Node.js. |
+| `1.8.3` | Stable classic Node.js server with JembaDB. |
+| `1.8.3-silero` | Speech service for Node.js 1.8.3. |
 | `2.0.1-silero` | Speech service for Rust 2.0.1. |
 
 The default image does not include Calibre. Calibre is available only when building the `runtime-calibre` target from the repository Dockerfile.

@@ -32,13 +32,13 @@ Android-клиент подключается по QR с адресом без �
 
 Мы перенесли сервер с Node.js на Rust, чтобы он быстрее работал с большими библиотеками. **Node.js 1.8.3** — последняя ветка классического сервера. Она будет получать только исправления ошибок. Все новые функции будут выходить только в **Rust 2.x**.
 
-Обновление с `latest` переводит существующую установку на Rust. Перед обновлением остановите сервер и скопируйте каталог данных. Для сохранения стабильного Node.js закрепите тег `1.8.2`. [Переход и откат](https://github.com/AceAsket/inpx-web/blob/v2.0.1/docs/upgrade-rollback.md)
+Обновление с `latest` переводит существующую установку на Rust. Перед обновлением остановите сервер и скопируйте каталог данных. Для сохранения стабильного Node.js закрепите тег `1.8.3`. [Переход и откат](https://github.com/AceAsket/inpx-web/blob/v2.0.1/docs/upgrade-rollback.md)
 
 | Тег | Назначение |
 | --- | --- |
 | `2.0.1`, `latest` | Стабильный сервер Rust. |
-| `1.8.3-rc.30` | Классический Node.js с JembaDB для проверки. |
-| `1.8.2` | Стабильный классический Node.js. |
+| `1.8.3` | Стабильный классический сервер Node.js с JembaDB. |
+| `1.8.3-silero` | Сервис озвучки для Node.js 1.8.3. |
 | `2.0.1-silero` | Сервис озвучки для Rust 2.0.1. |
 
 Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/v2.0.1/CHANGELOG.md).
@@ -155,13 +155,13 @@ Bundled Kindling converts FB2/EPUB to MOBI7/KF8. The full image enables MOBI by 
 
 We moved the server from Node.js to Rust to improve performance with large libraries. **Node.js 1.8.3** is the final release line for the classic server and will receive bug fixes only. All new features will ship exclusively in **Rust 2.x**.
 
-Updating a container pinned to `latest` switches it to Rust. Stop the server and back up its data directory before upgrading. Pin `1.8.2` to stay on stable Node.js. [Migration and rollback](https://github.com/AceAsket/inpx-web/blob/v2.0.1/docs/upgrade-rollback.md)
+Updating a container pinned to `latest` switches it to Rust. Stop the server and back up its data directory before upgrading. Pin `1.8.3` to stay on stable Node.js. [Migration and rollback](https://github.com/AceAsket/inpx-web/blob/v2.0.1/docs/upgrade-rollback.md)
 
 | Tag | Purpose |
 | --- | --- |
 | `2.0.1`, `latest` | Stable Rust server. |
-| `1.8.3-rc.30` | Classic Node.js with JembaDB for testing. |
-| `1.8.2` | Stable classic Node.js. |
+| `1.8.3` | Stable classic Node.js server with JembaDB. |
+| `1.8.3-silero` | Speech service for Node.js 1.8.3. |
 | `2.0.1-silero` | Speech service for Rust 2.0.1. |
 
 Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/v2.0.1/CHANGELOG.md) for changes.
