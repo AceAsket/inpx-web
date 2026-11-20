@@ -8,6 +8,7 @@ import BookView from './BookView/BookView.vue';
 import LoadingMessage from './LoadingMessage/LoadingMessage.vue';
 import LoadingState from '../share/LoadingState.vue';
 import SeriesZipButton from '../Library/SeriesZipButton.vue';
+import {deliverBook, openExternalReader} from '../Library/bookFileActions';
 import * as utils from '../../share/utils';
 const {match: catalogMatch} = require('../../../shared/CatalogSearch');
 const bookFormats = require('../../../shared/BookFormats');
@@ -388,15 +389,8 @@ export default class BaseList {
                 return;
             }
 
-            if (action == 'sendTelegram') {
-                await this.api.sendBookTelegram(book._uid, format);
-                this.$root.notify.success(`Книга отправлена в Telegram${format && format !== 'raw' ? ` (${format.toUpperCase()})` : ''}`);
-                return;
-            }
-
-            if (action == 'sendEmail') {
-                await this.api.sendBookEmail(book._uid, format);
-                this.$root.notify.success(`Книга отправлена на email${format && format !== 'raw' ? ` (${format.toUpperCase()})` : ''}`);
+            if (action === 'sendTelegram' || action === 'sendEmail') {
+                this.$root.notify.success(await deliverBook(this.api, book, action === 'sendTelegram' ? 'telegram' : 'email', format));
                 return;
             }
 
@@ -445,18 +439,7 @@ export default class BaseList {
                         this.$root.stdDialog.alert('Встроенная читалка пока поддерживает только FB2.', 'Информация');
                         return;
                     }
-                    let url = bookReadLink;
-
-                    if (bookReadLink.indexOf('${DOWNLOAD_LINK}') >= 0) {
-                        url = bookReadLink.replace('${DOWNLOAD_LINK}', href);
-
-                    } else if (bookReadLink.indexOf('${DOWNLOAD_URI}') >= 0) {
-                        const hrefUrl = new URL(href);
-                        const urlWithoutHost = hrefUrl.pathname + hrefUrl.search + hrefUrl.hash;
-                        url = bookReadLink.replace('${DOWNLOAD_URI}', urlWithoutHost);
-                    }
-
-                    window.open(url, '_blank');
+                    openExternalReader(bookReadLink, href);
                 }
             }
         } catch(e) {

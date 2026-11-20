@@ -12,7 +12,7 @@
                     <div v-for="slot in 3" :key="slot" class="favorite-books__placeholder" aria-hidden="true" />
                 </div>
                 <div v-else-if="books.length" class="favorite-books__grid">
-                    <BookTile v-for="book in books" :key="bookUid(book)" :book="book" />
+                    <BookTile v-for="book in books" :key="bookUid(book)" :book="book" quick-actions />
                 </div>
                 <div v-else-if="!error" class="library-empty">
                     <q-icon name="la la-star" size="32px" />

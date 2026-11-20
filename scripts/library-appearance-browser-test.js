@@ -141,12 +141,21 @@ if (require.main === module) (async() => {
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [], actions = [];
         let readingFailure = '', recommendationMode = 'full', recommendationBook = null, heldRecommendation = null;
         let favoritesFixture = null, readingReplies = null;
-        const overviewPreviews = [], pinWrites = [];
+        const overviewPreviews = [], pinWrites = [], deliveries = [];
+        let testDelivery = false;
         await page.routeWebSocket('**/ws', socket => {
+            const configRequests = new Set();
             const server = socket.connectToServer(), bookRequests = new Set(), authorRequests = new Set(), pinRequests = new Set(), heldReplies = new Map();
             socket.onMessage(message => {
                 try {
                     const request = JSON.parse(String(message));
+                    if (testDelivery && request.action === 'get-config') configRequests.add(request.requestId);
+                    if (['send-book-email','send-book-telegram'].includes(request.action)) {
+                        deliveries.push({action:request.action,bookUid:request.bookUid,format:request.format});
+                        socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));
+                        socket.send(JSON.stringify({requestId:request.requestId,success:true}));
+                        return;
+                    }
                     if (request.action === 'get-book-preview') overviewPreviews.push(request.bookUid);
                     if (request.action === 'get-discovery-shelves' && request.recommendationsOnly && recommendationBook) {
                         socket.send(JSON.stringify({requestId:request.requestId,_rok:1}));
@@ -194,6 +203,9 @@ if (require.main === module) (async() => {
             server.onMessage(message => {
                 try {
                     const response = JSON.parse(String(message));
+                    if (!response._rok && configRequests.delete(response.requestId)) {
+                        socket.send(JSON.stringify({...response,telegramShareEnabled:true,emailShareEnabled:true})); return;
+                    }
                     if (!response._rok && heldReplies.has(response.requestId)) {
                         heldReplies.get(response.requestId).resolve(() => socket.send(message));
                         heldReplies.delete(response.requestId);
@@ -453,7 +465,7 @@ if (require.main === module) (async() => {
         assert((await dialog.boundingBox()).height < 700, 'The action card must fit the phone without reserved poster space');
         await screenshot('book-preview-dark-390');
         assert.equal(await dialog.locator('.book-actions-secondary, .book-actions-card-link').count(), 0);
-        await dialog.getByRole('button', {name: 'Полки и статус', exact: true}).click();
+        await dialog.getByRole('button', {name: 'Быстрые действия', exact: true}).click();
         await page.getByRole('menuitem', {name: 'Прочитано', exact: true}).waitFor();
         assert.equal(await page.getByRole('menuitem', {name: 'Снять отметку', exact: true}).count(), 0);
         await page.keyboard.press('Escape');
@@ -780,35 +792,82 @@ if (require.main === module) (async() => {
         const historyTabs = page.locator('.books-tabs');
         const history = page.locator('.books-results');
         await page.setViewportSize({width:1100,height:730});
-        const restore = history.getByRole('button', {name:'Вернуть в историю: '+hiddenTitle, exact:true});
-        const stop = history.getByRole('button', {name:'Убрать из чтения: '+hiddenTitle, exact:true});
-        await historyTabs.getByRole('button', {name:/^Скрытые/}).click();
-        await restore.click();
-        await restore.waitFor({state:'detached'});
-        await historyTabs.getByRole('button', {name:/^Читаю/}).click();
-        await stop.waitFor();
-        await screenshot('my-books-reading');
-        await stop.click();
-        await stop.waitFor({state:'detached'});
+        testDelivery = true;
         await page.reload();
-        await historyTabs.getByRole('button', {name:/^Все/}).click();
+        const tile = history.locator('.book-tile').filter({has:page.getByRole('button',{name:'Открыть карточку: '+hiddenTitle,exact:true})});
+        const quick = page.getByRole('menu',{name:'Быстрые действия',exact:true});
+        const menuScreenshot = async name => {
+            await page.waitForFunction(() => {
+                const menu = document.querySelector('.q-menu [aria-label="Быстрые действия"]')?.closest('.q-menu');
+                return menu && getComputedStyle(menu).opacity === '1' && !menu.getAnimations().length;
+            });
+            await screenshot(name);
+        };
+        const menuAction = name => quick.getByRole('menuitem',{name,exact:true});
+        const openQuick = () => tile.getByRole('button',{name:'Быстрые действия',exact:true}).click();
+        const selectTab = label => historyTabs.getByRole('button',{name:new RegExp('^'+label)}).click();
+        await selectTab('Скрытые');
+        await openQuick();
+        await menuAction('Вернуть в историю').click();
+        await tile.waitFor({state:'detached'});
+        await selectTab('Читаю');
+        await tile.waitFor();
+        await screenshot('my-books-reading');
+        const otherTile = history.locator('.book-tile').filter({hasNot:page.getByRole('button',{name:'Открыть карточку: '+hiddenTitle,exact:true})}).first();
+        const otherTitle = await otherTile.locator('.book-tile__title').innerText();
+        const otherUid = indexedBooks.find(book => book.title === otherTitle)._uid;
+        await otherTile.getByRole('button',{name:'Читать',exact:true}).click();
+        await page.waitForURL(url => url.hash.startsWith('#/reader?') && new URLSearchParams(url.hash.split('?')[1]).get('bookUid') === otherUid);
+        await page.goBack();
+        await tile.waitFor();
+        await openQuick();
+        await menuAction('Убрать из чтения').click();
+        await tile.waitFor({state:'detached'});
+        await page.reload();
+        await selectTab('Все');
         await history.getByRole('button', {name:/^Открыть карточку:/}).first().waitFor();
-        assert.equal(await history.getByRole('button', {name:'Открыть карточку: '+hiddenTitle, exact:true}).count(),0);
-        await historyTabs.getByRole('button', {name:/^Скрытые/}).click();
-        await restore.waitFor();
+        assert.equal(await tile.count(),0);
+        await selectTab('Скрытые');
+        const toolbar = tile.getByRole('group');
+        await toolbar.waitFor();
+        assert.deepEqual(await toolbar.getByRole('button').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('aria-label'))),
+            ['Отправить книгу','Читать','Быстрые действия']);
         await screenshot('my-books-hidden');
-        await restore.click();
-        await restore.waitFor({state:'detached'});
-        await historyTabs.getByRole('button', {name:/^Читаю/}).click();
-        await stop.waitFor();
+        for (const width of [320,390]) {
+            await page.setViewportSize({width,height:800});
+            const positions = await toolbar.getByRole('button').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().toJSON()));
+            assert(positions.every((p,i)=>p.width>=30 && p.y===positions[0].y && p.right<=width && (!i||p.x>=positions[i-1].right)));
+        }
+        await screenshot('my-books-actions-mobile');
+        await toolbar.getByRole('button',{name:'Отправить книгу'}).click();
+        const sendMenu = page.getByRole('menu',{name:'Отправить книгу',exact:true});
+        await sendMenu.getByRole('menuitem',{name:'Отправить в Telegram'}).waitFor();
+        await sendMenu.getByRole('menuitem',{name:'Отправить по Email'}).click();
+        await page.getByText('Книга отправлена на email',{exact:true}).waitFor();
+        assert.equal(deliveries.at(-1).action,'send-book-email'); assert.equal(deliveries.at(-1).bookUid,uids[2]);
+        await page.getByText('Книга отправлена на email',{exact:true}).waitFor({state:'hidden'});
+        await page.setViewportSize({width:1100,height:730});
+        await openQuick();
+        await menuAction('Удалить из истории').waitFor();
+        await menuScreenshot('my-books-quick-menu');
+        await menuAction('Открыть карточку').click();
+        await dialog.getByRole('button',{name:'Быстрые действия'}).click();
+        await menuAction('Вернуть в историю').waitFor();
+        await menuScreenshot('my-books-card-menu');
+        await menuAction('Вернуть в историю').click();
+        await tile.waitFor({state:'detached'});
+        await selectTab('Читаю');
+        await tile.waitFor();
         const restored = await api(`return root.api.request({action:'get-reader-state', bookUid:${hiddenUid}});`);
-        assert.equal(restored.progress.percent, .52);
-        assert.equal(restored.progress.sectionId, 'chapter');
+        assert.equal(restored.progress.percent,.52);
+        assert.equal(restored.progress.sectionId,'chapter');
         assert(restored.bookmarks.some(item => item.title === bookmark.title));
-        await stop.click();
-        await historyTabs.getByRole('button', {name:/^Скрытые/}).click();
-        const forget = history.getByRole('button', {name:'Удалить из истории: '+hiddenTitle, exact:true});
-        await forget.click();
+        await openQuick();
+        await menuAction('Убрать из чтения').click();
+        await tile.waitFor({state:'detached'});
+        await selectTab('Скрытые');
+        await openQuick();
+        await menuAction('Удалить из истории').click();
         const confirmDelete = page.getByRole('button', {name:'Удалить', exact:true});
         await confirmDelete.waitFor();
         await screenshot('my-books-forget-confirm');
@@ -824,9 +883,10 @@ if (require.main === module) (async() => {
             saved.byUser['history-test-reader'] = {[uid]:{percent:.14}};
             localStorage.setItem(key,JSON.stringify(saved));
         }, {uid:uids[2],progress:cancelled.progress});
-        await forget.click();
+        await openQuick();
+        await menuAction('Удалить из истории').click();
         await confirmDelete.click();
-        await forget.waitFor({state:'detached'});
+        await tile.waitFor({state:'detached'});
         await page.reload();
         await historyTabs.getByRole('button', {name:/^Скрытые/}).click();
         await history.getByText('Здесь появятся книги, которые вы убрали из чтения.').waitFor();

@@ -22,16 +22,7 @@
                         <div v-for="slot in 3" :key="slot" class="books-placeholder" aria-hidden="true" />
                     </div>
                     <div v-else-if="items.length" class="books-grid">
-                        <div v-for="book in items" :key="bookUid(book)">
-                            <BookTile :book="book" />
-                            <q-btn v-if="!listId && config.profileAuthorized && (book.state === 'reading' || book.state === 'hidden')"
-                                flat dense no-caps align="left" class="books-history-action" :label="book.hidden ? 'Вернуть в историю' : 'Убрать из чтения'"
-                                :aria-label="(book.hidden ? 'Вернуть в историю: ' : 'Убрать из чтения: ') + book.title"
-                                :disable="!!changingBook" @click="changeHistory(book)" />
-                            <q-btn v-if="!listId && filter === 'hidden' && book.hidden && config.profileAuthorized"
-                                flat dense no-caps align="left" class="books-history-action" color="negative" label="Удалить из истории"
-                                :aria-label="'Удалить из истории: ' + book.title" :disable="!!changingBook" @click="changeHistory(book, true)" />
-                        </div>
+                        <BookTile v-for="book in items" :key="bookUid(book)" :book="book" quick-actions :history-generation="listId ? undefined : resultGeneration" />
                     </div>
                     <div v-else-if="!error" class="library-empty">
                         <q-icon name="la la-book-open" size="32px" />
@@ -42,7 +33,6 @@
                         <q-btn unelevated no-caps color="primary" label="Открыть каталог" to="/books" />
                     </div>
                     <LibraryNotice v-if="error" error title="Не удалось загрузить книги" message="Проверьте подключение и попробуйте ещё раз." action-label="Повторить" :busy="loading" @action="load" />
-                    <p v-if="visibilityError" role="alert">{{ visibilityError }}</p>
                     <p v-if="count > items.length" class="library-page__subtitle">Показано {{ items.length }} из {{ count }}. Уточните поиск, чтобы найти нужную книгу.</p>
                 </div>
             </template>
@@ -51,9 +41,7 @@
 </template>
 
 <script setup>
-import {ref, computed, watch, getCurrentInstance, onBeforeUnmount, onDeactivated} from 'vue';
-import escape from 'lodash/escape';
-import {clearStoredReaderProgress} from '../Reader/readerProgressStorage';
+import {ref, computed, watch, onBeforeUnmount, onDeactivated} from 'vue';
 import {useRoute} from 'vue-router';
 import BookTile from './BookTile.vue';
 import LibraryNotice from './LibraryNotice.vue';
@@ -63,7 +51,6 @@ import {useLibraryPage} from './useLibraryPage';
 
 const {library, active} = useLibraryPage('Мои книги', () => {library.repository.loadReading(true); load();});
 const {state, config} = library;
-const root = getCurrentInstance().proxy.$root;
 const route = useRoute(), filter = ref('reading'), query = ref(''), items = ref([]), count = ref(0), error = ref(''), loading = ref(false), loaded = ref(false);
 const favoritesSupported = computed(() => config.value.clientApi?.features?.includes('libraryFollowNews') === true);
 const favoritesView = computed(() => favoritesSupported.value && route.path === '/my-books' && route.query.view === 'favorites');
@@ -74,49 +61,11 @@ const favoritesAuthorized = computed(() => favoritesSupported.value && config.va
 const visibleLists = computed(() => readingLocked.value ? [] : state.lists);
 const selectedList = computed(() => visibleLists.value.find(list => list.id === listId.value));
 const tabs = [{id: 'reading', label: 'Читаю'}, {id: 'read', label: 'Прочитано'}, {id: 'all', label: 'Все'}, {id: 'hidden', label: 'Скрытые'}];
-const changingBook = ref(''), visibilityError = ref('');
-let resultGeneration;
+const resultGeneration = ref();
 function tabCount(id) {
     const counters = state.reading?.counters;
     if (!counters) return '';
     return id === 'all' ? (counters.reading || 0) + (counters.read || 0) : counters[id] || 0;
-}
-async function changeHistory(book, remove = false) {
-    const owner = config.value.currentUserId, epoch = state.revision;
-    if (!owner || !config.value.profileAuthorized || changingBook.value) return;
-    const hidden = !book.hidden;
-    const generation = resultGeneration;
-    changingBook.value = book.bookUid;
-    visibilityError.value = '';
-    try {
-        if (remove) {
-            const confirmed = await root.stdDialog.confirm(
-                `Удалить «${escape(book.title)}» из истории? Позиция чтения и все ваши закладки в этой книге будут удалены. Сама книга останется в библиотеке.`,
-                'Удалить из истории', {okLabel:'Удалить'});
-            if (!confirmed || epoch !== state.revision || !active.value) return;
-        }
-        const result = remove
-            ? await library.api.forgetHiddenBook(book, generation, owner)
-            : await library.api.setReadingHistoryHidden(book, hidden, generation, owner);
-        if (remove && result.success) clearStoredReaderProgress(owner, book.bookUid);
-        if (epoch !== state.revision) return;
-        if (remove ? result.success : result.progress?.hidden === hidden) {
-            if (!listId.value && items.value.includes(book)) {
-                items.value = items.value.filter(item => item !== book);
-                count.value--;
-            }
-        } else {
-            visibilityError.value = 'Позиция чтения изменилась. Попробуйте ещё раз.';
-        }
-        await library.repository.refreshReading();
-    } catch (failure) {
-        if (epoch === state.revision) {
-            if (profileLoginError(failure)) library.repository.requireLogin('reading');
-            else visibilityError.value = failure.message || 'Не удалось изменить статус книги.';
-        }
-    } finally {
-        if (epoch === state.revision) changingBook.value = '';
-    }
 }
 let sequence = 0, timer, running = false, queued = false;
 let resultList;
@@ -145,7 +94,7 @@ async function load() {
                     : await library.api.getUserReadingLibrary({state: filter.value, excludeHidden:filter.value === 'all', query: query.value || '', sort: 'updatedDesc', limit: 100}, {suppressProfileLogin: true});
                 if (!active.value || request !== sequence || epoch !== state.revision) continue;
                 items.value = (list ? response.books || [] : response.items || []).filter(book => bookUid(book) && (!book.hidden || (!list && filter.value === 'hidden')));
-                resultGeneration = response.progressGeneration;
+                resultGeneration.value = response.progressGeneration;
                 count.value = Number(list ? response.list?.bookCount : response.count) || items.value.length;
                 resultList = list;
                 loaded.value = true;
@@ -171,8 +120,7 @@ watch([listId, favoritesView], ([list, favorites]) => {
     invalidateRequest();
     if (active.value) load();
 });
-watch(() => state.revision, () => {clearResults(); favoriteCount.value = null; changingBook.value = ''; visibilityError.value = '';});
-watch([filter, query, listId, favoritesView], () => {visibilityError.value = '';});
+watch(() => state.revision, () => {clearResults(); favoriteCount.value = null;});
 watch(() => state.readingLoginRequired, required => {if (required) {sequence++; clearResults();}});
 watch([active, favoritesView, () => state.revision, favoritesAuthorized, () => state.readingRevision], async([enabled, favorites, epoch, authorized], _, cleanup) => {
     if (!authorized) {favoriteCount.value = null; return;}
@@ -210,9 +158,8 @@ onBeforeUnmount(() => clearTimeout(timer));
 .books-results {min-height: 260px;}
 .books-grid {display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 28px 24px;}
 .books-grid :deep(.book-cover) {max-height: 230px;}
-.books-grid > div {min-width: 0;}
-.books-history-action {display: flex; width: fit-content; max-width: 100%; margin-top: 4px; padding-inline: 0; color: var(--app-link); font-size: 12px; text-align: start;}
+.books-grid > * {min-width: 0;}
 .books-placeholder {aspect-ratio: 2 / 3; max-height: 230px; border-radius: 9px; background: var(--app-surface-3);}
 @media (max-width: 599px) {.books-heading .q-btn {font-size: 12px; padding-left: 0;} .books-tabs button {padding: 10px;} .books-search {max-width: none;} .books-grid {gap: 24px 18px; grid-template-columns: repeat(3, minmax(0, 1fr));}}
-@media (max-width: 359px) {.books-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} .books-placeholder:nth-child(3) {display: none;}}
+@media (max-width: 389px) {.books-grid {grid-template-columns: repeat(2, minmax(0, 1fr));} .books-placeholder:nth-child(3) {display: none;}}
 </style>

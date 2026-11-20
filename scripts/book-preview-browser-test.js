@@ -83,7 +83,7 @@ async function fixture(directory) {
         const lightReader = new URL(await modal.getByRole('link',{name:'Лёгкая читалка',exact:true}).getAttribute('href'),base);
         assert.equal(lightReader.pathname,'/ebook/read');assert(lightReader.searchParams.get('uid'));
         assert.equal(await modal.locator('.book-actions-secondary, .book-actions-card-link').count(),0,'No extra actions below the annotation');
-        for(const [name,icon] of [['Отправить книгу','send'],['Полки и статус','shelf'],['Поделиться книгой','share']]) {
+        for(const [name,icon] of [['Отправить книгу','send'],['Поделиться книгой','share']]) {
             const svg=modal.getByRole('button',{name,exact:true}).locator('svg[data-book-action-icon="'+icon+'"]');
             assert.equal(await svg.count(),1);const box=await svg.boundingBox();assert.equal(box.width,24);assert.equal(box.height,24);
         }
@@ -107,8 +107,8 @@ async function fixture(directory) {
         const menuBox=await shareMenu.boundingBox();assert(menuBox.x>=0&&menuBox.x+menuBox.width<=321,'The share menu fits a narrow phone');
         await page.screenshot({path:path.join(directory,'preview-share-menu-320.png')});
         await page.keyboard.press('Escape');await shareMenu.waitFor({state:'hidden'});assert(await modal.isVisible());
-        await modal.getByRole('button',{name:'Полки и статус',exact:true}).click();
-        const libraryMenu=page.getByRole('menu',{name:'Полки и статус',exact:true});await libraryMenu.getByRole('menuitem',{name:'Добавить на полку',exact:true}).waitFor();
+        await modal.getByRole('button',{name:'Быстрые действия',exact:true}).click();
+        const libraryMenu=page.getByRole('menu',{name:'Быстрые действия',exact:true});await libraryMenu.getByRole('menuitem',{name:'Добавить на полку',exact:true}).waitFor();
         await page.keyboard.press('Escape');await libraryMenu.waitFor({state:'hidden'});
         await page.setViewportSize({width:1440,height:1000});
         const details=modal.locator('.book-actions-details');await modal.getByText('2003',{exact:true}).waitFor();await details.getByText('север, сказка',{exact:true}).waitFor();
