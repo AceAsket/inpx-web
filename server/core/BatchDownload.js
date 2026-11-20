@@ -166,7 +166,11 @@ function register(app, config, recordDownload) {
         if (deliverFile(req,res,'batch',ticket.file,complete=>{
             finish();
             if (complete) record?.();
-        })) return;
+        })) {
+            // The local response only handed the file to Rust. Its receipt finishes the transfer.
+            res.off('close', finish);
+            return;
+        }
         res.once('finish', finish);
         if (record) countDownload(res,record);
         res.download(ticket.file, 'books.zip', error => {finish(); if (error && !res.headersSent) res.sendStatus(500);});

@@ -26,7 +26,7 @@ async function fixture(directories, enabled) {
         if (id) req.profileAccessIdentity = {user:{id}};
         proceed();
     });
-    batchDownload.register(app,{bookPathStatic:'/library/book'},(req,count)=>()=>{
+    batchDownload.register(app,{bookPathStatic:'/library/book'},async (req,count)=>()=>{
         recordedBatch.resolve({profile:req.profileAccessIdentity?.user?.id,count});
     });
     app.get('/library/book/a123/malformed',(_req,res)=>res.set(marker,'1').end('private descriptor'));
