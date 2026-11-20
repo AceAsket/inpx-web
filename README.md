@@ -39,6 +39,18 @@ docker run -d --name inpx-web --restart unless-stopped \
 
 Откройте `http://localhost:12380` на сервере или укажите его адрес вместо `localhost`. Профили и настройки сохраняются в томе `inpx-web-data`. [Пример Docker Compose](./docker-compose.full.yml) · [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
 
+## Интерфейс
+
+На обзоре видны текущая книга, прогресс чтения и полки с новинками.
+
+[![Обзор библиотеки с полкой новинок и кнопкой продолжения чтения](./docs/images/rust-2-overview.png)](./docs/images/rust-2-overview.png)
+
+| Каталог с фильтрами и карточками книг | Читалка в режиме разворота, тема «Сепия» |
+| --- | --- |
+| [![Поиск и карточки книг в каталоге](./docs/images/rust-2-catalog.png)](./docs/images/rust-2-catalog.png) | [![Две страницы открытой книги в читалке](./docs/images/rust-2-reader.png)](./docs/images/rust-2-reader.png) |
+
+Скриншоты сделаны в Rust 2.0.0 на демонстрационной библиотеке. Тексты и иллюстрации взяты из [Standard Ebooks](https://standardebooks.org/ebooks).
+
 ## Android
 
 ### Читалка INPX Reader для Android
