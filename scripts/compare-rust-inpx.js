@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const {spawn} = require('node:child_process');
 const {createHash} = require('node:crypto');
 const {performance} = require('node:perf_hooks');
-const {createInterface} = require('node:readline');
+const readJsonLines = require('../server/core/readJsonLines');
 const InpxParser = require('../server/core/InpxParser');
 
 function fingerprint() {
@@ -39,12 +39,10 @@ async function readRust(executable, indexPath) {
         child.once('error', error => resolve(error));
         child.once('close', (code, signal) => resolve(code === 0 ? null : new Error(stderr.trim() || `Rust reader exited with ${signal || code}`)));
     });
-    const lines = createInterface({input:child.stdout, crlfDelay:Infinity});
     const result = fingerprint();
     let info;
     try {
-        for await (const line of lines) {
-            const value = JSON.parse(line);
+        for await (const value of readJsonLines(child.stdout)) {
             if (info) result.add(value);
             else {
                 assert(value?.info, 'The first Rust output line must contain INPX metadata');
@@ -56,7 +54,6 @@ async function readRust(executable, indexPath) {
         assert(info, 'Rust reader returned no INPX metadata');
         return result.finish(info, started);
     } finally {
-        lines.close();
         if (child.exitCode === null && child.signalCode === null) child.kill();
         await finished;
     }

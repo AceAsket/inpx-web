@@ -97,6 +97,30 @@ fn falls_back_to_legacy_structure_and_decodes_non_utf8_rows() {
 }
 
 #[test]
+fn reads_lightlib_numbered_fields_and_preserves_the_file_identity() {
+    let mut archive = Archive::open(index(&[
+        ("structure.info", b"\xef\xbb\xbf0 TITLE;\r\n2 RATE;\r\n1 FILE;\r\n3 PAGES; // a;b;c\r\n4 PUBLISHER;\r\n5 ISBN;\r\n6 KEYWORD;"),
+        ("version.inf", b"20261101\r\n"),
+        ("books.inp", b"Volume\x040012\x045\x04210\x04Pub;City;1994\x04978-0-306-40615-7\x04space, travel\r\n"),
+    ])).unwrap();
+    assert_eq!(archive.info().version, "20261101");
+    archive
+        .records(|book| {
+            assert_eq!(book["title"], "Volume");
+            assert_eq!(book["file"], "0012");
+            assert_eq!(book["libid"], "0012");
+            assert_eq!(book["librate"], 5);
+            assert_eq!(book["pages"], "210");
+            assert_eq!(book["publisher"], "Pub;City;1994");
+            assert_eq!(book["isbn"], "978-0-306-40615-7");
+            assert_eq!(book["keywords"], "space, travel");
+            assert_eq!(book["folder"], "books.zip");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn propagates_a_stopped_consumer() {
     let mut archive = Archive::open(index(&[("books.inp", b"one\ntwo")])).unwrap();
     let mut visits = 0;

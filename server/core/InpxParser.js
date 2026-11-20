@@ -28,6 +28,19 @@ const recStructType = {
     keywords: 'S',
 }
 
+function numberedColumns(structure) {
+    const lines = structure.split(/\r?\n/).map(line => line.split('//', 1)[0].trim()).filter(Boolean);
+    if (!/^\d+(?:\s|$)/.test(lines[0] || '')) return null;
+    const fields = lines.map(line => {
+        const match = /^(\d+)\s+([a-z0-9_]+)\s*;?$/i.exec(line);
+        if (!match) throw new Error('Invalid numbered INPX structure.info');
+        const name = match[2].toLowerCase();
+        return {index: Number(match[1]), name: name === 'rate' ? 'librate' : name === 'keyword' ? 'keywords' : name};
+    }).sort((a, b) => a.index - b.index);
+    if (fields.some((field, i) => field.index !== i)) throw new Error('Invalid numbered INPX structure.info');
+    return fields.map(field => field.name);
+}
+
 class InpxParser {
     constructor() {
         this.inpxInfo = {};
@@ -94,20 +107,25 @@ class InpxParser {
             
             await readFileCallback({fileName: versionInfo, current: ++current});
             info.version = await this.safeExtractToString(zipReader, versionInfo);
+            if (!info.version)
+                info.version = await this.safeExtractToString(zipReader, 'version.inf');
 
             //структура
             if (!info.structure)
                 info.structure = defaultStructure;
-            const structure = info.structure.toLowerCase().split(';');
+            const numbered = numberedColumns(info.structure);
+            const structure = numbered || info.structure.toLowerCase().split(';');
+            const libidFromFile = !!numbered && !structure.includes('libid');
 
             info.recStruct = this.getRecStruct(structure);
+            if (libidFromFile) info.recStruct.push({field: 'libid', type: 'S'});
 
             //парсим inp-файлы
             this.chunk = [];
             for (const inpFile of inpFiles) {
                 await readFileCallback({fileName: inpFile, current: ++current});
                 
-                await this.parseInp(zipReader, inpFile, structure, parsedCallback);
+                await this.parseInp(zipReader, inpFile, structure, parsedCallback, libidFromFile);
             }
 
             if (this.chunk.length) {
@@ -119,7 +137,7 @@ class InpxParser {
         }
     }
 
-    async parseInp(zipReader, inpFile, structure, parsedCallback) {
+    async parseInp(zipReader, inpFile, structure, parsedCallback, libidFromFile) {
         const inpBuf = await zipReader.extractToBuf(inpFile);
         const rows = inpBuf.toString().split('\n');
 
@@ -165,6 +183,7 @@ class InpxParser {
             rec.del = parseInt(rec.del, 10) || 0;
             rec.insno = parseInt(rec.insno, 10) || 0;
             rec.librate = parseInt(rec.librate, 10) || 0;
+            if (libidFromFile && rec.file !== undefined) rec.libid = rec.file;
 
             //пушим
             this.chunk.push(rec);

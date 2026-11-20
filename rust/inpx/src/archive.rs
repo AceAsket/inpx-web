@@ -54,6 +54,60 @@ fn record_fields(structure: &str) -> Vec<Field> {
 pub struct Archive<R> {
     zip: ZipArchive<R>,
     info: Info,
+    columns: String,
+    libid_from_file: bool,
+}
+
+// LightLib lists one zero-based column per line. Comments may contain semicolons.
+fn numbered_columns(structure: &str) -> io::Result<Option<String>> {
+    let mut lines = structure
+        .lines()
+        .map(|line| {
+            line.split_once("//")
+                .map_or(line, |(field, _)| field)
+                .trim()
+        })
+        .filter(|line| !line.is_empty())
+        .peekable();
+    if !lines
+        .peek()
+        .and_then(|line| line.split_whitespace().next())
+        .is_some_and(|token| token.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Ok(None);
+    }
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid numbered INPX structure.info",
+        )
+    };
+    let mut fields = Vec::new();
+    for line in lines {
+        let (index, name) = line.split_once(char::is_whitespace).ok_or_else(invalid)?;
+        let index = index.parse::<usize>().map_err(|_| invalid())?;
+        let name = name.trim().trim_end_matches(';').trim();
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err(invalid());
+        }
+        let field = match name.to_ascii_lowercase().as_str() {
+            "rate" => "librate".into(),
+            "keyword" => "keywords".into(),
+            field => field.to_owned(),
+        };
+        fields.push((index, field));
+    }
+    fields.sort_unstable_by_key(|(index, _)| *index);
+    if fields.iter().enumerate().any(|(i, (index, _))| i != *index) {
+        return Err(invalid());
+    }
+    Ok(Some(
+        fields
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect::<Vec<_>>()
+            .join(";"),
+    ))
 }
 
 pub enum Event<'a> {
@@ -69,15 +123,31 @@ impl<R: Read + Seek> Archive<R> {
     pub fn open(source: R) -> Result<Self, ZipError> {
         let mut zip = ZipArchive::new(source)?;
         let collection = read_info(&mut zip, "collection.info");
-        let version = read_info(&mut zip, "version.info");
+        let mut version = read_info(&mut zip, "version.info");
+        if version.is_empty() {
+            version = read_info(&mut zip, "version.inf");
+        }
         let mut structure = read_info(&mut zip, "structure.info");
         if structure.is_empty() {
             structure = DEFAULT_STRUCTURE.into();
         }
 
-        let rec_struct = record_fields(&structure);
+        let numbered = numbered_columns(&structure)?;
+        let libid_from_file = numbered
+            .as_ref()
+            .is_some_and(|s| !s.split(';').any(|field| field == "libid"));
+        let columns = numbered.unwrap_or_else(|| structure.to_lowercase());
+        let mut rec_struct = record_fields(&columns);
+        if libid_from_file {
+            rec_struct.push(Field {
+                field: "libid".into(),
+                kind: 'S',
+            });
+        }
         Ok(Self {
             zip,
+            columns,
+            libid_from_file,
             info: Info {
                 collection,
                 structure,
@@ -89,6 +159,10 @@ impl<R: Read + Seek> Archive<R> {
 
     pub fn info(&self) -> &Info {
         &self.info
+    }
+
+    pub fn columns(&self) -> impl Iterator<Item = &str> {
+        self.columns.split(';')
     }
 
     pub fn into_info(self) -> Info {
@@ -110,8 +184,7 @@ impl<R: Read + Seek> Archive<R> {
     }
 
     pub fn scan(&mut self, mut visit: impl FnMut(Event<'_>) -> io::Result<()>) -> io::Result<u64> {
-        let lower = self.info.structure.to_lowercase();
-        let columns: Vec<_> = lower.split(';').collect();
+        let columns: Vec<_> = self.columns.split(';').collect();
         let mut row = Vec::new();
         let mut count = 0;
 
@@ -144,11 +217,13 @@ impl<R: Read + Seek> Archive<R> {
                 if row.last() == Some(&b'\r') {
                     row.pop();
                 }
-                visit(Event::Record(record::parse(
-                    &String::from_utf8_lossy(&row),
-                    &columns,
-                    &folder,
-                )))?;
+                let mut record = record::parse(&String::from_utf8_lossy(&row), &columns, &folder);
+                if self.libid_from_file
+                    && let Some(file) = record.get("file")
+                {
+                    record.insert("libid".into(), file.clone());
+                }
+                visit(Event::Record(record))?;
                 count += 1;
             }
         }

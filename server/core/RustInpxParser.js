@@ -1,5 +1,5 @@
 const {spawn} = require('node:child_process');
-const {createInterface} = require('node:readline');
+const readJsonLines = require('./readJsonLines');
 const InpxParser = require('./InpxParser');
 
 const infoFiles = ['collection.info', 'structure.info', 'version.info'];
@@ -13,11 +13,9 @@ async function parse(binary, file, onFile, onBooks) {
         child.once('close', (code, signal) => resolve(code === 0 ? null :
             new Error(stderr.trim() || `Rust INPX reader exited (${signal || code})`)));
     });
-    const lines = createInterface({input:child.stdout, crlfDelay:Infinity});
     let metadata, totalFiles, current = 0, batch = [];
     try {
-        for await (const line of lines) {
-            const frame = JSON.parse(line);
+        for await (const frame of readJsonLines(child.stdout)) {
             if (!metadata) {
                 if (!Array.isArray(frame.info?.recStruct) || !Number.isSafeInteger(frame.totalFiles) || frame.totalFiles < 3)
                     throw new Error('Invalid Rust INPX header');
@@ -44,7 +42,6 @@ async function parse(binary, file, onFile, onBooks) {
         if (batch.length) await onBooks(batch);
         return metadata;
     } finally {
-        lines.close();
         if (child.exitCode === null && child.signalCode === null) child.kill();
         await done;
     }

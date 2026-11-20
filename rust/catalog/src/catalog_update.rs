@@ -549,8 +549,7 @@ fn scan_archive(
 ) -> Result<Info> {
     let path = source.inpx.as_ref().ok_or("missing INPX source path")?;
     let archive = Archive::open(BufReader::new(File::open(path)?))?;
-    let structure = archive.info().structure.to_lowercase();
-    let columns: HashSet<_> = structure.split(';').collect();
+    let columns: HashSet<_> = archive.columns().collect();
     if !TEXT_FIELDS.iter().all(|key| columns.contains(key))
         || columns.iter().any(|key| {
             matches!(*key, "id" | "_uid")

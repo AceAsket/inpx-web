@@ -39,6 +39,35 @@ async function inpx(file,rating) {
     return line;
 }
 
+async function testLightLibNumberedFieldsAndUnicodeInStreamedRecords() {
+    await temporary(async dir => {
+        const file = path.join(dir, 'lightlib.inpx');
+        const title = 'Первая\u2028часть\u2029книги';
+        await writeInpx(file, {
+            'structure.info': ['\uFEFF0 TITLE;', '2 RATE;', '1 FILE;', '3 PAGES; // pages; count', '4 KEYWORD;'],
+            'version.inf': ['20261101'],
+            'library.inp': [[title, '0012', '4', '205', 'космос'].join('\x04')],
+        });
+        const parser = new (require('../server/core/InpxParser'))();
+        const rows = [];
+        await parser.parse(file, null, batch => rows.push(...batch));
+        assert.equal(parser.info.version, '20261101');
+        assert.equal(rows.length, 1);
+        const [book] = rows;
+        assert.deepEqual([book.title, book.libid, book.librate, book.pages, book.keywords],
+            [title, '0012', 4, '205', 'космос']);
+
+        const {Readable} = require('node:stream');
+        const readJsonLines = require('../server/core/readJsonLines');
+        const bytes = Buffer.from(JSON.stringify(parser.info) + '\n' + JSON.stringify(book));
+        const split = bytes.indexOf(Buffer.from('\u2028')) + 1;
+        const stream = Readable.from([bytes.subarray(0, split), bytes.subarray(split)]);
+        const frames = [];
+        for await (const frame of readJsonLines(stream)) frames.push(frame);
+        assert.deepEqual(frames, [parser.info, book]);
+    });
+}
+
 async function testRc13InpxUidSurvivesMetadataAndForcedRebuildFromLegacy14() {
     await temporary(async dir => {
         const file = path.join(dir,'library.inpx'), oldPath = path.join(dir,'old');
@@ -511,7 +540,8 @@ async function testRc13IsbnIndexReleasesIdleAndOversizedStateWithoutBreakingRead
     });
 }
 
-module.exports = [testRc13InpxUidSurvivesMetadataAndForcedRebuildFromLegacy14,
+module.exports = [testLightLibNumberedFieldsAndUnicodeInStreamedRecords,
+    testRc13InpxUidSurvivesMetadataAndForcedRebuildFromLegacy14,
     testRc13InpxPhysicalIdentitySeparatesSourcesAndAmbiguousFiles,
     testInpxLibraryMovePreservesUidsForRepeatedRecordsAcrossArchives,
     testIndexStatisticsStopsReportingProgressWhenUniqueIndexFails,

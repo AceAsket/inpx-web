@@ -102,6 +102,17 @@ async function verify(url, state, reindex) {
             const [north] = state.books;
             north.cover = state.replacement;
             await zip(join(state.directory, north.id, 'covers', 'books.zip'), [['1', north.cover]]);
+            // Upgrade just the second source to LightLib v2. check() reuses the saved UID and progress.
+            const south = state.books[1];
+            const columns = ['AUTHOR','GENRE','TITLE','SERIES','SERNO','FILE','SIZE','PAGES','DEL','EXT',
+                'DATE','LANG','RATE','IMAGES','YEAR','PUBLISHER','ISBN','KEYWORD'];
+            const structure = columns.map((field, i) => i + ' ' + field + ';').join('\r\n');
+            const row = ['Same,Author:', 'sf:', 'Shared catalogue title', '', 0, 1, 512, 225, 0, 'fb2',
+                '2026-11-18', 'en', 0, 1, '2026', 'Press;City;2026', south.isbn, ''];
+            await zip(join(state.directory, south.id, 'library.inpx'), [
+                ['collection.info', south.id], ['structure.info', structure], ['version.inf', '20261101'],
+                ['books.inp', row.join('\x04') + '\n'],
+            ]);
             const status = async () => (await fetch(url + '/api/index-status')).json();
             const before = (await status()).indexUpdate.updatedAt;
             assert.equal((await send('admin-reindex')).started, true);
