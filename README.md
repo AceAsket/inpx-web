@@ -9,14 +9,12 @@ inpx-web-7z
 
 Чтобы ускорить работу с большими библиотеками, мы перенесли разработку сервера с Node.js на Rust. **Node.js 1.8.3** — последняя ветка классического сервера. Она будет получать только исправления ошибок. Все новые функции будут выходить только в **Rust 2.x**.
 
-Классический сервер с JembaDB поддерживается в ветке `nodejs_depr`. Для проверки версии 1.8.3 используйте Docker-образ `aceasket/inpx-web-7z:1.8.3-rc.30` или standalone из того же выпуска. Тег Docker `latest` обновляет сервер до Rust 2.0.0. Для стабильного классического Node.js закрепите `1.8.2`. [Скачать RC30](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3-rc.30) · [Сервер Rust 2.0.0](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.0)
+Для классического сервера с JembaDB используйте Docker-образ `aceasket/inpx-web-7z:1.8.3` или скачайте standalone для Linux, Windows и macOS. Исправления выходят в ветке `nodejs_depr`. Тег Docker `latest` указывает на стабильный Rust. [Скачать Node.js 1.8.3](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3) · [История изменений](./CHANGELOG.md)
 
 [![INPX Reader — скачать читалку для Android](https://img.shields.io/badge/INPX_Reader-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK-0F766E?style=for-the-badge&logo=android&logoColor=white)](https://github.com/AceAsket/inpx-reader-releases/releases/latest)
 [![INPX Server — сервер для Android](https://img.shields.io/badge/INPX_Server-%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%20%D0%B4%D0%BB%D1%8F%20Android-455A64?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
 
 > **Читать и слушать на Android:** [скачайте INPX Reader](https://github.com/AceAsket/inpx-reader-releases/releases/latest) — наше клиентское приложение для подключения к вашей библиотеке INPX Web.
-
-Стабильная версия **1.8.2** доступна в Docker и в виде готовых сборок для Linux, Windows и macOS. Для сборки из исходников используйте тег `v1.8.2`. Разработка классического сервера идёт в ветке `nodejs_depr`. [Скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) · [История изменений](./CHANGELOG.md)
 
 В 1.8.2 добавлены OPDS 2.0, лёгкий интерфейс `/ebook` и синхронизация прогресса с KOReader. Читалка сохраняет место при выходе из полноэкранного режима, в том числе после перелистывания. [Подключение KOReader](./docs/koreader-sync.md)
 
@@ -149,7 +147,7 @@ inpx-web-7z
 
 ## Сборка Docker-контейнера
 
-Основной способ запуска рассчитан на Docker. Тег `aceasket/inpx-web-7z:1.8.2` фиксирует эту версию, а `latest` указывает на стабильный Rust. Образ рассчитан на `linux/amd64`. Для Linux ARM64 есть отдельный standalone-архив в GitHub Releases. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
+Основной способ запуска рассчитан на Docker. Тег `aceasket/inpx-web-7z:1.8.3` фиксирует эту версию, а `latest` указывает на стабильный Rust. Образ рассчитан на `linux/amd64`. Для Linux ARM64 есть отдельный standalone-архив в GitHub Releases. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
 
 Готовые YAML-примеры:
 
@@ -162,7 +160,7 @@ inpx-web-7z
 Для самостоятельной сборки сначала получите исходники релиза:
 
 ```sh
-git clone --branch v1.8.2 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.8.3 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 ```
 
@@ -236,7 +234,7 @@ docker run -d \
   -v /path/on/host/fb2cng:/config/fb2cng:ro \
   -v /path/on/host/library:/library:ro \
   -v /path/on/host/data:/usr/local/bin/.inpx-web \
-  aceasket/inpx-web-7z:1.8.2
+  aceasket/inpx-web-7z:1.8.3
 ```
 
 При первом обращении к конвертации приложение проверяет, что файл существует, читается и принимается командой `fbc --config PATH dumpconfig`. Ошибочный путь или YAML возвращает явную ошибку вместо незаметного запуска с настройками по умолчанию. Кэш учитывает логический формат (`epub` и `epub3` раздельно), содержимое и расположение YAML, версию встроенного fb2cng и настроенные пути конвертеров.
@@ -300,7 +298,7 @@ docker run -d \
 Для обновления сначала скачайте новый образ, затем пересоздайте контейнер. Повторите свою исходную команду `docker run`, заменив только тег образа: сохраните все переменные окружения, порты и тома, включая `INPX_LIBRARY_SOURCES`, настройки авторизации и отправки книг. Ниже пример для одной библиотеки; замените пути на свои. Команды соединены через `&&`, чтобы не удалять работающий контейнер при ошибке скачивания образа.
 
 ```sh
-docker pull aceasket/inpx-web-7z:1.8.2 &&
+docker pull aceasket/inpx-web-7z:1.8.3 &&
 docker rm -f inpx-web &&
 docker run -d \
   --name=inpx-web \
@@ -313,7 +311,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:1.8.2
+  aceasket/inpx-web-7z:1.8.3
 ```
 
 При локальной сборке используйте имя своего образа. Если сервис запущен через Compose, сохраните настройки в YAML, укажите нужный тег в `image` и выполните `docker compose pull && docker compose up -d`.
@@ -334,7 +332,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:1.8.2
+  aceasket/inpx-web-7z:1.8.3
 ```
 
 Важно:
@@ -695,7 +693,7 @@ docker run -d \
   -e EMAIL_FROM=user@example.com \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:1.8.2
+  aceasket/inpx-web-7z:1.8.3
 ```
 
 Переменные для Telegram:
@@ -879,7 +877,7 @@ http://<ваш_хост>:12380/opds/v2?user=<profileId>
 
 Начиная с **1.7.9-rc.1**, сервер поддерживает нативный [Custom metadata provider Audiobookshelf](https://audiobookshelf.org/docs/documentation/community/community-providers/). Он позволяет подбирать метаданные для аудиокниги по электронным книгам в INPX-библиотеке, включая самостоятельно озвученные книги.
 
-Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:1.8.2` и добавьте к своей команде запуска:
+Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:1.8.3` и добавьте к своей команде запуска:
 
 ```sh
 -e INPX_ABS_ENABLED=true \
@@ -1056,7 +1054,7 @@ http://127.0.0.1:12380/#/reader-lab?sample=night-watch.fb2&debugReader=1&debugRe
 Сборка на машине с архитектурой целевой платформы предпочтительна; CI использует отдельный ARM64 runner. Для кросс-сборки linux-arm64 на x64 потребуется [QEMU](https://wiki.debian.org/QemuUserEmulation). Linux-бинарники используют glibc; для Alpine используйте Docker-образ на Debian.
 
 ```sh
-git clone --branch v1.8.2 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.8.3 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 npm ci
 npm run release:linux
@@ -1135,7 +1133,7 @@ sudo apt install -y nodejs
 node --version
 
 # подготовка
-git clone --branch v1.8.2 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v1.8.3 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 npm ci
 npm run build:client
