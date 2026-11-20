@@ -18,7 +18,7 @@ async function makeRelease(target) {
         const zipFile = `${outDir}/${pckg.name}-${pckg.version}-${target}.zip`;
 
         const bin = `${srcDir}/bin`;
-        if (!applicationOnly && !await fs.pathExists(`${bin}/public.json`)) {
+        if (!applicationOnly) {
             if (target === nativeTarget) await bundleMutool(target, bin);
             else if (!await fs.pathExists(`${bin}/mutool${target === 'win' ? '.exe' : ''}`))
                 throw new Error(`Stage the ${target} MuPDF files in ${bin} before cross-packaging, or pass --application-only.`);

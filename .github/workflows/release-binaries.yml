@@ -176,6 +176,10 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y lzip
 
+      - name: Set up MSBuild for MuPDF
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
+
       - name: Stage the Windows Rust converters and Visual C++ runtime
         if: matrix.target == 'win'
         shell: pwsh

@@ -144,6 +144,7 @@ export default {
         author: {type: String, default: ''},
         cover: {type: String, default: ''},
         browserSpeechAvailable: {type: Boolean, default: false},
+        followReady: {type: Boolean, default: true},
     },
     emits: ['read-here','listen-here','use-browser','follow-anchor'],
     data() {
@@ -192,6 +193,10 @@ export default {
         bookUid() { this.reset(); },
         profileIdentity() { this.reset(); },
         speaker() { this.clearAudio(); this.loadPlan(); },
+        followReady(ready) {
+            this.followedGeneration = null;
+            if (ready) this.followCurrentClip();
+        },
         mode() { this.clearAudio(); this.chapters = []; this.chapterIndex = 0; this.loadPlan(); },
     },
     mounted() {
@@ -228,7 +233,10 @@ export default {
             this.stopForSleep(); return true;
         },
         stopForSleep() {this.autoPlay = false; this.$refs.audio?.pause(); this.savePosition(true); this.cancelAudioWork(); this.disarmSleep();},
-        onTimeUpdate() {if (!this.isPreview) this.checkSleep(); this.savePosition(false);},
+        onTimeUpdate() {
+            if (!this.isPreview && !this.checkSleep()) this.followCurrentClip();
+            this.savePosition(false);
+        },
         currentClipAnchor() {
             if (this.positionProfileIdentity && this.positionProfileIdentity !== this.profileIdentity) return;
             if (this.positionBookUid && this.positionBookUid !== this.bookUid) return;
@@ -248,10 +256,11 @@ export default {
             this.followCurrentClip();
         },
         followCurrentClip() {
-            if (!this.visible || !this.followSpeech || this.mode === 'book' || this.isPreview || this.followedGeneration === this.generation) return;
+            if (!this.visible || !this.followSpeech || !this.followReady || this.mode === 'book' || this.isPreview || this.followedGeneration === this.generation) return;
             const audio = this.$refs.audio;
             if (!this.src || !audio || audio.paused || audio.ended
-                || audio.readyState < audio.HAVE_FUTURE_DATA || audio.currentSrc !== audio.src) return;
+                || audio.readyState < audio.HAVE_CURRENT_DATA || audio.currentSrc !== audio.src
+                || audio.getAttribute('src') !== this.src) return;
             const anchor = this.currentClipAnchor();
             if (!anchor?.textSnippet) return;
             this.followedGeneration = this.generation;

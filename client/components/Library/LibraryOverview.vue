@@ -40,6 +40,7 @@
                                 <div class="current-book__caption">
                                     <q-icon name="la la-book-open" size="21px" aria-hidden="true" />
                                     <h1 id="current-book-heading">Сейчас читаю</h1>
+                                    <button v-if="config.profileAuthorized" type="button" aria-label="Убрать из «Сейчас читаю»" title="Убрать из «Сейчас читаю»" :disabled="hidingCurrent" @click="hideCurrent"><q-icon name="la la-eye-slash" size="21px" /></button>
                                     <button type="button" :aria-label="`Действия с книгой: ${books.current.title}`" @click="library.openActions(books.current)"><q-icon name="la la-ellipsis-v" size="23px" /></button>
                                 </div>
                                 <div class="current-book__body">
@@ -114,6 +115,24 @@ const searchFilters = computed(() => effectiveCatalogScope({}, settings.value, c
 const suggestionContext = computed(() => String(state.revision));
 watch(() => [active.value, state.revision], () => {searchFocused.value = false; activeSuggestionId.value = undefined; suggestionsExpanded.value = false;});
 const books = computed(() => homeBooks(state.reading?.items || []));
+const root = getCurrentInstance().proxy.$root;
+const hidingCurrent = ref(false);
+async function hideCurrent() {
+    const book = books.value.current;
+    const owner = config.value.currentUserId;
+    if (!book || !owner || !config.value.profileAuthorized || hidingCurrent.value) return;
+    hidingCurrent.value = true;
+    try {
+        const result = await library.api.updateReaderProgress(bookUid(book),
+            {hidden: true, generation: state.reading?.progressGeneration, baseRevision: book.revision},
+            {userId: owner, suppressProfileLogin: true});
+        if (config.value.currentUserId !== owner) return;
+        await repository.refreshReading();
+        if (!result.progress?.hidden) throw new Error('Позиция чтения изменилась. Попробуйте ещё раз.');
+    } catch (error) {
+        if (config.value.currentUserId === owner) root.stdDialog.alert(error.message, 'Сейчас читаю');
+    } finally { hidingCurrent.value = false; }
+}
 const currentDetails = ref({});
 const currentGenres = computed(() => previewMetadata.tokens(books.value.current?.genre || currentDetails.value.genres)
     .map(code => library.genreMap.value.get(code) || code));

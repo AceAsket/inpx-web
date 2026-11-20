@@ -57,7 +57,7 @@ async function check(directory, temp, tool, present) {
             if (ready) break;
             await delay(200);
         }
-        assert(ready, 'Packaged Node.js server must become ready');
+        assert(ready, 'Packaged server must become ready');
         const login = await fetch(url + '/ebook/login');
         const cookie = sessionCookieHeader(login)?.split(';')[0];
         await login.body.cancel();

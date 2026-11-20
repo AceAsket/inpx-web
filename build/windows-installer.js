@@ -56,7 +56,8 @@ function ensureInputFiles() {
     if (rust) {
         for (const file of ['vcruntime140.dll', 'bin/vcruntime140.dll', 'bin/inpx-catalog.exe',
             'bin/inpx-reader.exe', 'bin/public.json', 'bin/LICENSE.quickjs', 'bin/7za.exe',
-            'bin/djxl.exe', 'bin/dwebp.exe', 'bin/fbc.exe', 'bin/kindling.exe', 'bin/LICENSE.kindling'])
+            'bin/djxl.exe', 'bin/dwebp.exe', 'bin/fbc.exe', 'bin/kindling.exe', 'bin/LICENSE.kindling',
+            'bin/mutool.exe', 'bin/LICENSE.mupdf'])
             fs.accessSync(path.join(sourceDir, file));
     }
 }

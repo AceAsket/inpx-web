@@ -447,7 +447,7 @@ if (require.main === module) (async() => {
         await screenshot('app-download-dark-320');
         await appDialog.getByRole('button',{name:'Закрыть подключение',exact:true}).click();await appDialog.waitFor({state:'hidden'});
         await page.setViewportSize({width:390,height:844});
-        await page.locator('.current-book__caption button').click();
+        await page.locator('.current-book__caption').getByRole('button', {name: /^Действия с книгой/}).click();
         await page.locator('.library-book-actions').waitFor();
         const dialog = page.locator('.library-dialog-card[data-dialog-kind="book"]');
         assert((await dialog.boundingBox()).height < 700, 'The action card must fit the phone without reserved poster space');
@@ -744,6 +744,24 @@ if (require.main === module) (async() => {
         await page.locator('.current-book').waitFor();
         await api(`await root.api.updateReaderProgress(${JSON.stringify(uids[2])}, {percent:.52,sectionId:'chapter'}); return true;`);
         await page.getByRole('button', {name: 'Обновить', exact: true}).click();
+        await page.waitForFunction(() => document.querySelector('.current-book progress')?.value === .52);
+
+        const hiddenTitle = await page.locator('.current-book__title').innerText();
+        const hiddenUid = JSON.stringify(uids[2]);
+        const bookmark = {title:'Вернуться к цитате', sectionId:'chapter', percent:.52};
+        await api(`return root.api.request({action:'add-reader-bookmark', bookUid:${hiddenUid}, bookmark:${JSON.stringify(bookmark)}});`);
+        await page.getByRole('button', {name: 'Убрать из «Сейчас читаю»', exact:true}).click();
+        await page.waitForFunction(title => document.querySelector('.current-book__title')?.textContent !== title, hiddenTitle);
+        await page.reload();
+        await page.locator('.current-book__title').waitFor();
+        assert.notEqual(await page.locator('.current-book__title').innerText(), hiddenTitle);
+        const hidden = await api(`return root.api.request({action:'get-reader-state', bookUid:${hiddenUid}});`);
+        assert.equal(hidden.progress.hidden, true);
+        assert(hidden.bookmarks.some(item => item.title === bookmark.title));
+        const restored = await api(`return root.api.updateReaderProgress(${hiddenUid}, {hidden:false});`);
+        assert.equal(restored.progress.percent, .52);
+        assert.equal(restored.progress.sectionId, 'chapter');
+        await page.getByRole('button', {name: 'Обновить', exact:true}).click();
         await page.waitForFunction(() => document.querySelector('.current-book progress')?.value === .52);
 
         readingFailure = 'temporary_offline';

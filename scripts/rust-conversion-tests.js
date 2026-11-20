@@ -95,7 +95,7 @@ async function checkPackagedConversions(base, uid, directory) {
     const client = await connect(base);
     try {
         assert.equal(client.config.conversionEnabled, true);
-        assert.deepEqual(client.config.conversionFormats, ['fb2','epub','epub3','kepub','kfx','azw3','azw8','mobi'],
+        assert.deepEqual(client.config.conversionFormats, ['fb2','epub','epub3','kepub','kfx','azw3','azw8','mobi','pdf'],
             'Default download menu in a clean standalone installation');
     } finally { client.close(); }
     for (const format of ['epub','epub3','kepub'])
@@ -107,7 +107,8 @@ async function checkPackagedConversions(base, uid, directory) {
     }
     azw3(await download(base, uid, 'azw3'));
     await mobi(await download(base, uid, 'mobi'), directory, 'installed');
-    console.log('ok installed Rust HTTP server advertised and delivered all seven bundled conversion formats');
+    pdf(await download(base, uid, 'pdf'));
+    console.log('ok installed Rust HTTP server advertised and delivered all bundled conversion formats');
 }
 
 async function conversionEpub(directory) {

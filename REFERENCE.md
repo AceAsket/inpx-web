@@ -1074,7 +1074,7 @@ npm run release:linux
 
 Это пример сборки Linux x64. Архивы упаковывает Node.js. Для Linux ARM64 используйте `npm run release:arm64`, для Windows — `npm run release:win`, для macOS Intel — `npm run release:macos`. Команда `npm run release` собирает все четыре платформы. Архивы появятся в каталоге `dist/release`.
 
-Релизный ZIP с сервером Node.js включает MuPDF (`bin/mutool`, в Windows — `bin/mutool.exe`). Книги FB2 и EPUB можно сразу скачивать в PDF. Если MuPDF недоступен, пункт PDF скрывается. Путь к своей копии можно задать в `converterPaths.mutool`.
+Полный standalone ZIP включает MuPDF (`bin/mutool`, в Windows — `bin/mutool.exe`). Книги FB2 и EPUB можно сразу скачивать в PDF. В Rust до 2.0.2-rc.5 включительно MuPDF нужно установить отдельно. Путь к своей копии можно задать в `converterPaths.mutool`. PDF появляется в меню, когда сервер находит подходящий конвертер.
 
 При упаковке на целевой платформе скрипт собирает MuPDF из проверенного по SHA256 архива. Нужны `curl`, `tar` и компилятор C/C++ с `make` или MSBuild с набором инструментов v143 в Windows. Для Linux используется статическая компоновка. При кросс-сборке перенесите готовые `mutool` и сопутствующие файлы MuPDF из `bin` сборки целевой платформы в `dist/<target>/bin` перед упаковкой.
 
@@ -1120,7 +1120,7 @@ node build/release.js linux
 упаковки и используйте Rust-бинарники соответствующей платформы. Файл
 `bin/public.json` содержит веб-интерфейс и должен оставаться в каталоге `bin`.
 
-Полный установщик Windows x64 включает fb2cng, Kindling, инструменты для
+Полный установщик Windows x64 включает fb2cng, Kindling, MuPDF, инструменты для
 архивов и обложек, а также библиотеки Visual C++. Для сборки нужны Visual
 Studio с инструментами C++ x64 и Inno Setup 6. Выполните в PowerShell из корня проекта
 
@@ -1133,6 +1133,7 @@ $env:FB2CNG_RELEASE_API = 'https://api.github.com/repos/rupor-github/fb2cng/rele
 npm run build:win-tools
 node scripts/bundle-kindling.js win
 ./scripts/stage-rust-windows-tools.ps1 -ApplicationDir "$env:INPX_BUILD_DIST_DIR/win" -ToolsDir dist/win/bin
+node build/release.js win
 node build/windows-installer.js --rust
 ```
 

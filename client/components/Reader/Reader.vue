@@ -1528,6 +1528,7 @@
         <reader-audio
             v-if="bookUid && config.ttsEnabled && !isStandaloneMode"
             ref="audioPlayer" :book-uid="bookUid" :title="title" :author="authorLine" :cover="coverSrc"
+            :follow-ready="!!readerHtml && (!isPagedMode || (!isPagedBuildPending && pagedPages.length > 0))"
             :browser-speech-available="browserSpeechSupported" @use-browser="useBrowserAudio"
             @listen-here="listenFromReader" @read-here="readFromAudio" @follow-anchor="followReaderAudio"
         />

@@ -10,6 +10,7 @@ const {defaultSpeechOptions} = require('../shared/speechOptions');
 const password = 'rust-reader-audio-test';
 const title = 'Книга для проверки Rust и Silero';
 const cancelTitle = 'Длинная книга для проверки остановки';
+const followTitle = 'Две главы для проверки перелистывания';
 
 async function zip(path, files) {
     const archive = new ZipFile();
@@ -32,7 +33,9 @@ async function fixture(library) {
         <p>${(first + ' ').repeat(repeats)}<a type="note">СНОСКА</a></p></section>
         <section><title><p>Вторая глава</p></title><p>${(second + ' ').repeat(repeats)}</p></section>
         </body><body name="notes"><section><p>Пояснения из сносок.</p></section></body></FictionBook>`;
-    const samples = [[title, book(title, 16)], [cancelTitle, book(cancelTitle, 125)]];
+    // One online clip per chapter, with enough short paragraphs to span several phone pages.
+    const followBook = book(followTitle, 5).replaceAll('. ', '.</p><p>');
+    const samples = [[title, book(title, 16)], [cancelTitle, book(cancelTitle, 125)], [followTitle, followBook]];
     const rows = samples.map(([name, contents], i) => [
         'Тестов,Автор:', 'sf:', name, '', 0, i+1, Buffer.byteLength(contents), i+1, 0,
         'fb2', '2026-11-17', 'ru', 0, '',
@@ -78,6 +81,34 @@ async function checkMp3(base, url) {
     }
 }
 
+async function checkPageFollowing(browser, base, uid, mode, errors) {
+    const page = await signedInPage(browser, base, errors);
+    try {
+        await page.setViewportSize({width:390, height:520});
+        await page.goto(base + '/#/reader?debugReader=1&debugReadMode=paged&bookUid=' + encodeURIComponent(uid));
+        const livePage = page.locator('.reader-page-sheet--live').first();
+        await livePage.waitFor();
+        await page.getByRole('button', {name:'Озвучка книги', exact:true}).click();
+        const player = page.getByRole('complementary', {name:'Озвучка книги'});
+        await player.getByRole('combobox', {name:'Озвучка', exact:true}).selectOption(mode);
+        const selector = mode === 'online' ? 'Фрагмент' : 'Глава';
+        await player.getByRole('combobox', {name:selector, exact:true}).selectOption('0');
+        await player.getByRole('checkbox', {name:'Следить за озвучкой', exact:true}).check();
+        await player.getByRole('button', {name:'Подготовить и слушать', exact:true}).click();
+        const audio = player.locator('audio').first();
+        await page.waitForFunction(() => Number.isFinite(document.querySelector('.reader-audio audio')?.duration), null, {timeout:120000});
+        await audio.evaluate(el => el.play());
+        await player.getByText(/следующий готов$/).waitFor({timeout:120000});
+        await livePage.getByText('Первая глава', {exact:true}).waitFor();
+        const previousPage = Number(await livePage.getAttribute('data-page-index'));
+        await audio.evaluate(el => {el.currentTime = el.duration - 0.15;});
+        await livePage.getByText('Вторая глава', {exact:true}).waitFor();
+        assert(Number(await livePage.getAttribute('data-page-index')) > previousPage, 'Silero must turn the page on the next fragment');
+        assert.equal(await audio.evaluate(el => el.paused), false);
+        console.log('ok Silero ' + mode + ' playback turns the page at the prefetched chapter boundary');
+    } finally {await page.context().close();}
+}
+
 async function verify(base) {
     const {chromium} = require(process.env.INPX_PLAYWRIGHT_MODULE || 'playwright');
     const api = await connect(base);
@@ -108,6 +139,13 @@ async function verify(base) {
         browser = await chromium.launch({headless:true, executablePath:process.env.INPX_CHROMIUM_PATH || undefined,
             args:['--autoplay-policy=no-user-gesture-required']});
         const errors = [];
+        const followUid = await find(followTitle);
+        await checkPageFollowing(browser, base, followUid, 'online', errors);
+        await checkPageFollowing(browser, base, followUid, 'chapters', errors);
+        if (process.argv.includes('--follow-only')) {
+            assert.deepEqual(errors, []);
+            return;
+        }
         const page = await signedInPage(browser, base, errors);
         const player = await openPlayer(page, base, bookUid);
         const audio = player.locator('audio').first();

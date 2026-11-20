@@ -63,6 +63,35 @@ module.exports = async function testReaderAudioPlayer() {
     continuation.onPlay();
     assert.deepEqual(requested, [2], 'Playback uses the prefetched second chapter and prepares only the third');
     continuation.close();
+    for (const mode of ['online', 'chapters']) {
+        const following = player();
+        Object.assign(following, {mode, visible:true, followSpeech:true, followReady:false,
+            src:'/first.mp3', nextSrc:'/second.mp3', chapters:[
+                {anchor:{textSnippet:'Начало первой страницы'}}, {anchor:{textSnippet:'Начало второй страницы'}},
+            ]});
+        const audio = following.$refs.audio;
+        Object.assign(audio, {paused:false, src:'/first.mp3', currentSrc:'/first.mp3',
+            readyState:2, HAVE_CURRENT_DATA:2, getAttribute:() => audio.src});
+        const spoken = [];
+        following.$emit = (event, anchor) => {assert.equal(event, 'follow-anchor'); spoken.push(anchor.textSnippet);};
+        following.followCurrentClip();
+        assert.deepEqual(spoken, [], 'Wait for page layout');
+        following.followReady = true;
+        component.watch.followReady.call(following, true);
+        following.onTimeUpdate();
+        assert.deepEqual(spoken, ['Начало первой страницы'], 'Follow once when layout finishes during playback');
+        following.onEnded();
+        following.onTimeUpdate();
+        assert.equal(spoken.length, 1, 'Ignore old media events during the prefetched clip handoff');
+        audio.src = audio.currentSrc = '/second.mp3';
+        audio.paused = true;
+        following.onTimeUpdate();
+        assert.equal(spoken.length, 1, 'Paused audio does not turn the page');
+        audio.paused = false;
+        following.onTimeUpdate();
+        assert.deepEqual(spoken, ['Начало первой страницы', 'Начало второй страницы']);
+        following.close();
+    }
     const nextConsumers = [], nextCancels = [];
     const waiting = player({prepareReaderAudio: async(_book, _voice, _mode, chapter, _options, id) => {
         nextConsumers.push([chapter, id]); return {state:'ready', url:'/part.mp3'};

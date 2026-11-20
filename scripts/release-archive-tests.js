@@ -72,16 +72,17 @@ async function testIncompleteStandaloneConverterBundlesAreRejected() {
         for (const target of ['linux', 'linux-arm64', 'macos', 'win']) {
             const source = path.join(dir, target);
             const archive = path.join(dir, target + '.zip');
-            const programs = executableNames(target, true, true);
+            const programs = executableNames(target);
             const files = [...programs, rustProgramEntry(target, 'reader'), rustProgramEntry(target, 'catalog'),
-                'bin/public.json', 'bin/LICENSE.quickjs', 'bin/LICENSE.kindling'];
+                'bin/public.json', 'bin/LICENSE.quickjs', 'bin/LICENSE.kindling',
+                'bin/LICENSE.mupdf', 'bin/mupdf-source.txt', 'bin/mupdf-third-party.rst'];
             if (target.startsWith('linux')) files.push('bin/djxl', 'bin/djxl-licenses/LICENSE.jpeg-xl');
             if (target === 'win') files.push('bin/7za.exe', 'bin/djxl.exe', 'bin/dwebp.exe', 'vcruntime140.dll', 'bin/vcruntime140.dll');
             for (const name of files) await fs.outputFile(path.join(source, name), 'payload');
             await createReleaseArchive(source, archive, target);
             await checkArchivePermissions(archive, target, true, true);
 
-            for (const name of [...programs.slice(1), 'bin/LICENSE.kindling']) {
+            for (const name of [...programs.slice(1), 'bin/LICENSE.kindling', 'bin/LICENSE.mupdf']) {
                 const file = path.join(source, name);
                 await fs.unlink(file);
                 await createReleaseArchive(source, archive, target);
