@@ -66,7 +66,8 @@ async function download(base, uid, format, cookie = '') {
     const response = await fetch(bookUrl(base,uid,format),{
         headers:{cookie},signal:AbortSignal.timeout(90000),
     });
-    assert.equal(response.status,200,format+' returned HTTP '+response.status);
+    if (response.status !== 200)
+        assert.fail(format+' returned HTTP '+response.status+': '+(await response.text()).slice(0,500));
     const [extension,mime] = formats[format];
     assert.equal(response.headers.get('content-type'),mime);
     assert(response.headers.get('content-disposition').includes('.'+extension));

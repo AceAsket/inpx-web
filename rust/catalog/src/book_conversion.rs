@@ -594,7 +594,12 @@ impl Pdf {
         match self {
             Self::MuPdf(tool) => {
                 let mut command = tool.command(directory);
-                command.args(["convert", "-o"]).arg(output).arg(input);
+                // MuPDF interprets the '?' in a canonical Windows path as a wildcard.
+                // Both files belong to the converter's working directory.
+                command
+                    .args(["convert", "-o"])
+                    .arg(output.strip_prefix(directory)?)
+                    .arg(input.strip_prefix(directory)?);
                 run(command, deadline)
             }
             Self::Calibre(tool) => {
