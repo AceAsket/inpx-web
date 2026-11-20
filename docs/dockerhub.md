@@ -30,6 +30,8 @@ Android-клиент подключается по QR с адресом без �
 
 ### Образы и версии
 
+Мы перенесли сервер с Node.js на Rust, чтобы он быстрее работал с большими библиотеками. **Node.js 1.8.3** — последняя ветка классического сервера. Она будет получать только исправления ошибок. Все новые функции будут выходить только в **Rust 2.x**.
+
 Обновление с `latest` переводит существующую установку на Rust. Перед обновлением остановите сервер и скопируйте каталог данных. Для сохранения стабильного Node.js закрепите тег `1.8.2`. [Переход и откат](https://github.com/AceAsket/inpx-web/blob/v2.0.0/docs/upgrade-rollback.md)
 
 | Тег | Назначение |
@@ -150,6 +152,8 @@ Connect Android through a QR containing the server address without credentials. 
 Bundled Kindling converts FB2/EPUB to MOBI7/KF8. The full image enables MOBI by default. Set `INPX_MOBI_ENABLED=false` to disable it. Compatibility depends on the Kindle model. [MOBI configuration](https://github.com/AceAsket/inpx-web/blob/v2.0.0/REFERENCE.md#лёгкая-конвертация-mobi-181-rc2)
 
 ### Images and versions
+
+We moved the server from Node.js to Rust to improve performance with large libraries. **Node.js 1.8.3** is the final release line for the classic server and will receive bug fixes only. All new features will ship exclusively in **Rust 2.x**.
 
 Updating a container pinned to `latest` switches it to Rust. Stop the server and back up its data directory before upgrading. Pin `1.8.2` to stay on stable Node.js. [Migration and rollback](https://github.com/AceAsket/inpx-web/blob/v2.0.0/docs/upgrade-rollback.md)
 

@@ -20,6 +20,8 @@ This image is built from the [`AceAsket/inpx-web`](https://github.com/AceAsket/i
 
 ## Tags
 
+We moved the server from Node.js to Rust to improve performance with large libraries. **Node.js 1.8.3** is the final release line for the classic server and will receive bug fixes only. All new features will ship exclusively in **Rust 2.x**.
+
 | Tag | Purpose |
 | --- | --- |
 | `2.0.0`, `latest` | Stable Rust server. |
