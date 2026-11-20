@@ -9,7 +9,7 @@ const rcTag = /^(\d+)\.(\d+)\.(\d+)-rc\.(\d+)(?:-(?:rust|silero))?$/;
 // The CI migration and rollback tests pull this exact pre-Rust image.
 const compatibilityImage = '1.8.3-rc.15';
 
-function cleanupPlan(tags) {
+function cleanupPlan(tags, {oldRc = true, lite = false} = {}) {
     const versions = new Map();
     for (const tag of tags) {
         const match = rcTag.exec(tag.name);
@@ -23,14 +23,16 @@ function cleanupPlan(tags) {
         }
         return 0;
     }).slice(0, 2);
-    if (newest.length < 2) return {keep: tags.map(tag => tag.name), remove: []};
     const keepVersions = new Set(newest.map(version => `${version.slice(0, 3).join('.')}-rc.${version[3]}`));
-    for (const version of keepVersions) {
+    for (const version of oldRc && newest.length === 2 ? keepVersions : []) {
         if (!tags.some(tag => tag.name === version))
             throw new Error(`Main image missing for retained RC: ${version}`);
     }
-    const remove = tags.filter(tag => rcTag.test(tag.name) && tag.name !== compatibilityImage
-        && !keepVersions.has(tag.name.replace(/-(?:rust|silero)$/, ''))).map(tag => tag.name);
+    const remove = tags.filter(({name}) => {
+        if (lite && (name === 'lite' || name.endsWith('-lite'))) return true;
+        return oldRc && newest.length === 2 && rcTag.test(name) && name !== compatibilityImage
+            && !keepVersions.has(name.replace(/-(?:rust|silero)$/, ''));
+    }).map(tag => tag.name);
     return {keep: tags.filter(tag => !remove.includes(tag.name)).map(tag => tag.name), remove};
 }
 
@@ -77,7 +79,7 @@ async function main() {
     if (typeof token !== 'string' || !token) throw new Error('Docker Hub did not return an access token');
     const before = await request(repositoryPath, 'GET', undefined, token);
     const tags = await allTags(token);
-    const plan = cleanupPlan(tags);
+    const plan = cleanupPlan(tags, {oldRc: process.env.CLEANUP_OLD_RC === 'true', lite: process.env.CLEANUP_LITE === 'true'});
     await fs.writeFile('dockerhub-backup.json', JSON.stringify({repository, savedAt: new Date().toISOString(),
         description: before.description, full_description: before.full_description, tags, plan}, null, 2));
     await request(repositoryPath, 'PATCH', {description: shortDescription, full_description: description}, token);
@@ -85,9 +87,9 @@ async function main() {
     if (updated.full_description !== description || updated.description !== shortDescription)
         throw new Error('Docker Hub description verification failed');
     console.log(`Published RU/EN description: ${Buffer.byteLength(description)} bytes`);
-    if (process.env.CLEANUP_OLD_RC !== 'true') return;
+    if (plan.remove.length === 0) return;
     console.log(`Keep: ${plan.keep.join(', ')}`);
-    console.log(`Delete old RC tags: ${plan.remove.join(', ') || 'none'}`);
+    console.log(`Delete selected tags: ${plan.remove.join(', ') || 'none'}`);
     for (const name of plan.remove) {
         await request(`${repositoryPath}tags/${encodeURIComponent(name)}/`, 'DELETE', undefined, token);
         console.log(`Deleted ${name}`);
@@ -99,7 +101,7 @@ async function main() {
         if (!current || previous.digest !== current.digest)
             throw new Error(`Retained tag changed: ${name}`);
     }
-    if (after.some(tag => plan.remove.includes(tag.name))) throw new Error('Old RC tag still present');
+    if (after.some(tag => plan.remove.includes(tag.name))) throw new Error('Selected tag still present');
     console.log(`Cleanup verified: ${plan.remove.length} deleted; ${plan.keep.length} retained with original digests`);
 }
 

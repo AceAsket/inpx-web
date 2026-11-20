@@ -29,7 +29,6 @@ Optional:
   --metrics-path PATH    Prometheus metrics path
                          Default: /metrics
   --metrics-token TOKEN  Optional Prometheus bearer/query token
-  --lite                 Build the runtime-lite Docker target
   --skip-build           Do not rebuild image, only (re)start compose stack
   --project-name NAME    Docker compose project name
                          Default: inpx-web
@@ -50,8 +49,7 @@ Examples:
     --library-dir /srv/library \
     --inpx-file my-library.inpx \
     --data-dir /srv/inpx-web-data \
-    --port 18080 \
-    --lite
+    --port 18080
 
 Notes:
   - This script is intended to run inside a Debian/Ubuntu Proxmox LXC.
@@ -146,10 +144,6 @@ parse_args() {
             --source)
                 SOURCE_SPECS+=("${2:-}")
                 shift 2
-                ;;
-            --lite)
-                DOCKER_TARGET="runtime-lite"
-                shift
                 ;;
             --skip-build)
                 SKIP_BUILD="1"

@@ -4,7 +4,7 @@ Self-hosted web catalog and FB2 reader for large `.inpx`, `.zip`, `.7z` and `fLi
 
 This image is built from the [`AceAsket/inpx-web`](https://github.com/AceAsket/inpx-web) fork and is aimed at Docker, Unraid, Proxmox LXC and home-server setups.
 
-For the 1.8.3 release, `1.8.3` and `latest` will run classic Node.js with JembaDB. Select `1.8.3-rust` for the Rust server.
+`latest` runs Rust 2.0.0. Pin `1.8.2` to keep classic Node.js or use `1.8.3-rc.30` to test its release candidate. Before upgrading from Node.js, stop the server and back up the data directory. [Migration and rollback](https://github.com/AceAsket/inpx-web/blob/v2.0.0/docs/upgrade-rollback.md)
 
 ## What Is Included
 
@@ -22,10 +22,10 @@ For the 1.8.3 release, `1.8.3` and `latest` will run classic Node.js with JembaD
 
 | Tag | Purpose |
 | --- | --- |
-| `latest` | Current stable full image with fb2cng, MuPDF, 7z, JXL and WebP tools. |
-| `1.7.2` | Pinned stable release. Recommended for reproducible deployments. |
-| `lite` | Smaller image without book conversion tools. Catalog, reader, OPDS, covers and 7z support remain available. |
-| `1.7.2-lite` | Pinned lite release. |
+| `2.0.0`, `latest` | Stable Rust server. |
+| `1.8.3-rc.30` | Classic Node.js with JembaDB for testing. |
+| `1.8.2` | Stable classic Node.js. |
+| `2.0.0-silero` | Speech service for Rust 2.0.0. |
 
 The default image does not include Calibre. Calibre is available only when building the `runtime-calibre` target from the repository Dockerfile.
 
@@ -142,8 +142,8 @@ After restoring a full backup, restart the container. If library sources changed
 | `INPX_COVER_CACHE_SIZE_MB` | Cover cache size limit in MB. Default: `512`. |
 | `INPX_METRICS_ENABLED` | Enable Prometheus metrics when `true`. |
 | `INPX_METRICS_PATH` | Metrics endpoint path. Default: `/metrics`. |
-| `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. On stable and RC21, guests can see the navigation and sign-in form. |
-| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on stable and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. Starting with 1.8.3-rc.22, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
+| `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. On Node.js 1.8.2 and RC21, guests can see the navigation and sign-in form. |
+| `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on Node.js 1.8.2 and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. Starting with 1.8.3-rc.22, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
 | `INPX_AUTH_MODE` | Use `proxy` for Authelia/Authentik/SWAG-style trusted proxy auth. |
 | `INPX_TRUST_PROXY` | Trust reverse proxy headers when `true`. |
 | `INPX_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDR list. |
@@ -208,24 +208,6 @@ In this mode direct access that bypasses the trusted reverse proxy is rejected.
 ## Telegram And Email
 
 Telegram and SMTP can be configured either from the admin UI or through environment variables. Books are sent only to the current profile's personal Telegram chat id or email address. Global fallback recipients are intentionally not used.
-
-## Lite Image
-
-Use `aceasket/inpx-web-7z:lite` or a pinned lite tag when conversion is not needed:
-
-```sh
-docker run -d \
-  --name=inpx-web \
-  --restart unless-stopped \
-  -p 12380:12380 \
-  -e INPX=/library/my-library.inpx \
-  -e LIBDIR=/library \
-  -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
-  -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:lite
-```
-
-Lite keeps catalog, reader, profiles, OPDS, 7z support and cover extraction, but disables conversion formats.
 
 ## Links
 

@@ -23,7 +23,13 @@ const rustTags = ['latest', '1.8.2', '1.8.3-rc.15', '1.8.3-rc.15-silero',
 const rustPlan = cleanupPlan(rustTags.map(name => ({name})));
 assert.deepStrictEqual(rustPlan.remove, ['1.8.3-rc.15-silero', '1.8.3-rc.24', '1.8.3-rc.24-rust', '1.8.3-rc.24-silero']);
 assert(rustPlan.keep.includes('1.8.3-rc.15'));
+const retired = [...tags, {name: 'dev-lite'}, {name: 'lite-custom'}];
+assert.deepStrictEqual(cleanupPlan(retired, {oldRc: false, lite: true}).remove, ['lite', '1.7.2-lite', 'dev-lite']);
+assert.deepStrictEqual(cleanupPlan(retired, {oldRc: false}).remove, []);
+assert.deepStrictEqual(cleanupPlan([{name: '1.8.2'}, {name: 'lite'}], {lite: true}).remove, ['lite']);
+assert.deepStrictEqual(cleanupPlan(retired, {lite: true}).remove.sort(), [...plan.remove, 'lite', '1.7.2-lite', 'dev-lite'].sort());
 const readme = fs.readFileSync('docs/dockerhub.md', 'utf8');
+assert(!readme.includes('`lite`') && readme.includes('`2.0.0`, `latest`') && readme.includes('`1.8.3-rc.30`'));
 assert(Buffer.byteLength(readme) <= 25000);
 assert(readme.includes('## Русский') && readme.includes('## English'));
 console.log('Docker Hub: stable/custom tags protected, RC pairs retained, numeric version ordering and description limits passed');

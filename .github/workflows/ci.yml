@@ -200,15 +200,12 @@ jobs:
           version=$(node -p "require('./package.json').version")
           node scripts/release-archive-smoke-test.js ${{ matrix.target }} "$INPX_BUILD_DIST_DIR/release/inpx-web-$version-${{ matrix.target }}.zip" --application-only --rust
       - if: matrix.target == 'linux'
-        run: docker build --target runtime-lite -t inpx-web:ci .
+        run: docker build --build-arg INPX_SERVER_RUNTIME=node --target runtime -t inpx-web:ci-full .
       - if: matrix.target == 'linux'
-        run: node scripts/binary-smoke-test.js --image inpx-web:ci
+        run: node scripts/binary-smoke-test.js --image inpx-web:ci-full
         env:
           INPX_SMOKE_REQUIRE_RUST_HTTP: 'true'
           INPX_SMOKE_REQUIRE_RUST_CATALOG: 'true'
-      - name: Build full image with static MOBI converter
-        if: matrix.target == 'linux'
-        run: docker build --target runtime -t inpx-web:ci-full .
       - name: Test real image converters
         if: matrix.target == 'linux'
         run: bash scripts/test-image-converters.sh inpx-web:ci-full

@@ -2,7 +2,7 @@
 
 ARG NODE_IMAGE=node:24-bookworm-slim
 ARG RUNTIME_IMAGE=debian:bookworm-slim
-ARG INPX_SERVER_RUNTIME=node
+ARG INPX_SERVER_RUNTIME=rust
 ARG FB2CNG_VERSION=v2.1.1
 ARG FB2CNG_ARCH=linux-amd64
 
@@ -184,17 +184,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         /usr/lib/python3.11/test \
     && rm -rf /var/lib/apt/lists/*
 
-FROM runtime-base AS runtime-lite
-
-LABEL org.opencontainers.image.title="inpx-web-lite" \
-      org.opencontainers.image.description="Lighter inpx-web image without Calibre conversion support" \
-      org.opencontainers.image.source="https://github.com/AceAsket/inpx-web"
-
-ENV INPX_ENABLE_CONVERSION=false
-ENV INPX_CONVERSION_FORMATS=
-
 FROM runtime AS runtime-rust
 
 ENV INPX_CONVERSION_FORMATS=fb2,epub,epub3,kepub,kfx,azw3,azw8,mobi,pdf
 
-FROM runtime AS final
+FROM runtime-rust AS final

@@ -131,7 +131,7 @@
 
 ## Сборка Docker-контейнера
 
-Docker-образ Rust 2.0.0 для Linux x64 доступен по тегу `aceasket/inpx-web-7z:2.0.0`. Тег `latest` закреплён за стабильным Node.js. Для Linux ARM64 используйте standalone-архив. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
+Docker-образ Rust 2.0.0 для Linux x64 доступен по тегу `aceasket/inpx-web-7z:2.0.0`. Тег `latest` указывает на этот же образ Rust. Для Linux ARM64 используйте standalone-архив. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
 
 Готовые YAML-примеры:
 
@@ -160,12 +160,6 @@ docker build -t inpx-web-7z:latest .
 docker build --target runtime-calibre -t inpx-web-7z:calibre .
 ```
 
-Облегчённый вариант без конвертации в `epub` / `epub3` / `kepub` / `kfx` / `azw3` / `azw8` / `pdf`:
-
-```sh
-docker build --target runtime-lite -t inpx-web-7z:lite .
-```
-
 Если нужно пересобрать все слои заново без кэша:
 
 ```sh
@@ -176,8 +170,7 @@ docker build --no-cache -t inpx-web-7z:latest .
 
 * основной образ умеет `fb2 -> epub`, `epub3`, `kepub`, `kfx`, `azw3`, `azw8` через fb2cng и `fb2` / `epub -> pdf` через MuPDF
 * `runtime-calibre` тяжелее и собирается дольше из-за установки Calibre, но оставлен как совместимый fallback для редких ручных экспериментов
-* `runtime-lite` заметно легче и быстрее собирается, не умеет конвертацию книг и автоматически скрывает кнопки `EPUB` / `EPUB3` / `KEPUB` / `KFX` / `AZW3` / `AZW8` / `PDF` в интерфейсе
-* Dockerfile использует multi-stage сборку: приложение упаковывается в `pkg`-бинарник, а runtime-слой не тянет Node.js, `node_modules` и dev/UI-зависимости
+* Dockerfile использует multi-stage сборку: сервер собирается в бинарник Rust, а runtime-слой не тянет Node.js, `node_modules` и dev/UI-зависимости
 * при включённом BuildKit повторные сборки идут быстрее за счёт кэша `apt` и `npm`
 
 После сборки контейнер можно запустить через `docker compose`:
@@ -200,7 +193,7 @@ docker compose up -d
 
 Начиная с **1.8.2-rc.18**, MOBI включён по умолчанию. Отключение — `INPX_MOBI_ENABLED=false` с пересозданием контейнера; явное отключение блокирует и ранее созданный кэш. Общий `INPX_ENABLE_CONVERSION=false` отключает все конвертации, включая MOBI. Настроек MOBI в панели администратора нет. Для исходников нужны доступные конвертеры; полный Docker-образ и standalone-сборки содержат их.
 
-Основной Docker-образ и standalone-архивы включают конвертер и его MIT-лицензию. Linux x64/ARM64 используют статическую musl-сборку; Windows x64 и macOS Intel — закреплённые upstream-бинарники с проверкой SHA256. `runtime-lite` конвертеров не содержит. При запуске из исходников положите `kindling` / `kindling.exe` в `bin` рабочего каталога либо укажите `INPX_KINDLING_PATH` — полный путь к исполняемому файлу без аргументов. Для своей версии задайте `INPX_KINDLING_VERSION`: версия и путь учитываются в кэше. Пример PowerShell для standalone:
+Основной Docker-образ и standalone-архивы включают конвертер и его MIT-лицензию. Linux x64/ARM64 используют статическую musl-сборку; Windows x64 и macOS Intel — закреплённые upstream-бинарники с проверкой SHA256. При запуске из исходников положите `kindling` / `kindling.exe` в `bin` рабочего каталога либо укажите `INPX_KINDLING_PATH` — полный путь к исполняемому файлу без аргументов. Для своей версии задайте `INPX_KINDLING_VERSION`: версия и путь учитываются в кэше. Пример PowerShell для standalone:
 
 ```powershell
 $env:INPX_MOBI_ENABLED = 'true'
@@ -470,8 +463,7 @@ fLibrary и LightLib. Формат сжатия архива и формат к�
 
 Полный Docker-образ и Windows-поставка содержат эти инструменты. Для других
 standalone-поставок установите нужные CLI в системе или укажите пути в
-настройках конвертеров. Облегчённый `runtime-lite` не содержит полного набора
-декодеров и конвертеров.
+настройках конвертеров.
 
 В Rust-сервере `INPX_JXL_DECODER=native` включает декодер JPEG XL, встроенный в
 бинарник. Он обрабатывает обложки и иллюстрации в отдельном процессе. Для CMYK
@@ -1860,7 +1852,6 @@ pct set <CTID> -features nesting=1,keyctl=1
 * `--source 'id|Название|/путь/к/библиотеке|file.inpx'` — добавить источник; можно указать несколько раз
 * `--cover-cache-size-mb` — лимит кэша обложек; по умолчанию `512`
 * `--metrics`, `--metrics-path`, `--metrics-token` — включить и настроить Prometheus-метрики
-* `--lite` — собрать облегчённый образ `runtime-lite`
 * `--skip-build` — не пересобирать образ, а только перезапустить compose-стек
 * `--project-name` — имя docker compose проекта
 

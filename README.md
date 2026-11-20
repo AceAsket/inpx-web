@@ -9,11 +9,11 @@
 
 | Редакция | Docker-образ | ZIP и установщик Windows |
 | --- | --- | --- |
-| Rust 2.0.0 · стабильная | `aceasket/inpx-web-7z:2.0.0` | [Скачать Rust 2.0.0](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.0) |
+| Rust 2.0.0 · стабильная | `aceasket/inpx-web-7z:2.0.0` или `:latest` | [Скачать Rust 2.0.0](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.0) |
 | Классический Node.js 1.8.3 RC30 · для проверки | `aceasket/inpx-web-7z:1.8.3-rc.30` | [Скачать Node.js RC30](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3-rc.30) |
-| Классический Node.js 1.8.2 · стабильная | `aceasket/inpx-web-7z:latest` или `:1.8.2` | [Скачать Node.js 1.8.2](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) |
+| Классический Node.js 1.8.2 · стабильная | `aceasket/inpx-web-7z:1.8.2` | [Скачать Node.js 1.8.2](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) |
 
-Ветка `main` содержит сервер Rust. Для перехода в Docker явно выберите тег `2.0.0`. Тег `latest` закреплён за стабильными выпусками Node.js. Классический сервер с JembaDB поддерживается в ветке [nodejs_depr](https://github.com/AceAsket/inpx-web/tree/nodejs_depr).
+Ветка `main` содержит сервер Rust. При обновлении контейнера с тегом `latest` он перейдёт на Rust. Чтобы продолжить использовать стабильный Node.js, закрепите тег `1.8.2`. Классический сервер с JembaDB поддерживается в ветке [nodejs_depr](https://github.com/AceAsket/inpx-web/tree/nodejs_depr).
 
 Перед переходом с Node.js остановите прежний сервер и сохраните копию каталога данных, включая `db` и внешний файл фильтра, если он используется. При первом запуске Rust сохраняет снимок пользовательских данных и строит новый индекс с сохранением идентификаторов книг, полок, закладок и прогресса. [Переход и откат](./docs/upgrade-rollback.md)
 
