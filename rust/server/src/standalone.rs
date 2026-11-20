@@ -413,7 +413,11 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             loop {
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 let state = state.clone();
-                let _ = tokio::task::spawn_blocking(move || state.batch.cleanup()).await;
+                let _ = tokio::task::spawn_blocking(move || {
+                    state.downloads.expire_covers();
+                    state.batch.cleanup()
+                })
+                .await;
             }
         });
     }

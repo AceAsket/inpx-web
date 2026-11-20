@@ -114,7 +114,7 @@ Silero запускается отдельным CPU-контейнером `ace
 | `INPX_RESET_ADMIN_PASSWORD` | Для восстановления доступа задайте `true` и новый `INPX_ADMIN_PASSWORD`. Пересоздайте контейнер с прежним томом данных. После сброса уберите флаг и снова пересоздайте контейнер. |
 | `INPX_ALLOW_ANONYMOUS_ACCESS` | Задайте `false`, чтобы требовать вход в профиль для поиска, книг и обложек. В Node.js 1.8.2 и RC21 до входа видны меню и форма входа. |
 | `INPX_REQUIRE_AUTH` | Значение `true` включает проверку пользователя доверенного reverse proxy в режиме `INPX_AUTH_MODE=proxy`. Для локального входа в Node.js 1.8.2 и RC21 задайте `INPX_ALLOW_ANONYMOUS_ACCESS=false`. Начиная с 1.8.3-rc.22 достаточно `INPX_REQUIRE_AUTH=true`: до входа в библиотеку видна только форма входа. |
-| `INPX_COVER_CACHE_SIZE_MB` | Лимит кэша обложек; по умолчанию `512` МБ. |
+| `INPX_COVER_CACHE_SIZE_MB` | Лимит дискового кэша обложек. По умолчанию `512` МиБ. |
 | `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Включение Silero и адрес сервиса. |
 | `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Включение и токен провайдера Audiobookshelf. |
 | `INPX_METRICS_ENABLED` | Метрики Prometheus при значении `true`. |
@@ -237,7 +237,7 @@ Run Silero as a separate CPU service using `aceasket/inpx-web-7z:2.0.1-silero`. 
 | `INPX_RESET_ADMIN_PASSWORD` | To recover access, set this to `true` and supply a new `INPX_ADMIN_PASSWORD`. Recreate the container with the existing data volume. After the reset, remove the flag and recreate the container again. |
 | `INPX_ALLOW_ANONYMOUS_ACCESS` | Set to `false` to require profile login for search, books and covers. On Node.js 1.8.2 and RC21, guests can see the navigation and sign-in form. |
 | `INPX_REQUIRE_AUTH` | Set to `true` with `INPX_AUTH_MODE=proxy` to require an identity from a trusted reverse proxy. For local login on Node.js 1.8.2 and RC21, set `INPX_ALLOW_ANONYMOUS_ACCESS=false`. Starting with 1.8.3-rc.22, `INPX_REQUIRE_AUTH=true` alone opens the library at the sign-in form. |
-| `INPX_COVER_CACHE_SIZE_MB` | Cover cache limit; defaults to `512` MB. |
+| `INPX_COVER_CACHE_SIZE_MB` | Disk space for cached covers. Defaults to `512` MiB. |
 | `INPX_TTS_ENABLED`, `INPX_TTS_URL` | Enable Silero and set its service URL. |
 | `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Enable the Audiobookshelf provider and set its token. |
 | `INPX_METRICS_ENABLED` | Enable Prometheus metrics with `true`. |

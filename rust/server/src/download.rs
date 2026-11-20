@@ -166,6 +166,27 @@ fn prepare_file(mut file: File, conditions: &HeaderMap, head: bool) -> io::Resul
     let total = metadata.len();
     let version = FileVersion::from_metadata(total, metadata.modified()?)
         .ok_or_else(|| io::Error::other("invalid cache modification time"))?;
+    prepare_content(total, version, conditions, head, |range| {
+        if range.start != 0 {
+            file.seek(SeekFrom::Start(range.start))?;
+        }
+        let length = range.end - range.start;
+        if length > INLINE {
+            return Ok(Data::Stream(file));
+        }
+        let mut bytes = vec![0; length as usize];
+        file.read_exact(&mut bytes)?;
+        Ok(Data::Buffered(Bytes::from(bytes)))
+    })
+}
+
+fn prepare_content(
+    total: u64,
+    version: FileVersion,
+    conditions: &HeaderMap,
+    head: bool,
+    read: impl FnOnce(Range<u64>) -> io::Result<Data>,
+) -> io::Result<Prepared> {
     if let Some(status) = version.check(conditions) {
         return Ok(Prepared {
             version,
@@ -188,20 +209,10 @@ fn prepare_file(mut file: File, conditions: &HeaderMap, head: bool) -> io::Resul
             });
         }
     };
-    let length = range.end - range.start;
-    let data = if head || length == 0 {
+    let data = if head || range.is_empty() {
         Data::Empty
     } else {
-        if range.start != 0 {
-            file.seek(SeekFrom::Start(range.start))?;
-        }
-        if length <= INLINE {
-            let mut bytes = vec![0; length as usize];
-            file.read_exact(&mut bytes)?;
-            Data::Buffered(Bytes::from(bytes))
-        } else {
-            Data::Stream(file)
-        }
+        read(range.clone())?
     };
     Ok(Prepared {
         version,
@@ -308,6 +319,26 @@ fn local_response(headers: HeaderMap, prepared: Prepared, head: bool) -> Respons
     let (mut parts, ()) = Response::new(()).into_parts();
     parts.headers = headers;
     file_response(parts, prepared, head, None)
+}
+
+pub(crate) fn send_bytes(
+    bytes: Bytes,
+    modified: std::time::SystemTime,
+    headers: HeaderMap,
+    conditions: HeaderMap,
+    head: bool,
+) -> Response<Body> {
+    let total = bytes.len() as u64;
+    let Some(version) = FileVersion::from_metadata(total, modified) else {
+        return error(StatusCode::INTERNAL_SERVER_ERROR);
+    };
+    let prepared = prepare_content(total, version, &conditions, head, |range| {
+        Ok(Data::Buffered(
+            bytes.slice(range.start as usize..range.end as usize),
+        ))
+    })
+    .expect("in-memory range");
+    local_response(headers, prepared, head)
 }
 
 async fn prepare_async(

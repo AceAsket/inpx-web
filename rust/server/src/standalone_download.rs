@@ -85,7 +85,15 @@ enum Target {
 
 pub(crate) enum Prepared {
     Redirect(String),
-    File { path: PathBuf, headers: HeaderMap },
+    File {
+        path: PathBuf,
+        headers: HeaderMap,
+    },
+    Bytes {
+        data: Bytes,
+        modified: std::time::SystemTime,
+        headers: HeaderMap,
+    },
 }
 
 impl Downloads {
@@ -202,6 +210,10 @@ impl Downloads {
 
     pub(super) fn clear_cover_lookup(&self) {
         self.recent_covers.lock().expect("cover cache").clear();
+    }
+
+    pub(super) fn expire_covers(&self) {
+        self.recent_covers.lock().expect("cover cache").expire();
     }
 
     pub(super) fn rebuild_cover(
@@ -580,11 +592,11 @@ impl Downloads {
         sources: &[Source],
     ) -> Result<Prepared, StatusCode> {
         let (epoch, hit) = {
-            let cache = self.recent_covers.lock().expect("cover cache");
+            let mut cache = self.recent_covers.lock().expect("cover cache");
             (cache.epoch, cache.get(generation, uid))
         };
         let file = match hit {
-            Some(Some(file)) if file.available() => file,
+            Some(Some(file)) if file.bytes.is_some() || file.available() => file,
             Some(None) => return Err(StatusCode::NOT_FOUND),
             _ => {
                 let book = load_book(catalogue, uid)
@@ -618,9 +630,16 @@ impl Downloads {
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
         );
-        Ok(Prepared::File {
-            path: file.path,
-            headers,
+        Ok(match file.bytes {
+            Some(data) => Prepared::Bytes {
+                data,
+                modified: file.modified,
+                headers,
+            },
+            None => Prepared::File {
+                path: file.path,
+                headers,
+            },
         })
     }
 
@@ -834,6 +853,11 @@ pub(crate) async fn respond(
         Ok(Prepared::File { path, headers }) => {
             download::send_local(path, headers, conditions, head).await
         }
+        Ok(Prepared::Bytes {
+            data,
+            modified,
+            headers,
+        }) => download::send_bytes(data, modified, headers, conditions, head),
         Err(status) => error(status),
     }
 }

@@ -90,18 +90,27 @@ async function verify(base, directory, {libraryDir, profile, expected, conversio
             'A repeat request must serve the staged cover without invoking djxl again');
         if (switchToUnlimited) {
             const archive = join(libraryDir,'covers','smoke.zip');
-            await fs.rename(archive,archive+'.offline');
-            try {
-                const offline = await fetch(urls[0],{headers:{cookie:client.cookie}});
-                assert.equal(offline.status,200);
-                assert.deepEqual(Buffer.from(await offline.arrayBuffer()),png);
-            } finally {
-                await fs.rename(archive+'.offline',archive);
-            }
             const cached = join(directory,'public-files','source-verified-v1','book');
             const name = (await fs.readdir(cached)).find(file=>file.endsWith('.reader-cover'));
             assert(name);
-            await fs.unlink(join(cached,name));
+            await fs.rename(archive,archive+'.offline');
+            try {
+                await fs.unlink(join(cached,name));
+                const offline = await fetch(urls[0],{headers:{cookie:client.cookie}});
+                assert.equal(offline.status,200);
+                assert.deepEqual(Buffer.from(await offline.arrayBuffer()),png);
+                const partial = await fetch(urls[0],{headers:{cookie:client.cookie,range:'bytes=0-7'}});
+                assert.equal(partial.status,206);
+                assert.deepEqual(Buffer.from(await partial.arrayBuffer()),png.subarray(0,8));
+                const head = await fetch(urls[0],{method:'HEAD',headers:{cookie:client.cookie}});
+                assert.equal(Number(head.headers.get('content-length')),png.length);
+                const etag = offline.headers.get('etag');
+                assert(etag);
+                const unchanged = await fetch(urls[0],{headers:{cookie:client.cookie,'if-none-match':etag,'cache-control':'max-age=0'}});
+                assert.equal(unchanged.status,304);
+            } finally {
+                await fs.rename(archive+'.offline',archive);
+            }
             const image = await fetch(urls[0],{headers:{cookie:client.cookie}});
             assert.equal(image.status,200);
             assert.deepEqual(Buffer.from(await image.arrayBuffer()),png);
