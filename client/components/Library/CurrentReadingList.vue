@@ -65,8 +65,7 @@ async function hide(book) {
     if (!userId || removing.value || loading.value) return;
     removing.value = book.bookUid;
     try {
-        const result = await api.updateReaderProgress(book.bookUid, {hidden:true, generation:generation.value, baseRevision:book.revision},
-            {userId, suppressProfileLogin:true});
+        const result = await api.setReadingHistoryHidden(book, true, generation.value, userId);
         if (current !== revision || owner.value !== userId) return;
         emit('changed');
         await load(page.value);

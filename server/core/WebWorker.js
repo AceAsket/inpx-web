@@ -3547,7 +3547,8 @@ class WebWorker {
                     state: rowState,
                 };
             })
-            .filter((item) => item && (state === 'all' || item.state === state));
+            .filter(item => item && (item.state === state ||
+                (state === 'all' && (options.excludeHidden !== true || item.state !== 'hidden'))));
 
         const items = [];
         for (const item of rows) {

@@ -306,6 +306,20 @@ async function verifyShelves(url, readingUid, shelfUid) {
         const historySearch = await change('get-user-reading-library',{options:{state:'reading',query:'PACKAGED smoke'}});
         assert.equal(historySearch.items[0].bookUid,readingUid);
         assert.equal(historySearch.items[0].percent,0.35);
+        const setHistoryHidden = (book, hidden) => change('update-reader-progress',{bookUid:book.bookUid,
+            progress:{hidden,baseRevision:book.revision,generation:historySearch.progressGeneration}});
+        const paused = await setHistoryHidden(history.items[0],true);
+        assert.equal(paused.progress.hidden,true,paused.error);
+        const visible = await change('get-user-reading-library',{options:{state:'all',excludeHidden:true,limit:1}});
+        assert.equal(visible.count,1);
+        assert.deepEqual(visible.items.map(book=>book.bookUid),[readingUid]);
+        const all = await change('get-user-reading-library',{options:{state:'all'}});
+        assert.equal(all.count,2);
+        const hidden = await change('get-user-reading-library',{options:{state:'hidden'}});
+        assert.deepEqual(hidden.items.map(book=>book.bookUid),[shelfUid]);
+        const resumed = await setHistoryHidden(hidden.items[0],false);
+        assert.equal(resumed.progress.hidden,false,resumed.error);
+        assert.equal(resumed.progress.percent,1);
         assert.deepEqual((await change('get-reading-list',{listId:smart.list.id})).books.map(book=>book._uid),[readingUid]);
         const pin = (shelfIds) => change('set-overview-pinned-shelves',{shelfIds});
         assert.match((await pin([listId,listId])).error,/не повторяться/);

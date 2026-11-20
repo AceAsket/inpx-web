@@ -73,6 +73,7 @@ pub(super) fn reading_library(
         value => value.clamp(1.0, 500.0).trunc() as usize,
     };
     let mut counts = HashMap::from([("all", 0), ("reading", 0), ("read", 0), ("hidden", 0)]);
+    let include_hidden = options["excludeHidden"] != true;
     let mut selected = Vec::new();
     for (uid, progress) in user["readerProgress"].as_object().into_iter().flatten() {
         if uid.trim().is_empty() || !string(&progress["relinkedTo"]).is_empty() {
@@ -89,7 +90,7 @@ pub(super) fn reading_library(
         };
         *counts.get_mut("all").expect("all counter") += 1;
         *counts.get_mut(status).expect("status counter") += 1;
-        if state == "all" || state == status {
+        if state == status || (state == "all" && (include_hidden || !hidden)) {
             selected.push((uid.trim(), progress, status, percent));
         }
     }

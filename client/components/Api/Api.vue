@@ -688,6 +688,11 @@ class Api {
         return await this.request({action: 'update-reader-progress', bookUid, progress}, 120, options);
     }
 
+    setReadingHistoryHidden(book, hidden, generation, userId) {
+        return this.updateReaderProgress(book.bookUid, {hidden, generation, baseRevision:book.revision},
+            {userId, suppressProfileLogin:true});
+    }
+
     async relinkReaderBook(bookUid, replacementBookUid, baseRevision) {
         return await this.request({action: 'relink-reader-book', bookUid, replacementBookUid, baseRevision}, 120);
     }
