@@ -588,6 +588,37 @@ if (require.main === module) (async() => {
             assert.deepEqual(await pinnedOrder(), expected.map(shelf => shelf.id));
         };
         await assertPinnedShelves([smart, ordinary]);
+        const manageOverview = page.locator('.overview-toolbar').getByRole('button', {name: 'Управление полками'});
+        const layoutDialog = page.locator('[data-dialog-kind="overview-shelves"]');
+        const layoutRow = name => layoutDialog.getByRole('listitem').filter({has: page.getByRole('checkbox', {name, exact: true})});
+        const layoutNames = () => layoutDialog.locator('li label').allTextContents();
+        await manageOverview.click();
+        await layoutRow(ordinary.name).waitFor();
+        const initialNames = await layoutNames();
+        await layoutRow(ordinary.name).locator('[draggable="true"]').dragTo(layoutRow('Сейчас читаю'), {targetPosition:{x:20, y:4}});
+        assert.equal((await layoutNames())[0], ordinary.name);
+        assert(await layoutRow(ordinary.name).getByRole('checkbox').isChecked());
+        await layoutDialog.getByRole('button', {name:'Отмена', exact:true}).click();
+        await manageOverview.click();
+        await layoutRow(ordinary.name).waitFor();
+        assert.deepEqual(await layoutNames(), initialNames, 'Cancel discards the drop');
+        const target = layoutRow(ordinary.name);
+        await target.scrollIntoViewIfNeeded();
+        const targetBox = await target.boundingBox();
+        await layoutRow(smart.name).locator('[draggable="true"]').dragTo(target, {targetPosition:{x:20, y:targetBox.height - 4}});
+        const reorderedNames = await layoutNames();
+        assert(reorderedNames.indexOf(ordinary.name) < reorderedNames.indexOf(smart.name), 'Dropping below a shelf moves it down');
+        await layoutDialog.getByRole('button', {name:'Сохранить', exact:true}).click();
+        await layoutDialog.waitFor({state:'hidden'});
+        assert.deepEqual(await shelves.locator('h2').allTextContents(), [ordinary.name, smart.name]);
+        await manageOverview.click();
+        await layoutRow(smart.name).waitFor();
+        const savedNames = await layoutNames();
+        assert(savedNames.indexOf(ordinary.name) < savedNames.indexOf(smart.name));
+        await layoutRow(smart.name).getByRole('button', {name:`Выше: ${smart.name}`, exact:true}).press('Enter');
+        await layoutDialog.getByRole('button', {name:'Сохранить', exact:true}).click();
+        await layoutDialog.waitFor({state:'hidden'});
+        await assertPinnedShelves([smart, ordinary]);
         await shelves.filter({has:page.getByRole('heading', {name: ordinary.name, exact: true})})
             .getByRole('button', {name: `Открыть карточку: ${indexedBooks[0].title}`, exact: true}).waitFor();
         await shelves.filter({has:page.getByRole('heading', {name: smart.name, exact: true})})
