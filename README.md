@@ -7,14 +7,14 @@
 inpx-web-7z
 ===========
 
-Ветка `develop` содержит классический сервер Node.js с каталогом JembaDB. Последний запланированный стабильный релиз этой версии — **1.8.3**. Дальнейшая разработка сервера ведётся в [ветке Rust](https://github.com/AceAsket/inpx-web/tree/rust).
+Классический сервер на Node.js использует JembaDB и поддерживается в ветке `nodejs_depr`. Для проверки версии 1.8.3 используйте Docker-образ `aceasket/inpx-web-7z:1.8.3-rc.30` или standalone из того же выпуска. Тег Docker `latest` указывает на стабильный Node.js. [Скачать RC30](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3-rc.30) · [Сервер Rust 2.0.0](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.0)
 
 [![INPX Reader — скачать читалку для Android](https://img.shields.io/badge/INPX_Reader-%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C%20APK-0F766E?style=for-the-badge&logo=android&logoColor=white)](https://github.com/AceAsket/inpx-reader-releases/releases/latest)
 [![INPX Server — сервер для Android](https://img.shields.io/badge/INPX_Server-%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%20%D0%B4%D0%BB%D1%8F%20Android-455A64?style=for-the-badge&logo=android&logoColor=white)](#сервер-на-android)
 
 > **Читать и слушать на Android:** [скачайте INPX Reader](https://github.com/AceAsket/inpx-reader-releases/releases/latest) — наше клиентское приложение для подключения к вашей библиотеке INPX Web.
 
-Стабильная версия **1.8.2** доступна в Docker и в виде готовых сборок для Linux, Windows и macOS. Для сборки из исходников используйте тег `v1.8.2`. Разработка идёт в ветке `develop`. [Скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) · [История изменений](./CHANGELOG.md)
+Стабильная версия **1.8.2** доступна в Docker и в виде готовых сборок для Linux, Windows и macOS. Для сборки из исходников используйте тег `v1.8.2`. Разработка классического сервера идёт в ветке `nodejs_depr`. [Скачать релиз](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.2) · [История изменений](./CHANGELOG.md)
 
 В 1.8.2 добавлены OPDS 2.0, лёгкий интерфейс `/ebook` и синхронизация прогресса с KOReader. Читалка сохраняет место при выходе из полноэкранного режима, в том числе после перелистывания. [Подключение KOReader](./docs/koreader-sync.md)
 
