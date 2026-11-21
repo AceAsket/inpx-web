@@ -2,7 +2,7 @@ name: Validate development changes
 
 on:
   push:
-    branches: [develop, master, main, rust]
+    branches: [develop, master, main]
   pull_request:
   workflow_dispatch:
     inputs:
