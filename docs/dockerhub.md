@@ -63,6 +63,16 @@ docker run -d \
 
 Каталог `/usr/local/bin/.inpx-web` должен быть постоянным: в нём хранятся настройки, профили, позиции чтения, закладки, списки, индекс и кэш. Книги монтируются отдельно, обычно только для чтения. При обновлении пересоздайте контейнер с новым тегом, сохранив свои тома, порты, сеть и переменные окружения.
 
+### Caddy на Synology
+
+В Caddyfile укажите `reverse_proxy 192.168.31.97:12380` с адресом NAS. На NAS подставьте IP контейнера и откройте сайт через HTTPS.
+
+```sh
+sudo tcpdump -nni any -c 1 'dst host 172.18.0.2 and tcp dst port 12380 and tcp[tcpflags] & tcp-syn != 0'
+```
+
+Берите IP слева от `>` без порта. Для `172.18.0.1.54000` задайте `INPX_TRUST_PROXY: "true"` и `INPX_TRUSTED_PROXY_CIDRS: "172.18.0.1/32"`. Если это шлюз, доверием охвачены все соединения с его адреса. Сначала разрешите порт NAS только для Caddy. Пересоздайте сервис и проверьте статус `101` у `/ws`. [Пример Compose и проверка IP](https://github.com/AceAsket/inpx-web#caddy-и-docker-на-synology)
+
 ### Папки и несколько библиотек
 
 Для индексации папки FB2/EPUB без INPX добавьте переменную окружения:
@@ -185,6 +195,16 @@ docker run -d \
 Open `http://SERVER_IP:12380`. `INPX` and `LIBDIR` must refer to paths **inside the container**. Wait for initial indexing; the time required depends on the library size. Set `INPX_ADMIN_PASSWORD` to supply your own initial admin password. On a new installation without this setting, a password is generated and printed in the startup log. Existing profile passwords are preserved on upgrade.
 
 Keep `/usr/local/bin/.inpx-web` in a persistent volume: it stores settings, profiles, reading positions, bookmarks, lists, the index and caches. Mount your books separately, normally read-only. To update, recreate the container with the new image tag while preserving your volumes, ports, network and environment variables.
+
+### Caddy on Synology
+
+Use `reverse_proxy 192.168.31.97:12380` with your NAS IP in Caddyfile. On the NAS, substitute the container IP below and open the HTTPS site.
+
+```sh
+sudo tcpdump -nni any -c 1 'dst host 172.18.0.2 and tcp dst port 12380 and tcp[tcpflags] & tcp-syn != 0'
+```
+
+Use the IP left of `>`, omitting the port. For `172.18.0.1.54000`, set `INPX_TRUST_PROXY: "true"` and `INPX_TRUSTED_PROXY_CIDRS: "172.18.0.1/32"`. Trust extends to all connections from that IP. If it is the gateway, restrict the NAS port to Caddy first. Recreate the service and check for `101` on `/ws`. [Compose example](https://github.com/AceAsket/inpx-web#caddy-и-docker-на-synology)
 
 ### Folders and multiple libraries
 
