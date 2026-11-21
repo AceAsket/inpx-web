@@ -113,6 +113,11 @@ async function testEpubFb2CacheIsSharedAndFormatsAreOfferedConsistently() {
         assert.equal(formats.canRead('epub', config), true);
         assert.equal(formats.canRead('epub', {...config, conversionEnabled:false}), false);
         assert.equal(formats.canRead('fb2', {...config, conversionEnabled:false}), true);
+        const readerOnly = {...config, epubReaderEnabled:true, conversionEnabled:false, conversionFormats:[]};
+        assert.equal(formats.canRead('EPUB',readerOnly),true);
+        assert.equal(formats.canRead('epub',{...readerOnly,onlineReaderEnabled:false}),false);
+        assert.equal(formats.canRead('pdf',readerOnly),false);
+        assert.deepEqual(formats.available('epub',readerOnly),[]);
         assert.equal(formats.resolve('epub',config,'fb2'), 'fb2');
         const info = await converter.getConversionCacheInfo({...args, format:'kepub'});
         assert.equal(info.usesFb2cng, true);

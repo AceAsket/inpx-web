@@ -217,12 +217,12 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     let data = text(&config["dataDir"]).map_or(default_data, PathBuf::from);
     let remote = remote::Remote::new(&config, &data)?.map(Arc::new);
     let kosync_enabled = std::env::var("INPX_KOSYNC_ENABLED").as_deref() != Ok("false");
-    let epub_reader = epub_reader(&config);
+    let fb2_download = fb2_download_enabled(&config);
     let (cpu, memory) = diagnostics::hardware();
     let policy = resources::Policy::new(cpu, memory, &config)?;
     let resources = Arc::new(resources::Budget::new(policy.clone()));
     let conversion = Conversion::new(&config, exec_dir, policy.selected.limits.conversions)?;
-    let conversion_formats: Vec<_> = epub_reader
+    let conversion_formats: Vec<_> = fb2_download
         .then_some("fb2")
         .into_iter()
         .chain(conversion.iter().flat_map(Conversion::formats))
@@ -327,7 +327,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         &data,
         prefix,
         resources.clone(),
-        epub_reader,
+        fb2_download,
         conversion,
         remote,
         inpx_catalog::legacy_library_files::Covers::new(
@@ -521,7 +521,7 @@ fn text(value: &Value) -> Option<&str> {
     value.as_str().filter(|value| !value.is_empty())
 }
 
-fn epub_reader(config: &Value) -> bool {
+fn fb2_download_enabled(config: &Value) -> bool {
     std::env::var("INPX_ENABLE_CONVERSION").map_or(config["conversionEnabled"] != false, |value| {
         value != "false"
     }) && std::env::var("INPX_CONVERSION_FORMATS").map_or_else(

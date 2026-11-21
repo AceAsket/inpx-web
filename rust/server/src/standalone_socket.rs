@@ -116,6 +116,7 @@ impl Socket {
             "extendedSearch":config["extendedSearch"]!=false,
             "conversionEnabled":!conversion_formats.is_empty(),"conversionFormats":conversion_formats,
             "onlineReaderEnabled":config["onlineReaderEnabled"]!=false,
+            "epubReaderEnabled":config["onlineReaderEnabled"]!=false,
             "ebookReaderEnabled":config["onlineReaderEnabled"]!=false && matches!(&config["remoteLib"], Value::Null | Value::Bool(false)),
             "canRememberProfileDevice":false,
             "discovery":discovery,
@@ -833,6 +834,12 @@ impl Socket {
                 }
             }
             "get-book-link" | "get-book-info" | "get-book-gallery" => {
+                if action == "get-book-info"
+                    && request["readerOnly"] == true
+                    && self.web_config["onlineReaderEnabled"] == false
+                {
+                    return fault("Онлайн-читалка отключена.");
+                }
                 let uid = text(&request, "bookUid");
                 if uid.is_empty() {
                     return fault("bookUid is empty");

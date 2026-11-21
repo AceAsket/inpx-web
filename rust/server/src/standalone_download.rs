@@ -31,7 +31,7 @@ pub(crate) struct Downloads {
     pub(super) covers: Covers,
     recent_covers: Mutex<CoverCache>,
     local_books: book_delivery::LocalBooks,
-    epub: bool,
+    fb2_download: bool,
     conversions: Option<Conversion>,
     remote: Option<Arc<Remote>>,
 }
@@ -108,7 +108,7 @@ impl Downloads {
         data: &Path,
         prefix: &str,
         resources: Arc<Budget>,
-        epub: bool,
+        fb2_download: bool,
         conversions: Option<Conversion>,
         remote: Option<Arc<Remote>>,
         covers: Covers,
@@ -123,7 +123,7 @@ impl Downloads {
             covers,
             recent_covers: Mutex::default(),
             local_books: Default::default(),
-            epub,
+            fb2_download,
             conversions,
             remote,
         })
@@ -142,13 +142,11 @@ impl Downloads {
     }
 
     pub(super) fn ebook_readable(&self, extension: &str) -> bool {
-        self.remote.is_none()
-            && (extension.eq_ignore_ascii_case("fb2")
-                || self.epub && extension.eq_ignore_ascii_case("epub"))
+        self.remote.is_none() && reader_format(extension)
     }
 
     pub(super) fn ebook_formats(&self, extension: &str) -> Vec<&'static str> {
-        self.epub
+        self.fb2_download
             .then_some("fb2")
             .into_iter()
             .chain(self.conversions.iter().flat_map(Conversion::formats))
@@ -335,7 +333,7 @@ impl Downloads {
     }
 
     fn conversion(&self, name: &str) -> Option<Format> {
-        if name == "fb2" && self.epub {
+        if name == "fb2" && self.fb2_download {
             Some(Format::Fb2)
         } else {
             self.conversions
@@ -348,7 +346,7 @@ impl Downloads {
     fn supports(&self, format: Format, extension: &str) -> bool {
         match format {
             Format::Fb2 => {
-                self.epub
+                self.fb2_download
                     && (extension.eq_ignore_ascii_case("fb2")
                         || extension.eq_ignore_ascii_case("epub"))
             }
@@ -426,7 +424,7 @@ impl Downloads {
         };
         let book: Book = serde_json::from_value(row.clone())?;
         if !book.ext.eq_ignore_ascii_case("fb2")
-            && !(self.epub && reader_only && book.ext.eq_ignore_ascii_case("epub"))
+            && !(reader_only && book.ext.eq_ignore_ascii_case("epub"))
         {
             return Ok(Some(json!({"bookInfo":{
                 "book":row,"cover":"","fb2":false,"contents":[],"reviews":[],
@@ -496,8 +494,8 @@ impl Downloads {
         let _permit = self.resources.acquire(Kind::Archives)?;
         let book = load_book(catalogue, uid)?.ok_or("404 Файл не найден")?;
         let epub = book.ext.eq_ignore_ascii_case("epub");
-        if !(book.ext.eq_ignore_ascii_case("fb2") || self.epub && epub) {
-            return Err("Озвучка доступна для книг FB2.".into());
+        if !reader_format(&book.ext) {
+            return Err("Озвучка доступна для книг FB2 и EPUB.".into());
         }
         let source = book.source(sources).ok_or("404 Файл не найден")?;
         let cached = self.cache_book(&book, source)?;
@@ -574,8 +572,7 @@ impl Downloads {
     ) -> CatalogueResult<Option<Image>> {
         let _permit = self.resources.acquire(Kind::Images)?;
         self.source_cover(book, sources, || {
-            if (book.ext.eq_ignore_ascii_case("fb2")
-                || self.epub && book.ext.eq_ignore_ascii_case("epub"))
+            if reader_format(&book.ext)
                 && let Some((document, _)) = self.document(book, sources)?
             {
                 return self.covers.embedded(&document, &self.cache);
@@ -828,6 +825,10 @@ impl Downloads {
         }
         Ok(Prepared::File { path, headers })
     }
+}
+
+fn reader_format(extension: &str) -> bool {
+    extension.eq_ignore_ascii_case("fb2") || extension.eq_ignore_ascii_case("epub")
 }
 
 fn replace_extension(name: &str, ext: &str) -> String {

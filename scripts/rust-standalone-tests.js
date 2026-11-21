@@ -401,6 +401,31 @@ async function verifyEpubReader(binary, root) {
         assert.equal(unchanged.status,200);
         assert((await bytes(unchanged)).equals(original));
     } finally { await server.stop(); }
+    for (const env of [{INPX_CONVERSION_FORMATS:'epub,pdf'}, {INPX_ENABLE_CONVERSION:'false'}]) {
+        const reading = await start(binary,args,env);
+        try {
+            const feed = await (await fetch(reading.url+'/catalogue/v2/search?query=EPUB')).json();
+            const links = feed.publications[0].links;
+            assert(!links.some(link=>link.type==='application/fb2+xml'));
+            const uid = new URL(links.find(link=>link.rel==='self').href,reading.url).searchParams.get('uid');
+            const cookie = await browserCookie(reading.url);
+            const ws = await wsClient(reading.url,cookie);
+            try {
+                const config = await ws.request({action:'get-config'});
+                assert(!config.conversionFormats.includes('fb2'));
+                assert.equal(require('../shared/BookFormats').canRead('epub',config),true);
+                const {bookInfo} = await ws.request({action:'get-book-info',bookUid:uid,readerOnly:true});
+                assert.equal(bookInfo.book._uid,uid);
+                assert.match(JSON.stringify(bookInfo.fb2),/Текст второй главы/);
+            } finally { ws.close(); }
+            const query = new URLSearchParams({uid});
+            const page = await fetch(reading.url+'/reader/ebook/read?'+query,{headers:{cookie}});
+            assert.equal(page.status,200);
+            assert.match(await page.text(),/Текст второй главы/);
+            query.set('format','fb2');
+            assert.equal((await fetch(reading.url+'/reader/book/by-uid?'+query)).status,404);
+        } finally { await reading.stop(); }
+    }
     await fs.writeFile(config,JSON.stringify({...settings,conversionEnabled:false,onlineReaderEnabled:false}));
     const disabled = await start(binary,args);
     try {
@@ -409,7 +434,12 @@ async function verifyEpubReader(binary, root) {
         const uid = new URL(feed.publications[0].links.find(link=>link.rel==='self').href,disabled.url).searchParams.get('uid');
         assert.equal((await fetch(disabled.url+'/reader/book/by-uid?'+new URLSearchParams({uid,format:'fb2'}))).status,404);
         const ws = await wsClient(disabled.url,await browserCookie(disabled.url));
-        try { assert.equal((await ws.request({action:'get-config'})).onlineReaderEnabled,false); }
+        try {
+            const config = await ws.request({action:'get-config'});
+            assert.equal(config.onlineReaderEnabled,false);
+            assert.equal(config.epubReaderEnabled,false);
+            assert((await ws.request({action:'get-book-info',bookUid:uid,readerOnly:true})).error);
+        }
         finally { ws.close(); }
     } finally { await disabled.stop(); }
     const override = await start(binary,args,{INPX_ENABLE_CONVERSION:'true'});

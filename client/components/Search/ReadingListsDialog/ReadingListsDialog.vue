@@ -172,7 +172,7 @@
                                 </div>
                                 <div class="list-book-actions">
                                     <q-btn
-                                        v-if="config.onlineReaderEnabled && bookItem.ext === 'fb2'"
+                                        v-if="canRead(bookItem)"
                                         outline dense no-caps icon="la la-book-open"
                                         :label="bookItem.started && bookItem.percent < 0.999 ? 'Продолжить читать' : 'Читать'"
                                         @click="readBook(bookItem)"
@@ -213,6 +213,7 @@
 
 <script>
 import vueComponent from '../../vueComponent.js';
+import {readable} from '../../Library/libraryModel.js';
 
 import Dialog from '../../share/Dialog.vue';
 
@@ -567,6 +568,10 @@ class ReadingListsDialog {
         } finally {
             item.booksLoading = false;
         }
+    }
+
+    canRead(bookItem) {
+        return readable(bookItem, this.config);
     }
 
     async readBook(bookItem) {

@@ -19,8 +19,11 @@ function available(ext, config = {}) {
 }
 
 function canRead(ext, config = {}) {
-    const source = String(ext || '').toLowerCase();
-    return !!config.onlineReaderEnabled && (source === 'fb2' || source === 'epub' && available(source, config).includes('fb2'));
+    if (!config.onlineReaderEnabled) return false;
+    const source = String(ext || '').trim().toLowerCase();
+    if (source !== 'epub') return source === 'fb2';
+    // Older servers prepare EPUB through the configured FB2 download converter.
+    return config.epubReaderEnabled ?? available(source, config).includes('fb2');
 }
 
 function resolve(ext, config = {}, preference = 'original', explicit = '') {
