@@ -434,6 +434,8 @@ if (require.main === module) (async() => {
             const recent = page.locator('.book-shelf').filter({has: page.locator('#recent-books-heading')});
             if (width >= 1100) {
                 const currentBox = await page.locator('.current-book').boundingBox(), recentBox = await recent.boundingBox();
+                const row = await page.locator('.overview-reading--paired').boundingBox();
+                assert(Math.abs(recentBox.x + recentBox.width - row.x - row.width) <= 1, 'Recent books reach the right edge of the reading row');
                 assert(Math.abs(currentBox.height - recentBox.height) < 1, 'Current and recent reading blocks have equal heights');
                 assert(Math.abs(currentBox.y + currentBox.height - recentBox.y - recentBox.height) < 1, 'Reading blocks align along their lower edge');
                 assert(currentBox.width >= 320 && currentBox.width > (await recent.locator('.book-tile').first().boundingBox()).width * 2,

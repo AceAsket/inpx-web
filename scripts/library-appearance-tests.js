@@ -208,6 +208,8 @@ async function testLibraryBooksUseStructuredProgressStableIdsAndRealAvailability
     const home = model.homeBooks(items);
     assert.equal(home.current.bookUid, 'current');
     assert.deepEqual(home.recent.map(book => book.bookUid), ['read']);
+    const older = Array.from({length: 30}, (_, i) => ({bookUid: 'older-' + i, state: 'read', updatedAt: '2026-10-01'}));
+    assert.deepEqual(model.homeBooks([...items, ...older]).recent, [items[0], ...older.slice(0, 23)]);
     assert.equal(model.progress({_readerProgress: {percent: .23}}), .23);
     assert.equal(model.progress({discoveryReason: '37% прочитано'}), null, 'Never parse UI text as reading state');
     assert.equal(model.readable({bookUid: 'a', ext: 'epub'}, {onlineReaderEnabled: true}), true);

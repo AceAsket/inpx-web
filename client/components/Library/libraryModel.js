@@ -44,7 +44,7 @@ function recentBooks(items = []) {
 function homeBooks(items = []) {
     const books = recentBooks(items);
     const current = books.find(book => book.state !== 'read' && (progress(book) || 0) < .999) || null;
-    return {current, recent: books.filter(book => book !== current).slice(0, 8)};
+    return {current, recent: books.filter(book => book !== current).slice(0, 24)};
 }
 
 function personalAccess(config = {}, settings = {}) {
