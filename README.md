@@ -40,6 +40,44 @@ docker run -d --name inpx-web --restart unless-stopped \
 
 Откройте `http://localhost:12380` на сервере или укажите его адрес вместо `localhost`. Профили и настройки сохраняются в томе `inpx-web-data`. [Пример Docker Compose](./docker-compose.full.yml) · [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
 
+### Caddy и Docker на Synology
+
+Если Caddy работает на отдельной машине, укажите в Caddyfile адрес NAS и опубликованный порт библиотеки. В примере Caddy имеет адрес `192.168.31.49`, а Synology — `192.168.31.97`. Замените домен и адреса своими. Caddy передаёт WebSocket и заголовки внешнего адреса по умолчанию. [Документация Caddy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults)
+
+```caddyfile
+books.example.org {
+	reverse_proxy 192.168.31.97:12380
+}
+```
+
+Для `INPX_TRUSTED_PROXY_CIDRS` нужен **адрес источника TCP-соединения, который видит контейнер**. Чтобы его узнать, подключитесь к NAS по SSH и посмотрите IP контейнера в сети библиотеки.
+
+```sh
+sudo docker inspect -f '{{range $name, $net := .NetworkSettings.Networks}}{{println $name $net.IPAddress}}{{end}}' inpx-web
+```
+
+Подставьте этот IP вместо `172.18.0.2` в команду ниже. Пока она ждёт, откройте библиотеку через HTTPS-домен Caddy в новом окне браузера. Команда показывает первый пакет открытия TCP-соединения к библиотеке.
+
+```sh
+sudo tcpdump -nni any -c 1 'dst host 172.18.0.2 and tcp dst port 12380 and tcp[tcpflags] & tcp-syn != 0'
+```
+
+Например, строка `172.18.0.1.54000 > 172.18.0.2.12380` означает, что библиотека видит источником шлюз Docker `172.18.0.1`. Число `54000` — временный порт. Если слева виден адрес самого Caddy, используйте его. Суффикс `/32` обозначает один IPv4-адрес.
+
+**Если источником оказался шлюз**, такой настройке будут доверены все подключения, которые Docker передаёт с адреса шлюза. Сначала разрешите доступ к опубликованному TCP-порту `12380` только с адреса Caddy (`192.168.31.49` в примере). Правило должно фильтровать входящие подключения к порту Docker до подмены адреса. Проверьте с другого устройства в LAN, что прямое подключение к `192.168.31.97:12380` закрыто, а через Caddy библиотека открывается. [Фильтрация опубликованных портов Docker](https://docs.docker.com/engine/network/firewall-iptables/#restrict-external-connections-to-containers)
+
+Добавьте значения в `environment` сервиса `inpx-web` в Compose. Для приведённого вывода подойдут такие значения.
+
+```yaml
+environment:
+  INPX_TRUST_PROXY: "true"
+  INPX_TRUSTED_PROXY_CIDRS: "172.18.0.1/32"
+```
+
+Выполните `docker compose up -d --force-recreate inpx-web` из каталога проекта. Откройте библиотеку через HTTPS и проверьте запрос `/ws` в инструментах разработчика браузера (**Сеть → WS**). Статус `101 Switching Protocols` подтверждает, что WebSocket открылся.
+
+**Если Caddy тоже в Docker на том же NAS**, подключите оба контейнера к общей пользовательской сети, уберите `ports` у `inpx-web` и укажите в Caddyfile `reverse_proxy inpx-web:12380`. Закрепите за Caddy IPv4-адрес в этой сети и укажите его с `/32`. Клиенты в LAN обращаются к библиотеке через Caddy. [Сети Docker bridge](https://docs.docker.com/engine/network/drivers/bridge/)
+
 ## Интерфейс
 
 На обзоре видны текущая книга, прогресс чтения и полки с новинками.
