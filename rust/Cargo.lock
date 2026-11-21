@@ -1002,6 +1002,7 @@ dependencies = [
  "hyper-util",
  "inpx-auth-state",
  "inpx-catalog",
+ "ipnet",
  "jxl",
  "libc",
  "mail-send",

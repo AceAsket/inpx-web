@@ -4,6 +4,7 @@ use ctutils::CtEq;
 use hyper::body::Bytes;
 use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
+use ipnet::IpNet;
 use serde::Deserialize;
 use serde_json::Value;
 use url::{Origin, Url};
@@ -32,22 +33,62 @@ pub(crate) struct Settings {
 }
 
 #[derive(Deserialize)]
-struct Range {
+#[serde(try_from = "LegacyIpv4Range")]
+struct Range(IpNet);
+
+// The Node.js HTTP bridge sends its IPv4 networks as two integers.
+#[derive(Deserialize)]
+struct LegacyIpv4Range {
     base: u32,
     mask: u32,
+}
+
+impl TryFrom<LegacyIpv4Range> for Range {
+    type Error = ipnet::PrefixLenError;
+
+    fn try_from(range: LegacyIpv4Range) -> Result<Self, Self::Error> {
+        IpNet::with_netmask(
+            Ipv4Addr::from(range.base).into(),
+            Ipv4Addr::from(range.mask).into(),
+        )
+        .map(Self)
+    }
 }
 
 impl Range {
     fn parse(value: &str) -> Option<Self> {
         let value = value.trim();
-        let (address, bits) = value.split_once('/').unwrap_or((value, "32"));
-        let address = ipv4(address.parse().ok()?)?;
-        let bits = bits.parse::<u32>().ok().filter(|bits| *bits <= 32)?;
-        let mask = u32::MAX.checked_shl(32 - bits).unwrap_or(0);
-        Some(Self {
-            base: u32::from(address) & mask,
-            mask,
-        })
+        let (address, prefix) = match value.split_once('/') {
+            Some((address, length)) => (address, Some(length.parse::<u8>().ok()?)),
+            None => (value, None),
+        };
+        let address = address.parse::<IpAddr>().ok()?;
+        // Older configurations can use ::1 or mapped addresses with IPv4 prefix lengths.
+        if let Some(v4) = ipv4(address)
+            && prefix.unwrap_or(32) <= 32
+        {
+            return IpNet::new(v4.into(), prefix.unwrap_or(32)).ok().map(Self);
+        }
+        let network = match prefix {
+            Some(length) => IpNet::new(address, length).ok()?,
+            None => IpNet::from(address),
+        };
+        if let IpNet::V6(net) = network
+            && let Some(mapped) = net.addr().to_ipv4_mapped()
+            && net.prefix_len() >= 96
+        {
+            return IpNet::new(mapped.into(), net.prefix_len() - 96)
+                .ok()
+                .map(Self);
+        }
+        Some(Self(network))
+    }
+
+    fn contains(&self, peer: IpAddr) -> bool {
+        match self.0 {
+            IpNet::V4(net) => ipv4(peer).is_some_and(|ip| net.contains(&ip)),
+            IpNet::V6(net) => matches!(peer.to_canonical(), IpAddr::V6(ip) if net.contains(&ip)),
+        }
     }
 }
 
@@ -470,12 +511,10 @@ impl Policy {
     }
 
     fn trusted_range(&self, peer: IpAddr) -> bool {
-        ipv4(peer).is_some_and(|ip| {
-            self.settings
-                .trusted_ranges
-                .iter()
-                .any(|range| u32::from(ip) & range.mask == range.base)
-        })
+        self.settings
+            .trusted_ranges
+            .iter()
+            .any(|range| range.contains(peer))
     }
 
     fn forwarded_client(&self, headers: &HeaderMap) -> Option<IpAddr> {
@@ -734,6 +773,68 @@ impl Denial {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipv6_proxy_networks_match_prefixes_and_single_hosts() {
+        let matches =
+            |range: &str, peer: &str| Range::parse(range).unwrap().contains(peer.parse().unwrap());
+        assert!(matches(" 2001:db8:5::a/64 ", "2001:db8:5::ffff"));
+        assert!(!matches("2001:db8:5::/64", "2001:db8:6::"));
+        assert!(matches("2001:db8::3/127", "2001:db8::2"));
+        assert!(!matches("2001:db8::3/127", "2001:db8::1"));
+        for range in ["2001:db8::7", "2001:db8::7/128"] {
+            assert!(matches(range, "2001:db8:0:0:0:0:0:7"));
+            assert!(!matches(range, "2001:db8::6"));
+        }
+        assert!(matches("::/0", "2001:db8::1"));
+        assert!(!matches("::/0", "192.0.2.1"));
+        assert!(!matches("::/0", "::ffff:192.0.2.1"));
+        assert!(!matches("0.0.0.0/0", "2001:db8::1"));
+        for invalid in [
+            "",
+            "example.org",
+            "2001:db8::1/129",
+            "::/bad",
+            "::/",
+            "192.0.2.1/33",
+        ] {
+            assert!(Range::parse(invalid).is_none(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn ipv4_proxy_ranges_keep_legacy_address_and_wire_forms() {
+        let legacy: Range = serde_json::from_value(serde_json::json!({
+            "base": u32::from(Ipv4Addr::new(192,0,2,0)), "mask": 0xffffff00u32
+        }))
+        .unwrap();
+        for range in [
+            legacy,
+            Range::parse("192.0.2.0/24").unwrap(),
+            Range::parse("::ffff:192.0.2.0/24").unwrap(),
+            Range::parse("::ffff:192.0.2.0/120").unwrap(),
+        ] {
+            for peer in ["192.0.2.42", "::ffff:192.0.2.42"] {
+                assert!(range.contains(peer.parse().unwrap()));
+            }
+            assert!(!range.contains("192.0.3.1".parse().unwrap()));
+        }
+        assert!(
+            Range::parse("127.0.0.1")
+                .unwrap()
+                .contains("::1".parse().unwrap())
+        );
+        assert!(
+            Range::parse("::1/128")
+                .unwrap()
+                .contains("::1".parse().unwrap())
+        );
+        assert!(
+            !Range::parse("::1/128")
+                .unwrap()
+                .contains("127.0.0.1".parse().unwrap())
+        );
+    }
 
     #[test]
     fn session_cookie_uses_the_public_port() {

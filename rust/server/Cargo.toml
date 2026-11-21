@@ -19,6 +19,7 @@ hyper = { version = "1", features = ["client", "server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 inpx-auth-state = { path = "../auth-state" }
 inpx-catalog = { path = "../catalog" }
+ipnet = "2"
 jxl = "0.8"
 mail-send = { version = "0.6.1", default-features = false, features = ["ring", "tls12"] }
 percent-encoding = "2"
