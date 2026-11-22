@@ -16,7 +16,13 @@ android {
         testInstrumentationRunner 'ru.inpx.server.RustSmokeInstrumentation'
         ndk { abiFilters inpxAbi }
     }
-    packaging { jniLibs { useLegacyPackaging = true } }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            // Build scripts already strip the executables; preserve the bytes in runtime-manifest.
+            keepDebugSymbols += ['**/*.so']
+        }
+    }
     if (findProject(':reader') != null) {
         compileOptions {
             coreLibraryDesugaringEnabled true
