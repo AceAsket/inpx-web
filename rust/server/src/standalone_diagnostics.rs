@@ -327,6 +327,8 @@ impl Diagnostics {
             "update-admin-library-sources" => ("sources", "Обновлены источники библиотек"),
             "update-admin-integrations"
             | "update-admin-opds"
+            | "update-admin-access"
+            | "update-admin-runtime"
             | "set-admin-resource-profile"
             | "set-admin-isbn-threads"
             | "update-admin-cache"

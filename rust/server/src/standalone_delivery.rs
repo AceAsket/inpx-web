@@ -340,7 +340,7 @@ pub(super) fn book_error(error: Box<dyn std::error::Error>) -> Box<dyn std::erro
             {
                 return error;
             }
-            eprintln!("Book delivery: {error}");
+            log::error!(target: "inpx::delivery", "Не удалось подготовить файл для отправки");
             "Не удалось подготовить файл книги".into()
         }
     }

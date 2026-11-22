@@ -53,6 +53,8 @@ mod isbn;
 mod kosync;
 #[path = "standalone_legacy_http.rs"]
 mod legacy_http;
+#[path = "standalone_logging.rs"]
+pub(crate) mod logging;
 #[path = "standalone_metadata.rs"]
 pub(crate) mod metadata;
 #[path = "standalone_metrics.rs"]
@@ -139,7 +141,7 @@ impl Args {
                 "--unsafe-filter" if value.is_none() => {}
                 "--host" | "--port" | "--config" | "--data-dir" | "--app-dir" | "--lib-dir"
                 | "--inpx" | "--library-sources" | "--admin-login" | "--admin-password"
-                | "--web-bundle" => {
+                | "--web-bundle" | "--log-level" => {
                     let value = value
                         .or_else(|| {
                             args.next()
@@ -174,7 +176,8 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         println!(
             "{NAME} v{VERSION}\nUsage: inpx-web [--host=<ip>] [--port=<port>] [--data-dir=<dir>]\n\
             [--config=<file>] [--lib-dir=<dir>] [--inpx=<file>] [--library-sources=<sources>] [--web-bundle=<file>]\n\
-            [--admin-login=<login>] [--admin-password=<password>] [--reset-admin-password] [--recreate]"
+            [--admin-login=<login>] [--admin-password=<password>] [--reset-admin-password] [--recreate]\n\
+            [--log-level=<error|warn|info|debug>]"
         );
         return Ok(());
     }
@@ -215,8 +218,23 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             .expect("application defaults")
             .extend(saved);
     }
+    let host = args
+        .nonempty("--host")
+        .or_else(|| text(&config["server"]["host"]))
+        .unwrap_or("0.0.0.0");
+    if host.contains('/') {
+        return Err("Для --host или server.host укажите адрес слушателя без CIDR. Для всех IPv6-интерфейсов используйте ::".into());
+    }
+    let port = match args
+        .nonempty("--port")
+        .or_else(|| config["server"]["port"].as_str())
+    {
+        Some(port) => port.parse::<u16>()?,
+        None => u16::try_from(config["server"]["port"].as_u64().unwrap_or(12380))?,
+    };
     let prefix = text(&config["server"]["root"]).unwrap_or_default();
     let data = text(&config["dataDir"]).map_or(default_data, PathBuf::from);
+    logging::init(args.get("--log-level"), &config, &data)?;
     let remote = remote::Remote::new(&config, &data)?.map(Arc::new);
     let kosync_enabled = runtime::kosync_enabled(&config);
     let fb2_download = fb2_download_enabled(&config);
@@ -269,26 +287,15 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
                 if !remote.has_inpx() {
                     return Err(error.to_string());
                 }
-                eprintln!("Удалённая библиотека: {error}. Используется сохранённый INPX.");
+                log::warn!(target: "inpx::index", "Удалённая библиотека недоступна. Используется сохранённый INPX");
             }
             Ok(())
         })
         .await??;
     }
 
-    let sources = settings.sources()?;
-    let filter = text(&config["inpxFilterFile"])
-        .map_or_else(|| file.with_file_name("filter.json"), PathBuf::from);
-    let low_memory =
-        env_bool("INPX_LOW_MEMORY_MODE").unwrap_or(config["lowMemoryMode"] == Value::Bool(true));
-    let index = index::Index::new(
-        CatalogueFiles {
-            data: data.clone(),
-            filter,
-            low_memory,
-        },
-        sources,
-    );
+    let sources = settings.sources(&config)?;
+    let index = index::Index::new(settings.index_files(&config), sources);
     let login = override_string(&args, "--admin-login", "INPX_ADMIN_LOGIN", &Value::Null)
         .unwrap_or_else(|| "admin".into());
     let password = args
@@ -324,17 +331,6 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         metrics_path: metrics::Endpoint::path(&config),
         opds_path: Some(text(&config["opds"]["root"]).unwrap_or("/opds").into()),
     }));
-    let host = args
-        .nonempty("--host")
-        .or_else(|| text(&config["server"]["host"]))
-        .unwrap_or("0.0.0.0");
-    let port = match args
-        .nonempty("--port")
-        .or_else(|| config["server"]["port"].as_str())
-    {
-        Some(port) => port.parse::<u16>()?,
-        None => u16::try_from(config["server"]["port"].as_u64().unwrap_or(12380))?,
-    };
     let downloads = Downloads::new(
         &data,
         prefix,
@@ -349,7 +345,9 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             policy.timeout,
         ),
     )?;
-    let listener = TcpListener::bind((host, port)).await?;
+    let listener = TcpListener::bind((host, port)).await.map_err(|error| {
+        format!("Не удалось открыть TCP-слушатель на {host} (порт {port}). {error}")
+    })?;
     downloads.configure_names_and_covers(&config);
     let speech = speech::Speech::new(&data, prefix, &config)?;
     let batch = batch::Downloads::new(&data, downloads.root());
@@ -371,7 +369,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         settings,
         admin_cache: admin_cache::Cache::new(),
         diagnostics: diagnostics::Diagnostics::new(&data),
-        backups: backup::Backups::new(&data, &file, prefix, &config),
+        backups: backup::Backups::new(&data, &file, prefix, socket::TransportLimits::new(&config)),
         assets,
         legacy: legacy_http::Routes::new(prefix),
         opds_slots: Arc::new(Semaphore::new(8)),
@@ -437,7 +435,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
                 let state = state.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Err(error) = state.access.library.flush() {
-                        eprintln!("WebAccess flush: {error}");
+                        log::error!(target: "inpx::auth", "WebAccess flush: {error}");
                     }
                 })
                 .await;
@@ -614,39 +612,50 @@ impl State {
     fn start_index_check(self: &Arc<Self>, force: bool) -> Option<tokio::task::JoinHandle<()>> {
         self.index.start(force).then(|| {
             let state = self.clone();
-            tokio::task::spawn_blocking(move || state.refresh_index(state.index.sources(), force))
+            tokio::task::spawn_blocking(move || {
+                state.refresh_index(state.index.sources(), force, state.index.files());
+            })
         })
     }
 
     fn reindex(self: &Arc<Self>) -> Result<Value> {
-        let sources = self.settings.sources()?;
+        let config = self.settings.snapshot();
+        let sources = self.settings.sources(&config)?;
+        let files = self.settings.index_files(&config);
         if !self.index.start(true) {
             return Ok(json!({"started":false}));
         }
         let state = self.clone();
-        tokio::task::spawn_blocking(move || state.refresh_index(sources, true));
+        tokio::task::spawn_blocking(move || state.refresh_index(sources, true, files));
         Ok(json!({"started":true}))
     }
 
-    fn refresh_index(&self, sources: Arc<Vec<inpx_catalog::library_sources::Source>>, force: bool) {
+    fn refresh_index(
+        &self,
+        sources: Arc<Vec<inpx_catalog::library_sources::Source>>,
+        force: bool,
+        files: CatalogueFiles,
+    ) {
         let _permit = match self.resources.acquire(resources::Kind::Background) {
             Ok(permit) => permit,
-            Err(error) => {
-                self.index
-                    .failed(error.as_ref(), "Индексация не получила ресурсы");
+            Err(_) => {
+                self.index.failed("Индексация не получила ресурсы", None);
                 return;
             }
         };
         if let Some(remote) = self.downloads.remote()
-            && let Err(error) = remote.sync_inpx()
+            && remote.sync_inpx().is_err()
         {
-            self.index.failed(
-                error.as_ref(),
-                "Не удалось обновить INPX удалённой библиотеки",
-            );
+            self.index
+                .failed("Не удалось обновить INPX удалённой библиотеки", None);
             return;
         }
-        self.index.refresh(sources, force);
+        let event = match self.index.refresh(sources, force, files) {
+            Some(true) => ("info", "Переиндексация завершена"),
+            None => ("error", "Переиндексация завершилась ошибкой"),
+            Some(false) => return,
+        };
+        self.diagnostics.log(self, event.0, "index", event.1);
     }
 
     fn schedule_index_checks(self: &Arc<Self>, on_start: bool) {
@@ -694,7 +703,14 @@ impl State {
         let route = self.service_route(&request, websocket, &policy);
         let admission = match policy.admit(&request, peer, protocol, route) {
             Ok(admission) => admission,
-            Err(_) if websocket => return Ok(request_access::Denial::websocket()),
+            Err(failure) if websocket => {
+                let event = match failure {
+                    Decision::Deny { reason, .. } => reason.diagnostic(),
+                    _ => "invalid-websocket-request",
+                };
+                logging::warn_limited("inpx::proxy", event, format_args!("peer={peer}"));
+                return Ok(request_access::Denial::websocket());
+            }
             Err(Decision::Deny { reason, secure }) => {
                 let mut response = reason.http(head, secure);
                 standalone_access::private(response.headers_mut());
@@ -821,8 +837,8 @@ impl State {
                 };
                 match opds.serve(&request, catalogue, &grant, reading.as_ref()) {
                     Ok(response) => response,
-                    Err(failure) => {
-                        eprintln!("OPDS: {failure}");
+                    Err(_) => {
+                        log::error!(target: "inpx::opds", "Не удалось сформировать выдачу OPDS");
                         error(StatusCode::INTERNAL_SERVER_ERROR)
                     }
                 }

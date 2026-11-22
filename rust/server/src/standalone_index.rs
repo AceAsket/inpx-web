@@ -17,7 +17,7 @@ const UPDATING: u8 = 2;
 pub(super) struct Index {
     pub(super) starting: AtomicBool,
     pub(super) isbn: Arc<IsbnIndex>,
-    files: CatalogueFiles,
+    files: RwLock<CatalogueFiles>,
     pub(super) catalogue: RwLock<Option<Catalogue>>,
     sources: RwLock<Arc<Vec<Source>>>,
     status: Mutex<Value>,
@@ -30,7 +30,7 @@ impl Index {
         Self {
             starting: AtomicBool::new(true),
             isbn: Arc::new(IsbnIndex::new(files.data.join("isbn-index.json"))),
-            files,
+            files: RwLock::new(files),
             status: Mutex::new(
                 json!({"ready":false,"updating":true,"job":"open","jobMessage":"Открытие каталога"}),
             ),
@@ -47,7 +47,8 @@ impl Index {
         let mut job = String::new();
         let mut message = String::new();
         let sources = self.sources();
-        let mut catalogue = self.files.open_or_create(&sources, |patch| {
+        let files = self.files();
+        let mut catalogue = files.open_or_create(&sources, |patch| {
             let mut phase_changed = false;
             let leaving_identities = job == "previous identities"
                 && patch["job"].as_str().is_some_and(|next| next != job);
@@ -79,7 +80,12 @@ impl Index {
                 if let Some(table) = patch["lookupTable"].as_str() {
                     details.push_str(&format!(" · {table}"));
                 }
-                eprintln!(
+                let level = if matches!(job.as_str(), "checkpoint" | "resume" | "migration") {
+                    log::Level::Info
+                } else {
+                    log::Level::Debug
+                };
+                log::log!(target: "inpx::index", level,
                     "Индекс [{job}, {:.1} с]: {message}{details}",
                     started.elapsed().as_secs_f64()
                 );
@@ -112,7 +118,7 @@ impl Index {
         catalogue.attach_isbn_index(self.isbn.clone());
         let created = catalogue.created;
         if created {
-            eprintln!(
+            log::info!(target: "inpx::index",
                 "Индекс [ready, {:.1} с]: каталог готов, записей {}",
                 started.elapsed().as_secs_f64(),
                 catalogue.stats["recsLoaded"].as_u64().unwrap_or_default()
@@ -122,7 +128,7 @@ impl Index {
         *self.catalogue.write().expect("open catalogue") = Some(catalogue);
         if recreate && !created {
             self.start(true);
-            self.refresh(sources, true);
+            let _ = self.refresh(sources, true, files);
         }
         self.starting.store(false, Ordering::Release);
         Ok(created)
@@ -138,6 +144,10 @@ impl Index {
 
     pub(super) fn sources(&self) -> Arc<Vec<Source>> {
         self.sources.read().expect("library sources").clone()
+    }
+
+    pub(super) fn files(&self) -> CatalogueFiles {
+        self.files.read().expect("catalogue options").clone()
     }
 
     pub(super) fn start(&self, force: bool) -> bool {
@@ -158,16 +168,34 @@ impl Index {
         }
     }
 
-    pub(super) fn refresh(&self, sources: Arc<Vec<Source>>, force: bool) {
-        match self.rebuild(sources, force) {
-            Ok(false) => (),
-            Ok(true) => self.job.store(IDLE, Ordering::Release),
-            Err(error) => self.failed(error.as_ref(), "Не удалось обновить поисковый индекс"),
+    pub(super) fn refresh(
+        &self,
+        sources: Arc<Vec<Source>>,
+        force: bool,
+        files: CatalogueFiles,
+    ) -> Option<bool> {
+        let started = Instant::now();
+        match self.rebuild(sources, force, &files) {
+            Ok(false) => Some(false),
+            Ok(true) => {
+                *self.files.write().expect("catalogue options") = files;
+                log::info!(target: "inpx::index", "phase=ready elapsed_ms={}", started.elapsed().as_millis());
+                self.job.store(IDLE, Ordering::Release);
+                Some(true)
+            }
+            Err(error) => {
+                self.failed("Не удалось обновить поисковый индекс", Some(error.as_ref()));
+                None
+            }
         }
     }
 
-    pub(super) fn failed(&self, error: &dyn std::error::Error, message: &str) {
-        eprintln!("Index update failed: {error}");
+    pub(super) fn failed(&self, message: &str, detail: Option<&dyn std::error::Error>) {
+        if let Some(detail) = detail {
+            log::error!(target: "inpx::index", "Index update failed: {detail}");
+        } else {
+            log::error!(target: "inpx::index", "Index update failed: {message}");
+        }
         let catalogue = self.catalogue.read().expect("open catalogue");
         let mut status = self.status.lock().expect("index status");
         if let Some(catalogue) = catalogue.as_ref() {
@@ -182,7 +210,12 @@ impl Index {
         status["error"] = message.into();
         self.job.store(IDLE, Ordering::Release);
     }
-    fn rebuild(&self, sources: Arc<Vec<Source>>, force: bool) -> Result<bool> {
+    fn rebuild(
+        &self,
+        sources: Arc<Vec<Source>>,
+        force: bool,
+        files: &CatalogueFiles,
+    ) -> Result<bool> {
         let (generation, hash, store) = {
             let current = self.catalogue.read().expect("open catalogue");
             let current = current
@@ -194,7 +227,7 @@ impl Index {
                 current.store.clone(),
             )
         };
-        if !force && self.files.source_hash(&sources)? == hash {
+        if !force && files.source_hash(&sources)? == hash {
             self.status
                 .lock()
                 .expect("index status")
@@ -210,11 +243,13 @@ impl Index {
             }
         }
         self.job.store(UPDATING, Ordering::Release);
+        log::info!(target: "inpx::index", "phase=start sources={} forced={force} low_memory={}",
+            sources.len(), files.low_memory);
         self.progress(
             json!({"updating":true,"job":"","jobStep":0,"jobStepCount":3,"progress":0,
             "recsLoaded":0,"jobMessage":"Подготовка нового индекса","error":null}),
         );
-        let stage = self.files.prepare(&sources, &generation, &store, |patch| {
+        let stage = files.prepare(&sources, &generation, &store, |patch| {
             self.progress(patch);
             Ok(())
         })?;
@@ -222,7 +257,7 @@ impl Index {
         self.progress(json!({"job":"publish","jobStep":3,"progress":0,"jobMessage":"Переключение поискового индекса"}));
         // Publication needs exclusive access while the store files are closed and replaced.
         let mut catalogue = self.catalogue.write().expect("open catalogue");
-        let published = self.files.publish(stage, &mut catalogue);
+        let published = files.publish(stage, &mut catalogue);
         if let Some(catalogue) = catalogue.as_mut() {
             catalogue.attach_isbn_index(self.isbn.clone());
         }

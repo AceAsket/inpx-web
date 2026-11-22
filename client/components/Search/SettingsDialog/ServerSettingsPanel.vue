@@ -48,6 +48,13 @@
             <p v-if="group.id === 'covers'" class="hint">djxl · {{ runtime.djxl ? 'найден' : 'недоступен' }}</p>
             <p v-if="group.id === 'limits'" class="hint">{{ effectiveLimits }}</p>
             <p v-if="group.id === 'speech'" class="hint">Silero · {{ runtime.ttsActive ? 'включён в настройках' : 'выключен' }}</p>
+            <p v-if="group.id === 'logging' && runtime.settings?.logToFile && runtime.logging?.fileActive === false" class="hint">
+                Файловый журнал недоступен. Записи идут в консоль.
+            </p>
+            <p v-if="group.id === 'maintenance' && runtime.indexOptions" class="hint">
+                Действует · {{ runtime.indexOptions.filter }} · {{ runtime.indexOptions.lowMemory ? 'экономия памяти' : 'обычный режим' }}
+                <span v-if="runtime.indexOptions.pending"> · Применится после переиндексации</span>
+            </p>
             <div class="server-fields">
                 <div v-for="field in group.fields" :key="field.key" class="server-field">
                     <q-checkbox v-if="field.type === 'boolean'" v-model="settings[field.key]"
@@ -58,10 +65,13 @@
                         :max="field.max" :label="field.label" :hint="field.hint" outlined dense
                         :disable="isLocked(field.key)" :autocomplete="field.type === 'password' ? 'new-password' : undefined"
                         :placeholder="field.type === 'password' && secretSet(field.key) ? 'Ключ задан' : undefined" />
-                    <small v-if="isLocked(field.key)" class="hint">{{ locked[field.key] }} · окружение</small>
+                    <small v-if="isLocked(field.key)" class="hint">{{ locked[field.key] }} · задано при запуске</small>
                 </div>
             </div>
             <div class="server-actions">
+                <q-btn v-if="group.id === 'logging' && runtime.logging && !runtime.logging.lockedBy"
+                    outline color="primary" no-caps :label="debugActive ? 'Завершить debug' : 'Включить debug на 15 минут'"
+                    :disable="!!saving" @click="setDebug(!debugActive)" />
                 <template v-for="field in group.fields" :key="field.key">
                     <q-checkbox v-if="field.type === 'password' && secretSet(field.key) && !isLocked(field.key)"
                         v-model="removeSecrets[field.key]" label="Удалить сохранённый ключ" />
@@ -94,7 +104,23 @@ const accessFields = [
     {...toggle('authExemptHealth', 'Разрешить публичную проверку состояния'), env: 'INPX_AUTH_EXEMPT_HEALTH'},
 ];
 const groups = [
+    {id: 'logging', title: 'Логирование', icon: 'la la-file-alt', fields: [
+        {key: 'logLevel', label: 'Уровень', options: ['error', 'warn', 'info']},
+        toggle('logToFile', 'Сохранять журнал в файл'),
+    ]},
+    {id: 'webDefaults', title: 'Поиск и настройки по умолчанию', icon: 'la la-search', fields: [
+        toggle('extendedSearch', 'Расширенный поиск'),
+        {key: 'bookReadLink', label: 'Ссылка на внешнюю читалку', hint: 'Можно использовать ${DOWNLOAD_LINK} или ${DOWNLOAD_URI}'},
+        {...number('defaultLimit', 'Книг на странице', 1, 120), defaultKey: 'limit', fallback: 20},
+        {key: 'defaultLanguage', label: 'Язык книг', hint: 'Код языка, например ru. Пусто — все языки', defaultKey: 'langDefault', fallback: ''},
+        {key: 'defaultCardView', label: 'Вид книг', defaultKey: 'bookCardView', fallback: 'cards', options: [
+            {label: 'Карточки', value: 'cards'}, {label: 'Список', value: 'list'},
+        ]},
+        {...toggle('defaultDarkTheme', 'Ночная тема'), defaultKey: 'darkTheme', fallback: false},
+    ]},
     {id: 'maintenance', title: 'Проверка INPX и ISBN', icon: 'la la-barcode', fields: [
+        {key: 'inpxFilterFile', label: 'JSON-файл фильтра INPX', hint: 'Пусто — filter.json рядом с конфигурацией'},
+        toggle('lowMemoryMode', 'Экономить память при переиндексации'),
         number('inpxCheckInterval', 'Проверять изменения INPX каждые, мин', 0, 10080, '0 отключает проверку'),
         number('isbnMaxBookMb', 'Максимальный размер книги для ISBN, МиБ', 1, 16384, 'Со следующей подготовки'),
     ]},
@@ -149,6 +175,12 @@ const groups = [
         toggle('resourceBenchEnabled', 'Разрешить тест производительности'),
         number('resourceBenchTimeoutMs', 'Длительность теста, мс', 10000, 180000),
     ]},
+    {id: 'transferLimits', title: 'Размер запросов и резервных копий', icon: 'la la-file-archive', fields: [
+        number('wsMessageLimitMb', 'Обычный запрос WebSocket, МиБ', 1, 16, 'Увеличение действует после переподключения'),
+        number('importLimitMb', 'Импорт настроек и списков, МиБ', 1, 64),
+        number('backupUploadLimitMb', 'Архив резервной копии, МиБ', 1, 128),
+        number('backupExpandedLimitMb', 'Распакованная резервная копия, МиБ', 1, 256),
+    ]},
     {id: 'speech', title: 'Озвучка Silero', icon: 'la la-headphones', fields: [
         toggle('ttsEnabled', 'Включить серверную озвучку'),
         {key: 'ttsUrl', label: 'URL сервиса', type: 'url'},
@@ -180,6 +212,8 @@ export default {
             formatOptions: formats.map(value => ({value, label: value.toUpperCase()})),
             removeSecrets: {},
             saving: '',
+            debugActive: false,
+            debugTimer: null,
         };
     },
     computed: {
@@ -210,6 +244,9 @@ export default {
     created() {
         this.loadRuntime(this.runtime);
     },
+    beforeUnmount() {
+        clearTimeout(this.debugTimer);
+    },
     watch: {
         'config.adminRuntime'(next) {
             if (!this.saving) this.syncRuntime(next);
@@ -225,6 +262,13 @@ export default {
                 fb2cngArgs: (runtime.settings.fb2cngArgs || []).join('\n')};
             for (const [field, [key, unit]] of Object.entries(units)) this.settings[field] = runtime.settings[key] / unit;
             for (const key of secretKeys) this.settings[key] = '';
+            const defaults = groups.find(group => group.id === 'webDefaults').fields;
+            for (const field of defaults.filter(field => field.defaultKey))
+                this.settings[field.key] = runtime.settings.uiDefaults?.[field.defaultKey] ?? field.fallback;
+            clearTimeout(this.debugTimer);
+            const remaining = runtime.logging?.debugRemainingMs || 0;
+            this.debugActive = remaining > 0;
+            if (remaining) this.debugTimer = setTimeout(() => { this.debugActive = false; }, remaining);
             this.removeSecrets = {};
         },
         syncRuntime(runtime, savedGroup) {
@@ -235,6 +279,11 @@ export default {
             this.loadRuntime(runtime);
             for (const patch of pending) {
                 for (const key of Object.keys(patch)) {
+                    if (key === 'uiDefaults') {
+                        for (const field of this.groups.find(group => group.id === 'webDefaults').fields)
+                            if (Object.hasOwn(patch.uiDefaults, field.defaultKey)) this.settings[field.key] = draft[field.key];
+                        continue;
+                    }
                     const field = formKey(key);
                     if (!this.isLocked(field)) {
                         this.settings[field] = draft[field];
@@ -265,9 +314,25 @@ export default {
                     value = value === '' || value == null ? null : Number(value);
                     if (units[field.key] && value !== null) value *= units[field.key][1];
                 }
+                if (field.defaultKey) {
+                    const previous = this.runtime.settings.uiDefaults?.[field.defaultKey] ?? field.fallback;
+                    if (value !== previous) (patch.uiDefaults ??= {})[field.defaultKey] = value;
+                    continue;
+                }
                 if (value !== (this.runtime.settings[key] ?? null)) patch[key] = value;
             }
             return patch;
+        },
+        async setDebug(enabled) {
+            this.saving = 'logging';
+            try {
+                const {runtime} = await this.$root.api.saveAdminRuntime({}, enabled);
+                this.syncRuntime(runtime);
+            } catch (error) {
+                this.$root.stdDialog.alert(error.message, 'Логирование');
+            } finally {
+                this.saving = '';
+            }
         },
         async saveAccess() {
             this.saving = 'access';

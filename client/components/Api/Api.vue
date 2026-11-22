@@ -118,8 +118,8 @@ class Api {
         return this.request({action: 'update-admin-access', access}, 30);
     }
 
-    async saveAdminRuntime(settings) {
-        return this.request({action: 'update-admin-runtime', settings}, 30);
+    async saveAdminRuntime(settings, debugLogging) {
+        return this.request({action: 'update-admin-runtime', settings, debugLogging}, 30);
     }
 
     get isStandaloneReaderLab() {

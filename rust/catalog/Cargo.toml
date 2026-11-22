@@ -15,6 +15,7 @@ icu_locale_core = "2"
 inpx-auth-state = { path = "../auth-state" }
 indexmap = { version = "2", features = ["serde"] }
 inpx-reader = { path = "../inpx" }
+log = "0.4"
 memchr = "2"
 once_cell = "1"
 quick-xml = "0.42"

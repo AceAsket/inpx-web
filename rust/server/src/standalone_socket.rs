@@ -41,12 +41,63 @@ pub(super) struct Socket {
     root: String,
     route: String,
     web_config: Map<String, Value>,
-    message_limit: usize,
-    import_limit: usize,
-    frame_limit: usize,
+    limits: std::sync::RwLock<TransportLimits>,
     jobs: Arc<Semaphore>,
     pub(super) previews: Arc<super::resources::AdmissionSlots>,
     external: ExternalDiscovery,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct TransportLimits {
+    pub(super) message: usize,
+    pub(super) import: usize,
+    pub(super) backup_upload: usize,
+    pub(super) backup_expanded: usize,
+}
+
+impl TransportLimits {
+    pub(super) fn new(config: &Value) -> Self {
+        let limit = |key: &str, env: &str, default, max| {
+            let value = std::env::var(env).ok().map(Value::from);
+            megabytes(value.as_ref().unwrap_or(&config[key]), default, max)
+        };
+        Self {
+            message: limit("wsMessageLimitMb", "INPX_WS_MESSAGE_LIMIT_MB", 1, 16),
+            import: limit("importLimitMb", "INPX_IMPORT_LIMIT_MB", 16, 64),
+            backup_upload: limit(
+                "backupUploadLimitMb",
+                "INPX_BACKUP_UPLOAD_LIMIT_MB",
+                32,
+                128,
+            ),
+            backup_expanded: limit(
+                "backupExpandedLimitMb",
+                "INPX_BACKUP_EXPANDED_LIMIT_MB",
+                64,
+                256,
+            ),
+        }
+    }
+
+    fn clamp_to(self, connection: Self) -> Self {
+        Self {
+            message: self.message.min(connection.message),
+            import: self.import.min(connection.import),
+            backup_upload: self.backup_upload.min(connection.backup_upload),
+            backup_expanded: self.backup_expanded.min(connection.backup_expanded),
+        }
+    }
+
+    fn backup_request_size(self) -> usize {
+        self.backup_upload.div_ceil(3) * 4 + 65536
+    }
+
+    fn frame_size(self) -> usize {
+        self.message
+            .max(6 * MIB)
+            .max(self.import + 65536)
+            .max(self.backup_request_size())
+    }
 }
 
 impl Socket {
@@ -60,17 +111,6 @@ impl Socket {
         archive_slots: usize,
     ) -> Self {
         let root = root.trim_end_matches('/');
-        let message_limit = megabytes(&config["wsMessageLimitMb"], 1, 16);
-        let import_limit = megabytes(&config["importLimitMb"], 16, 64);
-        let frame_limit = [
-            message_limit,
-            6 * MIB,
-            import_limit + 65536,
-            megabytes(&config["backupUploadLimitMb"], 32, 128).div_ceil(3) * 4 + 65536,
-        ]
-        .into_iter()
-        .max()
-        .expect("transport limits");
         let mut web_config = Map::new();
         for key in [
             "latestVersion",
@@ -127,13 +167,19 @@ impl Socket {
             root: root.into(),
             route: format!("{root}/ws"),
             web_config,
-            message_limit,
-            import_limit,
-            frame_limit,
+            limits: std::sync::RwLock::new(TransportLimits::new(config)),
             jobs: Arc::new(Semaphore::new(64)),
             previews: super::resources::AdmissionSlots::new(archive_slots),
             external: ExternalDiscovery::new(data),
         }
+    }
+
+    pub(super) fn limits(&self) -> TransportLimits {
+        *self.limits.read().expect("transport limits")
+    }
+
+    pub(super) fn configure_limits(&self, config: &Value) {
+        *self.limits.write().expect("transport limits") = TransportLimits::new(config);
     }
 
     pub(super) fn document(&self, path: &str) -> bool {
@@ -226,8 +272,8 @@ impl Socket {
             Ok(LibraryAdmission::RateLimited(retry)) => {
                 return login_response(BrowserLogin::RateLimited(retry));
             }
-            Err(error) => {
-                eprintln!("WebAccess: {error}");
+            Err(_) => {
+                log::error!(target: "inpx::auth", "Хранилище сеансов доступа недоступно");
                 return fault("Хранилище сеансов доступа недоступно");
             }
         }
@@ -460,7 +506,7 @@ impl Socket {
                 }
                 state
                     .backups
-                    .dispatch(state, profile_request, &action, &request)
+                    .dispatch(state, profile_request, &action, &request, context.limits)
                     .unwrap_or_else(|error| fault(&error.to_string()))
             }
             "start-library-audit"
@@ -513,7 +559,7 @@ impl Socket {
                         state,
                         &action,
                         &request,
-                        self.import_limit,
+                        context.limits.import,
                         connection_access,
                     )
                     .unwrap_or_else(|error| fault(&error.to_string()))
@@ -671,7 +717,7 @@ impl Socket {
                     .logout(text(&request, "accessToken"))
                     .map(|()| json!({"success":true}))
                     .unwrap_or_else(|error| {
-                        eprintln!("WebAccess revoke: {error}");
+                        log::error!(target: "inpx::auth", "Не удалось отозвать сеанс доступа: {error}");
                         fault("Хранилище сеансов доступа недоступно")
                     })
             }
@@ -804,7 +850,7 @@ impl Socket {
                             stamp,
                             &request["data"],
                             &self.root,
-                            self.import_limit,
+                            context.limits.import,
                         ),
                     }
                 })
@@ -912,7 +958,7 @@ impl Socket {
                             DownloadError::DecoderMemory => fault(&failure.to_string()),
                             DownloadError::Limit => fault("Файл книги слишком большой"),
                             DownloadError::Internal => {
-                                eprintln!("WebSocket book link: {failure}");
+                                log::error!(target: "inpx::download", "Не удалось подготовить ссылку на книгу");
                                 fault("Не удалось подготовить книгу")
                             }
                         }
@@ -1361,6 +1407,7 @@ struct DispatchContext<'a> {
     connection: Option<u64>,
     events_connection: u64,
     batch_progress: &'a dyn Fn(usize, usize),
+    limits: TransportLimits,
 }
 
 async fn run(
@@ -1369,9 +1416,10 @@ async fn run(
     browser: String,
     connection_access: Arc<BrowserConnection>,
 ) {
+    let connection_limits = state.socket.limits();
     let settings = WebSocketConfig::default()
-        .max_message_size(Some(state.socket.frame_limit))
-        .max_frame_size(Some(state.socket.frame_limit))
+        .max_message_size(Some(connection_limits.frame_size()))
+        .max_frame_size(Some(connection_limits.frame_size()))
         .read_buffer_size(16 * 1024)
         .write_buffer_size(0);
     let mut socket = WebSocketStream::from_raw_socket(client, Role::Server, Some(settings)).await;
@@ -1426,11 +1474,12 @@ async fn run(
                 // The browser requests a fresh salt with an otherwise empty envelope.
                 let probe = state.access.library.protected() && request.as_object().is_some_and(|fields|
                     fields.len() == 1 && fields.contains_key("requestId"));
+                let limits = state.socket.limits().clamp_to(connection_limits);
                 let limit = match request["action"].as_str() {
-                    Some("update-reader-preferences" | "update-user-profile") => state.socket.message_limit.max(6 * MIB),
-                    Some("import-reading-lists" | "import-admin-settings") => state.socket.import_limit + 65536,
-                    Some("preview-admin-backup" | "import-admin-backup") => state.backups.request_limit(),
-                    _ => state.socket.message_limit,
+                    Some("update-reader-preferences" | "update-user-profile") => limits.message.max(6 * MIB),
+                    Some("import-reading-lists" | "import-admin-settings") => limits.import + 65536,
+                    Some("preview-admin-backup" | "import-admin-backup") => limits.backup_request_size(),
+                    _ => limits.message,
                 };
                 if (!probe && !request["action"].is_string()) || frame.len() > limit {
                     let reason = if request["action"].is_string() { "Превышен размер запроса" } else { "Некорректный запрос WebSocket" };
@@ -1468,7 +1517,7 @@ async fn run(
                             }
                         };
                         let response = state.socket.dispatch(&state, &browser, &connection_access,
-                            DispatchContext {connection, events_connection, batch_progress: &batch_progress}, request, &mut change);
+                            DispatchContext {connection, events_connection, batch_progress: &batch_progress, limits}, request, &mut change);
                         (response, change)
                     }).await.unwrap_or_else(|_| (fault("server_busy"), Change::Unchanged));
                     if response["error"] == "need_access_token" {
@@ -1622,6 +1671,11 @@ pub(super) fn login_response(result: BrowserLogin) -> Value {
             json!({"error":"Настройте обязательный OTP в веб-интерфейсе INPX Web","errorCode":"need_profile_otp_setup"})
         }
         BrowserLogin::RateLimited(seconds) => {
+            super::logging::warn_limited(
+                "inpx::auth",
+                "login-rate-limit",
+                format_args!("transport=websocket retry_s={seconds}"),
+            );
             json!({"error":"Слишком много попыток входа. Повторите позже.",
             "errorCode":"INPX_LOGIN_RATE_LIMIT","retryAfterMs":u64::from(seconds)*1000})
         }

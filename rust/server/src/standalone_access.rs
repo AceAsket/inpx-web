@@ -876,8 +876,8 @@ fn profile_grant(profile: &BrowserProfile, stamp: &str) -> Grant {
     }
 }
 
-fn report(error: Box<dyn std::error::Error>) -> Rejection {
-    eprintln!("OPDS authentication: {error}");
+fn report(_error: Box<dyn std::error::Error>) -> Rejection {
+    log::error!(target: "inpx::auth", "Ошибка хранилища учётных данных OPDS");
     Rejection::Unavailable
 }
 

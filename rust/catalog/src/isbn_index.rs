@@ -161,35 +161,42 @@ impl IsbnIndex {
         }
     }
 
-    pub fn checkpoint(&self, build: &mut IsbnBuild) -> Result<()> {
+    pub fn checkpoint(&self, build: &mut IsbnBuild) -> Result<bool> {
         let mut shared = self.shared.lock().expect("ISBN job");
-        if build.pending.len() >= 4096 || build.checkpoint.elapsed() >= Duration::from_secs(30) {
+        let saved =
+            build.pending.len() >= 4096 || build.checkpoint.elapsed() >= Duration::from_secs(30);
+        if saved {
             self.save(build)?;
         }
         if let Some(active) = shared.build.as_mut() {
             active.progress = build.progress.clone();
         }
-        Ok(())
+        Ok(saved)
     }
 
-    pub fn finish(&self, mut build: IsbnBuild, outcome: Result<bool>) {
+    pub fn finish(&self, mut build: IsbnBuild, outcome: Result<bool>) -> &'static str {
         let mut shared = self.shared.lock().expect("ISBN job");
+        let mut result = "failed";
         let mut error = match outcome {
             Ok(completed) => {
                 build.progress.complete = completed && !build.cancelled();
                 if build.progress.complete {
+                    result = "ready";
                     String::new()
                 } else {
+                    result = "cancelled";
                     "Подготовка ISBN отменена".into()
                 }
             }
             Err(error) => error.to_string(),
         };
         if let Err(error_saving) = self.save(&mut build) {
+            result = "checkpoint-failed";
             error = error_saving.to_string();
         }
         shared.error = error;
         shared.build = None;
+        result
     }
 
     fn save(&self, build: &mut IsbnBuild) -> Result<()> {
@@ -229,6 +236,18 @@ impl IsbnBuild {
     pub fn last_id(&self) -> u32 {
         self.progress.last_id
     }
+    pub fn revision(&self) -> &str {
+        &self.progress.revision
+    }
+    pub fn counts(&self) -> (u64, u64, u64, u64) {
+        let progress = &self.progress;
+        (
+            progress.checked,
+            progress.found,
+            progress.errors,
+            progress.skipped,
+        )
+    }
     pub fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Acquire)
     }
@@ -246,6 +265,7 @@ impl IsbnBuild {
         sources: &[Source],
         reader: &mut BookIsbnReader,
         spare_workers: impl Fn(usize) -> Vec<P>,
+        mut reading: impl FnMut(&str, &str),
     ) -> Result<()> {
         enum Outcome {
             Numbers(Vec<String>),
@@ -253,7 +273,7 @@ impl IsbnBuild {
             Unread,
         }
         let mut records = Vec::with_capacity(rows.len());
-        let mut groups = HashMap::<(_, String), Vec<IsbnMember>>::new();
+        let mut groups = HashMap::<(_, String), (&str, Vec<IsbnMember>)>::new();
         for (row_index, row) in rows.into_iter().enumerate() {
             let id = row["id"]
                 .as_u64()
@@ -278,7 +298,8 @@ impl IsbnBuild {
                 {
                     groups
                         .entry((&source.lib_dir, book.folder))
-                        .or_default()
+                        .or_insert_with(|| (&source.id, Vec::new()))
+                        .1
                         .push(IsbnMember {
                             row: row_index,
                             name,
@@ -291,10 +312,17 @@ impl IsbnBuild {
             };
             records.push((id, deleted, outcome));
         }
-        for ((library, folder), members) in groups {
+        for ((library, folder), (source, members)) in groups {
             if self.cancelled() {
                 return Ok(());
             }
+            reading(
+                source,
+                std::path::Path::new(&folder)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(""),
+            );
             if let Ok(folder) = Folder::resolve(library, &folder) {
                 let _ = reader.archive.read_group(
                     &folder,

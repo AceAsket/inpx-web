@@ -15,6 +15,7 @@ use crate::crypto_support::{KEY_BYTES, Sensitive, hex, random};
 use crate::reader_state::ReaderState;
 use crate::{Result, configuration, file_stamp, profile_totp, progress_journal, secret_store};
 
+#[derive(Clone)]
 pub struct Backup {
     data: PathBuf,
     config: PathBuf,
@@ -35,6 +36,14 @@ pub struct Archive {
 }
 
 impl Backup {
+    pub fn with_limits(&self, upload_limit: u64, expanded_limit: u64) -> Self {
+        Self {
+            upload_limit,
+            expanded_limit,
+            ..self.clone()
+        }
+    }
+
     pub fn new(data: &Path, config: &Path, upload_limit: u64, expanded_limit: u64) -> Self {
         Self {
             data: data.into(),

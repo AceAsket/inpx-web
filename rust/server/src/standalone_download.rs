@@ -427,13 +427,23 @@ impl Downloads {
                 .expect("download formats")
                 .conversion
                 .clone();
-            return conversion.ok_or("Конвертер недоступен")?.convert(
-                &self.cache,
-                book,
-                cached,
-                format,
-                || self.resources.acquire(Kind::Conversions),
-            );
+            return conversion
+                .ok_or("Конвертер недоступен")?
+                .convert(&self.cache, book, cached, format, || {
+                    self.resources.acquire(Kind::Conversions)
+                })
+                .inspect_err(|error| {
+                    let event = match error.downcast_ref::<ConversionError>() {
+                        Some(ConversionError::Busy) => "conversion-queue-full",
+                        Some(ConversionError::TimedOut) => "conversion-timeout",
+                        _ => "conversion-failed",
+                    };
+                    crate::standalone::logging::warn_limited(
+                        "inpx::conversion",
+                        event,
+                        format_args!("format={}", format.extension()),
+                    );
+                });
         }
         let _permit = self
             .resources
@@ -880,7 +890,7 @@ impl Downloads {
                     Ok(path.clone())
                 }
             }) {
-                eprintln!("KOSync download: {error}");
+                log::error!(target: "inpx::kosync", "KOSync download: {error}");
             }
         }
         Ok(Prepared::File { path, headers })
@@ -948,6 +958,11 @@ fn failure(error: Box<dyn std::error::Error>) -> StatusCode {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     if error.is::<MissingDecoder>() {
+        crate::standalone::logging::warn_limited(
+            "inpx::cover",
+            "decoder-unavailable",
+            format_args!("status=503"),
+        );
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     if error.is::<Unavailable>() {
@@ -965,7 +980,7 @@ fn failure(error: Box<dyn std::error::Error>) -> StatusCode {
         DownloadError::Unsupported => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         DownloadError::DecoderMemory => StatusCode::UNPROCESSABLE_ENTITY,
         DownloadError::Internal => {
-            eprintln!("Book download: {error}");
+            log::error!(target: "inpx::download", "Не удалось подготовить скачивание");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }

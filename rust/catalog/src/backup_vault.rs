@@ -265,6 +265,7 @@ fn backup_name(name: &str) -> Option<BackupName<'_>> {
     })
 }
 
+#[derive(Clone)]
 pub struct Vault {
     root: PathBuf,
     directory: PathBuf,

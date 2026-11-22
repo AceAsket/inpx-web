@@ -21,7 +21,7 @@ use crate::request_access::{BrowserConnection, LIVE_FIELDS};
 use crate::standalone_access::LiveOpds;
 
 const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch bookReadLink isbnThreads
-    loggingEnabled logServerStats logQueries loginRateLimitEnabled loginRateLimitWindowMs loginRateLimitMaxAttempts
+    loggingEnabled logServerStats logQueries logLevel logToFile loginRateLimitEnabled loginRateLimitWindowMs loginRateLimitMaxAttempts
     requireAuth allowAnonymousAccess proxyBindProfile authMode trustProxy proxyAuthHeader trustedProxyCidrs authExemptHealth
     metricsEnabled metricsPath metricsExemptAuth dbCacheSize dbCacheBudgetMb queryCacheMemMb queryCacheDiskMb
     maxFilesDirSize bookCacheSize coverCacheSize queryCacheEnabled queryCacheMemSize queryCacheDiskSize
@@ -34,7 +34,8 @@ const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch b
     resourceTaskTimeoutMs resourceBenchEnabled resourceBenchTimeoutMs
     isbnMaxBookBytes conversionEnabled conversionFormats conversionQueueLimit conversionQueueTimeoutMs conversionTimeoutMs
     bookFilenameTemplate onlineReaderEnabled jxlDecoder coverMemoryMb ttsEnabled ttsUrl ttsModel ttsCacheSizeMb ttsTimeoutMs
-    kosyncEnabled opdsFeedsFile absEnabled absPublicUrl absMaxResults";
+    kosyncEnabled opdsFeedsFile absEnabled absPublicUrl absMaxResults
+    wsMessageLimitMb importLimitMb backupUploadLimitMb backupExpandedLimitMb";
 
 const INTEGRATIONS: &[(&str, &str)] = &[
     ("telegramShareEnabled", "INPX_TELEGRAM_SHARE_ENABLED"),
@@ -78,6 +79,21 @@ pub(super) struct Settings {
 }
 
 impl Settings {
+    pub(super) fn index_files(
+        &self,
+        config: &Value,
+    ) -> inpx_catalog::standalone_catalogue::CatalogueFiles {
+        inpx_catalog::standalone_catalogue::CatalogueFiles {
+            data: self.data.clone(),
+            filter: config["inpxFilterFile"]
+                .as_str()
+                .filter(|path| !path.is_empty())
+                .map_or_else(|| self.file.with_file_name("filter.json"), PathBuf::from),
+            low_memory: super::env_bool("INPX_LOW_MEMORY_MODE")
+                .unwrap_or(config["lowMemoryMode"] == true),
+        }
+    }
+
     pub(super) fn new(
         file: PathBuf,
         data: PathBuf,
@@ -176,8 +192,7 @@ impl Settings {
         Ok(())
     }
 
-    pub(super) fn sources(&self) -> Result<Arc<Vec<Source>>> {
-        let config = self.snapshot();
+    pub(super) fn sources(&self, config: &Value) -> Result<Arc<Vec<Source>>> {
         let mut options = self.source_options.clone();
         if super::remote::Remote::address(&config["remoteLib"])?.is_some() {
             options["remote"] = json!({"inpx":self.data.join("remote.inpx"),"libDir":self.data});
@@ -325,7 +340,23 @@ impl Settings {
                 if !connection.valid(&state.request_access.current()) {
                     return Err("Правила доступа изменились. Подключитесь заново".into());
                 }
-                let patch = match action {
+                let debug = if action == "update-admin-runtime" {
+                    request
+                        .get("debugLogging")
+                        .map(|value| {
+                            if let Some(flag) = super::logging::locked_by() {
+                                Err(format!("Уровень логирования задан через {flag}"))
+                            } else {
+                                value
+                                    .as_bool()
+                                    .ok_or_else(|| "Некорректный режим диагностики".into())
+                            }
+                        })
+                        .transpose()?
+                } else {
+                    None
+                };
+                let mut patch = match action {
                     "update-admin-integrations" => {
                         integration_patch(&current, &request["integrations"])?
                     }
@@ -375,7 +406,9 @@ impl Settings {
                         let runtime: serde_json::Map<_, _> = fields
                             .iter()
                             .filter(|(key, value)| {
-                                super::runtime::known(key) && current.get(*key) != Some(*value)
+                                key.as_str() != "uiDefaults"
+                                    && super::runtime::known(key)
+                                    && current.get(*key) != Some(*value)
                             })
                             .map(|(key, value)| (key.clone(), value.clone()))
                             .collect();
@@ -385,11 +418,30 @@ impl Settings {
                     }
                     _ => return Err("Неизвестная операция с настройками".into()),
                 };
+                if action == "update-admin-runtime"
+                    && let Some(defaults) = patch["uiDefaults"].as_object()
+                {
+                    let mut merged = current["uiDefaults"]
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default();
+                    merged.extend(defaults.clone());
+                    patch["uiDefaults"] = Value::Object(merged);
+                }
                 let mut next = current.clone();
                 let fields = patch.as_object().expect("settings patch");
                 next.as_object_mut()
                     .expect("settings")
                     .extend(fields.clone());
+                if let Some(path) = fields.get("inpxFilterFile").and_then(Value::as_str)
+                    && !path.is_empty()
+                    && current["inpxFilterFile"] != path
+                {
+                    inpx_catalog::standalone_catalogue::CatalogueFiles::validate_filter(Path::new(
+                        path,
+                    ))
+                    .map_err(|error| format!("Фильтр INPX не принят: {error}"))?;
+                }
                 let access_patch = Value::Object(
                     fields
                         .iter()
@@ -554,10 +606,35 @@ impl Settings {
                     }
                     channels
                 });
+                let log_file = if fields.contains_key("logToFile") {
+                    Some(super::logging::prepare_file(&next, &self.data)?)
+                } else {
+                    None
+                };
                 if !fields.is_empty() {
                     configuration::save(&self.file, &self.data, &next)?;
                 }
                 *current = next;
+                super::logging::apply(
+                    fields
+                        .get("logLevel")
+                        .and_then(Value::as_str)
+                        .and_then(super::logging::level),
+                    log_file,
+                );
+                if let Some(debug) = debug {
+                    super::logging::temporary_debug(debug);
+                }
+                if fields
+                    .keys()
+                    .any(|key| super::runtime::TRANSPORT_KEYS.contains(&key.as_str()))
+                {
+                    state.socket.configure_limits(&current);
+                }
+                if !fields.is_empty() || debug.is_some() {
+                    let changed: Vec<_> = fields.keys().map(String::as_str).collect();
+                    log::info!(target: "inpx::settings", "operation={action} fields={changed:?} temporary_debug={debug:?}");
+                }
                 if fields.contains_key("inpxCheckInterval") {
                     self.index_interval
                         .send_replace(super::index::interval(&current["inpxCheckInterval"]));
@@ -624,7 +701,7 @@ impl Settings {
                     "update-admin-cache" => json!({"cache":Cache::settings(&current)}),
                     _ => {
                         json!({"success":true,"importedKeys":fields.keys().collect::<Vec<_>>(), "settings":export(&current,state),
-                        "reindexRequired":fields.keys().any(|key|matches!(key.as_str(),"libDir"|"inpx"|"librarySources")),
+                        "reindexRequired":fields.keys().any(|key|matches!(key.as_str(),"libDir"|"inpx"|"librarySources"|"inpxFilterFile"|"lowMemoryMode")),
                         "restartRequired":fields.keys().any(|key|restart_key(key))})
                     }
                 })

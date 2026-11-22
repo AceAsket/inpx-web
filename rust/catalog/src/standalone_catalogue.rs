@@ -74,6 +74,7 @@ pub struct Catalogue {
     _lease: CatalogueLease,
 }
 
+#[derive(Clone)]
 pub struct CatalogueFiles {
     pub data: PathBuf,
     pub filter: PathBuf,
@@ -88,6 +89,22 @@ enum PreviousCatalogue<'a> {
 }
 
 impl CatalogueFiles {
+    pub fn validate_filter(path: &Path) -> Result<()> {
+        const MAX_BYTES: u64 = 4 * 1024 * 1024;
+        let input = File::open(path)?;
+        if !input.metadata()?.is_file() {
+            return Err("Фильтр должен быть обычным JSON-файлом".into());
+        }
+        let mut bytes = Vec::new();
+        input.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_BYTES {
+            return Err("Фильтр INPX превышает 4 МиБ".into());
+        }
+        let filter: Filter = serde_json::from_slice(&bytes)?;
+        RecordFilter::compile(filter.filter.as_ref())?;
+        Ok(())
+    }
+
     pub fn open_or_create(
         &self,
         sources: &[Source],

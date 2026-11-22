@@ -425,7 +425,7 @@ impl Routes {
                 Ok(Some(book)) => match state.downloads.book_cover(&book, &state.index.sources()) {
                     Ok(Some(image)) => {
                         if let Err(error) = image.stage(state.downloads.cache()) {
-                            eprintln!("Metadata cover cache: {error}");
+                            log::warn!(target: "inpx::metadata", "Metadata cover cache: {error}");
                         }
                         let mut response = send_bytes(image.bytes, image.content_type, head);
                         response.headers_mut().insert(

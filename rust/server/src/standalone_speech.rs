@@ -707,6 +707,11 @@ impl Speech {
                         Err(error) => {
                             job.state = Phase::Error;
                             job.error = error;
+                            super::logging::warn_limited(
+                                "inpx::speech",
+                                "synthesis-failed",
+                                format_args!("provider=silero"),
+                            );
                         }
                     }
                     job.remaining = None;

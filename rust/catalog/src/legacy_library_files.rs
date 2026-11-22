@@ -228,7 +228,9 @@ impl Covers {
                 Ok(status) if status.success() => return read_png(&native_output, limit),
                 Ok(status) if status.code() == Some(NATIVE_JXL_LIMIT) => return Ok(None),
                 Err(error) if tool.is_none() || Instant::now() >= deadline => return Err(error),
-                _ => {}
+                _ => {
+                    log::debug!(target: "inpx::cover", "decoder=native status=failed fallback=djxl")
+                }
             }
         }
         let tool = tool.ok_or(MissingDecoder)?;

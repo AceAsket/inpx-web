@@ -254,6 +254,7 @@ pub fn authenticate(
                 .expect("TOTP attempts")
                 .allows(&profile.id, now)
             {
+                log::debug!(target: "inpx::auth", "otp=rate-limited");
                 return Ok(Decision::Denied);
             }
             let remember = (trust_enabled && remember_device).then(|| trusted_devices::Remember {
@@ -277,6 +278,7 @@ pub fn authenticate(
             let mut attempts = attempts.lock().expect("TOTP attempts");
             let Some(result) = accepted else {
                 attempts.failed(&profile.id, now);
+                log::debug!(target: "inpx::auth", "otp=rejected");
                 return Ok(Decision::Denied);
             };
             attempts.reset(&profile.id);

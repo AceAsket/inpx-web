@@ -194,7 +194,7 @@ impl Library {
 impl Drop for Store {
     fn drop(&mut self) {
         if let Err(error) = self.runtime.flush(now_ms()) {
-            eprintln!("WebAccess flush: {error}");
+            log::error!(target: "inpx::auth", "WebAccess flush: {error}");
         }
     }
 }

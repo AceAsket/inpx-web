@@ -85,7 +85,7 @@ impl From<Box<dyn std::error::Error>> for Failure {
             "Список не найден" => Self::missing("Полка не найдена."),
             inpx_catalog::library_media::RATING_FILTER_PENDING => Self::busy(),
             _ => {
-                eprintln!("Ebook: {error}");
+                log::error!(target: "inpx::reader", "Ebook: {error}");
                 Self::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Не удалось выполнить запрос. Попробуйте ещё раз.",

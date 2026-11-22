@@ -139,6 +139,11 @@ pub(super) async fn login(
 }
 
 fn rate_limit(seconds: u32) -> Response<Body> {
+    super::logging::warn_limited(
+        "inpx::auth",
+        "login-rate-limit",
+        format_args!("transport=http retry_s={seconds}"),
+    );
     let mut response = failure(
         StatusCode::TOO_MANY_REQUESTS,
         "Слишком много попыток входа. Повторите позже.",

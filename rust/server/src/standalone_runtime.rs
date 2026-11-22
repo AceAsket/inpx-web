@@ -52,9 +52,26 @@ pub(super) const LOGIN_KEYS: &[&str] = &[
     "loginRateLimitMaxAttempts",
     "loginRateLimitWindowMs",
 ];
+pub(super) const TRANSPORT_KEYS: &[&str] = &[
+    "wsMessageLimitMb",
+    "importLimitMb",
+    "backupUploadLimitMb",
+    "backupExpandedLimitMb",
+];
 const SECRET_KEYS: &[&str] = &["ttsApiKey", "absToken", "metricsToken"];
 
 const FIELDS: &[(&str, &[&str])] = &[
+    ("logLevel", &[]),
+    ("logToFile", &[]),
+    ("extendedSearch", &[]),
+    ("bookReadLink", &[]),
+    ("uiDefaults", &[]),
+    ("inpxFilterFile", &[]),
+    ("lowMemoryMode", &["INPX_LOW_MEMORY_MODE"]),
+    ("wsMessageLimitMb", &["INPX_WS_MESSAGE_LIMIT_MB"]),
+    ("importLimitMb", &["INPX_IMPORT_LIMIT_MB"]),
+    ("backupUploadLimitMb", &["INPX_BACKUP_UPLOAD_LIMIT_MB"]),
+    ("backupExpandedLimitMb", &["INPX_BACKUP_EXPANDED_LIMIT_MB"]),
     ("conversionEnabled", &["INPX_ENABLE_CONVERSION"]),
     ("conversionFormats", &["INPX_CONVERSION_FORMATS"]),
     ("mobiEnabled", &["INPX_MOBI_ENABLED"]),
@@ -139,6 +156,11 @@ pub(super) fn patch(value: &Value) -> Result<Value> {
         if let Some(variable) = vars.iter().find(|variable| std::env::var(variable).is_ok()) {
             return Err(format!("Параметр задан через {variable}").into());
         }
+        if key == "logLevel"
+            && let Some(flag) = super::logging::locked_by()
+        {
+            return Err(format!("Параметр задан через {flag}").into());
+        }
         let number = |min, max| {
             value
                 .as_u64()
@@ -152,6 +174,9 @@ pub(super) fn patch(value: &Value) -> Result<Value> {
         };
         let checked = match key.as_str() {
             "conversionEnabled"
+            | "logToFile"
+            | "extendedSearch"
+            | "lowMemoryMode"
             | "mobiEnabled"
             | "onlineReaderEnabled"
             | "ttsEnabled"
@@ -161,6 +186,50 @@ pub(super) fn patch(value: &Value) -> Result<Value> {
             | "metricsEnabled"
             | "metricsExemptAuth"
             | "absEnabled" => value.as_bool().map(Value::from),
+            "logLevel" => string()
+                .filter(|value| matches!(*value, "error" | "warn" | "info"))
+                .map(Value::from),
+            "bookReadLink" => string()
+                .map(str::trim)
+                .filter(|address| {
+                    address.is_empty()
+                        || url::Url::parse(address).is_ok_and(|url| {
+                            matches!(url.scheme(), "http" | "https")
+                                && url.host().is_some()
+                                && url.username().is_empty()
+                                && url.password().is_none()
+                        })
+                })
+                .map(Value::from),
+            "uiDefaults" => value
+                .as_object()
+                .filter(|settings| {
+                    settings.iter().all(|(key, value)| match key.as_str() {
+                        "limit" => value
+                            .as_u64()
+                            .is_some_and(|value| (1..=120).contains(&value)),
+                        "langDefault" => value.as_str().is_some_and(|value| {
+                            value.len() <= 16
+                                && value
+                                    .bytes()
+                                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                        }),
+                        "bookCardView" => matches!(value.as_str(), Some("cards" | "list")),
+                        "darkTheme"
+                        | "downloadAsZip"
+                        | "showCounts"
+                        | "showRates"
+                        | "showInfo"
+                        | "showGenres"
+                        | "showDates"
+                        | "showDeleted"
+                        | "abCacheEnabled"
+                        | "showJson"
+                        | "showNewReleaseAvailable" => value.is_boolean(),
+                        _ => false,
+                    })
+                })
+                .map(|_| value.clone()),
             "fb2cngArgs" => value
                 .as_array()
                 .filter(|args| {
@@ -188,6 +257,10 @@ pub(super) fn patch(value: &Value) -> Result<Value> {
                     )
                 }),
             "conversionQueueLimit" => number(0, 256),
+            "wsMessageLimitMb" => number(1, 16),
+            "importLimitMb" => number(1, 64),
+            "backupUploadLimitMb" => number(1, 128),
+            "backupExpandedLimitMb" => number(1, 256),
             "resourceTaskTimeoutMs" => number(1000, 3_600_000),
             "resourceBenchTimeoutMs" => number(10_000, 180_000),
             "conversionQueueTimeoutMs" | "conversionTimeoutMs" => number(1000, 3_600_000),
@@ -257,6 +330,10 @@ pub(super) fn view(config: &Value, state: &State) -> Value {
         "absEnabled":false, "absToken":"", "absPublicUrl":"", "absMaxResults":10,
         "ttsCacheSizeMb":4096, "ttsTimeoutMs":3_600_000,
     });
+    settings["logToFile"] = false.into();
+    settings["extendedSearch"] = true.into();
+    settings["bookReadLink"] = "".into();
+    settings["uiDefaults"] = json!({});
     let mut locked = Map::new();
     for (key, vars) in FIELDS {
         if let Some(value) = config.get(*key).filter(|value| !value.is_null()) {
@@ -288,6 +365,23 @@ pub(super) fn view(config: &Value, state: &State) -> Value {
                 _ => value.into(),
             };
         }
+    }
+    let logging = super::logging::view();
+    let active_index = state.index.files();
+    let next_index = state.settings.index_files(config);
+    let limits = state.socket.limits();
+    settings["wsMessageLimitMb"] = ((limits.message as u64) / MIB).into();
+    settings["importLimitMb"] = ((limits.import as u64) / MIB).into();
+    settings["backupUploadLimitMb"] = ((limits.backup_upload as u64) / MIB).into();
+    settings["backupExpandedLimitMb"] = ((limits.backup_expanded as u64) / MIB).into();
+    settings["lowMemoryMode"] = next_index.low_memory.into();
+    settings["inpxFilterFile"] = settings["inpxFilterFile"]
+        .as_str()
+        .unwrap_or_default()
+        .into();
+    settings["logLevel"] = logging["level"].clone();
+    if let Some(locked_by) = logging["lockedBy"].as_str() {
+        locked.insert("logLevel".into(), locked_by.into());
     }
     if !settings["conversionFormats"].is_array() {
         settings["conversionFormats"] = json!(FORMATS);
@@ -334,7 +428,9 @@ pub(super) fn view(config: &Value, state: &State) -> Value {
         })
     });
     json!({
-        "settings":settings, "locked":locked, "formats":state.downloads.formats(),
+        "settings":settings, "locked":locked, "logging":logging, "formats":state.downloads.formats(),
+        "indexOptions":{"filter":active_index.filter,"lowMemory":active_index.low_memory,
+            "pending":active_index.filter != next_index.filter || active_index.low_memory != next_index.low_memory},
         "djxl":state.downloads.covers.has_djxl(), "ttsActive":state.speech.enabled(), "tools":tools,
         "limits":state.resources.policy().selected.limits
     })

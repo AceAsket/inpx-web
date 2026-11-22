@@ -430,8 +430,12 @@ impl Telegram {
                 continue;
             };
             next = update_id.saturating_add(1);
-            if let Err(error) = chat::handle(state, self, id, update).await {
-                eprintln!("Telegram: {error}");
+            if chat::handle(state, self, id, update).await.is_err() {
+                super::logging::warn_limited(
+                    "inpx::delivery",
+                    "telegram-handler-failed",
+                    format_args!("channel=telegram"),
+                );
             }
         }
         if next != *offset {

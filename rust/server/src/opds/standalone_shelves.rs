@@ -73,7 +73,7 @@ impl SharedShelves {
                 if state.failure.as_ref().is_none_or(|(previous, observed)| {
                     previous != &message || observed.elapsed() >= Duration::from_secs(60)
                 }) {
-                    eprintln!("OPDS shelves: {message}");
+                    log::warn!(target: "inpx::opds", "Не удалось обновить общие подборки OPDS");
                     state.failure = Some((message, Instant::now()));
                 }
                 Err(Unavailable.into())
@@ -110,8 +110,8 @@ impl SharedShelves {
             return Ok(cached.selection.clone());
         }
         let selection = Arc::new(Selection::build(catalogue, &query, shelf.grouping).map_err(
-            |error| {
-                eprintln!("OPDS shelf {}: {error}", shelf.id);
+            |_| {
+                log::warn!(target: "inpx::opds", "Ошибка чтения подборки OPDS");
                 Unavailable
             },
         )?);

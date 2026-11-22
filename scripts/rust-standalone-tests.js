@@ -39,12 +39,12 @@ async function bundle(file) {
 function environment() {
     const env = {...process.env};
     for (const name of Object.keys(env))
-        if (/^(PATH|INPX_(REQUIRE_AUTH|ALLOW_ANONYMOUS_ACCESS|AUTH_MODE|AUTH_EXEMPT_HEALTH|TRUST_PROXY|TRUSTED_PROXY_CIDRS|PROXY_AUTH_HEADER|PROXY_BIND_PROFILE|LOGIN_RATE_LIMIT_ENABLED|RESOURCE_.*|CONVERSION_CONCURRENCY|RESET_ADMIN_PASSWORD|LIBRARY_SOURCES|OPDS_COMPATIBILITY|OPDS_FEEDS_FILE|KOSYNC_ENABLED|ENABLE_CONVERSION|CONVERSION_FORMATS|ADMIN_.*|METRICS_.*|ABS_.*|RUST_.*)|LIBRARY_SOURCES|LIBDIR|INPX)$/i.test(name))
+        if (/^(PATH|INPX_(REQUIRE_AUTH|ALLOW_ANONYMOUS_ACCESS|AUTH_MODE|AUTH_EXEMPT_HEALTH|TRUST_PROXY|TRUSTED_PROXY_CIDRS|PROXY_AUTH_HEADER|PROXY_BIND_PROFILE|LOGIN_RATE_LIMIT_ENABLED|RESOURCE_.*|CONVERSION_CONCURRENCY|RESET_ADMIN_PASSWORD|LIBRARY_SOURCES|OPDS_COMPATIBILITY|OPDS_FEEDS_FILE|KOSYNC_ENABLED|LOG_LEVEL|LOW_MEMORY_MODE|WS_MESSAGE_LIMIT_MB|IMPORT_LIMIT_MB|BACKUP_(UPLOAD|EXPANDED)_LIMIT_MB|ENABLE_CONVERSION|CONVERSION_FORMATS|ADMIN_.*|METRICS_.*|ABS_.*|RUST_.*)|LIBRARY_SOURCES|LIBDIR|INPX)$/i.test(name))
             delete env[name];
     return {...env,PATH:'',INPX_BOOK_FILENAME_TEMPLATE:'[${TITLE}] Тест.${EXT}'};
 }
 
-async function start(binary,args,environmentOverrides,readinessHeaders) {
+async function start(binary,args,environmentOverrides,readinessHeaders,host='127.0.0.1') {
     const port = await unusedPort();
     const env = {...environment(),...environmentOverrides};
     const child = spawn(binary,[...args,'--port='+port],{env,windowsHide:true,stdio:['ignore','pipe','pipe']});
@@ -58,7 +58,7 @@ async function start(binary,args,environmentOverrides,readinessHeaders) {
         if (child.exitCode===null && child.signalCode===null) child.kill();
         await settled;
     };
-    const url = 'http://127.0.0.1:'+port;
+    const url = `http://${host}:${port}`;
     try {
         const until = Date.now()+35000;
         while (Date.now()<until && child.exitCode===null) {
@@ -2160,6 +2160,32 @@ async function verifyCacheSettings(binary, root) {
     console.log('ok cache environment defaults, file rotation and live Prometheus limits');
 }
 
+async function verifyStandaloneIpv6(binary, root) {
+    const {connect} = require('./rust-events-tests');
+    const library = join(root, 'library'), web = join(root, 'web.json'), config = join(root, 'settings.json');
+    await createFixture(library);
+    await bundle(web);
+    const args = ['--standalone', '--data-dir='+join(root, 'data'), '--config='+config,
+        '--lib-dir='+library, '--web-bundle='+web, '--admin-password=ipv6-fixture'];
+    const proxy = {INPX_TRUST_PROXY:'true', INPX_TRUSTED_PROXY_CIDRS:'::/0'};
+    const ipv4 = await start(binary,args,proxy);
+    try {
+        const url = new URL('/ready',ipv4.url);
+        url.hostname = '[::1]';
+        await assert.rejects(fetch(url,{signal:AbortSignal.timeout(2000)}), error => error.cause?.code === 'ECONNREFUSED');
+    } finally {await ipv4.stop();}
+    await assert.rejects(start(binary,[...args,'--host=::/0']), /Для --host .* используйте ::/);
+    for (const [host, flags] of [['0.0.0.0', ['--host=::']], ['::', []]]) {
+        await fs.writeFile(config,JSON.stringify({server:{host}}));
+        const server = await start(binary,[...args,...flags],undefined,undefined,'[::1]');
+        try {
+            const browser = await connect(server.url);
+            browser.close();
+        } finally {await server.stop();}
+    }
+    console.log('ok standalone direct IPv6 over HTTP and WebSocket, independent of proxy CIDRs');
+}
+
 async function verifyRuntimeSettings(binary, root) {
     const {connect, signIn, waitFor} = require('./rust-events-tests');
     const library = join(root, 'library'), data = join(root, 'data'), web = join(root, 'web.json');
@@ -2239,8 +2265,87 @@ async function verifyRuntimeSettings(binary, root) {
             assert.equal(exported.metricsToken, undefined);
             assert.equal(exported.absToken, undefined);
             assert.equal((await guest.send('get-config')).adminLaunch, undefined);
+
+            const webSettings = await save({extendedSearch:false, bookReadLink:'https://reader.example.test/?book=${DOWNLOAD_LINK}', uiDefaults:{limit:40}});
+            assert.equal(webSettings.error, undefined);
+            assert.equal((await guest.send('get-config')).extendedSearch, false);
+            assert.equal((await guest.send('get-config')).uiDefaults.limit, 40);
+            assert.match((await save({bookReadLink:'javascript:void(0)'})).error, /bookReadLink/);
+            assert.match((await save({uiDefaults:{limit:0}})).error, /uiDefaults/);
+
+            const logFile = join(data, 'log', 'inpx-web.log');
+            const logging = await save({logLevel:'info', logToFile:true});
+            assert.equal(logging.runtime.logging.effectiveLevel, 'info');
+            assert.equal(logging.runtime.logging.fileActive, true);
+            assert.match(await fs.readFile(logFile, 'utf8'), /INFO \[inpx::settings\].*logToFile/);
+            await fs.truncate(logFile, 8 * 1024 * 1024);
+            const debugging = await admin.send('update-admin-runtime', {...identity, settings:{}, debugLogging:true});
+            assert.equal(debugging.runtime.logging.effectiveLevel, 'debug');
+            assert(debugging.runtime.logging.debugRemainingMs > 0);
+            assert.equal((await fs.stat(logFile+'.1')).size, 8 * 1024 * 1024);
+            const stopDebug = await admin.send('update-admin-runtime', {...identity, settings:{logLevel:'warn'}, debugLogging:false});
+            assert.equal(stopDebug.runtime.logging.effectiveLevel, 'warn');
+            assert.equal(stopDebug.runtime.logging.debugRemainingMs, 0);
+            assert.equal((await readJson(join(data,'config.json'))).logLevel, 'warn');
+            const rejectedWs = new WebSocket(server.url.replace(/^http/,'ws')+'/ws', {
+                headers:{origin:server.url.replace('127.0.0.1','localhost')},
+            });
+            assert.match((await once(rejectedWs,'error'))[0].message, /403/);
+            assert.match(await fs.readFile(logFile, 'utf8'), /WARN \[inpx::proxy\] foreign-origin/);
+
+            const larger = {padding:'x'.repeat(1024*1024)};
+            const limits = await save({wsMessageLimitMb:2,importLimitMb:4,backupUploadLimitMb:8,backupExpandedLimitMb:16});
+            assert.equal(limits.runtime.settings.backupUploadLimitMb, 8);
+            assert.match((await guest.send('test',larger)).error,/размер/);
+            const reconnected = await connect(server.url);
+            try {
+                assert.equal((await reconnected.send('test',larger)).error,undefined);
+                assert.equal((await save({wsMessageLimitMb:1})).error,undefined);
+                assert.match((await reconnected.send('test',larger)).error,/размер/);
+            } finally {reconnected.close();}
+
+            const filter = join(data,'test-filter.json');
+            await fs.writeFile(filter, '{');
+            assert.match((await save({inpxFilterFile:filter})).error, /Фильтр INPX/);
+            await fs.writeFile(filter, JSON.stringify({includeAuthors:['Несуществующий автор для теста']}));
+            const pending = await save({inpxFilterFile:filter, lowMemoryMode:true});
+            assert.equal(pending.runtime.indexOptions.pending, true);
+            assert.equal(pending.runtime.indexOptions.lowMemory, false);
+            assert((await search()).totalFound > 0);
+            assert.equal((await admin.send('admin-reindex', identity)).started, true);
+            await waitFor(() => admin.send('get-config', identity),
+                config => config.adminRuntime?.indexOptions?.filter === filter
+                    && config.adminRuntime.indexOptions.lowMemory && !config.adminRuntime.indexOptions.pending,
+                'The new index options did not become active');
+            assert.equal((await search()).totalFound, 0);
         } finally { guest.close(); admin.close(); }
     } finally { await server.stop(); }
+    const lockedLog = await start(binary, [...args,'--log-level=error'], {INPX_LOG_LEVEL:'warn',INPX_WS_MESSAGE_LIMIT_MB:'3'});
+    try {
+        const admin = await connect(lockedLog.url);
+        try {
+            const identity = await signIn(admin, 'admin', password);
+            const config = await admin.send('get-config', identity);
+            assert.equal(config.adminRuntime.logging.effectiveLevel,'error');
+            assert.equal(config.adminRuntime.locked.logLevel,'--log-level');
+            assert.equal(config.adminRuntime.settings.wsMessageLimitMb,3);
+            assert.match((await admin.send('update-admin-runtime',{...identity,settings:{},debugLogging:true})).error,/--log-level/);
+        } finally {admin.close();}
+    } finally { await lockedLog.stop(); }
+    const configFile = join(data,'config.json');
+    const persisted = await readJson(configFile);
+    await fs.writeFile(configFile, JSON.stringify({...persisted, logLevel:'legacy-level', logDir:configFile}));
+    const consoleOnly = await start(binary,args);
+    try {
+        const admin = await connect(consoleOnly.url);
+        try {
+            const identity = await signIn(admin,'admin',password);
+            const {adminRuntime} = await admin.send('get-config',identity);
+            assert.equal(adminRuntime.settings.logToFile,true);
+            assert.equal(adminRuntime.logging.fileActive,false);
+            assert.equal(adminRuntime.logging.effectiveLevel,'info');
+        } finally {admin.close();}
+    } finally {await consoleOnly.stop();}
     console.log('ok live guest access on the same WebSocket, environment overrides and runtime settings persistence');
 }
 
@@ -2829,6 +2934,7 @@ async function verifyJembaUpgrade(binary, root) {
     const binary = resolve(process.argv[2]);
     const root = await fs.mkdtemp(join(tmpdir(),'inpx-standalone-'));
     try {
+        await verifyStandaloneIpv6(binary,join(root,'ipv6'));
         await verify(binary,root);
         await verifyCatalogue(binary,join(root,'opds'));
         await verifyEpubReader(binary,join(root,'epub-reader'));

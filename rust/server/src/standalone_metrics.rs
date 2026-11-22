@@ -246,7 +246,7 @@ impl Monitor {
                 Ok(activity) => Some(Arc::new(activity)),
                 Err(error) if Endpoint::new(config).enabled => return Err(error),
                 Err(error) => {
-                    eprintln!("Server activity: {error}");
+                    log::warn!(target: "inpx::metrics", "Server activity: {error}");
                     None
                 }
             },

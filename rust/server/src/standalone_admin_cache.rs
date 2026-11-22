@@ -192,7 +192,7 @@ impl Cache {
                             .clean(&config, &worker.downloads, "all", false)
                     });
                 if let Err(error) = run {
-                    eprintln!("Cache rotation: {error}");
+                    log::error!(target: "inpx::cache", "Cache rotation: {error}");
                 }
             })
             .await;

@@ -331,13 +331,17 @@ impl Conversion {
         if usable(&target)? {
             return Ok(target);
         }
+        let queued = Instant::now();
         let ticket = self.queue.enter(&target)?;
         if usable(&target)? {
             drop(ticket);
             return Ok(target);
         }
         let _permit = acquire()?;
-        let deadline = Instant::now() + self.timeout;
+        let started = Instant::now();
+        log::debug!(target: "inpx::conversion", "format={} phase=start queue_ms={}",
+            format.extension(), queued.elapsed().as_millis());
+        let deadline = started + self.timeout;
         let directory = workspace(cache)?;
         let dir = directory.path();
         let result = match format {
@@ -400,6 +404,8 @@ impl Conversion {
         };
         remaining(deadline)?;
         publish(cache, &target, &result)?;
+        log::debug!(target: "inpx::conversion", "format={} phase=ready elapsed_ms={}",
+            format.extension(), started.elapsed().as_millis());
         drop(ticket);
         Ok(target)
     }

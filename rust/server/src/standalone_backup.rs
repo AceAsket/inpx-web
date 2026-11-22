@@ -12,7 +12,7 @@ use inpx_catalog::backup_vault::{Request as VaultRequest, ScheduleWindow};
 use serde_json::Value;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
-use super::{NAME, State, VERSION, socket::megabytes};
+use super::{NAME, State, VERSION, socket::TransportLimits};
 use crate::http::{Body, error};
 use crate::request_access::Admission;
 use crate::standalone_access::{self, BrowserProfileRequest};
@@ -26,14 +26,14 @@ pub(super) struct Backups {
 }
 
 impl Backups {
-    pub(super) fn new(data: &Path, file: &Path, root: &str, config: &Value) -> Self {
+    pub(super) fn new(data: &Path, file: &Path, root: &str, limits: TransportLimits) -> Self {
         let root = root.trim_end_matches('/');
         Self {
             backup: Backup::new(
                 data,
                 file,
-                megabytes(&config["backupUploadLimitMb"], 32, 128) as u64,
-                megabytes(&config["backupExpandedLimitMb"], 64, 256) as u64,
+                limits.backup_upload as u64,
+                limits.backup_expanded as u64,
             ),
             root: root.into(),
             route: format!("{root}/admin-backups/"),
@@ -42,21 +42,18 @@ impl Backups {
         }
     }
 
-    pub(super) fn request_limit(&self) -> usize {
-        (self.backup.upload_limit as usize).div_ceil(3) * 4 + 65536
-    }
-
     pub(super) fn dispatch(
         &self,
         state: &State,
         profile: BrowserProfileRequest<'_>,
         action: &str,
         request: &Value,
+        limits: TransportLimits,
     ) -> Result<Value> {
         let operation = request["operation"].as_str().unwrap_or_default();
         if action == "admin-backup-vault" && operation == "status" {
             state.access.backup(Some(profile), false, |_, _| Ok(()))?;
-            return self.status();
+            return self.status(limits);
         }
         let _operation = self
             .operation
@@ -64,16 +61,16 @@ impl Backups {
             .map_err(|_| "Выполняется другая операция с резервными копиями")?;
         state.access.backup(Some(profile), false, |_, _| Ok(()))?;
         match action {
-            "create-admin-backup" => self.create(state, Some(profile), false),
+            "create-admin-backup" => self.create(state, Some(profile), false, limits),
             "preview-admin-backup" | "import-admin-backup" => {
-                self.restore(state, profile, action, request)
+                self.restore(state, profile, action, request, limits)
             }
             "admin-backup-vault" if matches!(operation, "preview" | "restore") => {
-                self.restore(state, profile, action, request)
+                self.restore(state, profile, action, request, limits)
             }
             "admin-backup-vault" if operation == "update" => {
                 self.backup.vault.update(&request["options"])?;
-                self.status()
+                self.status(limits)
             }
             "admin-backup-vault" if operation == "delete" => {
                 let name = request["options"]["name"]
@@ -81,7 +78,7 @@ impl Backups {
                     .unwrap_or_default()
                     .into();
                 self.backup.vault.execute(VaultRequest::Remove { name })?;
-                self.status()
+                self.status(limits)
             }
             _ => Err("Неизвестное действие с резервной копией".into()),
         }
@@ -93,21 +90,24 @@ impl Backups {
         profile: BrowserProfileRequest<'_>,
         action: &str,
         request: &Value,
+        limits: TransportLimits,
     ) -> Result<Value> {
         let stored = action == "admin-backup-vault";
         let preview =
             action == "preview-admin-backup" || (stored && request["operation"] == "preview");
+        let backup = self
+            .backup
+            .with_limits(limits.backup_upload as u64, limits.backup_expanded as u64);
         let archive = if stored {
-            self.backup.stored(&request["options"])?
+            backup.stored(&request["options"])?
         } else {
-            self.backup.upload(&request["data"])?
+            backup.upload(&request["data"])?
         };
         state.settings.with_backup(!preview, |current| {
             state.access.backup(Some(profile), !preview, |reader, _| {
-                self.backup
-                    .restore(archive, current, reader, &self.root, preview, |config| {
-                        state.settings.validate_backup(config)
-                    })
+                backup.restore(archive, current, reader, &self.root, preview, |config| {
+                    state.settings.validate_backup(config)
+                })
             })
         })
     }
@@ -117,6 +117,7 @@ impl Backups {
         state: &State,
         profile: Option<BrowserProfileRequest<'_>>,
         scheduled: bool,
+        limits: TransportLimits,
     ) -> Result<Value> {
         self.running.store(true, Ordering::Relaxed);
         let result = (|| {
@@ -125,7 +126,10 @@ impl Backups {
                     self.backup.snapshot(reader, stamp, NAME, VERSION)
                 })
             })?;
-            let mut result = self.backup.publish(snapshot, scheduled)?;
+            let mut result = self
+                .backup
+                .with_limits(limits.backup_upload as u64, limits.backup_expanded as u64)
+                .publish(snapshot, scheduled)?;
             result["link"] = self
                 .link(result["fileName"].as_str().expect("archive name"))
                 .into();
@@ -135,7 +139,7 @@ impl Backups {
         result
     }
 
-    fn status(&self) -> Result<Value> {
+    fn status(&self, limits: TransportLimits) -> Result<Value> {
         let mut policy = self
             .backup
             .vault
@@ -170,7 +174,7 @@ impl Backups {
                 OffsetDateTime::now_local().map_or("UTC".into(), |date| date.offset().to_string())
             })
             .into();
-        policy["uploadLimit"] = self.backup.upload_limit.into();
+        policy["uploadLimit"] = limits.backup_upload.into();
         policy["backups"] = backups;
         Ok(policy)
     }
@@ -196,11 +200,13 @@ impl Backups {
             .await;
             match result {
                 Ok(Ok(())) => (),
-                Ok(Err(failure)) => {
-                    eprintln!("Backup schedule: {failure}");
+                Ok(Err(_)) => {
+                    log::error!(target: "inpx::backup", "Не удалось выполнить запланированное резервное копирование");
                     retry_after = Instant::now() + Duration::from_secs(3600);
                 }
-                Err(failure) => eprintln!("Backup worker: {failure}"),
+                Err(_) => {
+                    log::error!(target: "inpx::backup", "Фоновая задача резервного копирования прервана")
+                }
             }
         }
     }
@@ -218,7 +224,7 @@ impl Backups {
         if policy.is_null() {
             return Ok(());
         }
-        if let Err(failure) = self.create(state, None, true) {
+        if let Err(failure) = self.create(state, None, true, state.socket.limits()) {
             self.backup.vault.execute(VaultRequest::MarkFailed)?;
             return Err(failure);
         }
@@ -228,6 +234,13 @@ impl Backups {
         self.backup.vault.execute(VaultRequest::Rotate {
             keep: policy["keep"].as_u64().unwrap_or(7) as usize,
         })?;
+        log::info!(target: "inpx::backup", "Запланированное резервное копирование завершено");
+        state.diagnostics.log(
+            state,
+            "info",
+            "backup",
+            "Запланированное резервное копирование завершено",
+        );
         Ok(())
     }
 
