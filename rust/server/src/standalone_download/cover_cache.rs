@@ -48,10 +48,20 @@ struct Entry {
     file: Option<CoverFile>,
 }
 
-#[derive(Default)]
 pub(super) struct CoverCache {
     rows: VecDeque<Entry>,
     pub epoch: u64,
+    budget: usize,
+}
+
+impl Default for CoverCache {
+    fn default() -> Self {
+        Self {
+            rows: VecDeque::new(),
+            epoch: 0,
+            budget: MEMORY_LIMIT,
+        }
+    }
 }
 
 impl CoverCache {
@@ -84,7 +94,12 @@ impl CoverCache {
             file,
         });
         self.rows.truncate(CAPACITY);
-        self.trim(MEMORY_LIMIT);
+        self.trim(self.budget);
+    }
+
+    pub(super) fn set_budget(&mut self, budget: usize) {
+        self.budget = budget;
+        self.trim(budget);
     }
 
     fn trim(&mut self, mut budget: usize) {

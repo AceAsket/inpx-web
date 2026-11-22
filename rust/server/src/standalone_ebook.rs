@@ -38,9 +38,6 @@ pub(super) struct Ebook {
     base: String,
     root: String,
     language: String,
-    online: bool,
-    binding: bool,
-    conversions: Vec<&'static str>,
     slots: Arc<Semaphore>,
     login_slots: Arc<Semaphore>,
     text: reader::Cache,
@@ -99,20 +96,12 @@ impl From<Box<dyn std::error::Error>> for Failure {
 }
 
 impl Ebook {
-    pub(super) fn new(
-        root: &str,
-        config: &Value,
-        binding: bool,
-        conversions: Vec<&'static str>,
-    ) -> Self {
+    pub(super) fn new(root: &str, config: &Value) -> Self {
         let root = root.trim_end_matches('/');
         Self {
             base: format!("{root}/ebook"),
             root: root.into(),
             language: text(&config["uiDefaults"], "langDefault").into(),
-            online: config["onlineReaderEnabled"] != false,
-            binding,
-            conversions,
             slots: Arc::new(Semaphore::new(4)),
             login_slots: Arc::new(Semaphore::new(2)),
             text: reader::Cache::default(),
@@ -430,7 +419,7 @@ impl Page<'_> {
             ));
         }
         if self.path == "/login" {
-            if self.site.binding {
+            if self.state.request_access.current().profile_binding() {
                 return Ok(self.document(
                     "Вход",
                     "<p>Профиль задаётся входом через proxy.</p>",
@@ -547,7 +536,7 @@ impl Page<'_> {
         self.state.access.profile_command(
             self.profile_request(),
             self.admission,
-            self.site.binding,
+            self.state.request_access.current().profile_binding(),
             &self.site.root,
             "update-user-profile",
             &json!({"targetUserId":owner,"profile":{"defaultDownloadFormat":format}}),
@@ -585,7 +574,7 @@ impl Page<'_> {
     }
 
     fn login_profile(&self, form: &Params, next: &str) -> Result<Response<Body>> {
-        if self.site.binding {
+        if self.state.request_access.current().profile_binding() {
             return Err(Failure::new(
                 StatusCode::FORBIDDEN,
                 "Профиль задаётся входом через proxy.",

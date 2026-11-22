@@ -133,11 +133,17 @@ struct Settings {
 }
 
 impl Settings {
-    fn new(budget: &Arc<Budget>) -> Self {
+    fn new(budget: &Arc<Budget>, config: &Value) -> Self {
         Self {
-            enabled: std::env::var("INPX_RESOURCE_BENCH_ENABLED").as_deref() != Ok("false"),
-            timeout: environment_number("INPX_RESOURCE_BENCH_TIMEOUT_MS", 60000)
-                .clamp(10000, 180000),
+            enabled: std::env::var("INPX_RESOURCE_BENCH_ENABLED")
+                .map_or(config["resourceBenchEnabled"] != false, |value| {
+                    value != "false"
+                }),
+            timeout: environment_number(
+                "INPX_RESOURCE_BENCH_TIMEOUT_MS",
+                config["resourceBenchTimeoutMs"].as_u64().unwrap_or(60_000),
+            )
+            .clamp(10000, 180000),
             budget: budget.policy(),
         }
     }
@@ -235,7 +241,7 @@ impl Benchmark {
 
     pub(super) fn snapshot(&self, state: &State) -> Result<Value> {
         let machine = Machine::sample();
-        let settings = Settings::new(&state.resources);
+        let settings = Settings::new(&state.resources, &state.settings.snapshot());
         let sources = state.index.sources();
         let mut report = self.report.lock().expect("benchmark report").clone();
         let mut recommendation = provisional(
@@ -290,9 +296,9 @@ impl Benchmark {
         owner: BrowserProfileRequest<'_>,
         options: &Value,
     ) -> Result<Value> {
-        let settings = Settings::new(&state.resources);
+        let settings = Settings::new(&state.resources, &state.settings.snapshot());
         if !settings.enabled {
-            return Err("Проверка отключена параметром INPX_RESOURCE_BENCH_ENABLED".into());
+            return Err("Проверка производительности отключена".into());
         }
         let mut slot = self.job.lock().expect("benchmark slot");
         if slot

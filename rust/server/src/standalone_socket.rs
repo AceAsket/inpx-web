@@ -23,7 +23,7 @@ use super::discovery::{ExternalDiscovery, ExternalOptions, limit as discovery_li
 use super::events::{Change, Event, Subscription};
 use super::{NAME, State, VERSION};
 use crate::http::{Body, error};
-use crate::request_access::Admission;
+use crate::request_access::{Admission, BrowserConnection};
 use crate::standalone_access::{
     BLOCKED_PROFILE, BrowserAccess, BrowserLogin, BrowserProfileRequest, PROXY_SCOPE, Rejection,
     profile_scope,
@@ -166,6 +166,8 @@ impl Socket {
         mut request: Request<Incoming>,
         state: Arc<State>,
         admission: Admission,
+        peer: std::net::IpAddr,
+        proxy_revision: u64,
     ) -> Response<Body> {
         let mut response = crate::websocket::public_reply(&request);
         if response.status() != StatusCode::SWITCHING_PROTOCOLS {
@@ -178,9 +180,19 @@ impl Socket {
             response.headers_mut().append(header::SET_COOKIE, cookie);
         }
         let upgrade = hyper::upgrade::on(&mut request);
+        let mut handshake = Request::new(());
+        *handshake.uri_mut() = request.uri().clone();
+        *handshake.method_mut() = request.method().clone();
+        *handshake.headers_mut() = request.headers().clone();
+        let access = Arc::new(BrowserConnection {
+            admission: Arc::new(admission),
+            peer,
+            request: handshake,
+            proxy_revision,
+        });
         tokio::spawn(async move {
             if let Ok(client) = upgrade.await {
-                run(TokioIo::new(client), state, session.id, Arc::new(admission)).await;
+                run(TokioIo::new(client), state, session.id, access).await;
             }
         });
         response
@@ -190,11 +202,12 @@ impl Socket {
         &self,
         state: &Arc<State>,
         browser: &str,
-        admission: &Admission,
+        connection_access: &BrowserConnection,
         context: DispatchContext<'_>,
         mut request: Value,
         subscription: &mut Change,
     ) -> Value {
+        let admission = &connection_access.admission;
         let peer = admission.client;
         let proxy_login = admission.proxy_login.as_deref();
         let connection = context.connection;
@@ -255,6 +268,8 @@ impl Socket {
                 | "update-admin-integrations"
                 | "test-admin-integration"
                 | "update-admin-opds"
+                | "update-admin-access"
+                | "update-admin-runtime"
                 | "update-admin-library-sources"
                 | "admin-diagnose-library-source"
                 | "set-admin-resource-profile"
@@ -357,7 +372,7 @@ impl Socket {
         }
         let response = match action.as_str() {
             "test" => json!({"message":format!("{NAME} project is awesome")}),
-            "get-config" => self.config(state, &access, requested, admission, &request),
+            "get-config" => self.config(state, &access, requested, connection_access, &request),
             "get-worker-state" => worker_state(state, &access, text(&request, "workerId")),
             "get-user-profiles" => profiles(&access, requested),
             "subscribe-client-events" => {
@@ -474,6 +489,8 @@ impl Socket {
             "update-admin-integrations"
             | "test-admin-integration"
             | "update-admin-opds"
+            | "update-admin-access"
+            | "update-admin-runtime"
             | "update-admin-library-sources"
             | "admin-diagnose-library-source"
             | "set-admin-resource-profile"
@@ -492,7 +509,13 @@ impl Socket {
                 }
                 state
                     .settings
-                    .dispatch(state, &action, &request, self.import_limit)
+                    .dispatch(
+                        state,
+                        &action,
+                        &request,
+                        self.import_limit,
+                        connection_access,
+                    )
                     .unwrap_or_else(|error| fault(&error.to_string()))
             }
             "get-library-metadata" => state
@@ -606,7 +629,7 @@ impl Socket {
                 .profile_command(
                     profile_request,
                     admission,
-                    state.request_access.profile_binding(),
+                    state.request_access.current().profile_binding(),
                     &self.root,
                     &action,
                     &request,
@@ -836,7 +859,7 @@ impl Socket {
             "get-book-link" | "get-book-info" | "get-book-gallery" => {
                 if action == "get-book-info"
                     && request["readerOnly"] == true
-                    && self.web_config["onlineReaderEnabled"] == false
+                    && !state.settings.online_reader()
                 {
                     return fault("Онлайн-читалка отключена.");
                 }
@@ -931,7 +954,7 @@ impl Socket {
         state: &State,
         access: &BrowserAccess,
         requested: &str,
-        admission: &Admission,
+        connection_access: &BrowserConnection,
         request: &Value,
     ) -> Value {
         let bare = access.required && access.owner.is_none();
@@ -966,7 +989,9 @@ impl Socket {
                 && (access.owner.as_deref() == Some(profile.id.as_str())
                     || !access.required && !profile.requires_login && !profile.otp_required)
         });
-        let binding = state.request_access.profile_binding();
+        let policy = state.request_access.current();
+        let admission = &connection_access.admission;
+        let binding = policy.profile_binding();
         let can_remember = !binding
             && admission.secure
             && request["client"]["type"] != "android"
@@ -1045,6 +1070,17 @@ impl Socket {
         config.insert("emailShareEnabled".into(), email.into());
         if !bare {
             let current = state.settings.snapshot();
+            let formats = state.downloads.formats();
+            let online = state.settings.online_reader();
+            config.insert("conversionEnabled".into(), (!formats.is_empty()).into());
+            config.insert("conversionFormats".into(), json!(formats));
+            config.insert("onlineReaderEnabled".into(), online.into());
+            config.insert("epubReaderEnabled".into(), online.into());
+            config.insert(
+                "ebookReaderEnabled".into(),
+                (online && state.downloads.remote().is_none()).into(),
+            );
+            config.insert("ttsEnabled".into(), state.speech.enabled().into());
             config.insert(
                 "opdsRoot".into(),
                 current["opds"]["root"].as_str().unwrap_or("/opds").into(),
@@ -1063,13 +1099,20 @@ impl Socket {
             }
             if authorized && selected.is_some_and(|profile| profile.is_admin) {
                 config.insert(
+                    "adminAccess".into(),
+                    policy.admin_view(connection_access.peer),
+                );
+                config.insert("adminRuntime".into(), super::runtime::view(&current, state));
+                config.insert("adminLaunch".into(), state.launch.clone());
+                config.insert(
+                    "adminSourcesOrigin".into(),
+                    state.settings.source_view(&current),
+                );
+                config.insert(
                     "adminIntegrations".into(),
                     super::settings::admin_integrations(&current, state),
                 );
-                config.insert(
-                    "adminOpds".into(),
-                    super::settings::opds_view(&current["opds"], true),
-                );
+                config.insert("adminOpds".into(), super::settings::admin_opds(&current));
                 config.insert(
                     "adminCache".into(),
                     super::admin_cache::Cache::settings(&current),
@@ -1324,7 +1367,7 @@ async fn run(
     client: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     state: Arc<State>,
     browser: String,
-    admission: Arc<Admission>,
+    connection_access: Arc<BrowserConnection>,
 ) {
     let settings = WebSocketConfig::default()
         .max_message_size(Some(state.socket.frame_limit))
@@ -1332,6 +1375,11 @@ async fn run(
         .read_buffer_size(16 * 1024)
         .write_buffer_size(0);
     let mut socket = WebSocketStream::from_raw_socket(client, Role::Server, Some(settings)).await;
+    let mut policy = state.request_access.subscribe();
+    if !connection_access.valid(&policy.borrow_and_update()) {
+        close(&mut socket, CloseCode::Policy, "Access policy changed").await;
+        return;
+    }
     let online = state
         .metrics
         .activity
@@ -1344,6 +1392,13 @@ async fn run(
     let (replies, mut incoming) = mpsc::channel(16);
     loop {
         tokio::select! {
+            result = policy.changed() => {
+                if result.is_err() || !connection_access.valid(&policy.borrow_and_update()) {
+                    close(&mut socket, CloseCode::Policy, "Access policy changed").await;
+                    return;
+                }
+                if send(&mut socket, json!({"type":"client-event","kind":"access-policy"}), None).await.is_err() { return; }
+            }
             message = timeout(IDLE, socket.next()) => {
                 let frame = match message {
                     Ok(Some(Ok(Message::Text(text)))) => text,
@@ -1391,7 +1446,7 @@ async fn run(
                 };
                 let state = state.clone();
                 let browser = browser.clone();
-                let admission = admission.clone();
+                let connection_access = connection_access.clone();
                 let replies = replies.clone();
                 running.spawn(async move {
                     let _permit = permit;
@@ -1399,6 +1454,9 @@ async fn run(
                     let progress_id = id.clone();
                     let (response, change) = tokio::task::spawn_blocking(move || {
                         let mut change = Change::Unchanged;
+                        if !connection_access.valid(&state.request_access.current()) {
+                            return (fault("access_policy_changed"), change);
+                        }
                         let enabled = request["wantProgress"] == true;
                         let last = std::cell::Cell::new(None::<Instant>);
                         let batch_progress = |done, total| {
@@ -1409,7 +1467,7 @@ async fn run(
                                 }
                             }
                         };
-                        let response = state.socket.dispatch(&state, &browser, &admission,
+                        let response = state.socket.dispatch(&state, &browser, &connection_access,
                             DispatchContext {connection, events_connection, batch_progress: &batch_progress}, request, &mut change);
                         (response, change)
                     }).await.unwrap_or_else(|_| (fault("server_busy"), Change::Unchanged));
@@ -1423,6 +1481,10 @@ async fn run(
                 if !matches!(result, Some(Ok(()))) { return; }
             }
             Some((result,id,change)) = incoming.recv() => {
+                if !connection_access.valid(&state.request_access.current()) {
+                    close(&mut socket, CloseCode::Policy, "Access policy changed").await;
+                    return;
+                }
                 match change {
                     Change::Unchanged => (),
                     Change::Clear => subscribed = None,
@@ -1437,7 +1499,8 @@ async fn run(
                     Ok(event) => {
                         let (subscription, _) = subscribed.as_ref().expect("event subscription");
                         if event.origin == Some(events_connection) || event.owner != subscription.owner { continue; }
-                        if !subscription.clone().authorized(state.clone(), browser.clone(), admission.clone()).await {
+                        if !connection_access.valid(&state.request_access.current())
+                            || !subscription.clone().authorized(state.clone(), browser.clone(), connection_access.admission.clone()).await {
                             close(&mut socket, CloseCode::Policy, "Session expired").await;
                             return;
                         }

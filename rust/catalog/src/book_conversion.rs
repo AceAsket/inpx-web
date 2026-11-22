@@ -107,34 +107,21 @@ enum Pdf {
     Calibre(Tool),
 }
 
-impl Conversion {
-    pub fn set_concurrency(&self, limit: usize) {
-        self.queue.set_limit(limit);
-    }
+struct Tools {
+    fb2cng: Option<Tool>,
+    kindling: Option<Tool>,
+    pdf: Option<Pdf>,
+}
 
-    pub fn new(config: &Value, exec_dir: &Path, concurrency: usize) -> Result<Option<Self>> {
-        let enabled = std::env::var("INPX_ENABLE_CONVERSION")
-            .map_or(config["conversionEnabled"] != false, |value| {
-                value != "false"
-            });
-        if !enabled {
-            return Ok(None);
-        }
+impl Tools {
+    fn find(config: &Value, exec_dir: &Path) -> Self {
         let paths = &config["converterPaths"];
-        let fbc = Tool::find(exec_dir, "fbc", &configured(paths, &["fb2cng", "fbc"]))
-            .map(|tool| Fb2cng::new(config, tool))
-            .transpose()?;
-        let mobi_enabled = std::env::var("INPX_MOBI_ENABLED")
-            .map_or(config["mobiEnabled"] != false, |value| value != "false");
-        let kindling = mobi_enabled
-            .then(|| {
-                let path = std::env::var("INPX_KINDLING_PATH")
-                    .ok()
-                    .or_else(|| config["kindlingPath"].as_str().map(str::to_owned))
-                    .filter(|value| !value.trim().is_empty());
-                Tool::find(exec_dir, "kindling", &path.into_iter().collect::<Vec<_>>())
-            })
-            .flatten();
+        let fb2cng = Tool::find(exec_dir, "fbc", &configured(paths, &["fb2cng", "fbc"]));
+        let kindling_path = std::env::var("INPX_KINDLING_PATH")
+            .ok()
+            .or_else(|| config["kindlingPath"].as_str().map(str::to_owned))
+            .filter(|value| !value.trim().is_empty());
+        let kindling = Tool::find(exec_dir, "kindling", kindling_path.as_slice());
         let mutool = configured(paths, &["mutool", "mupdf"]);
         let calibre = configured(paths, &["calibre", "ebookConvert", "ebook-convert"]);
         let pdf = if mutool.is_empty() && !calibre.is_empty() {
@@ -149,6 +136,77 @@ impl Conversion {
                         .flatten()
                 })
         };
+        Self {
+            fb2cng,
+            kindling,
+            pdf,
+        }
+    }
+}
+
+impl Conversion {
+    pub fn validate_fb2cng(config: &Value, exec_dir: &Path, check_yaml: bool) -> Result<()> {
+        Fb2cng::arguments(config)?;
+        if !check_yaml
+            || config["fb2cngConfigPath"]
+                .as_str()
+                .is_none_or(str::is_empty)
+        {
+            return Ok(());
+        }
+        let tool = Tools::find(config, exec_dir)
+            .fb2cng
+            .ok_or("Утилита fb2cng недоступна")?;
+        let fbc = Fb2cng::new(config, tool)?;
+        let Some(path) = &fbc.yaml else { return Ok(()) };
+        bounded_config(path)?;
+        let output = tempfile::tempdir()?;
+        let mut command = fbc
+            .tool
+            .command(path.parent().ok_or("Некорректный путь YAML")?);
+        command
+            .arg("--config")
+            .arg(path)
+            .arg("dumpconfig")
+            .arg(output.path().join("config.yaml"));
+        run(command, Instant::now() + Duration::from_secs(10))
+            .map_err(|error| format!("fb2cng не принял YAML: {error}").into())
+    }
+
+    pub fn tool_availability(config: &Value, exec_dir: &Path) -> Value {
+        let tools = Tools::find(config, exec_dir);
+        serde_json::json!({
+            "fb2cng":tools.fb2cng.is_some(),
+            "kindling":tools.kindling.is_some(),
+            "pdf":tools.pdf.is_some(),
+        })
+    }
+
+    pub fn share_queue(&mut self, previous: &Self) {
+        self.queue.shared = previous.queue.shared.clone();
+    }
+
+    pub fn set_concurrency(&self, limit: usize) {
+        self.queue.set_limit(limit);
+    }
+
+    pub fn new(config: &Value, exec_dir: &Path, concurrency: usize) -> Result<Option<Self>> {
+        let enabled = std::env::var("INPX_ENABLE_CONVERSION")
+            .map_or(config["conversionEnabled"] != false, |value| {
+                value != "false"
+            });
+        if !enabled {
+            return Ok(None);
+        }
+        let Tools {
+            fb2cng,
+            kindling,
+            pdf,
+        } = Tools::find(config, exec_dir);
+        let fbc = fb2cng.map(|tool| Fb2cng::new(config, tool)).transpose()?;
+        let mobi_enabled = std::env::var("INPX_MOBI_ENABLED")
+            .map_or(config["mobiEnabled"] != false, |value| value != "false");
+        let kindling = kindling.filter(|_| mobi_enabled);
         let requested = std::env::var("INPX_CONVERSION_FORMATS").ok();
         let formats: Vec<_> = FORMATS
             .into_iter()
@@ -348,7 +406,7 @@ impl Conversion {
 }
 
 impl Fb2cng {
-    fn new(config: &Value, tool: Tool) -> Result<Self> {
+    fn arguments(config: &Value) -> Result<Vec<String>> {
         let arguments = std::env::var("INPX_FB2CNG_ARGS")
             .ok()
             .map(|value| {
@@ -383,6 +441,11 @@ impl Fb2cng {
                 );
             }
         }
+        Ok(arguments)
+    }
+
+    fn new(config: &Value, tool: Tool) -> Result<Self> {
+        let arguments = Self::arguments(config)?;
         let yaml = std::env::var_os("INPX_FB2CNG_CONFIG")
             .or_else(|| std::env::var_os("FB2CNG_CONFIG"))
             .or_else(|| config["fb2cngConfigPath"].as_str().map(Into::into))
@@ -711,10 +774,14 @@ fn milliseconds(config: &Value, variables: &[&str], key: &str, default: u64) -> 
 }
 
 pub(crate) struct Queue {
-    active: Mutex<QueueState>,
-    changed: Condvar,
+    shared: std::sync::Arc<SharedQueue>,
     max_waiting: usize,
     timeout: Duration,
+}
+
+struct SharedQueue {
+    active: Mutex<QueueState>,
+    changed: Condvar,
 }
 
 struct QueueState {
@@ -748,24 +815,27 @@ impl Queue {
 
     pub(crate) fn with_limits(concurrency: usize, max_waiting: usize, timeout: Duration) -> Self {
         Self {
-            active: Mutex::new(QueueState {
-                paths: HashSet::new(),
-                waiting: 0,
-                limit: concurrency,
+            shared: std::sync::Arc::new(SharedQueue {
+                active: Mutex::new(QueueState {
+                    paths: HashSet::new(),
+                    waiting: 0,
+                    limit: concurrency,
+                }),
+                changed: Condvar::new(),
             }),
-            changed: Condvar::new(),
             max_waiting,
             timeout,
         }
     }
 
     pub(crate) fn set_limit(&self, limit: usize) {
-        self.active.lock().expect("conversion queue").limit = limit;
-        self.changed.notify_all();
+        self.shared.active.lock().expect("conversion queue").limit = limit;
+        self.shared.changed.notify_all();
     }
 
     pub(crate) fn enter<'a>(&'a self, path: &'a Path) -> Result<Ticket<'a>> {
         let mut state = self
+            .shared
             .active
             .lock()
             .map_err(|_| "Конвертер книг недоступен")?;
@@ -777,6 +847,7 @@ impl Queue {
             }
             state.waiting += 1;
             let (mut waiting, _) = self
+                .shared
                 .changed
                 .wait_timeout_while(state, self.timeout, |state| busy(state))
                 .map_err(|_| "Конвертер книг недоступен")?;
@@ -794,12 +865,13 @@ impl Queue {
 impl Drop for Ticket<'_> {
     fn drop(&mut self) {
         self.queue
+            .shared
             .active
             .lock()
             .expect("conversion queue")
             .paths
             .remove(self.path);
-        self.queue.changed.notify_all();
+        self.queue.shared.changed.notify_all();
     }
 }
 

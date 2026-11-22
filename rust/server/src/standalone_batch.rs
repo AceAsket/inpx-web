@@ -101,7 +101,7 @@ impl Downloads {
                     .raw_book(&book, &state.index.sources())
                     .map_err(super::delivery::book_error)?;
                 let name =
-                    book_batch::entry_name(&book, state.downloads.template(), index, &mut names)?;
+                    book_batch::entry_name(&book, &state.downloads.template(), index, &mut names)?;
                 archive.add_file(&file, name)
             };
             if let Err(error) = add() {

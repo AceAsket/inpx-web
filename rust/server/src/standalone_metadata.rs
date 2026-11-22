@@ -29,15 +29,18 @@ const CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 pub(super) struct Routes {
     root: String,
     prefix: String,
-    enabled: bool,
-    token: String,
-    signer: Option<CoverSigner>,
-    public_url: Option<String>,
-    limit: usize,
     searches: Arc<Semaphore>,
     reads: Arc<Semaphore>,
     pending: Arc<Semaphore>,
     cache: Mutex<Cache>,
+}
+
+#[derive(Clone)]
+pub(crate) struct Endpoint {
+    pub(crate) enabled: bool,
+    pub(crate) rules: MetadataService,
+    pub(super) public_url: Option<String>,
+    pub(super) limit: usize,
 }
 
 #[derive(Default)]
@@ -46,40 +49,45 @@ struct Cache {
     bytes: usize,
 }
 
-impl Routes {
-    pub(super) fn new(prefix: &str) -> Self {
-        let enabled = std::env::var("INPX_ABS_ENABLED").as_deref() == Ok("true");
+impl Endpoint {
+    pub(crate) fn new(config: &Value, prefix: &str) -> Self {
+        let enabled = std::env::var("INPX_ABS_ENABLED")
+            .map_or(config["absEnabled"] == true, |value| value == "true");
         let token = env("INPX_ABS_TOKEN")
+            .or_else(|| config["absToken"].as_str().map(str::to_owned))
             .map(|value| trim_js(&value).to_owned())
             .unwrap_or_default();
-        let signer = (!token.is_empty()).then(|| CoverSigner::new(&token));
         let limit = env("INPX_ABS_MAX_RESULTS")
             .and_then(|value| value.trim().parse::<f64>().ok())
             .filter(|value| value.is_finite() && *value != 0.0)
+            .or_else(|| config["absMaxResults"].as_f64())
             .unwrap_or(10.0);
+        Self {
+            enabled,
+            rules: MetadataService {
+                path: format!("{}/api/audiobookshelf", prefix.trim_end_matches('/')),
+                token,
+            },
+            public_url: env("INPX_ABS_PUBLIC_URL")
+                .or_else(|| config["absPublicUrl"].as_str().map(str::to_owned))
+                .map(|value| trim_js(&value).to_owned())
+                .filter(|value| !value.is_empty()),
+            limit: limit.floor().clamp(1.0, 20.0) as usize,
+        }
+    }
+}
+
+impl Routes {
+    pub(super) fn new(prefix: &str) -> Self {
         let prefix = prefix.trim_end_matches('/').to_owned();
         Self {
             root: format!("{prefix}/api/audiobookshelf"),
             prefix,
-            enabled,
-            token,
-            signer,
-            public_url: env("INPX_ABS_PUBLIC_URL")
-                .map(|value| trim_js(&value).to_owned())
-                .filter(|value| !value.is_empty()),
-            limit: limit.floor().clamp(1.0, 20.0) as usize,
             searches: Arc::new(Semaphore::new(2)),
             reads: Arc::new(Semaphore::new(READS)),
             pending: Arc::new(Semaphore::new(PENDING)),
             cache: Mutex::new(Cache::default()),
         }
-    }
-
-    pub(super) fn access(&self) -> Option<MetadataService> {
-        (self.enabled && !self.token.is_empty()).then(|| MetadataService {
-            path: self.root.clone(),
-            token: self.token.clone(),
-        })
     }
 
     pub(super) fn matches(&self, path: &str) -> bool {
@@ -91,14 +99,15 @@ impl Routes {
     pub(super) async fn serve(
         &self,
         state: &Arc<State>,
+        endpoint: &Endpoint,
         request: &Request<Incoming>,
         admission: &Admission,
     ) -> Response<Body> {
         let head = request.method() == Method::HEAD;
         let path = request.uri().path().trim_end_matches('/');
-        let denied = if !self.enabled {
+        let denied = if !endpoint.enabled {
             Some((StatusCode::NOT_FOUND, "Metadata provider is disabled"))
-        } else if self.token.is_empty() {
+        } else if endpoint.rules.token.is_empty() {
             Some((
                 StatusCode::SERVICE_UNAVAILABLE,
                 "INPX_ABS_TOKEN is required",
@@ -112,7 +121,7 @@ impl Routes {
             None
         };
         if path == self.root {
-            let mut info = self.info();
+            let mut info = self.info(endpoint);
             if let Some((status, message)) = denied {
                 info["error"] = message.into();
                 return reply(status, info, head);
@@ -151,28 +160,35 @@ impl Routes {
                 head,
             );
         }
-        let Some(base) = self.base_url(request, admission) else {
+        let Some(base) = self.base_url(endpoint, request, admission) else {
             return failure(
                 StatusCode::BAD_REQUEST,
                 "Invalid metadata provider public URL",
                 head,
             );
         };
-        self.search(state, trim_js(&title), trim_js(author), base, head)
-            .await
+        self.search(
+            state,
+            endpoint,
+            trim_js(&title),
+            trim_js(author),
+            base,
+            head,
+        )
+        .await
     }
 
-    fn info(&self) -> Value {
+    fn info(&self, endpoint: &Endpoint) -> Value {
         let search = format!("{}/search", self.root);
         json!({
             "provider":"inpx-web", "version":VERSION,
             "description":"Провайдер метаданных Audiobookshelf. Укажите этот базовый адрес в настройках custom provider; ABS сам добавляет /search.",
             "search":search, "cover":format!("{}/cover",self.root), "authorizationRequired":true,
-            "configuration":{"enabled":self.enabled,"tokenConfigured":!self.token.is_empty()},
+            "configuration":{"enabled":endpoint.enabled,"tokenConfigured":!endpoint.rules.token.is_empty()},
             "authorization":{"header":"Authorization","formats":["<INPX_ABS_TOKEN>","Bearer <INPX_ABS_TOKEN>"]},
             "parameters":{"query":"Название книги; параметр обязателен, но может быть пустым при поиске по автору.",
                 "author":"Имя автора; необязательный параметр. Название или автор должны быть заполнены.","maxLength":200},
-            "limits":{"maxResults":self.limit,"searchTimeoutMs":SEARCH.as_millis() as u64,"metadataTimeoutMs":ENRICH.as_millis() as u64},
+            "limits":{"maxResults":endpoint.limit,"searchTimeoutMs":SEARCH.as_millis() as u64,"metadataTimeoutMs":ENRICH.as_millis() as u64},
             "example":{"method":"GET","path":format!("{search}?query=&author=%D0%A5%D0%B0%D0%BD%D0%B4%D0%BA%D0%B5"),
                 "curl":format!("curl --get 'http://<host>:12380{search}' --header 'Authorization: <INPX_ABS_TOKEN>' --data-urlencode 'query=' --data-urlencode 'author=Хандке'")},
             "troubleshooting":{
@@ -186,8 +202,13 @@ impl Routes {
         })
     }
 
-    fn base_url(&self, request: &Request<Incoming>, admission: &Admission) -> Option<Url> {
-        let supplied = if let Some(url) = &self.public_url {
+    fn base_url(
+        &self,
+        endpoint: &Endpoint,
+        request: &Request<Incoming>,
+        admission: &Admission,
+    ) -> Option<Url> {
+        let supplied = if let Some(url) = &endpoint.public_url {
             url.clone()
         } else {
             let host = admission
@@ -219,6 +240,7 @@ impl Routes {
     async fn search(
         &self,
         state: &Arc<State>,
+        endpoint: &Endpoint,
         title: &str,
         author: &str,
         base: Url,
@@ -301,7 +323,7 @@ impl Routes {
                     + u8::from(book["ext"] == "fb2"),
             )
         });
-        books.truncate(self.limit);
+        books.truncate(endpoint.limit);
         let index = state.index.snapshot();
         let mut extras = vec![Value::Null; books.len()];
         let (sender, mut receiver) = mpsc::channel(books.len().max(1));
@@ -325,13 +347,7 @@ impl Routes {
         while let Ok(Some((i, extra))) = timeout_at(budget, receiver.recv()).await {
             extras[i] = extra;
         }
-        let Some(signer) = &self.signer else {
-            return failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Metadata search is unavailable",
-                head,
-            );
-        };
+        let signer = CoverSigner::new(&endpoint.rules.token);
         let cover = base
             .join("api/audiobookshelf/cover")
             .expect("fixed metadata route");

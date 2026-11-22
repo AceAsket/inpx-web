@@ -2160,6 +2160,90 @@ async function verifyCacheSettings(binary, root) {
     console.log('ok cache environment defaults, file rotation and live Prometheus limits');
 }
 
+async function verifyRuntimeSettings(binary, root) {
+    const {connect, signIn, waitFor} = require('./rust-events-tests');
+    const library = join(root, 'library'), data = join(root, 'data'), web = join(root, 'web.json');
+    const password = 'runtime-settings-fixture';
+    await createFixture(library);
+    await bundle(web);
+    const args = ['--standalone', '--host=127.0.0.1', '--data-dir='+data, '--lib-dir='+library,
+        '--web-bundle='+web, '--admin-password='+password];
+    const server = await start(binary, args, {INPX_JXL_DECODER:'native'});
+    try {
+        const admin = await connect(server.url), guest = await connect(server.url);
+        try {
+            const identity = await signIn(admin, 'admin', password);
+            const update = access => admin.send('update-admin-access', {...identity, access});
+            const search = () => guest.send('search', {from:'title', query:{title:'', del:'0'}});
+            assert.equal(guest.config.adminAccess, undefined);
+            assert.equal(guest.config.adminRuntime, undefined);
+            assert((await search()).totalFound > 0);
+            assert.match((await guest.send('update-admin-access', {access:{allowAnonymousAccess:false}})).error, /need_profile_login|администратора/);
+            assert.match((await update({trustedProxyCidrs:['192.0.2.1/64']})).error, /IPv4\/IPv6/);
+            assert.equal((await update({allowAnonymousAccess:false})).access.allowAnonymousAccess, false);
+            await waitFor(()=>guest.events, events=>events.some(event=>event.kind==='access-policy'), 'Open WebSocket did not receive the policy change');
+            assert.equal((await search()).error, 'need_profile_login');
+            assert.equal((await guest.send('get-config')).profileLoginRequired, true);
+            assert.equal((await update({allowAnonymousAccess:true})).access.allowAnonymousAccess, true);
+            assert((await search()).totalFound > 0);
+            const invalid = await admin.send('update-admin-runtime', {...identity, settings:{jxlDecoder:'djxl'}});
+            assert.match(invalid.error, /INPX_JXL_DECODER/);
+            const changed = await admin.send('update-admin-runtime', {...identity, settings:{
+                inpxCheckInterval:0, isbnMaxBookBytes:4194304, coverMemoryMb:0, conversionEnabled:false,
+                resourceImages:2, ttsModel:'fixture-model', ttsApiKey:'fixture-speech-key',
+            }});
+            assert.equal(changed.error, undefined);
+            assert.equal(changed.runtime.limits.images, 2);
+            assert.equal(changed.runtime.settings.ttsApiKey, '__KEEP__');
+            assert.deepEqual((await guest.send('get-config')).conversionFormats, []);
+            const disk = await readJson(join(data, 'config.json'));
+            assert.equal(disk.isbnMaxBookBytes, 4194304);
+            assert.equal(disk.ttsModel, 'fixture-model');
+            assert.notEqual(disk.ttsApiKey, 'fixture-speech-key');
+
+            const save = settings => admin.send('update-admin-runtime', {...identity, settings});
+            const opds = settings => admin.send('update-admin-opds', {...identity, opds:settings});
+            assert((await opds({feedsFile:'missing.json'})).error);
+            await fs.writeFile(join(data, 'collections.json'), JSON.stringify({version:1, shelves:[]}));
+            const feeds = await opds({compatibility:'tolino', feedsFile:'collections.json'});
+            assert.equal(feeds.opds.feedsFile, 'collections.json');
+            assert.equal(feeds.opds.compatibility, 'tolino');
+            assert.match((await save({fb2cngArgs:['--output-file']})).error, /переопределять/);
+            assert.deepEqual((await save({fb2cngArgs:['--no-cover']})).runtime.settings.fb2cngArgs, ['--no-cover']);
+            assert.equal((await fetch(server.url+'/kosync/healthcheck')).status, 200);
+            assert.equal((await save({kosyncEnabled:false})).runtime.settings.kosyncEnabled, false);
+            assert.equal((await fetch(server.url+'/kosync/healthcheck')).status, 404);
+            assert.equal((await save({kosyncEnabled:true})).runtime.settings.kosyncEnabled, true);
+            assert.equal((await fetch(server.url+'/kosync/healthcheck')).status, 200);
+
+            assert((await update({authMode:'proxy', requireAuth:true})).error);
+            assert((await save({metricsPath:'/ready'})).error);
+            const services = await save({metricsEnabled:true, metricsPath:'/observe', metricsToken:'first-metrics',
+                absEnabled:true, absPublicUrl:'https://library.example.test', absToken:'first-abs', absMaxResults:3});
+            assert.equal(services.runtime.settings.metricsToken, '__KEEP__');
+            assert.equal(services.runtime.settings.absToken, '__KEEP__');
+            assert.match((await opds({root:'/observe'})).error, /маршрутом метрик/);
+            const status = async (route, token) => {
+                const response = await fetch(server.url+route, {headers:{Authorization:'Bearer '+token}});
+                await response.body.cancel();
+                return response.status;
+            };
+            assert.equal(await status('/observe', 'first-metrics'), 200);
+            assert.equal(await status('/api/audiobookshelf', 'first-abs'), 200);
+            assert.equal((await save({metricsToken:'next-metrics', absToken:'next-abs'})).error, undefined);
+            assert.equal(await status('/observe', 'first-metrics'), 401);
+            assert.equal(await status('/observe', 'next-metrics'), 200);
+            assert.equal(await status('/api/audiobookshelf', 'first-abs'), 401);
+            assert.equal(await status('/api/audiobookshelf', 'next-abs'), 200);
+            const exported = (await admin.send('export-admin-settings', identity)).settings;
+            assert.equal(exported.metricsToken, undefined);
+            assert.equal(exported.absToken, undefined);
+            assert.equal((await guest.send('get-config')).adminLaunch, undefined);
+        } finally { guest.close(); admin.close(); }
+    } finally { await server.stop(); }
+    console.log('ok live guest access on the same WebSocket, environment overrides and runtime settings persistence');
+}
+
 async function verifyResourceProfiles(binary, root) {
     const probe = require('./rust-resource-profile-tests');
     const library = join(root,'library'), web = join(root,'web.json');
@@ -2758,6 +2842,7 @@ async function verifyJembaUpgrade(binary, root) {
         await verifyProfileCommands(binary,join(root,'profile-commands'));
         await verifySeriesZip(binary,join(root,'series-zip'));
         await verifyCacheSettings(binary,join(root,'cache-settings'));
+        await verifyRuntimeSettings(binary,join(root,'runtime-settings'));
         await verifyResourceProfiles(binary,join(root,'resource-profiles'));
         await verifyMobileEvents(binary,join(root,'mobile-events'));
         await verifyJembaUpgrade(binary,join(root,'jemba-upgrade'));

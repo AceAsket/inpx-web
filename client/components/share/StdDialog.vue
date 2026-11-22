@@ -594,6 +594,11 @@ class StdDialog {
         });
     }
 
+    dismissRequiredProfileLogin() {
+        if (this.active && this.type === 'profileLogin' && this.noCancel)
+            this.$refs.dialog.hide();
+    }
+
     profileLogin(message, caption, opts) {
         return new Promise((resolve) => {
             this.enableValidator = false;

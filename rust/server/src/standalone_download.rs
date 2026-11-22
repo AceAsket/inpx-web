@@ -25,15 +25,20 @@ use crate::standalone_access::Access;
 pub(crate) struct Downloads {
     root: String,
     cache: PathBuf,
-    template: String,
+    template: RwLock<String>,
     resources: Arc<Budget>,
     cover_root: String,
     pub(super) covers: Covers,
     recent_covers: Mutex<CoverCache>,
     local_books: book_delivery::LocalBooks,
-    fb2_download: bool,
-    conversions: Option<Conversion>,
+    media: RwLock<Media>,
     remote: Option<Arc<Remote>>,
+}
+
+struct Media {
+    fb2: bool,
+    conversion: Option<Arc<Conversion>>,
+    previous: Option<Arc<Conversion>>,
 }
 
 pub(crate) struct Requested {
@@ -99,9 +104,54 @@ pub(crate) enum Prepared {
 impl Downloads {
     pub(crate) fn set_resource_limits(&self, limits: crate::standalone::resources::Limits) {
         self.covers.set_concurrency(limits.images);
-        if let Some(conversions) = &self.conversions {
+        let media = self.media.read().expect("download formats");
+        if let Some(conversions) = media.conversion.as_ref().or(media.previous.as_ref()) {
             conversions.set_concurrency(limits.conversions);
         }
+    }
+
+    pub(super) fn configure_media(&self, fb2: bool, mut conversion: Option<Conversion>) {
+        let mut media = self.media.write().expect("download formats");
+        let previous = media.conversion.take().or_else(|| media.previous.take());
+        if let (Some(next), Some(old)) = (&mut conversion, &previous) {
+            next.share_queue(old);
+        }
+        media.fb2 = fb2;
+        media.previous = previous.filter(|_| conversion.is_none());
+        media.conversion = conversion.map(Arc::new);
+    }
+
+    pub(super) fn configure_names_and_covers(&self, config: &Value) {
+        *self.template.write().expect("filename template") =
+            std::env::var("INPX_BOOK_FILENAME_TEMPLATE").unwrap_or_else(|_| {
+                config["bookFilenameTemplate"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into()
+            });
+        let decoder = std::env::var("INPX_JXL_DECODER")
+            .unwrap_or_else(|_| config["jxlDecoder"].as_str().unwrap_or_default().into());
+        self.covers.set_jxl_mode(&decoder);
+        let mib = config["coverMemoryMb"].as_u64().unwrap_or(64).min(1024);
+        self.recent_covers
+            .lock()
+            .expect("cover cache")
+            .set_budget(mib as usize * 1024 * 1024);
+    }
+
+    pub(super) fn formats(&self) -> Vec<&'static str> {
+        let media = self.media.read().expect("download formats");
+        media
+            .fb2
+            .then_some("fb2")
+            .into_iter()
+            .chain(
+                media
+                    .conversion
+                    .iter()
+                    .flat_map(|conversion| conversion.formats()),
+            )
+            .collect()
     }
 
     pub(crate) fn new(
@@ -117,14 +167,17 @@ impl Downloads {
         Ok(Self {
             root: format!("{prefix}/book"),
             cache: book_delivery::cache_directory(data)?,
-            template: std::env::var("INPX_BOOK_FILENAME_TEMPLATE").unwrap_or_default(),
+            template: RwLock::default(),
             resources,
             cover_root: format!("{prefix}/cover/by-uid"),
             covers,
             recent_covers: Mutex::default(),
             local_books: Default::default(),
-            fb2_download,
-            conversions,
+            media: RwLock::new(Media {
+                fb2: fb2_download,
+                conversion: conversions.map(Arc::new),
+                previous: None,
+            }),
             remote,
         })
     }
@@ -146,10 +199,8 @@ impl Downloads {
     }
 
     pub(super) fn ebook_formats(&self, extension: &str) -> Vec<&'static str> {
-        self.fb2_download
-            .then_some("fb2")
+        self.formats()
             .into_iter()
-            .chain(self.conversions.iter().flat_map(Conversion::formats))
             .filter(|format| {
                 *format != extension
                     && self
@@ -198,8 +249,8 @@ impl Downloads {
         cached.file(&self.cache, "", Representation::Raw)
     }
 
-    pub(super) fn template(&self) -> &str {
-        &self.template
+    pub(super) fn template(&self) -> String {
+        self.template.read().expect("filename template").clone()
     }
 
     pub(super) fn legacy_covers(&self) -> PathBuf {
@@ -318,7 +369,7 @@ impl Downloads {
             self.cache_book(book, source)?
         };
         let mut name = book
-            .filename(&self.template)?
+            .filename(&self.template())?
             .replace(|ch: char| ch.is_ascii_control(), "_");
         if let Some(ext) = variant.extension() {
             name = replace_extension(&name, ext);
@@ -333,10 +384,12 @@ impl Downloads {
     }
 
     fn conversion(&self, name: &str) -> Option<Format> {
-        if name == "fb2" && self.fb2_download {
+        let media = self.media.read().expect("download formats");
+        if name == "fb2" && media.fb2 {
             Some(Format::Fb2)
         } else {
-            self.conversions
+            media
+                .conversion
                 .as_ref()?
                 .format(name)
                 .map(Format::Converted)
@@ -344,14 +397,15 @@ impl Downloads {
     }
 
     fn supports(&self, format: Format, extension: &str) -> bool {
+        let media = self.media.read().expect("download formats");
         match format {
             Format::Fb2 => {
-                self.fb2_download
+                media.fb2
                     && (extension.eq_ignore_ascii_case("fb2")
                         || extension.eq_ignore_ascii_case("epub"))
             }
-            Format::Converted(format) => self
-                .conversions
+            Format::Converted(format) => media
+                .conversion
                 .as_ref()
                 .is_some_and(|conversions| conversions.supports(format, extension)),
             Format::Raw | Format::Zip => true,
@@ -367,13 +421,19 @@ impl Downloads {
         compressed: bool,
     ) -> CatalogueResult<PathBuf> {
         if let Some(Format::Converted(format)) = variant {
-            return self
-                .conversions
-                .as_ref()
-                .ok_or("Конвертер недоступен")?
-                .convert(&self.cache, book, cached, format, || {
-                    self.resources.acquire(Kind::Conversions)
-                });
+            let conversion = self
+                .media
+                .read()
+                .expect("download formats")
+                .conversion
+                .clone();
+            return conversion.ok_or("Конвертер недоступен")?.convert(
+                &self.cache,
+                book,
+                cached,
+                format,
+                || self.resources.acquire(Kind::Conversions),
+            );
         }
         let _permit = self
             .resources
@@ -405,7 +465,7 @@ impl Downloads {
             "link":format!("{}/{}", self.root, cached.hash),
             "libFolder":book.folder,
             "libFile":format!("{}.{extension}", book.file),
-            "downFileName":book.filename(&self.template)?,
+            "downFileName":book.filename(&self.template())?,
             "size":cached.size(),
         })))
     }
@@ -755,7 +815,7 @@ impl Downloads {
                 cached
             }
         };
-        let mut name = book.filename(&self.template).map_err(failure)?;
+        let mut name = book.filename(&self.template()).map_err(failure)?;
         if let Target::ByUid = request.target {
             let mut href = format!("{}/{}", self.root, cached.hash);
             if let Some(variant) = request.format {

@@ -99,11 +99,38 @@
         "discovery",
         "uiDefaults"
     ],
+    "rustProperties": [
+        "kosyncEnabled",
+        "absEnabled",
+        "absToken",
+        "absPublicUrl",
+        "absMaxResults",
+        "resourceTotal",
+        "resourceImages",
+        "resourceReviews",
+        "resourceConversions",
+        "resourceBackground",
+        "resourceBenchEnabled",
+        "resourceBenchTimeoutMs",
+        "resourceTaskTimeoutMs",
+        "isbnMaxBookBytes",
+        "bookFilenameTemplate",
+        "jxlDecoder",
+        "coverMemoryMb",
+        "ttsEnabled",
+        "ttsUrl",
+        "ttsModel",
+        "ttsApiKey",
+        "ttsCacheSizeMb",
+        "ttsTimeoutMs"
+    ],
     "secrets": [
         "telegramBotToken",
         "telegramProxyPassword",
         "smtpPass",
+        "ttsApiKey",
         "opds.password",
+        "absToken",
         "metricsToken"
     ]
 }

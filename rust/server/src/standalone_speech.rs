@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use ctutils::CtEq;
@@ -36,15 +36,19 @@ const SAMPLE: &str = "Откройте книгу и устройтесь поу
 pub(super) struct Speech {
     root: String,
     directory: PathBuf,
+    provider: RwLock<Arc<Provider>>,
+    signer: Hmac<Sha256>,
+    scheduler: Mutex<Scheduler>,
+    parts: Mutex<VecDeque<CachedParts>>,
+}
+
+pub(super) struct Provider {
     url: Option<String>,
     api_key: String,
     model: String,
     limit: u64,
     timeout: Duration,
-    signer: Hmac<Sha256>,
     client: reqwest::Client,
-    scheduler: Mutex<Scheduler>,
-    parts: Mutex<VecDeque<CachedParts>>,
 }
 
 struct CachedParts {
@@ -82,6 +86,7 @@ impl Phase {
 }
 
 struct Job {
+    provider: Option<Arc<Provider>>,
     attempt: String,
     speaker: String,
     engine: String,
@@ -100,6 +105,7 @@ struct Job {
 }
 
 struct Work {
+    provider: Arc<Provider>,
     id: String,
     attempt: String,
     engine: String,
@@ -136,8 +142,8 @@ struct SpeechSelection<'a> {
     preview: bool,
 }
 
-impl Speech {
-    pub(super) fn new(data: &Path, root: &str, config: &Value) -> Result<Arc<Self>> {
+impl Provider {
+    pub(super) fn new(config: &Value) -> Result<Arc<Self>> {
         let setting = |name: &str, key: &str| {
             std::env::var(name)
                 .ok()
@@ -157,11 +163,7 @@ impl Speech {
             .map_or(config["ttsEnabled"] == true, |value| value == "true");
         let url = setting("INPX_TTS_URL", "ttsUrl");
         let model = setting("INPX_TTS_MODEL", "ttsModel");
-        let mut secret = [0; 32];
-        getrandom::fill(&mut secret).map_err(std::io::Error::other)?;
         Ok(Arc::new(Self {
-            root: format!("{}/reader-audio/", root.trim_end_matches('/')),
-            directory: data.join("speech"),
             url: (enabled && !url.is_empty()).then(|| url.trim_end_matches('/').to_owned()),
             api_key: setting("INPX_TTS_API_KEY", "ttsApiKey"),
             model: if model.is_empty() {
@@ -177,17 +179,48 @@ impl Speech {
                 "ttsTimeoutMs",
                 3_600_000,
             )),
-            signer: Hmac::new_from_slice(&secret).expect("HMAC key"),
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
+        }))
+    }
+
+    fn http(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        let mut request = self.client.request(
+            method,
+            format!("{}{path}", self.url.as_deref().expect("speech enabled")),
+        );
+        if !self.api_key.is_empty() {
+            request = request.bearer_auth(&self.api_key);
+        }
+        request
+    }
+}
+
+impl Speech {
+    pub(super) fn new(data: &Path, root: &str, config: &Value) -> Result<Arc<Self>> {
+        let mut secret = [0; 32];
+        getrandom::fill(&mut secret).map_err(std::io::Error::other)?;
+        Ok(Arc::new(Self {
+            root: format!("{}/reader-audio/", root.trim_end_matches('/')),
+            directory: data.join("speech"),
+            provider: RwLock::new(Provider::new(config)?),
+            signer: Hmac::new_from_slice(&secret).expect("HMAC key"),
             scheduler: Mutex::new(Scheduler::default()),
             parts: Mutex::new(VecDeque::new()),
         }))
     }
 
+    pub(super) fn configure(&self, provider: Arc<Provider>) {
+        *self.provider.write().expect("speech provider") = provider;
+    }
+
+    fn provider(&self) -> Arc<Provider> {
+        self.provider.read().expect("speech provider").clone()
+    }
+
     pub(super) fn enabled(&self) -> bool {
-        self.url.is_some()
+        self.provider().url.is_some()
     }
 
     pub(super) fn request(
@@ -270,7 +303,9 @@ impl Speech {
         let parts = self.parts(&path, &version, parsed)?;
         if !preparing {
             let (chapters, start, characters) = plan::chapters(&parts, &request["anchor"])?;
-            let estimate = self.metadata("/estimate").ok().zip(chapters.first());
+            let estimate = Self::metadata(&self.provider(), "/estimate")
+                .ok()
+                .zip(chapters.first());
             let (engine, estimate) = estimate
                 .and_then(|(data, first)| {
                     Some((
@@ -358,9 +393,12 @@ impl Speech {
         Ok(parts)
     }
 
-    fn metadata(&self, path: &str) -> Result<Value> {
+    fn metadata(provider: &Provider, path: &str) -> Result<Value> {
+        if provider.url.is_none() {
+            return Err(DISABLED.into());
+        }
         tokio::runtime::Handle::current().block_on(async {
-            let response = self
+            let response = provider
                 .http(reqwest::Method::GET, path)
                 .timeout(META_TIMEOUT)
                 .send()
@@ -445,13 +483,13 @@ impl Speech {
         let segments = options
             .as_ref()
             .map(|_| segments.unwrap_or(&parts[index..index + 1]));
-        let engine = self
-            .metadata("/health")
+        let provider = self.provider();
+        let engine = Self::metadata(&provider, "/health")
             .ok()
             .and_then(|data| engine_id(&data).map(str::to_owned))
             .ok_or("Не удалось проверить сервис Silero. Проверьте контейнер озвучки.")?;
         let id = cache_id(
-            &self.model,
+            &provider.model,
             speaker,
             &selection,
             text,
@@ -463,7 +501,7 @@ impl Speech {
         let payload = serde_json::to_vec(&Synthesis {
             text,
             speaker,
-            model: &self.model,
+            model: &provider.model,
             request_id: &attempt,
             options: options.as_ref(),
             segments,
@@ -505,6 +543,7 @@ impl Speech {
         scheduler.jobs.insert(
             id.clone(),
             Job {
+                provider: (!cached).then_some(provider),
                 attempt,
                 speaker: speaker.into(),
                 engine,
@@ -583,9 +622,6 @@ impl Speech {
             .and_then(|name| name.strip_suffix(".mp3"))
             .filter(|id| valid_id(id))
             .ok_or(missing)?;
-        if !self.enabled() {
-            return Err(missing);
-        }
         let mut query =
             url::form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
                 .filter(|(key, _)| key == "access");
@@ -629,17 +665,6 @@ impl Speech {
         self.directory.join(format!("{id}.mp3"))
     }
 
-    fn http(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let mut request = self.client.request(
-            method,
-            format!("{}{path}", self.url.as_deref().expect("speech enabled")),
-        );
-        if !self.api_key.is_empty() {
-            request = request.bearer_auth(&self.api_key);
-        }
-        request
-    }
-
     async fn drain(self: Arc<Self>) {
         loop {
             let work = {
@@ -651,6 +676,7 @@ impl Speech {
                 let job = scheduler.jobs.get_mut(&id).expect("queued job");
                 job.state = Phase::Generating;
                 Work {
+                    provider: job.provider.take().expect("queued speech provider"),
                     id,
                     attempt: job.attempt.clone(),
                     engine: job.engine.clone(),
@@ -691,14 +717,16 @@ impl Speech {
     }
 
     async fn generate(&self, work: Work, temporary: &Path) -> std::result::Result<(), String> {
-        let used = self.clean_cache(self.limit - self.limit / 5).await?;
-        if used >= self.limit {
+        let limit = work.provider.limit;
+        let used = self.clean_cache(limit - limit / 5).await?;
+        if used >= limit {
             return Err(
                 "Кэш озвучки заполнен. Увеличьте INPX_TTS_CACHE_SIZE_MB или повторите позже."
                     .into(),
             );
         }
         let Work {
+            provider,
             id,
             attempt,
             engine,
@@ -710,15 +738,16 @@ impl Speech {
             return Ok(());
         }
         let progress_path = format!("/jobs/{attempt}");
-        let mut worker = Box::pin(self.synthesize(
+        let mut worker = Box::pin(Self::synthesize(
+            &provider,
             payload,
             &engine,
             options,
             temporary,
-            self.limit - used,
+            limit - used,
             cancel.clone(),
         ));
-        let tracking = self.track(&id, &attempt, &progress_path);
+        let tracking = self.track(&provider, &id, &attempt, &progress_path);
         tokio::pin!(tracking);
         tokio::select! {
             biased;
@@ -726,7 +755,7 @@ impl Speech {
             _ = cancel.changed() => {
                 // Let Silero release its single worker even with older containers
                 // that only implement synthesis.
-                let cancellation = self.http(reqwest::Method::POST, &format!("{progress_path}/cancel"))
+                let cancellation = provider.http(reqwest::Method::POST, &format!("{progress_path}/cancel"))
                     .timeout(META_TIMEOUT).send();
                 tokio::pin!(cancellation);
                 tokio::select! {
@@ -738,10 +767,10 @@ impl Speech {
         }
     }
 
-    async fn track(&self, id: &str, attempt: &str, path: &str) {
+    async fn track(&self, provider: &Provider, id: &str, attempt: &str, path: &str) {
         tokio::time::sleep(Duration::from_secs(1)).await;
         loop {
-            if let Ok(response) = self
+            if let Ok(response) = provider
                 .http(reqwest::Method::GET, path)
                 .timeout(Duration::from_secs(3))
                 .send()
@@ -772,7 +801,7 @@ impl Speech {
     }
 
     async fn synthesize(
-        &self,
+        provider: &Provider,
         payload: Vec<u8>,
         engine: &str,
         options: bool,
@@ -780,10 +809,10 @@ impl Speech {
         available: u64,
         cancel: watch::Receiver<bool>,
     ) -> std::result::Result<(), String> {
-        let mut response = self
+        let mut response = provider
             .http(reqwest::Method::POST, "/synthesize")
             .header(header::CONTENT_TYPE, "application/json")
-            .timeout(self.timeout)
+            .timeout(provider.timeout)
             .body(payload)
             .send()
             .await

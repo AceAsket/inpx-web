@@ -78,7 +78,7 @@ pub(super) fn start(state: &Arc<State>, force: bool) -> Result<Value> {
 fn run(state: &State, generation: &str, build: &mut IsbnBuild) -> Result<bool> {
     let sources = state.index.sources();
     let mut after = Some(build.last_id());
-    let mut reader = build.reader(state.isbn_limit);
+    let mut reader = build.reader(super::isbn_limit(&state.settings.snapshot()));
     while !build.cancelled() {
         let workers = state
             .settings

@@ -18,15 +18,13 @@ use crate::standalone_download::load_book;
 
 pub(super) struct Routes {
     pub(super) root: String,
-    pub(super) enabled: bool,
     slots: Arc<Semaphore>,
 }
 
 impl Routes {
-    pub(super) fn new(prefix: &str, enabled: bool) -> Self {
+    pub(super) fn new(prefix: &str) -> Self {
         Self {
             root: format!("{}/kosync", prefix.trim_end_matches('/')),
-            enabled,
             slots: Arc::new(Semaphore::new(2)),
         }
     }
@@ -44,7 +42,7 @@ impl Routes {
     ) -> Response<Body> {
         let head = request.method() == Method::HEAD;
         let read = matches!(*request.method(), Method::GET | Method::HEAD);
-        if !self.enabled {
+        if !state.access.kosync_enabled() {
             return failure(StatusCode::NOT_FOUND, "Not Found", head);
         }
         let path = request.uri().path()[self.root.len()..].trim_end_matches('/');

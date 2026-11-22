@@ -54,15 +54,17 @@ mod kosync;
 #[path = "standalone_legacy_http.rs"]
 mod legacy_http;
 #[path = "standalone_metadata.rs"]
-mod metadata;
+pub(crate) mod metadata;
 #[path = "standalone_metrics.rs"]
-mod metrics;
+pub(crate) mod metrics;
 #[path = "standalone_profile_http.rs"]
 mod profile_http;
 #[path = "standalone_remote.rs"]
 pub(crate) mod remote;
 #[path = "standalone_resources.rs"]
 pub(crate) mod resources;
+#[path = "standalone_runtime.rs"]
+mod runtime;
 #[path = "standalone_settings.rs"]
 mod settings;
 #[path = "standalone_smtp.rs"]
@@ -102,12 +104,12 @@ struct State {
     downloads: Downloads,
     download_slots: Arc<resources::AdmissionSlots>,
     kosync: kosync::Routes,
-    request_access: request_access::Standalone,
+    request_access: Arc<request_access::Live>,
     metadata: metadata::Routes,
     exchange: exchange::Exchange,
-    isbn_limit: u64,
     isbn_worker_capacity: usize,
     metrics: metrics::Monitor,
+    launch: Value,
 }
 
 #[derive(Default)]
@@ -216,7 +218,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     let prefix = text(&config["server"]["root"]).unwrap_or_default();
     let data = text(&config["dataDir"]).map_or(default_data, PathBuf::from);
     let remote = remote::Remote::new(&config, &data)?.map(Arc::new);
-    let kosync_enabled = std::env::var("INPX_KOSYNC_ENABLED").as_deref() != Ok("false");
+    let kosync_enabled = runtime::kosync_enabled(&config);
     let fb2_download = fb2_download_enabled(&config);
     let (cpu, memory) = diagnostics::hardware();
     let policy = resources::Policy::new(cpu, memory, &config)?;
@@ -231,21 +233,31 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         file.clone(),
         data.clone(),
         prefix,
-        conversion_formats.clone(),
         config.clone(),
         json!({
             "argument":args.get("--library-sources").unwrap_or_default(),
             "environment":env("INPX_LIBRARY_SOURCES").or_else(|| env("LIBRARY_SOURCES")).unwrap_or_default(),
+            "environmentName":if env("INPX_LIBRARY_SOURCES").is_some() { "INPX_LIBRARY_SOURCES" } else { "LIBRARY_SOURCES" },
             "libDir":args.nonempty("--lib-dir").map(str::to_owned).or_else(||env("LIBDIR")),
+            "libDirSource":if args.nonempty("--lib-dir").is_some() { "--lib-dir" } else { "LIBDIR" },
             "inpx":args.nonempty("--inpx").map(str::to_owned).or_else(||env("INPX")),
+            "inpxSource":if args.nonempty("--inpx").is_some() { "--inpx" } else { "INPX" },
             "execDir":exec_dir,
         }),
     );
+    let metadata = metadata::Routes::new(prefix);
+    let metrics = metrics::Monitor::new(&config, &data)?;
+    let request_access = Arc::new(request_access::Live::new(request_access::Standalone::new(
+        &config,
+        prefix,
+        request_access::Services::new(&config, prefix),
+    )?));
     let access = Access::new(
         &data,
         &config,
         kosync_enabled,
-        settings.build_opds(&config)?,
+        settings.build_opds(&config, &conversion_formats)?,
+        request_access.clone(),
     )?;
     if fresh || needs_save {
         configuration::save(&file, &data, &config)?;
@@ -309,7 +321,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         directory: public_dir,
         prefix: prefix.into(),
         app_directory: app_directory.into(),
-        metrics_path: metrics::Monitor::path(&config),
+        metrics_path: metrics::Endpoint::path(&config),
         opds_path: Some(text(&config["opds"]["root"]).unwrap_or("/opds").into()),
     }));
     let host = args
@@ -338,6 +350,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         ),
     )?;
     let listener = TcpListener::bind((host, port)).await?;
+    downloads.configure_names_and_covers(&config);
     let speech = speech::Speech::new(&data, prefix, &config)?;
     let batch = batch::Downloads::new(&data, downloads.root());
     let delivery = delivery::Delivery::new(&data, &config);
@@ -350,17 +363,8 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         speech.enabled(),
         policy.selected.limits.reviews,
     );
-    let metadata = metadata::Routes::new(prefix);
     let exchange = exchange::Exchange::new(&config);
-    let (metrics, metrics_policy) = metrics::Monitor::new(&config, &data)?;
-    let request_access =
-        request_access::Standalone::new(&config, prefix, metrics_policy, metadata.access())?;
-    let ebook = ebook::Ebook::new(
-        prefix,
-        &config,
-        request_access.profile_binding(),
-        conversion_formats,
-    );
+    let ebook = ebook::Ebook::new(prefix, &config);
     let state = Arc::new(State {
         started: Instant::now(),
         index,
@@ -381,13 +385,16 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         downloads,
         download_slots: resources::AdmissionSlots::new(policy.selected.limits.total.max(4)),
         resources,
-        kosync: kosync::Routes::new(prefix, kosync_enabled),
+        kosync: kosync::Routes::new(prefix),
         request_access,
         metadata,
         exchange,
-        isbn_limit: isbn_limit(&config),
         isbn_worker_capacity: isbn::capacity(cpu, memory),
         metrics,
+        launch: json!({
+            "host":host, "address":listener.local_addr()?.to_string(), "prefix":prefix,
+            "dataDir":data, "configFile":file
+        }),
     });
     println!("{NAME} v{VERSION} listening on {}", listener.local_addr()?);
     let initializing = state.clone();
@@ -421,10 +428,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             }
         });
     }
-    state.schedule_index_checks(
-        !created && !args.recreate && state.downloads.remote().is_none(),
-        index::interval(&config["inpxCheckInterval"]),
-    );
+    state.schedule_index_checks(!created && !args.recreate && state.downloads.remote().is_none());
     if state.access.library.protected() {
         let state = state.clone();
         tokio::spawn(async move {
@@ -543,7 +547,42 @@ fn fb2_download_enabled(config: &Value) -> bool {
 }
 
 impl State {
-    fn service_route(&self, request: &Request<Incoming>, websocket: bool) -> ServiceRoute {
+    fn validate_metrics_path(&self, path: &str, opds_root: &str) -> Result<()> {
+        let prefix = self.launch["prefix"]
+            .as_str()
+            .unwrap_or_default()
+            .trim_end_matches('/');
+        let in_route = |root: &str| {
+            path.strip_prefix(root)
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with('/'))
+        };
+        let opds_path = format!("{prefix}{}", opds_root.trim_end_matches('/'));
+        if self.socket.matches(path)
+            || self.socket.document(path)
+            || self.assets.has_path(path)
+            || self.kosync.matches(path)
+            || self.metadata.matches(path)
+            || self.ebook.matches(path)
+            || self.backups.matches(path)
+            || self.batch.matches(path)
+            || self.speech.matches(path)
+            || matches!(path, "/" | "/health" | "/ready" | "/api/index-status")
+            || in_route(&opds_path)
+            || ["book", "cover", "api", "reader-background"]
+                .iter()
+                .any(|route| in_route(&format!("{prefix}/{route}")))
+        {
+            return Err("Путь метрик занят другим маршрутом библиотеки".into());
+        }
+        Ok(())
+    }
+
+    fn service_route(
+        &self,
+        request: &Request<Incoming>,
+        websocket: bool,
+        policy: &request_access::Standalone,
+    ) -> ServiceRoute {
         if websocket || !matches!(*request.method(), Method::GET | Method::HEAD) {
             return ServiceRoute::Other;
         }
@@ -565,7 +604,7 @@ impl State {
             "/health" | "/ready" | "/api/index-status"
         ) {
             ServiceRoute::Health
-        } else if self.metrics.matches(path) {
+        } else if policy.services.metrics.matches(path) {
             ServiceRoute::Metrics
         } else {
             ServiceRoute::Other
@@ -610,21 +649,26 @@ impl State {
         self.index.refresh(sources, force);
     }
 
-    fn schedule_index_checks(self: &Arc<Self>, on_start: bool, interval: Option<Duration>) {
-        if !on_start && interval.is_none() {
-            return;
-        }
+    fn schedule_index_checks(self: &Arc<Self>, on_start: bool) {
         let state = self.clone();
+        let mut interval = self.settings.index_interval.subscribe();
         tokio::spawn(async move {
             if on_start && let Some(check) = state.start_index_check(false) {
                 let _ = check.await;
             }
-            if let Some(interval) = interval {
-                loop {
-                    tokio::time::sleep(interval).await;
-                    if let Some(check) = state.start_index_check(false) {
-                        let _ = check.await;
+            loop {
+                let next = *interval.borrow_and_update();
+                if let Some(delay) = next {
+                    tokio::select! {
+                        result = interval.changed() => { if result.is_err() { break; } }
+                        () = tokio::time::sleep(delay) => {
+                            if let Some(check) = state.start_index_check(false) {
+                                let _ = check.await;
+                            }
+                        }
                     }
+                } else if interval.changed().await.is_err() {
+                    break;
                 }
             }
         });
@@ -646,8 +690,9 @@ impl State {
             Protocol::Http
         };
         let head = request.method() == Method::HEAD;
-        let route = self.service_route(&request, websocket);
-        let admission = match self.request_access.admit(&request, peer, protocol, route) {
+        let policy = self.request_access.current();
+        let route = self.service_route(&request, websocket, &policy);
+        let admission = match policy.admit(&request, peer, protocol, route) {
             Ok(admission) => admission,
             Err(_) if websocket => return Ok(request_access::Denial::websocket()),
             Err(Decision::Deny { reason, secure }) => {
@@ -671,11 +716,25 @@ impl State {
                 head,
             )
         } else if websocket {
-            self.socket.upgrade(request, self.clone(), admission)
+            self.socket.upgrade(
+                request,
+                self.clone(),
+                admission,
+                peer,
+                policy.proxy_revision,
+            )
         } else {
             match route {
-                ServiceRoute::Metrics => self.metrics.serve(self, admission.service, head).await,
-                ServiceRoute::Metadata => self.metadata.serve(self, &request, &admission).await,
+                ServiceRoute::Metrics => {
+                    self.metrics
+                        .serve(self, &policy.services.metrics, admission.service, head)
+                        .await
+                }
+                ServiceRoute::Metadata => {
+                    self.metadata
+                        .serve(self, &policy.services.metadata, &request, &admission)
+                        .await
+                }
                 _ => self.serve_http(request, admission).await?,
             }
         };
@@ -855,7 +914,7 @@ impl State {
                         requested.expect("download request"),
                         &state.index.catalogue,
                         &state.index.sources(),
-                        state.kosync.enabled.then_some(&state.access),
+                        state.access.kosync_enabled().then_some(&state.access),
                     )
                 };
                 let owner = (download && state.metrics.activity.is_some())

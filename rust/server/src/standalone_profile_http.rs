@@ -25,9 +25,10 @@ pub(super) async fn login(
         .existing_browser(request.headers(), admission.cookie_port);
     let Some(browser) = browser.filter(|_| {
         admission.secure
-            && !state.request_access.profile_binding()
+            && !state.request_access.current().profile_binding()
             && state
                 .request_access
+                .current()
                 .secure_browser_origin(request.headers())
     }) else {
         return failure(

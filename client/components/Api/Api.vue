@@ -99,8 +99,27 @@ class Api {
     }
 
     mounted() {
-        if (!this.isStandaloneReaderLab)
+        if (!this.isStandaloneReaderLab) {
+            this.removeAccessObserver = wsc.observe({
+                event: message => {
+                    if (message.kind === 'access-policy')
+                        this.updateConfig();
+                },
+            });
             this.updateConfig();//no await
+        }
+    }
+
+    beforeUnmount() {
+        this.removeAccessObserver?.();
+    }
+
+    async saveAdminAccess(access) {
+        return this.request({action: 'update-admin-access', access}, 30);
+    }
+
+    async saveAdminRuntime(settings) {
+        return this.request({action: 'update-admin-runtime', settings}, 30);
     }
 
     get isStandaloneReaderLab() {
@@ -207,7 +226,10 @@ class Api {
                 }
             }
             config.webAppVersion = packageJson.version;
+            const loginWasRequired = this.$store.state.config.profileLoginRequired;
             this.commit('setConfig', config);
+            if (loginWasRequired && !config.profileLoginRequired)
+                this.$root.stdDialog.dismissRequiredProfileLogin();
             if (config.profileLoginRequired && !config.profileAuthorized) {
                 this.accessGranted = false;
                 if (options.skipProfileLogin)
@@ -981,7 +1003,7 @@ class Api {
             // Release the dialog before account controls for the new profile become visible.
             this.profileLoginPromise = this.promptProfileLogin(prefillLogin, opts).finally(() => {
                 this.profileLoginPromise = null;
-            }).then(result => this.applyProfileLogin(result));
+            }).then(result => result && this.applyProfileLogin(result));
         }
         return this.profileLoginPromise;
     }
@@ -1010,7 +1032,9 @@ class Api {
                     noBackdropDismiss: opts.required === true,
                 }),
             );
-            if (!loginPrompt || loginPrompt === false)
+            if (!loginPrompt && opts.required && !this.$store.state.config.profileLoginRequired)
+                return null;
+            if (!loginPrompt)
                 throw new Error('Вход в профиль отменён');
             login = String(loginPrompt.login || '').trim();
             try {

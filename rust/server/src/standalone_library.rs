@@ -1,10 +1,11 @@
 use std::fs;
 use std::net::IpAddr;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use crate::request_access::Live;
 use inpx_auth_state::access_wire;
-use inpx_auth_state::login_rate::{Kind, LoginRate, Policy};
+use inpx_auth_state::login_rate::{Kind, LoginRate};
 use inpx_catalog::Result;
 use inpx_catalog::access_runtime::{AccessCommand, AccessReply, AccessRuntime, now_ms};
 use inpx_catalog::catalogue_lock::CatalogueLease;
@@ -15,7 +16,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 pub(crate) struct Library {
     protected: bool,
     store: Option<Mutex<Store>>,
-    policy: Policy,
+    access: Arc<Live>,
 }
 
 struct Store {
@@ -60,7 +61,7 @@ impl Library {
         data: &Path,
         password: &str,
         timeout: Option<i64>,
-        policy: Policy,
+        access: Arc<Live>,
     ) -> Result<Self> {
         let protected = !password.is_empty();
         let directory = data.join("web-access");
@@ -90,7 +91,7 @@ impl Library {
         Ok(Self {
             protected,
             store,
-            policy,
+            access,
         })
     }
 
@@ -117,7 +118,11 @@ impl Library {
             .and_then(|store| store.lock().ok())
             .map_or(
                 [0; inpx_auth_state::login_rate::METRIC_COUNT],
-                |mut store| store.attempts.metrics(now_ms(), self.policy.max_attempts),
+                |mut store| {
+                    store
+                        .attempts
+                        .metrics(now_ms(), self.access.current().login_rate.max_attempts)
+                },
             )
     }
 
@@ -129,6 +134,7 @@ impl Library {
             .lock()
             .map_err(|_| "Хранилище сеансов доступа недоступно")?;
         let now = now_ms();
+        let policy = self.access.current().login_rate;
         let client = peer.to_string();
         let allowed =
             access_wire::token(token.as_bytes()).is_some() && check(&mut store, token, now)?;
@@ -136,19 +142,14 @@ impl Library {
             if !allowed {
                 let retry = store
                     .attempts
-                    .check(Kind::Access, &client, now, self.policy, false);
+                    .check(Kind::Access, &client, now, policy, false);
                 if retry != 0 {
                     return Ok(Admission::RateLimited(retry));
                 }
             }
-            store.attempts.finish(
-                Kind::Access,
-                &client,
-                now,
-                self.policy,
-                false,
-                Some(allowed),
-            );
+            store
+                .attempts
+                .finish(Kind::Access, &client, now, policy, false, Some(allowed));
         }
         if allowed {
             return Ok(Admission::Allowed);

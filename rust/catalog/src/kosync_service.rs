@@ -79,6 +79,14 @@ pub fn valid_document(value: &str) -> bool {
 }
 
 impl KoSync {
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
     pub fn new(data: &Path, enabled: bool) -> Self {
         Self {
             file: data.join("kosync.json"),

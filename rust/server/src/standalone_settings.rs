@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use inpx_catalog::{
     Result, configuration, directory_diagnostics,
@@ -16,6 +17,7 @@ use super::{
     delivery::{self, Channels, Delivery},
 };
 use crate::opds::standalone::Opds;
+use crate::request_access::{BrowserConnection, LIVE_FIELDS};
 use crate::standalone_access::LiveOpds;
 
 const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch bookReadLink isbnThreads
@@ -28,7 +30,11 @@ const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch b
     server opds telegramShareEnabled telegramBotEnabled
     telegramIpFamily telegramProxyMode telegramProxyProtocol telegramProxyHost telegramProxyPort telegramProxyUsername
     telegramChatId telegramCaptionTemplate emailShareEnabled smtpHost smtpPort smtpSecure smtpUser emailFrom emailTo
-    discovery uiDefaults";
+    discovery uiDefaults resourceTotal resourceImages resourceReviews resourceConversions resourceBackground
+    resourceTaskTimeoutMs resourceBenchEnabled resourceBenchTimeoutMs
+    isbnMaxBookBytes conversionEnabled conversionFormats conversionQueueLimit conversionQueueTimeoutMs conversionTimeoutMs
+    bookFilenameTemplate onlineReaderEnabled jxlDecoder coverMemoryMb ttsEnabled ttsUrl ttsModel ttsCacheSizeMb ttsTimeoutMs
+    kosyncEnabled opdsFeedsFile absEnabled absPublicUrl absMaxResults";
 
 const INTEGRATIONS: &[(&str, &str)] = &[
     ("telegramShareEnabled", "INPX_TELEGRAM_SHARE_ENABLED"),
@@ -63,11 +69,12 @@ pub(super) struct Settings {
     file: PathBuf,
     data: PathBuf,
     prefix: String,
-    conversion_formats: Vec<&'static str>,
     source_options: Value,
     config: Mutex<Value>,
     extended_search: AtomicBool,
+    online_reader: AtomicBool,
     restored: AtomicBool,
+    pub(super) index_interval: tokio::sync::watch::Sender<Option<Duration>>,
 }
 
 impl Settings {
@@ -75,7 +82,6 @@ impl Settings {
         file: PathBuf,
         data: PathBuf,
         prefix: &str,
-        conversion_formats: Vec<&'static str>,
         config: Value,
         source_options: Value,
     ) -> Self {
@@ -83,10 +89,13 @@ impl Settings {
             file,
             data,
             prefix: prefix.trim_end_matches('/').into(),
-            conversion_formats,
             source_options,
             extended_search: AtomicBool::new(config["extendedSearch"] != false),
+            online_reader: AtomicBool::new(config["onlineReaderEnabled"] != false),
             restored: AtomicBool::new(false),
+            index_interval: tokio::sync::watch::Sender::new(super::index::interval(
+                &config["inpxCheckInterval"],
+            )),
             config: Mutex::new(config),
         }
     }
@@ -97,6 +106,10 @@ impl Settings {
 
     pub(super) fn extended_search(&self) -> bool {
         self.extended_search.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn online_reader(&self) -> bool {
+        self.online_reader.load(Ordering::Relaxed)
     }
 
     pub(super) fn isbn_threads(&self) -> Option<usize> {
@@ -159,7 +172,7 @@ impl Settings {
         if let Some(schedule) = config["cacheCleanSchedule"].as_str() {
             super::admin_cache::validate_schedule(schedule.trim())?;
         }
-        self.build_opds(config)?;
+        self.build_opds(config, &[])?;
         Ok(())
     }
 
@@ -184,7 +197,42 @@ impl Settings {
         )?)?))
     }
 
-    pub(super) fn build_opds(&self, config: &Value) -> Result<LiveOpds> {
+    fn source_override(&self, config: &Value) -> Option<&str> {
+        let options = &self.source_options;
+        if super::remote::Remote::address(&config["remoteLib"])
+            .is_ok_and(|address| address.is_some())
+        {
+            Some("Удалённая библиотека")
+        } else if library_sources::has_environment_sources(
+            options["environment"].as_str().unwrap_or_default(),
+        ) {
+            options["environmentName"].as_str()
+        } else if options["argument"]
+            .as_str()
+            .is_some_and(|argument| !argument.is_empty())
+        {
+            Some("--library-sources")
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn source_view(&self, config: &Value) -> Value {
+        let origin = self.source_override(config);
+        let options = &self.source_options;
+        json!({
+            "override":origin,
+            "fallback":if origin.is_none() && config["librarySources"].as_array().is_none_or(Vec::is_empty) {
+                ["libDir", "inpx"].into_iter().filter_map(|field| {
+                    let value = options.get(field)?.as_str()?;
+                    let name = options.get(format!("{field}Source"))?.as_str()?;
+                    Some(json!({"from":name,"value":value}))
+                }).collect::<Vec<_>>()
+            } else { Vec::new() }
+        })
+    }
+
+    pub(super) fn build_opds(&self, config: &Value, formats: &[&str]) -> Result<LiveOpds> {
         let opds = &config["opds"];
         let tolino = match std::env::var("INPX_OPDS_COMPATIBILITY") {
             Ok(value) if value == "tolino" => true,
@@ -203,7 +251,7 @@ impl Settings {
                 &self.prefix,
                 &format!("{}/book", self.prefix),
                 tolino,
-                &self.conversion_formats,
+                formats,
                 feeds,
             )
         });
@@ -216,6 +264,7 @@ impl Settings {
         action: &str,
         request: &Value,
         import_limit: usize,
+        connection: &BrowserConnection,
     ) -> Result<Value> {
         match action {
             "admin-diagnose-library-source" => diagnose(&request["source"]),
@@ -273,14 +322,39 @@ impl Settings {
                         "Перезапустите приложение после восстановления резервной копии".into(),
                     );
                 }
+                if !connection.valid(&state.request_access.current()) {
+                    return Err("Правила доступа изменились. Подключитесь заново".into());
+                }
                 let patch = match action {
                     "update-admin-integrations" => {
                         integration_patch(&current, &request["integrations"])?
                     }
                     "update-admin-opds" => {
-                        json!({"opds":opds_patch(&current["opds"],&request["opds"])?})
+                        let request = &request["opds"];
+                        let mut patch = json!({"opds":opds_patch(&current["opds"],request)?});
+                        if let Some(file) = request.get("feedsFile") {
+                            if std::env::var("INPX_OPDS_FEEDS_FILE").is_ok() {
+                                return Err("Параметр задан через INPX_OPDS_FEEDS_FILE".into());
+                            }
+                            let file = file
+                                .as_str()
+                                .map(str::trim)
+                                .filter(|name| {
+                                    name.len() <= 4096 && !name.chars().any(char::is_control)
+                                })
+                                .ok_or("Некорректный путь к файлу подборок")?;
+                            patch["opdsFeedsFile"] = file.into();
+                        }
+                        patch
                     }
+                    "update-admin-access" => live_access_patch(&request["access"])?,
+                    "update-admin-runtime" => super::runtime::patch(&request["settings"])?,
                     "update-admin-library-sources" => {
+                        if let Some(source) = self.source_override(&current) {
+                            return Err(
+                                format!("Список источников задан при запуске ({source})").into()
+                            );
+                        }
                         json!({"librarySources":normalized_sources(&request["sources"])?})
                     }
                     "set-admin-resource-profile" => {
@@ -295,7 +369,20 @@ impl Settings {
                         json!({"isbnThreads":super::isbn::thread_setting(value)?})
                     }
                     "update-admin-cache" => Cache::patch(&current, &request["cache"])?,
-                    "import-admin-settings" => import(&current, &request["data"], import_limit)?,
+                    "import-admin-settings" => {
+                        let mut patch = import(&current, &request["data"], import_limit)?;
+                        let fields = patch.as_object_mut().expect("imported settings");
+                        let runtime: serde_json::Map<_, _> = fields
+                            .iter()
+                            .filter(|(key, value)| {
+                                super::runtime::known(key) && current.get(*key) != Some(*value)
+                            })
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect();
+                        let validated = super::runtime::patch(&Value::Object(runtime))?;
+                        fields.extend(validated.as_object().expect("runtime patch").clone());
+                        patch
+                    }
                     _ => return Err("Неизвестная операция с настройками".into()),
                 };
                 let mut next = current.clone();
@@ -303,15 +390,156 @@ impl Settings {
                 next.as_object_mut()
                     .expect("settings")
                     .extend(fields.clone());
-                let resource_policy = if fields.contains_key("resourceProfile") {
+                let access_patch = Value::Object(
+                    fields
+                        .iter()
+                        .filter(|(key, value)| {
+                            LIVE_FIELDS.iter().any(|(name, _)| key.as_str() == *name)
+                                && current.get(*key) != Some(*value)
+                        })
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect(),
+                );
+                if fields.get("jxlDecoder").is_some_and(|mode| mode == "djxl")
+                    && current["jxlDecoder"] != "djxl"
+                    && !state.downloads.covers.has_djxl()
+                {
+                    return Err("Утилита djxl недоступна на сервере".into());
+                }
+                let services = fields
+                    .keys()
+                    .any(|key| super::runtime::SERVICE_KEYS.contains(&key.as_str()))
+                    .then(|| crate::request_access::Services::new(&next, &self.prefix));
+                let active_access = state.request_access.current();
+                let active_metrics = &active_access.services.metrics;
+                let metrics = services
+                    .as_ref()
+                    .map_or(active_metrics, |services| &services.metrics);
+                if metrics.rules.path != active_metrics.rules.path
+                    || metrics.enabled && !active_metrics.enabled
+                {
+                    state.validate_metrics_path(
+                        &metrics.rules.path,
+                        next["opds"]["root"].as_str().unwrap_or("/opds"),
+                    )?;
+                }
+                if let Some(services) = &services
+                    && services.metadata.enabled
+                    && services.metadata.rules.token.is_empty()
+                    && ["absEnabled", "absToken"].iter().any(|key| {
+                        fields
+                            .get(*key)
+                            .is_some_and(|value| current.get(*key) != Some(value))
+                    })
+                {
+                    return Err("Для Audiobookshelf укажите токен".into());
+                }
+                let resource_policy = if fields
+                    .keys()
+                    .any(|key| key == "resourceProfile" || super::runtime::resource_key(key))
+                {
                     let (cpu, memory) = super::diagnostics::hardware();
                     Some(super::resources::Policy::new(cpu, memory, &next)?)
                 } else {
                     None
                 };
-                let opds = fields
-                    .contains_key("opds")
-                    .then(|| self.build_opds(&next))
+                let media = if fields
+                    .keys()
+                    .any(|key| super::runtime::MEDIA_KEYS.contains(&key.as_str()))
+                {
+                    let exe = std::env::current_exe()?;
+                    let directory = exe.parent().ok_or("Каталог сервера недоступен")?;
+                    if fields.contains_key("fb2cngArgs") || fields.contains_key("fb2cngConfigPath")
+                    {
+                        inpx_catalog::book_conversion::Conversion::validate_fb2cng(
+                            &next,
+                            directory,
+                            next["fb2cngConfigPath"] != current["fb2cngConfigPath"],
+                        )?;
+                    }
+                    let limit = resource_policy.as_ref().map_or_else(
+                        || state.resources.policy().selected.limits.conversions,
+                        |policy| policy.selected.limits.conversions,
+                    );
+                    Some((
+                        super::fb2_download_enabled(&next),
+                        inpx_catalog::book_conversion::Conversion::new(&next, directory, limit)?,
+                    ))
+                } else {
+                    None
+                };
+                if fields.contains_key("opdsFeedsFile")
+                    && next["opdsFeedsFile"] != current["opdsFeedsFile"]
+                {
+                    if std::env::var("INPX_OPDS_FEEDS_FILE").is_ok() {
+                        return Err("Параметр задан через INPX_OPDS_FEEDS_FILE".into());
+                    }
+                    let file = next["opdsFeedsFile"]
+                        .as_str()
+                        .ok_or("Некорректный путь к файлу подборок")?
+                        .trim();
+                    if !file.is_empty() {
+                        inpx_catalog::opds_shelves::load(&self.data.join(file)).map_err(
+                            |error| format!("Не удалось прочитать подборки OPDS: {error}"),
+                        )?;
+                    }
+                }
+                let opds = if fields.contains_key("opds")
+                    || fields.contains_key("opdsFeedsFile")
+                    || media.is_some()
+                {
+                    let formats =
+                        media.as_ref().map_or_else(
+                            || state.downloads.formats(),
+                            |(fb2, conversion)| {
+                                fb2.then_some("fb2")
+                                    .into_iter()
+                                    .chain(conversion.iter().flat_map(
+                                        inpx_catalog::book_conversion::Conversion::formats,
+                                    ))
+                                    .collect()
+                            },
+                        );
+                    let opds = self.build_opds(&next, &formats)?;
+                    if fields.contains_key("opds")
+                        && metrics.enabled
+                        && !state
+                            .access
+                            .opds()
+                            .route
+                            .as_ref()
+                            .is_some_and(|opds| opds.matches(&metrics.rules.path))
+                        && opds
+                            .route
+                            .as_ref()
+                            .is_some_and(|opds| opds.matches(&metrics.rules.path))
+                    {
+                        return Err("Путь OPDS пересекается с маршрутом метрик".into());
+                    }
+                    Some(opds)
+                } else {
+                    None
+                };
+                let access = if access_patch
+                    .as_object()
+                    .is_some_and(|patch| !patch.is_empty())
+                    || services.is_some()
+                    || fields
+                        .keys()
+                        .any(|key| super::runtime::LOGIN_KEYS.contains(&key.as_str()))
+                {
+                    let candidate = active_access.update(&access_patch, &next, services)?;
+                    if !connection.valid(&candidate) {
+                        return Err("Новые правила лишат текущий сеанс доступа. Подключитесь через доверенный прокси с подходящим заголовком SSO или сохраните прежний режим".into());
+                    }
+                    Some(candidate)
+                } else {
+                    None
+                };
+                let speech = fields
+                    .keys()
+                    .any(|key| super::runtime::SPEECH_KEYS.contains(&key.as_str()))
+                    .then(|| super::speech::Provider::new(&next))
                     .transpose()?;
                 let telegram_changed = INTEGRATIONS
                     .iter()
@@ -330,8 +558,26 @@ impl Settings {
                     configuration::save(&self.file, &self.data, &next)?;
                 }
                 *current = next;
+                if fields.contains_key("inpxCheckInterval") {
+                    self.index_interval
+                        .send_replace(super::index::interval(&current["inpxCheckInterval"]));
+                }
                 self.extended_search
                     .store(current["extendedSearch"] != false, Ordering::Relaxed);
+                self.online_reader
+                    .store(current["onlineReaderEnabled"] != false, Ordering::Relaxed);
+                if let Some((fb2, conversion)) = media {
+                    state.downloads.configure_media(fb2, conversion);
+                }
+                if fields
+                    .keys()
+                    .any(|key| super::runtime::COVER_KEYS.contains(&key.as_str()))
+                {
+                    state.downloads.configure_names_and_covers(&current);
+                }
+                if let Some(speech) = speech {
+                    state.speech.configure(speech);
+                }
                 if let Some(policy) = resource_policy {
                     let limits = policy.selected.limits;
                     state.resources.configure(policy);
@@ -342,17 +588,33 @@ impl Settings {
                 if let Some(opds) = opds {
                     state.access.set_opds(opds);
                 }
+                if fields.contains_key("kosyncEnabled") {
+                    state
+                        .access
+                        .set_kosync_enabled(super::runtime::kosync_enabled(&current));
+                }
                 if let Some(channels) = channels {
                     Delivery::configure(state, channels, telegram_changed);
                 }
                 if fields.keys().any(|key| cache_key(key)) {
                     state.admin_cache.changed.notify_one();
                 }
+                if let Some(access) = access {
+                    state.request_access.apply(access);
+                } else if fields.keys().any(|key| super::runtime::known(key)) {
+                    state.request_access.refresh_clients();
+                }
                 Ok(match action {
                     "update-admin-integrations" => {
                         json!({"integrations":integrations(&current,state)})
                     }
-                    "update-admin-opds" => json!({"opds":opds_view(&current["opds"], true)}),
+                    "update-admin-opds" => json!({"opds":admin_opds(&current)}),
+                    "update-admin-access" => {
+                        json!({"access":state.request_access.current().admin_view(connection.peer)})
+                    }
+                    "update-admin-runtime" => {
+                        json!({"runtime":super::runtime::view(&current, state)})
+                    }
                     "update-admin-library-sources" => {
                         json!({"sources":current["librarySources"],"reindexRequired":true})
                     }
@@ -378,22 +640,41 @@ fn cache_key(key: &str) -> bool {
     key.starts_with("cacheClean")
         || matches!(key, "bookCacheSize" | "coverCacheSize" | "maxFilesDirSize")
 }
+fn live_access_patch(value: &Value) -> Result<Value> {
+    let fields = value.as_object().ok_or("Укажите настройки доступа")?;
+    if fields
+        .keys()
+        .any(|key| !LIVE_FIELDS.iter().any(|(field, _)| key == field))
+    {
+        return Err("Неизвестная настройка доступа".into());
+    }
+    Ok(value.clone())
+}
+
 fn restart_key(key: &str) -> bool {
     !cache_key(key)
+        && !LIVE_FIELDS.iter().any(|(field, _)| key == *field)
+        && !super::runtime::known(key)
         && !matches!(
             key,
             "opds"
+                | "opdsFeedsFile"
                 | "librarySources"
                 | "libDir"
                 | "inpx"
                 | "uiDefaults"
                 | "extendedSearch"
                 | "bookReadLink"
+                | "isbnThreads"
+                | "inpxCheckInterval"
         )
         && !INTEGRATIONS.iter().any(|(field, _)| *field == key)
 }
 
 pub(super) fn display_sources(config: &Value, state: &State) -> Value {
+    if state.settings.source_override(config).is_some() {
+        return json!(&*state.index.sources());
+    }
     config["librarySources"]
         .as_array()
         .filter(|rows| !rows.is_empty())
@@ -489,6 +770,27 @@ pub(super) fn opds_view(opds: &Value, placeholder: bool) -> Value {
     result
 }
 
+pub(super) fn admin_opds(config: &Value) -> Value {
+    let compatibility = std::env::var("INPX_OPDS_COMPATIBILITY").ok();
+    let feeds = std::env::var("INPX_OPDS_FEEDS_FILE").ok();
+    let mut view = opds_view(&config["opds"], true);
+    view["compatibility"] = compatibility
+        .as_deref()
+        .unwrap_or(
+            config["opds"]["compatibility"]
+                .as_str()
+                .unwrap_or("standard"),
+        )
+        .into();
+    view["feedsFile"] = feeds
+        .as_deref()
+        .unwrap_or(config["opdsFeedsFile"].as_str().unwrap_or_default())
+        .into();
+    view["compatibilityLocked"] = compatibility.is_some().into();
+    view["feedsFileLocked"] = feeds.is_some().into();
+    view
+}
+
 fn opds_patch(current: &Value, patch: &Value) -> Result<Value> {
     let mut next = if current.is_object() {
         current.clone()
@@ -529,6 +831,11 @@ fn opds_patch(current: &Value, patch: &Value) -> Result<Value> {
         next["password"] = password.as_str().unwrap_or_default().into();
     }
     if let Some(mode) = patch.get("compatibility") {
+        if std::env::var("INPX_OPDS_COMPATIBILITY").is_ok()
+            && current.get("compatibility") != Some(mode)
+        {
+            return Err("Параметр задан через INPX_OPDS_COMPATIBILITY".into());
+        }
         if !matches!(mode.as_str(), Some("standard" | "tolino")) {
             return Err("Режим OPDS должен быть standard или tolino".into());
         }

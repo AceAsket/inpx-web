@@ -3,6 +3,7 @@ use std::fs::{self, File};
 use std::io::{self, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -43,6 +44,7 @@ pub struct Covers {
     webp: Option<Tool>,
     jxl: Option<Tool>,
     native_jxl: Option<PathBuf>,
+    prefer_native: AtomicBool,
 }
 
 struct Archives {
@@ -72,23 +74,30 @@ impl std::fmt::Display for MissingDecoder {
 impl std::error::Error for MissingDecoder {}
 
 impl Covers {
+    pub fn set_jxl_mode(&self, mode: &str) {
+        self.prefer_native
+            .store(matches!(mode.trim(), "" | "native"), Ordering::Relaxed);
+    }
+
+    pub fn has_djxl(&self) -> bool {
+        self.jxl.is_some()
+    }
+
     pub fn set_concurrency(&self, limit: usize) {
         self.decoders.set_limit(limit);
     }
 
     pub fn new(exec: &Path, config: &Value, images: usize, queue_timeout: Duration) -> Self {
         let paths = &config["converterPaths"];
-        let jxl_mode = std::env::var("INPX_JXL_DECODER").unwrap_or_default();
+        let jxl_mode = std::env::var("INPX_JXL_DECODER")
+            .unwrap_or_else(|_| config["jxlDecoder"].as_str().unwrap_or_default().into());
         Self {
             archives: Mutex::new(None),
             decoders: Queue::with_limits(images, 16, queue_timeout),
             webp: Tool::find(exec, "dwebp", &configured(paths, &["dwebp", "webp"])),
             jxl: Tool::find(exec, "djxl", &configured(paths, &["djxl", "jxl"])),
-            native_jxl: if matches!(jxl_mode.trim(), "" | "native") {
-                std::env::current_exe().ok()
-            } else {
-                None
-            },
+            native_jxl: std::env::current_exe().ok(),
+            prefer_native: AtomicBool::new(matches!(jxl_mode.trim(), "" | "native")),
         }
     }
 
@@ -193,7 +202,11 @@ impl Covers {
             (_, true) => ("jxl", self.jxl.as_ref()),
             _ => return Ok(Image::from_bytes_limited(bytes, limit)),
         };
-        if tool.is_none() && !(jxl && self.native_jxl.is_some()) {
+        let native = self
+            .native_jxl
+            .as_ref()
+            .filter(|_| jxl && self.prefer_native.load(Ordering::Relaxed));
+        if tool.is_none() && native.is_none() {
             return Err(MissingDecoder.into());
         }
         let temp = tempfile::tempdir_in(cache)?;
@@ -203,7 +216,7 @@ impl Covers {
         let output = temp.path().join("cover.png");
         fs::write(&input, bytes)?;
         let deadline = Instant::now() + Duration::from_secs(15);
-        if jxl && let Some(executable) = &self.native_jxl {
+        if let Some(executable) = native {
             let native_output = temp.path().join("native.png");
             let mut worker = Command::new(executable);
             worker

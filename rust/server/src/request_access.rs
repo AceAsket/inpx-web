@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
 
 use ctutils::CtEq;
 use hyper::body::Bytes;
@@ -6,7 +7,8 @@ use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use ipnet::IpNet;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
+use tokio::sync::watch;
 use url::{Origin, Url};
 
 use crate::http::{Body, body};
@@ -17,7 +19,7 @@ pub(crate) use services::{CoverSigner, query_values, trim_js};
 
 pub(crate) const APPROVAL: HeaderName = HeaderName::from_static("x-inpx-request-access");
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
     revision: u64,
@@ -32,7 +34,7 @@ pub(crate) struct Settings {
     metadata_service: Option<MetadataService>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(try_from = "LegacyIpv4Range")]
 struct Range(IpNet);
 
@@ -92,14 +94,14 @@ impl Range {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(crate) struct Metrics {
     pub(crate) path: String,
     pub(crate) exempt: bool,
     pub(crate) token: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(crate) struct MetadataService {
     pub(crate) path: String,
     pub(crate) token: String,
@@ -115,7 +117,7 @@ pub(crate) struct Policy {
     cover_signer: Option<CoverSigner>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServiceAccess {
     None,
     Exempt,
@@ -162,8 +164,41 @@ pub(crate) enum Denial {
 pub(crate) struct Standalone {
     policy: Policy,
     bind_profile: bool,
+    configured_binding: bool,
+    configured_binding_required: bool,
+    force_local_login: bool,
+    allow_guests: bool,
+    mode: String,
+    require_auth: bool,
+    pub(crate) services: Arc<Services>,
+    pub(crate) login_rate: inpx_auth_state::login_rate::Policy,
+    pub(crate) proxy_revision: u64,
 }
 
+pub(crate) struct Services {
+    pub(crate) metrics: crate::standalone::metrics::Endpoint,
+    pub(crate) metadata: crate::standalone::metadata::Endpoint,
+}
+
+impl Services {
+    pub(crate) fn new(config: &Value, prefix: &str) -> Self {
+        Self {
+            metrics: crate::standalone::metrics::Endpoint::new(config),
+            metadata: crate::standalone::metadata::Endpoint::new(config, prefix),
+        }
+    }
+
+    fn metrics_rules(&self) -> Option<Metrics> {
+        self.metrics.enabled.then(|| self.metrics.rules.clone())
+    }
+
+    fn metadata_rules(&self) -> Option<MetadataService> {
+        (self.metadata.enabled && !self.metadata.rules.token.is_empty())
+            .then(|| self.metadata.rules.clone())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Admission {
     pub(crate) client: IpAddr,
     pub(crate) proxy_login: Option<String>,
@@ -172,6 +207,66 @@ pub(crate) struct Admission {
     pub(crate) protected: bool,
     pub(crate) service: ServiceAccess,
     pub(crate) forwarded_host: Option<String>,
+}
+
+pub(crate) struct Live(watch::Sender<Arc<Standalone>>);
+
+impl Live {
+    pub(crate) fn new(policy: Standalone) -> Self {
+        Self(watch::Sender::new(Arc::new(policy)))
+    }
+
+    pub(crate) fn current(&self) -> Arc<Standalone> {
+        self.0.borrow().clone()
+    }
+
+    pub(crate) fn subscribe(&self) -> watch::Receiver<Arc<Standalone>> {
+        self.0.subscribe()
+    }
+
+    pub(crate) fn apply(&self, policy: Standalone) {
+        self.0.send_replace(Arc::new(policy));
+    }
+
+    pub(crate) fn refresh_clients(&self) {
+        self.0.send_modify(|_| {});
+    }
+}
+
+pub(crate) const LIVE_FIELDS: &[(&str, &str)] = &[
+    ("allowAnonymousAccess", "INPX_ALLOW_ANONYMOUS_ACCESS"),
+    ("trustProxy", "INPX_TRUST_PROXY"),
+    ("trustedProxyCidrs", "INPX_TRUSTED_PROXY_CIDRS"),
+    ("authMode", "INPX_AUTH_MODE"),
+    ("requireAuth", "INPX_REQUIRE_AUTH"),
+    ("proxyAuthHeader", "INPX_PROXY_AUTH_HEADER"),
+    ("authExemptHealth", "INPX_AUTH_EXEMPT_HEALTH"),
+];
+
+pub(crate) struct BrowserConnection {
+    pub(crate) admission: Arc<Admission>,
+    pub(crate) peer: IpAddr,
+    pub(crate) request: Request<()>,
+    pub(crate) proxy_revision: u64,
+}
+
+impl BrowserConnection {
+    pub(crate) fn valid(&self, policy: &Standalone) -> bool {
+        self.proxy_revision == policy.proxy_revision
+            || policy
+                .admit(
+                    &self.request,
+                    self.peer,
+                    Protocol::WebSocket,
+                    ServiceRoute::Other,
+                )
+                .is_ok_and(|admission| {
+                    admission.client == self.admission.client
+                        && admission.proxy_login == self.admission.proxy_login
+                        && admission.secure == self.admission.secure
+                        && admission.cookie_port == self.admission.cookie_port
+                })
+    }
 }
 
 fn auth_mode(config: &Value) -> String {
@@ -188,15 +283,164 @@ fn require_auth(config: &Value) -> bool {
         .map_or_else(|_| truthy(&config["requireAuth"]), |value| value == "true")
 }
 
-pub(crate) fn local_login_required(config: &Value) -> bool {
+fn allow_guests(config: &Value) -> bool {
     std::env::var("INPX_ALLOW_ANONYMOUS_ACCESS")
-        .map_or(config["allowAnonymousAccess"] == false, |value| {
-            value == "false"
+        .map_or(config["allowAnonymousAccess"] != false, |value| {
+            value != "false"
         })
-        || (matches!(auth_mode(config).as_str(), "" | "local") && require_auth(config))
+}
+
+fn login_rate(config: &Value) -> inpx_auth_state::login_rate::Policy {
+    let read = |field: &str, fallback| {
+        let value = &config[field];
+        value
+            .as_i64()
+            .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()))
+            .filter(|&value| value != 0)
+            .unwrap_or(fallback)
+    };
+    inpx_auth_state::login_rate::Policy {
+        enabled: std::env::var("INPX_LOGIN_RATE_LIMIT_ENABLED")
+            .map_or(config["loginRateLimitEnabled"] != false, |value| {
+                value != "false"
+            }),
+        window_ms: read("loginRateLimitWindowMs", 900_000).max(60_000),
+        max_attempts: u32::try_from(read("loginRateLimitMaxAttempts", 8).max(1))
+            .unwrap_or(u32::MAX),
+    }
 }
 
 impl Standalone {
+    pub(crate) fn local_login_required(&self) -> bool {
+        !self.allow_guests || self.force_local_login
+    }
+
+    pub(crate) fn admin_view(&self, peer: IpAddr) -> Value {
+        let fields = &self.policy.settings;
+        let locked: Vec<_> = LIVE_FIELDS
+            .iter()
+            .filter(|(_, name)| std::env::var(name).is_ok())
+            .map(|(field, _)| *field)
+            .collect();
+        json!({
+            "allowAnonymousAccess":self.allow_guests,
+            "localLoginForced":self.force_local_login,
+            "trustProxy":fields.trust_proxy,
+            "authMode":if self.mode.is_empty() {"local"} else {&self.mode},
+            "requireAuth":self.require_auth,
+            "proxyAuthHeader":fields.proxy_header,
+            "authExemptHealth":fields.auth_exempt_health,
+            "trustedProxyCidrs":fields.trusted_ranges.iter().map(|range| range.0.trunc().to_string()).collect::<Vec<_>>(),
+            "peer":peer.to_canonical(),
+            "peerTrusted":fields.trust_proxy && self.policy.trusted_range(peer),
+            "locked":locked
+        })
+    }
+
+    pub(crate) fn update(
+        &self,
+        patch: &Value,
+        config: &Value,
+        services: Option<Services>,
+    ) -> inpx_catalog::Result<Self> {
+        let mut settings = self.policy.settings.clone();
+        let mut allow_guests = self.allow_guests;
+        let mut mode = self.mode.clone();
+        let mut require_auth = self.require_auth;
+        for (field, env) in LIVE_FIELDS {
+            let Some(value) = patch.get(*field) else {
+                continue;
+            };
+            if std::env::var(env).is_ok() {
+                return Err(format!("Параметр задан через {env}").into());
+            }
+            match *field {
+                "allowAnonymousAccess" => {
+                    allow_guests = value
+                        .as_bool()
+                        .ok_or("Укажите, разрешён ли гостевой доступ")?
+                }
+                "trustProxy" => {
+                    settings.trust_proxy = value
+                        .as_bool()
+                        .ok_or("Укажите, используется ли доверенный прокси")?;
+                    settings.express_trust_proxy = settings.trust_proxy;
+                }
+                "trustedProxyCidrs" => {
+                    let rows = value
+                        .as_array()
+                        .filter(|rows| rows.len() <= 128)
+                        .ok_or("Укажите до 128 доверенных сетей")?;
+                    settings.trusted_ranges = rows
+                        .iter()
+                        .map(|row| {
+                            row.as_str()
+                                .and_then(Range::parse)
+                                .ok_or("Некорректный IPv4/IPv6-адрес или префикс сети")
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                }
+                "authMode" => {
+                    mode = value
+                        .as_str()
+                        .filter(|mode| matches!(*mode, "local" | "proxy" | "none"))
+                        .ok_or("Некорректный режим входа")?
+                        .to_owned();
+                }
+                "requireAuth" => {
+                    require_auth = value.as_bool().ok_or("Некорректное требование входа")?
+                }
+                "authExemptHealth" => {
+                    settings.auth_exempt_health = value
+                        .as_bool()
+                        .ok_or("Некорректный режим проверки состояния")?
+                }
+                "proxyAuthHeader" => {
+                    let name = value
+                        .as_str()
+                        .map(str::trim)
+                        .ok_or("Некорректный заголовок SSO")?;
+                    HeaderName::from_bytes(name.as_bytes())
+                        .map_err(|_| "Некорректный заголовок SSO")?;
+                    settings.proxy_header = name.to_owned();
+                }
+                _ => unreachable!(),
+            }
+        }
+        let bind_profile = mode == "proxy" && self.configured_binding;
+        settings.require_proxy =
+            mode == "proxy" && (require_auth || self.configured_binding_required);
+        if settings.require_proxy && (!settings.trust_proxy || settings.trusted_ranges.is_empty()) {
+            return Err("Для входа через прокси укажите хотя бы один доверенный адрес".into());
+        }
+        let services = services.map_or_else(|| self.services.clone(), Arc::new);
+        settings.metrics = services.metrics_rules();
+        settings.metadata_service = services.metadata_rules();
+        let force_local_login = matches!(mode.as_str(), "" | "local") && require_auth;
+        let changed = self.bind_profile != bind_profile
+            || !patch.is_null()
+                && LIVE_FIELDS
+                    .iter()
+                    .any(|(key, _)| *key != "allowAnonymousAccess" && patch.get(*key).is_some());
+        let policy = Policy::new(settings);
+        if policy.settings.require_proxy && policy.proxy_header.is_none() {
+            return Err("Некорректный заголовок SSO".into());
+        }
+        Ok(Self {
+            policy,
+            bind_profile,
+            configured_binding: self.configured_binding,
+            configured_binding_required: self.configured_binding_required,
+            force_local_login,
+            allow_guests,
+            mode,
+            require_auth,
+            services,
+            login_rate: login_rate(config),
+            proxy_revision: self.proxy_revision.wrapping_add(u64::from(changed)),
+        })
+    }
+
     pub(crate) fn profile_binding(&self) -> bool {
         self.bind_profile
     }
@@ -209,8 +453,7 @@ impl Standalone {
     pub(crate) fn new(
         config: &Value,
         root: &str,
-        metrics: Option<Metrics>,
-        metadata_service: Option<MetadataService>,
+        services: Services,
     ) -> inpx_catalog::Result<Self> {
         let value = |variable, property: &str, default: &str| {
             std::env::var(variable)
@@ -225,7 +468,10 @@ impl Standalone {
             return Err("Unsupported authentication mode".into());
         }
         let bind = flag("INPX_PROXY_BIND_PROFILE");
-        let bind_profile = mode == "proxy" && bind.unwrap_or(config["proxyBindProfile"] == true);
+        let configured_binding = bind.unwrap_or(config["proxyBindProfile"] == true);
+        let configured_binding_required =
+            bind.unwrap_or_else(|| truthy(&config["proxyBindProfile"]));
+        let bind_profile = mode == "proxy" && configured_binding;
         let trust_proxy = flag("INPX_TRUST_PROXY").unwrap_or(config["trustProxy"] == true);
         let trusted_ranges = match std::env::var("INPX_TRUSTED_PROXY_CIDRS") {
             Ok(value) => value.split(',').filter_map(Range::parse).collect(),
@@ -237,9 +483,8 @@ impl Standalone {
                 .collect(),
         };
         let proxy_header = value("INPX_PROXY_AUTH_HEADER", "proxyAuthHeader", "Remote-User");
-        let require_proxy = mode == "proxy"
-            && (bind.unwrap_or_else(|| truthy(&config["proxyBindProfile"]))
-                || require_auth(config));
+        let require_auth = require_auth(config);
+        let require_proxy = mode == "proxy" && (configured_binding_required || require_auth);
         let policy = Policy::new(Settings {
             revision: 0,
             require_proxy,
@@ -256,8 +501,8 @@ impl Standalone {
                     value != "false"
                 }),
             root: root.trim_end_matches('/').into(),
-            metrics,
-            metadata_service,
+            metrics: services.metrics_rules(),
+            metadata_service: services.metadata_rules(),
         });
         if require_proxy && policy.proxy_header.is_none() {
             return Err("Invalid proxy authentication header".into());
@@ -265,6 +510,15 @@ impl Standalone {
         Ok(Self {
             policy,
             bind_profile,
+            configured_binding,
+            configured_binding_required,
+            force_local_login: matches!(mode.as_str(), "" | "local") && require_auth,
+            allow_guests: allow_guests(config),
+            mode,
+            require_auth,
+            services: Arc::new(services),
+            login_rate: login_rate(config),
+            proxy_revision: 0,
         })
     }
 

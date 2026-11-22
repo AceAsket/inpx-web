@@ -129,6 +129,10 @@ fn parse_sources(text: &str) -> Result<Vec<Value>> {
         .collect())
 }
 
+pub fn has_environment_sources(value: &str) -> bool {
+    parse_sources(value).is_ok_and(|sources| !sources.is_empty())
+}
+
 fn normalize(row: &Value, index: usize) -> Result<Source> {
     if row.is_null() {
         return Err("Cannot read properties of null (reading 'inpx')".into());

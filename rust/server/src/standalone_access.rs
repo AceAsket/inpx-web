@@ -18,7 +18,7 @@ use serde_json::{Value, value::RawValue};
 
 use crate::http::{Body, error};
 use crate::opds::standalone::Opds;
-use crate::request_access::Admission;
+use crate::request_access::{Admission, Live};
 use crate::standalone_browser::{Identity, Sessions};
 use crate::standalone_library::Library;
 
@@ -29,8 +29,7 @@ pub(crate) struct Access {
     file: PathBuf,
     key_file: PathBuf,
     opds: RwLock<Arc<LiveOpds>>,
-    require_profile: bool,
-    policy: Policy,
+    request_access: Arc<Live>,
     state: Mutex<State>,
     totp: Mutex<TotpAttempts>,
     pub(crate) sessions: Sessions,
@@ -110,6 +109,22 @@ pub(crate) enum BrowserLogin {
 }
 
 impl Access {
+    fn login_rate_policy(&self) -> Policy {
+        self.request_access.current().login_rate
+    }
+
+    pub(super) fn kosync_enabled(&self) -> bool {
+        self.state.lock().expect("profile access").kosync.enabled()
+    }
+
+    pub(super) fn set_kosync_enabled(&self, enabled: bool) {
+        self.state
+            .lock()
+            .expect("profile access")
+            .kosync
+            .set_enabled(enabled);
+    }
+
     pub(super) fn telegram(
         &self,
         run: impl FnOnce(&ReaderState, &str) -> inpx_catalog::Result<Value>,
@@ -123,16 +138,17 @@ impl Access {
     }
 
     pub(crate) fn login_metrics(&self) -> (bool, [u64; inpx_auth_state::login_rate::METRIC_COUNT]) {
+        let rate = self.login_rate_policy();
         let mut metrics = self
             .state
             .lock()
             .expect("profile access")
             .attempts
-            .metrics(now_ms(), self.policy.max_attempts);
+            .metrics(now_ms(), rate.max_attempts);
         for (total, library) in metrics.iter_mut().zip(self.library.login_metrics()) {
             *total = total.saturating_add(library);
         }
-        (self.policy.enabled, metrics)
+        (rate.enabled, metrics)
     }
 
     pub(crate) fn download_profile(
@@ -179,16 +195,8 @@ impl Access {
         config: &Value,
         kosync_enabled: bool,
         opds: LiveOpds,
+        request_access: Arc<Live>,
     ) -> inpx_catalog::Result<Self> {
-        let policy = Policy {
-            enabled: std::env::var("INPX_LOGIN_RATE_LIMIT_ENABLED").map_or(
-                config["loginRateLimitEnabled"] != Value::Bool(false),
-                |value| value != "false",
-            ),
-            window_ms: setting(&config["loginRateLimitWindowMs"], 900_000).max(60_000),
-            max_attempts: u32::try_from(setting(&config["loginRateLimitMaxAttempts"], 8).max(1))
-                .unwrap_or(u32::MAX),
-        };
         let minutes = &config["accessTimeout"];
         let minutes = minutes
             .as_f64()
@@ -226,8 +234,7 @@ impl Access {
             file: data.join("reading-lists.json"),
             key_file: data.join("secret.key"),
             opds: RwLock::new(Arc::new(opds)),
-            require_profile: crate::request_access::local_login_required(config),
-            policy,
+            request_access: request_access.clone(),
             state: Mutex::new(State {
                 profiles: Store::default(),
                 attempts: LoginRate::default(),
@@ -237,7 +244,7 @@ impl Access {
             }),
             totp: Mutex::new(TotpAttempts::default()),
             sessions: Sessions::new(config["server"]["root"].as_str().unwrap_or_default())?,
-            library: Library::open(data, password, timeout, policy)?,
+            library: Library::open(data, password, timeout, request_access)?,
         })
     }
 
@@ -362,7 +369,10 @@ impl Access {
                 self.sessions.revoke(&token);
             }
             current
-        } else if token.is_empty() && !self.require_profile && !profiles.require_otp {
+        } else if token.is_empty()
+            && !self.request_access.current().local_login_required()
+            && !profiles.require_otp
+        {
             profiles
                 .users
                 .iter()
@@ -471,7 +481,7 @@ impl Access {
             identity.owner == id && identity.credential_version == profile.credential_version
         });
         if !authorized
-            && (self.require_profile
+            && (self.request_access.current().local_login_required()
                 || profiles.require_otp
                 || profile.otp_required
                 || profile.requires_login
@@ -493,11 +503,11 @@ impl Access {
         self.with_profile_state(profile, false, |state, owner, stamp| {
             let confirm = operation == "use-web-password";
             let client = peer.to_string();
+            let rate = self.login_rate_policy();
             if confirm {
-                let retry =
-                    state
-                        .attempts
-                        .check(Kind::Profile, &client, now_ms(), self.policy, true);
+                let retry = state
+                    .attempts
+                    .check(Kind::Profile, &client, now_ms(), rate, true);
                 if retry != 0 {
                     return Ok(serde_json::json!({
                         "error":"Слишком много попыток входа. Повторите позже.",
@@ -521,8 +531,8 @@ impl Access {
                     Kind::Profile,
                     &client,
                     now_ms(),
-                    self.policy,
-                    self.policy.enabled,
+                    rate,
+                    rate.enabled,
                     outcome,
                 );
             }
@@ -538,9 +548,10 @@ impl Access {
     ) -> Result<Session, Rejection> {
         let mut state = self.state.lock().map_err(|_| Rejection::Unavailable)?;
         let client = peer.to_string();
+        let rate = self.login_rate_policy();
         let retry = state
             .attempts
-            .check(Kind::Opds, &client, now_ms(), self.policy, true);
+            .check(Kind::Opds, &client, now_ms(), rate, true);
         if retry != 0 {
             return Err(Rejection::RateLimited(retry));
         }
@@ -549,14 +560,9 @@ impl Access {
         } = &mut *state;
         let result = kosync.authenticate(profiles, user, key);
         let outcome = result.as_ref().ok().map(Option::is_some);
-        state.attempts.finish(
-            Kind::Opds,
-            &client,
-            now_ms(),
-            self.policy,
-            self.policy.enabled,
-            outcome,
-        );
+        state
+            .attempts
+            .finish(Kind::Opds, &client, now_ms(), rate, rate.enabled, outcome);
         result.map_err(report)?.ok_or(Rejection::Unauthorized)
     }
 
@@ -626,7 +632,7 @@ impl Access {
                 users: profiles.users,
                 blocked_users: profiles.blocked_users,
                 auth_policy: profiles.auth_policy,
-                required: self.require_profile,
+                required: self.request_access.current().local_login_required(),
                 bound: true,
                 stamp: profiles.stamp,
             });
@@ -653,7 +659,7 @@ impl Access {
             users: profiles.users,
             blocked_users: profiles.blocked_users,
             auth_policy: profiles.auth_policy,
-            required: self.require_profile || profiles.require_otp,
+            required: self.request_access.current().local_login_required() || profiles.require_otp,
             bound: false,
             stamp: profiles.stamp,
         })
@@ -672,9 +678,10 @@ impl Access {
             return BrowserLogin::Unavailable;
         };
         let client = peer.to_string();
+        let rate = self.login_rate_policy();
         let retry = state
             .attempts
-            .check(Kind::Profile, &client, now_ms(), self.policy, true);
+            .check(Kind::Profile, &client, now_ms(), rate, true);
         if retry != 0 {
             return BrowserLogin::RateLimited(retry);
         }
@@ -696,8 +703,8 @@ impl Access {
             Kind::Profile,
             &client,
             now_ms(),
-            self.policy,
-            self.policy.enabled,
+            rate,
+            rate.enabled,
             outcome,
         );
         match decision {
@@ -779,7 +786,10 @@ impl Access {
                         && profile.credential_version == owner.credential_version
                 });
                 match profile {
-                    Some(profile) if self.require_profile || profiles.require_otp => {
+                    Some(profile)
+                        if self.request_access.current().local_login_required()
+                            || profiles.require_otp =>
+                    {
                         if !profile_scope(profile, scope.trim()) {
                             return Err(Rejection::Unauthorized);
                         }
@@ -796,7 +806,7 @@ impl Access {
                 opds_access::Request {
                     profile_file: &self.file,
                     shared: policy.shared.as_ref(),
-                    require_profile: self.require_profile,
+                    require_profile: self.request_access.current().local_login_required(),
                     opds_enabled: policy.route.is_some(),
                     resource,
                     scope: &scope,
@@ -807,9 +817,10 @@ impl Access {
         let mut decision = inspect(&mut state.profiles, None).map_err(report)?;
         if authorization.is_some() && matches!(decision, Decision::Deny) {
             let client = admission.client.to_string();
+            let rate = self.login_rate_policy();
             let retry = state
                 .attempts
-                .check(Kind::Opds, &client, now_ms(), self.policy, true);
+                .check(Kind::Opds, &client, now_ms(), rate, true);
             if retry != 0 {
                 return Err(Rejection::RateLimited(retry));
             }
@@ -819,14 +830,9 @@ impl Access {
                 Ok(Decision::Deny) => Some(false),
                 _ => None,
             };
-            state.attempts.finish(
-                Kind::Opds,
-                &client,
-                now_ms(),
-                self.policy,
-                self.policy.enabled,
-                outcome,
-            );
+            state
+                .attempts
+                .finish(Kind::Opds, &client, now_ms(), rate, rate.enabled, outcome);
             decision = verified.map_err(report)?;
         }
         match decision {
@@ -868,14 +874,6 @@ fn profile_grant(profile: &BrowserProfile, stamp: &str) -> Grant {
         authenticated: true,
         profile_stamp: stamp.into(),
     }
-}
-
-fn setting(value: &Value, fallback: i64) -> i64 {
-    value
-        .as_i64()
-        .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()))
-        .filter(|&value| value != 0)
-        .unwrap_or(fallback)
 }
 
 fn report(error: Box<dyn std::error::Error>) -> Rejection {

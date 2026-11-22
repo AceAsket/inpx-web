@@ -17,8 +17,10 @@ use crate::{Result, atomic_file, upgrade_data};
 type Settings = IndexMap<String, Value>;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Fields {
     properties: Vec<String>,
+    rust_properties: Vec<String>,
     secrets: Vec<String>,
 }
 
@@ -202,6 +204,7 @@ fn select(value: &Value) -> Settings {
     fields()
         .properties
         .iter()
+        .chain(&fields().rust_properties)
         .filter_map(|name| {
             value
                 .get(name.as_str())

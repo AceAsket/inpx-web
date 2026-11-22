@@ -441,7 +441,7 @@ impl Page<'_> {
     }
 
     pub(super) fn readable(&self, extension: &str) -> bool {
-        self.site.online && self.state.downloads.ebook_readable(extension)
+        self.state.settings.online_reader() && self.state.downloads.ebook_readable(extension)
     }
 
     pub(super) fn progress(&self, uid: &str) -> Result<Value> {
@@ -558,7 +558,7 @@ impl Page<'_> {
 
     fn format_form(&self, next: &str, ext: &str) -> String {
         let selected = self.preferred();
-        let mut choices = self.site.conversions.clone();
+        let mut choices = self.state.downloads.formats();
         for value in [ext, selected] {
             if let Some(&name) = FORMAT_NAMES.iter().find(|&&name| name == value)
                 && !choices.contains(&name)

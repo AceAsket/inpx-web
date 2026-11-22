@@ -86,7 +86,7 @@ impl Access {
                 return Err("need_profile_login".into());
             }
             (current.id.as_str(), token.as_str())
-        } else if !self.require_profile
+        } else if !self.request_access.current().local_login_required()
             && !profiles.require_otp
             && query.token.is_empty()
             && (action == "update-user-profile"
@@ -119,10 +119,11 @@ impl Access {
                 | "reset-user-profile-totp"
         );
         let peer = admission.client.to_string();
+        let rate = self.login_rate_policy();
         if rate_limited {
             let retry = state
                 .attempts
-                .check(Kind::Profile, &peer, now_ms(), self.policy, true);
+                .check(Kind::Profile, &peer, now_ms(), rate, true);
             if retry != 0 {
                 return Ok(
                     json!({"error":"Слишком много попыток входа. Повторите позже.",
@@ -171,8 +172,8 @@ impl Access {
                 Kind::Profile,
                 &peer,
                 now_ms(),
-                self.policy,
-                self.policy.enabled,
+                rate,
+                rate.enabled,
                 if invalid {
                     Some(false)
                 } else {

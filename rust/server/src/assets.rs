@@ -50,6 +50,10 @@ pub struct Delivery<'a> {
 }
 
 impl Assets {
+    pub(crate) fn has_path(&self, path: &str) -> bool {
+        self.files.contains_key(path)
+    }
+
     pub fn load(config: Option<Config>) -> Self {
         let files = config.and_then(Self::read).unwrap_or_default();
         Self { files }

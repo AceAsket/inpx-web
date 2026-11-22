@@ -29,13 +29,17 @@ const MAX_FILES: usize = 20_000;
 const MAX_PROFILES: usize = 512;
 
 pub(super) struct Monitor {
-    pub(super) path: String,
-    enabled: bool,
-    token_required: bool,
     data: PathBuf,
     disabled_sources: usize,
     pub(super) activity: Option<Arc<Activity>>,
     slot: Arc<Semaphore>,
+}
+
+#[derive(Clone)]
+pub(crate) struct Endpoint {
+    pub(crate) enabled: bool,
+    pub(crate) rules: Metrics,
+    token_required: bool,
 }
 
 pub(super) struct Activity {
@@ -184,7 +188,7 @@ impl Drop for Connection {
     }
 }
 
-impl Monitor {
+impl Endpoint {
     pub(super) fn path(config: &Value) -> String {
         env("INPX_METRICS_PATH")
             .or_else(|| {
@@ -196,7 +200,7 @@ impl Monitor {
             .unwrap_or_else(|| "/metrics".into())
     }
 
-    pub(super) fn new(config: &Value, data: &Path) -> Result<(Self, Option<Metrics>)> {
+    pub(crate) fn new(config: &Value) -> Self {
         let enabled = std::env::var("INPX_METRICS_ENABLED")
             .map_or(config["metricsEnabled"] == true, |value| value == "true");
         let path = Self::path(config);
@@ -205,7 +209,7 @@ impl Monitor {
         let token_required = !token.is_empty();
         let token = trim_js(&token);
         let normalized = path.trim_end_matches('/');
-        let access = enabled.then(|| Metrics {
+        let rules = Metrics {
             path: if normalized.is_empty() {
                 "/"
             } else {
@@ -215,11 +219,22 @@ impl Monitor {
             token: token.into(),
             exempt: std::env::var("INPX_METRICS_EXEMPT_AUTH")
                 .map_or(config["metricsExemptAuth"] == true, |value| value == "true"),
-        });
-        let monitor = Self {
-            path,
+        };
+        Self {
             enabled,
+            rules,
             token_required,
+        }
+    }
+
+    pub(super) fn matches(&self, path: &str) -> bool {
+        path.trim_end_matches('/') == self.rules.path.trim_end_matches('/')
+    }
+}
+
+impl Monitor {
+    pub(super) fn new(config: &Value, data: &Path) -> Result<Self> {
+        Ok(Self {
             data: data.into(),
             disabled_sources: config["librarySources"]
                 .as_array()
@@ -229,30 +244,26 @@ impl Monitor {
                 .count(),
             activity: match Activity::new(data) {
                 Ok(activity) => Some(Arc::new(activity)),
-                Err(error) if enabled => return Err(error),
+                Err(error) if Endpoint::new(config).enabled => return Err(error),
                 Err(error) => {
                     eprintln!("Server activity: {error}");
                     None
                 }
             },
             slot: Arc::new(Semaphore::new(1)),
-        };
-        Ok((monitor, access))
-    }
-
-    pub(super) fn matches(&self, path: &str) -> bool {
-        path.trim_end_matches('/') == self.path.trim_end_matches('/')
+        })
     }
 
     pub(super) async fn serve(
         &self,
         state: &Arc<State>,
+        endpoint: &Endpoint,
         service: ServiceAccess,
         head: bool,
     ) -> Response<Body> {
-        let (status, text) = if !self.enabled {
+        let (status, text) = if !endpoint.enabled {
             (StatusCode::NOT_FOUND, "Not Found")
-        } else if self.token_required && !matches!(service, ServiceAccess::Metrics) {
+        } else if endpoint.token_required && !matches!(service, ServiceAccess::Metrics) {
             (StatusCode::UNAUTHORIZED, "Metrics token required")
         } else if let Ok(permit) = self.slot.clone().try_acquire_owned() {
             let state = state.clone();
