@@ -46,8 +46,12 @@ public final class RustSmokeInstrumentation extends Instrumentation {
       finish(code, result);
       return;
     }
+    if (!"ru.inpx.server.rust".equals(context.getPackageName())) {
+      result.putString("stream", "Refusing fixture tests in the real server application");
+      finish(Activity.RESULT_CANCELED, result);
+      return;
+    }
     try {
-      if (!"ru.inpx.server.rust".equals(context.getPackageName())) throw new AssertionError("Wrong target");
       context.getSharedPreferences("MainActivity", 0).edit().putString("port", Integer.toString(PORT)).commit();
       startActivitySync(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
       ServerControl.stop(context);
