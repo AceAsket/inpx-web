@@ -228,7 +228,7 @@ class Api {
             config.webAppVersion = packageJson.version;
             const loginWasRequired = this.$store.state.config.profileLoginRequired;
             this.commit('setConfig', config);
-            if (loginWasRequired && !config.profileLoginRequired)
+            if (this.profileLoginPromise && loginWasRequired && !config.profileLoginRequired)
                 this.$root.stdDialog.dismissRequiredProfileLogin();
             if (config.profileLoginRequired && !config.profileAuthorized) {
                 this.accessGranted = false;

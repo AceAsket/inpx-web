@@ -110,5 +110,29 @@ async function testInitialUiDefaultsWaitForConfigAndPreserveManualSettings() {
     assert.equal(value.settings.limit,7);
 }
 
-module.exports = [testInitialUiDefaultsWaitForConfigAndPreserveManualSettings, testProfileLogoutClearsCredentialsAndStopsOldPageWrites, testFailedLogoutRetainsSessionAndSsoCannotPretendToSignOut,
+async function testReopeningGuestAccessDismissesActiveRequiredLogin() {
+    const {value} = api();
+    const started = deferred(), prompt = deferred();
+    let dismissed = 0;
+    value.$root.stdDialog.profileLogin = (_message, _title, options) => {
+        assert.equal(options.noCancel, true);
+        started.resolve();
+        return prompt.promise;
+    };
+    value.$root.stdDialog.dismissRequiredProfileLogin = () => {
+        dismissed++;
+        prompt.resolve(null);
+    };
+    value.getConfig = async() => ({profileLoginRequired: true, profileAuthorized: false});
+    const original = value.updateConfig();
+    await Promise.race([started.promise, original.then(() => {throw new Error('Login was not opened');})]);
+    assert.equal(value.accessGranted, false);
+    value.getConfig = async() => ({profileLoginRequired: false, profileAuthorized: false});
+    await value.updateConfig();
+    await original;
+    assert.equal(dismissed, 1);
+    assert.equal(value.accessGranted, true);
+}
+
+module.exports = [testInitialUiDefaultsWaitForConfigAndPreserveManualSettings, testReopeningGuestAccessDismissesActiveRequiredLogin, testProfileLogoutClearsCredentialsAndStopsOldPageWrites, testFailedLogoutRetainsSessionAndSsoCannotPretendToSignOut,
     testLateConfigCannotRestoreAdminAfterLogout, testLogoutButtonWaitsForRevocationAndReportsFailure];
