@@ -48,7 +48,16 @@ async function main() {
         'books.inp':Buffer.from(row(1, 'zip') + '\n' + row(2, '7z') + '\n'),
     });
     const version = require('../../package.json').version;
-    const manifest = {runtime:'rust', backendVersion:version,
+    const reader = require('../../android/reader.lock.json');
+    const native = {};
+    for (const abi of ['arm64-v8a', 'armeabi-v7a']) {
+        native[abi] = {};
+        for (const tool of ['libinpxserver.so', 'libfbc.so', 'libkindling.so', 'libmutool.so']) {
+            const contents = await fs.readFile(path.join(root, 'android/app/src/main/jniLibs', abi, tool));
+            native[abi][tool] = {bytes:contents.length, sha256:crypto.createHash('sha256').update(contents).digest('hex')};
+        }
+    }
+    const manifest = {runtime:'rust', backendVersion:version, reader, native,
         sourceCommit:execFileSync('git', ['rev-parse', 'HEAD'], {cwd:root, encoding:'utf8'}).trim()};
     const entries = {'public.json':bundle, 'runtime-manifest.json':Buffer.from(JSON.stringify(manifest))};
     for (const name of ['books.zip', 'books.7z', 'demo.inpx']) entries[`demo/${name}`] = await fs.readFile(path.join(temporary, name));

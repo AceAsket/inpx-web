@@ -15,6 +15,19 @@ final class Io {
     Files.write(file.toPath(), value.getBytes(StandardCharsets.UTF_8));
   }
 
+  static void writeAtomic(File file, String value) throws Exception {
+    android.util.AtomicFile atomic = new android.util.AtomicFile(file);
+    java.io.FileOutputStream output = null;
+    try {
+      output = atomic.startWrite();
+      output.write(value.getBytes(StandardCharsets.UTF_8));
+      atomic.finishWrite(output);
+    } catch (Exception error) {
+      if (output != null) atomic.failWrite(output);
+      throw error;
+    }
+  }
+
   static String read(InputStream input) throws Exception {
     ByteArrayOutputStream output = new ByteArrayOutputStream();
     byte[] bytes = new byte[8192];

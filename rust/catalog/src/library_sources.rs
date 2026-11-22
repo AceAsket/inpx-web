@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::crypto_support::hex;
-use crate::directory_diagnostics::ordered_entries;
 use crate::fb2_prepare::js_space;
+use crate::library_fs::{self, ordered_entries};
 use crate::startup_paths::absolute;
 
 #[derive(Default, Deserialize)]
@@ -78,7 +78,7 @@ pub fn resolve(options: Options) -> Result<Vec<Source>> {
     };
     if rows.is_empty() {
         let directory = nonempty(&options.lib_dir).unwrap_or(&options.exec_dir);
-        if !Path::new(directory).exists() {
+        if !library_fs::is_dir(Path::new(directory)) {
             return Err(format!("Directory \"{directory}\" not exists").into());
         }
         let directory = absolute(Path::new(directory))?;
@@ -152,7 +152,9 @@ fn normalize(row: &Value, index: usize) -> Result<Source> {
                 .map(Path::to_path_buf)
         })
         .ok_or_else(|| format!("Library source #{index}: libDir is empty"))?;
-    if !directory.exists() {
+    // Android keeps INPX locally so the catalogue can start with its media disconnected.
+    library_fs::register_source(&directory)?;
+    if !library_fs::virtual_path(&directory) && !library_fs::is_dir(&directory) {
         return Err(format!(
             "Library source #{index}: directory \"{}\" not exists",
             directory.display()

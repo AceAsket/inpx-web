@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Read-only mounts. Node receives real seekable descriptors, including SMB proxy descriptors. */
+/** Read-only mounts. The server receives seekable descriptors, including SMB proxy descriptors. */
 public final class StorageBridge implements AutoCloseable {
   public static final String PREFIX = "/__android_library__/";
   private final Context context;
@@ -496,7 +496,8 @@ public final class StorageBridge implements AutoCloseable {
             client.connect(address.getHost(), address.getPort() == -1 ? 445 : address.getPort());
         session =
             connection.authenticate(
-                new AuthenticationContext(
+                s.optString("user").isEmpty() && s.optString("password").isEmpty()
+                    ? AuthenticationContext.guest() : new AuthenticationContext(
                     s.optString("user"),
                     s.optString("password").toCharArray(),
                     s.optString("domain")));

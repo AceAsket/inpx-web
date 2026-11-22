@@ -2,7 +2,8 @@ const {execFileSync} = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const revision = '29a1562efbb471fa88f58843bd6401d2e7d99f24'; // INPX Reader 0.17.4
+const lock = require('../../android/reader.lock.json');
+const revision = lock.revision;
 const checkout = process.argv[2];
 if (!checkout) throw new Error('Usage: node scripts/android/prepare-reader.js <local inpx-reader-android checkout>');
 
@@ -15,7 +16,7 @@ try {
     execFileSync('git', ['-C', path.resolve(checkout), 'archive', '--format=tar', `--output=${archive}`,
         revision, 'app/src/main'], {stdio:'inherit'});
     execFileSync('tar', ['-xf', archive, '-C', output], {stdio:'inherit'});
-    execFileSync('git', ['apply', '--no-index', path.join(root, 'android/reader/embedded.patch')],
+    execFileSync('git', ['apply', '--no-index', '--ignore-space-change', path.join(root, 'android/reader/embedded.patch')],
         {cwd:output, stdio:'inherit', env:{...process.env, GIT_CEILING_DIRECTORIES:build}});
     console.log(output);
 } finally {if (fs.existsSync(archive)) fs.unlinkSync(archive);}

@@ -475,7 +475,7 @@ final class DashboardView {
       button.setContentDescription(sourceLabels.get(source.id).replace('\n', ' ') + ". " + label);
     }
     badge.setText(
-        online
+        online && state.indexUpdating ? "●  ОБНОВЛЕНИЕ КАТАЛОГА" : online
             ? "●  СЕРВЕР В СЕТИ"
             : state.phase == DashboardState.Phase.STOPPING
                 ? "●  ЗАВЕРШЕНИЕ РАБОТЫ"
@@ -487,7 +487,7 @@ final class DashboardView {
     badge.setTextColor(
         online ? MINT : busy || state.phase == DashboardState.Phase.ERROR ? AMBER : MUTED);
     headline.setText(
-        online
+        online && state.indexUpdating ? "Обновляем\nкаталог" : online
             ? "Всё готово\nк чтению"
             : state.phase == DashboardState.Phase.STOPPING
                 ? "Завершаем\nработу"
@@ -503,7 +503,7 @@ final class DashboardView {
                 ? " источника"
                 : " источников";
     summary.setText(
-        online
+        online && state.indexUpdating ? state.detail : online
             ? (state.demo
                 ? "Демо-библиотека · две книги для знакомства"
                 : count + noun + " · Каталог и OPDS в домашней сети")
@@ -513,13 +513,13 @@ final class DashboardView {
                     ? "Подключите папку с INPX и архивами или библиотеку на NAS."
                     : "Настройки сохранены. Запустите сервер и откройте каталог.");
     boolean starting = state.phase == DashboardState.Phase.STARTING;
-    startupProgress.setVisibility(starting && state.startupPercent >= 0 ? View.VISIBLE : View.GONE);
+    startupProgress.setVisibility((starting || state.indexUpdating) && state.startupPercent >= 0 ? View.VISIBLE : View.GONE);
     if (state.startupPercent >= 0) startupProgress.setProgress(state.startupPercent);
     address.setText(
         online
             ? state.url().isEmpty() ? "Подключите Wi-Fi или Ethernet" : state.url()
             : "Адрес появится после запуска");
-    memory.setVisibility(state.memory.activeMiB > 0 && (online || busy) ? View.VISIBLE : View.GONE);
+    memory.setVisibility(state.memory.rssMiB > 0 && (online || busy) ? View.VISIBLE : View.GONE);
     memory.setText(
         state.memory.rssMiB > 0 ? "ОЗУ Rust-сервера: " + state.memory.rssMiB + " МиБ" : "");
     nextStep.setText(

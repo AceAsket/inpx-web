@@ -669,6 +669,8 @@ impl Tool {
 
     pub(crate) fn command(&self, directory: &Path) -> Command {
         let mut command = Command::new(&self.0);
+        #[cfg(target_os = "android")]
+        crate::android_process::bind_child(&mut command);
         command.current_dir(directory);
         command
     }

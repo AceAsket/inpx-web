@@ -103,9 +103,7 @@ final class AndroidServerRepository implements ServerRepository {
     } else if (ready) phase = DashboardState.Phase.RUNNING;
     else if (exhausted) {
       phase = DashboardState.Phase.ERROR;
-      message = memory.suggestedMiB() > 0
-          ? "Не хватает памяти для запуска каталога. Увеличьте лимит и запустите сервер снова."
-          : "Не хватает памяти. Лимит уже максимальный для этого устройства. Попробуйте меньший каталог.";
+      message = "Не хватает свободной ОЗУ для Rust-сервера. Закройте другие приложения и запустите сервер снова.";
     } else if (control.optBoolean("blocked") || message.startsWith("Ошибка"))
       phase = DashboardState.Phase.ERROR;
     else if (running
@@ -114,7 +112,8 @@ final class AndroidServerRepository implements ServerRepository {
       phase = DashboardState.Phase.STARTING;
     else phase = DashboardState.Phase.STOPPED;
     int percent = -1;
-    if (phase == DashboardState.Phase.STARTING) {
+    boolean updating = readiness.optBoolean("updating");
+    if (phase == DashboardState.Phase.STARTING || ready && updating) {
       message = ServerStartupProgress.summary(
           progress, message, control.optLong("explicitStart"), readiness.length() > 0);
       percent = ServerStartupProgress.percent(progress);
@@ -142,7 +141,8 @@ final class AndroidServerRepository implements ServerRepository {
         false,
         context.getFilesDir().getUsableSpace(),
         memory,
-        percent);
+        percent,
+        ready && updating);
   }
 
   private JSONObject readiness(int port) {

@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -42,13 +41,12 @@ pub(crate) fn visit_inventory(
 ) -> Result<()> {
     let mut dirs = vec![root.to_owned()];
     while let Some(dir) = dirs.pop() {
-        let mut entries = fs::read_dir(&dir)
+        let entries = crate::library_fs::ordered_entries(&dir)
             .map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", dir.display())))?
             .collect::<io::Result<Vec<_>>>()?;
         // Match Node's readdir order before the stable locale sort. Distinct
         // filenames can collate equally, and their order affects the fingerprint.
-        entries.sort_by_cached_key(fs::DirEntry::file_name);
-        for entry in entries {
+        for (_, entry) in entries {
             let kind = entry.file_type()?;
             if kind.is_dir() {
                 dirs.push(entry.path());

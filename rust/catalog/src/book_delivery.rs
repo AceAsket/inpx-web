@@ -233,7 +233,7 @@ impl LocalBooks {
                 Ok((
                     item.path.clone(),
                     item.member.clone(),
-                    crate::file_stamp::stamp(&item.file)?,
+                    crate::library_fs::source_stamp(&item.path, &item.file)?,
                 ))
             })
             .collect::<io::Result<Vec<_>>>()?;

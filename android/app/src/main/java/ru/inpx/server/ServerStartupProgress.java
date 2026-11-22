@@ -17,6 +17,10 @@ final class ServerStartupProgress {
   }
 
   static void write(Context context, String stage, String detail, int percent) {
+    write(context, stage, detail, percent, false);
+  }
+
+  static void write(Context context, String stage, String detail, int percent, boolean ready) {
     AtomicFile file = new AtomicFile(file(context));
     FileOutputStream output = null;
     try {
@@ -25,6 +29,7 @@ final class ServerStartupProgress {
           .put("stage", stage)
           .put("detail", detail)
           .put("percent", percent)
+          .put("ready", ready)
           .put("changedAt", System.currentTimeMillis());
       output = file.startWrite();
       output.write(progress.toString().getBytes(StandardCharsets.UTF_8));

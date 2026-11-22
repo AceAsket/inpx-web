@@ -5,6 +5,8 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod access_runtime;
 pub mod access_store;
+#[cfg(target_os = "android")]
+pub mod android_process;
 mod atomic_file;
 pub mod backup_archive;
 mod backup_crypto;
@@ -64,6 +66,7 @@ pub mod kosync;
 mod kosync_index;
 mod kosync_store;
 pub mod legacy_library_files;
+mod library_fs;
 pub mod library_media;
 pub mod library_sources;
 mod lookup;

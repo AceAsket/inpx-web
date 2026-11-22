@@ -217,19 +217,19 @@ fn links_to_ancestor(root: &Path, parent: &Path, child: &Path) -> bool {
 fn source(root: &Path, inpx: &Path) -> Source {
     let mut result = Source {
         inpx_exists: inpx.exists(),
-        lib_dir_exists: root.exists(),
+        lib_dir_exists: crate::library_fs::is_dir(root),
         ..Source::default()
     };
     if !result.lib_dir_exists {
         return result;
     }
-    result.has_covers = root.join("covers").exists();
-    result.has_etc = root.join("etc").exists();
-    result.has_images = root.join("images").exists();
-    result.has_bin = root.join("bin").exists();
+    result.has_covers = crate::library_fs::is_dir(&root.join("covers"));
+    result.has_etc = crate::library_fs::is_dir(&root.join("etc"));
+    result.has_images = crate::library_fs::is_dir(&root.join("images"));
+    result.has_bin = crate::library_fs::is_dir(&root.join("bin"));
     let mut directories = vec![root.to_owned()];
     while let Some(dir) = directories.pop() {
-        let stop = visit_dir(&dir, |name, entry| {
+        let stop = visit_library_dir(&dir, |name, entry| {
             let Ok(kind) = entry.file_type() else {
                 return ControlFlow::Continue(());
             };
@@ -264,6 +264,18 @@ fn source(root: &Path, inpx: &Path) -> Source {
         }
     }
     result
+}
+
+fn visit_library_dir(
+    dir: &Path,
+    mut visit: impl FnMut(&std::ffi::OsStr, &crate::library_fs::Entry) -> ControlFlow<()>,
+) -> ControlFlow<()> {
+    if let Ok(entries) = crate::library_fs::ordered_entries(dir) {
+        for (name, entry) in entries.flatten() {
+            visit(&name, &entry)?;
+        }
+    }
+    ControlFlow::Continue(())
 }
 
 pub fn diagnose(directory: &Path, inpx: &Path) -> Result<serde_json::Value> {

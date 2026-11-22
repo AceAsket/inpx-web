@@ -2,7 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
-use crate::directory_diagnostics::ordered_entries;
+use crate::library_fs::{self, ordered_entries};
 
 pub(crate) struct Input {
     pub file: File,
@@ -29,12 +29,12 @@ pub(crate) struct Folder {
 impl Folder {
     pub(crate) fn resolve(library: &Path, folder: &str) -> io::Result<Self> {
         let folder = relative(folder)?;
-        let root = library.canonicalize()?;
+        let root = library_fs::canonicalize(library)?;
         let path = archive_location(&root, &folder)?.ok_or_else(|| {
             io::Error::new(ErrorKind::NotFound, "Book folder or archive not found")
         })?;
         Ok(Self {
-            archived: !path.is_dir(),
+            archived: !library_fs::is_dir(&path),
             path,
             root,
         })
@@ -62,7 +62,7 @@ pub(crate) fn cover_inputs(library: &Path, folder: &str, file: &str) -> io::Resu
     if folder.is_empty() {
         return Ok(vec![]);
     }
-    let root = library.canonicalize()?;
+    let root = library_fs::canonicalize(library)?;
     let archive = archive_location(&root, &folder)?.unwrap_or_else(|| root.join(folder));
     asset_inputs(&root, &archive, file, "covers")
 }
@@ -76,7 +76,7 @@ pub(crate) fn fb2_inputs(
     if folder.is_empty() {
         return Ok((vec![], vec![]));
     }
-    let root = library.canonicalize()?;
+    let root = library_fs::canonicalize(library)?;
     let archive = if book.member.is_some() {
         book.path.clone()
     } else {
@@ -105,7 +105,7 @@ fn asset_inputs(root: &Path, archive: &Path, file: &str, kind: &str) -> io::Resu
         root.join(kind),
         parent.join(kind),
     ] {
-        let Ok(directory) = directory.canonicalize() else {
+        let Ok(directory) = library_fs::canonicalize(&directory) else {
             continue;
         };
         if !directory.starts_with(parent) || !visited.insert(directory.clone()) {
@@ -119,7 +119,7 @@ fn asset_inputs(root: &Path, archive: &Path, file: &str, kind: &str) -> io::Resu
             let Ok(Some(path)) = existing(parent, &path) else {
                 continue;
             };
-            if !path.is_file() {
+            if !library_fs::is_file(&path) {
                 continue;
             }
             let Ok(file) = open_within(parent, &path) else {
@@ -166,7 +166,7 @@ fn recoverable(error: &io::Error) -> bool {
 }
 
 fn existing(root: &Path, candidate: &Path) -> io::Result<Option<PathBuf>> {
-    match candidate.canonicalize() {
+    match library_fs::canonicalize(candidate) {
         Ok(path) => return within(root, path).map(Some),
         Err(error) if recoverable(&error) => {}
         Err(error) => return Err(error),
@@ -174,7 +174,7 @@ fn existing(root: &Path, candidate: &Path) -> io::Result<Option<PathBuf>> {
     let Some((parent, name)) = candidate.parent().zip(candidate.file_name()) else {
         return Ok(None);
     };
-    let parent = match parent.canonicalize() {
+    let parent = match library_fs::canonicalize(parent) {
         Ok(parent) => within(root, parent)?,
         Err(error) if recoverable(&error) => return Ok(None),
         Err(error) => return Err(error),
@@ -183,7 +183,7 @@ fn existing(root: &Path, candidate: &Path) -> io::Result<Option<PathBuf>> {
     for entry in ordered_entries(&parent)? {
         let (actual, entry) = entry?;
         if actual.to_string_lossy().to_lowercase() == name {
-            return within(root, entry.path().canonicalize()?).map(Some);
+            return within(root, library_fs::canonicalize(&entry.path())?).map(Some);
         }
     }
     Ok(None)
@@ -241,6 +241,10 @@ fn archive_variant(root: &Path, candidate: &Path) -> io::Result<Option<PathBuf>>
 
 #[cfg(unix)]
 pub(crate) fn open_within(root: &Path, path: &Path) -> io::Result<File> {
+    if library_fs::virtual_path(path) {
+        within(root, path.to_owned())?;
+        return library_fs::open(path);
+    }
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};

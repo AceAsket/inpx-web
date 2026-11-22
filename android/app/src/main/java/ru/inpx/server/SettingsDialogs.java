@@ -192,38 +192,11 @@ final class SettingsDialogs extends DialogUi {
             });
   }
 
-  private void memory() {
-    ServerMemory state = current.get().memory;
-    int[] limits = state.choices();
-    String[] labels = new String[limits.length + 1];
-    labels[0] = "Автоматически · " + state.autoMiB + " МиБ";
-    int selected = 0;
-    for (int i = 0; i < limits.length; i++) {
-      labels[i + 1] = limits[i] + " МиБ";
-      if (state.preferredMiB == limits[i]) selected = i + 1;
-    }
-    String title = "Лимит памяти Node.js";
-    if (state.rssMiB > 0)
-      title += "\nОЗУ сервера: " + state.rssMiB + " МиБ · Куча: " + state.heapMiB + " МиБ";
-    AlertDialog dialog = new AlertDialog.Builder(activity)
-        .setTitle(title)
-        .setSingleChoiceItems(labels, selected, (d, index) ->
-            presenter.saveMemoryLimit(index == 0 ? 0 : limits[index - 1], () -> {
-              d.dismiss();
-              toast("Лимит применится при следующем запуске сервера");
-            }))
-        .setNegativeButton("Назад", null)
-        .create();
-    show(dialog);
-  }
-
   public void recoverMemory() {
-    int next = current.get().memory.suggestedMiB();
-    if (next == 0) return;
     AlertDialog dialog = new AlertDialog.Builder(activity)
         .setTitle("Не хватает памяти")
-        .setMessage("Увеличить лимит Node.js до " + next + " МиБ и снова запустить сервер?")
-        .setPositiveButton("Увеличить и запустить", (d, w) -> presenter.retryWithMoreMemory())
+        .setMessage("Закройте другие приложения, чтобы освободить ОЗУ, и запустите Rust-сервер снова.")
+        .setPositiveButton("Запустить снова", (d, w) -> presenter.start(current.get().demo))
         .setNegativeButton("Отмена", null)
         .create();
     show(dialog);

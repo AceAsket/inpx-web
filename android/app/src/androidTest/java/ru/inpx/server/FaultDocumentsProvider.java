@@ -31,7 +31,7 @@ public final class FaultDocumentsProvider extends DocumentsProvider {
       try {
         int caller = android.os.Binder.getCallingUid();
         if (caller != android.os.Process.myUid()
-            && caller != getContext().getPackageManager().getPackageUid("ru.inpx.server", 0))
+            && caller != getContext().getPackageManager().getPackageUid(targetPackage(), 0))
           throw new SecurityException("Fixture access denied");
       } catch (android.content.pm.PackageManager.NameNotFoundException e) {
         throw new SecurityException(e);
@@ -39,9 +39,9 @@ public final class FaultDocumentsProvider extends DocumentsProvider {
     if (method.equals("fixture-grant")) {
       getContext()
           .grantUriPermission(
-              "ru.inpx.server",
+              targetPackage(),
               android.provider.DocumentsContract.buildTreeDocumentUri(
-                  "ru.inpx.server.test.storage", "root"),
+                  getContext().getPackageName() + ".storage", "root"),
               android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                   | android.content.Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
       return new Bundle();
@@ -69,6 +69,11 @@ public final class FaultDocumentsProvider extends DocumentsProvider {
     if (!file.getParentFile().equals(root.getCanonicalFile()))
       throw new SecurityException("Invalid fixture name");
     return file;
+  }
+
+  private String targetPackage() {
+    String name = getContext().getPackageName();
+    return name.substring(0, name.length() - 5);
   }
 
   private void available() throws FileNotFoundException {

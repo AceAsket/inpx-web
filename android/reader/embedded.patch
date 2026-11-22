@@ -30,7 +30,7 @@ index c9a13c5..52ac0d4 100644
      handledImport = state == null ? "" : state.getString("handledImport", "");
      importer =
          new androidx.lifecycle.ViewModelProvider(
-@@ -153,6 +158,26 @@ public final class MainActivity extends AppCompatActivity {
+@@ -153,6 +158,27 @@ public final class MainActivity extends AppCompatActivity {
          && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
              != PackageManager.PERMISSION_GRANTED)
        requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 1);
@@ -46,7 +46,8 @@ index c9a13c5..52ac0d4 100644
 +          localAddress = "";
 +          android.widget.Toast.makeText(this, value.error, android.widget.Toast.LENGTH_LONG).show();
 +          connection(address);
-+        } else if (value.data != null && value.data.url.equals(Connection.normalizeUrl(localAddress))) {
++        } else if (value.data != null && value.data.connection() != null
++            && value.data.connection().url.equals(Connection.normalizeUrl(localAddress))) {
 +          localAddress = "";
 +          connected(CATALOG);
 +        }
@@ -197,15 +198,16 @@ diff --git a/app/src/main/java/ru/inpx/reader/features/connection/ConnectionView
 index 617f796..15fb2f3 100644
 --- a/app/src/main/java/ru/inpx/reader/features/connection/ConnectionViewModel.java
 +++ b/app/src/main/java/ru/inpx/reader/features/connection/ConnectionViewModel.java
-@@ -20,6 +20,14 @@ public final class ConnectionViewModel extends TaskViewModel<Connection> {
-     submit(() -> repository.connect(draft));
+@@ -61,6 +61,15 @@ public final class ConnectionViewModel extends TaskViewModel<InpxClient.OtpEnrollment> {
+     update(null);
    }
  
 +  public void connectLocal(String address) {
 +    submit(() -> {
 +      Connection active = repository.currentOrNull();
-+      if (active != null && active.url.equals(Connection.normalizeUrl(address))) return active;
-+      return repository.connect(new Connection(address, "", "", "", ""));
++      Connection local = active != null && active.url.equals(Connection.normalizeUrl(address))
++          ? active : repository.connect(new Connection(address, "", "", "", ""), "");
++      return new InpxClient.OtpEnrollment(local, null, null);
 +    });
 +  }
 +

@@ -130,7 +130,7 @@ books.example.org {
 
 ### Сервер на Android
 
-INPX Server запускает библиотеку с локальной папки или по SMB на телефоне, планшете или ТВ-приставке с Android 9+. Выбирайте APK по разрядности Android. [Предрелиз и контрольные суммы](https://github.com/AceAsket/inpx-web/releases/tag/android-v0.7.3) · [Инструкция](https://github.com/AceAsket/inpx-web/blob/android/android/README.md)
+INPX Server 0.8.0 на Rust запускает библиотеку с SD/USB или по SMB на телефоне, планшете и ТВ-приставке с Android 9+. В одном APK доступны встроенная INPX Reader 0.17.9, семь форматов конвертации и панель для сенсорного экрана и пульта. Есть сборки ARM64 и ARM32; пакет и подпись сохранены для обновления старого приложения. [Возможности, сборка и переход с Node.js](./android/RUST.md)
 
 ## Документация
 

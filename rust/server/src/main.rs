@@ -85,6 +85,10 @@ impl Config {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "android")]
+    if std::env::var_os("INPX_ANDROID_STORAGE_SOCKET").is_some() {
+        inpx_catalog::android_process::watch_parent()?;
+    }
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if let [flag, input, output, limit] = args.as_slice()
         && flag == inpx_catalog::legacy_library_files::NATIVE_JXL_WORKER

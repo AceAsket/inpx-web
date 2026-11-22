@@ -27,10 +27,8 @@ final class ServerDiagnostics {
       } catch (Exception ignored) {
       }
     }
-    int last = control.optInt("lastHeapMiB");
     return new ServerMemory(
-        android.os.Process.is64Bit(), mib(info.totalMem), control.optInt("heapLimitMiB"),
-        running ? last : 0, rss, heap, last, exhausted);
+        android.os.Process.is64Bit(), mib(info.totalMem), 0, 0, rss, heap, 0, false);
   }
 
   private static int mib(long bytes) {
@@ -57,10 +55,9 @@ final class ServerDiagnostics {
     if (control.optBoolean("heapExhausted")) return true;
     long started = control.optLong("attemptStarted");
     if (started == 0 || journalFile(context).lastModified() < started) return false;
-    String latest = journal.substring(Math.max(0, journal.lastIndexOf("INFO: inpx-web v")));
-    return (latest.contains("FATAL ERROR") && latest.contains("JavaScript heap out of memory"))
-        || latest.contains("Поисковая база недоступна: поток завершился из-за нехватки памяти")
-        || (latest.contains("GC in old space requested") && latest.contains("Native stack trace"));
+    String latest = journal.substring(Math.max(0, journal.lastIndexOf("inpx-web v")));
+    return latest.contains("memory allocation of") && latest.contains("failed")
+        || latest.contains("out of memory");
   }
 
   private ServerDiagnostics() {}

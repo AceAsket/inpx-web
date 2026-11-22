@@ -24,6 +24,7 @@ public final class DashboardState {
   public final long freeBytes;
   public final ServerMemory memory;
   public final int startupPercent;
+  public final boolean indexUpdating;
 
   public DashboardState(
       Phase phase,
@@ -64,6 +65,14 @@ public final class DashboardState {
       Phase phase, List<SourceInfo> sources, List<String> addresses, String detail, String journal,
       String uiMode, int preferredPort, int activePort, boolean demo, boolean restartRequired,
       boolean checkingSources, long freeBytes, ServerMemory memory, int startupPercent) {
+    this(phase, sources, addresses, detail, journal, uiMode, preferredPort, activePort, demo,
+        restartRequired, checkingSources, freeBytes, memory, startupPercent, false);
+  }
+
+  public DashboardState(
+      Phase phase, List<SourceInfo> sources, List<String> addresses, String detail, String journal,
+      String uiMode, int preferredPort, int activePort, boolean demo, boolean restartRequired,
+      boolean checkingSources, long freeBytes, ServerMemory memory, int startupPercent, boolean indexUpdating) {
     this.phase = phase;
     this.sources = Collections.unmodifiableList(new ArrayList<>(sources));
     this.addresses = Collections.unmodifiableList(new ArrayList<>(addresses));
@@ -78,6 +87,7 @@ public final class DashboardState {
     this.freeBytes = freeBytes;
     this.memory = memory;
     this.startupPercent = startupPercent;
+    this.indexUpdating = indexUpdating;
   }
 
   public static DashboardState initial() {
@@ -123,7 +133,8 @@ public final class DashboardState {
         checkingSources,
         freeBytes,
         memory,
-        next == phase ? startupPercent : -1);
+        next == phase ? startupPercent : -1,
+        next == phase && indexUpdating);
   }
 
   public DashboardState withSourceCheck(boolean checking) {
@@ -141,7 +152,8 @@ public final class DashboardState {
         checking,
         freeBytes,
         memory,
-        startupPercent);
+        startupPercent,
+        indexUpdating);
   }
 
   /** Only structural changes rebuild views, so status polling preserves TV focus and scroll. */

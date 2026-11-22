@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -14,7 +14,8 @@ use crate::Result;
 use crate::book_archive::{Failure, open_directory, read_member};
 use crate::book_delivery::Book;
 use crate::crypto_support::{hex, md5};
-use crate::file_stamp::{FileStamp, path_stamp, stamp};
+use crate::file_stamp::{FileStamp, stamp};
+use crate::library_fs::{self, path_stamp};
 use crate::library_sources::{Source, js_string};
 use crate::reader_document::{IMAGE_LIMIT, Image};
 use crate::standalone_catalogue::Catalogue;
@@ -472,15 +473,14 @@ fn scan(
     numeric: bool,
     seen: &mut HashSet<PathBuf>,
 ) -> Result<Vec<Archive>> {
-    let dir = match fs::read_dir(dir) {
+    let dir = match library_fs::ordered_entries(dir) {
         Ok(dir) => dir,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.into()),
     };
-    let mut paths = dir.collect::<std::result::Result<Vec<_>, _>>()?;
-    paths.sort_by_key(|item| item.file_name());
+    let paths = dir.collect::<std::result::Result<Vec<_>, _>>()?;
     let mut archives = Vec::new();
-    for entry in paths {
+    for (_, entry) in paths {
         let path = entry.path();
         if path
             .extension()
@@ -495,8 +495,8 @@ fn scan(
         if numeric && (id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit())) {
             continue;
         }
-        let stable = match path.canonicalize() {
-            Ok(path) if path.is_file() => path,
+        let stable = match library_fs::canonicalize(&path) {
+            Ok(path) if library_fs::is_file(&path) => path,
             Ok(_) => continue,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
@@ -517,7 +517,7 @@ fn scan(
 fn read_asset(path: &Path, entry: &str, limit: u64) -> Result<Vec<u8>> {
     Ok(read_member(
         path,
-        File::open(path)?,
+        library_fs::open(path)?,
         entry,
         |size, reader| {
             if size > limit {
@@ -664,7 +664,7 @@ impl<'de> Deserialize<'de> for RatingRecords {
 }
 
 fn rating_archive(path: &Path) -> Result<RatingRecords> {
-    let result = read_member(path, File::open(path)?, "books.json", |_, reader| {
+    let result = read_member(path, library_fs::open(path)?, "books.json", |_, reader| {
         let mut reader = BufReader::with_capacity(64 * 1024, reader);
         use std::io::BufRead;
         if reader.fill_buf()?.starts_with(b"\xef\xbb\xbf") {

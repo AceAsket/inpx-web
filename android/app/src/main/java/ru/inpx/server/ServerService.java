@@ -37,6 +37,8 @@ public final class ServerService extends Service {
   private static final long STOP_TIMEOUT_MS = 18000;
   private final Handler lifecycle = new Handler(Looper.getMainLooper());
   private boolean launched;
+  private volatile int latestStartId;
+  private volatile int stoppingStartId;
   private volatile boolean stopping, nativeStarted;
   private Thread serverThread;
   private volatile RustRuntime rust;
@@ -121,6 +123,7 @@ public final class ServerService extends Service {
     }
     if (stopping) return;
     stopping = true;
+    stoppingStartId = latestStartId;
     if (rust != null) rust.stop();
     lifecycle.postDelayed(this::forceStop, STOP_TIMEOUT_MS);
     if (!nativeStarted && serverThread != null) serverThread.interrupt();
@@ -144,6 +147,7 @@ public final class ServerService extends Service {
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
+    latestStartId = startId;
     try {
       if (intent != null && STOP.equals(intent.getAction())) {
         ServerControl.stop(this);
@@ -176,7 +180,8 @@ public final class ServerService extends Service {
             notification("Подготовка библиотеки…"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
       else startForeground(1, notification("Подготовка библиотеки…"));
-      if (launched) return stopping ? START_NOT_STICKY : START_STICKY;
+      // A new start while the previous child is stopping must survive this process's exit.
+      if (launched) return START_STICKY;
       if (ServerDiagnostics.exhausted(this, request, ServerDiagnostics.journal(this))) {
         ServerControl.blockForMemory(this);
         state("Ошибка: не хватает памяти для сервера.");
@@ -302,7 +307,6 @@ public final class ServerService extends Service {
       progress("Подключение к источникам", "", -1);
       storage = new StorageBridge(this, sources);
       JSONArray libraries = IndexCache.refresh(this, storage, sources, this::progress);
-      libraries = RustRuntime.libraries(sources, libraries);
       checkStopping();
       for (int i = 0; i < libraries.length(); i++)
         activeSources.add(libraries.getJSONObject(i).getString("id"));
@@ -333,6 +337,14 @@ public final class ServerService extends Service {
           .put("conversionConcurrency", 1)
           .put("conversionQueueLimit", 4)
           .put("conversionTimeoutMs", 180000);
+      File nativeDir = new File(getApplicationInfo().nativeLibraryDir);
+      config.put("conversionEnabled", true)
+          .put("conversionFormats", new JSONArray()
+              .put("epub").put("epub3").put("kepub").put("kfx").put("azw8").put("mobi").put("pdf"))
+          .put("converterPaths", new JSONObject()
+              .put("fbc", new File(nativeDir, "libfbc.so").getAbsolutePath())
+              .put("mutool", new File(nativeDir, "libmutool.so").getAbsolutePath()))
+          .put("kindlingPath", new File(nativeDir, "libkindling.so").getAbsolutePath());
       Io.write(configFile, config.toString(2));
       sourcesReady = true;
       ConnectivityManager manager = getSystemService(ConnectivityManager.class);
@@ -377,7 +389,9 @@ public final class ServerService extends Service {
           TimeUnit.SECONDS);
       state("Сервер запускается на порту " + port);
       progress("Запуск сервера", "Порт " + port, -1);
-      rust = new RustRuntime(this, data(), runtime, port);
+      new File(data(), "memory.json").delete();
+      ServerControl.launchMemory(this, 0);
+      rust = new RustRuntime(this, data(), runtime, port, storage);
       nativeStarted = true;
       checkStopping();
       rust.run();
@@ -394,7 +408,7 @@ public final class ServerService extends Service {
       try {
         if (!ServerControl.read(this).optBoolean("requested")) {
           state("Сервер остановлен");
-          stopSelf();
+          stopSelfResult(stoppingStartId > 0 ? stoppingStartId : latestStartId);
         }
       } catch (Exception ignored) {
         stopSelf();

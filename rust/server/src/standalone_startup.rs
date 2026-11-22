@@ -51,6 +51,10 @@ pub(super) fn response(state: &State, request: &Request<Incoming>) -> Response<B
         "migration":index["migration"]==true,"job":index["job"],"jobMessage":stage,
         "recsLoaded":index["recsLoaded"],"totalRecords":index["totalRecords"],
         "current":index["current"],"totalFiles":index["totalFiles"],"elapsedSeconds":state.started.elapsed().as_secs()});
+    #[cfg(target_os = "android")]
+    {
+        status["progress"] = index["progress"].clone();
+    }
     if !state.access.library.protected() {
         status["sourceName"] = index.get("sourceName").cloned().unwrap_or(Value::Null);
     }

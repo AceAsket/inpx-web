@@ -14,7 +14,7 @@ use crate::book_archive::{Directory, Failure, extract_input, input_directory};
 use crate::book_conversion::{Queue, Tool, configured, run, run_status};
 use crate::book_delivery::Book;
 use crate::book_source::{cover_inputs, open_within, within};
-use crate::directory_diagnostics::ordered_entries;
+use crate::library_fs::{self, ordered_entries};
 use crate::library_sources::Source;
 use crate::reader_document::{COVER_LIMIT, Document, Image, fb2_cover};
 
@@ -32,8 +32,8 @@ pub fn reader_lab_source(library: &Path, requested: &str) -> io::Result<File> {
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("fb2"))
         })
         .ok_or(io::ErrorKind::NotFound)?;
-    let root = library.canonicalize()?;
-    let path = within(&root, root.join(name).canonicalize()?)?;
+    let root = library_fs::canonicalize(library)?;
+    let path = within(&root, library_fs::canonicalize(&root.join(name))?)?;
     open_within(&root, &path)
 }
 
@@ -249,7 +249,7 @@ impl Archives {
         let mut covers = Vec::new();
         let mut books = Vec::new();
         for (source, item) in sources.iter().enumerate() {
-            let Ok(root) = item.lib_dir.canonicalize() else {
+            let Ok(root) = library_fs::canonicalize(&item.lib_dir) else {
                 continue;
             };
             let parent = root.parent().unwrap_or(&root);
@@ -281,7 +281,7 @@ impl Archives {
 }
 
 fn scan(items: &mut Vec<Archive>, dir: &Path, boundary: &Path, source: usize) {
-    let Ok(root) = fs::canonicalize(dir).and_then(|dir| within(boundary, dir)) else {
+    let Ok(root) = library_fs::canonicalize(dir).and_then(|dir| within(boundary, dir)) else {
         return;
     };
     let Ok(entries) = ordered_entries(&root) else {
@@ -323,7 +323,7 @@ fn scan(items: &mut Vec<Archive>, dir: &Path, boundary: &Path, source: usize) {
 
 impl Archive {
     fn read(&self, name: &str, covers: bool) -> Result<Option<Vec<u8>>> {
-        let path = within(&self.root, self.path.canonicalize()?)?;
+        let path = within(&self.root, library_fs::canonicalize(&self.path)?)?;
         let file = open_within(&self.root, &path)?;
         let mut archive = input_directory(&self.path, file)?;
         if covers {

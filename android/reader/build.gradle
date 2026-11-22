@@ -1,6 +1,7 @@
 plugins { id 'com.android.library' }
 
 def reader = file(providers.gradleProperty('inpxReaderSource').get())
+def readerLock = new groovy.json.JsonSlurper().parse(file('../reader.lock.json'))
 if (!new File(reader, 'app/src/main/java/ru/inpx/reader/ReaderApplication.java').isFile())
     throw new GradleException('Prepare the reader sources with scripts/android/prepare-reader.js')
 
@@ -10,8 +11,8 @@ android {
     defaultConfig {
         minSdk 28
         buildConfigField 'boolean', 'EMBEDDED', 'true'
-        buildConfigField 'String', 'VERSION_NAME', '"0.17.4"'
-        buildConfigField 'int', 'VERSION_CODE', '50'
+        buildConfigField 'String', 'VERSION_NAME', '"' + readerLock.version + '"'
+        buildConfigField 'int', 'VERSION_CODE', readerLock.versionCode.toString()
     }
     sourceSets.main {
         java.srcDirs = [new File(reader, 'app/src/main/java')]

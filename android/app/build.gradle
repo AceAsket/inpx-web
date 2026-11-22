@@ -8,11 +8,11 @@ android {
     compileSdk 36
     ndkVersion '28.2.13676358'
     defaultConfig {
-        applicationId 'ru.inpx.server.rust'
+        applicationId providers.gradleProperty('inpxApplicationId').getOrElse('ru.inpx.server')
         minSdk 28
         targetSdk 36
-        versionCode 1
-        versionName '0.8.0-rust-preview'
+        versionCode 100
+        versionName '0.8.0'
         testInstrumentationRunner 'ru.inpx.server.RustSmokeInstrumentation'
         ndk { abiFilters inpxAbi }
     }

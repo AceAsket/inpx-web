@@ -602,7 +602,7 @@ fn run(cache: &mut ArchiveCache, request: &Request) -> Extraction<Option<serde_j
 
 impl ArchiveCache {
     fn open(&mut self, path: &Path, file: File) -> Extraction<&mut ArchiveReader> {
-        let stamp = stamp(&file)?;
+        let stamp = crate::library_fs::source_stamp(path, &file)?;
         let old = self
             .0
             .iter()
