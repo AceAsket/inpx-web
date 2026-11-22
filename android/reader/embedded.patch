@@ -1,0 +1,243 @@
+diff --git a/app/src/main/java/ru/inpx/reader/MainActivity.java b/app/src/main/java/ru/inpx/reader/MainActivity.java
+index c9a13c5..52ac0d4 100644
+--- a/app/src/main/java/ru/inpx/reader/MainActivity.java
++++ b/app/src/main/java/ru/inpx/reader/MainActivity.java
+@@ -44,10 +44,13 @@ public final class MainActivity extends AppCompatActivity {
+   private int headerMaximum;
+   private ru.inpx.reader.features.updates.AppUpdatesViewModel updates;
+   private com.google.android.material.snackbar.Snackbar updateNotice;
++  private ru.inpx.reader.features.connection.ConnectionViewModel localConnection;
++  private String localAddress = "";
+ 
+   @Override
+   public void onCreate(Bundle state) {
+     super.onCreate(state);
++    ((ReaderApplication) getApplication()).initializeReader();
+     LinearLayout root = Ui.column(this);
+     rootView = root;
+     root.setBackgroundColor(Ui.bg(this));
+@@ -113,9 +116,11 @@ public final class MainActivity extends AppCompatActivity {
+           if (!selecting) navigate(item.getItemId());
+           return true;
+         });
+-    selected = state == null ? HOME : state.getInt("destination", HOME);
++    int port = getIntent().getIntExtra("ru.inpx.reader.LOCAL_PORT", -1);
++    int initial = BuildConfig.EMBEDDED && port >= 0 ? (port == 0 ? MY_BOOKS : CATALOG) : HOME;
++    selected = state == null ? initial : state.getInt("destination", HOME);
+     collectionArgs = state == null ? null : state.getBundle("collection");
+-    navigate(selected);
++    if (state != null || !BuildConfig.EMBEDDED || port < 1) navigate(selected);
+     handledImport = state == null ? "" : state.getString("handledImport", "");
+     importer =
+         new androidx.lifecycle.ViewModelProvider(
+@@ -153,6 +158,26 @@ public final class MainActivity extends AppCompatActivity {
+         && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+             != PackageManager.PERMISSION_GRANTED)
+       requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 1);
++    if (BuildConfig.EMBEDDED) {
++      localConnection = new androidx.lifecycle.ViewModelProvider(
++          this, ((ReaderApplication) getApplication()).factory())
++          .get(ru.inpx.reader.features.connection.ConnectionViewModel.class);
++      localAddress = state == null ? "" : state.getString("localAddress", "");
++      localConnection.uiState().observe(this, value -> {
++        if (localAddress.isEmpty() || value.loading) return;
++        if (!value.error.isEmpty()) {
++          String address = localAddress;
++          localAddress = "";
++          android.widget.Toast.makeText(this, value.error, android.widget.Toast.LENGTH_LONG).show();
++          connection(address);
++        } else if (value.data != null && value.data.url.equals(Connection.normalizeUrl(localAddress))) {
++          localAddress = "";
++          connected(CATALOG);
++        }
++      });
++      if (state == null) openLocal(getIntent());
++      return;
++    }
+     updates =
+         new androidx.lifecycle.ViewModelProvider(
+                 this, ((ReaderApplication) getApplication()).factory())
+@@ -194,6 +219,7 @@ public final class MainActivity extends AppCompatActivity {
+   }
+ 
+   public void updates() {
++    if (BuildConfig.EMBEDDED) return;
+     var fragments = getSupportFragmentManager();
+     if (isFinishing() || isDestroyed() || fragments.isStateSaved()) return;
+     dismissUpdateNotice();
+@@ -283,9 +309,18 @@ public final class MainActivity extends AppCompatActivity {
+   protected void onNewIntent(Intent intent) {
+     super.onNewIntent(intent);
+     setIntent(intent);
++    if (BuildConfig.EMBEDDED) openLocal(intent);
+     openDocumentIntent(intent, true);
+   }
+ 
++  private void openLocal(Intent intent) {
++    int port = intent.getIntExtra("ru.inpx.reader.LOCAL_PORT", -1);
++    if (port == 0) navigate(MY_BOOKS);
++    if (port < 1 || port > 65535) return;
++    localAddress = "http://127.0.0.1:" + port;
++    localConnection.connectLocal(localAddress);
++  }
++
+   public void appearance() {
+     ru.inpx.reader.data.AppAppearance appearance =
+         ((ReaderApplication) getApplication()).appearance;
+@@ -387,11 +422,23 @@ public final class MainActivity extends AppCompatActivity {
+   }
+ 
+   public void connection() {
+-    if (getSupportFragmentManager().findFragmentByTag("connection") == null)
+-      new ConnectionDialog().show(getSupportFragmentManager(), "connection");
++    connection("");
++  }
++
++  private void connection(String address) {
++    if (getSupportFragmentManager().findFragmentByTag("connection") != null) return;
++    ConnectionDialog dialog = new ConnectionDialog();
++    Bundle args = new Bundle();
++    args.putString("address", address);
++    dialog.setArguments(args);
++    dialog.show(getSupportFragmentManager(), "connection");
+   }
+ 
+   public void connected() {
++    connected(HOME);
++  }
++
++  private void connected(int destination) {
+     FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
+     for (Fragment fragment : getSupportFragmentManager().getFragments())
+       if (!(fragment instanceof ConnectionDialog)) transaction.remove(fragment);
+@@ -399,7 +446,7 @@ public final class MainActivity extends AppCompatActivity {
+     new androidx.lifecycle.ViewModelProvider(this, ((ReaderApplication) getApplication()).factory())
+         .get(ru.inpx.reader.features.home.OverviewViewModel.class)
+         .reset();
+-    navigate(HOME);
++    navigate(destination);
+   }
+ 
+   public void read(String key) {
+@@ -431,6 +478,7 @@ public final class MainActivity extends AppCompatActivity {
+   @Override
+   protected void onSaveInstanceState(Bundle state) {
+     state.putInt("destination", selected);
++    state.putString("localAddress", localAddress);
+     state.putBundle("collection", collectionArgs);
+     state.putString("handledImport", handledImport);
+     super.onSaveInstanceState(state);
+diff --git a/app/src/main/java/ru/inpx/reader/ReaderApplication.java b/app/src/main/java/ru/inpx/reader/ReaderApplication.java
+index 83d5d9f..0a36676 100644
+--- a/app/src/main/java/ru/inpx/reader/ReaderApplication.java
++++ b/app/src/main/java/ru/inpx/reader/ReaderApplication.java
+@@ -48,10 +48,23 @@ public final class ReaderApplication extends Application {
+   private final ExecutorService readingNetwork = Executors.newSingleThreadExecutor();
+   private final ExecutorService bookLocal = Executors.newSingleThreadExecutor();
+   private final ExecutorService shelfNetwork = Executors.newSingleThreadExecutor();
++  private boolean initialized;
+ 
+   @Override
+   public void onCreate() {
+     super.onCreate();
++    if (!BuildConfig.EMBEDDED
++        || (getPackageName().equals(Application.getProcessName())
++            && getSharedPreferences("embedded-reader", MODE_PRIVATE).getBoolean("opened", false))) {
++      initializeReader();
++    }
++  }
++
++  public synchronized void initializeReader() {
++    if (initialized) return;
++    initialized = true;
++    if (BuildConfig.EMBEDDED)
++      getSharedPreferences("embedded-reader", MODE_PRIVATE).edit().putBoolean("opened", true).apply();
+     ru.inpx.reader.core.DiagnosticEvents.initialize(
+         new java.io.File(getFilesDir(), "diagnostics/events.json"));
+     Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+@@ -91,7 +104,7 @@ public final class ReaderApplication extends Application {
+     accounts = new AccountRepository(connections, overview);
+     delivery = new DeliveryRepository(connections);
+     updates = new AppUpdatesRepository(this);
+-    io.execute(() -> updates.downloads().cleanInstalled());
++    if (!BuildConfig.EMBEDDED) io.execute(() -> updates.downloads().cleanInstalled());
+     ReadingSyncWorker.periodic(this);
+     AudioSyncWorker.periodic(this);
+   }
+diff --git a/app/src/main/java/ru/inpx/reader/data/AppUpdatePackage.java b/app/src/main/java/ru/inpx/reader/data/AppUpdatePackage.java
+index 41dcc82..51cf143 100644
+--- a/app/src/main/java/ru/inpx/reader/data/AppUpdatePackage.java
++++ b/app/src/main/java/ru/inpx/reader/data/AppUpdatePackage.java
+@@ -42,7 +42,7 @@ public final class AppUpdatePackage {
+ 
+   public static Intent installer(Context context, File file) {
+     var uri =
+-        FileProvider.getUriForFile(context, BuildConfig.APPLICATION_ID + ".app-updates", file);
++        FileProvider.getUriForFile(context, context.getPackageName() + ".app-updates", file);
+     Intent intent =
+         new Intent(Intent.ACTION_VIEW)
+             .setDataAndType(uri, "application/vnd.android.package-archive")
+diff --git a/app/src/main/java/ru/inpx/reader/features/connection/ConnectionDialog.java b/app/src/main/java/ru/inpx/reader/features/connection/ConnectionDialog.java
+index 225a7be..30b2f96 100644
+--- a/app/src/main/java/ru/inpx/reader/features/connection/ConnectionDialog.java
++++ b/app/src/main/java/ru/inpx/reader/features/connection/ConnectionDialog.java
+@@ -42,7 +42,10 @@ public final class ConnectionDialog extends DialogFragment {
+         new ViewModelProvider(this, app.factory()).get(ConnectionViewModel.class);
+     connectionModel = model;
+     Connection active = app.connections.currentOrNull();
+-    model.initialize(active);
++    String initial = getArguments() == null ? "" : getArguments().getString("address", "");
++    if (!initial.isEmpty() && (active == null || !active.url.equals(Connection.normalizeUrl(initial))))
++      model.initialize(new Connection(initial, "", "", "", ""));
++    else model.initialize(active);
+     LinearLayout form = Ui.column(requireContext());
+     form.setFocusableInTouchMode(true);
+     form.requestFocus();
+diff --git a/app/src/main/java/ru/inpx/reader/features/connection/ConnectionViewModel.java b/app/src/main/java/ru/inpx/reader/features/connection/ConnectionViewModel.java
+index 617f796..15fb2f3 100644
+--- a/app/src/main/java/ru/inpx/reader/features/connection/ConnectionViewModel.java
++++ b/app/src/main/java/ru/inpx/reader/features/connection/ConnectionViewModel.java
+@@ -20,6 +20,14 @@ public final class ConnectionViewModel extends TaskViewModel<Connection> {
+     submit(() -> repository.connect(draft));
+   }
+ 
++  public void connectLocal(String address) {
++    submit(() -> {
++      Connection active = repository.currentOrNull();
++      if (active != null && active.url.equals(Connection.normalizeUrl(address))) return active;
++      return repository.connect(new Connection(address, "", "", "", ""));
++    });
++  }
++
+   public void initialize(Connection active) {
+     if (initialized) return;
+     initialized = true;
+diff --git a/app/src/main/java/ru/inpx/reader/features/home/ProfileFragment.java b/app/src/main/java/ru/inpx/reader/features/home/ProfileFragment.java
+index 855f7db..c31de0d 100644
+--- a/app/src/main/java/ru/inpx/reader/features/home/ProfileFragment.java
++++ b/app/src/main/java/ru/inpx/reader/features/home/ProfileFragment.java
+@@ -181,14 +181,16 @@ public final class ProfileFragment extends OverviewScreen {
+           "Пользователи, источники и состояние",
+           () -> host().navigate(MainActivity.SERVER));
+     }
+-    var updateState = updates.uiState().getValue();
+-    row(
+-        R.drawable.ic_refresh,
+-        "Обновления приложения",
+-        updateState != null && updateState.data != null && updateState.data.available()
+-            ? "Доступна версия " + updateState.data.release().version()
+-            : "Установлена версия " + BuildConfig.VERSION_NAME,
+-        () -> host().updates());
++    if (!BuildConfig.EMBEDDED) {
++      var updateState = updates.uiState().getValue();
++      row(
++          R.drawable.ic_refresh,
++          "Обновления приложения",
++          updateState != null && updateState.data != null && updateState.data.available()
++              ? "Доступна версия " + updateState.data.release().version()
++              : "Установлена версия " + BuildConfig.VERSION_NAME,
++          () -> host().updates());
++    }
+     row(
+         R.drawable.ic_books,
+         "О приложении",

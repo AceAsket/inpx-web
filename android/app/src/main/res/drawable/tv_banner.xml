@@ -1,0 +1,9 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/tv_banner_background" />
+    <item
+        android:drawable="@mipmap/ic_launcher"
+        android:gravity="left|center_vertical"
+        android:height="92dp"
+        android:left="14dp"
+        android:width="92dp" />
+</layer-list>

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+task_root="$(cd "$(dirname "$0")/../.." && pwd)"
+task_tools="${INPX_ANDROID_TOOLS:-$HOME/.cache/inpx-android}"
+source "$task_root/scripts/android/abi-env.sh"
+export CARGO_HOME="$task_tools/cargo" RUSTUP_HOME="$task_tools/rustup"
+export PATH="$CARGO_HOME/bin:$PATH"
+task_bin="$task_tools/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
+task_cargo_target="${task_rust_target^^}"; task_cargo_target="${task_cargo_target//-/_}"
+task_cc_target="${task_rust_target//-/_}"
+export "CARGO_TARGET_${task_cargo_target}_LINKER=$task_bin/$task_cc$task_api-clang"
+export "CC_${task_cc_target}=$task_bin/$task_cc$task_api-clang"
+export "CXX_${task_cc_target}=$task_bin/$task_cc$task_api-clang++"
+export "AR_${task_cc_target}=$task_bin/llvm-ar"
+export "CARGO_TARGET_${task_cargo_target}_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384"
+rustup target add "$task_rust_target"
+cd "$task_tools/converters/kindling"
+cargo build --locked --release --target "$task_rust_target" -j2
+mkdir -p "$task_root/android/app/src/main/jniLibs/$task_abi"
+cp "target/$task_rust_target/release/kindling-cli" "$task_root/android/app/src/main/jniLibs/$task_abi/libkindling.so"
+"$task_bin/llvm-strip" "$task_root/android/app/src/main/jniLibs/$task_abi/libkindling.so"
+cp LICENSE "$task_root/android/app/src/main/assets/LICENSE.kindling.txt"

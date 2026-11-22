@@ -1,0 +1,49 @@
+plugins { id 'com.android.application' }
+
+def inpxAbi = providers.gradleProperty('inpxAbi').getOrElse('arm64-v8a')
+if (!(inpxAbi in ['arm64-v8a', 'armeabi-v7a'])) throw new GradleException("Unsupported Android ABI: ${inpxAbi}")
+
+android {
+    namespace 'ru.inpx.server'
+    compileSdk 36
+    ndkVersion '28.2.13676358'
+    defaultConfig {
+        applicationId 'ru.inpx.server.rust'
+        minSdk 28
+        targetSdk 36
+        versionCode 1
+        versionName '0.8.0-rust-preview'
+        testInstrumentationRunner 'ru.inpx.server.RustSmokeInstrumentation'
+        ndk { abiFilters inpxAbi }
+    }
+    packaging { jniLibs { useLegacyPackaging = true } }
+    if (findProject(':reader') != null) {
+        compileOptions {
+            coreLibraryDesugaringEnabled true
+            sourceCompatibility JavaVersion.VERSION_17
+            targetCompatibility JavaVersion.VERSION_17
+        }
+    }
+    signingConfigs {
+        debug {
+            def serverKeystore = System.getenv('INPX_ANDROID_KEYSTORE_FILE')
+            if (serverKeystore) {
+                storeFile file(serverKeystore)
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
+        }
+    }
+    buildTypes { debug { debuggable true } }
+}
+
+dependencies {
+    if (findProject(':reader') != null) {
+        implementation project(':reader')
+        coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    }
+    testImplementation 'junit:junit:4.13.2'
+    implementation 'com.hierynomus:smbj:0.15.0'
+    implementation 'com.google.zxing:core:3.5.3'
+}

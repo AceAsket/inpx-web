@@ -54,12 +54,12 @@ impl Machine {
             available: None,
             cpu_us: None,
         };
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         let machine = machine.with_linux_metrics();
         machine
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn with_linux_metrics(mut self) -> Self {
         use std::fs;
         let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();

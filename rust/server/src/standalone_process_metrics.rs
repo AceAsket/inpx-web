@@ -1,4 +1,4 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(in crate::standalone) fn rss() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     let kib = status
@@ -28,7 +28,7 @@ pub(in crate::standalone) fn rss() -> Option<u64> {
         .then(|| unsafe { info.assume_init() }.resident_size)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", windows)))]
 pub(in crate::standalone) fn rss() -> Option<u64> {
     None
 }

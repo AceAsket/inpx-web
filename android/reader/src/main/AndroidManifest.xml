@@ -1,0 +1,28 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <queries><intent><action android:name="android.intent.action.TTS_SERVICE" /></intent></queries>
+    <application android:name="ru.inpx.reader.ReaderApplication">
+        <activity android:name="ru.inpx.reader.MainActivity" android:theme="@style/AppTheme"
+            android:exported="false" android:launchMode="singleTop" />
+        <activity android:name="ru.inpx.reader.ReaderActivity" android:theme="@style/AppTheme"
+            android:exported="false">
+            <property android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY" android:value="true" />
+        </activity>
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.book-files"
+            android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/book_file_paths" />
+        </provider>
+        <receiver android:name="ru.inpx.reader.DownloadCancelReceiver" android:exported="false" />
+        <service android:name="ru.inpx.reader.PlaybackService" android:exported="false" android:foregroundServiceType="mediaPlayback">
+            <intent-filter><action android:name="androidx.media3.session.MediaSessionService" /></intent-filter>
+        </service>
+        <service android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync" android:exported="false" tools:node="merge" />
+    </application>
+</manifest>
