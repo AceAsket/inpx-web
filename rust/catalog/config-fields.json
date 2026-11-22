@@ -128,9 +128,11 @@
         "telegramBotToken",
         "telegramProxyPassword",
         "smtpPass",
-        "ttsApiKey",
         "opds.password",
-        "absToken",
         "metricsToken"
+    ],
+    "rustSecrets": [
+        "ttsApiKey",
+        "absToken"
     ]
 }

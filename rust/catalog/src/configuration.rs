@@ -22,6 +22,7 @@ struct Fields {
     properties: Vec<String>,
     rust_properties: Vec<String>,
     secrets: Vec<String>,
+    rust_secrets: Vec<String>,
 }
 
 fn fields() -> &'static Fields {
@@ -87,7 +88,7 @@ pub fn load(options: Load, runtime: &str) -> Result<Loaded> {
     }
     let mut raw = match read(&options.file)? {
         ReadConfig::Missing => None,
-        ReadConfig::Json(value) => Some(select(&value)),
+        ReadConfig::Json(value) => Some(select(&value, runtime == "rust")),
         ReadConfig::Legacy => return Ok(Loaded::Legacy),
     };
     let mut needs_save = false;
@@ -128,17 +129,21 @@ pub fn save_from(mut input: impl Read) -> Result<bool> {
         Err(_) if serde_json::from_slice::<&RawValue>(&bytes.0).is_ok() => return Ok(false),
         Err(_) => return Err("Invalid configuration save request".into()),
     };
-    save(&request.file, &request.data_dir, &request.config)?;
+    save_config(&request.file, &request.data_dir, &request.config, false)?;
     Ok(true)
 }
 
 pub fn save(file: &Path, directory: &Path, value: &Value) -> Result<()> {
+    save_config(file, directory, value, true)
+}
+
+fn save_config(file: &Path, directory: &Path, value: &Value, standalone: bool) -> Result<()> {
     if !value.is_object() {
         return Err("Invalid configuration save request".into());
     }
     let file = absolute(file)?;
     let expected = atomic_file::current_stamp(&file)?;
-    let mut config = select(value);
+    let mut config = select(value, standalone);
     secrets(&mut config, directory, true)?;
     let parent = file.parent().ok_or("Missing configuration directory")?;
     fs::create_dir_all(parent)?;
@@ -172,7 +177,7 @@ pub(crate) fn stage_backup(
             fields.remove(name);
         }
     }
-    let mut decoded = select(&config);
+    let mut decoded = select(&config, true);
     secrets(&mut decoded, folder, false)?;
     let decoded = serde_json::to_value(decoded)?;
     validate(&decoded)?;
@@ -200,11 +205,17 @@ fn read(file: &Path) -> Result<ReadConfig> {
     }
 }
 
-fn select(value: &Value) -> Settings {
-    fields()
+fn select(value: &Value, standalone: bool) -> Settings {
+    let fields = fields();
+    let standalone_fields = if standalone {
+        fields.rust_properties.as_slice()
+    } else {
+        &[]
+    };
+    fields
         .properties
         .iter()
-        .chain(&fields().rust_properties)
+        .chain(standalone_fields)
         .filter_map(|name| {
             value
                 .get(name.as_str())
@@ -285,7 +296,7 @@ fn secrets(config: &mut Settings, directory: &Path, encrypt: bool) -> Result<boo
     let file = directory.join("secret.key");
     let mut key = None;
     let mut needs_save = false;
-    for path in &fields().secrets {
+    for path in fields().secrets.iter().chain(&fields().rust_secrets) {
         let value = match path.split_once('.') {
             Some((object, property)) => config
                 .get_mut(object)
