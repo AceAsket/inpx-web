@@ -17,7 +17,7 @@ use super::{
     delivery::{self, Channels, Delivery},
 };
 use crate::opds::standalone::Opds;
-use crate::request_access::{BrowserConnection, LIVE_FIELDS};
+use crate::request_access::{BrowserConnection, LIVE_FIELDS, split_proxy_cidrs};
 use crate::standalone_access::LiveOpds;
 
 const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch bookReadLink isbnThreads
@@ -41,6 +41,8 @@ const INTEGRATIONS: &[(&str, &str)] = &[
     ("telegramShareEnabled", "INPX_TELEGRAM_SHARE_ENABLED"),
     ("telegramBotEnabled", "INPX_TELEGRAM_BOT_ENABLED"),
     ("telegramBotToken", "TELEGRAM_BOT_TOKEN"),
+    ("telegramApiMode", "INPX_TELEGRAM_API_MODE"),
+    ("telegramApiUrl", "INPX_TELEGRAM_API_URL"),
     ("telegramIpFamily", "TELEGRAM_IP_FAMILY"),
     ("telegramProxyMode", "TELEGRAM_PROXY_MODE"),
     ("telegramProxyProtocol", "TELEGRAM_PROXY_PROTOCOL"),
@@ -678,7 +680,7 @@ impl Settings {
                 }
                 if let Some(access) = access {
                     state.request_access.apply(access);
-                } else if fields.keys().any(|key| super::runtime::known(key)) {
+                } else if telegram_changed || fields.keys().any(|key| super::runtime::known(key)) {
                     state.request_access.refresh_clients();
                 }
                 Ok(match action {
@@ -932,6 +934,8 @@ fn integrations(config: &Value, state: &State) -> Value {
         result[*status] = configured.into();
     }
     result["telegramBotStatus"] = state.delivery.telegram().status();
+    result["telegramApiModeLocked"] = std::env::var("INPX_TELEGRAM_API_MODE").is_ok().into();
+    result["telegramApiUrlLocked"] = std::env::var("INPX_TELEGRAM_API_URL").is_ok().into();
     result
 }
 
@@ -959,6 +963,7 @@ fn effective_integrations(config: &Value) -> Value {
         result[key] = delivery::boolean(config, env, key, default).into();
     }
     for (key, default) in [
+        ("telegramApiMode", "cloud"),
         ("telegramIpFamily", "auto"),
         ("telegramProxyMode", "system"),
         ("telegramProxyProtocol", "http"),
@@ -982,10 +987,13 @@ fn effective_integrations(config: &Value) -> Value {
 
 fn integration_patch(config: &Value, patch: &Value) -> Result<Value> {
     let mut next = json!({});
-    for (key, _) in INTEGRATIONS {
+    for (key, env) in INTEGRATIONS {
         let Some(value) = patch.get(key) else {
             continue;
         };
+        if matches!(*key, "telegramApiMode" | "telegramApiUrl") && std::env::var(env).is_ok() {
+            return Err(format!("Параметр задан через {env}").into());
+        }
         next[*key] = match *key {
             "telegramShareEnabled" | "telegramBotEnabled" | "emailShareEnabled" | "smtpSecure" => {
                 value
@@ -1037,6 +1045,9 @@ fn integration_patch(config: &Value, patch: &Value) -> Result<Value> {
         .as_object_mut()
         .expect("settings")
         .extend(next.as_object().expect("patch").clone());
+    if next.get("telegramApiMode").is_some() || next.get("telegramApiUrl").is_some() {
+        super::telegram::api_endpoint(&combined)?;
+    }
     let effective = effective_integrations(&combined);
     validate_integration_fields(&effective)?;
     Ok(next)
@@ -1110,6 +1121,11 @@ fn import(current: &Value, data: &Value, limit: usize) -> Result<Value> {
         return Err("Файл настроек имеет неверный формат".into());
     }
     let mut patch = pick(body);
+    if let Some(cidrs) = patch.get_mut("trustedProxyCidrs")
+        && let Some(value) = cidrs.as_str()
+    {
+        *cidrs = json!(split_proxy_cidrs(value).collect::<Vec<_>>());
+    }
     if let Some(value) = patch.get("isbnThreads") {
         super::isbn::thread_setting(value)?;
     }

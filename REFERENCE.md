@@ -1,6 +1,6 @@
 # Справочник INPX Web
 
-Сервер Rust 2.0.2, классический Node.js и варианты установки перечислены на [главной странице](./README.md).
+Сервер Rust 2.0.3, классический Node.js и варианты установки перечислены на [главной странице](./README.md).
 
 В гостевом режиме `/ebook` для Kindle сначала выберите
 «Применить формат», затем «Скачать MOBI» по ссылке с расширением файла.
@@ -131,7 +131,7 @@
 
 ## Сборка Docker-контейнера
 
-Docker-образ Rust 2.0.2 для Linux x64 доступен по тегу `aceasket/inpx-web-7z:2.0.2`. Тег `latest` указывает на этот же образ Rust. Для Linux ARM64 используйте standalone-архив. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
+Docker-образ Rust 2.0.3 для Linux x64 доступен по тегу `aceasket/inpx-web-7z:2.0.3`. Тег `latest` указывает на этот же образ Rust. Для Linux ARM64 используйте standalone-архив. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
 
 Готовые YAML-примеры:
 
@@ -144,7 +144,7 @@ Docker-образ Rust 2.0.2 для Linux x64 доступен по тегу `ac
 Для самостоятельной сборки сначала получите исходники релиза:
 
 ```sh
-git clone --branch v2.0.2 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v2.0.3 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 ```
 
@@ -218,7 +218,7 @@ docker run -d \
   -v /path/on/host/fb2cng:/config/fb2cng:ro \
   -v /path/on/host/library:/library:ro \
   -v /path/on/host/data:/usr/local/bin/.inpx-web \
-  aceasket/inpx-web-7z:2.0.2
+  aceasket/inpx-web-7z:2.0.3
 ```
 
 В fb2cng 2.1.1 настройки Markdown-изображений находятся в `document.markdown.images`. При обновлении собственного YAML перенесите туда параметры из `document.images.markdown`. Прежний флаг `--kfx-compression` в настройках приложения сохраняет своё действие для KFX и AZW8.
@@ -284,7 +284,7 @@ docker run -d \
 Для обновления сначала скачайте новый образ, затем пересоздайте контейнер. Повторите свою исходную команду `docker run`, заменив только тег образа: сохраните все переменные окружения, порты и тома, включая `INPX_LIBRARY_SOURCES`, настройки авторизации и отправки книг. Ниже пример для одной библиотеки; замените пути на свои. Команды соединены через `&&`, чтобы не удалять работающий контейнер при ошибке скачивания образа.
 
 ```sh
-docker pull aceasket/inpx-web-7z:2.0.2 &&
+docker pull aceasket/inpx-web-7z:2.0.3 &&
 docker rm -f inpx-web &&
 docker run -d \
   --name=inpx-web \
@@ -297,7 +297,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:2.0.2
+  aceasket/inpx-web-7z:2.0.3
 ```
 
 При локальной сборке используйте имя своего образа. Если сервис запущен через Compose, сохраните настройки в YAML, укажите нужный тег в `image` и выполните `docker compose pull && docker compose up -d`.
@@ -318,7 +318,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:2.0.2
+  aceasket/inpx-web-7z:2.0.3
 ```
 
 Важно:
@@ -681,6 +681,25 @@ OPDS поддерживает исходные и доступные серве�
 
 В админ-панели можно сохранить параметры Telegram/SMTP и сразу проверить подключение: Telegram проверяется через Bot API `getMe`, SMTP — через подключение к серверу и `verify`.
 
+### Локальный Telegram Bot API в Rust 2.x
+
+Обычный режим принимает вложения до 50 МБ. Для файлов до 2000 МБ запустите [Telegram Bot API Server](https://github.com/tdlib/telegram-bot-api#usage) с `--local` и собственными `api_id` и `api_hash`. При переносе действующего бота выполните [выход из облачного Bot API](https://core.telegram.org/bots/api#logout), затем переключите адрес. Используйте тот же токен бота.
+
+В **Отправке книг** выберите **Telegram Bot API → Локальный**, введите базовый адрес без токена и нажмите **Проверить**. Изменение действует без перезапуска. INPX Web передаёт вложение потоком по HTTP. Тайм-аут отправки в локальном режиме составляет 30 минут.
+
+Для Compose с двумя сервисами в общей сети можно задать переменные для `inpx-web`.
+
+```yaml
+environment:
+  INPX_TELEGRAM_API_MODE: "local"
+  INPX_TELEGRAM_API_URL: "http://telegram-bot-api:8081"
+  TELEGRAM_PROXY_MODE: "direct"
+```
+
+`INPX_TELEGRAM_API_MODE` и `INPX_TELEGRAM_API_URL` имеют приоритет над админкой. При наличии только `INPX_TELEGRAM_API_URL` в стандартном режиме действует лимит 50 МБ. Для standalone на той же машине укажите адрес вашего сервера, например `http://127.0.0.1:8081`.
+
+### Переменные окружения для отправки книг
+
 Пример `docker run` с включённой отправкой:
 
 ```sh
@@ -703,7 +722,7 @@ docker run -d \
   -e EMAIL_FROM=user@example.com \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:2.0.2
+  aceasket/inpx-web-7z:2.0.3
 ```
 
 Переменные для Telegram:
@@ -888,7 +907,7 @@ http://<ваш_хост>:12380/opds/v2?user=<profileId>
 
 Начиная с **1.7.9-rc.1**, сервер поддерживает нативный [Custom metadata provider Audiobookshelf](https://audiobookshelf.org/docs/documentation/community/community-providers/). Он позволяет подбирать метаданные для аудиокниги по электронным книгам в INPX-библиотеке, включая самостоятельно озвученные книги.
 
-Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:2.0.2` и добавьте к своей команде запуска:
+Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:2.0.3` и добавьте к своей команде запуска:
 
 ```sh
 -e INPX_ABS_ENABLED=true \

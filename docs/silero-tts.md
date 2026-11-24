@@ -4,7 +4,7 @@
 
 Экспериментальная серверная озвучка русских FB2, **выключенная по умолчанию**. Включается только при запуске контейнера переменной `INPX_TTS_ENABLED=true`; настройки администратора эту опцию не меняют. Silero работает в отдельном CPU-контейнере; основное приложение не требует Python или PyTorch. Текст книги передаётся только вашему сервису Silero.
 
-Для Rust **2.0.2** используйте основной образ `aceasket/inpx-web-7z:2.0.2` и сервис `aceasket/inpx-web-7z:2.0.2-silero`. Эти теги используются по умолчанию в `docker-compose.silero.yml`. При обновлении обоих контейнеров подключите прежние тома данных и моделей.
+Для Rust **2.0.3** используйте основной образ `aceasket/inpx-web-7z:2.0.3` и сервис `aceasket/inpx-web-7z:2.0.3-silero`. Эти теги используются по умолчанию в `docker-compose.silero.yml`. При обновлении обоих контейнеров подключите прежние тома данных и моделей.
 
 ## Docker Compose
 
@@ -18,27 +18,27 @@ docker compose -f docker-compose.yml -f docker-compose.silero.yml --profile tts 
 
 Образы предназначены для Linux x64. Для сборки из исходников используйте `--build` вместо `--no-build`, пропустите `pull` и задайте `INPX_TTS_MODEL=v5_6_ru` для текущей модели.
 
-При первой озвучке сервис скачает официальную модель в постоянный том `silero-models`. Образ Silero 2.0.2 использует `v5_6_ru`. В примере Compose для существующих установок закреплена `v5_5_ru`. Переменная `INPX_TTS_MODEL` задаёт одну модель для обоих контейнеров. Для загрузки модели нужен доступ к `models.silero.ai`. Последующие запуски используют локальный файл. Контейнер по умолчанию использует до 4 CPU и 4 ГБ RAM. `/health` показывает выбранную модель и состояние её загрузки.
+При первой озвучке сервис скачает официальную модель в постоянный том `silero-models`. Образ Silero 2.0.3 использует `v5_6_ru`. В примере Compose для существующих установок закреплена `v5_5_ru`. Переменная `INPX_TTS_MODEL` задаёт одну модель для обоих контейнеров. Для загрузки модели нужен доступ к `models.silero.ai`. Последующие запуски используют локальный файл. Контейнер по умолчанию использует до 4 CPU и 4 ГБ RAM. `/health` показывает выбранную модель и состояние её загрузки.
 
 Сервис Silero включён в необязательный Compose-профиль `tts`. Без `--profile tts` он не запускается; основной контейнер работает без него. Сам адрес `INPX_TTS_URL` не включает озвучку. Чтобы выключить озвучку, задайте `INPX_TTS_ENABLED=false` и пересоздайте основной контейнер; ненужный сервис можно остановить командой `docker compose -f docker-compose.yml -f docker-compose.silero.yml stop silero`.
 
-### Переход на 2.0.2
+### Переход на 2.0.3
 
 Для Compose задайте версию обоих образов и общую модель перед запуском команд выше.
 
 ```sh
-export INPX_TTS_RELEASE=2.0.2
+export INPX_TTS_RELEASE=2.0.3
 export INPX_TTS_MODEL=v5_6_ru
 ```
 
-На Unraid выберите теги `2.0.2` и `2.0.2-silero`. Если в шаблонах уже задана модель, установите `INPX_TTS_MODEL=v5_6_ru` в INPX Web и `SILERO_MODEL=v5_6_ru` в Silero. Сохраните том `/models`. Новая модель скачается при первом синтезе и будет использовать свой кэш MP3. Для возврата к `v5_5_ru` задайте её в обоих контейнерах.
+На Unraid выберите теги `2.0.3` и `2.0.3-silero`. Если в шаблонах уже задана модель, установите `INPX_TTS_MODEL=v5_6_ru` в INPX Web и `SILERO_MODEL=v5_6_ru` в Silero. Сохраните том `/models`. Новая модель скачается при первом синтезе и будет использовать свой кэш MP3. Для возврата к `v5_5_ru` задайте её в обоих контейнерах.
 
-### Rust 2.0.2 на Unraid
+### Rust 2.0.3 на Unraid
 
 Для существующего контейнера INPX Web на Unraid загрузите сервис отдельно:
 
 ```sh
-docker pull aceasket/inpx-web-7z:2.0.2-silero
+docker pull aceasket/inpx-web-7z:2.0.3-silero
 ```
 
 Подключите оба контейнера к одной пользовательской Docker-сети, запустите Silero с именем `silero`, портом `8000` внутри сети и постоянным томом `/models`. В **новой сборке** INPX Web задайте `INPX_TTS_ENABLED=true` и `INPX_TTS_URL=http://silero:8000`. При использовании разных хостов укажите адрес и доступный порт вашего Silero. После изменения переменных пересоздайте контейнер INPX Web.
@@ -48,20 +48,20 @@ docker pull aceasket/inpx-web-7z:2.0.2-silero
 Для нового сервиса Silero создайте сеть и запустите контейнер. Порт сервиса остаётся внутри сети; модель хранится в `/mnt/user/appdata/inpx-silero`.
 
 ```sh
-docker pull aceasket/inpx-web-7z:2.0.2-silero &&
+docker pull aceasket/inpx-web-7z:2.0.3-silero &&
 (docker network inspect inpx-tts >/dev/null 2>&1 || docker network create inpx-tts) &&
 docker run -d --name silero --restart unless-stopped --network inpx-tts \
   --cpus=4 --memory=4g \
   -e SILERO_MODEL=v5_6_ru -e SILERO_THREADS=4 -e SILERO_STRESS_ENABLED=true \
   -v /mnt/user/appdata/inpx-silero:/models \
-  aceasket/inpx-web-7z:2.0.2-silero
+  aceasket/inpx-web-7z:2.0.3-silero
 ```
 
 Затем замените существующий `inpx-web`, сохранив переменные запуска, включая токен Audiobookshelf. Команда ниже использует пути стенда `/mnt/user/appdata/inpx-web` и `/mnt/user/Torrents`.
 
 ```sh
 inpx_env_file=$(mktemp) &&
-docker pull aceasket/inpx-web-7z:2.0.2 &&
+docker pull aceasket/inpx-web-7z:2.0.3 &&
 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' inpx-web > "$inpx_env_file" &&
 docker stop inpx-web && docker rm inpx-web &&
 docker run -d --name inpx-web --restart unless-stopped --network inpx-tts \
@@ -71,7 +71,7 @@ docker run -d --name inpx-web --restart unless-stopped --network inpx-tts \
   -e INPX_TTS_MODEL=v5_6_ru \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/Torrents:/library:ro \
-  aceasket/inpx-web-7z:2.0.2 &&
+  aceasket/inpx-web-7z:2.0.3 &&
 rm -f "$inpx_env_file"
 ```
 
@@ -83,18 +83,18 @@ rm -f "$inpx_env_file"
 
 ```sh
 silero_env_file=$(mktemp) &&
-docker pull aceasket/inpx-web-7z:2.0.2-silero &&
+docker pull aceasket/inpx-web-7z:2.0.3-silero &&
 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' silero > "$silero_env_file" &&
 docker stop silero && docker rm silero &&
 docker run -d --name silero --restart unless-stopped --network inpx-tts \
   --cpus=4 --memory=4g --env-file "$silero_env_file" \
   -e SILERO_MODEL=v5_6_ru -e SILERO_THREADS=4 -e SILERO_STRESS_ENABLED=true \
   -v /mnt/user/appdata/inpx-silero:/models \
-  aceasket/inpx-web-7z:2.0.2-silero &&
+  aceasket/inpx-web-7z:2.0.3-silero &&
 rm -f "$silero_env_file"
 ```
 
-Для обновления с предыдущих выпусков используйте образы `2.0.2` и `2.0.2-silero` вместе. Подключите прежний том `/models`, чтобы использовать уже загруженные модели.
+Для обновления с предыдущих выпусков используйте образы `2.0.3` и `2.0.3-silero` вместе. Подключите прежний том `/models`, чтобы использовать уже загруженные модели.
 
 ## Использование
 

@@ -8,7 +8,7 @@ on:
       tag:
         description: Git tag to build and publish
         required: true
-        default: v2.0.2
+        default: v2.0.3
       test_only:
         description: Build and test a tag or commit without publishing images
         type: boolean
@@ -100,6 +100,7 @@ jobs:
           INPX_SMOKE_EPUB: 'true'
         run: |
           node scripts/binary-smoke-test.js --image "$IMAGE" --rust
+          node scripts/rust-proxy-cidr-tests.js "$IMAGE"
           node scripts/rust-conversion-tests.js "$IMAGE"
       - name: Test Silero text preparation and real audio
         if: matrix.component == 'silero'

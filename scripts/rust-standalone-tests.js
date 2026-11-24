@@ -39,7 +39,7 @@ async function bundle(file) {
 function environment() {
     const env = {...process.env};
     for (const name of Object.keys(env))
-        if (/^(PATH|INPX_(REQUIRE_AUTH|ALLOW_ANONYMOUS_ACCESS|AUTH_MODE|AUTH_EXEMPT_HEALTH|TRUST_PROXY|TRUSTED_PROXY_CIDRS|PROXY_AUTH_HEADER|PROXY_BIND_PROFILE|LOGIN_RATE_LIMIT_ENABLED|RESOURCE_.*|CONVERSION_CONCURRENCY|RESET_ADMIN_PASSWORD|LIBRARY_SOURCES|OPDS_COMPATIBILITY|OPDS_FEEDS_FILE|KOSYNC_ENABLED|LOG_LEVEL|LOW_MEMORY_MODE|WS_MESSAGE_LIMIT_MB|IMPORT_LIMIT_MB|BACKUP_(UPLOAD|EXPANDED)_LIMIT_MB|ENABLE_CONVERSION|CONVERSION_FORMATS|ADMIN_.*|METRICS_.*|ABS_.*|RUST_.*)|LIBRARY_SOURCES|LIBDIR|INPX)$/i.test(name))
+        if (/^(PATH|INPX_(REQUIRE_AUTH|ALLOW_ANONYMOUS_ACCESS|AUTH_MODE|AUTH_EXEMPT_HEALTH|TRUST_PROXY|TRUSTED_PROXY_CIDRS|PROXY_AUTH_HEADER|PROXY_BIND_PROFILE|LOGIN_RATE_LIMIT_ENABLED|RESOURCE_.*|CONVERSION_CONCURRENCY|RESET_ADMIN_PASSWORD|LIBRARY_SOURCES|OPDS_COMPATIBILITY|OPDS_FEEDS_FILE|KOSYNC_ENABLED|LOG_LEVEL|LOW_MEMORY_MODE|WS_MESSAGE_LIMIT_MB|IMPORT_LIMIT_MB|BACKUP_(UPLOAD|EXPANDED)_LIMIT_MB|ENABLE_CONVERSION|CONVERSION_FORMATS|ADMIN_.*|METRICS_.*|ABS_.*|RUST_.*|TELEGRAM_.*)|TELEGRAM_.*|LIBRARY_SOURCES|LIBDIR|INPX)$/i.test(name))
             delete env[name];
     return {...env,PATH:'',INPX_BOOK_FILENAME_TEMPLATE:'[${TITLE}] Тест.${EXT}'};
 }
@@ -1262,7 +1262,22 @@ async function verifyProxy(binary, args, data, settings, config, detail) {
         assert.equal(response.status,status,path);
         return response;
     };
-    await fs.writeFile(config,JSON.stringify({...settings,allowAnonymousAccess:false}));
+    const legacyCidrs = '192.0.2.10/32, 127.0.0.1';
+    await fs.writeFile(config,JSON.stringify({...settings,authMode:'local',trustProxy:true,trustedProxyCidrs:legacyCidrs}));
+    const legacy = await start(binary,args);
+    try {
+        const headers = {Host:'books.example.invalid','X-Forwarded-Proto':'https','X-Forwarded-Scheme':'https'};
+        const page = await check(legacy,'/reader/',200,{headers});
+        const cookie = page.headers.get('set-cookie');
+        assert.match(cookie,/; Secure$/);
+        await page.body.cancel();
+        const ws = await wsClient(legacy.url,cookie.split(';')[0],{...headers,origin});
+        try { assert.ok((await ws.request({action:'get-config'})).csrfToken); }
+        finally { ws.close(); }
+        await assert.rejects(wsClient(legacy.url,null,{...headers,origin:'https://other.example.invalid'}),/403/);
+    } finally { await legacy.stop(); }
+
+    await fs.writeFile(config,JSON.stringify({...settings,allowAnonymousAccess:false,trustedProxyCidrs:legacyCidrs}));
     const untrusted = await start(binary,args,{...env,INPX_TRUSTED_PROXY_CIDRS:'192.0.2.0/24'});
     try {
         const spoofed = {...alice,'X-Forwarded-For':'192.0.2.1'};
@@ -2186,6 +2201,85 @@ async function verifyStandaloneIpv6(binary, root) {
     console.log('ok standalone direct IPv6 over HTTP and WebSocket, independent of proxy CIDRs');
 }
 
+async function verifyTelegramApi(binary, root) {
+    const {connect,signIn} = require('./rust-events-tests');
+    const library = join(root,'library'), data = join(root,'data'), web = join(root,'web.json');
+    const password = 'telegram-api-fixture', token = '123456:telegram-api-fixture';
+    const title = 'Large Telegram fixture';
+    const content = Buffer.alloc(51 * 1024 * 1024, 'a');
+    const row = ['Test,Author:','sf:',title,'','','1',content.length,'1','0','txt','2026-11-23','en','0',''].join('\x04');
+    await fs.mkdir(library,{recursive:true});
+    await fs.writeFile(join(library,'telegram.inpx'),await zip([['telegram.inp',row+'\n']]));
+    await fs.writeFile(join(library,'telegram.zip'),await zip([['1.txt',content]]));
+    await bundle(web);
+
+    const calls = [];
+    const relay = createServer(async (req,res) => {
+        let length = 0;
+        for await (const chunk of req) length += chunk.length;
+        calls.push({url:req.url,type:req.headers['content-type'],length});
+        res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify({ok:true,result:{username:'fixture_bot'}}));
+    });
+    relay.listen(0,'127.0.0.1');
+    await once(relay,'listening');
+    const url = `http://127.0.0.1:${relay.address().port}/relay/`;
+    const args = ['--standalone','--host=127.0.0.1','--data-dir='+data,'--lib-dir='+library,
+        '--web-bundle='+web,'--admin-password='+password];
+    const env = {TELEGRAM_BOT_TOKEN:token, TELEGRAM_PROXY_MODE:'direct'};
+    let server, client;
+    try {
+        server = await start(binary,args,env);
+        client = await connect(server.url);
+        let identity = await signIn(client,'admin',password);
+        const send = (action, fields={}) => client.send(action,{...identity,...fields});
+        const save = integrations => send('update-admin-integrations',{integrations});
+        assert.equal((await send('get-config')).adminIntegrations.telegramApiMode,'cloud');
+        assert.equal((await send('update-user-profile',{targetUserId:identity.userId,profile:{telegramChatId:'123'}})).error,undefined);
+        const bookUid = (await send('bookSearch',{query:{title:'='+title}})).found[0]._uid;
+        const upload = () => send('send-book-telegram',{bookUid,format:'original'});
+        assert.match((await upload()).error,/50 МБ/);
+        assert.match((await save({telegramApiMode:'local'})).error,/Укажите адрес/);
+        assert.match((await save({telegramApiMode:'local',telegramApiUrl:'http://user@localhost:8081'})).error,/Некорректный адрес/);
+        assert.match((await save({telegramApiMode:'local',telegramApiUrl:'https://api.telegram.org'})).error,/--local/);
+        assert.equal((await save({telegramApiMode:'local',telegramApiUrl:url})).integrations.telegramApiMode,'local');
+        assert.equal((await send('get-config')).telegramUploadTimeoutSeconds,1830);
+        assert.equal((await send('test-admin-integration',{kind:'telegram'})).username,'fixture_bot');
+        assert.equal((await upload()).success,true);
+        assert.equal(calls[0].url,`/relay/bot${token}/getMe`);
+        assert.equal(calls[1].url,`/relay/bot${token}/sendDocument`);
+        assert.match(calls[1].type,/^multipart\/form-data/);
+        assert(calls[1].length > content.length);
+
+        client.close();
+        await server.stop();
+        server = await start(binary,args,env);
+        client = await connect(server.url);
+        identity = await signIn(client,'admin',password);
+        assert.equal((await send('get-config')).adminIntegrations.telegramApiUrl,url);
+        assert.equal((await save({telegramApiMode:'cloud'})).integrations.telegramApiMode,'cloud');
+        assert.equal((await send('get-config')).telegramUploadTimeoutSeconds,300);
+        assert.match((await upload()).error,/50 МБ/);
+        assert.equal(calls.length,2);
+
+        client.close();
+        await server.stop();
+        server = await start(binary,args,{...env,INPX_TELEGRAM_API_MODE:'local',INPX_TELEGRAM_API_URL:url});
+        client = await connect(server.url);
+        identity = await signIn(client,'admin',password);
+        const config = (await send('get-config')).adminIntegrations;
+        assert.equal(config.telegramApiModeLocked,true);
+        assert.equal(config.telegramApiUrlLocked,true);
+        assert.match((await save({telegramApiMode:'cloud'})).error,/INPX_TELEGRAM_API_MODE/);
+        assert.equal((await upload()).success,true);
+        assert.equal(calls.length,3);
+    } finally {
+        client?.close();
+        await server?.stop();
+        await new Promise(resolve=>relay.close(resolve));
+    }
+    console.log('ok Telegram local Bot API, multipart upload above 50 MiB, cloud limit, persistence and environment');
+}
+
 async function verifyRuntimeSettings(binary, root) {
     const {connect, signIn, waitFor} = require('./rust-events-tests');
     const library = join(root, 'library'), data = join(root, 'data'), web = join(root, 'web.json');
@@ -2206,6 +2300,11 @@ async function verifyRuntimeSettings(binary, root) {
             assert((await search()).totalFound > 0);
             assert.match((await guest.send('update-admin-access', {access:{allowAnonymousAccess:false}})).error, /need_profile_login|администратора/);
             assert.match((await update({trustedProxyCidrs:['192.0.2.1/64']})).error, /IPv4\/IPv6/);
+            const importCidrs = trustedProxyCidrs => admin.send('import-admin-settings',{...identity,data:{trustedProxyCidrs}});
+            assert.match((await importCidrs('192.0.2.1/64')).error,/IPv4\/IPv6/);
+            assert.equal((await importCidrs('127.0.0.1, 192.0.2.10/32')).success,true);
+            assert.deepEqual((await admin.send('get-config',identity)).adminAccess.trustedProxyCidrs,
+                ['127.0.0.1/32','192.0.2.10/32']);
             assert.equal((await update({allowAnonymousAccess:false})).access.allowAnonymousAccess, false);
             await waitFor(()=>guest.events, events=>events.some(event=>event.kind==='access-policy'), 'Open WebSocket did not receive the policy change');
             assert.equal((await search()).error, 'need_profile_login');
@@ -2948,6 +3047,7 @@ async function verifyJembaUpgrade(binary, root) {
         await verifyProfileCommands(binary,join(root,'profile-commands'));
         await verifySeriesZip(binary,join(root,'series-zip'));
         await verifyCacheSettings(binary,join(root,'cache-settings'));
+        await verifyTelegramApi(binary,join(root,'telegram-api'));
         await verifyRuntimeSettings(binary,join(root,'runtime-settings'));
         await verifyResourceProfiles(binary,join(root,'resource-profiles'));
         await verifyMobileEvents(binary,join(root,'mobile-events'));

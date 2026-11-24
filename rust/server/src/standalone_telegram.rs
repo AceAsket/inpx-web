@@ -21,7 +21,10 @@ use crate::standalone_access::BrowserProfileRequest;
 #[path = "standalone_telegram_chat.rs"]
 mod chat;
 
-const MAX_DOCUMENT: u64 = 50 * 1024 * 1024;
+const CLOUD_MAX_MIB: u64 = 50;
+const LOCAL_MAX_MIB: u64 = 2000;
+const CLOUD_UPLOAD_SECONDS: u64 = 270;
+const LOCAL_UPLOAD_SECONDS: u64 = 1800;
 const LINK_TIME: Duration = Duration::from_secs(600);
 type AsyncResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -30,6 +33,7 @@ pub(super) struct Telegram {
     interactive: bool,
     token: String,
     caption: String,
+    local_api: bool,
     transport: std::result::Result<(Url, Client), String>,
     offset_file: PathBuf,
     bot: Mutex<Bot>,
@@ -75,8 +79,12 @@ impl Telegram {
                 "telegramBotEnabled",
                 false,
             );
+        let endpoint = api_endpoint(config);
+        let local_api = endpoint.as_ref().is_ok_and(|(_, local)| *local);
         let transport = if !token.is_empty() {
-            transport(config).map_err(|error| error.to_string())
+            endpoint
+                .and_then(|(url, _)| Ok((url, transport(config)?)))
+                .map_err(|error| error.to_string())
         } else {
             Err("Отправка в Telegram отключена в настройках".into())
         };
@@ -84,6 +92,7 @@ impl Telegram {
             send,
             interactive,
             token,
+            local_api,
             transport,
             offset_file: data.join("telegram-bot-state.json"),
             caption: if caption.is_empty() {
@@ -123,8 +132,13 @@ impl Telegram {
         file: &Path,
         name: &str,
     ) -> Result<()> {
-        if tokio::fs::metadata(file).await?.len() > MAX_DOCUMENT {
-            return Err("Telegram принимает файлы не больше 50 МБ".into());
+        let max_mib = if self.local_api {
+            LOCAL_MAX_MIB
+        } else {
+            CLOUD_MAX_MIB
+        };
+        if tokio::fs::metadata(file).await?.len() > max_mib * 1024 * 1024 {
+            return Err(format!("Telegram принимает файлы не больше {max_mib} МБ").into());
         }
         let caption = book.caption(&self.caption)?;
         let caption = if caption.encode_utf16().count() > 1024 {
@@ -142,12 +156,24 @@ impl Telegram {
         self.response(
             self.request("sendDocument")
                 .map_err(|error| error.to_string())?
-                .timeout(Duration::from_secs(270))
+                .timeout(Duration::from_secs(self.upload_seconds()))
                 .multipart(form),
         )
         .await
         .map_err(|error| error.to_string())?;
         Ok(())
+    }
+
+    fn upload_seconds(&self) -> u64 {
+        if self.local_api {
+            LOCAL_UPLOAD_SECONDS
+        } else {
+            CLOUD_UPLOAD_SECONDS
+        }
+    }
+
+    pub(super) fn client_upload_seconds(&self) -> u64 {
+        self.upload_seconds() + 30
     }
 
     fn request(&self, method: &str) -> AsyncResult<RequestBuilder> {
@@ -162,10 +188,13 @@ impl Telegram {
     }
 
     async fn response(&self, request: RequestBuilder) -> AsyncResult<Value> {
-        let mut response = request
-            .send()
-            .await
-            .map_err(|_| "Telegram API недоступен, проверьте сеть и прокси")?;
+        let mut response = request.send().await.map_err(|error| {
+            if error.is_timeout() {
+                "Истекло время ожидания ответа Telegram API"
+            } else {
+                "Telegram API недоступен, проверьте сеть и прокси"
+            }
+        })?;
         let status = response.status();
         let mut bytes = Vec::new();
         while let Some(chunk) = response
@@ -471,9 +500,23 @@ impl Bot {
     }
 }
 
-fn transport(config: &Value) -> Result<(Url, Client)> {
-    let base = std::env::var("INPX_TELEGRAM_API_URL")
-        .unwrap_or_else(|_| "https://api.telegram.org/".into());
+pub(super) fn api_endpoint(config: &Value) -> Result<(Url, bool)> {
+    let mode = setting(config, "INPX_TELEGRAM_API_MODE", "telegramApiMode");
+    let local = match mode.trim() {
+        "" | "cloud" => false,
+        "local" => true,
+        _ => return Err("Режим Telegram Bot API должен быть cloud или local".into()),
+    };
+    let base = std::env::var("INPX_TELEGRAM_API_URL").unwrap_or_else(|_| {
+        if local {
+            config["telegramApiUrl"].as_str().unwrap_or_default().into()
+        } else {
+            "https://api.telegram.org/".into()
+        }
+    });
+    if local && base.trim().is_empty() {
+        return Err("Укажите адрес локального Telegram Bot API".into());
+    }
     let url = Url::parse(&base).map_err(|_| "Некорректный адрес Telegram API")?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host().is_none()
@@ -484,6 +527,17 @@ fn transport(config: &Value) -> Result<(Url, Client)> {
     {
         return Err("Некорректный адрес Telegram API".into());
     }
+    if local
+        && url
+            .host_str()
+            .is_some_and(|host| host.trim_end_matches('.') == "api.telegram.org")
+    {
+        return Err("Укажите адрес сервера Telegram Bot API, запущенного с --local".into());
+    }
+    Ok((url, local))
+}
+
+fn transport(config: &Value) -> Result<Client> {
     let family = setting(config, "TELEGRAM_IP_FAMILY", "telegramIpFamily");
     let mut client = Client::builder()
         .connect_timeout(Duration::from_secs(20))
@@ -544,12 +598,9 @@ fn transport(config: &Value) -> Result<(Url, Client)> {
         }
         _ => return Err("Telegram прокси: direct, system или custom".into()),
     }
-    Ok((
-        url,
-        client
-            .build()
-            .map_err(|_| "Не удалось создать клиент Telegram")?,
-    ))
+    client
+        .build()
+        .map_err(|_| "Не удалось создать клиент Telegram".into())
 }
 
 fn safe_number(value: &Value) -> Option<u64> {

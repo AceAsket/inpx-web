@@ -948,7 +948,8 @@ class Api {
     }
 
     async sendBookTelegram(bookUid, format = '') {
-        return await this.request({action: 'send-book-telegram', bookUid, format}, 300);
+        const timeout = this.$store.state.config?.telegramUploadTimeoutSeconds || 300;
+        return await this.request({action: 'send-book-telegram', bookUid, format}, timeout);
     }
 
     async sendBookEmail(bookUid, format = '') {

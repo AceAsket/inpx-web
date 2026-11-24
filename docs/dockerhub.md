@@ -8,9 +8,9 @@
 
 ### Возможности
 
-**Rust 2.0.2** поддерживает каталоги LightLib INPX v2, показывает прогресс скачивания серии в ZIP и повторяет загрузку обложек после временного сбоя. Обложки JPEG XL по умолчанию открывает встроенный декодер с резервным `djxl`. [История выпуска](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.2)
+**Rust 2.0.3** добавляет настройки сервера без перезапуска, технический журнал с ротацией и отправку крупных вложений через локальный Telegram Bot API. Сервер поддерживает списки доверенных IPv4/IPv6-прокси в строке и в массиве. [История выпуска](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.3)
 
-- Превью книг и вкладки загружаются по запросу. Кэши ограничены, проверка производительности показывает CPU, память и время отклика. [Профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v2.0.2/docs/resource-profiles.md)
+- Превью книг и вкладки загружаются по запросу. Кэши ограничены, проверка производительности показывает CPU, память и время отклика. [Профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v2.0.3/docs/resource-profiles.md)
 - Подсказки от трёх символов работают без подготовки и опроса; обычный поиск доступен сразу. Галерея: до 18 иллюстраций, 2 МиБ на изображение, 8 МиБ суммарно, 32 МиБ FB2 XML. Диагностика: `failedByCode`, `failedByKind`. Telegram: напрямую, через окружение сервера или свой HTTP(S)/SOCKS5; пароль хранится отдельно.
 - Поиск по автору, названию, серии, жанру, языку и источнику; несколько библиотек в одном каталоге.
 - Обложки и их кэширование, поддержка WebP и JXL.
@@ -22,26 +22,26 @@
 
 Совместный поиск поддерживает название, автора, ключевые слова, форматы и ISBN. Форматы скачивания, Email, Telegram и OPDS настраиваются отдельно. Интерактивный Telegram-бот выдаёт книги по личному Chat ID.
 
-Профиль `unlimited` используется по умолчанию. В администрировании можно выбрать `auto`, `economy`, `balanced` или `performance`. [Профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v2.0.2/docs/resource-profiles.md)
+Профиль `unlimited` используется по умолчанию. В администрировании можно выбрать `auto`, `economy`, `balanced` или `performance`. [Профили ресурсов](https://github.com/AceAsket/inpx-web/blob/v2.0.3/docs/resource-profiles.md)
 
-Android-клиент подключается по QR с адресом без паролей. API поддерживает восстановление сессий, события чтения, быстрый снимок главной и отмену озвучки. Для остановки синтеза обновите основной контейнер и Silero. HTTP разрешён с предупреждением; HTTPS поддерживается через reverse proxy. [Контракт клиента](https://github.com/AceAsket/inpx-web/blob/v2.0.2/docs/native-client-protocol.md).
+Android-клиент подключается по QR с адресом без паролей. API поддерживает восстановление сессий, события чтения, быстрый снимок главной и отмену озвучки. Для остановки синтеза обновите основной контейнер и Silero. HTTP разрешён с предупреждением; HTTPS поддерживается через reverse proxy. [Контракт клиента](https://github.com/AceAsket/inpx-web/blob/v2.0.3/docs/native-client-protocol.md).
 
-Встроенный Kindling конвертирует FB2/EPUB в MOBI7/KF8. В полном образе MOBI включён по умолчанию. Отключение — `INPX_MOBI_ENABLED=false`. Совместимость зависит от модели Kindle. [Настройка MOBI](https://github.com/AceAsket/inpx-web/blob/v2.0.2/REFERENCE.md#лёгкая-конвертация-mobi-181-rc2)
+Встроенный Kindling конвертирует FB2/EPUB в MOBI7/KF8. В полном образе MOBI включён по умолчанию. Отключение — `INPX_MOBI_ENABLED=false`. Совместимость зависит от модели Kindle. [Настройка MOBI](https://github.com/AceAsket/inpx-web/blob/v2.0.3/REFERENCE.md#лёгкая-конвертация-mobi-181-rc2)
 
 ### Образы и версии
 
 Мы перенесли сервер с Node.js на Rust, чтобы он быстрее работал с большими библиотеками. **Node.js 1.8.3** — последняя ветка классического сервера. Она будет получать только исправления ошибок. Все новые функции будут выходить только в **Rust 2.x**.
 
-Обновление с `latest` переводит существующую установку на Rust. Перед обновлением остановите сервер и скопируйте каталог данных. Для сохранения стабильного Node.js закрепите тег `1.8.3`. [Переход и откат](https://github.com/AceAsket/inpx-web/blob/v2.0.2/docs/upgrade-rollback.md)
+Обновление с `latest` переводит существующую установку на Rust. Перед обновлением остановите сервер и скопируйте каталог данных. Для сохранения стабильного Node.js закрепите тег `1.8.3`. [Переход и откат](https://github.com/AceAsket/inpx-web/blob/v2.0.3/docs/upgrade-rollback.md)
 
 | Тег | Назначение |
 | --- | --- |
-| `2.0.2`, `latest` | Стабильный сервер Rust. |
+| `2.0.3`, `latest` | Стабильный сервер Rust. |
 | `1.8.3` | Стабильный классический сервер Node.js с JembaDB. |
 | `1.8.3-silero` | Сервис озвучки для Node.js 1.8.3. |
-| `2.0.2-silero` | Сервис озвучки для Rust 2.0.2. |
+| `2.0.3-silero` | Сервис озвучки для Rust 2.0.3. |
 
-Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/v2.0.2/CHANGELOG.md).
+Опубликованные образы предназначены для Linux x64 (`linux/amd64`). Для воспроизводимой установки используйте конкретный тег версии. RC — предварительные сборки; история изменений доступна в [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/v2.0.3/CHANGELOG.md).
 
 ### Быстрый запуск
 
@@ -56,7 +56,7 @@ docker run -d \
   -e LIBDIR=/library \
   -v /path/to/data:/usr/local/bin/.inpx-web \
   -v /path/to/library:/library:ro \
-  aceasket/inpx-web-7z:2.0.2
+  aceasket/inpx-web-7z:2.0.3
 ```
 
 Откройте `http://SERVER_IP:12380`. Пути `INPX` и `LIBDIR` указываются **внутри контейнера**. При первом запуске дождитесь индексации; её продолжительность зависит от размера библиотеки. Свой начальный пароль администратора задаётся через `INPX_ADMIN_PASSWORD`. На новой установке без этой настройки пароль генерируется и выводится в журнал запуска. При обновлении пароль существующего профиля сохраняется.
@@ -87,7 +87,7 @@ sudo tcpdump -nni any -c 1 'dst host 172.18.0.2 and tcp dst port 12380 and tcp[t
 -e INPX_LIBRARY_SOURCES='[{"id":"first","name":"Первая библиотека","inpx":"/library/first/books.inpx","libDir":"/library/first"},{"id":"second","name":"Вторая библиотека","inpx":"/library/second/books.inpx","libDir":"/library/second"}]'
 ```
 
-Это параметры `docker run`, их нужно вставить перед именем образа. После изменения источников выполните переиндексацию. [Настройка библиотек и Docker Compose](https://github.com/AceAsket/inpx-web/blob/v2.0.2/REFERENCE.md).
+Это параметры `docker run`, их нужно вставить перед именем образа. После изменения источников выполните переиндексацию. [Настройка библиотек и Docker Compose](https://github.com/AceAsket/inpx-web/blob/v2.0.3/REFERENCE.md).
 
 ### Имена файлов и заголовки
 
@@ -98,7 +98,7 @@ sudo tcpdump -nni any -c 1 'dst host 172.18.0.2 and tcp dst port 12380 and tcp[t
 -e INPX_BOOK_TITLE_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}'
 ```
 
-Номер берётся из каталога. Для книги без номера блок с дефисом исчезнет. Для одного названия используйте `'${TITLE}'`. Первая настройка меняет имя файла, вторая — заголовок внутри EPUB/EPUB3/KEPUB/KFX/AZW3/AZW8 при конвертации FB2. Без настроек сохраняется прежнее поведение. [Все поля шаблонов и настройки fbc](https://github.com/AceAsket/inpx-web/blob/v2.0.2/REFERENCE.md#имя-файла-и-заголовок-книги).
+Номер берётся из каталога. Для книги без номера блок с дефисом исчезнет. Для одного названия используйте `'${TITLE}'`. Первая настройка меняет имя файла, вторая — заголовок внутри EPUB/EPUB3/KEPUB/KFX/AZW3/AZW8 при конвертации FB2. Без настроек сохраняется прежнее поведение. [Все поля шаблонов и настройки fbc](https://github.com/AceAsket/inpx-web/blob/v2.0.3/REFERENCE.md#имя-файла-и-заголовок-книги).
 
 ### Озвучка Silero
 
@@ -109,7 +109,7 @@ sudo tcpdump -nni any -c 1 'dst host 172.18.0.2 and tcp dst port 12380 and tcp[t
 -e INPX_TTS_URL=http://silero:8000
 ```
 
-Silero запускается отдельным CPU-контейнером `aceasket/inpx-web-7z:2.0.2-silero`. Оба контейнера должны находиться в одной пользовательской Docker-сети. Смонтируйте постоянный том в `/models`; модели загружаются при первом синтезе. Расстановка ударений через silero-stress включена по умолчанию. Текст передаётся вашему сервису Silero.
+Silero запускается отдельным CPU-контейнером `aceasket/inpx-web-7z:2.0.3-silero`. Оба контейнера должны находиться в одной пользовательской Docker-сети. Смонтируйте постоянный том в `/models`; модели загружаются при первом синтезе. Расстановка ударений через silero-stress включена по умолчанию. Текст передаётся вашему сервису Silero.
 
 [Готовые команды и Compose для Silero](https://github.com/AceAsket/inpx-web/blob/main/docs/silero-tts.md).
 
@@ -129,7 +129,7 @@ Silero запускается отдельным CPU-контейнером `ace
 | `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Включение и токен провайдера Audiobookshelf. |
 | `INPX_METRICS_ENABLED` | Метрики Prometheus при значении `true`. |
 
-OPDS: `http://SERVER_IP:12380/opds`. Проверка состояния: `/health`, `/ready`, `/api/index-status`; метрики: `/metrics`, если включены. Для внешнего доступа поддерживается авторизация за доверенным reverse proxy — [документация](https://github.com/AceAsket/inpx-web/blob/v2.0.2/REFERENCE.md).
+OPDS: `http://SERVER_IP:12380/opds`. Проверка состояния: `/health`, `/ready`, `/api/index-status`; метрики: `/metrics`, если включены. Для внешнего доступа поддерживается авторизация за доверенным reverse proxy — [документация](https://github.com/AceAsket/inpx-web/blob/v2.0.3/REFERENCE.md).
 
 Книги и архивы библиотек в образ не входят. Полный резервный архив приложения не содержит библиотеку, поисковый индекс и временные кэши: сами книги сохраняйте отдельно.
 
@@ -141,9 +141,9 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 ### Features
 
-**Rust 2.0.2** supports LightLib INPX v2 catalogs, shows progress while preparing a series ZIP, and retries cover requests after a temporary failure. JPEG XL covers use the built-in decoder with `djxl` as a fallback. [Release notes](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.2)
+**Rust 2.0.3** adds live server settings, rotating logs and large attachment uploads through a local Telegram Bot API. Trusted IPv4/IPv6 proxies can be configured as a comma-separated string or an array. [Release notes](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.3)
 
-- Book previews and detail tabs load on demand. Cache budgets limit memory use, and the performance check reports CPU, memory and response time. [Resource profiles](https://github.com/AceAsket/inpx-web/blob/v2.0.2/docs/resource-profiles.md)
+- Book previews and detail tabs load on demand. Cache budgets limit memory use, and the performance check reports CPU, memory and response time. [Resource profiles](https://github.com/AceAsket/inpx-web/blob/v2.0.3/docs/resource-profiles.md)
 - Suggestions from three characters need no preparation or polling; search is available immediately. Gallery: up to 18 illustrations, 2 MiB/image, 8 MiB total, 32 MiB FB2 XML. Diagnostics: `failedByCode`, `failedByKind`. Telegram: direct, server-environment or custom HTTP(S)/SOCKS5 proxy; passwords stored separately.
 - Search by author, title, series, genre, language and source; multiple libraries in one catalog.
 - Cover extraction and caching, including WebP and JXL support.
@@ -155,26 +155,26 @@ A self-hosted web catalog for your ebook library with a built-in FB2 reader. Sup
 
 Combine title, author, keywords, formats and ISBN in search. Set separate formats for downloads, email, Telegram and OPDS. The interactive Telegram bot delivers books to the profile's personal chat.
 
-The default resource profile is `unlimited`. Administrators can select `auto`, `economy`, `balanced` or `performance`. [Resource profiles](https://github.com/AceAsket/inpx-web/blob/v2.0.2/docs/resource-profiles.md)
+The default resource profile is `unlimited`. Administrators can select `auto`, `economy`, `balanced` or `performance`. [Resource profiles](https://github.com/AceAsket/inpx-web/blob/v2.0.3/docs/resource-profiles.md)
 
-Connect Android through a QR containing the server address without credentials. The compatible API adds session resume, reading events, fast home snapshots and speech cancellation. Update both the web and Silero containers to stop synthesis. HTTP remains allowed with a warning; HTTPS works through a reverse proxy. [Client contract](https://github.com/AceAsket/inpx-web/blob/v2.0.2/docs/native-client-protocol.md).
+Connect Android through a QR containing the server address without credentials. The compatible API adds session resume, reading events, fast home snapshots and speech cancellation. Update both the web and Silero containers to stop synthesis. HTTP remains allowed with a warning; HTTPS works through a reverse proxy. [Client contract](https://github.com/AceAsket/inpx-web/blob/v2.0.3/docs/native-client-protocol.md).
 
-Bundled Kindling converts FB2/EPUB to MOBI7/KF8. The full image enables MOBI by default. Set `INPX_MOBI_ENABLED=false` to disable it. Compatibility depends on the Kindle model. [MOBI configuration](https://github.com/AceAsket/inpx-web/blob/v2.0.2/REFERENCE.md#лёгкая-конвертация-mobi-181-rc2)
+Bundled Kindling converts FB2/EPUB to MOBI7/KF8. The full image enables MOBI by default. Set `INPX_MOBI_ENABLED=false` to disable it. Compatibility depends on the Kindle model. [MOBI configuration](https://github.com/AceAsket/inpx-web/blob/v2.0.3/REFERENCE.md#лёгкая-конвертация-mobi-181-rc2)
 
 ### Images and versions
 
 We moved the server from Node.js to Rust to improve performance with large libraries. **Node.js 1.8.3** is the final release line for the classic server and will receive bug fixes only. All new features will ship exclusively in **Rust 2.x**.
 
-Updating a container pinned to `latest` switches it to Rust. Stop the server and back up its data directory before upgrading. Pin `1.8.3` to stay on stable Node.js. [Migration and rollback](https://github.com/AceAsket/inpx-web/blob/v2.0.2/docs/upgrade-rollback.md)
+Updating a container pinned to `latest` switches it to Rust. Stop the server and back up its data directory before upgrading. Pin `1.8.3` to stay on stable Node.js. [Migration and rollback](https://github.com/AceAsket/inpx-web/blob/v2.0.3/docs/upgrade-rollback.md)
 
 | Tag | Purpose |
 | --- | --- |
-| `2.0.2`, `latest` | Stable Rust server. |
+| `2.0.3`, `latest` | Stable Rust server. |
 | `1.8.3` | Stable classic Node.js server with JembaDB. |
 | `1.8.3-silero` | Speech service for Node.js 1.8.3. |
-| `2.0.2-silero` | Speech service for Rust 2.0.2. |
+| `2.0.3-silero` | Speech service for Rust 2.0.3. |
 
-Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/v2.0.2/CHANGELOG.md) for changes.
+Published images target Linux x64 (`linux/amd64`). Pin a version tag for reproducible deployments. RC tags are prereleases; see the [CHANGELOG](https://github.com/AceAsket/inpx-web/blob/v2.0.3/CHANGELOG.md) for changes.
 
 ### Quick start
 
@@ -189,7 +189,7 @@ docker run -d \
   -e LIBDIR=/library \
   -v /path/to/data:/usr/local/bin/.inpx-web \
   -v /path/to/library:/library:ro \
-  aceasket/inpx-web-7z:2.0.2
+  aceasket/inpx-web-7z:2.0.3
 ```
 
 Open `http://SERVER_IP:12380`. `INPX` and `LIBDIR` must refer to paths **inside the container**. Wait for initial indexing; the time required depends on the library size. Set `INPX_ADMIN_PASSWORD` to supply your own initial admin password. On a new installation without this setting, a password is generated and printed in the startup log. Existing profile passwords are preserved on upgrade.
@@ -220,7 +220,7 @@ For multiple INPX libraries, specify an array of sources:
 -e INPX_LIBRARY_SOURCES='[{"id":"first","name":"First library","inpx":"/library/first/books.inpx","libDir":"/library/first"},{"id":"second","name":"Second library","inpx":"/library/second/books.inpx","libDir":"/library/second"}]'
 ```
 
-These are `docker run` options; insert them before the image name. Reindex after changing sources. [Library configuration and Docker Compose](https://github.com/AceAsket/inpx-web/blob/v2.0.2/REFERENCE.md).
+These are `docker run` options; insert them before the image name. Reindex after changing sources. [Library configuration and Docker Compose](https://github.com/AceAsket/inpx-web/blob/v2.0.3/REFERENCE.md).
 
 ### Filenames and book titles
 
@@ -231,7 +231,7 @@ The main image includes fbc **2.1.1**. Add these launch options to get a filenam
 -e INPX_BOOK_TITLE_TEMPLATE='[${NUMBER_PADDED} - ]${TITLE}'
 ```
 
-The series number comes from the catalogue. The number and separator disappear for unnumbered books. Use `'${TITLE}'` for the title alone. The first option changes download filenames; the second changes internal EPUB/EPUB3/KEPUB/KFX/AZW3/AZW8 titles when converting FB2. Existing behavior is preserved when these options are unset. [Template fields and fbc settings](https://github.com/AceAsket/inpx-web/blob/v2.0.2/REFERENCE.md#имя-файла-и-заголовок-книги).
+The series number comes from the catalogue. The number and separator disappear for unnumbered books. Use `'${TITLE}'` for the title alone. The first option changes download filenames; the second changes internal EPUB/EPUB3/KEPUB/KFX/AZW3/AZW8 titles when converting FB2. Existing behavior is preserved when these options are unset. [Template fields and fbc settings](https://github.com/AceAsket/inpx-web/blob/v2.0.3/REFERENCE.md#имя-файла-и-заголовок-книги).
 
 ### Silero speech
 
@@ -242,7 +242,7 @@ Speech is **disabled by default**. Enable it through the main container's startu
 -e INPX_TTS_URL=http://silero:8000
 ```
 
-Run Silero as a separate CPU service using `aceasket/inpx-web-7z:2.0.2-silero`. Place both containers on the same user-defined Docker network. Mount a persistent volume at `/models`; models are downloaded on the first synthesis request. Stress placement with silero-stress is enabled by default. Book text is sent to your own Silero service.
+Run Silero as a separate CPU service using `aceasket/inpx-web-7z:2.0.3-silero`. Place both containers on the same user-defined Docker network. Mount a persistent volume at `/models`; models are downloaded on the first synthesis request. Stress placement with silero-stress is enabled by default. Book text is sent to your own Silero service.
 
 [Silero commands and Compose instructions](https://github.com/AceAsket/inpx-web/blob/main/docs/silero-tts.md).
 
@@ -262,7 +262,7 @@ Run Silero as a separate CPU service using `aceasket/inpx-web-7z:2.0.2-silero`. 
 | `INPX_ABS_ENABLED`, `INPX_ABS_TOKEN` | Enable the Audiobookshelf provider and set its token. |
 | `INPX_METRICS_ENABLED` | Enable Prometheus metrics with `true`. |
 
-OPDS: `http://SERVER_IP:12380/opds`. Health endpoints: `/health`, `/ready`, `/api/index-status`; metrics: `/metrics` when enabled. Authentication behind a trusted reverse proxy is supported for external access — see the [documentation](https://github.com/AceAsket/inpx-web/blob/v2.0.2/REFERENCE.md).
+OPDS: `http://SERVER_IP:12380/opds`. Health endpoints: `/health`, `/ready`, `/api/index-status`; metrics: `/metrics` when enabled. Authentication behind a trusted reverse proxy is supported for external access — see the [documentation](https://github.com/AceAsket/inpx-web/blob/v2.0.3/REFERENCE.md).
 
 Book collections are not included in the image. Full application backups exclude book files, the search index and temporary caches; back up your library separately.
 

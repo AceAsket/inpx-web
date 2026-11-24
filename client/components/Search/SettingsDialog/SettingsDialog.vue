@@ -543,6 +543,15 @@
                                     <q-icon :name="telegramTokenVisible ? 'la la-eye-slash' : 'la la-eye'" class="password-visibility-toggle" @click="telegramTokenVisible = !telegramTokenVisible" />
                                 </template>
                             </q-input>
+                            <template v-if="integrations.telegramApiMode">
+                                <q-select v-model="integrations.telegramApiMode" outlined dense emit-value map-options behavior="dialog"
+                                    label="Telegram Bot API" :options="telegramApiModes" :disable="integrations.telegramApiModeLocked"
+                                    :hint="integrations.telegramApiModeLocked ? 'Задано через INPX_TELEGRAM_API_MODE' : undefined" />
+                                <q-input v-if="integrations.telegramApiMode === 'local'" v-model="integrations.telegramApiUrl"
+                                    outlined dense label="Адрес локального Bot API" placeholder="http://telegram-bot-api:8081"
+                                    :disable="integrations.telegramApiUrlLocked" autocomplete="off" spellcheck="false"
+                                    :hint="integrations.telegramApiUrlLocked ? 'Задано через INPX_TELEGRAM_API_URL' : undefined" />
+                            </template>
                             <q-select v-model="integrations.telegramProxyMode" outlined dense emit-value map-options behavior="dialog" label="Маршрут Telegram" :options="telegramProxyModes" />
                             <q-select v-model="integrations.telegramIpFamily" outlined dense emit-value map-options behavior="dialog"
                                 label="IP-семейство Telegram" :options="[{label:'Авто (IPv4 / IPv6)',value:'auto'},{label:'Только IPv4',value:'4'},{label:'Только IPv6',value:'6'}]" />
@@ -802,6 +811,7 @@ class SettingsDialog {
     adminEventLogSize = 300;
     integrations = this.makeDefaultIntegrations();
     telegramProxyModes = [{label:'Прямое соединение',value:'direct'}, {label:'Прокси окружения сервера',value:'system'}, {label:'Свой прокси',value:'custom'}];
+    telegramApiModes = [{label:'Стандартный · до 50 МБ',value:'cloud'}, {label:'Локальный · до 2000 МБ',value:'local'}];
     telegramProxyProtocols = [{label:'HTTP',value:'http'}, {label:'HTTPS',value:'https'}, {label:'SOCKS5',value:'socks5'}, {label:'SOCKS5 (DNS через прокси)',value:'socks5h'}];
     opdsSettings = this.makeDefaultOpdsSettings();
     opdsModes = [{label: 'Стандартный', value: 'standard'}, {label: 'Tolino', value: 'tolino'}];
@@ -1998,6 +2008,10 @@ class SettingsDialog {
         this.integrationSaveLoading = true;
         try {
             const patch = {...this.integrations};
+            if (patch.telegramApiModeLocked) delete patch.telegramApiMode;
+            if (patch.telegramApiUrlLocked || this.integrations.telegramApiMode !== 'local') delete patch.telegramApiUrl;
+            delete patch.telegramApiModeLocked;
+            delete patch.telegramApiUrlLocked;
             // Hidden custom drafts must not block direct/environment routing.
             // Omitted fields preserve the server's saved custom connection.
             if (patch.telegramProxyMode !== 'custom')

@@ -79,6 +79,8 @@
         "telegramShareEnabled",
         "telegramBotToken",
         "telegramBotEnabled",
+        "telegramApiMode",
+        "telegramApiUrl",
         "telegramIpFamily",
         "telegramProxyMode",
         "telegramProxyProtocol",

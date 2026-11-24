@@ -19,6 +19,13 @@ pub(crate) use services::{CoverSigner, query_values, trim_js};
 
 pub(crate) const APPROVAL: HeaderName = HeaderName::from_static("x-inpx-request-access");
 
+pub(crate) fn split_proxy_cidrs(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
@@ -474,13 +481,15 @@ impl Standalone {
         let bind_profile = mode == "proxy" && configured_binding;
         let trust_proxy = flag("INPX_TRUST_PROXY").unwrap_or(config["trustProxy"] == true);
         let trusted_ranges = match std::env::var("INPX_TRUSTED_PROXY_CIDRS") {
-            Ok(value) => value.split(',').filter_map(Range::parse).collect(),
-            Err(_) => config["trustedProxyCidrs"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|value| Range::parse(value.as_str()?))
-                .collect(),
+            Ok(value) => split_proxy_cidrs(&value).filter_map(Range::parse).collect(),
+            Err(_) => match &config["trustedProxyCidrs"] {
+                Value::String(value) => split_proxy_cidrs(value).filter_map(Range::parse).collect(),
+                Value::Array(values) => values
+                    .iter()
+                    .filter_map(|value| Range::parse(value.as_str()?))
+                    .collect(),
+                _ => Vec::new(),
+            },
         };
         let proxy_header = value("INPX_PROXY_AUTH_HEADER", "proxyAuthHeader", "Remote-User");
         let require_auth = require_auth(config);

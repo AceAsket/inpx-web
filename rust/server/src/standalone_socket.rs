@@ -1113,6 +1113,12 @@ impl Socket {
             (false, false)
         };
         config.insert("telegramShareEnabled".into(), telegram.into());
+        if telegram {
+            config.insert(
+                "telegramUploadTimeoutSeconds".into(),
+                state.delivery.telegram().client_upload_seconds().into(),
+            );
+        }
         config.insert("emailShareEnabled".into(), email.into());
         if !bare {
             let current = state.settings.snapshot();
@@ -1438,6 +1444,10 @@ async fn run(
     let mut subscribed = None::<(Arc<Subscription>, Receiver<Arc<Event>>)>;
     let mut running = JoinSet::new();
     let (replies, mut incoming) = mpsc::channel(16);
+    let ping_interval = Duration::from_secs(30);
+    let mut keepalive =
+        tokio::time::interval_at(tokio::time::Instant::now() + ping_interval, ping_interval);
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             result = policy.changed() => {
@@ -1446,6 +1456,9 @@ async fn run(
                     return;
                 }
                 if send(&mut socket, json!({"type":"client-event","kind":"access-policy"}), None).await.is_err() { return; }
+            }
+            _ = keepalive.tick(), if !running.is_empty() => {
+                if !matches!(timeout(Duration::from_secs(5), socket.send(Message::Ping(Default::default()))).await, Ok(Ok(()))) { return; }
             }
             message = timeout(IDLE, socket.next()) => {
                 let frame = match message {
