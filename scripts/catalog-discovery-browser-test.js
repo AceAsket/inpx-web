@@ -8,6 +8,47 @@ const {unusedPort} = require('./binary-smoke-test');
 const {archive} = require('./library-appearance-browser-test');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function checkMobileCatalogFilters(browser, base) {
+    const viewport = {width: 360, height: 600};
+    const page = await browser.newPage({viewport, isMobile: true, hasTouch: true});
+    page.setDefaultTimeout(10000);
+    try {
+        await page.goto(base + '/#/books');
+        await page.getByRole('button', {name: /^Фильтры/}).tap();
+        const card = page.locator('.catalog-filters-dialog');
+        const body = card.locator('.catalog-filters-dialog__body');
+        const apply = card.getByRole('button', {name: 'Применить', exact: true});
+        await page.locator('.q-dialog__inner:not(.q-dialog__inner--animating) > .catalog-filters-dialog').waitFor();
+        const cardBox = await card.boundingBox();
+        assert(cardBox.y >= 0 && cardBox.y + cardBox.height <= viewport.height + 1, 'Portrait filters must fit the viewport');
+
+        const bodyBox = await body.boundingBox();
+        const x = Math.round(bodyBox.x + bodyBox.width / 2);
+        const swipeStart = bodyBox.y + bodyBox.height - 24;
+        const swipeEnd = bodyBox.y + 24;
+        const touch = await page.context().newCDPSession(page);
+        for (let swipe = 0; swipe < 2; swipe++) {
+            await touch.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x, y: Math.round(swipeStart)}]});
+            for (let step = 1; step <= 8; step++) {
+                const y = Math.round(swipeStart + (swipeEnd - swipeStart) * step / 8);
+                await touch.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [{x, y}]});
+            }
+            await touch.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+        }
+        await page.waitForFunction(() => {
+            const body = document.querySelector('.catalog-filters-dialog__body');
+            const lastField = body.querySelector('[role="checkbox"]');
+            return body.scrollTop > 0 && lastField.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom;
+        });
+        assert.equal((await card.boundingBox()).y, cardBox.y, 'Only the filter fields should scroll');
+        await card.getByRole('checkbox', {name: 'Скрывать повторные издания'}).tap();
+        await apply.tap();
+        await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).has('hideCopies'));
+    } finally {
+        await page.close();
+    }
+}
+
 async function fixture(directory) {
     await fs.ensureDir(directory);
     const entries = [
@@ -42,7 +83,7 @@ async function fixture(directory) {
     let child, browser, output = '';
     try {
         const library = path.join(directory, 'library'); await fixture(library);
-        const dataDir = path.join(directory, 'data'); await fs.copy(path.resolve('dist/tmp/public'), path.join(dataDir, 'public'));
+        const dataDir = path.join(directory, 'data'); await fs.copy(path.join(require('../build/dist-dir'), 'tmp/public'), path.join(dataDir, 'public'));
         assert(await fs.pathExists(path.join(dataDir,'public/index.html')), 'Build the production UI before copying browser fixtures');
         const port = await unusedPort(), base = `http://127.0.0.1:${port}`;
         child = spawn(process.execPath, [path.resolve('server'), `--data-dir=${dataDir}`, `--config=${library}/config.json`, `--lib-dir=${library}`, `--port=${port}`, '--host=127.0.0.1'],
@@ -57,6 +98,7 @@ async function fixture(directory) {
         assert(ready, output);
         assert(!await fs.pathExists(path.join(dataDir, 'db/catalog_lookup')), 'Startup must not build an unused suggestions index');
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
+        await checkMobileCatalogFilters(browser, base);
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [];
         page.setDefaultTimeout(15000); page.setDefaultNavigationTimeout(15000);
         let externalFixture = false;

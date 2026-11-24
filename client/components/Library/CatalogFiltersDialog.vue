@@ -58,14 +58,34 @@ function apply() {emit('apply', {...draft}); close();}
 </script>
 
 <style>
-.catalog-filters-dialog {width: 600px; max-width: calc(100vw - 32px); max-height: min(760px, 90vh); display: flex; flex-direction: column; border-radius: 22px !important; background: var(--app-surface); color: var(--app-text);}
+.q-dialog__inner > .catalog-filters-dialog {
+    width: 600px;
+    max-width: calc(100vw - 32px);
+    max-height: min(760px, 90vh);
+    max-height: min(760px, calc(var(--q-dialog-viewport-height, 100dvh) * 0.9));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: 22px !important;
+    background: var(--app-surface);
+    color: var(--app-text);
+}
+.catalog-filters-dialog__header,
+.catalog-filters-dialog__footer {flex-shrink: 0;}
 .catalog-filters-dialog__header {display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 22px 24px 12px;}
 .catalog-filters-dialog h2 {font-size: 21px; font-weight: 550; line-height: 1.4; margin: 0;}
-.catalog-filters-dialog__body {overflow: auto; padding: 0 24px 16px;}
+.catalog-filters-dialog__body {flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 0 24px 16px;}
 .catalog-filters-dialog__body > p {color: var(--app-muted); font-size: 13px; margin: 0 0 22px; line-height: 1.6;}
 .catalog-filters-dialog__grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 14px; margin-bottom: 12px;}
 .catalog-filters-dialog__wide {grid-column: 1 / -1;}
 .catalog-filters-dialog__footer {display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--app-border); padding: 14px 24px;}
 .catalog-filters-dialog__footer > span {flex: 1;}
-@media (max-width: 599px) {.catalog-filters-dialog {max-width: 100%; width: 100%; border-radius: 22px 22px 0 0 !important; max-height: 90vh;} .catalog-filters-dialog__header {padding: 18px 20px;} .catalog-filters-dialog__body {padding: 0 20px 18px;} .catalog-filters-dialog__grid {grid-template-columns: minmax(0, 1fr); gap: 17px;} .catalog-filters-dialog__footer {padding: 12px 12px max(12px, env(safe-area-inset-bottom)); gap: 4px;} .catalog-filters-dialog__footer .q-btn {font-size: 13px; padding-left: 10px; padding-right: 10px;}}
+@media (max-width: 599px) {
+    .q-dialog__inner > .catalog-filters-dialog {max-width: 100%; width: 100%; border-radius: 22px 22px 0 0 !important;}
+    .catalog-filters-dialog__header {padding: 18px 20px;}
+    .catalog-filters-dialog__body {padding: 0 20px 18px;}
+    .catalog-filters-dialog__grid {grid-template-columns: minmax(0, 1fr); gap: 17px;}
+    .catalog-filters-dialog__footer {padding: 12px 12px max(12px, env(safe-area-inset-bottom)); gap: 4px;}
+    .catalog-filters-dialog__footer .q-btn {font-size: 13px; padding-left: 10px; padding-right: 10px;}
+}
 </style>
