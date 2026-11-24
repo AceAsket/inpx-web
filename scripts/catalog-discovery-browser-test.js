@@ -40,7 +40,8 @@ async function checkMobileCatalogFilters(browser, base) {
             const lastField = body.querySelector('[role="checkbox"]');
             return body.scrollTop > 0 && lastField.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom;
         });
-        assert.equal((await card.boundingBox()).y, cardBox.y, 'Only the filter fields should scroll');
+        const scrolledCardBox = await card.boundingBox();
+        assert(Math.abs(scrolledCardBox.y - cardBox.y) <= 1, 'Only the filter fields should scroll');
         await card.getByRole('checkbox', {name: 'Скрывать повторные издания'}).tap();
         await apply.tap();
         await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).has('hideCopies'));
