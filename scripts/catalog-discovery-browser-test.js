@@ -18,7 +18,10 @@ async function checkMobileCatalogFilters(browser, base) {
         const card = page.locator('.catalog-filters-dialog');
         const body = card.locator('.catalog-filters-dialog__body');
         const apply = card.getByRole('button', {name: 'Применить', exact: true});
-        await page.locator('.q-dialog__inner:not(.q-dialog__inner--animating) > .catalog-filters-dialog').waitFor();
+        await page.waitForFunction(() => {
+            const dialog = document.querySelector('.catalog-filters-dialog')?.parentElement;
+            return dialog && !dialog.classList.contains('q-dialog__inner--animating') && dialog.getAnimations().length === 0;
+        });
         const cardBox = await card.boundingBox();
         assert(cardBox.y >= 0 && cardBox.y + cardBox.height <= viewport.height + 1, 'Portrait filters must fit the viewport');
 
@@ -40,8 +43,7 @@ async function checkMobileCatalogFilters(browser, base) {
             const lastField = body.querySelector('[role="checkbox"]');
             return body.scrollTop > 0 && lastField.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom;
         });
-        const scrolledCardBox = await card.boundingBox();
-        assert(Math.abs(scrolledCardBox.y - cardBox.y) <= 1, 'Only the filter fields should scroll');
+        assert.equal(await card.evaluate(element => element.scrollTop), 0, 'Only the filter fields should scroll');
         await card.getByRole('checkbox', {name: 'Скрывать повторные издания'}).tap();
         await apply.tap();
         await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).has('hideCopies'));
