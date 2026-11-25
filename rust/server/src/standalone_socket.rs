@@ -25,8 +25,8 @@ use super::{NAME, State, VERSION};
 use crate::http::{Body, error};
 use crate::request_access::{Admission, BrowserConnection};
 use crate::standalone_access::{
-    BLOCKED_PROFILE, BrowserAccess, BrowserLogin, BrowserProfileRequest,
-    PROXY_SCOPE, Rejection, profile_scope,
+    BLOCKED_PROFILE, BrowserAccess, BrowserLogin, BrowserProfileRequest, PROXY_SCOPE, Rejection,
+    profile_scope,
 };
 use crate::standalone_library::Admission as LibraryAdmission;
 use inpx_catalog::book_preview;

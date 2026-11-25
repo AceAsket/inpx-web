@@ -583,17 +583,21 @@ impl Settings {
                         .any(|key| super::runtime::LOGIN_KEYS.contains(&key.as_str()))
                 {
                     let candidate = active_access.update(&access_patch, &next, services)?;
-                    let admin_client = candidate.admin_client(connection.peer, connection.request.headers());
-                    let permitted = candidate.profile_transport(connection.peer, admin_client).permits(true);
+                    let admin_client =
+                        candidate.admin_client(connection.peer, connection.request.headers());
+                    let permitted = candidate
+                        .profile_transport(connection.peer, admin_client)
+                        .permits(true);
                     if candidate.has_admin_ranges() && !permitted {
                         let Some(address) = admin_client else {
                             return Err("Сервер не получил IP текущего клиента от доверенного прокси. Проверьте настройку прокси и повторите сохранение.".into());
                         };
                         return Err(format!("Добавьте текущий адрес {} в список разрешённых адресов администратора, чтобы сохранить доступ.", address.to_canonical()).into());
                     }
-                    if !permitted || !candidate.has_admin_ranges()
-                        && access_patch["adminDirectOnly"] == true
-                        && active_access.is_proxy_peer(connection.peer)
+                    if !permitted
+                        || !candidate.has_admin_ranges()
+                            && access_patch["adminDirectOnly"] == true
+                            && active_access.is_proxy_peer(connection.peer)
                     {
                         return Err(format!(
                             "TCP-адрес текущего подключения {} попадает в список адресов прокси. Откройте библиотеку напрямую с адреса вне этого списка.",

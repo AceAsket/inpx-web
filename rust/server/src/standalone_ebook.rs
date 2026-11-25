@@ -16,9 +16,7 @@ use super::State;
 use crate::http::{Body, body};
 use crate::opds::html::escape;
 use crate::request_access::Admission;
-use crate::standalone_access::{
-    BrowserAccess, BrowserLogin, BrowserProfileRequest, Rejection,
-};
+use crate::standalone_access::{BrowserAccess, BrowserLogin, BrowserProfileRequest, Rejection};
 use crate::standalone_library::Admission as LibraryAdmission;
 
 #[path = "standalone_ebook_pages.rs"]

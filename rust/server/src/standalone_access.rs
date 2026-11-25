@@ -102,7 +102,10 @@ pub(crate) enum BrowserLogin {
         device: Option<profile_login::DeviceGrant>,
     },
     Invalid,
-    AdminRestricted { message: &'static str, code: &'static str },
+    AdminRestricted {
+        message: &'static str,
+        code: &'static str,
+    },
     NeedOtp,
     NeedOtpSetup,
     RateLimited(u32),
@@ -118,7 +121,8 @@ impl Access {
 
     pub(crate) fn profile_binding(&self, admission: &Admission) -> bool {
         let policy = self.request_access.current();
-        policy.profile_transport(admission.peer, admission.admin_client) != ProfileTransport::AdminOnly
+        policy.profile_transport(admission.peer, admission.admin_client)
+            != ProfileTransport::AdminOnly
             && policy.profile_binding()
     }
 

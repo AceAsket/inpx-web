@@ -366,10 +366,18 @@ impl Standalone {
         }
     }
 
-    pub(crate) fn profile_transport(&self, peer: IpAddr, admin_client: Option<IpAddr>) -> ProfileTransport {
-        if self.has_admin_ranges() && !admin_client.is_some_and(|address| {
-            self.admin_ranges.iter().any(|range| range.contains(&address.to_canonical()))
-        }) {
+    pub(crate) fn profile_transport(
+        &self,
+        peer: IpAddr,
+        admin_client: Option<IpAddr>,
+    ) -> ProfileTransport {
+        if self.has_admin_ranges()
+            && !admin_client.is_some_and(|address| {
+                self.admin_ranges
+                    .iter()
+                    .any(|range| range.contains(&address.to_canonical()))
+            })
+        {
             return ProfileTransport::WithoutAdmin;
         }
         if !self.admin_direct_only {
@@ -580,7 +588,9 @@ impl Standalone {
             flag("INPX_ADMIN_DIRECT_ONLY").unwrap_or(config["adminDirectOnly"] == true);
         let admin_ranges = match std::env::var("INPX_ADMIN_ALLOWED_CIDRS") {
             Ok(value) => parse_admin_ranges(&Value::String(value))?,
-            Err(std::env::VarError::NotPresent) => parse_admin_ranges(&config["adminAllowedCidrs"])?,
+            Err(std::env::VarError::NotPresent) => {
+                parse_admin_ranges(&config["adminAllowedCidrs"])?
+            }
             Err(error) => return Err(error.into()),
         };
         validate_admin_direct(admin_direct_only, &trusted_ranges)?;
@@ -704,18 +714,23 @@ fn parse_admin_ranges(value: &Value) -> inpx_catalog::Result<Vec<IpNet>> {
     if entries.len() > 128 {
         return Err("Укажите до 128 разрешённых адресов и сетей администратора".into());
     }
-    entries.into_iter().map(|entry| {
-        let entry = entry.trim();
-        let network = entry.parse::<IpNet>().or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
-            .map_err(|_| INVALID)?;
-        if let IpNet::V6(range) = network
-            && range.prefix_len() >= 96
-            && let Some(mapped) = range.addr().to_ipv4_mapped()
-        {
-            return Ok(IpNet::new(mapped.into(), range.prefix_len() - 96)?.trunc());
-        }
-        Ok(network.trunc())
-    }).collect()
+    entries
+        .into_iter()
+        .map(|entry| {
+            let entry = entry.trim();
+            let network = entry
+                .parse::<IpNet>()
+                .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
+                .map_err(|_| INVALID)?;
+            if let IpNet::V6(range) = network
+                && range.prefix_len() >= 96
+                && let Some(mapped) = range.addr().to_ipv4_mapped()
+            {
+                return Ok(IpNet::new(mapped.into(), range.prefix_len() - 96)?.trunc());
+            }
+            Ok(network.trunc())
+        })
+        .collect()
 }
 
 fn validate_admin_direct(enabled: bool, ranges: &[Range]) -> inpx_catalog::Result<()> {
