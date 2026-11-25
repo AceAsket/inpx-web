@@ -16,7 +16,9 @@ use super::State;
 use crate::http::{Body, body};
 use crate::opds::html::escape;
 use crate::request_access::Admission;
-use crate::standalone_access::{BrowserAccess, BrowserLogin, BrowserProfileRequest, Rejection};
+use crate::standalone_access::{
+    ADMIN_DIRECT_ONLY_MESSAGE, BrowserAccess, BrowserLogin, BrowserProfileRequest, Rejection,
+};
 use crate::standalone_library::Admission as LibraryAdmission;
 
 #[path = "standalone_ebook_pages.rs"]
@@ -589,6 +591,8 @@ impl Page<'_> {
             BrowserLogin::Invalid => self.form(true,next,login,
                 if otp.is_empty() { "Неверный логин или пароль." } else { "Неверный логин, пароль или код." },
                 !otp.is_empty(),false,StatusCode::UNAUTHORIZED,false),
+            BrowserLogin::AdminDirectOnly => self.form(true,next,login,ADMIN_DIRECT_ONLY_MESSAGE,
+                false,false,StatusCode::FORBIDDEN,false),
             BrowserLogin::RateLimited(seconds) => self.limited(seconds, true, next),
             BrowserLogin::Unavailable => return Err(Failure::busy()),
         })

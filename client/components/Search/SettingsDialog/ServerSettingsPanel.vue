@@ -14,19 +14,23 @@
                 label="Доверенные IPv4 и IPv6" hint="Одна сеть или адрес на строку"
                 placeholder="192.168.1.10/32" :disable="!!saving || accessLocked('trustedProxyCidrs')" />
             <small v-if="accessLocked('trustedProxyCidrs')" class="hint">INPX_TRUSTED_PROXY_CIDRS · окружение</small>
-            <p class="hint">Адрес вашего соединения <code>{{ access.peer }}</code> · {{ access.peerTrusted ? 'доверенный прокси' : 'прямое или недоверенное соединение' }}</p>
+            <p class="hint">TCP-адрес, который видит сервер <code>{{ savedAccess.peer }}</code> · {{ peerInProxyCidrs ? 'в списке адресов прокси' : 'вне списка адресов прокси' }}</p>
             <details>
                 <summary>Правила входа и SSO</summary>
                 <div class="server-fields">
                     <div v-for="field in accessFields" :key="field.key" class="server-field">
                         <q-checkbox v-if="field.type === 'boolean'" v-model="access[field.key]" :label="field.label"
-                            :disable="!!saving || accessLocked(field.key)" />
+                            :disable="!!saving || accessLocked(field.key) || (field.key === 'adminDirectOnly' && peerInProxyCidrs)" />
                         <q-select v-else-if="field.options" v-model="access[field.key]" :options="field.options"
                             emit-value map-options outlined dense :label="field.label" :disable="!!saving || accessLocked(field.key)" />
                         <q-input v-else v-model="access[field.key]" outlined dense :label="field.label"
                             :disable="!!saving || accessLocked(field.key)" />
                         <small v-if="accessLocked(field.key)" class="hint">{{ field.env }} · окружение</small>
-                        <small v-if="field.hint" class="hint">{{ field.hint }}</small>
+                        <small v-if="field.key === 'adminDirectOnly' && peerInProxyCidrs" class="hint">
+                            Подключитесь с адреса вне списка прокси. Если Docker показывает шлюз для обоих маршрутов,
+                            выделите прокси свой IP в общей сети Docker.
+                        </small>
+                        <small v-else-if="field.hint" class="hint">{{ field.hint }}</small>
                     </div>
                 </div>
             </details>
@@ -220,6 +224,7 @@ export default {
         };
     },
     computed: {
+        peerInProxyCidrs() { return this.savedAccess.peerInProxyCidrs ?? this.savedAccess.peerTrusted; },
         locked() { return this.runtime.locked; },
         availableFormats() { return this.runtime.formats.map(format => format.toUpperCase()).join(', ') || 'исходный формат'; },
         converterStatus() {
@@ -235,6 +240,7 @@ export default {
             const patch = {};
             const original = this.savedAccess;
             for (const key of ['allowAnonymousAccess', 'trustProxy', ...this.accessFields.map(field => field.key)]) {
+                if (key === 'adminDirectOnly' && this.peerInProxyCidrs) continue;
                 if (!this.accessLocked(key) && this.access[key] !== original[key])
                     patch[key] = this.access[key];
             }

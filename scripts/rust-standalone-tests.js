@@ -2258,9 +2258,14 @@ async function verifyDirectAdmin(binary, root) {
         const aliceId = alice.user?.id;
         assert(aliceId,JSON.stringify(alice));
         const rule = {adminDirectOnly:true};
+        const proxyAccess = (await viaProxy.send('get-config',{userId:proxiedLogin.userId,
+            profileAccessToken:proxiedLogin.profileAccessToken})).adminAccess;
+        assert.equal(proxyAccess?.peer,'127.0.0.2');
+        assert.equal(proxyAccess.peerInProxyCidrs,true);
+        assert.equal((await direct.send('get-config',session)).adminAccess?.peerInProxyCidrs,false);
         const rejectedSetting = await viaProxy.send('update-admin-access',{userId:proxiedLogin.userId,
             profileAccessToken:proxiedLogin.profileAccessToken,access:rule});
-        assert.match(rejectedSetting.error,/напрямую/);
+        assert.match(rejectedSetting.error,/127\.0\.0\.2.*список адресов прокси.*напрямую/);
         const oldSocketClosed = once(viaProxy.ws.socket,'close',{signal:AbortSignal.timeout(5000)});
         assert.equal((await direct.send('update-admin-access',{...session,access:rule})).access?.adminDirectOnly,true);
         await oldSocketClosed;
@@ -2269,12 +2274,35 @@ async function verifyDirectAdmin(binary, root) {
         const replay = {userId:proxiedLogin.userId,profileAccessToken:proxiedLogin.profileAccessToken};
         assert.equal((await restricted.send('get-config',replay)).adminAccess,undefined);
         assert((await restricted.send('delete-user-profile',{...replay,targetUserId:aliceId})).error);
-        assert.equal((await restricted.send('login-user-profile',credentials)).errorCode,'INPX_INVALID_PROFILE_CREDENTIALS');
+        const denialCode = 'INPX_ADMIN_DIRECT_ONLY';
+        const denialMessage = 'Вход администратора через прокси запрещён. Откройте библиотеку по прямому адресу сервера.';
+        const blocked = await restricted.send('login-user-profile',credentials);
+        assert.equal(blocked.errorCode,denialCode);
+        assert.equal(blocked.error,denialMessage);
+        assert.equal(blocked.profileAccessToken,undefined);
+        for (const supplied of [{...credentials,password:'wrong'}, {...credentials,login:'unknown-admin'}]) {
+            const denied = await restricted.send('login-user-profile',supplied);
+            assert.equal(denied.errorCode,'INPX_INVALID_PROFILE_CREDENTIALS');
+            assert.equal(denied.error,'Неверный логин или пароль');
+        }
         const https = 'https://'+new URL(proxy).host;
-        const webLogin = await fetch(proxy+'/reader/api/profile/login',{method:'POST',headers:{
+        const loginOverHttps = supplied => fetch(proxy+'/reader/api/profile/login',{method:'POST',headers:{
             cookie:proxyCookie, origin:https,'X-Forwarded-Proto':'https','Content-Type':'application/json',
-        },body:JSON.stringify({...credentials,csrfToken:restricted.csrfToken})});
-        assert.equal(webLogin.status,401,await webLogin.text());
+        },body:JSON.stringify({...supplied,csrfToken:restricted.csrfToken})});
+        const webLogin = await loginOverHttps(credentials);
+        assert.equal(webLogin.status,403);
+        assert.deepEqual(await webLogin.json(),{code:denialCode,error:denialMessage});
+        const invalidWebLogin = await loginOverHttps({...credentials,password:'wrong'});
+        assert.equal(invalidWebLogin.status,401);
+        assert.equal((await invalidWebLogin.json()).code,'INPX_INVALID_PROFILE_CREDENTIALS');
+        const formUrl = proxy+'/reader/ebook/login';
+        const form = await fetch(formUrl,{headers:{cookie:proxyCookie}});
+        const csrf = (await form.text()).match(/name="csrf" value="([^"]+)"/)?.[1];
+        assert(csrf,'The lightweight login form includes a CSRF token');
+        const formLogin = await fetch(formUrl,{method:'POST',headers:{cookie:proxyCookie},redirect:'manual',
+            body:new URLSearchParams({...credentials,csrf})});
+        assert.equal(formLogin.status,403);
+        assert((await formLogin.text()).includes(denialMessage));
         const aliceLogin = await restricted.send('login-user-profile',{login:'alice',password});
         assert(aliceLogin.profileAccessToken,JSON.stringify(aliceLogin));
         assert.equal((await direct.send('get-config',session)).currentUserProfile?.isAdmin,true);

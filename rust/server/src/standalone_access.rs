@@ -74,6 +74,8 @@ pub(crate) enum Rejection {
 
 pub(crate) const PROXY_SCOPE: &str = "Профиль закреплён за пользователем proxy";
 pub(crate) const BLOCKED_PROFILE: &str = "Профиль недоступен";
+pub(crate) const ADMIN_DIRECT_ONLY_MESSAGE: &str =
+    "Вход администратора через прокси запрещён. Откройте библиотеку по прямому адресу сервера.";
 
 pub(crate) struct BrowserAccess {
     pub(crate) csrf: String,
@@ -102,6 +104,7 @@ pub(crate) enum BrowserLogin {
         device: Option<profile_login::DeviceGrant>,
     },
     Invalid,
+    AdminDirectOnly,
     NeedOtp,
     NeedOtpSetup,
     RateLimited(u32),
@@ -759,18 +762,18 @@ impl Access {
             otp,
             trust,
         );
-        let decision = self
-            .login_permitted(&mut state, admission, login)
-            .and_then(|permitted| {
-                if permitted {
-                    profile_login::authenticate(request, &self.totp, &mut state.profiles)
-                } else {
-                    Ok(profile_login::Decision::Denied)
-                }
-            });
+        let transport = self.profile_transport(admission);
+        let decision = profile_login::authenticate_with_role_check(
+            request,
+            &self.totp,
+            &mut state.profiles,
+            |admin| transport.permits(admin),
+        );
         let outcome = match &decision {
             Ok(profile_login::Decision::Accepted(_)) => Some(true),
-            Ok(profile_login::Decision::Denied) => Some(false),
+            Ok(profile_login::Decision::Denied | profile_login::Decision::RoleDenied) => {
+                Some(false)
+            }
             _ => None,
         };
         state.attempts.finish(
@@ -798,7 +801,14 @@ impl Access {
             }
             Ok(profile_login::Decision::NeedOtp) => BrowserLogin::NeedOtp,
             Ok(profile_login::Decision::NeedOtpSetup) => BrowserLogin::NeedOtpSetup,
-            Ok(profile_login::Decision::Denied) => BrowserLogin::Invalid,
+            Ok(profile_login::Decision::RoleDenied)
+                if transport == ProfileTransport::WithoutAdmin =>
+            {
+                BrowserLogin::AdminDirectOnly
+            }
+            Ok(profile_login::Decision::Denied | profile_login::Decision::RoleDenied) => {
+                BrowserLogin::Invalid
+            }
             _ => BrowserLogin::Unavailable,
         }
     }

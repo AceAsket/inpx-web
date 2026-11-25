@@ -363,6 +363,7 @@ impl Standalone {
 
     pub(crate) fn admin_view(&self, peer: IpAddr) -> Value {
         let fields = &self.policy.settings;
+        let peer_in_proxy_cidrs = self.is_proxy_peer(peer);
         let locked: Vec<_> = LIVE_FIELDS
             .iter()
             .filter(|(_, name)| std::env::var(name).is_ok())
@@ -379,7 +380,8 @@ impl Standalone {
             "authExemptHealth":fields.auth_exempt_health,
             "trustedProxyCidrs":fields.trusted_ranges.iter().map(|range| range.0.trunc().to_string()).collect::<Vec<_>>(),
             "peer":peer.to_canonical(),
-            "peerTrusted":fields.trust_proxy && self.policy.trusted_range(peer),
+            "peerTrusted":fields.trust_proxy && peer_in_proxy_cidrs,
+            "peerInProxyCidrs":peer_in_proxy_cidrs,
             "locked":locked
         })
     }

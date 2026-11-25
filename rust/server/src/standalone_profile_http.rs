@@ -132,8 +132,13 @@ pub(super) async fn login(
             BrowserLogin::RateLimited(seconds) => rate_limit(seconds),
             BrowserLogin::Unavailable => failure(StatusCode::INTERNAL_SERVER_ERROR, "Не удалось войти в профиль", ""),
             denied => {
+                let status = if matches!(denied, BrowserLogin::AdminDirectOnly) {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::UNAUTHORIZED
+                };
                 let reply = socket::login_response(denied);
-                failure(StatusCode::UNAUTHORIZED, text(&reply,"error"),text(&reply,"errorCode"))
+                failure(status, text(&reply,"error"),text(&reply,"errorCode"))
             }
         }
     }).await.unwrap_or_else(|_| failure(StatusCode::INTERNAL_SERVER_ERROR, "Не удалось войти в профиль", ""))

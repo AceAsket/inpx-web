@@ -25,8 +25,8 @@ use super::{NAME, State, VERSION};
 use crate::http::{Body, error};
 use crate::request_access::{Admission, BrowserConnection};
 use crate::standalone_access::{
-    BLOCKED_PROFILE, BrowserAccess, BrowserLogin, BrowserProfileRequest, PROXY_SCOPE, Rejection,
-    profile_scope,
+    ADMIN_DIRECT_ONLY_MESSAGE, BLOCKED_PROFILE, BrowserAccess, BrowserLogin, BrowserProfileRequest,
+    PROXY_SCOPE, Rejection, profile_scope,
 };
 use crate::standalone_library::Admission as LibraryAdmission;
 use inpx_catalog::book_preview;
@@ -1668,6 +1668,9 @@ pub(super) fn login_response(result: BrowserLogin) -> Value {
         }
         BrowserLogin::Invalid => {
             json!({"error":"Неверный логин или пароль","errorCode":"INPX_INVALID_PROFILE_CREDENTIALS"})
+        }
+        BrowserLogin::AdminDirectOnly => {
+            json!({"error":ADMIN_DIRECT_ONLY_MESSAGE,"errorCode":"INPX_ADMIN_DIRECT_ONLY"})
         }
         BrowserLogin::NeedOtp => {
             json!({"error":"Введите код двухфакторной защиты","errorCode":"need_profile_otp"})

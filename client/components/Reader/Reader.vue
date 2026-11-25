@@ -1712,6 +1712,7 @@ class Reader {
     resizeObserver = null;
     scrollerViewportWidth = 0;
     scrollerViewportHeight = 0;
+    scrollerVisibleHeight = 0;
     contents = [];
     bookmarks = [];
     searchQuery = '';
@@ -1876,7 +1877,6 @@ class Reader {
     pagedBuildNeedsRefresh = false;
     pagedBuildOwnerJobId = 0;
     pagedBuildSignature = '';
-    pagedBuildGeometrySignature = '';
     pagedBuildStage = 'idle';
     progressPersistPendingAfterPagedBuild = false;
     pagedBuildJobId = 0;
@@ -3443,12 +3443,8 @@ class Reader {
         return padTop + padBottom;
     }
 
-    get compactVisibleScrollerHeight() {
-        if (!this.isCompactLayout || typeof window === 'undefined')
-            return 0;
-
-        const scroller = (this.$refs ? this.$refs.scroller : null);
-        if (!scroller || !window.visualViewport)
+    measureCompactVisibleScrollerHeight(scroller) {
+        if (!this.isCompactLayout || !scroller || typeof window === 'undefined' || !window.visualViewport)
             return 0;
 
         const rect = scroller.getBoundingClientRect();
@@ -3456,10 +3452,10 @@ class Reader {
         if (!viewportHeight)
             return 0;
 
-        return Math.max(0, Math.min(
+        return Math.max(0, Math.floor(Math.min(
             rect.height || 0,
             viewportHeight - Math.max(0, rect.top || 0),
-        ));
+        )));
     }
 
     get readerMobileFooterHeight() {
@@ -3570,7 +3566,7 @@ class Reader {
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         if (this.isCompactLayout) {
-            const visibleScrollerHeight = this.compactVisibleScrollerHeight || 0;
+            const visibleScrollerHeight = this.scrollerVisibleHeight;
             const availableHeight = (visibleScrollerHeight
                 ? Math.min(Math.max(0, scrollerHeight || visibleScrollerHeight), visibleScrollerHeight)
                 : scrollerHeight);
@@ -4617,33 +4613,22 @@ class Reader {
         if (this.isCompactLayout && this.isPagedMode && this.controlsOpen)
             return;
 
-        const scroller = (this.$refs ? this.$refs.scroller : null);
-        const previousViewportWidth = Math.round(Number(this.scrollerViewportWidth || 0) || 0);
-        const previousViewportHeight = Math.round(Number(this.scrollerViewportHeight || 0) || 0);
-        this.scrollerViewportWidth = ((scroller && scroller.clientWidth) || 0);
-        this.scrollerViewportHeight = ((scroller && scroller.clientHeight) || 0);
+        this.measureScrollerViewport();
         if (this.isPagedMode) {
-            const nextViewportWidth = Math.round(Number(this.scrollerViewportWidth || 0) || 0);
-            const nextViewportHeight = Math.round(Number(this.scrollerViewportHeight || 0) || 0);
+            if (!this.scrollerViewportWidth || !this.scrollerViewportHeight)
+                return;
             this.syncBottomClipCompensationGeometry();
+            const signature = this.getPagedLayoutSignature();
             // loadReader owns the initial pagination pass. Viewport callbacks fired by
             // its placeholder/status UI must not start a second build against the
-            // same measurement node, but a real size change still invalidates it.
+            // same measurement node. Compare the usable page, which can stay the same
+            // even while the scroller resizes behind the visual viewport.
             if (this.loading || this.bookPreparing) {
-                if (
-                    this.pagedBuildInProgress
-                    && nextViewportWidth > 0
-                    && nextViewportHeight > 0
-                    && (
-                        nextViewportWidth !== previousViewportWidth
-                        || nextViewportHeight !== previousViewportHeight
-                    )
-                )
+                if (this.pagedBuildInProgress && signature !== this.pagedBuildSignature)
                     this.pagedBuildNeedsRefresh = true;
                 return;
             }
 
-            const signature = this.getPagedLayoutSignature();
             const calibrationKey = this.getBottomClipCompensationGeometryKey();
             if (
                 this.pagedPages.length
@@ -4659,15 +4644,8 @@ class Reader {
             }
 
             if (this.pagedBuildInProgress) {
-                const geometrySignature = this.getPagedGeometrySignature();
-                if (
-                    signature
-                    && geometrySignature
-                    && signature === this.pagedBuildSignature
-                    && geometrySignature === this.pagedBuildGeometrySignature
-                )
-                    return;
-                this.pagedBuildNeedsRefresh = true;
+                if (signature !== this.pagedBuildSignature)
+                    this.pagedBuildNeedsRefresh = true;
                 return;
             }
 
@@ -4678,6 +4656,13 @@ class Reader {
             return;
         }
         this.applyVerticalSectionAlignment();
+    }
+
+    measureScrollerViewport() {
+        const scroller = this.$refs?.scroller;
+        this.scrollerViewportWidth = scroller?.clientWidth || 0;
+        this.scrollerViewportHeight = scroller?.clientHeight || 0;
+        this.scrollerVisibleHeight = this.measureCompactVisibleScrollerHeight(scroller);
     }
 
     schedulePagedViewportBuild() {
@@ -4796,6 +4781,7 @@ class Reader {
             return '';
 
         return [
+            (this.isCompactLayout ? 'compact' : 'regular'),
             Math.round(Number(this.pageFrameWidth || 0) || 0),
             Math.round(Number(this.pageMeasureFrameWidth || 0) || 0),
             Math.round(Number(this.pageMinHeight || 0) || 0),
@@ -4803,28 +4789,6 @@ class Reader {
             this.layoutSignatureForPreferences(this.activePreferences),
             this.readerSourceKey,
         ].join('|');
-    }
-
-    getPagedGeometrySignature() {
-        if (!this.isPagedMode)
-            return '';
-
-        return [
-            Math.round(Number(this.scrollerViewportWidth || 0) || 0),
-            Math.round(Number(this.scrollerViewportHeight || 0) || 0),
-            Math.round(Number(this.pageMeasureFrameWidth || 0) || 0),
-            Math.round(Number(this.pageMinHeight || 0) || 0),
-            Math.round(Number(this.currentDynamicBottomClipCompensation || 0) || 0),
-        ].join('|');
-    }
-
-    getPagedLayoutCacheKey(layoutSignature = '', calibrationKey = '', geometrySignature = '') {
-        const layout = String(layoutSignature || '').trim();
-        const calibration = String(calibrationKey || '').trim();
-        const geometry = String(geometrySignature || '').trim();
-        if (!layout || !calibration || !geometry)
-            return '';
-        return `${layout}::${calibration}::${geometry}`;
     }
 
     takePagedLayoutCacheEntry(cacheKey = '') {
@@ -8403,14 +8367,9 @@ class Reader {
         const buildOwnerJobId = jobId || this.pagedBuildJobId;
         const buildCalibrationKey = this.getBottomClipCompensationGeometryKey();
         const buildLayoutSignature = this.getPagedLayoutSignature();
-        const buildGeometrySignature = this.getPagedGeometrySignature();
         const buildContentSize = this.pagedContentSize;
         const buildSourceKey = this.readerSourceKey;
-        const layoutCacheKey = this.getPagedLayoutCacheKey(
-            buildLayoutSignature,
-            buildCalibrationKey,
-            buildGeometrySignature,
-        );
+        const layoutCacheKey = buildCalibrationKey ? buildLayoutSignature : '';
         let cachedLayout = this.takePagedLayoutCacheEntry(layoutCacheKey);
         let diskKey = cachedLayout?.diskKey || '';
         const lookupStarted = performance.now();
@@ -8425,7 +8384,7 @@ class Reader {
             if (buildOwnerJobId !== this.pagedBuildJobId || this.pagedBuildInProgress ||
                 digest !== this.pagedDocumentDigest || scope !== (this.currentUserId || '') ||
                 buildSourceKey !== this.readerSourceKey || buildLayoutSignature !== this.getPagedLayoutSignature() ||
-                buildGeometrySignature !== this.getPagedGeometrySignature()) return false;
+                buildCalibrationKey !== this.getBottomClipCompensationGeometryKey()) return false;
             if (pages) {
                 const root = measureHtml.ownerDocument.createElement('div');
                 root.innerHTML = this.readerHtml;
@@ -8611,7 +8570,6 @@ class Reader {
         this.pagedBuildInProgress = true;
         this.pagedBuildNeedsRefresh = false;
         this.pagedBuildSignature = buildLayoutSignature;
-        this.pagedBuildGeometrySignature = buildGeometrySignature;
         this.pagedBuildStage = 'building';
         this.pagedBuildProgressPercent = buildProgressPercent;
         this.loadingMessage = `${this.uiText.loadingPages} ${buildProgressPercent}%`;
@@ -8761,7 +8719,6 @@ class Reader {
                 this.pagedBuildNeedsRefresh
                 || buildCalibrationKey !== this.getBottomClipCompensationGeometryKey()
                 || buildLayoutSignature !== this.getPagedLayoutSignature()
-                || buildGeometrySignature !== this.getPagedGeometrySignature()
             ) {
                 storePartialLayout(queue.length);
                 this.pagedBuildNeedsRefresh = true;
@@ -8801,9 +8758,7 @@ class Reader {
                 )
                     this.loadingMessage = '';
                 const completedBuildSignature = this.pagedBuildSignature;
-                const completedGeometrySignature = this.pagedBuildGeometrySignature;
                 this.pagedBuildSignature = '';
-                this.pagedBuildGeometrySignature = '';
                 const isCurrentJob = (!jobId || jobId === this.pagedBuildJobId);
                 if (isCurrentJob) {
                     if (this.compactChromePagedBuildPending)
@@ -8811,9 +8766,7 @@ class Reader {
                     const refreshAlreadySatisfied = !!(
                         this.pagedBuildNeedsRefresh
                         && completedBuildSignature
-                        && completedGeometrySignature
                         && completedBuildSignature === this.getPagedLayoutSignature()
-                        && completedGeometrySignature === this.getPagedGeometrySignature()
                     );
                     if (refreshAlreadySatisfied) {
                         this.pagedBuildNeedsRefresh = false;
@@ -9405,8 +9358,7 @@ class Reader {
                         || initialBuildJobId !== this.pagedBuildJobId
                     )
                         return;
-                    this.scrollerViewportWidth = ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0);
-                    this.scrollerViewportHeight = ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0);
+                    this.measureScrollerViewport();
                     initialBuildCommitted = await this.buildPagedPagesChunked(initialBuildJobId);
                     if (
                         loadJobId !== this.readerLoadJobId

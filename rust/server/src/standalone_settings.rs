@@ -587,7 +587,10 @@ impl Settings {
                         && active_access.is_proxy_peer(connection.peer)
                         || !candidate.profile_transport(connection.peer).permits(true)
                     {
-                        return Err("Откройте библиотеку напрямую, чтобы изменить правило входа администратора".into());
+                        return Err(format!(
+                            "TCP-адрес текущего подключения {} попадает в список адресов прокси. Откройте библиотеку напрямую с адреса вне этого списка.",
+                            connection.peer.to_canonical()
+                        ).into());
                     }
                     if !connection.valid(&candidate) {
                         return Err("Новые правила лишат текущий сеанс доступа. Подключитесь через доверенный прокси с подходящим заголовком SSO или сохраните прежний режим".into());
