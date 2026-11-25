@@ -26,6 +26,7 @@
                         <q-input v-else v-model="access[field.key]" outlined dense :label="field.label"
                             :disable="!!saving || accessLocked(field.key)" />
                         <small v-if="accessLocked(field.key)" class="hint">{{ field.env }} · окружение</small>
+                        <small v-if="field.hint" class="hint">{{ field.hint }}</small>
                     </div>
                 </div>
             </details>
@@ -100,6 +101,8 @@ const accessFields = [
         {label: 'Локальные профили', value: 'local'}, {label: 'Внешний SSO', value: 'proxy'}, {label: 'Без режима обязательного входа', value: 'none'},
     ]},
     {...toggle('requireAuth', 'Требовать вход'), env: 'INPX_REQUIRE_AUTH'},
+    {...toggle('adminDirectOnly', 'Разрешить вход администратора только напрямую'), env: 'INPX_ADMIN_DIRECT_ONLY',
+        hint: 'Откройте адрес сервера в обход прокси. Укажите TCP-адреса всех прокси в списке выше.'},
     {key: 'proxyAuthHeader', label: 'Заголовок с именем пользователя SSO', env: 'INPX_PROXY_AUTH_HEADER'},
     {...toggle('authExemptHealth', 'Разрешить публичную проверку состояния'), env: 'INPX_AUTH_EXEMPT_HEALTH'},
 ];

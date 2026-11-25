@@ -255,7 +255,6 @@ impl Socket {
     ) -> Value {
         let admission = &connection_access.admission;
         let peer = admission.client;
-        let proxy_login = admission.proxy_login.as_deref();
         let connection = context.connection;
         if let (Some(activity), Some(id)) = (&state.metrics.activity, connection) {
             activity.seen(id, None);
@@ -284,7 +283,7 @@ impl Socket {
         let access =
             match state
                 .access
-                .browser(browser, text(&request, "profileAccessToken"), proxy_login)
+                .browser(browser, text(&request, "profileAccessToken"), admission)
             {
                 Ok(access) => access,
                 Err(Rejection::Unauthorized) => {
@@ -392,7 +391,7 @@ impl Socket {
             browser,
             token: text(&request, "profileAccessToken"),
             user: requested,
-            proxy_login,
+            admission,
         };
         let permitted_scope = access.users.iter().any(|profile| {
             access.owner.as_deref() == Some(profile.id.as_str())
@@ -651,7 +650,7 @@ impl Socket {
                 }
                 let result = state
                     .access
-                    .login(browser, peer, &login, password, otp, None);
+                    .login(browser, admission, &login, password, otp, None);
                 if let (Some(activity), BrowserLogin::Accepted { user, .. }) =
                     (&state.metrics.activity, &result)
                 {
@@ -672,14 +671,7 @@ impl Socket {
             | "set-user-profile-blocked"
             | "delete-user-profile" => state
                 .access
-                .profile_command(
-                    profile_request,
-                    admission,
-                    state.request_access.current().profile_binding(),
-                    &self.root,
-                    &action,
-                    &request,
-                )
+                .profile_command(profile_request, &self.root, &action, &request)
                 .unwrap_or_else(|failure| fault(&failure.to_string())),
             "resume-user-profile" => {
                 let Some(owner) = access
@@ -1037,7 +1029,7 @@ impl Socket {
         });
         let policy = state.request_access.current();
         let admission = &connection_access.admission;
-        let binding = policy.profile_binding();
+        let binding = state.access.profile_binding(admission);
         let can_remember = !binding
             && admission.secure
             && request["client"]["type"] != "android"

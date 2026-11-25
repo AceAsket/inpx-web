@@ -91,7 +91,7 @@ impl Subscription {
                 .unwrap_or(false)
                 && state
                     .access
-                    .browser(&browser, &self.token, admission.proxy_login.as_deref())
+                    .browser(&browser, &self.token, &admission)
                     .is_ok_and(|access| {
                         access.owner.as_deref() == Some(self.owner.as_str())
                             && access.token == self.token

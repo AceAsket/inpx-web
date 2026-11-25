@@ -22,7 +22,7 @@ use crate::standalone_access::LiveOpds;
 
 const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch bookReadLink isbnThreads
     loggingEnabled logServerStats logQueries logLevel logToFile loginRateLimitEnabled loginRateLimitWindowMs loginRateLimitMaxAttempts
-    requireAuth allowAnonymousAccess proxyBindProfile authMode trustProxy proxyAuthHeader trustedProxyCidrs authExemptHealth
+    requireAuth allowAnonymousAccess proxyBindProfile authMode trustProxy proxyAuthHeader trustedProxyCidrs adminDirectOnly authExemptHealth
     metricsEnabled metricsPath metricsExemptAuth dbCacheSize dbCacheBudgetMb queryCacheMemMb queryCacheDiskMb
     maxFilesDirSize bookCacheSize coverCacheSize queryCacheEnabled queryCacheMemSize queryCacheDiskSize
     cacheCleanInterval cacheCleanSchedule cacheCleanTargetRatio adminEventLogEnabled adminEventLogSize inpxCheckInterval
@@ -583,6 +583,12 @@ impl Settings {
                         .any(|key| super::runtime::LOGIN_KEYS.contains(&key.as_str()))
                 {
                     let candidate = active_access.update(&access_patch, &next, services)?;
+                    if access_patch["adminDirectOnly"] == true
+                        && active_access.is_proxy_peer(connection.peer)
+                        || !candidate.profile_transport(connection.peer).permits(true)
+                    {
+                        return Err("Откройте библиотеку напрямую, чтобы изменить правило входа администратора".into());
+                    }
                     if !connection.valid(&candidate) {
                         return Err("Новые правила лишат текущий сеанс доступа. Подключитесь через доверенный прокси с подходящим заголовком SSO или сохраните прежний режим".into());
                     }

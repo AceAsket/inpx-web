@@ -107,7 +107,7 @@ struct JobOwner {
     browser: String,
     token: String,
     user: String,
-    proxy_login: Option<String>,
+    admission: crate::request_access::Admission,
 }
 
 impl JobOwner {
@@ -116,7 +116,7 @@ impl JobOwner {
             browser: request.browser.into(),
             token: request.token.into(),
             user: request.user.into(),
-            proxy_login: request.proxy_login.map(str::to_owned),
+            admission: request.admission.clone(),
         }
     }
 
@@ -128,7 +128,7 @@ impl JobOwner {
                     browser: &self.browser,
                     token: &self.token,
                     user: &self.user,
-                    proxy_login: self.proxy_login.as_deref(),
+                    admission: &self.admission,
                 }),
                 false,
                 |_, _| Ok(()),

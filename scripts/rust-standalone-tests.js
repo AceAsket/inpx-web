@@ -4,6 +4,7 @@ const {spawn,spawnSync,execFileSync} = require('node:child_process');
 const {createHash} = require('node:crypto');
 const fs = require('node:fs/promises');
 const {createServer} = require('node:http');
+const {createServer:createTcpServer,createConnection} = require('node:net');
 const {once} = require('node:events');
 const {tmpdir} = require('node:os');
 const {dirname,join,resolve} = require('node:path');
@@ -2217,6 +2218,92 @@ async function verifyStandaloneIpv6(binary, root) {
     console.log('ok standalone direct IPv6 over HTTP and WebSocket, independent of proxy CIDRs');
 }
 
+async function verifyDirectAdmin(binary, root) {
+    const library = join(root,'library'), config = join(root,'config.json'), web = join(root,'web.json');
+    await createFixture(library);
+    await bundle(web);
+    await fs.writeFile(config,JSON.stringify({server:{host:'127.0.0.1',root:'/reader'},
+        trustProxy:true,trustedProxyCidrs:['127.0.0.2/32'],proxyBindProfile:true,allowAnonymousAccess:false,
+        opds:{enabled:true,root:'/catalogue'}}));
+    const password = 'direct-admin-fixture';
+    const server = await start(binary,['--standalone','--config='+config,'--lib-dir='+library,
+        '--data-dir='+join(root,'data'),'--web-bundle='+web,'--admin-password='+password]);
+    const bridge = createTcpServer(client => {
+        const upstream = createConnection({host:'127.0.0.1',port:Number(new URL(server.url).port),localAddress:'127.0.0.2'});
+        upstream.on('error',()=>client.destroy());
+        client.on('error',()=>upstream.destroy());
+        client.on('close',()=>upstream.destroy());
+        client.pipe(upstream).pipe(client);
+    });
+    bridge.listen(0,'127.0.0.1');
+    await once(bridge,'listening');
+    const proxy = 'http://127.0.0.1:'+bridge.address().port;
+    const sockets = [];
+    async function client(url, headers = {}, cookie) {
+        const ws = await wsClient(url,cookie || await browserCookie(url),headers);
+        sockets.push(ws);
+        const {csrfToken} = await ws.request({action:'get-config'});
+        return {ws, csrfToken, send:(action,fields={})=>ws.request({action,csrfToken,...fields})};
+    }
+    try {
+        const direct = await client(server.url);
+        const proxyCookie = await browserCookie(proxy);
+        const viaProxy = await client(proxy,{},proxyCookie);
+        const credentials = {login:'admin',password};
+        const login = await direct.send('login-user-profile',credentials);
+        const proxiedLogin = await viaProxy.send('login-user-profile',credentials);
+        assert(login.profileAccessToken && proxiedLogin.profileAccessToken);
+        const session = {userId:login.userId,profileAccessToken:login.profileAccessToken};
+        const alice = await direct.send('create-user-profile',{...session,profile:{name:'Alice',login:'alice',password}});
+        const aliceId = alice.user?.id;
+        assert(aliceId,JSON.stringify(alice));
+        const rule = {adminDirectOnly:true};
+        const rejectedSetting = await viaProxy.send('update-admin-access',{userId:proxiedLogin.userId,
+            profileAccessToken:proxiedLogin.profileAccessToken,access:rule});
+        assert.match(rejectedSetting.error,/напрямую/);
+        const oldSocketClosed = once(viaProxy.ws.socket,'close',{signal:AbortSignal.timeout(5000)});
+        assert.equal((await direct.send('update-admin-access',{...session,access:rule})).access?.adminDirectOnly,true);
+        await oldSocketClosed;
+
+        const restricted = await client(proxy,{'X-Forwarded-For':'127.0.0.1'},proxyCookie);
+        const replay = {userId:proxiedLogin.userId,profileAccessToken:proxiedLogin.profileAccessToken};
+        assert.equal((await restricted.send('get-config',replay)).adminAccess,undefined);
+        assert((await restricted.send('delete-user-profile',{...replay,targetUserId:aliceId})).error);
+        assert.equal((await restricted.send('login-user-profile',credentials)).errorCode,'INPX_INVALID_PROFILE_CREDENTIALS');
+        const https = 'https://'+new URL(proxy).host;
+        const webLogin = await fetch(proxy+'/reader/api/profile/login',{method:'POST',headers:{
+            cookie:proxyCookie, origin:https,'X-Forwarded-Proto':'https','Content-Type':'application/json',
+        },body:JSON.stringify({...credentials,csrfToken:restricted.csrfToken})});
+        assert.equal(webLogin.status,401,await webLogin.text());
+        const aliceLogin = await restricted.send('login-user-profile',{login:'alice',password});
+        assert(aliceLogin.profileAccessToken,JSON.stringify(aliceLogin));
+        assert.equal((await direct.send('get-config',session)).currentUserProfile?.isAdmin,true);
+        const sso = await direct.send('update-admin-access',{...session,access:{authMode:'proxy',requireAuth:true}});
+        assert.equal(sso.access?.authMode,'proxy',sso.error);
+        const anonymous = await client(server.url);
+        assert.equal((await anonymous.send('get-config')).profileLoginRequired,true);
+        assert.equal((await anonymous.send('login-user-profile',{login:'alice',password})).errorCode,'INPX_INVALID_PROFILE_CREDENTIALS');
+        assert.equal((await fetch(server.url+'/catalogue/v2/')).status,403);
+        assert((await anonymous.send('login-user-profile',credentials)).profileAccessToken);
+        assert.equal((await direct.send('get-config',session)).currentUserProfile?.isAdmin,true);
+
+        const ssoCookie = async user => (await fetch(proxy+'/reader/',{headers:{'Remote-User':user}})).headers.get('set-cookie').split(';')[0];
+        const ssoAlice = await client(proxy,{'Remote-User':'alice'},await ssoCookie('alice'));
+        assert.equal((await ssoAlice.send('get-config')).profileBoundId,aliceId);
+        const ssoAdmin = await client(proxy,{'Remote-User':'admin'},await ssoCookie('admin'));
+        const ssoAdminConfig = await ssoAdmin.send('get-config');
+        assert.equal(ssoAdminConfig.profileAuthorized,false);
+        assert.equal(ssoAdminConfig.adminAccess,undefined);
+        const users = await direct.send('get-user-profiles',session);
+        assert(users.users.some(user=>user.id===aliceId));
+    } finally {
+        for (const ws of sockets) ws.close();
+        bridge.close();
+        await server.stop();
+    }
+    console.log('ok direct-only admin on live proxy policy, HTTP login, existing sessions and strict SSO');
+}
+
 async function verifyTelegramApi(binary, root) {
     const {connect,signIn} = require('./rust-events-tests');
     const library = join(root,'library'), data = join(root,'data'), web = join(root,'web.json');
@@ -3050,6 +3137,7 @@ async function verifyJembaUpgrade(binary, root) {
     const root = await fs.mkdtemp(join(tmpdir(),'inpx-standalone-'));
     try {
         await verifyStandaloneIpv6(binary,join(root,'ipv6'));
+        await verifyDirectAdmin(binary,join(root,'direct-admin'));
         await verify(binary,root);
         await verifyCatalogue(binary,join(root,'opds'));
         await verifyEpubReader(binary,join(root,'epub-reader'));

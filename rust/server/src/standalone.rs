@@ -776,6 +776,17 @@ impl State {
         request: Request<Incoming>,
         admission: Admission,
     ) -> std::result::Result<Response<Body>, Infallible> {
+        if admission.profile_transport == request_access::ProfileTransport::AdminOnly
+            && admission.service == request_access::ServiceAccess::None
+            && self
+                .access
+                .require_http_admin(request.headers(), &admission)
+                .is_err()
+        {
+            return Ok(self
+                .static_asset(&request, &admission)
+                .unwrap_or_else(|| error(StatusCode::FORBIDDEN)));
+        }
         if self.ebook.matches(request.uri().path()) {
             return Ok(self.ebook.serve(self, request, admission).await);
         }
@@ -975,24 +986,9 @@ impl State {
             }
             "/api/index-status" => self.index.snapshot(),
             _ => {
-                return Ok(self.assets.select(&request, false).map_or_else(
-                    || error(StatusCode::NOT_FOUND),
-                    |asset| {
-                        let mut response = asset.response(None);
-                        if !head && self.socket.document(request.uri().path()) {
-                            match self.access.sessions.open(request.headers(), &admission) {
-                                Ok(session) => {
-                                    if let Some(cookie) = session.cookie {
-                                        standalone_access::private(response.headers_mut());
-                                        response.headers_mut().append(header::SET_COOKIE, cookie);
-                                    }
-                                }
-                                Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE),
-                            }
-                        }
-                        response
-                    },
-                ));
+                return Ok(self
+                    .static_asset(&request, &admission)
+                    .unwrap_or_else(|| error(StatusCode::NOT_FOUND)));
             }
         };
         let bytes = serde_json::to_vec(&reply).expect("application status serializes");
@@ -1001,6 +997,24 @@ impl State {
             *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
         }
         Ok(response)
+    }
+
+    fn static_asset(
+        &self,
+        request: &Request<Incoming>,
+        admission: &Admission,
+    ) -> Option<Response<Body>> {
+        let mut response = self.assets.select(request, false)?.response(None);
+        if request.method() != Method::HEAD && self.socket.document(request.uri().path()) {
+            let Ok(session) = self.access.sessions.open(request.headers(), admission) else {
+                return Some(error(StatusCode::SERVICE_UNAVAILABLE));
+            };
+            if let Some(cookie) = session.cookie {
+                standalone_access::private(response.headers_mut());
+                response.headers_mut().append(header::SET_COOKIE, cookie);
+            }
+        }
+        Some(response)
     }
 }
 
