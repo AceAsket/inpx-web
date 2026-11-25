@@ -1,14 +1,23 @@
 const assert = require('node:assert/strict');
 const {sessionCookieHeader} = require('./test-session-cookie');
 const {once} = require('node:events');
+const {setTimeout:sleep} = require('node:timers/promises');
 const WebSocket = require('ws');
 const {hotp} = require('../server/core/ProfileTotp');
+const period = 30000;
 
 function code(secret, offset = 0) {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
     const bits = Array.from(secret,letter=>alphabet.indexOf(letter).toString(2).padStart(5,'0')).join('');
     const key = Buffer.from(bits.match(/.{8}/g).map(byte=>parseInt(byte,2)));
-    return hotp(key,Math.floor(Date.now()/30000)+offset);
+    return hotp(key,Math.floor(Date.now()/period)+offset);
+}
+
+async function previousCode(secret) {
+    // The previous step expires when the current one ends, including during password verification.
+    const remaining = period - Date.now() % period;
+    if (remaining < 5000) await sleep(remaining + 50);
+    return code(secret,-1);
 }
 
 function credentials(reply) {
@@ -125,7 +134,7 @@ async function verifyProfileCommands(base, options = {}) {
         const start = await admin('profile-totp',{operation:'start',payload:{password:adminPassword}});
         assert(start.secret,start.error);
         assert.match(start.otpAuthUri,/^otpauth:\/\/totp\/inpx-web:admin\?/);
-        const enrolled = await admin('profile-totp',{operation:'enable',payload:{password:adminPassword,code:code(start.secret,-1)}});
+        const enrolled = await admin('profile-totp',{operation:'enable',payload:{password:adminPassword,code:await previousCode(start.secret)}});
         assert.equal(enrolled.otpEnabled,true,enrolled.error);
         assert.equal(enrolled.recoveryCodes.length,8);
         const adminCodes = enrolled.recoveryCodes;
@@ -142,10 +151,10 @@ async function verifyProfileCommands(base, options = {}) {
         const payload = {login:'alice',password};
         const setup = await local.send('profile-totp-enrollment',{operation:'start',payload});
         assert(setup.enrollmentId,setup.error);
-        const enableSetup = {operation:'enable',payload:{...payload,enrollmentId:setup.enrollmentId,code:code(setup.secret,-1)}};
-        assert.match((await guest.send('profile-totp-enrollment',enableSetup)).error,/Начните настройку/);
+        const enableSetup = {operation:'enable',payload:{...payload,enrollmentId:setup.enrollmentId}};
+        assert.match((await guest.send('profile-totp-enrollment',{...enableSetup,payload:{...enableSetup.payload,code:code(setup.secret)}})).error,/Начните настройку/);
         assert.equal((await local.send('profile-totp-enrollment',{...enableSetup,payload:{...enableSetup.payload,code:'invalid'}})).errorCode,invalid);
-        const enabled = await local.send('profile-totp-enrollment',enableSetup);
+        const enabled = await local.send('profile-totp-enrollment',{...enableSetup,payload:{...enableSetup.payload,code:await previousCode(setup.secret)}});
         const enrolledAlice = credentials(enabled);
         const aliceCodes = enabled.recoveryCodes;
         const aliceAction = (operation,auth=undefined)=>local.send('profile-totp',{...enrolledAlice,operation,payload:{password,code:auth}});
