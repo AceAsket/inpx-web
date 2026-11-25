@@ -176,6 +176,7 @@ pub(crate) struct Standalone {
     force_local_login: bool,
     allow_guests: bool,
     admin_direct_only: bool,
+    admin_ranges: Vec<IpNet>,
     mode: String,
     require_auth: bool,
     pub(crate) services: Arc<Services>,
@@ -210,6 +211,7 @@ impl Services {
 pub(crate) struct Admission {
     pub(crate) peer: IpAddr,
     pub(crate) client: IpAddr,
+    pub(crate) admin_client: Option<IpAddr>,
     pub(crate) proxy_login: Option<String>,
     pub(crate) secure: bool,
     pub(crate) cookie_port: u16,
@@ -265,6 +267,7 @@ pub(crate) const LIVE_FIELDS: &[(&str, &str)] = &[
     ("trustProxy", "INPX_TRUST_PROXY"),
     ("trustedProxyCidrs", "INPX_TRUSTED_PROXY_CIDRS"),
     ("adminDirectOnly", "INPX_ADMIN_DIRECT_ONLY"),
+    ("adminAllowedCidrs", "INPX_ADMIN_ALLOWED_CIDRS"),
     ("authMode", "INPX_AUTH_MODE"),
     ("requireAuth", "INPX_REQUIRE_AUTH"),
     ("proxyAuthHeader", "INPX_PROXY_AUTH_HEADER"),
@@ -290,6 +293,7 @@ impl BrowserConnection {
                 )
                 .is_ok_and(|admission| {
                     admission.client == self.admission.client
+                        && admission.admin_client == self.admission.admin_client
                         && admission.proxy_login == self.admission.proxy_login
                         && admission.secure == self.admission.secure
                         && admission.cookie_port == self.admission.cookie_port
@@ -349,11 +353,33 @@ impl Standalone {
         self.policy.trusted_range(peer)
     }
 
-    pub(crate) fn profile_transport(&self, peer: IpAddr) -> ProfileTransport {
+    pub(crate) fn has_admin_ranges(&self) -> bool {
+        !self.admin_ranges.is_empty()
+    }
+
+    pub(crate) fn admin_client(&self, peer: IpAddr, headers: &HeaderMap) -> Option<IpAddr> {
+        if self.policy.settings.trust_proxy && self.is_proxy_peer(peer) {
+            // A proxy's TCP address cannot identify a client when forwarding is missing.
+            self.policy.forwarded_client(headers)
+        } else {
+            Some(peer)
+        }
+    }
+
+    pub(crate) fn profile_transport(&self, peer: IpAddr, admin_client: Option<IpAddr>) -> ProfileTransport {
+        if self.has_admin_ranges() && !admin_client.is_some_and(|address| {
+            self.admin_ranges.iter().any(|range| range.contains(&address.to_canonical()))
+        }) {
+            return ProfileTransport::WithoutAdmin;
+        }
         if !self.admin_direct_only {
             ProfileTransport::All
         } else if self.is_proxy_peer(peer) {
-            ProfileTransport::WithoutAdmin
+            if self.has_admin_ranges() {
+                ProfileTransport::All
+            } else {
+                ProfileTransport::WithoutAdmin
+            }
         } else if self.policy.settings.require_proxy {
             ProfileTransport::AdminOnly
         } else {
@@ -361,8 +387,9 @@ impl Standalone {
         }
     }
 
-    pub(crate) fn admin_view(&self, peer: IpAddr) -> Value {
+    pub(crate) fn admin_view(&self, admission: &Admission) -> Value {
         let fields = &self.policy.settings;
+        let peer = admission.peer;
         let peer_in_proxy_cidrs = self.is_proxy_peer(peer);
         let locked: Vec<_> = LIVE_FIELDS
             .iter()
@@ -374,6 +401,8 @@ impl Standalone {
             "localLoginForced":self.force_local_login,
             "trustProxy":fields.trust_proxy,
             "adminDirectOnly":self.admin_direct_only,
+            "adminAllowedCidrs":self.admin_ranges.iter().map(IpNet::to_string).collect::<Vec<_>>(),
+            "adminClient":admission.admin_client.map(|ip| ip.to_canonical()),
             "authMode":if self.mode.is_empty() {"local"} else {&self.mode},
             "requireAuth":self.require_auth,
             "proxyAuthHeader":fields.proxy_header,
@@ -397,6 +426,7 @@ impl Standalone {
         let mut mode = self.mode.clone();
         let mut require_auth = self.require_auth;
         let mut admin_direct_only = self.admin_direct_only;
+        let mut admin_ranges = self.admin_ranges.clone();
         for (field, env) in LIVE_FIELDS {
             let Some(value) = patch.get(*field) else {
                 continue;
@@ -414,6 +444,9 @@ impl Standalone {
                     admin_direct_only = value
                         .as_bool()
                         .ok_or("Некорректное правило входа администратора")?;
+                }
+                "adminAllowedCidrs" => {
+                    admin_ranges = parse_admin_ranges(value)?;
                 }
                 "trustProxy" => {
                     settings.trust_proxy = value
@@ -490,6 +523,7 @@ impl Standalone {
             force_local_login,
             allow_guests,
             admin_direct_only,
+            admin_ranges,
             mode,
             require_auth,
             services,
@@ -544,6 +578,11 @@ impl Standalone {
         let proxy_header = value("INPX_PROXY_AUTH_HEADER", "proxyAuthHeader", "Remote-User");
         let admin_direct_only =
             flag("INPX_ADMIN_DIRECT_ONLY").unwrap_or(config["adminDirectOnly"] == true);
+        let admin_ranges = match std::env::var("INPX_ADMIN_ALLOWED_CIDRS") {
+            Ok(value) => parse_admin_ranges(&Value::String(value))?,
+            Err(std::env::VarError::NotPresent) => parse_admin_ranges(&config["adminAllowedCidrs"])?,
+            Err(error) => return Err(error.into()),
+        };
         validate_admin_direct(admin_direct_only, &trusted_ranges)?;
         let require_auth = require_auth(config);
         let require_proxy = mode == "proxy" && (configured_binding_required || require_auth);
@@ -577,6 +616,7 @@ impl Standalone {
             force_local_login: matches!(mode.as_str(), "" | "local") && require_auth,
             allow_guests: allow_guests(config),
             admin_direct_only,
+            admin_ranges,
             mode,
             require_auth,
             services: Arc::new(services),
@@ -592,7 +632,9 @@ impl Standalone {
         protocol: Protocol,
         route: ServiceRoute,
     ) -> Result<Admission, Decision> {
-        let profile_transport = self.profile_transport(peer);
+        let headers = request.headers();
+        let admin_client = self.admin_client(peer, headers);
+        let profile_transport = self.profile_transport(peer, admin_client);
         let decision = self
             .policy
             .evaluate(
@@ -610,12 +652,7 @@ impl Standalone {
             return Err(decision);
         };
         let trusted = self.policy.settings.trust_proxy && self.policy.trusted_range(peer);
-        let headers = request.headers();
-        let client = if trusted {
-            self.policy.forwarded_client(headers).unwrap_or(peer)
-        } else {
-            peer
-        };
+        let client = admin_client.unwrap_or(peer);
         let proxy_login = if trusted && self.bind_profile {
             self.policy
                 .proxy_header
@@ -639,6 +676,7 @@ impl Standalone {
         Ok(Admission {
             peer,
             client,
+            admin_client,
             proxy_login,
             secure,
             cookie_port,
@@ -650,6 +688,34 @@ impl Standalone {
             profile_transport,
         })
     }
+}
+
+fn parse_admin_ranges(value: &Value) -> inpx_catalog::Result<Vec<IpNet>> {
+    const INVALID: &str = "Некорректный IPv4/IPv6-адрес или CIDR в списке адресов администратора";
+    let entries: Vec<_> = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::String(value) => split_proxy_cidrs(value).collect(),
+        Value::Array(values) => values
+            .iter()
+            .map(|value| value.as_str().ok_or(INVALID))
+            .collect::<Result<_, _>>()?,
+        _ => return Err(INVALID.into()),
+    };
+    if entries.len() > 128 {
+        return Err("Укажите до 128 разрешённых адресов и сетей администратора".into());
+    }
+    entries.into_iter().map(|entry| {
+        let entry = entry.trim();
+        let network = entry.parse::<IpNet>().or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
+            .map_err(|_| INVALID)?;
+        if let IpNet::V6(range) = network
+            && range.prefix_len() >= 96
+            && let Some(mapped) = range.addr().to_ipv4_mapped()
+        {
+            return Ok(IpNet::new(mapped.into(), range.prefix_len() - 96)?.trunc());
+        }
+        Ok(network.trunc())
+    }).collect()
 }
 
 fn validate_admin_direct(enabled: bool, ranges: &[Range]) -> inpx_catalog::Result<()> {

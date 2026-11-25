@@ -1,8 +1,17 @@
 #!/bin/sh
 set -e
 
+DATA_DIR_VALUE="${DATA_DIR:-${APP_DIR:-}}"
+if [ -z "$DATA_DIR_VALUE" ] && [ -n "$CACHE_DIR" ]; then
+    DATA_DIR_VALUE="$(dirname "$CACHE_DIR")"
+fi
+DATA_DIR_VALUE="${DATA_DIR_VALUE:-/usr/local/bin/.inpx-web}"
+
 if [ "$#" -gt 0 ]; then
     case "$1" in
+        --reset-admin-network)
+            exec inpx-web "--data-dir=$DATA_DIR_VALUE" "$@"
+            ;;
         -*)
             exec inpx-web "$@"
             ;;
@@ -11,12 +20,6 @@ if [ "$#" -gt 0 ]; then
             ;;
     esac
 fi
-
-DATA_DIR_VALUE="${DATA_DIR:-${APP_DIR:-}}"
-if [ -z "$DATA_DIR_VALUE" ] && [ -n "$CACHE_DIR" ]; then
-    DATA_DIR_VALUE="$(dirname "$CACHE_DIR")"
-fi
-DATA_DIR_VALUE="${DATA_DIR_VALUE:-/usr/local/bin/.inpx-web}"
 
 LIBDIR_VALUE="${LIBDIR:-${LIB_DIR:-/library}}"
 INPX_VALUE="${INPX:-}"

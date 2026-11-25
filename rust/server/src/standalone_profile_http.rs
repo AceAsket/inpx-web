@@ -132,7 +132,7 @@ pub(super) async fn login(
             BrowserLogin::RateLimited(seconds) => rate_limit(seconds),
             BrowserLogin::Unavailable => failure(StatusCode::INTERNAL_SERVER_ERROR, "Не удалось войти в профиль", ""),
             denied => {
-                let status = if matches!(denied, BrowserLogin::AdminDirectOnly) {
+                let status = if matches!(denied, BrowserLogin::AdminRestricted { .. }) {
                     StatusCode::FORBIDDEN
                 } else {
                     StatusCode::UNAUTHORIZED

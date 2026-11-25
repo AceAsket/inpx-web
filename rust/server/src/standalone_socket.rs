@@ -25,7 +25,7 @@ use super::{NAME, State, VERSION};
 use crate::http::{Body, error};
 use crate::request_access::{Admission, BrowserConnection};
 use crate::standalone_access::{
-    ADMIN_DIRECT_ONLY_MESSAGE, BLOCKED_PROFILE, BrowserAccess, BrowserLogin, BrowserProfileRequest,
+    BLOCKED_PROFILE, BrowserAccess, BrowserLogin, BrowserProfileRequest,
     PROXY_SCOPE, Rejection, profile_scope,
 };
 use crate::standalone_library::Admission as LibraryAdmission;
@@ -1144,7 +1144,7 @@ impl Socket {
             if authorized && selected.is_some_and(|profile| profile.is_admin) {
                 config.insert(
                     "adminAccess".into(),
-                    policy.admin_view(connection_access.peer),
+                    policy.admin_view(&connection_access.admission),
                 );
                 config.insert("adminRuntime".into(), super::runtime::view(&current, state));
                 config.insert("adminLaunch".into(), state.launch.clone());
@@ -1669,8 +1669,8 @@ pub(super) fn login_response(result: BrowserLogin) -> Value {
         BrowserLogin::Invalid => {
             json!({"error":"Неверный логин или пароль","errorCode":"INPX_INVALID_PROFILE_CREDENTIALS"})
         }
-        BrowserLogin::AdminDirectOnly => {
-            json!({"error":ADMIN_DIRECT_ONLY_MESSAGE,"errorCode":"INPX_ADMIN_DIRECT_ONLY"})
+        BrowserLogin::AdminRestricted { message, code } => {
+            json!({"error":message,"errorCode":code})
         }
         BrowserLogin::NeedOtp => {
             json!({"error":"Введите код двухфакторной защиты","errorCode":"need_profile_otp"})

@@ -1286,7 +1286,8 @@ async function verifyProxy(binary, args, data, settings, config, detail) {
         return response;
     };
     const legacyCidrs = '192.0.2.10/32, 127.0.0.1';
-    await fs.writeFile(config,JSON.stringify({...settings,authMode:'local',trustProxy:true,trustedProxyCidrs:legacyCidrs}));
+    await fs.writeFile(config,JSON.stringify({...settings,authMode:'local',allowAnonymousAccess:false,
+        trustProxy:true,trustedProxyCidrs:legacyCidrs}));
     const legacy = await start(binary,args);
     try {
         const headers = {Host:'books.example.invalid','X-Forwarded-Proto':'https','X-Forwarded-Scheme':'https'};
@@ -1298,6 +1299,27 @@ async function verifyProxy(binary, args, data, settings, config, detail) {
         try { assert.ok((await ws.request({action:'get-config'})).csrfToken); }
         finally { ws.close(); }
         await assert.rejects(wsClient(legacy.url,null,{...headers,origin:'https://other.example.invalid'}),/403/);
+
+        const mobileProxy = {...headers,'X-Forwarded-Host':'books.example.invalid'};
+        const bootstrap = await check(legacy,'/reader/',200,{method:'HEAD',headers:{...mobileProxy,accept:'text/html'}});
+        assert.equal(bootstrap.headers.get('cache-control'),'private, no-store');
+        const session = bootstrap.headers.get('set-cookie');
+        assert.match(session,/; Secure$/);
+        assert.equal((await bootstrap.arrayBuffer()).byteLength,0);
+        const mobileHeaders = {...mobileProxy,cookie:session.split(';')[0]};
+        const cover = '/reader/cover/by-uid?'+new URLSearchParams({uid});
+        const before = await check(legacy,cover,401,{headers:mobileHeaders});
+        await before.body.cancel();
+        const mobile = await wsClient(legacy.url,mobileHeaders.cookie,{...mobileProxy,origin});
+        try {
+            const {csrfToken} = await mobile.request({action:'get-config'});
+            const login = await mobile.request({action:'login-user-profile',login:'admin',password:'fixture-admin',csrfToken});
+            assert.equal(login.userId,'admin',login.error);
+            // The cover request uses only the cookie returned by HEAD.
+            const image = await check(legacy,cover,200,{headers:mobileHeaders});
+            assert.equal(image.headers.get('content-type'),'image/png');
+            await image.body.cancel();
+        } finally { mobile.close(); }
     } finally { await legacy.stop(); }
 
     await fs.writeFile(config,JSON.stringify({...settings,allowAnonymousAccess:false,trustedProxyCidrs:legacyCidrs}));
@@ -2400,12 +2422,14 @@ async function verifyDirectAdmin(binary, root) {
     const library = join(root,'library'), config = join(root,'config.json'), web = join(root,'web.json');
     await createFixture(library);
     await bundle(web);
-    await fs.writeFile(config,JSON.stringify({server:{host:'127.0.0.1',root:'/reader'},
-        trustProxy:true,trustedProxyCidrs:['127.0.0.2/32'],proxyBindProfile:true,allowAnonymousAccess:false,
-        opds:{enabled:true,root:'/catalogue'}}));
+    const settings = {server:{host:'127.0.0.1',root:'/reader'},trustProxy:true,
+        trustedProxyCidrs:['127.0.0.2/32'],proxyBindProfile:true,allowAnonymousAccess:false,
+        opds:{enabled:true,root:'/catalogue'}};
+    await fs.writeFile(config,JSON.stringify(settings));
     const password = 'direct-admin-fixture';
-    const server = await start(binary,['--standalone','--config='+config,'--lib-dir='+library,
-        '--data-dir='+join(root,'data'),'--web-bundle='+web,'--admin-password='+password]);
+    const args = ['--standalone','--config='+config,'--lib-dir='+library,
+        '--data-dir='+join(root,'data'),'--web-bundle='+web,'--admin-password='+password];
+    const server = await start(binary,args);
     const bridge = createTcpServer(client => {
         const upstream = createConnection({host:'127.0.0.1',port:Number(new URL(server.url).port),localAddress:'127.0.0.2'});
         upstream.on('error',()=>client.destroy());
@@ -2426,7 +2450,7 @@ async function verifyDirectAdmin(binary, root) {
     try {
         const direct = await client(server.url);
         const proxyCookie = await browserCookie(proxy);
-        const viaProxy = await client(proxy,{},proxyCookie);
+        let viaProxy = await client(proxy,{},proxyCookie);
         const credentials = {login:'admin',password};
         const login = await direct.send('login-user-profile',credentials);
         const proxiedLogin = await viaProxy.send('login-user-profile',credentials);
@@ -2435,6 +2459,36 @@ async function verifyDirectAdmin(binary, root) {
         const alice = await direct.send('create-user-profile',{...session,profile:{name:'Alice',login:'alice',password}});
         const aliceId = alice.user?.id;
         assert(aliceId,JSON.stringify(alice));
+        const replay = {userId:proxiedLogin.userId,profileAccessToken:proxiedLogin.profileAccessToken};
+        const allowed = await client(proxy,{'X-Forwarded-For':'2001:db8:1::7'});
+        const allowedLogin = await allowed.send('login-user-profile',credentials);
+        const allowedSession = {userId:allowedLogin.userId,profileAccessToken:allowedLogin.profileAccessToken};
+        assert(allowedSession.profileAccessToken,allowedLogin.error);
+        const addresses = ['127.0.0.1','2001:db8:1::/64'];
+        const setAddresses = (source, auth, rows) => source.send('update-admin-access',{
+            ...auth,access:{adminAllowedCidrs:rows},
+        });
+        assert.match((await setAddresses(direct, session, ['invalid'])).error,/Некорректный IPv4\/IPv6/);
+        assert.match((await setAddresses(allowed, allowedSession, ['127.0.0.1'])).error,/2001:db8:1::7/);
+        assert.match((await setAddresses(viaProxy, replay, addresses)).error,/не получил IP/);
+        const disallowedClosed = once(viaProxy.ws.socket,'close',{signal:AbortSignal.timeout(5000)});
+        const applied = await setAddresses(allowed, allowedSession, addresses);
+        assert.equal(applied.access?.adminClient,'2001:db8:1::7',applied.error);
+        assert.deepEqual(applied.access.adminAllowedCidrs,['127.0.0.1/32','2001:db8:1::/64']);
+        await disallowedClosed;
+        assert.deepEqual((await readJson(config)).adminAllowedCidrs,addresses);
+        const other = await client(proxy,{'X-Forwarded-For':'2001:db8:1::7, 198.51.100.21'});
+        const deniedByAddress = await other.send('login-user-profile',credentials);
+        assert.equal(deniedByAddress.errorCode,'INPX_ADMIN_ADDRESS_DENIED');
+        assert.equal((await other.send('get-config',allowedSession)).adminAccess,undefined);
+        assert((await other.send('delete-user-profile',{...allowedSession,targetUserId:aliceId})).error);
+        assert((await other.send('login-user-profile',{login:'alice',password})).profileAccessToken);
+        const directWithForwardedHeader = await client(server.url,{'X-Forwarded-For':'198.51.100.21'});
+        const directLogin = await directWithForwardedHeader.send('login-user-profile',credentials);
+        assert.equal((await directWithForwardedHeader.send('get-config',directLogin)).adminAccess?.adminClient,'127.0.0.1');
+        assert.deepEqual((await setAddresses(direct, session, [])).access?.adminAllowedCidrs,[]);
+
+        viaProxy = await client(proxy,{},proxyCookie);
         const rule = {adminDirectOnly:true};
         const proxyAccess = (await viaProxy.send('get-config',{userId:proxiedLogin.userId,
             profileAccessToken:proxiedLogin.profileAccessToken})).adminAccess;
@@ -2449,7 +2503,6 @@ async function verifyDirectAdmin(binary, root) {
         await oldSocketClosed;
 
         const restricted = await client(proxy,{'X-Forwarded-For':'127.0.0.1'},proxyCookie);
-        const replay = {userId:proxiedLogin.userId,profileAccessToken:proxiedLogin.profileAccessToken};
         assert.equal((await restricted.send('get-config',replay)).adminAccess,undefined);
         assert((await restricted.send('delete-user-profile',{...replay,targetUserId:aliceId})).error);
         const denialCode = 'INPX_ADMIN_DIRECT_ONLY';
@@ -2507,7 +2560,35 @@ async function verifyDirectAdmin(binary, root) {
         bridge.close();
         await server.stop();
     }
-    console.log('ok direct-only admin on live proxy policy, HTTP login, existing sessions and strict SSO');
+    await fs.writeFile(config,JSON.stringify({...settings,adminDirectOnly:true,adminAllowedCidrs:['2001:db8:1::/64']}));
+    const locked = await start(binary,args);
+    try {
+        const ws = await wsClient(locked.url,await browserCookie(locked.url));
+        try {
+            const {csrfToken} = await ws.request({action:'get-config'});
+            const login = await ws.request({action:'login-user-profile',login:'admin',password,csrfToken});
+            assert.equal(login.errorCode,'INPX_ADMIN_ADDRESS_DENIED');
+        } finally { ws.close(); }
+    } finally { await locked.stop(); }
+    execFileSync(binary,[...args,'--reset-admin-network'],{timeout:5000});
+    const restored = await readJson(config);
+    assert.equal(restored.adminAllowedCidrs,undefined);
+    assert.equal(restored.adminDirectOnly,undefined);
+    assert.equal(restored.opds.root,'/catalogue');
+    assert.deepEqual(restored.trustedProxyCidrs,settings.trustedProxyCidrs);
+    const recovered = await start(binary,args,{INPX_ADMIN_ALLOWED_CIDRS:'127.0.0.1'});
+    try {
+        const ws = await wsClient(recovered.url,await browserCookie(recovered.url));
+        try {
+            const {csrfToken} = await ws.request({action:'get-config'});
+            const login = await ws.request({action:'login-user-profile',login:'admin',password,csrfToken});
+            assert(login.profileAccessToken,login.error);
+            const access = (await ws.request({action:'get-config',profileAccessToken:login.profileAccessToken,userId:login.userId})).adminAccess;
+            assert.deepEqual(access.adminAllowedCidrs,['127.0.0.1/32']);
+            assert(access.locked.includes('adminAllowedCidrs'));
+        } finally { ws.close(); }
+    } finally { await recovered.stop(); }
+    console.log('ok admin IPv4/IPv6 allowlist, scope, live revocation, local reset, direct-only compatibility and strict SSO');
 }
 
 async function verifyTelegramApi(binary, root) {

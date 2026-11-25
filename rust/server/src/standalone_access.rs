@@ -74,8 +74,6 @@ pub(crate) enum Rejection {
 
 pub(crate) const PROXY_SCOPE: &str = "Профиль закреплён за пользователем proxy";
 pub(crate) const BLOCKED_PROFILE: &str = "Профиль недоступен";
-pub(crate) const ADMIN_DIRECT_ONLY_MESSAGE: &str =
-    "Вход администратора через прокси запрещён. Откройте библиотеку по прямому адресу сервера.";
 
 pub(crate) struct BrowserAccess {
     pub(crate) csrf: String,
@@ -104,7 +102,7 @@ pub(crate) enum BrowserLogin {
         device: Option<profile_login::DeviceGrant>,
     },
     Invalid,
-    AdminDirectOnly,
+    AdminRestricted { message: &'static str, code: &'static str },
     NeedOtp,
     NeedOtpSetup,
     RateLimited(u32),
@@ -115,12 +113,12 @@ impl Access {
     pub(crate) fn profile_transport(&self, admission: &Admission) -> ProfileTransport {
         self.request_access
             .current()
-            .profile_transport(admission.peer)
+            .profile_transport(admission.peer, admission.admin_client)
     }
 
     pub(crate) fn profile_binding(&self, admission: &Admission) -> bool {
         let policy = self.request_access.current();
-        policy.profile_transport(admission.peer) != ProfileTransport::AdminOnly
+        policy.profile_transport(admission.peer, admission.admin_client) != ProfileTransport::AdminOnly
             && policy.profile_binding()
     }
 
@@ -674,7 +672,7 @@ impl Access {
             .browser_profiles(&self.file)
             .map_err(report)?;
         let policy = self.request_access.current();
-        let transport = policy.profile_transport(admission.peer);
+        let transport = policy.profile_transport(admission.peer, admission.admin_client);
         let profile = browser.profile.filter(|(token, identity)| {
             let current = profiles.users.iter().find(|user| {
                 user.id == identity.owner && user.credential_version == identity.credential_version
@@ -762,7 +760,8 @@ impl Access {
             otp,
             trust,
         );
-        let transport = self.profile_transport(admission);
+        let policy = self.request_access.current();
+        let transport = policy.profile_transport(admission.peer, admission.admin_client);
         let decision = profile_login::authenticate_with_role_check(
             request,
             &self.totp,
@@ -804,7 +803,17 @@ impl Access {
             Ok(profile_login::Decision::RoleDenied)
                 if transport == ProfileTransport::WithoutAdmin =>
             {
-                BrowserLogin::AdminDirectOnly
+                if policy.has_admin_ranges() {
+                    BrowserLogin::AdminRestricted {
+                        message: "Вход администратора разрешён только с адресов, указанных в настройках сервера.",
+                        code: "INPX_ADMIN_ADDRESS_DENIED",
+                    }
+                } else {
+                    BrowserLogin::AdminRestricted {
+                        message: "Вход администратора через прокси запрещён. Откройте библиотеку по прямому адресу сервера.",
+                        code: "INPX_ADMIN_DIRECT_ONLY",
+                    }
+                }
             }
             Ok(profile_login::Decision::Denied | profile_login::Decision::RoleDenied) => {
                 BrowserLogin::Invalid
