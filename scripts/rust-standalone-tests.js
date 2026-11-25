@@ -675,6 +675,22 @@ async function verifyCatalogue(binary, root) {
         const guest = await wsClient(server.url,await browserCookie(server.url));
         const admin = await wsClient(server.url,await browserCookie(server.url));
         try {
+            const titles = query=>guest.request({action:'search',from:'title',query});
+            const portion = {title:'Маршрут',del:'0',offset:40,limit:40};
+            const filtered = await titles({...portion,ext:'fb2|epub'});
+            const unfiltered = await titles(portion);
+            assert.equal(filtered.totalFound,105,filtered.error);
+            assert.equal(filtered.found.length,40);
+            assert.deepEqual(filtered.found,unfiltered.found);
+            const deleted = await titles({title:'=МАРШРУТ 106',ext:'fb2|epub'});
+            assert.equal(deleted.totalFound,1,deleted.error);
+            const {bookCount,bookDelCount,books} = deleted.found[0];
+            assert.deepEqual([bookCount,bookDelCount,books.map(book=>book.del)],[0,1,[1]]);
+            const absentFormat = await titles({title:'*шрут',ext:'epub|mobi',del:'0'});
+            assert.deepEqual([absentFormat.totalFound,absentFormat.found],[0,[]],absentFormat.error);
+            const absentTitle = await titles({title:'=unknown title',ext:'fb2|epub'});
+            assert.deepEqual([absentTitle.totalFound,absentTitle.found],[0,[]],absentTitle.error);
+
             const options = {kind:'series',name:'Маршрут',page:2,limit:2,
                 filters:{sourceId:'catalogue',lang:'ru',ext:'fb2',genre:'sf_space'}};
             const entity = {action:'catalog-entity',options};

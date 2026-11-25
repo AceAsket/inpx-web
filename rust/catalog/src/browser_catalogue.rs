@@ -708,7 +708,7 @@ impl Catalogue {
         .then(|| self.store.opds_books(&[]))
         .transpose()?;
         let matching = (non_deleted.is_none() && search.constrained())
-            .then(|| self.matching(&search))
+            .then(|| self.matching(&search, table, &term))
             .transpose()?;
         let mut found = Vec::new();
         let mut book_groups = Vec::new();
@@ -762,9 +762,35 @@ impl Catalogue {
         Ok(json!({"found":found,"totalFound":count}))
     }
 
-    fn matching(&self, search: &Search) -> Result<HashMap<u32, bool>> {
+    fn matching(
+        &self,
+        search: &Search,
+        table: Table,
+        term: &NameQuery,
+    ) -> Result<HashMap<u32, bool>> {
+        let mut candidates = self.search_candidates(search)?;
+        if candidates.is_none() && !term.matches("") {
+            // Use the group's postings when metadata filters alone would scan the catalogue.
+            let prefix = match term {
+                NameQuery::Exact(name) | NameQuery::Prefix(name) => Some(name.as_str()),
+                _ => None,
+            };
+            let mut ids = Vec::new();
+            self.lookup.visit_name_candidates(
+                &self.lookup_generation,
+                table,
+                prefix.as_slice(),
+                |key| term.matches(key),
+                |_, _, _, _, books| {
+                    ids.extend(books.iter().copied().map(u32::from_le_bytes));
+                    Ok(())
+                },
+            )?;
+            ids.sort_unstable();
+            ids.dedup();
+            candidates = Some(ids);
+        }
         let mut selected = HashMap::new();
-        let candidates = self.search_candidates(search)?;
         self.store
             .visit_search_rows(&self.generation, candidates.as_deref(), |id, bytes| {
                 let row: Record = serde_json::from_slice(bytes)?;
