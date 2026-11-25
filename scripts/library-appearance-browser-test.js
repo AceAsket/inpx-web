@@ -122,7 +122,7 @@ if (require.main === module) (async() => {
     const artifacts = [];
     try {
         const library = path.join(directory, 'library'); await fixture(library);
-        const dataDir = path.join(directory, 'data'); await fs.copy(path.resolve('dist/tmp/public'), path.join(dataDir, 'public'));
+        const dataDir = path.join(directory, 'data'); await fs.copy(path.join(require('../build/dist-dir'), 'tmp/public'), path.join(dataDir, 'public'));
         const port = await unusedPort(), base = `http://127.0.0.1:${port}`;
         child = spawn(process.execPath, [path.resolve('server'), `--data-dir=${dataDir}`, `--config=${library}/config.json`, `--lib-dir=${library}`, `--port=${port}`, '--host=127.0.0.1'],
             {windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: {...process.env, INPX_TTS_ENABLED: 'false',
@@ -425,7 +425,17 @@ if (require.main === module) (async() => {
                     bodyWidth: document.querySelector('.library-page__body').clientWidth, shelfColumns: getComputedStyle(document.querySelector('.overview-shelves')).gridTemplateColumns.split(' ').length};
             });
             assert(geometry.documentWidth <= width + 1 && geometry.pageWidth <= geometry.mainWidth + 1, JSON.stringify(geometry));
-            if (width >= 1800) assert(geometry.bodyWidth >= geometry.mainWidth - 80, 'Overview must use the available width');
+            if (width >= 1800) {
+                assert(geometry.bodyWidth >= geometry.mainWidth - 80, 'Overview must use the available width');
+                await page.waitForFunction(() => {
+                    const heading = document.querySelector('[id^="shelf-newest"]');
+                    const strip = heading?.closest('.book-shelf')?.querySelector('.book-shelf__strip');
+                    if (!strip) return false;
+                    const rect = strip.getBoundingClientRect();
+                    const fullCards = [...strip.children].filter(card => card.getBoundingClientRect().right <= rect.right + 1);
+                    return fullCards.length > 8 && rect.right - fullCards.at(-1).getBoundingClientRect().right < 12;
+                });
+            }
             if (width >= 900) {
                 assert(await page.locator('.library-shell__nav-bottom strong').evaluate(node => node.scrollWidth <= node.clientWidth), 'Profile name is not clipped');
                 assert(await page.locator('.library-shell__nav-bottom small').evaluate(node => node.getBoundingClientRect().height <= 16 && node.scrollWidth <= node.clientWidth), 'Profile subtitle fits on one line');

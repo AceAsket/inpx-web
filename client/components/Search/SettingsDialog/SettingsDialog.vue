@@ -51,8 +51,8 @@
                         <q-checkbox v-model="compactDiscoveryCards" size="36px" label="Компактные карточки" />
                     </div>
                     <div class="settings-fields">
-                        <q-select v-model="discoveryNewestLimit" :options="discoveryLimitOptions" label="Книг в «Новинках»" outlined dense emit-value map-options />
-                        <q-select v-model="discoveryPopularLimit" :options="discoveryLimitOptions" label="Книг в «Популярном»" outlined dense emit-value map-options />
+                        <q-select v-model="discoveryNewestLimit" :options="discoveryLimitOptions" label="Минимум книг в «Новинках»" outlined dense emit-value map-options />
+                        <q-select v-model="discoveryPopularLimit" :options="discoveryLimitOptions" label="Минимум книг в «Популярном»" outlined dense emit-value map-options />
                     </div>
                 </div>
             </details>

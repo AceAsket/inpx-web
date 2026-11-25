@@ -18,7 +18,7 @@
 <script setup>
 import {ref, onBeforeUnmount, watch} from 'vue';
 import BookTile from './BookTile.vue';
-import {bookUid} from './libraryModel';
+import {bookUid, overviewShelfColumns} from './libraryModel';
 
 const props = defineProps({title: {type: String, required: true}, books: {type: Array, required: true}, headingId: {type: String, required: true}});
 const strip = ref(null), canBack = ref(false), canForward = ref(false);
@@ -29,16 +29,26 @@ function measure() {
     canBack.value = node.scrollLeft > 2;
     canForward.value = node.scrollLeft + node.clientWidth < node.scrollWidth - 2;
 }
+function measureLayout() {
+    const node = strip.value;
+    const width = (node?.clientWidth || 0) - 8;
+    if (width > 0) {
+        const minimum = Math.ceil((width + 20) / 185);
+        const columns = Math.min(overviewShelfColumns(width), Math.max(minimum, props.books.length));
+        node.style.setProperty('--shelf-tile-width', `${(width - 20 * (columns - 1)) / columns}px`);
+    }
+    measure();
+}
 function scroll(direction) {
     strip.value?.scrollBy({left: direction * Math.max(150, strip.value.clientWidth * .8),
         behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
 }
 watch(strip, node => {
     observer?.disconnect();
-    if (node) {observer = new ResizeObserver(measure); observer.observe(node);}
-    measure();
+    if (node) {observer = new ResizeObserver(measureLayout); observer.observe(node);}
+    measureLayout();
 }, {flush: 'post'});
-watch(() => props.books, measure, {flush: 'post'});
+watch(() => props.books, measureLayout, {flush: 'post'});
 onBeforeUnmount(() => observer?.disconnect());
 </script>
 
@@ -52,8 +62,9 @@ h2 {font-size: 19px; line-height: 1.4; letter-spacing: -.02em; font-weight: 550;
 button {background: transparent; color: var(--app-muted); border: 1px solid var(--app-border); width: 30px; height: 30px; border-radius: 50%; cursor: pointer;}
 button:disabled {opacity: .3; cursor: default;}
 button:focus-visible, .book-shelf__strip:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}
-.book-shelf__strip {display: grid; grid-auto-columns: 130px; grid-auto-flow: column; gap: 20px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; padding: 4px 4px 8px; margin: -4px; overscroll-behavior-x: contain;}
+.book-shelf__strip {display: grid; grid-auto-columns: var(--shelf-tile-width, 130px); grid-auto-flow: column; gap: 20px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none; padding: 4px 4px 8px; margin: -4px; overscroll-behavior-x: contain;}
 .book-shelf__strip::-webkit-scrollbar {display: none;}
 .book-shelf__strip > * {scroll-snap-align: start;}
+.book-shelf__strip :deep(.book-tile__details) {right: -4px;}
 @media (max-width: 599px) {.book-shelf__strip {grid-auto-columns: 112px; gap: 20px;} h2 {font-size: 18px;} .book-shelf__actions > button {display: none;}}
 </style>

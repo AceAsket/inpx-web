@@ -1,4 +1,4 @@
-const {identity, personalAccess, discoveryOptions, normalizeShelves, profileLoginError} = require('./libraryModel');
+const {identity, personalAccess, discoveryOptions, overviewShelfColumns, normalizeShelves, profileLoginError} = require('./libraryModel');
 
 const READING_TTL = 30000;
 const DISCOVERY_TTL = 15 * 60 * 1000;
@@ -22,6 +22,7 @@ class LibraryRepository {
         this.contextKey = '';
         this.epoch = 0;
         this.discoveryRevision = 0;
+        this.overviewWidthLimit = 0;
         this.pinnedShelvesRevision = 0;
         this.pending = {};
         this.loadedAt = {};
@@ -44,7 +45,7 @@ class LibraryRepository {
             this.discoveryKey = '';
             this.patch({...emptyState(), revision: this.epoch, locked: !personalAccess(config, settings)});
         }
-        const discoveryKey = JSON.stringify([!!config.version, discoveryOptions(settings), config.discovery, this.overviewShelfEnabled('discovery:external-source', settings.showDiscoveryExternal !== false),
+        const discoveryKey = JSON.stringify([!!config.version, discoveryOptions(settings, this.overviewWidthLimit), config.discovery, this.overviewShelfEnabled('discovery:external-source', settings.showDiscoveryExternal !== false),
             config.clientApi?.features?.includes('separateExternalDiscovery'), this.overviewShelfEnabled('recommendations', settings.showDiscoverySimilar !== false),
             config.currentUserProfile?.personalRecommendationsEnabled !== false]);
         if (discoveryKey !== this.discoveryKey) {
@@ -60,6 +61,14 @@ class LibraryRepository {
                 externalShelvesError: '', externalShelvesLoginRequired: false, recommendationsLoading: false,
                 ...(!this.overviewShelfEnabled('recommendations', settings.showDiscoverySimilar !== false) || config.currentUserProfile?.personalRecommendationsEnabled === false ? {recommendations: []} : {})});
         }
+    }
+
+    expandOverview(width) {
+        const next = Math.min(24, Math.ceil(overviewShelfColumns(width) / 4) * 4);
+        if (next <= Math.max(this.overviewWidthLimit, 8)) return false;
+        this.overviewWidthLimit = next;
+        this.setContext(this.config, this.settings);
+        return true;
     }
 
     async run(kind, force, ttl, work) {
@@ -137,7 +146,7 @@ class LibraryRepository {
             return Promise.resolve();
         }
         return this.run('shelves', force, DISCOVERY_TTL, async() => {
-            const options = discoveryOptions(this.settings);
+            const options = discoveryOptions(this.settings, this.overviewWidthLimit);
             if (this.config.clientApi?.features?.includes('separateExternalDiscovery')) options.includeExternal = false;
             const result = await this.api.getDiscoveryShelves(options, {suppressProfileLogin: true});
             return {shelves: normalizeShelves(Array.isArray(result.shelves) ? result.shelves : [])};
@@ -156,7 +165,7 @@ class LibraryRepository {
             || !this.overviewShelfEnabled('discovery:external-source', this.settings.showDiscoveryExternal !== false))
             return Promise.resolve();
         return this.run('externalShelves', force, DISCOVERY_TTL, async() => {
-            const result = await this.api.getDiscoveryShelves({externalOnly:true, externalLimit:8, forceRefresh:force}, {suppressProfileLogin:true});
+            const result = await this.api.getDiscoveryShelves({externalOnly:true, externalLimit:Math.max(8, this.overviewWidthLimit), forceRefresh:force}, {suppressProfileLogin:true});
             return {externalShelves: normalizeShelves(Array.isArray(result.shelves) ? result.shelves : [])};
         });
     }
@@ -169,7 +178,7 @@ class LibraryRepository {
             return Promise.resolve();
         }
         return this.run('recommendations',force,DISCOVERY_TTL,async() => {
-            const result = await this.api.getDiscoveryShelves({recommendationsOnly:true,personalLimit:12}, {suppressProfileLogin:true});
+            const result = await this.api.getDiscoveryShelves({recommendationsOnly:true,personalLimit:Math.max(12, this.overviewWidthLimit)}, {suppressProfileLogin:true});
             const shelf = normalizeShelves(Array.isArray(result.shelves) ? result.shelves : []).find(shelf => shelf.id === 'similar-books');
             return {recommendations:shelf?.books || []};
         });

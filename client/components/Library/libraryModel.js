@@ -59,11 +59,16 @@ function identity(config = {}, settings = {}) {
         config.discovery?.enabled !== false, settings.profileAccessToken || '', config.dbConfig?.inpxHash || '']);
 }
 
-function discoveryOptions(settings = {}) {
+function overviewShelfColumns(width) {
+    return Math.max(1, Math.min(24, Math.round((width + 20) / 150)));
+}
+
+function discoveryOptions(settings = {}, widthLimit = 0) {
     return {
-        newestLimit: Math.max(1, Math.min(24, Number(settings.discoveryNewestLimit) || 8)),
-        popularLimit: Math.max(1, Math.min(24, Number(settings.discoveryPopularLimit) || 8)),
-        externalLimit: 8,
+        newestLimit: Math.min(24, Math.max(1, Number(settings.discoveryNewestLimit) || 8, widthLimit)),
+        popularLimit: Math.min(24, Math.max(1, Number(settings.discoveryPopularLimit) || 8, widthLimit)),
+        externalLimit: Math.max(8, widthLimit),
+        ...(widthLimit > 8 ? {personalLimit: widthLimit} : {}),
         personalSimilarEnabled: false,
     };
 }
@@ -90,4 +95,4 @@ function profileLoginError(error) {
 }
 
 module.exports = {catalogRoutes, bookUid, progress, coverUrl, coverCacheVersion,
-    readable, ebookReaderUrl, recentBooks, homeBooks, personalAccess, identity, discoveryOptions, normalizeShelves, genreMapFromTree, profileLoginError};
+    readable, ebookReaderUrl, recentBooks, homeBooks, personalAccess, identity, overviewShelfColumns, discoveryOptions, normalizeShelves, genreMapFromTree, profileLoginError};

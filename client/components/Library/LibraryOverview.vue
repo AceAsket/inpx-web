@@ -1,6 +1,6 @@
 <template>
     <div class="library-page library-overview">
-        <div class="library-page__body">
+        <div ref="overviewBody" class="library-page__body">
             <DialogSurface v-if="readingListOpen && config.profileAuthorized" v-model="readingListOpen" variant="current-reading">
                 <template #header>Сейчас читаю</template>
                 <CurrentReadingList class="overview-reading-list" @changed="repository.refreshReading()" @read="book => { readingListOpen = false; library.openBook(book); }" />
@@ -110,10 +110,22 @@ import {useLibraryPage} from './useLibraryPage';
 import {catalogTarget, effectiveCatalogScope} from './catalogSearchModel';
 import previewMetadata from '../../../shared/BookPreview';
 
+const overviewBody = ref(null);
 const {library, active} = useLibraryPage('Обзор', value => {
-    if (value.config.value.version) value.repository.loadHome({freshReading: true});
+    if (value.config.value.version) {
+        value.repository.expandOverview(overviewBody.value?.clientWidth || 0);
+        value.repository.loadHome({freshReading: true});
+    }
 });
 const {state, repository, config, settings} = library;
+watch([overviewBody, active], ([body, visible], _, cleanup) => {
+    if (!body || !visible) return;
+    const observer = new ResizeObserver(() => {
+        if (config.value.version && repository.expandOverview(body.clientWidth)) void repository.loadHome();
+    });
+    observer.observe(body);
+    cleanup(() => observer.disconnect());
+}, {flush: 'post'});
 const router = useRouter(), query = ref('');
 const completion = ref(null), searchFocused = ref(false), suggestionsExpanded = ref(false), activeSuggestionId = ref();
 const suggestionListId = `overview-suggestions-${getCurrentInstance().uid}`;
