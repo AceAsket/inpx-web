@@ -93,10 +93,30 @@ impl SelectedBooks {
         }
     }
 
+    pub(crate) fn remove(&mut self, id: u32) {
+        match self {
+            Self::Bitmap(data) => {
+                if let Some(bits) = data.get_mut((id / 8) as usize) {
+                    *bits &= !(1 << (id % 8));
+                }
+            }
+            Self::Ids(ids) => {
+                ids.remove(&id);
+            }
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         match self {
             Self::Bitmap(data) => data.iter().all(|&byte| byte == 0),
             Self::Ids(ids) => ids.is_empty(),
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Bitmap(data) => data.iter().map(|byte| byte.count_ones() as usize).sum(),
+            Self::Ids(ids) => ids.len(),
         }
     }
 

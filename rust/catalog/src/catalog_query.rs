@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::catalog_text::{field, lower, normalize_key, number, words};
+use crate::facets::{Facet, Label};
 
 #[derive(Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +91,74 @@ pub(crate) struct BookScope<'a> {
 }
 
 impl Filter {
+    // A facet can omit the record check only when its labels preserve all
+    // distinctions the filter makes. Empty text shares the '?' label.
+    pub(crate) fn browser_facet(&self) -> Option<(Facet, bool)> {
+        let numeric = |field: &str, includes_zero: bool| match field {
+            "del" => Some((Facet::Del, !includes_zero)),
+            "librate" => Some((Facet::Librate, !includes_zero)),
+            _ => None,
+        };
+        match self {
+            Self::Genre { .. } => Some((Facet::Genre, true)),
+            Self::Date { from, to }
+                if [from, to].into_iter().all(|bound| {
+                    bound
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || byte == b'-')
+                }) =>
+            {
+                let includes_empty =
+                    date_matches(Some(""), from, to) || date_matches(Some("?"), from, to);
+                Some((Facet::Date, !includes_empty))
+            }
+            Self::TextValues {
+                field,
+                empty_alias,
+                values,
+            } if *empty_alias || !values.iter().any(|value| value == "?" || value.is_empty()) => {
+                match field.as_str() {
+                    "lang" => Some((Facet::Lang, true)),
+                    "ext" => Some((Facet::Ext, true)),
+                    _ => None,
+                }
+            }
+            Self::NumberValues { field, values } => numeric(field, values.contains(&0.0)),
+            Self::NumberRange { field, from, to } => numeric(field, *from <= 0.0 && *to >= 0.0),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn matches_browser_facet(&self, label: &Label) -> bool {
+        match (self, label) {
+            (Self::Genre { values }, Label::Text(genre)) => {
+                let genre = lower(genre);
+                values
+                    .iter()
+                    .any(|value| value == genre.trim_matches(js_whitespace))
+            }
+            (
+                Self::TextValues {
+                    values,
+                    empty_alias,
+                    ..
+                },
+                Label::Text(text),
+            ) => text_values_match(text, values, *empty_alias),
+            (Self::Date { from, to }, Label::Text(date)) => {
+                date_matches(Some(date), from, to)
+                    || date == "?" && date_matches(Some(""), from, to)
+            }
+            (Self::NumberValues { values, .. }, Label::Number(value)) => {
+                values.contains(&(*value as f64))
+            }
+            (Self::NumberRange { from, to, .. }, Label::Number(value)) => {
+                (*from..=*to).contains(&(*value as f64))
+            }
+            _ => false,
+        }
+    }
+
     pub fn scope_only(&self) -> bool {
         matches!(self, Self::Date { .. })
             || matches!(self,Self::TextValues{field,..} if matches!(field.as_str(),"lang"|"ext"))
@@ -172,7 +241,7 @@ impl Filter {
     }
 }
 
-fn title_copy_key(title: &str, author: &str) -> Option<String> {
+pub(crate) fn title_copy_key(title: &str, author: &str) -> Option<String> {
     let title = normalize_key(title);
     if title.is_empty() {
         return None;

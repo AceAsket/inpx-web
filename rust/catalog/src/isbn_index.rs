@@ -56,6 +56,14 @@ impl IsbnIndex {
         }
     }
 
+    pub fn has_saved(&self) -> bool {
+        self.file
+            .with_extension("redb")
+            .try_exists()
+            .unwrap_or(true)
+            || self.file.try_exists().unwrap_or(true)
+    }
+
     pub fn status(&self, signature: &str) -> Value {
         let shared = self.shared.lock().expect("ISBN job");
         if let Some(job) = &shared.build {
@@ -367,10 +375,34 @@ impl Catalogue {
     }
 
     pub fn isbn_signature(&self) -> Result<String> {
+        if let Some(signature) = self.isbn_revision.lock().expect("ISBN revision").as_ref() {
+            return Ok(signature.clone());
+        }
         Ok(hex(&Sha256::digest(serde_json::to_vec(&json!([
             ["indexUpdate", self.index_update],
             ["inpxHash", self.inpx_hash]
         ]))?)))
+    }
+
+    pub fn refresh_isbn_signature(&self, sources: &[Source]) -> Result<String> {
+        let _check = self
+            .isbn_revision_check
+            .lock()
+            .expect("ISBN revision check");
+        if let Some(inputs) = self
+            .prepared_browse
+            .as_ref()
+            .and_then(|browse| browse.isbn_inputs.as_ref())
+        {
+            let signature = inputs.signature(sources);
+            *self.isbn_revision.lock().expect("ISBN revision") = Some(signature.clone());
+            return Ok(signature);
+        }
+        self.isbn_signature()
+    }
+
+    pub fn set_isbn_revision(&mut self, revision: Option<String>) {
+        *self.isbn_revision.get_mut().expect("ISBN revision") = revision;
     }
 
     pub(crate) fn isbn_candidates(&self, value: &str) -> Result<HashSet<u32>> {

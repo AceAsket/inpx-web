@@ -57,6 +57,7 @@ mod gzip;
 mod index;
 mod inpx_filter;
 mod isbn;
+mod isbn_revision;
 pub mod isbn_store;
 mod jemba;
 mod jemba_identity;

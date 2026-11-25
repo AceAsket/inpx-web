@@ -18,6 +18,12 @@ const VERSION = require('../package.json').version;
 const readJson = async file=>JSON.parse(await fs.readFile(file,'utf8'));
 const bytes = async response=>Buffer.from(await response.arrayBuffer());
 
+function checkedBrowseCache(content) {
+    const payload = content.subarray(32);
+    assert.deepEqual(content.subarray(0,32),createHash('sha256').update(payload).digest());
+    return JSON.parse(payload.toString('utf8'));
+}
+
 async function zip(entries) {
     const archive = new ZipFile();
     const chunks = [];
@@ -1650,6 +1656,15 @@ async function verifyIndexRefresh(binary, root) {
     const loose = join(root,'loose'), config = join(root,'config.json'), web = join(root,'web.json');
     const archive = join(library,'smoke.inpx');
     const filter = join(root,'filter.json');
+    const metadata = ()=>readJson(join(data,'db','catalogue.json'));
+    const cache = join(data,'db','browser-catalogue-v1.cache');
+    async function prepared() {
+        const content = await fs.readFile(cache);
+        const snapshot = checkedBrowseCache(content);
+        assert.equal(snapshot.generation,(await metadata()).rustBookStoreGeneration);
+        assert(snapshot.languages && snapshot.facet_order?.merged_copies && snapshot.keywords && snapshot.isbn_inputs);
+        return {content,generation:snapshot.generation};
+    }
     const original = join(loose,'original.fb2'), replacement = join(loose,'replacement.fb2');
     const book = title=>`<FictionBook><description><title-info><book-title>${title}</book-title><lang>en</lang></title-info></description><body><section><p>Sample.</p></section></body></FictionBook>`;
     const settings = {server:{host:'127.0.0.1',port:0,root:'/reader'},opds:{enabled:true,root:'/catalogue'},
@@ -1719,6 +1734,7 @@ async function verifyIndexRefresh(binary, root) {
             assert.deepEqual((await follow('add',{kind:'series',value:'Подписная серия'})).follows.map(row=>row.unread),[0,0]);
             assert.deepEqual((await news({autoRefresh:true,limit:0})).follows.map(row=>row.revision),[1,1]);
             const before = await index(url);
+            const originalIndex = await prepared();
             // The same UID retains its embedded cover across publication.
             await fs.unlink(original);
             await fs.writeFile(replacement,book('Replacement folder record'));
@@ -1736,6 +1752,7 @@ async function verifyIndexRefresh(binary, root) {
             assert.equal(after.indexUpdate.incremental,true);
             assert.equal(after.indexUpdate.recordsChanged,3);
             assert.equal(after.indexUpdate.recordsRemoved,1);
+            assert.notEqual((await prepared()).generation,originalIndex.generation);
             assert.equal((await find(ws,'Updated smoke book'))._uid,stable);
             assert.deepEqual(await readCover(),embedded);
             // A changed sidecar must be observed even when the INPX row stays the same.
@@ -1786,23 +1803,39 @@ async function verifyIndexRefresh(binary, root) {
             assert.equal((await fetch(url+'/catalogue/v2/book?uid='+encodeURIComponent(stable))).status,200);
             hash = after.inpxHash;
 
+            const saved = await prepared();
             await fs.writeFile(filter,'{invalid');
             assert.equal((await ws.request(command)).started,true);
             const failure = await updated(url,status=>status.error);
             assert.equal(failure.inpxHash,hash);
             assert.equal(failure.ready,true);
             assert(await find(ws,'Replacement folder record'));
+            assert.deepEqual((await prepared()).content,saved.content);
+            const cleaned = await ws.request({...command,action:'admin-clean-cache',kind:'all'});
+            assert.equal(cleaned.error,undefined);
+            assert.deepEqual((await prepared()).content,saved.content);
             await fs.unlink(filter);
         } finally { ws.close(); }
     } finally { await server.stop(); }
 
     await fs.writeFile(config,JSON.stringify({...settings,inpxCheckInterval:0.01}));
+    const saved = await prepared();
+    const cacheTime = new Date('2001-01-01T00:00:00Z');
+    await fs.utimes(cache,cacheTime,cacheTime);
     const timed = await start(binary,args);
     try {
         assert.equal((await index(timed.url)).inpxHash,hash);
+        assert.equal((await fs.stat(cache)).mtimeMs,cacheTime.getTime());
+        await fs.writeFile(join(library,'covers','smoke.zip'),await zip([['1',Buffer.from('new cover')]]));
+        await sleep(1400);
+        assert.equal((await index(timed.url)).inpxHash,hash);
+        assert.deepEqual((await prepared()).content,saved.content);
+        assert.equal((await fs.stat(cache)).mtimeMs,cacheTime.getTime());
         await fs.writeFile(original,book('New folder record from polling'));
         const after = await updated(timed.url,status=>status.stats.bookCount===4);
         assert.notEqual(after.inpxHash,hash);
+        const changed = await prepared();
+        assert.notEqual(changed.generation,saved.generation);
         hash = after.inpxHash;
         const ws = await wsClient(timed.url,await browserCookie(timed.url));
         try {
@@ -1813,15 +1846,40 @@ async function verifyIndexRefresh(binary, root) {
             assert.equal(news.follows[0].revision,3);
             assert.equal(news.unseenCount,0);
         } finally { ws.close(); }
+
+        await fs.writeFile(filter,JSON.stringify({filter:'book => book.sourceId !== "loose"'}));
+        const filtered = await updated(timed.url,status=>status.stats.bookCount===2);
+        assert.notEqual(filtered.inpxHash,hash);
+        const filteredIndex = await prepared();
+        assert.notEqual(filteredIndex.generation,changed.generation);
+        await fs.unlink(filter);
+        await updated(timed.url,status=>status.inpxHash===hash && status.stats.bookCount===4);
+        assert.notEqual((await prepared()).generation,filteredIndex.generation);
     } finally { await timed.stop(); }
 
-    const metadata = ()=>readJson(join(data,'db','catalogue.json'));
     const before = (await metadata()).rustBookStoreGeneration;
     const recreated = await start(binary,[...args,'--recreate']);
     try {
         assert.equal((await index(recreated.url)).inpxHash,hash);
-        assert.notEqual((await metadata()).rustBookStoreGeneration,before);
+        assert.notEqual((await prepared()).generation,before);
         assert.equal((await fetch(recreated.url+'/catalogue/v2/book?uid='+encodeURIComponent(stable))).status,200);
+        const ws = await wsClient(recreated.url,await browserCookie(recreated.url));
+        try {
+            const {csrfToken} = await ws.request({action:'get-config'});
+            const {profileAccessToken} = await ws.request({action:'login-user-profile',login:'admin',password:'fixture-admin',csrfToken});
+            const identity = {csrfToken,profileAccessToken,userId:'admin'};
+            for (const enabled of [false,true]) {
+                const prior = await prepared();
+                const sources = settings.librarySources.map(source=>source.id==='loose' ? {...source,enabled} : source);
+                const savedSources = await ws.request({...identity,action:'update-admin-library-sources',sources});
+                assert.equal(savedSources.reindexRequired,true,savedSources.error);
+                assert.deepEqual((await prepared()).content,prior.content);
+                assert.equal((await ws.request({...identity,action:'admin-reindex'})).started,true);
+                await updated(recreated.url,status=>status.stats.bookCount===(enabled ? 4 : 2));
+                assert.notEqual((await prepared()).generation,prior.generation);
+                assert.equal(Boolean(await find(ws,'Replacement folder record')),enabled);
+            }
+        } finally { ws.close(); }
     } finally { await recreated.stop(); }
 
     const release = process.env.INPX_STANDALONE_COMPAT_PACKAGE;
@@ -1832,7 +1890,7 @@ async function verifyIndexRefresh(binary, root) {
             assert.equal((await fetch(legacy.url+'/catalogue/v2/book?uid='+encodeURIComponent(stable))).status,200);
         } finally { await legacy.stop(); }
     }
-    console.log('ok standalone admin, periodic and forced catalogue updates preserve book identity and recover from a broken filter');
+    console.log('ok prepared catalogue refreshes with books, filters or applied sources and survives cache cleanup, restart and failed rebuild');
 }
 
 async function verifyTwoLibraries(binary, root) {
@@ -1844,19 +1902,113 @@ async function verifyTwoLibraries(binary, root) {
         '--config=' + join(root, 'config.json'), '--web-bundle=' + web, '--admin-password=' + libraries.password];
     const cache = join(root, 'data', 'db', 'browser-catalogue-v1.cache');
     for (const phase of ['index', 'restart', 'upgrade', 'repair']) {
-        if (phase === 'upgrade') await fs.unlink(cache);
+        if (phase === 'upgrade') {
+            const saved = JSON.parse((await fs.readFile(cache)).subarray(32).toString('utf8'));
+            delete saved.languages;
+            const legacy = Buffer.from(JSON.stringify(saved));
+            await fs.writeFile(cache, Buffer.concat([createHash('sha256').update(legacy).digest(),legacy]));
+        }
         if (phase === 'repair') await fs.writeFile(cache, 'partial cache');
         const prior = phase === 'restart' ? await fs.stat(cache) : null;
         const server = await start(binary, args);
         try {
             const saved = await fs.stat(cache);
             assert(saved.size > 32, 'Default pages and directories are ready before the first request');
+            const prepared = JSON.parse((await fs.readFile(cache)).subarray(32).toString('utf8'));
+            assert(prepared.languages.exact.en, 'A legacy cache is refreshed with language orders');
             if (prior) assert.equal(saved.mtimeMs, prior.mtimeMs, 'Restart reuses the prepared catalogue');
             await libraries.verify(server.url, state, phase === 'index');
         }
         finally { await server.stop(); }
     }
     console.log('ok two INPX libraries retain separate books, covers, illustrations and progress after reindex and restart');
+}
+
+async function verifyLanguageCatalogue(binary, root) {
+    const library = join(root,'library'), config = join(root,'config.json'), web = join(root,'web.json');
+    const data = join(root,'data'), cache = join(data,'db','browser-catalogue-v1.cache');
+    await createFixture(library);
+    await bundle(web);
+    const archive = join(library,'smoke.inpx');
+    // A physical file can be described in several rows. Filtering must precede ranking.
+    const rows = [
+        ['Arabic duplicate', 1, 1, 0, 'ar', 4],
+        ['Russian metadata for the same file', 1, 2, 0, 'ru', 0, 'fb2', '2026-11-25', 'sf:', 'Учениями космос'],
+        ['Russian alternative language', 1, 3, 0, 'ru-ru', 3],
+        ['Another Russian book', 2, 4, 0, 'ru', 1, 'epub'],
+        ['Deleted Russian book', 3, 5, 1, 'ru', 5],
+        ['Missing language, genre and date', 4, 6, 0, '', 0, 'fb2', '', ''],
+        ['Same title', 5, 7, 0, 'ja', 5, 'fb2', '2026-11-25', 'sf:', 'космос история'],
+        ['Same title', 6, 8, 0, 'ko', 2, 'epub', '2026-11-25', 'sf:', 'космос история'],
+    ].map(([title,file,id,del,lang,rate,ext='fb2',date='2026-11-25',genre='sf:',keywords=''])=>['Tester,Smoke:',genre,title,'',0,file,100,id,del,
+        ext,date,lang,rate,keywords].join('\x04'));
+    await fs.writeFile(archive,await zip([['collection.info','Languages\n'],['smoke.inp',rows.join('\n')+'\n']]));
+    await fs.writeFile(config,JSON.stringify({server:{host:'127.0.0.1'},inpxCheckInterval:0}));
+    const args = ['--standalone','--data-dir='+data,'--config='+config,
+        '--lib-dir='+library,'--inpx='+archive,'--web-bundle='+web,'--admin-password=fixture-admin'];
+    const server = await start(binary,args);
+    let prepared;
+    try {
+        prepared = checkedBrowseCache(await fs.readFile(cache));
+        assert(prepared.languages.prefixes.ru, 'The common prefix is prepared when two language labels share it');
+        assert.equal(prepared.facet_order.merged_copies.length,1);
+        assert(Object.keys(prepared.keywords).length > 0);
+        const {connect} = require('./rust-events-tests');
+        const client = await connect(server.url);
+        try {
+            const search = query=>client.send('bookSearch',{query});
+            const page = await search({lang:'=RU',del:'0',limit:20});
+            assert.equal(page.totalFound,2,page.error);
+            assert.deepEqual(page.found.map(book=>book.title),['Another Russian book','Russian metadata for the same file']);
+            const prefix = await search({lang:'ru',del:'0',limit:20});
+            assert.equal(prefix.totalFound,2,prefix.error);
+            assert.deepEqual(prefix.found.map(book=>book.title),['Another Russian book','Russian alternative language']);
+            for (const [query, titles] of [
+                [{ext:'epub',lang:'ru',genre:'sf',librate:'1..3',date:'2026-01-01,2026-12-31'}, ['Another Russian book']],
+                [{ext:'fb2,epub',lang:'ru,ja'}, ['Another Russian book','Russian metadata for the same file','Same title']],
+                [{lang:'=?',genre:'?',date:',2026-11-25'}, []],
+                [{lang:'?,ja',genre:'?',date:',2026-11-25'}, ['Missing language, genre and date']],
+                [{lang:'?,ja',date:'2026-01-01,2026-12-31'}, ['Same title']],
+                [{keywords:'Учениям косм',lang:'ru'}, ['Russian metadata for the same file']],
+            ]) {
+                const filtered = await search({del:'0',...query});
+                assert.equal(filtered.totalFound,titles.length,filtered.error);
+                assert.deepEqual(filtered.found.map(book=>book.title),titles);
+            }
+            const merged = await search({del:'0',hideCopies:true,limit:20});
+            assert.deepEqual(merged.found,(await search({del:'0,0',hideCopies:true,limit:20})).found);
+            assert.deepEqual(merged.found.filter(book=>book.title==='Same title').map(book=>book.lang),['ja']);
+            const alternate = await search({del:'0',hideCopies:true,ext:'epub',keywords:'история'});
+            assert.deepEqual(alternate.found.map(book=>[book.title,book.lang]),[['Same title','ko']]);
+            for (const lang of ['','ar','=RU','ru','ja']) {
+                for (const offset of [0,1,2]) {
+                    const query = {lang,offset,limit:1};
+                    const prepared = await search({...query,del:'0'});
+                    const ordinary = await search({...query,del:'0,0'});
+                    assert.equal(prepared.totalFound,ordinary.totalFound);
+                    assert.deepEqual(prepared.found,ordinary.found);
+                }
+            }
+        } finally {client.close();}
+    } finally {await server.stop();}
+
+    const serializedCache = snapshot=>{
+        const payload = Buffer.from(JSON.stringify(snapshot));
+        return Buffer.concat([createHash('sha256').update(payload).digest(),payload]);
+    };
+    for (const replacement of [null,Buffer.from('truncated cache'),
+        serializedCache({...prepared,generation:'obsolete-generation'}),
+        serializedCache({...prepared,facet_order:undefined}),
+    ]) {
+        if (replacement === null) await fs.unlink(cache);
+        else await fs.writeFile(cache,replacement);
+        const restarted = await start(binary,args);
+        try {
+            assert.deepEqual(checkedBrowseCache(await fs.readFile(cache)),prepared);
+            assert.equal((await readJson(join(data,'db','catalogue.json'))).rustBookStoreGeneration,prepared.generation);
+        } finally {await restarted.stop();}
+    }
+    console.log('ok language catalogue preserves results and rebuilds missing, corrupt, stale and old prepared cache without reimport');
 }
 
 async function verifyLibraryMedia(binary, root) {
@@ -1882,12 +2034,14 @@ async function verifyLibraryMedia(binary, root) {
     await fs.writeFile(inpx,index);
     const fb2 = (name,isbn,extra='')=>`<FictionBook><description><title-info><book-title>${name}</book-title><lang>en</lang><annotation><p>${extra}</p></annotation></title-info><publish-info><isbn>${isbn}</isbn></publish-info></description><body><section><p>Sample text.</p></section></body></FictionBook>`;
     const independent = Array.from({length:72}, (_,i)=>[(1000+i)+'.fb2', fb2('Sample '+i,'')]);
-    await fs.writeFile(join(library,'smoke.zip'),await zip([
+    const bookArchive = join(library,'smoke.zip');
+    const bookZip = independentMembers=>zip([
         ['1.fb2',fb2('Packaged smoke book','0-306-40615-2')],
-        ...independent,
+        ...independentMembers,
         ['2.fb2',fb2('Slow ISBN sample','','a'.repeat(512*1024))],
         ['3.epub',epub],
-    ]));
+    ]);
+    await fs.writeFile(bookArchive,await bookZip(independent));
     const biographies = join(library,'etc','authors');
     await fs.mkdir(join(biographies,'pictures'),{recursive:true});
     const key = createHash('md5').update('tester smoke').digest('hex');
@@ -2011,19 +2165,43 @@ async function verifyLibraryMedia(binary, root) {
             assert.deepEqual((await byIsbn('0-306-40615-2')).found.map(book=>book._uid),[uid]);
             assert.equal((await byIsbn('9783161484100')).found?.[0]?.title,'ISBN in EPUB');
             assert.match((await byIsbn('0-306-40615-9')).error,/корректный ISBN/);
+            const indexStatus = async()=>(await fetch(server.url+'/api/index-status')).json();
+            const previous = await indexStatus();
+            assert.equal((await send('admin-reindex')).started,true);
+            await waitFor(async()=>{
+                const current = await indexStatus();
+                return {...current,state:!current.updating && current.indexUpdate.updatedAt!==previous.indexUpdate.updatedAt ? 'ready' : 'running'};
+            },'ready');
+            assert.deepEqual(await status(),ready);
+            assert.deepEqual((await byIsbn('0-306-40615-2')).found.map(book=>book._uid),[uid]);
             const smart = await send('create-reading-list',{name:'ISBN shelf',filters:{isbn:'9780306406157',ratingCount:'8'}});
             smartId = smart.list.id;
             const shelf = await send('get-reading-list',{listId:smartId});
             assert.deepEqual(shelf.books.map(book=>book._uid),[uid],shelf.error);
         } finally {socket.close();publicWs.close();}
     } finally {await server.stop();}
-    await fs.writeFile(config,JSON.stringify({...settings,allowRemoteLib:false}));
+    await fs.writeFile(config,JSON.stringify({...settings,allowRemoteLib:false,inpxCheckInterval:0.01}));
     server = await start(binary,args);
     try {
         const {socket,send} = await connect(server);
         try {
             assert.equal((await send('get-inpx-file')).error,'Remote lib access disabled');
             assert.equal((await send('get-background-tasks')).isbnIndex.state,'ready');
+            const status = async()=>(await send('get-background-tasks')).isbnIndex;
+            const meta = join(data,'db','catalogue.json');
+            const generation = (await readJson(meta)).rustBookStoreGeneration;
+            await fs.mkdir(join(library,'covers'));
+            await fs.writeFile(join(library,'covers','smoke.zip'),await zip([['1',png]]));
+            await sleep(1400);
+            assert.equal((await status()).state,'ready');
+            const changed = independent.map(([name,contents])=>[name,name==='1071.fb2' ? fb2('Sample 71','9780131103627') : contents]);
+            await fs.writeFile(bookArchive,await bookZip(changed));
+            await waitFor(status,'empty');
+            assert.equal((await readJson(meta)).rustBookStoreGeneration,generation);
+            assert.match((await send('bookSearch',{query:{isbn:'9780131103627'}})).error,/не готов/);
+            await send('start-isbn-index');
+            assert.equal((await waitFor(status,'ready')).found,3);
+            assert.equal((await send('bookSearch',{query:{isbn:'9780131103627'}})).found?.[0]?.title,'Slow ISBN sample 71');
             const sevenZip = require('../server/core/ExternalTools').sevenZipCommandCandidates()
                 .find(tool=>spawnSync(tool,['i'],{windowsHide:true,stdio:'ignore'}).status===0);
             if (sevenZip) {
@@ -2053,7 +2231,7 @@ async function verifyLibraryMedia(binary, root) {
             assert.deepEqual(shelf.books?.map(book=>book._uid),[uid],shelf.error);
         } finally {socket.close();}
     } finally {await server.stop();}
-    console.log('ok Rust author archives, reviews and rating exchange, INPX hash and access, metadata overrides, ISBN cancel/resume and restart');
+    console.log('ok Rust author archives, reviews, ratings, metadata overrides, ISBN resume, reindex reuse and archive invalidation');
 }
 
 async function verifySeriesZip(binary, root) {
@@ -3173,6 +3351,7 @@ async function verifyJembaUpgrade(binary, root) {
         await verifyServiceRoutes(binary,join(root,'services'));
         await verifyIndexRefresh(binary,join(root,'reindex'));
         await verifyTwoLibraries(binary,join(root,'two-libraries'));
+        await verifyLanguageCatalogue(binary,join(root,'language-catalogue'));
         await verifyOverview(binary,join(root,'overview'));
         await verifyLibraryMedia(binary,join(root,'library-media'));
         await verifyReaderTransfer(binary,join(root,'reader-transfer'));

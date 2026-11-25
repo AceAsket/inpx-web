@@ -34,9 +34,19 @@ struct Search {
     isbn: Option<String>,
 }
 
+struct FacetSearch<'a> {
+    selected: Option<SelectedBooks>,
+    filters: Vec<&'a Filter>,
+    comparisons: Vec<&'a (String, NameQuery)>,
+    active_only: bool,
+    source_exact: bool,
+}
+
 // Order belongs to one published catalogue. A cell shares an in-flight search
 // across pages without holding the cache mutex while reading the store.
 pub(crate) type SearchOrders = VecDeque<(String, Arc<OnceCell<Arc<Vec<u32>>>>)>;
+const DIRECT_ROW_LIMIT: usize = 65_536;
+const PREPARED_ORDER_MIN: usize = 4_096;
 
 impl Search {
     fn new(query: &Map<String, Value>, except: &str) -> Result<Self> {
@@ -178,9 +188,12 @@ impl Search {
             || self.isbn.is_some()
     }
 
+    fn active_rows_only(&self) -> bool {
+        matches!(&self.filters[..], [Filter::NumberValues { field, values }] if field == "del" && values == &[0.0])
+    }
+
     fn only_active_filter(&self) -> bool {
-        self.comparisons.is_empty()
-            && matches!(&self.filters[..], [Filter::NumberValues { field, values }] if field == "del" && values == &[0.0])
+        self.comparisons.is_empty() && self.active_rows_only()
     }
 }
 
@@ -264,10 +277,19 @@ impl Catalogue {
                 if terms.is_empty() {
                     return Ok(Some(Vec::new()));
                 }
-                if name_table(field).is_err() {
+                let keywords = (field == "keywords")
+                    .then(|| self.prepared_browse.as_ref()?.keywords.as_ref())
+                    .flatten();
+                if keywords.is_none() && name_table(field).is_err() {
                     continue;
                 }
                 for [word, stem] in terms {
+                    if let Some(keywords) = keywords {
+                        if narrow(keywords.candidates(word, stem)) {
+                            break 'indexed;
+                        }
+                        continue;
+                    }
                     let prefix = format!("{field}:{stem}");
                     let shorter: Vec<_> = shorter_search_roots(word, stem)
                         .map(|root| format!("{field}:{root}"))
@@ -347,32 +369,95 @@ impl Catalogue {
         if search.hide_copies
             || search.ratings.is_some()
             || search.isbn.is_some()
-            || !search.only_active_filter()
+            || !search.active_rows_only()
         {
             return None;
         }
-        Some(self.prepared_browse.as_ref()?.active.ids(&search.source))
+        let prepared = self.prepared_browse.as_ref()?;
+        let [(field, query)] = search.comparisons.as_slice() else {
+            return search
+                .comparisons
+                .is_empty()
+                .then(|| prepared.active.ids(&search.source));
+        };
+        if field != "lang" {
+            return None;
+        }
+        let prepared = prepared.languages.as_ref()?;
+        let order = match query {
+            NameQuery::Exact(lang) => prepared.exact.get(lang),
+            NameQuery::Prefix(prefix) => {
+                if let Some(order) = prepared.prefixes.get(prefix) {
+                    return Some(order.ids(&search.source));
+                }
+                let mut matches = prepared
+                    .exact
+                    .iter()
+                    .filter(|(lang, _)| lang.starts_with(prefix));
+                let first = matches.next();
+                if matches.next().is_some() {
+                    // Other overlapping selections must still rank all their rows together.
+                    return None;
+                }
+                first.map(|(_, order)| order)
+            }
+            _ => return None,
+        };
+        Some(order.map_or(&[], |order| order.ids(&search.source)))
     }
 
     fn ordered_books(&self, query: &Map<String, Value>, search: &Search) -> Result<Arc<Vec<u32>>> {
         let compute = || {
-            let candidates = self.search_candidates(search)?;
-            let all = search.filters.is_empty() && search.comparisons.is_empty();
-            let active = search.only_active_filter();
+            let mut candidates = self.search_candidates(search)?;
+            let mut plan = self.facet_search(
+                search,
+                candidates.as_ref().is_none_or(|ids| ids.len() > 1024),
+            )?;
+            let check_record = !plan.filters.is_empty() || !plan.comparisons.is_empty();
+            let size = plan.selected.as_ref().map_or(0, SelectedBooks::len);
+            if (size >= PREPARED_ORDER_MIN || search.hide_copies && plan.selected.is_none())
+                && candidates.is_none()
+                && plan.active_only
+                && !check_record
+                && plan.source_exact
+                && let Some(order) = self
+                    .prepared_browse
+                    .as_ref()
+                    .and_then(|browse| browse.facet_order.as_ref())
+            {
+                return Ok(Arc::new(
+                    order.select(plan.selected.take(), search.hide_copies),
+                ));
+            }
+            if let Some(selection) = &plan.selected {
+                if let Some(ids) = &mut candidates {
+                    ids.retain(|id| selection.contains(*id));
+                } else if size <= DIRECT_ROW_LIMIT {
+                    let mut ids = Vec::with_capacity(size);
+                    selection.extend_ids(&mut ids);
+                    ids.sort_unstable();
+                    candidates = Some(ids);
+                }
+            }
             self.store
                 .browser_search_order(
                     &self.generation,
                     candidates.as_deref(),
+                    plan.selected.as_ref().filter(|_| candidates.is_none()),
                     |row, del, source| {
-                        Ok(if !search.source.is_empty() && search.source != source {
-                            false
-                        } else if all {
-                            true
-                        } else if active {
-                            del == Some(0)
-                        } else {
-                            search.matches(&serde_json::from_slice(row)?)
-                        })
+                        if (!search.source.is_empty() && search.source != source)
+                            || (plan.active_only && del != Some(0))
+                        {
+                            return Ok(false);
+                        }
+                        if !check_record {
+                            return Ok(true);
+                        }
+                        let row = serde_json::from_slice(row)?;
+                        Ok(plan.filters.iter().all(|filter| filter.matches(&row))
+                            && plan.comparisons.iter().all(|(field_name, comparison)| {
+                                comparison.matches(&lower(field(&row, field_name)))
+                            }))
                     },
                     search.hide_copies,
                 )
@@ -406,6 +491,79 @@ impl Catalogue {
             cell
         };
         cell.get_or_try_init(compute).cloned()
+    }
+
+    fn facet_search<'a>(&self, search: &'a Search, indexed: bool) -> Result<FacetSearch<'a>> {
+        let mut plan = FacetSearch {
+            selected: None,
+            filters: Vec::new(),
+            comparisons: Vec::new(),
+            active_only: false,
+            source_exact: search.source.is_empty(),
+        };
+        for filter in &search.filters {
+            if matches!(filter, Filter::NumberValues { field, values } if field == "del" && values == &[0.0])
+            {
+                plan.active_only = true;
+                continue;
+            }
+            if indexed
+                && let Some((facet, exact)) = filter.browser_facet()
+                && let Some(selected) =
+                    self.store
+                        .try_select_facet(facet, plan.selected.as_ref(), |label| {
+                            filter.matches_browser_facet(label)
+                        })?
+            {
+                plan.selected = Some(selected);
+                if exact {
+                    continue;
+                }
+            }
+            plan.filters.push(filter);
+        }
+        for comparison @ (field_name, query) in &search.comparisons {
+            let facet = match field_name.as_str() {
+                "lang" => Some(Facet::Lang),
+                "ext" => Some(Facet::Ext),
+                _ => None,
+            };
+            if indexed
+                && let Some(facet) = facet
+                && matches!(query, NameQuery::Exact(_) | NameQuery::Prefix(_))
+                && query.matches("") == query.matches("?")
+                && let Some(selected) = self.store.try_select_facet(
+                    facet,
+                    plan.selected.as_ref(),
+                    |label| matches!(label, Label::Text(text) if query.matches(&lower(text))),
+                )?
+            {
+                plan.selected = Some(selected);
+                continue;
+            }
+            plan.comparisons.push(comparison);
+        }
+        if indexed && !search.source.is_empty() {
+            let source = lower(&search.source);
+            if let Some(selected) = self.store.try_select_facet(
+                Facet::Source,
+                plan.selected.as_ref(),
+                |label| matches!(label, Label::Text(value) if lower(value) == source),
+            )? {
+                plan.selected = Some(selected);
+                // Source IDs are case-sensitive. Older catalogues can share a
+                // lowercased facet label or the empty label across sources.
+                plan.source_exact = source != "?"
+                    && self.prepared_browse.as_ref().is_some_and(|browse| {
+                        browse
+                            .active
+                            .by_source
+                            .keys()
+                            .all(|id| id == &search.source || lower(id) != source)
+                    });
+            }
+        }
+        Ok(plan)
     }
 
     pub fn browser_books(&self, query: &Map<String, Value>) -> Result<Value> {
