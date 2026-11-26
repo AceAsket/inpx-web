@@ -8,6 +8,26 @@ const {unusedPort} = require('./binary-smoke-test');
 const {archive} = require('./library-appearance-browser-test');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function openIllustration(page, gallery, number, keyboard = false) {
+    const thumbnail = gallery.getByRole('button', {name: `Открыть иллюстрацию ${number}`, exact: true});
+    const source = await thumbnail.locator('img').getAttribute('src');
+    if (keyboard) await thumbnail.press('Enter');
+    else await thumbnail.click();
+
+    const label = `Иллюстрация ${number}`;
+    const viewer = page.getByRole('dialog', {name: label, exact: true});
+    const image = viewer.getByRole('img', {name: label, exact: true});
+    await image.waitFor();
+    assert.equal(await image.getAttribute('src'), source, 'The viewer opens the selected illustration');
+    assert(await image.evaluate(async node => {
+        await node.decode();
+        const bounds = node.getBoundingClientRect();
+        return node.naturalWidth > 0 && getComputedStyle(node).objectFit === 'contain'
+            && bounds.left >= 0 && bounds.right <= innerWidth + 1 && bounds.height < innerHeight;
+    }), 'The full illustration fits the viewport');
+    return {viewer, thumbnail};
+}
+
 async function checkMobileCatalogFilters(browser, base) {
     const viewport = {width: 360, height: 600};
     const page = await browser.newPage({viewport, isMobile: true, hasTouch: true});
@@ -293,10 +313,16 @@ async function fixture(directory) {
         await page.locator('.catalog-book-details').waitFor();
         assert(!page.url().includes('/reader'));
         const bookUrl = page.url();
-        await page.locator('.fb2-gallery').scrollIntoViewIfNeeded();
+        const gallery = page.locator('.fb2-gallery');
+        await gallery.scrollIntoViewIfNeeded();
         await page.getByText('Показаны первые 18. Остальные иллюстрации доступны в читалке.', {exact:true}).waitFor();
-        assert.equal(await page.locator('.fb2-gallery-image').count(), 18, 'The real gallery endpoint returns a bounded preview');
+        assert.equal(await gallery.locator('.fb2-gallery-image').count(), 18, 'The real gallery endpoint returns a bounded preview');
         await screenshot('gallery-limited-1440');
+        const {viewer, thumbnail} = await openIllustration(page, gallery, 2);
+        await page.keyboard.press('Escape');
+        await viewer.waitFor({state: 'hidden'});
+        assert(await thumbnail.evaluate(node => node === document.activeElement), 'Closing the viewer restores focus to the thumbnail');
+        assert.equal(page.url(), bookUrl, 'Opening and closing an illustration keeps the book page');
         galleryFixture = 'empty-limited';
         await page.reload();
         await page.locator('.fb2-gallery').scrollIntoViewIfNeeded();
@@ -396,6 +422,20 @@ async function fixture(directory) {
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Author suggestions retain the language');
         assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
         await page.goto(base + '/#/books?lang=ru&title=*Кост');
+        await page.getByRole('button', {name: 'Открыть карточку: Косточка', exact: true}).click();
+        const preview = page.locator('.q-dialog [data-dialog-kind="book"]');
+        await preview.getByRole('button', {name: 'Полное описание', exact: true}).click();
+        const details = page.locator('.q-dialog [data-dialog-kind="book-info"]');
+        const dialogGallery = details.locator('.fb2-gallery');
+        await dialogGallery.scrollIntoViewIfNeeded();
+        const {viewer: mobileViewer} = await openIllustration(page, dialogGallery, 18, true);
+        await screenshot('gallery-viewer-320');
+        await mobileViewer.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+        await mobileViewer.waitFor({state: 'hidden'});
+        assert(await details.isVisible(), 'Closing the viewer leaves the book details open');
+        await details.getByRole('button', {name: 'Назад к книге', exact: true}).click();
+        await preview.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+        await preview.waitFor({state: 'hidden'});
         await page.locator('.library-result-card__author').first().click();
         await page.getByRole('heading', {name:'Толстой Лев', exact:true}).waitFor();
         await page.getByRole('button', {name:'Открыть карточку: Косточка', exact:true}).waitFor();
