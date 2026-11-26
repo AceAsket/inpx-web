@@ -221,7 +221,8 @@ async function testInactiveReaderSkipsCardRoutesAndDiscardsLateDocuments() {
     const source = await fs.readFile(path.resolve(__dirname, '../client/components/Reader/Reader.vue'), 'utf8');
     const key = source.slice(source.indexOf('    get readerSourceKey() {'), source.indexOf('    get readerHeaderTitle() {'));
     const load = source.slice(source.indexOf('    cancelReaderLoad() {'), source.indexOf('    restoreProgress() {'));
-    const Reader = new Function(`return class {${key}${load}}`)();
+    const orientation = source.slice(source.indexOf('    clearPagedOrientation() {'), source.indexOf('    schedulePagedViewportBuild() {'));
+    const Reader = new Function(`return class {pagedOrientationTimer = null; ${key}${load}${orientation}}`)();
     const reader = new Reader();
     Object.assign(reader, {readerActive: true, isStandaloneMode: false, bookUid: 'same-uid', $route: {path: '/book'}, currentUserId: 'test', config: {profileAuthorized: true}});
     assert.strictEqual(reader.readerSourceKey, '', 'A book-details UID must not activate the cached reader');
