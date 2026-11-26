@@ -5,23 +5,25 @@
             <q-checkbox :model-value="access.allowAnonymousAccess && !access.localLoginForced" label="Разрешить гостевой доступ"
                 :disable="!!saving || accessLocked('allowAnonymousAccess') || access.localLoginForced"
                 @update:model-value="access.allowAnonymousAccess = $event" />
-            <p v-if="access.localLoginForced" class="hint">Для входа требуются учётные данные по настройке сервера.</p>
+            <p v-if="access.localLoginForced" class="hint">Гостевой доступ отключён, пока действует «Требовать вход».</p>
             <small v-if="accessLocked('allowAnonymousAccess')" class="hint">INPX_ALLOW_ANONYMOUS_ACCESS · окружение</small>
             <q-checkbox v-model="access.trustProxy" label="Доверять заголовкам от указанных прокси"
                 :disable="!!saving || accessLocked('trustProxy')" />
-            <small v-if="accessLocked('trustProxy')" class="hint">INPX_TRUST_PROXY · окружение</small>
+            <small v-if="accessLocked('trustProxy')" class="hint">Задано при запуске через <code>INPX_TRUST_PROXY</code></small>
             <q-input v-model="networks" type="textarea" autogrow outlined dense
                 label="IP и сети доверенных прокси" hint="Одна сеть или адрес на строку"
                 placeholder="192.168.1.10/32" :disable="!!saving || accessLocked('trustedProxyCidrs')" />
-            <small v-if="accessLocked('trustedProxyCidrs')" class="hint">INPX_TRUSTED_PROXY_CIDRS · окружение</small>
+            <small v-if="accessLocked('trustedProxyCidrs')" class="hint">Задано при запуске через <code>INPX_TRUSTED_PROXY_CIDRS</code></small>
             <p class="hint">TCP-адрес, который видит сервер <code>{{ savedAccess.peer }}</code> · {{ peerInProxyCidrs ? 'в списке адресов прокси' : 'вне списка адресов прокси' }}</p>
             <q-input v-model="adminNetworks" type="textarea" autogrow outlined dense
                 label="Разрешённые IP и сети администратора"
                 hint="Один IPv4, IPv6 или CIDR на строку. Пустой список снимает ограничение по IP."
                 :disable="!!saving || accessLocked('adminAllowedCidrs')" />
             <small v-if="accessLocked('adminAllowedCidrs')" class="hint">INPX_ADMIN_ALLOWED_CIDRS · окружение</small>
-            <p class="hint">IP для проверки доступа администратора <code v-if="savedAccess.adminClient">{{ savedAccess.adminClient }}</code>
-                <span v-else>· прокси не передал адрес клиента</span>
+            <p v-if="savedAccess.adminClient" class="hint">IP для проверки доступа администратора <code>{{ savedAccess.adminClient }}</code></p>
+            <p v-else-if="savedAccess.peerTrusted" class="hint">
+                Не удалось определить IP клиента через <code>{{ savedAccess.peer }}</code>.
+                Откройте библиотеку через прокси с <code>X-Forwarded-For</code> или напрямую с адреса вне списка прокси.
             </p>
             <details>
                 <summary>Правила входа и SSO</summary>
@@ -33,7 +35,7 @@
                             emit-value map-options outlined dense :label="field.label" :disable="!!saving || accessLocked(field.key)" />
                         <q-input v-else v-model="access[field.key]" outlined dense :label="field.label"
                             :disable="!!saving || accessLocked(field.key)" />
-                        <small v-if="accessLocked(field.key)" class="hint">{{ field.env }} · окружение</small>
+                        <small v-if="accessLocked(field.key)" class="hint">Задано при запуске через <code>{{ field.env }}</code></small>
                         <small v-if="field.key === 'adminDirectOnly' && legacyRuleLockedHere" class="hint">
                             Подключитесь с адреса вне списка прокси. Если Docker показывает шлюз для обоих маршрутов,
                             выделите прокси свой IP в общей сети Docker.

@@ -590,7 +590,10 @@ impl Settings {
                         .permits(true);
                     if candidate.has_admin_ranges() && !permitted {
                         let Some(address) = admin_client else {
-                            return Err("Сервер не получил IP текущего клиента от доверенного прокси. Проверьте настройку прокси и повторите сохранение.".into());
+                            return Err(format!(
+                                "Сервер не получил IP клиента через {}. Проверьте X-Forwarded-For или откройте библиотеку с адреса вне списка прокси.",
+                                connection.peer.to_canonical()
+                            ).into());
                         };
                         return Err(format!("Добавьте текущий адрес {} в список разрешённых адресов администратора, чтобы сохранить доступ.", address.to_canonical()).into());
                     }
