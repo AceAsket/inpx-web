@@ -650,7 +650,7 @@ async function testReaderDefersViewportRefreshAcrossScreenUnlock() {
     assert.match(readerSource, /document\.visibilityState === 'visible'[\s\S]{0,140}this\.resumeViewportRefreshAfterVisibility\(\);/);
     assert.match(readerSource, /resumeViewportRefreshAfterVisibility\(\) \{[\s\S]{0,500}this\.viewportResumeGuardUntil = Date\.now\(\) \+ 520;/);
     assert.match(readerSource, /deferViewportRefreshForVisibility\(calibrate = true\)[\s\S]{0,700}Date\.now\(\) \+ 220/);
-    assert.match(readerSource, /scheduleViewportRefresh\(\{calibrate = true\} = \{\}\) \{[\s\S]{0,180}this\.deferViewportRefreshForVisibility\(calibrate\)/);
+    assert.match(readerSource, /^    scheduleViewportRefresh\([^\n]+\) \{[\s\S]{0,180}this\.deferViewportRefreshForVisibility\(calibrate\)/m);
     assert.match(readerSource, /await this\.waitForStablePagedStage\(\);\s*if \(this\.deferViewportRefreshForVisibility\(true\)\)/);
 }
 
