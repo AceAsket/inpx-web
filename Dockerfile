@@ -123,16 +123,18 @@ COPY --from=djxl-tools /out/djxl-licenses/ /usr/local/share/licenses/djxl/
 COPY --from=build-app /app/dist/linux/inpx-web /usr/local/bin/inpx-web
 COPY --from=build-app /app/dist/linux/bin/ /usr/local/bin/bin/
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY docker-healthcheck.sh /usr/local/bin/docker-healthcheck.sh
 
-RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-healthcheck.sh \
     && chmod +x /usr/local/bin/inpx-web \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh
+    && chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-healthcheck.sh
 
 EXPOSE 12380
 VOLUME ["/usr/local/bin/.inpx-web", "/library"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD ["/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PORT:-12380} && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n 1 <&3 | grep -q '200'"]
+    CMD ["/usr/local/bin/docker-healthcheck.sh"]
 
 ENTRYPOINT ["tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 
