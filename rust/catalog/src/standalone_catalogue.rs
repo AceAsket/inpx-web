@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 
 use crate::catalog_update::{FolderInput, Source as UpdateSource, prepare_update_reporting};
 use crate::catalogue_browse_cache::PreparedBrowse;
-use crate::catalogue_lock::CatalogueLease;
+use crate::catalogue_lock::{CatalogueLease, OnLost};
 use crate::inpx_filter::Filter as RecordFilter;
 use crate::isbn_revision::IsbnInputs;
 use crate::library_sources::{Kind, Source};
@@ -74,7 +74,7 @@ pub struct Catalogue {
     pub(crate) isbn_index: Option<Arc<crate::isbn_store::IsbnIndex>>,
     pub(crate) isbn_revision: Mutex<Option<String>>,
     pub(crate) isbn_revision_check: Mutex<()>,
-    _lease: CatalogueLease,
+    lease: CatalogueLease,
 }
 
 #[derive(Clone)]
@@ -111,6 +111,15 @@ impl CatalogueFiles {
     pub fn open_or_create(
         &self,
         sources: &[Source],
+        report: impl FnMut(Value) -> Result<()>,
+    ) -> Result<Catalogue> {
+        self.open_or_create_with_on_lost(sources, None, report)
+    }
+
+    pub fn open_or_create_with_on_lost(
+        &self,
+        sources: &[Source],
+        on_lost: Option<OnLost>,
         mut report: impl FnMut(Value) -> Result<()>,
     ) -> Result<Catalogue> {
         fs::create_dir_all(&self.data)?;
@@ -131,18 +140,29 @@ impl CatalogueFiles {
             fs::rename(stage.0.path(), &directory)?;
             atomic_file::sync_parent(&directory)?;
             save_folder_caches(&directory);
-            return Catalogue::open(&directory, self.low_memory, true, &mut report);
+            return Catalogue::open_with_on_lost(
+                &directory,
+                self.low_memory,
+                true,
+                on_lost,
+                &mut report,
+            );
         }
         let book_table = directory.join("book");
         if !directory.join(METADATA).try_exists()? && book_table.is_dir() {
             report(startup_step("migration", "Перенос каталога JembaDB → Redb"))?;
-            let legacy = CatalogueLease::open(&directory)?;
-            let pending = self.prepare_migration(sources, &book_table, &mut report)?;
+            let legacy = CatalogueLease::open_with_on_lost(&directory, on_lost.clone())?;
+            let pending = self.prepare_migration(sources, &book_table, &mut |patch| {
+                legacy.check()?;
+                report(patch)
+            })?;
+            legacy.check()?;
             remove_previous(&previous)?;
             report(startup_step("publish", "Подключение готового индекса"))?;
             // Directory renames on Windows require closing the lease handle.
             drop(legacy);
-            let catalogue = self.replace(&pending, &directory, &previous, true, &mut report)?;
+            let catalogue =
+                self.replace(&pending, &directory, &previous, true, on_lost, &mut report)?;
             return Ok(catalogue);
         }
         let resuming_publication =
@@ -153,10 +173,11 @@ impl CatalogueFiles {
                 "Открываю готовый индекс после прерванного переноса",
             ))?;
         }
-        let catalogue = Catalogue::open(
+        let catalogue = Catalogue::open_with_on_lost(
             &directory,
             self.low_memory,
             resuming_publication,
+            on_lost,
             &mut report,
         )?;
         if resuming_publication {
@@ -253,7 +274,22 @@ impl CatalogueFiles {
     }
 
     pub fn publish(&self, stage: PreparedCatalogue, active: &mut Option<Catalogue>) -> Result<()> {
+        self.publish_with_on_lost(stage, active, None)
+    }
+
+    pub fn publish_with_on_lost(
+        &self,
+        stage: PreparedCatalogue,
+        active: &mut Option<Catalogue>,
+        on_lost: Option<OnLost>,
+    ) -> Result<()> {
+        if active.as_ref().is_some_and(Catalogue::is_lease_lost) {
+            return Err("Catalogue lease lost".into());
+        }
         let _publishing = self.publication_lock()?;
+        if active.as_ref().is_some_and(Catalogue::is_lease_lost) {
+            return Err("Catalogue lease lost".into());
+        }
         let directory = self.data.join("db");
         let previous = self.data.join("db.previous");
         remove_previous(&previous)?;
@@ -265,6 +301,7 @@ impl CatalogueFiles {
             &directory,
             &previous,
             false,
+            on_lost.clone(),
             &mut |_| Ok(()),
         ) {
             Ok(catalogue) => {
@@ -272,7 +309,13 @@ impl CatalogueFiles {
                 Ok(())
             }
             Err(error) => {
-                match Catalogue::open(&directory, self.low_memory, false, &mut |_| Ok(())) {
+                match Catalogue::open_with_on_lost(
+                    &directory,
+                    self.low_memory,
+                    false,
+                    on_lost,
+                    &mut |_| Ok(()),
+                ) {
                     Ok(catalogue) => {
                         *active = Some(catalogue);
                         Err(error)
@@ -291,6 +334,7 @@ impl CatalogueFiles {
         directory: &Path,
         previous: &Path,
         created: bool,
+        on_lost: Option<OnLost>,
         report: &mut impl FnMut(Value) -> Result<()>,
     ) -> Result<Catalogue> {
         fs::rename(directory, previous)?;
@@ -301,7 +345,7 @@ impl CatalogueFiles {
             moved = true;
             atomic_file::sync_parent(directory)?;
             synced = true;
-            Catalogue::open(directory, self.low_memory, created, report)
+            Catalogue::open_with_on_lost(directory, self.low_memory, created, on_lost, report)
         })();
         let catalogue = match install {
             Ok(catalogue) => catalogue,
@@ -380,13 +424,31 @@ fn remove_previous(previous: &Path) -> Result<()> {
 }
 
 impl Catalogue {
+    pub fn is_lease_lost(&self) -> bool {
+        self.lease.is_lost()
+    }
+
+    pub fn check_lease(&self) -> Result<()> {
+        self.lease.check()
+    }
+
     fn open(
         directory: &Path,
         low_memory: bool,
         created: bool,
         report: &mut impl FnMut(Value) -> Result<()>,
     ) -> Result<Self> {
-        let lease = CatalogueLease::open(directory)?;
+        Self::open_with_on_lost(directory, low_memory, created, None, report)
+    }
+
+    fn open_with_on_lost(
+        directory: &Path,
+        low_memory: bool,
+        created: bool,
+        on_lost: Option<OnLost>,
+        report: &mut impl FnMut(Value) -> Result<()>,
+    ) -> Result<Self> {
+        let lease = CatalogueLease::open_with_on_lost(directory, on_lost)?;
         let (store, lookup, header) = Self::load(directory, low_memory)?;
         let mut catalogue = Self {
             store: Arc::new(store),
@@ -406,7 +468,7 @@ impl Catalogue {
             isbn_index: None,
             isbn_revision: Mutex::default(),
             isbn_revision_check: Mutex::default(),
-            _lease: lease,
+            lease,
         };
         catalogue.prepared_browse = PreparedBrowse::load(directory, &catalogue.generation)
             .unwrap_or_else(|error| {

@@ -104,6 +104,7 @@ impl Catalogue {
         similar_limit: Option<usize>,
         recommendations_only: bool,
     ) -> Result<Vec<Value>> {
+        self.check_lease()?;
         let reading = Reading::new(profile);
         let now = now_ms();
         let mut shelves = Vec::new();

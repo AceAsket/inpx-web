@@ -180,6 +180,7 @@ impl Selection {
         query: &Map<String, Value>,
         grouping: Grouping,
     ) -> Result<Self> {
+        catalogue.check_lease()?;
         let books = catalogue.filtered_shelf_ids(query)?;
         let generation = catalogue.generation.clone();
         let groups = match grouping {
@@ -200,6 +201,7 @@ impl Selection {
         offset: usize,
         limit: usize,
     ) -> Result<(Vec<Value>, bool)> {
+        catalogue.check_lease()?;
         if self.generation != catalogue.generation {
             return Err("Каталог обновился. Откройте подборку ещё раз.".into());
         }

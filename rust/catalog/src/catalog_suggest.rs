@@ -47,6 +47,7 @@ const PREVIEW_FIELDS: &[&str] = &[
 
 impl Catalogue {
     pub fn browser_suggest(&self, options: &Value) -> Result<Value> {
+        self.check_lease()?;
         let original = options
             .get("query")
             .filter(|value| !value.is_null())

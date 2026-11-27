@@ -206,6 +206,7 @@ impl Search {
 
 impl Catalogue {
     pub fn browser_author_name(&self, id: u32) -> Result<Option<String>> {
+        self.check_lease()?;
         self.lookup
             .browser_label(&self.lookup_generation, Table::Author, id)
     }
@@ -327,6 +328,7 @@ impl Catalogue {
     }
 
     pub fn browser_book(&self, uid: &str) -> Result<Option<Value>> {
+        self.check_lease()?;
         Ok(self.browser_books_by_uid([uid])?.pop())
     }
 
@@ -574,6 +576,7 @@ impl Catalogue {
     }
 
     pub fn browser_books(&self, query: &Map<String, Value>) -> Result<Value> {
+        self.check_lease()?;
         let search = Search::new(query, "")?;
         let ordered;
         let ids = match self.prepared_order(&search) {
@@ -595,6 +598,7 @@ impl Catalogue {
     }
 
     pub fn browser_browse(&self, options: &Value) -> Result<Value> {
+        self.check_lease()?;
         let kind = options["kind"].as_str().unwrap_or_default();
         let table = match kind {
             "author" => Table::Author,
@@ -675,12 +679,14 @@ impl Catalogue {
     }
 
     pub fn batch_series(&self, name: &str) -> Result<Vec<String>> {
+        self.check_lease()?;
         let (_, mut rows) = self.entity_books(Table::Series, name, None)?;
         order_entity(&mut rows, false)?;
         Ok(rows.into_iter().map(|row| row.uid).collect())
     }
 
     pub fn browser_entity(&self, options: &Value, reading: &CatalogueReading) -> Result<Value> {
+        self.check_lease()?;
         let kind = options["kind"].as_str().unwrap_or_default();
         let table = match kind {
             "author" => Table::Author,
@@ -863,6 +869,7 @@ impl Catalogue {
     }
 
     pub fn browser_names(&self, field: &str, query: &Map<String, Value>) -> Result<Value> {
+        self.check_lease()?;
         let table = name_table(field)?;
         let term = NameQuery::parse(query.get(field).and_then(Value::as_str).unwrap_or_default())?;
         let search = Search::new(query, field)?;
@@ -973,6 +980,7 @@ impl Catalogue {
         query: &Map<String, Value>,
         series: bool,
     ) -> Result<Value> {
+        self.check_lease()?;
         let search = Search::new(query, "")?;
         let mut groups =
             self.lookup
@@ -1015,6 +1023,7 @@ impl Catalogue {
     }
 
     pub fn browser_series(&self, name: &str, query: &Map<String, Value>) -> Result<Value> {
+        self.check_lease()?;
         let search = Search::new(query, "")?;
         let name = name.to_lowercase();
         let mut ids = Vec::new();
@@ -1039,6 +1048,7 @@ impl Catalogue {
     }
 
     pub fn browser_facets(&self) -> Result<(Vec<String>, Vec<String>)> {
+        self.check_lease()?;
         if let Some(prepared) = &self.prepared_browse {
             return Ok(prepared.facets.clone());
         }

@@ -85,6 +85,7 @@ impl Catalogue {
         popular_limit: usize,
         scores: &HashMap<String, u64>,
     ) -> Result<Value> {
+        self.check_lease()?;
         let updated = crate::access_runtime::now_ms();
         let today = OffsetDateTime::from_unix_timestamp(updated / 1000)?.date();
         let key = (newest_limit, popular_limit, today);

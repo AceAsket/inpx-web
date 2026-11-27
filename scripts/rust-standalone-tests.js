@@ -74,7 +74,7 @@ async function start(binary,args,environmentOverrides,readinessHeaders,host='127
                 const ready = await response.json();
                 assert.equal(ready.ready,true);
                 assert.equal(ready.version,VERSION);
-                return {url,ready,stop};
+                return {url,ready,stop,child,settled,output:()=>output};
             }
             await sleep(200);
         }
@@ -3423,6 +3423,77 @@ async function verifyJembaUpgrade(binary, root) {
     console.log('ok standalone JembaDB upgrade reuses a complete index after a lock and preserves IDs, shelves, bookmarks and progress');
 }
 
+async function verifyLeaseLoss(binary, root) {
+    const data = join(root,'data'), library = join(root,'library');
+    const config = join(root,'config.json'), web = join(root,'web.json');
+    await createFixture(library);
+    await bundle(web);
+    const settings = {
+        server:{host:'127.0.0.1',root:'/reader'},
+        librarySources:[{id:'fixture',inpx:join(library,'smoke.inpx')}],
+        inpxCheckInterval:0,
+    };
+    await fs.writeFile(config,JSON.stringify(settings));
+    const args = ['--standalone','--data-dir='+data,'--config='+config,'--web-bundle='+web,'--admin-password=fixture-admin'];
+    const dbMarker = join(data,'db','__softlock');
+
+    // Case 1: __softlock replaced while server is serving with an open WebSocket.
+    const first = await start(binary,args);
+    let ws;
+    try {
+        ws = await wsClient(first.url,await browserCookie(first.url));
+        const search = await ws.request({action:'bookSearch',query:{title:'=Packaged smoke book'}});
+        assert.equal(search.found?.length,1,search.error);
+        const wsClosed = once(ws.socket,'close',{signal:AbortSignal.timeout(5000)});
+        await fs.unlink(dbMarker);
+        await fs.writeFile(dbMarker,'different owner');
+        await wsClosed;
+        const exited = await Promise.race([first.settled.then(()=>true),sleep(5000,false,{ref:false})]);
+        assert.equal(exited,true,'Server must exit promptly when catalogue lease is lost');
+        assert.equal(first.child.signalCode,null);
+        assert.notEqual(first.child.exitCode,0,'Server must exit with non-zero code on lease loss');
+        assert.match(first.output(),/catalogue lease lost/i);
+        assert.equal(await fs.readFile(dbMarker,'utf8'),'different owner','Exiting server must not delete the replacement marker');
+        const unreachable = await fetch(first.url+'/ready',{signal:AbortSignal.timeout(1000)}).catch(()=>null);
+        assert.equal(unreachable,null,'Stopped server must no longer accept requests');
+    } finally {
+        ws?.close();
+        await first.stop();
+        await fs.rm(dbMarker,{force:true});
+    }
+
+    // Case 2: Fresh server reopens cleanly (stores were closed) and exits non-zero when __softlock is removed.
+    const second = await start(binary,args);
+    try {
+        await fs.unlink(dbMarker);
+        const exited = await Promise.race([second.settled.then(()=>true),sleep(5000,false,{ref:false})]);
+        assert.equal(exited,true,'Server must exit promptly when __softlock is removed');
+        assert.equal(second.child.signalCode,null);
+        assert.notEqual(second.child.exitCode,0);
+    } finally {
+        await second.stop();
+        await fs.rm(dbMarker,{force:true});
+    }
+
+    // Case 3: Losing the web-access lease also stops the server and exits non-zero.
+    await fs.writeFile(config,JSON.stringify({...settings,accessPassword:'lease-loss-pass'}));
+    const webAccessMarker = join(data,'web-access','__softlock');
+    const third = await start(binary,args);
+    try {
+        await fs.unlink(webAccessMarker);
+        await fs.writeFile(webAccessMarker,'other auth owner');
+        const exited = await Promise.race([third.settled.then(()=>true),sleep(5000,false,{ref:false})]);
+        assert.equal(exited,true,'Server must exit promptly when web-access lease is lost');
+        assert.equal(third.child.signalCode,null);
+        assert.notEqual(third.child.exitCode,0);
+        assert.equal(await fs.readFile(webAccessMarker,'utf8'),'other auth owner');
+    } finally {
+        await third.stop();
+        await fs.rm(webAccessMarker,{force:true});
+    }
+    console.log('ok standalone server closes stores and exits non-zero on catalogue or web-access lease loss');
+}
+
 (async()=>{
     const binary = resolve(process.argv[2]);
     const root = await fs.mkdtemp(join(tmpdir(),'inpx-standalone-'));
@@ -3448,6 +3519,7 @@ async function verifyJembaUpgrade(binary, root) {
         await verifyResourceProfiles(binary,join(root,'resource-profiles'));
         await verifyMobileEvents(binary,join(root,'mobile-events'));
         await verifyJembaUpgrade(binary,join(root,'jemba-upgrade'));
+        await verifyLeaseLoss(binary,join(root,'lease-loss'));
     }
     finally { await fs.rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:200}); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

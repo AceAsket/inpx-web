@@ -1,6 +1,7 @@
 use std::fs;
 use std::net::IpAddr;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::request_access::Live;
@@ -8,20 +9,21 @@ use inpx_auth_state::access_wire;
 use inpx_auth_state::login_rate::{Kind, LoginRate};
 use inpx_catalog::Result;
 use inpx_catalog::access_runtime::{AccessCommand, AccessReply, AccessRuntime, now_ms};
-use inpx_catalog::catalogue_lock::CatalogueLease;
+use inpx_catalog::catalogue_lock::{CatalogueLease, OnLost};
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 pub(crate) struct Library {
     protected: bool,
-    store: Option<Mutex<Store>>,
+    store: Option<Mutex<Option<Store>>>,
     access: Arc<Live>,
+    lease_lost: Arc<AtomicBool>,
 }
 
 struct Store {
     runtime: AccessRuntime,
-    _lease: CatalogueLease,
+    lease: CatalogueLease,
     attempts: LoginRate,
 }
 
@@ -62,16 +64,25 @@ impl Library {
         password: &str,
         timeout: Option<i64>,
         access: Arc<Live>,
+        on_lease_lost: Option<OnLost>,
     ) -> Result<Self> {
         let protected = !password.is_empty();
         let directory = data.join("web-access");
+        let lease_lost = Arc::new(AtomicBool::new(false));
         let store = if protected || directory.try_exists()? {
             let mut create = fs::DirBuilder::new();
             create.recursive(true);
             #[cfg(unix)]
             create.mode(0o700);
             create.create(&directory)?;
-            let lease = CatalogueLease::open(&directory)?;
+            let lib_lost = Arc::clone(&lease_lost);
+            let on_lost: OnLost = Arc::new(move |reason| {
+                lib_lost.store(true, Ordering::Release);
+                if let Some(notify) = &on_lease_lost {
+                    notify(reason);
+                }
+            });
+            let lease = CatalogueLease::open_with_on_lost(&directory, Some(on_lost))?;
             let file = directory.join("sessions.redb");
             let mut open = fs::OpenOptions::new();
             open.create(true).append(true);
@@ -80,11 +91,11 @@ impl Library {
             drop(open.open(&file)?);
             let runtime = AccessRuntime::open(&file, password.as_bytes(), timeout)?
                 .ok_or("Нужно восстановить прежнее хранилище сеансов доступа")?;
-            Some(Mutex::new(Store {
+            Some(Mutex::new(Some(Store {
                 runtime,
-                _lease: lease,
+                lease,
                 attempts: LoginRate::default(),
-            }))
+            })))
         } else {
             None
         };
@@ -92,7 +103,20 @@ impl Library {
             protected,
             store,
             access,
+            lease_lost,
         })
+    }
+
+    pub(crate) fn is_lease_lost(&self) -> bool {
+        self.lease_lost.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn close(&self) {
+        self.lease_lost.store(true, Ordering::Release);
+        if let Some(store) = &self.store {
+            let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = None;
+        }
     }
 
     pub(crate) fn protected(&self) -> bool {
@@ -103,25 +127,39 @@ impl Library {
         let Some(store) = self.store.as_ref().filter(|_| self.protected) else {
             return Ok(true);
         };
+        if self.is_lease_lost() {
+            return Err("Catalogue lease lost".into());
+        }
         if access_wire::token(token.as_bytes()).is_none() {
             return Ok(false);
         }
-        let mut store = store
+        let mut guard = store
             .lock()
             .map_err(|_| "Хранилище сеансов доступа недоступно")?;
-        check(&mut store, token, now_ms())
+        let Some(store) = guard.as_mut() else {
+            return Err("Catalogue lease lost".into());
+        };
+        store.lease.check()?;
+        check(store, token, now_ms())
     }
 
     pub(crate) fn login_metrics(&self) -> [u64; inpx_auth_state::login_rate::METRIC_COUNT] {
+        if self.is_lease_lost() {
+            return [0; inpx_auth_state::login_rate::METRIC_COUNT];
+        }
         self.store
             .as_ref()
             .and_then(|store| store.lock().ok())
             .map_or(
                 [0; inpx_auth_state::login_rate::METRIC_COUNT],
-                |mut store| {
-                    store
-                        .attempts
-                        .metrics(now_ms(), self.access.current().login_rate.max_attempts)
+                |mut guard| {
+                    guard
+                        .as_mut()
+                        .map_or([0; inpx_auth_state::login_rate::METRIC_COUNT], |store| {
+                            store
+                                .attempts
+                                .metrics(now_ms(), self.access.current().login_rate.max_attempts)
+                        })
                 },
             )
     }
@@ -130,9 +168,16 @@ impl Library {
         let Some(store) = self.store.as_ref().filter(|_| self.protected) else {
             return Ok(Admission::Allowed);
         };
-        let mut store = store
+        if self.is_lease_lost() {
+            return Err("Catalogue lease lost".into());
+        }
+        let mut guard = store
             .lock()
             .map_err(|_| "Хранилище сеансов доступа недоступно")?;
+        let Some(store) = guard.as_mut() else {
+            return Err("Catalogue lease lost".into());
+        };
+        store.lease.check()?;
         let now = now_ms();
         let policy = self.access.current().login_rate;
         let client = peer.to_string();
@@ -147,7 +192,7 @@ impl Library {
                 return Ok(Admission::RateLimited(retry));
             }
             let allowed =
-                access_wire::token(token.as_bytes()).is_some() && check(&mut store, token, now)?;
+                access_wire::token(token.as_bytes()).is_some() && check(store, token, now)?;
             store
                 .attempts
                 .finish(Kind::Access, &client, now, policy, false, Some(allowed));
@@ -166,27 +211,39 @@ impl Library {
         if let Some(store) = self.store.as_ref().filter(|_| self.protected)
             && access_wire::token(token.as_bytes()).is_some()
         {
-            store
+            if self.is_lease_lost() {
+                return Err("Catalogue lease lost".into());
+            }
+            let mut guard = store
                 .lock()
-                .map_err(|_| "Хранилище сеансов доступа недоступно")?
-                .runtime
-                .run(
-                    AccessCommand::Revoke {
-                        token: token.into(),
-                    },
-                    now_ms(),
-                )?;
+                .map_err(|_| "Хранилище сеансов доступа недоступно")?;
+            let Some(store) = guard.as_mut() else {
+                return Err("Catalogue lease lost".into());
+            };
+            store.lease.check()?;
+            store.runtime.run(
+                AccessCommand::Revoke {
+                    token: token.into(),
+                },
+                now_ms(),
+            )?;
         }
         Ok(())
     }
 
     pub(crate) fn flush(&self) -> Result<()> {
         if let Some(store) = &self.store {
-            store
+            if self.is_lease_lost() {
+                return Err("Catalogue lease lost".into());
+            }
+            let mut guard = store
                 .lock()
-                .map_err(|_| "Хранилище сеансов доступа недоступно")?
-                .runtime
-                .flush(now_ms())?;
+                .map_err(|_| "Хранилище сеансов доступа недоступно")?;
+            let Some(store) = guard.as_mut() else {
+                return Err("Catalogue lease lost".into());
+            };
+            store.lease.check()?;
+            store.runtime.flush(now_ms())?;
         }
         Ok(())
     }
@@ -194,6 +251,9 @@ impl Library {
 
 impl Drop for Store {
     fn drop(&mut self) {
+        if self.lease.is_lost() {
+            return;
+        }
         if let Err(error) = self.runtime.flush(now_ms()) {
             log::error!(target: "inpx::auth", "WebAccess flush: {error}");
         }

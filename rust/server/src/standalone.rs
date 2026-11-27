@@ -114,6 +114,7 @@ struct State {
     isbn_worker_capacity: usize,
     metrics: metrics::Monitor,
     launch: Value,
+    lease_lost: tokio::sync::watch::Sender<Option<String>>,
 }
 
 #[derive(Default)]
@@ -285,12 +286,30 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         prefix,
         request_access::Services::new(&config, prefix),
     )?));
+    let (lease_lost_tx, mut lease_lost_rx) = tokio::sync::watch::channel(None::<String>);
+    let lease_lost_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let on_lease_lost: inpx_catalog::catalogue_lock::OnLost = {
+        let tx = lease_lost_tx.clone();
+        let flag = lease_lost_flag.clone();
+        Arc::new(move |reason| {
+            flag.store(true, std::sync::atomic::Ordering::Release);
+            let _ = tx.send_if_modified(|current| {
+                if current.is_some() {
+                    false
+                } else {
+                    *current = Some(reason);
+                    true
+                }
+            });
+        })
+    };
     let access = Access::new(
         &data,
         &config,
         kosync_enabled,
         settings.build_opds(&config, &conversion_formats)?,
         request_access.clone(),
+        Some(on_lease_lost.clone()),
     )?;
     if fresh || needs_save {
         configuration::save(&file, &data, &config)?;
@@ -310,7 +329,12 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     }
 
     let sources = settings.sources(&config)?;
-    let index = index::Index::new(settings.index_files(&config), sources);
+    let index = index::Index::new(
+        settings.index_files(&config),
+        sources,
+        lease_lost_flag,
+        on_lease_lost,
+    );
     let login = override_string(&args, "--admin-login", "INPX_ADMIN_LOGIN", &Value::Null)
         .unwrap_or_else(|| "admin".into());
     let password = args
@@ -408,9 +432,14 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             "host":host, "address":listener.local_addr()?.to_string(), "prefix":prefix,
             "dataDir":data, "configFile":file
         }),
+        lease_lost: lease_lost_tx,
     });
     let connections = Arc::new(Semaphore::new(512));
     println!("{NAME} v{VERSION} listening on {}", listener.local_addr()?);
+    if let Some(reason) = lease_lost_rx.borrow_and_update().clone() {
+        drop(listener);
+        return Err(handle_lease_loss(&state, &reason).await);
+    }
     let initializing = state.clone();
     let mut opening = tokio::task::spawn_blocking(move || {
         initializing
@@ -423,10 +452,23 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     let created = loop {
         tokio::select! {
             _ = &mut shutdown => {
+                drop(listener);
                 flush_on_shutdown(&state).await;
                 return Ok(());
             }
-            result = &mut opening => break result??,
+            _ = lease_lost_rx.changed() => {
+                if let Some(reason) = lease_lost_rx.borrow_and_update().clone() {
+                    drop(listener);
+                    return Err(handle_lease_loss(&state, &reason).await);
+                }
+            }
+            result = &mut opening => {
+                if let Some(reason) = lease_lost_rx.borrow_and_update().clone() {
+                    drop(listener);
+                    return Err(handle_lease_loss(&state, &reason).await);
+                }
+                break result??;
+            }
             connection = listener.accept() => match connection {
                 Ok(connection) => serve_connection(&state, &connections, connection),
                 Err(error) => {
@@ -436,6 +478,10 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             },
         }
     };
+    if let Some(reason) = lease_lost_rx.borrow_and_update().clone() {
+        drop(listener);
+        return Err(handle_lease_loss(&state, &reason).await);
+    }
     delivery::Delivery::start(&state);
     tokio::spawn(admin_cache::Cache::schedule(state.clone()));
     tokio::spawn(diagnostics::Diagnostics::collect_lag(state.clone()));
@@ -460,6 +506,9 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(60)).await;
+                if state.access.library.is_lease_lost() || state.index.is_lease_lost() {
+                    break;
+                }
                 let state = state.clone();
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Err(error) = state.access.library.flush() {
@@ -473,8 +522,15 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
     loop {
         tokio::select! {
             _ = &mut shutdown => {
+                drop(listener);
                 flush_on_shutdown(&state).await;
                 return Ok(());
+            }
+            _ = lease_lost_rx.changed() => {
+                if let Some(reason) = lease_lost_rx.borrow_and_update().clone() {
+                    drop(listener);
+                    return Err(handle_lease_loss(&state, &reason).await);
+                }
             }
             connection = listener.accept() => match connection {
                 Ok(connection) => serve_connection(&state, &connections, connection),
@@ -485,6 +541,30 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             },
         }
     }
+}
+
+async fn handle_lease_loss(state: &Arc<State>, reason: &str) -> Box<dyn std::error::Error> {
+    log::error!(
+        target: "inpx::index",
+        "Fatal: catalogue lease lost ({reason}); stopping server and closing stores"
+    );
+    eprintln!("inpx-web: catalogue lease lost ({reason}); shutting down");
+    let closing = state.clone();
+    let close_task = tokio::task::spawn_blocking(move || {
+        closing.index.close();
+        closing.access.library.close();
+    });
+    if tokio::time::timeout(Duration::from_secs(5), close_task)
+        .await
+        .is_err()
+    {
+        log::error!(
+            target: "inpx::index",
+            "Timed out closing stores after catalogue lease loss; terminating process"
+        );
+        std::process::exit(1);
+    }
+    format!("Catalogue lease lost: {reason}").into()
 }
 
 async fn shutdown_signal() {
@@ -514,7 +594,7 @@ async fn shutdown_signal() {
 }
 
 async fn flush_on_shutdown(state: &Arc<State>) {
-    if state.access.library.protected() {
+    if state.access.library.protected() && !state.access.library.is_lease_lost() {
         let state = state.clone();
         let _ = tokio::task::spawn_blocking(move || {
             if let Err(error) = state.access.library.flush() {
@@ -774,6 +854,9 @@ impl State {
         request: Request<Incoming>,
         peer: IpAddr,
     ) -> std::result::Result<Response<Body>, Infallible> {
+        if self.index.is_lease_lost() || self.access.library.is_lease_lost() {
+            return Ok(error(StatusCode::SERVICE_UNAVAILABLE));
+        }
         if request.method() == Method::CONNECT || request.uri().authority().is_some() {
             return Ok(error(StatusCode::BAD_REQUEST));
         }

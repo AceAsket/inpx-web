@@ -257,6 +257,7 @@ impl Access {
         kosync_enabled: bool,
         opds: LiveOpds,
         request_access: Arc<Live>,
+        on_lease_lost: Option<inpx_catalog::catalogue_lock::OnLost>,
     ) -> inpx_catalog::Result<Self> {
         let minutes = &config["accessTimeout"];
         let minutes = minutes
@@ -306,7 +307,7 @@ impl Access {
             }),
             totp: Mutex::new(TotpAttempts::default()),
             sessions: Sessions::new(config["server"]["root"].as_str().unwrap_or_default())?,
-            library: Library::open(data, password, timeout, request_access)?,
+            library: Library::open(data, password, timeout, request_access, on_lease_lost)?,
         })
     }
 

@@ -1436,6 +1436,14 @@ async fn run(
         .write_buffer_size(0);
     let mut socket = WebSocketStream::from_raw_socket(client, Role::Server, Some(settings)).await;
     let mut policy = state.request_access.subscribe();
+    let mut lease_lost = state.lease_lost.subscribe();
+    if lease_lost.borrow_and_update().is_some()
+        || state.index.is_lease_lost()
+        || state.access.library.is_lease_lost()
+    {
+        close(&mut socket, CloseCode::Again, "Catalogue lease lost").await;
+        return;
+    }
     if !connection_access.valid(&policy.borrow_and_update()) {
         close(&mut socket, CloseCode::Policy, "Access policy changed").await;
         return;
@@ -1456,6 +1464,12 @@ async fn run(
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            result = lease_lost.changed() => {
+                if result.is_err() || lease_lost.borrow_and_update().is_some() {
+                    close(&mut socket, CloseCode::Again, "Catalogue lease lost").await;
+                    return;
+                }
+            }
             result = policy.changed() => {
                 if result.is_err() || !connection_access.valid(&policy.borrow_and_update()) {
                     close(&mut socket, CloseCode::Policy, "Access policy changed").await;
@@ -1546,6 +1560,13 @@ async fn run(
                     let reply_id = id.clone();
                     let (payload, delay, change) = tokio::task::spawn_blocking(move || {
                         let mut change = Change::Unchanged;
+                        if state.index.is_lease_lost() || state.access.library.is_lease_lost() {
+                            return (
+                                encode_reply(fault("Catalogue lease lost"), reply_id),
+                                false,
+                                change,
+                            );
+                        }
                         if !connection_access.valid(&state.request_access.current()) {
                             return (encode_reply(fault("access_policy_changed"), reply_id), false, change);
                         }

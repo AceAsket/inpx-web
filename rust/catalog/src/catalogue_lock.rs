@@ -18,6 +18,8 @@ const SOFT: &str = "__softlock";
 const HARD: &str = "__lock";
 const CHECK: &str = "__softlockcheck";
 
+pub type OnLost = Arc<dyn Fn(String) + Send + Sync>;
+
 pub struct CatalogueLease {
     stop: mpsc::Sender<()>,
     watcher: Option<thread::JoinHandle<()>>,
@@ -26,6 +28,10 @@ pub struct CatalogueLease {
 
 impl CatalogueLease {
     pub fn open(directory: &Path) -> Result<Self> {
+        Self::open_with_on_lost(directory, None)
+    }
+
+    pub fn open_with_on_lost(directory: &Path, on_lost: Option<OnLost>) -> Result<Self> {
         let lease = Lease::acquire(directory)?.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -38,7 +44,15 @@ impl CatalogueLease {
         let watcher_lost = Arc::clone(&lost);
         let watcher = thread::Builder::new()
             .name("catalogue-lock".into())
-            .spawn(move || watch(&leases, parent, false, Some(&watcher_lost)))?;
+            .spawn(move || {
+                watch(
+                    &leases,
+                    parent,
+                    false,
+                    Some(&watcher_lost),
+                    on_lost.as_ref(),
+                )
+            })?;
         Ok(Self {
             stop,
             watcher: Some(watcher),
@@ -48,6 +62,13 @@ impl CatalogueLease {
 
     pub fn is_lost(&self) -> bool {
         self.lost.load(Ordering::Acquire)
+    }
+
+    pub fn check(&self) -> Result<()> {
+        if self.is_lost() {
+            return Err("Catalogue lease lost".into());
+        }
+        Ok(())
     }
 }
 
@@ -71,7 +92,7 @@ pub fn serve(mut input: impl BufRead, mut output: impl Write) -> Result<()> {
     let leases = Mutex::new(HashMap::new());
     let (stop, parent) = mpsc::channel();
     thread::scope(|scope| {
-        let watcher = scope.spawn(|| watch(&leases, parent, true, None));
+        let watcher = scope.spawn(|| watch(&leases, parent, true, None, None));
         let result = (|| {
             while let Some(command) = header(&mut input)? {
                 let result = update(&leases, command).and_then(|applied| {
@@ -100,21 +121,27 @@ fn watch(
     parent: mpsc::Receiver<()>,
     exit_on_loss: bool,
     lost: Option<&AtomicBool>,
+    on_lost: Option<&OnLost>,
 ) {
     while let Err(mpsc::RecvTimeoutError::Timeout) = parent.recv_timeout(Duration::from_millis(200))
     {
         let mut active = leases.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(error) = active.values().find_map(|lease| lease.acknowledge().err()) {
+            let message = error.to_string();
             active.clear();
+            drop(active);
             if let Some(lost) = lost {
                 lost.store(true, Ordering::Release);
             }
             if exit_on_loss {
                 // Standalone lock subprocess: parent closes associated stores when worker exits.
-                eprintln!("inpx-catalog: {error}");
+                eprintln!("inpx-catalog: {message}");
                 std::process::exit(1);
             }
-            log::error!(target: "inpx::index", "Catalogue lease lost: {error}");
+            log::error!(target: "inpx::index", "Catalogue lease lost: {message}");
+            if let Some(notify) = on_lost {
+                notify(message);
+            }
             return;
         }
     }
@@ -289,4 +316,58 @@ fn legacy_inactive(probe: &Path) -> io::Result<bool> {
     }
     remove(probe)?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lease_loss_sets_flag_fires_callback_and_releases_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let on_lost: OnLost = Arc::new(move |reason| {
+            let _ = tx.send(reason);
+        });
+        let lease = CatalogueLease::open_with_on_lost(dir.path(), Some(on_lost)).unwrap();
+        assert!(!lease.is_lost());
+        assert!(lease.check().is_ok());
+
+        let marker = dir.path().join(SOFT);
+        fs::remove_file(&marker).unwrap();
+        fs::write(&marker, b"other owner").unwrap();
+
+        let reason = rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("on_lost callback should fire when marker is replaced");
+        assert!(reason.contains("marker was replaced"), "{reason}");
+        assert!(lease.is_lost());
+        assert!(lease.check().is_err());
+        assert_eq!(fs::read(&marker).unwrap(), b"other owner");
+
+        drop(lease);
+        assert_eq!(
+            fs::read(&marker).unwrap(),
+            b"other owner",
+            "dropping a lost lease must not remove the replacement marker"
+        );
+    }
+
+    #[test]
+    fn lease_loss_fires_when_marker_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let on_lost: OnLost = Arc::new(move |reason| {
+            let _ = tx.send(reason);
+        });
+        let lease = CatalogueLease::open_with_on_lost(dir.path(), Some(on_lost)).unwrap();
+        fs::remove_file(dir.path().join(SOFT)).unwrap();
+
+        let reason = rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("on_lost callback should fire when marker is removed");
+        assert!(reason.contains("marker was replaced"), "{reason}");
+        assert!(lease.is_lost());
+        assert!(lease.check().is_err());
+    }
 }

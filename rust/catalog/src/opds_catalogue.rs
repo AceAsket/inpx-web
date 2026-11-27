@@ -65,6 +65,7 @@ pub struct Name {
 
 impl Catalogue {
     pub fn opds_genres(&self) -> Result<Vec<String>> {
+        self.check_lease()?;
         if let Some(prepared) = &self.prepared_browse {
             return Ok(prepared.genres.clone());
         }
@@ -88,6 +89,7 @@ impl Catalogue {
         genre: &str,
         group: bool,
     ) -> Result<Vec<Name>> {
+        self.check_lease()?;
         let scope = (!genre.is_empty())
             .then(|| self.opds_selection(genre))
             .transpose()?;
@@ -163,17 +165,20 @@ impl Catalogue {
     }
 
     pub fn opds_entity(&self, field: Field, query: &NameQuery, genre: &str) -> Result<Vec<Record>> {
+        self.check_lease()?;
         let selected = self.opds_selection(genre)?;
         let ids = self.opds_matching_books(field, query, &selected)?;
         self.store.catalogue_rows(&self.generation, ids)
     }
 
     pub fn opds_entity_count(&self, field: Field, query: &NameQuery) -> Result<usize> {
+        self.check_lease()?;
         let selected = self.opds_selection("")?;
         Ok(self.opds_matching_books(field, query, &selected)?.len())
     }
 
     pub fn opds_search(&self, term: &str, genre: &str, needed: usize) -> Result<Vec<Record>> {
+        self.check_lease()?;
         let term = term.trim();
         if term.is_empty() {
             return Ok(Vec::new());
