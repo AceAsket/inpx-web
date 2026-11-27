@@ -1,13 +1,57 @@
 <template>
     <span ref="element" class="book-cover" :style="{'--cover-color': color}">
         <img v-if="src && visible && !failed" :key="src" :src="src" :alt="`Обложка: ${book.title || 'Без названия'}`"
-            loading="lazy" decoding="async" @load="loaded" @error="failed = true; emit('error')" />
+            loading="lazy" decoding="async" @load="loaded" @error="onImageError" />
         <span v-else class="book-cover__placeholder" aria-hidden="true">
             <span>{{ letter }}</span><small>{{ (book.ext || 'КНИГА').toUpperCase() }}</small>
         </span>
         <BookRatingBadge v-if="showRating && store.state.settings.showRates !== false" :book="book" />
     </span>
 </template>
+
+<script>
+const failedCoverUrls = new Map();
+const MAX_FAILED_COVERS = 500;
+const FAILED_COVER_TTL_MS = 5 * 60 * 1000;
+
+let sharedObserver = null;
+const observedCallbacks = new WeakMap();
+
+function getSharedObserver() {
+    if (sharedObserver || typeof window === 'undefined' || !window.IntersectionObserver)
+        return sharedObserver;
+    sharedObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const callback = observedCallbacks.get(entry.target);
+            sharedObserver.unobserve(entry.target);
+            observedCallbacks.delete(entry.target);
+            if (callback) callback();
+        }
+    }, {rootMargin: '160px'});
+    return sharedObserver;
+}
+
+function isCoverRecentlyFailed(url) {
+    if (!url) return false;
+    const at = failedCoverUrls.get(url);
+    if (!at) return false;
+    if (Date.now() - at > FAILED_COVER_TTL_MS) {
+        failedCoverUrls.delete(url);
+        return false;
+    }
+    return true;
+}
+
+function markCoverFailed(url) {
+    if (!url) return;
+    if (failedCoverUrls.size >= MAX_FAILED_COVERS) {
+        const oldest = failedCoverUrls.keys().next().value;
+        if (oldest !== undefined) failedCoverUrls.delete(oldest);
+    }
+    failedCoverUrls.set(url, Date.now());
+}
+</script>
 
 <script setup>
 import {computed, ref, watch, onMounted, onBeforeUnmount} from 'vue';
@@ -29,41 +73,48 @@ const color = computed(() => {
     const seed = bookUid(props.book) || props.book.title || '';
     return colors[Array.from(seed).reduce((sum, c) => sum + c.codePointAt(0), 0) % colors.length];
 });
-let observer;
 let retried = false;
 function loaded() {
     retried = false;
+    if (src.value) failedCoverUrls.delete(src.value);
     emit('load', src.value);
 }
-watch(src, () => {
+function onImageError() {
+    failed.value = true;
+    if (retried && src.value) markCoverFailed(src.value);
+    emit('error');
+}
+watch(src, (value) => {
     retried = false;
-    failed.value = false;
-});
+    failed.value = isCoverRecentlyFailed(value);
+}, {immediate: true});
 watch(failed, (needsRetry, _, onCleanup) => {
-    if (!needsRetry) return;
+    if (!needsRetry || isCoverRecentlyFailed(src.value)) return;
     function retry() {
         if (document.hidden || navigator.onLine === false) return;
         retried = true;
         failed.value = false;
     }
-    // One retry for a brief failure. After that, wait for the reader to return or reconnect.
+    // One brief retry for transient hiccups; cache persistent 404/failures without polling on tab switch.
     const timer = retried ? undefined : setTimeout(retry, 1500);
     window.addEventListener('online', retry);
-    document.addEventListener('visibilitychange', retry);
     onCleanup(() => {
         clearTimeout(timer);
         window.removeEventListener('online', retry);
-        document.removeEventListener('visibilitychange', retry);
     });
 });
 onMounted(() => {
-    if (!window.IntersectionObserver) {visible.value = true; return;}
-    observer = new IntersectionObserver(entries => {
-        if (entries.some(entry => entry.isIntersecting)) {visible.value = true; observer.disconnect();}
-    }, {rootMargin: '160px'});
-    observer.observe(element.value);
+    const obs = getSharedObserver();
+    if (!obs || !element.value) {visible.value = true; return;}
+    observedCallbacks.set(element.value, () => {visible.value = true;});
+    obs.observe(element.value);
 });
-onBeforeUnmount(() => observer?.disconnect());
+onBeforeUnmount(() => {
+    if (sharedObserver && element.value) {
+        sharedObserver.unobserve(element.value);
+        observedCallbacks.delete(element.value);
+    }
+});
 </script>
 
 <style scoped>

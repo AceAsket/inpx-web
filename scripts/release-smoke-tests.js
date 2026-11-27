@@ -400,8 +400,8 @@ async function testReaderAnnotationStaysOutsideReadingFlow() {
     assert.match(readerSource, /contentsPanelView === 'annotation'/);
     assert.match(readerSource, /this\.findPagedPageIndexByAnchor\(targetId\)/);
     assert.match(readerSource, /this\.readerHtmlHasAnchor\(targetId\)/);
-    assert.match(readerSource, /\.filter\(\(img\) => !img\.closest\('\.reader-annotation-html'\)\)/);
-    assert.match(readerSource, /\.filter\(\(link\) => !link\.closest\('\.reader-annotation-html'\)\)/);
+    assert.match(readerSource, /bindReaderImageListeners\(\) \{[\s\S]{0,450}img\.closest\('\.reader-annotation-html'\)/);
+    assert.match(readerSource, /bindReaderLinkDelegation\(\) \{[\s\S]{0,600}target\.closest\('\.reader-annotation-html'\)/);
     assert.strictEqual((readerSource.match(/src="\$\{this\.escapeHtml\(src\)\}"/g) || []).length, 2);
 
     const handlerStart = readerSource.indexOf('    handleReaderAnnotationClick(event) {');
@@ -697,10 +697,10 @@ async function testAppCacheRecoveryBootstrapAndRoute() {
     assert.ok(bootstrapStart >= 0 && bootstrapEnd > bootstrapStart);
     const bootstrapSource = mainSource.slice(bootstrapStart, bootstrapEnd);
     const resetIndex = bootstrapSource.indexOf('await handleRequestedCacheReset()');
-    const buildIndex = bootstrapSource.indexOf('await ensureCurrentAppBuild()');
     const mountIndex = bootstrapSource.indexOf('mountApplication()');
-    assert.ok(resetIndex >= 0 && resetIndex < buildIndex);
-    assert.ok(buildIndex < mountIndex);
+    const buildIndex = bootstrapSource.indexOf('ensureCurrentAppBuild()');
+    assert.ok(resetIndex >= 0 && resetIndex < mountIndex);
+    assert.ok(buildIndex > resetIndex);
     assert.match(mainSource, /Promise\.allSettled\(\[\s*clearKnownAppCaches\(\),\s*unregisterScopedServiceWorkers\(\)/);
     assert.match(mainSource, /const appReloadMaxAttempts = 3;/);
     assert.doesNotMatch(mainSource, /searchParams\.get\('appBuild'\) === deployedBuildId/);

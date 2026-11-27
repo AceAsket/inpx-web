@@ -603,8 +603,14 @@ class DiscoveryShelves extends BaseList {
     }
 
     openSource(shelf = {}) {
-        if (shelf.sourceUrl)
-            window.open(shelf.sourceUrl, '_blank');
+        if (!shelf.sourceUrl) return;
+        try {
+            const parsed = new URL(shelf.sourceUrl, window.location.origin);
+            if (!['http:', 'https:'].includes(parsed.protocol)) return;
+            window.open(parsed.href, '_blank', 'noopener,noreferrer');
+        } catch {
+            // Ignore malformed external URLs.
+        }
     }
 }
 

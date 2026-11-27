@@ -153,7 +153,11 @@ import authorBooksStorage from './authorBooksStorage';
 import Dialog from '../share/Dialog.vue';
 import CatalogSearchPanel from '../Library/CatalogSearchPanel.vue';
 
-import _ from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
+import isEqual from 'lodash/isEqual';
+import isObject from 'lodash/isObject';
+import pickBy from 'lodash/pickBy';
+const _ = {cloneDeep, isEqual, isObject, pickBy};
 
 const maxLimit = 1000;
 const searchRoutePaths = new Set(['/', '/author', '/series', '/title', '/books', '/for-you', '/newest', '/popular', '/bestsellers', '/extended']);
@@ -408,14 +412,27 @@ class Search {
             this.search.lang = this.langDefault;
 
             //для встраивания в liberama
-            window.addEventListener('message', (event) => {
+            this.parentOrigin = '';
+            if (window.parent && window.parent !== window && document.referrer) {
+                try {
+                    const parsed = new URL(document.referrer);
+                    if (['http:', 'https:'].includes(parsed.protocol))
+                        this.parentOrigin = parsed.origin;
+                } catch {
+                    this.parentOrigin = '';
+                }
+            }
+            this.handleWindowMessage = (event) => {
+                if (window.parent === window || event.source !== window.parent)
+                    return;
+                if (!this.parentOrigin || event.origin !== this.parentOrigin)
+                    return;
                 if (!_.isObject(event.data) || event.data.from != 'ExternalLibs')
                     return;
 
-                //console.log(event);
-
                 this.recvMessage(event.data);
-            });
+            };
+            window.addEventListener('message', this.handleWindowMessage);
 
             //локальный кеш
             await authorBooksStorage.init();
@@ -430,12 +447,19 @@ class Search {
         })();
     }
 
+    beforeUnmount() {
+        if (this.handleWindowMessage) {
+            window.removeEventListener('message', this.handleWindowMessage);
+            this.handleWindowMessage = null;
+        }
+    }
+
     loadSettings() {
         const settings = this.settings;
 
         this.search.limit = settings.limit;
 
-        this.expanded = _.cloneDeep(settings.expanded);
+        this.expandedAuthor = _.cloneDeep(settings.expandedAuthor);
         this.expandedSeries = _.cloneDeep(settings.expandedSeries);
         this.abCacheEnabled = settings.abCacheEnabled;
         this.langDefault = settings.langDefault;
@@ -482,7 +506,9 @@ class Search {
     }
 
     sendMessage(d) {
-        window.parent.postMessage(Object.assign({}, {from: 'inpx-web'}, d), '*');
+        if (!window.parent || window.parent === window || !this.parentOrigin)
+            return;
+        window.parent.postMessage(Object.assign({}, {from: 'inpx-web'}, d), this.parentOrigin);
     }
 
     sendCurrentUrl() {
@@ -859,8 +885,16 @@ class Search {
     }
 
     openReleasePage() {
-        if (this.config.latestReleaseLink)
-            window.open(this.config.latestReleaseLink, '_blank');
+        if (!this.config.latestReleaseLink)
+            return;
+        try {
+            const parsed = new URL(this.config.latestReleaseLink, window.location.origin);
+            if (!['http:', 'https:'].includes(parsed.protocol))
+                return;
+            window.open(parsed.href, '_blank', 'noopener,noreferrer');
+        } catch {
+            // Ignore malformed release link.
+        }
     }
 
     normalizeReleaseVersion(value = '') {
@@ -876,7 +910,7 @@ class Search {
 
         let pre = null;
         if (prePart) {
-            const match = prePart.match(/^([a-z]+)(?:[.\-]?(\d+))?$/i);
+            const match = prePart.match(/^([a-z]+)(?:[.-]?(\d+))?$/i);
             if (match) {
                 pre = {
                     label: String(match[1] || '').toLowerCase(),
@@ -1319,15 +1353,15 @@ class Search {
         switch (event.type) {
             case 'author':
                 this.search.author = `=${event.value}`;
-                this.selectedList = '/author';
+                this.selectedList = 'author';
                 break;
             case 'series':
                 this.search.series = `=${event.value}`;
-                this.selectedList = '/series';
+                this.selectedList = 'series';
                 break;
             case 'title':
                 this.search.title = `=${event.value}`;
-                this.selectedList = '/title';
+                this.selectedList = 'title';
                 break;
             case 'genreName': {
                 const genreCode = this.findGenreCodeByName(event.value);
@@ -1335,12 +1369,12 @@ class Search {
                     return;
 
                 this.search.genre = genreCode;
-                this.selectedList = '/books';
+                this.selectedList = 'books';
                 break;
             }
             case 'keyword':
                 this.search.keywords = `*${event.value}`;
-                this.selectedList = '/books';
+                this.selectedList = 'books';
                 break;
         }
 

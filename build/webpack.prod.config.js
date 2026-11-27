@@ -22,6 +22,7 @@ module.exports = merge(baseWpConfig, {
     output: {
         path: `${publicDir}${baseWpConfig.output.publicPath}`,
         filename: 'bundle.[contenthash].js',
+        chunkFilename: 'chunk.[name].[contenthash].js',
     },
     module: {
         rules: [
@@ -35,6 +36,16 @@ module.exports = merge(baseWpConfig, {
         ]
     },
     optimization: {
+        splitChunks: {
+            chunks: 'all',
+            cacheGroups: {
+                vendors: {
+                    test: /[\\/]node_modules[\\/]/,
+                    name: 'vendors',
+                    chunks: 'all',
+                },
+            },
+        },
         minimizer: [
             new TerserPlugin({
                 parallel: true,

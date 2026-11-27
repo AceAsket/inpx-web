@@ -69,6 +69,10 @@ function storeBounded(request, response) {
     const sizes = [];
     for (const key of keys) {
       const stored = await cache.match(key);
+      if (!stored) {
+        sizes.push(0);
+        continue;
+      }
       const size = Number(stored.headers.get('x-inpx-cache-bytes')) || (await stored.arrayBuffer()).byteLength;
       sizes.push(size); bytes += size;
     }
@@ -119,7 +123,7 @@ self.addEventListener('fetch', (event) => {
   // signed audio, backgrounds, backups and APIs always go to the network.
   if (request.mode === 'navigate' && isShellDocument(url.pathname)) {
     event.respondWith(
-      fetch(noStoreRequest(request))
+      fetch(request, {cache: 'no-store'})
         .then((response) => {
           if (canStore(response) && /text\/html/i.test(response.headers.get('content-type') || ''))
             event.waitUntil(storeBounded(withBase('/index.html'), response.clone()));
@@ -132,7 +136,7 @@ self.addEventListener('fetch', (event) => {
 
   if (isFreshShellPath(url.pathname)) {
     event.respondWith(
-      fetch(noStoreRequest(request))
+      fetch(request, {cache: 'no-store'})
         .catch(() => (
           [withBase('/'), withBase('/index.html')].includes(url.pathname)
             ? shellFallback()
@@ -145,11 +149,10 @@ self.addEventListener('fetch', (event) => {
   if (!isStaticAsset(url) || request.headers.has('range') || request.headers.has('authorization'))
     return;
 
-  const cacheKey = new URL(url);
-  cacheKey.search = '';
+  const cacheKey = url.href;
   event.respondWith(
-    caches.open(CACHE_NAME).then(cache => cache.match(cacheKey.href)).then((cached) => cached || fetch(request).then((response) => {
-      if (canStore(response)) event.waitUntil(storeBounded(cacheKey.href, response.clone()));
+    caches.open(CACHE_NAME).then(cache => cache.match(cacheKey)).then((cached) => cached || fetch(request).then((response) => {
+      if (canStore(response)) event.waitUntil(storeBounded(cacheKey, response.clone()));
       return response;
     }))
   );

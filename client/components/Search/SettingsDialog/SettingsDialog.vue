@@ -649,6 +649,8 @@ const componentOptions = {
                 return;
             }
 
+            this.loadIntegrations();
+            this.loadOpdsSettings();
             if (this.adminExpanded && this.adminDashboard.generatedAt)
                 this.startAdminMetricsPolling();
         },
@@ -1000,6 +1002,7 @@ class SettingsDialog {
     }
 
     unmounted() {
+        this._unmounted = true;
         this.stopAdminMetricsPolling();
         this.stopAdminIndexPolling();
     }
@@ -1173,8 +1176,10 @@ class SettingsDialog {
             : 'web-page');
         this.discoveryExternalName = String(settings.discoveryExternalName || this.discoveryConfig.externalName || '').trim();
         this.discoveryExternalUrl = String(settings.discoveryExternalUrl || this.discoveryConfig.externalUrl || '').trim();
-        this.loadIntegrations();
-        this.loadOpdsSettings();
+        if (!this.dialogVisible) {
+            this.loadIntegrations();
+            this.loadOpdsSettings();
+        }
     }
 
     makeDefaultAdminCacheSettings() {
@@ -1739,13 +1744,17 @@ class SettingsDialog {
 
     scheduleAdminIndexPolling(delay = 2500) {
         this.stopAdminIndexPolling();
+        if (this._unmounted || !this.dialogVisible)
+            return;
         this.adminIndexPollTimer = setTimeout(async() => {
             this.adminIndexPollTimer = null;
-            if (!this.adminExpanded && !this.adminReindexInProgress)
+            if (this._unmounted || !this.dialogVisible || (!this.adminExpanded && !this.adminReindexInProgress))
                 return;
 
             try {
                 await this.refreshAdminDashboard(false);
+                if (this._unmounted || !this.dialogVisible)
+                    return;
                 if (this.adminIndexBusy) {
                     this.scheduleAdminIndexPolling();
                 } else {
@@ -1757,7 +1766,8 @@ class SettingsDialog {
                 }
             } catch (e) {
                 this.adminReindexInProgress = false;
-                this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
+                if (!this._unmounted && this.dialogVisible)
+                    this.$root.stdDialog.alert(e.message, this.mailUi.errorTitle);
             }
         }, delay);
     }
@@ -2076,13 +2086,19 @@ class SettingsDialog {
 
         this.opdsSaveLoading = true;
         try {
-            const {compatibilityLocked, feedsFileLocked, passwordSet, ...opds} = this.opdsSettings;
+            const {compatibilityLocked, feedsFileLocked} = this.opdsSettings;
+            const opds = {...this.opdsSettings};
+            delete opds.compatibilityLocked;
+            delete opds.feedsFileLocked;
+            delete opds.passwordSet;
             if (compatibilityLocked) delete opds.compatibility;
             if (feedsFileLocked) delete opds.feedsFile;
             if ((opds.feedsFile || '') === (this.config.adminOpds?.feedsFile || '')) delete opds.feedsFile;
             const result = await this.api.updateAdminOpds(opds);
             if (result && result.opds)
-                this.opdsSettings = Object.assign(this.makeDefaultOpdsSettings(), result.opds);
+                this.opdsSettings = Object.assign(this.makeDefaultOpdsSettings(), result.opds, {
+                    password: result.opds.password || (result.opds.passwordSet ? '__KEEP__' : ''),
+                });
             await this.api.updateConfig();
             this.$root.notify.success(this.opdsUi.saved);
             return true;
@@ -2103,7 +2119,7 @@ class SettingsDialog {
         document.body.appendChild(link);
         link.click();
         link.remove();
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
 
     async exportSettings() {

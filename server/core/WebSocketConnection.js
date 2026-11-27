@@ -26,6 +26,8 @@ class WebSocketConnection {
         this.closed = false;
 
         this.connecting = false;
+        this._openPromise = null;
+        this._abortOpen = null;
         this.periodicClean();//no await
     }
 
@@ -85,84 +87,124 @@ class WebSocketConnection {
     }
 
     _open() {
-        return new Promise((resolve, reject) => { (async() => {
-            if (this.closed)
-                reject(new Error('Этот экземпляр класса уничтожен. Пожалуйста, создайте новый.'));
+        if (this.closed)
+            return Promise.reject(new Error('Этот экземпляр класса уничтожен. Пожалуйста, создайте новый.'));
 
-            if (this.connecting) {
-                let i = this.openTimeout/100;
-                while (i-- > 0 && this.connecting) {
-                    await utils.sleep(100);
-                }
+        if (this.isOpen)
+            return Promise.resolve(this.ws);
+
+        if (this._openPromise)
+            return this._openPromise;
+
+        this.terminate();
+
+        let openPromise = null;
+        let settled = false;
+        let openTimer = null;
+        let rejectOpen = null;
+        const abortOpen = (reason) => {
+            if (rejectOpen) rejectOpen(reason);
+        };
+        const clearOpenState = () => {
+            if (openTimer) {
+                clearTimeout(openTimer);
+                openTimer = null;
             }
+            this.connecting = false;
+            if (this._openPromise === openPromise) this._openPromise = null;
+            if (this._abortOpen === abortOpen) this._abortOpen = null;
+        };
 
-            //проверим подключение, и если нет, то подключимся заново
-            if (this.isOpen) {
-                resolve(this.ws);
-            } else {
-                this.connecting = true;
-                this.terminate();
+        this.connecting = true;
+        this._abortOpen = abortOpen;
+        openPromise = new Promise((resolve, reject) => {
+            const finishResolve = (value) => {
+                if (settled) return;
+                settled = true;
+                clearOpenState();
+                resolve(value);
+            };
+            const finishReject = (error) => {
+                if (settled) return;
+                settled = true;
+                clearOpenState();
+                reject(error);
+            };
+            rejectOpen = finishReject;
 
+            let socket;
+            try {
                 if (isBrowser) {
                     const protocol = (window.location.protocol == 'https:' ? 'wss:' : 'ws:');
                     const url = this.url || `${protocol}//${window.location.host}/ws`;
-                    this.ws = new this.WebSocket(url);
+                    socket = new this.WebSocket(url);
                 } else {
-                    this.ws = new this.WebSocket(this.url, this.webSocketOptions);
+                    socket = new this.WebSocket(this.url, this.webSocketOptions);
                 }
-                const socket = this.ws;
-
-                const onopen = () => {
-                    this.connecting = false;
-                    resolve(this.ws);
-                    this.notify('open', socket);
-                };
-
-                const onmessage = (data) => {
-                    try {
-                        if (isBrowser)
-                            data = data.data;
-                        const mes = JSON.parse(data);
-                        if (mes?.type === 'client-event' && !mes.requestId) {
-                            this.notify('event', mes, socket);
-                            return;
-                        }
-                        this.messageQueue.push({regTime: Date.now(), mes});
-
-                        this.processMessageQueue();
-                    } catch (e) {
-                        this.emit(e.message, true);
-                    }
-                };
-
-                let disconnected = false;
-                const onDisconnect = (event) => {
-                    if (this.ws && this.ws !== socket) return;
-                    if (disconnected) return;
-                    disconnected = true;
-                    this.connecting = false;
-                    const message = event?.message || 'Соединение с библиотекой по WebSocket не установлено или прервалось.';
-                    this.emit(message, true);
-                    this.notify('close', socket);
-                    reject(new Error(message));
-                };
-
-                if (isBrowser) {
-                    this.ws.onopen = onopen;
-                    this.ws.onmessage = onmessage;
-                    this.ws.onerror = onDisconnect;
-                    this.ws.onclose = onDisconnect;
-                } else {
-                    this.ws.on('open', onopen);
-                    this.ws.on('message', onmessage);
-                    this.ws.on('error', onDisconnect);
-                    this.ws.on('close', onDisconnect);
-                }
-
-                await utils.sleep(this.openTimeout);
-                reject(new Error('Соединение не удалось'));
+            } catch (error) {
+                finishReject(error);
+                return;
             }
-        })() });
+            this.ws = socket;
+
+            openTimer = setTimeout(() => {
+                finishReject(new Error('Соединение не удалось'));
+                if (this.ws === socket) this.terminate();
+            }, this.openTimeout);
+            openTimer.unref?.();
+
+            const onopen = () => {
+                finishResolve(socket);
+                this.notify('open', socket);
+            };
+
+            const onmessage = (data) => {
+                try {
+                    if (isBrowser)
+                        data = data.data;
+                    const mes = JSON.parse(data);
+                    if (mes?.type === 'client-event' && !mes.requestId) {
+                        this.notify('event', mes, socket);
+                        return;
+                    }
+                    this.messageQueue.push({regTime: Date.now(), mes});
+
+                    this.processMessageQueue();
+                } catch (e) {
+                    this.emit(e.message, true);
+                }
+            };
+
+            let disconnected = false;
+            const onDisconnect = (event) => {
+                if (this.ws && this.ws !== socket) return;
+                if (disconnected) return;
+                disconnected = true;
+                const message = event?.message || 'Соединение с библиотекой по WebSocket не установлено или прервалось.';
+                this.emit(message, true);
+                this.notify('close', socket);
+                finishReject(new Error(message));
+            };
+
+            try {
+                if (isBrowser) {
+                    socket.onopen = onopen;
+                    socket.onmessage = onmessage;
+                    socket.onerror = onDisconnect;
+                    socket.onclose = onDisconnect;
+                } else {
+                    socket.on('open', onopen);
+                    socket.on('message', onmessage);
+                    socket.on('error', onDisconnect);
+                    socket.on('close', onDisconnect);
+                }
+            } catch (error) {
+                finishReject(error);
+                if (this.ws === socket) this.terminate();
+            }
+        });
+        if (!settled) this._openPromise = openPromise;
+        return openPromise;
     }
 
     //timeout в секундах (проверка каждый cleanPeriod интервал)
@@ -202,7 +244,7 @@ class WebSocketConnection {
             try {
                 resp = await this.message(requestId, timeoutSecs);
             } catch(e) {
-                this.terminate();
+                if (!this.isOpen) this.terminate();
                 throw new Error('WebSocket не отвечает');
             }
 
@@ -217,19 +259,26 @@ class WebSocketConnection {
     }
 
     terminate() {
-        if (this.ws) {
-            if (isBrowser) {
-                this.ws.close();
-            } else {
-                this.ws.terminate();
-            }
-        }
+        const ws = this.ws;
         this.ws = null;
+        if (this._abortOpen)
+            this._abortOpen(new Error('Соединение с библиотекой по WebSocket не установлено или прервалось.'));
+        this._openPromise = null;
+        this.connecting = false;
+        if (ws) {
+            try {
+                if (isBrowser) {
+                    ws.close();
+                } else {
+                    ws.terminate();
+                }
+            } catch (_) { /* Socket may already be closed. */ }
+        }
     }
 
     close() {
-        this.terminate();
         this.closed = true;
+        this.terminate();
     }
 
     async periodicClean() {

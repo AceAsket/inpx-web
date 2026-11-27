@@ -122,8 +122,9 @@ async function build() {
     // Добавляем README в релиз.
     let readme = await fs.readFile(path.resolve(__dirname, '../README.md'), 'utf-8');
     const converter = new MarkdownIt({html: true, linkify: true});
-    readme = converter.render(readme);
-    await fs.writeFile(`${outDir}/readme.html`, readme);
+    const rendered = converter.render(readme);
+    const document = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>INPX Web</title></head><body>${rendered}</body></html>\n`;
+    await fs.writeFile(`${outDir}/readme.html`, document);
 
     const zipFile = `${tmpDir}/public.zip`;
     const jsonFile = native ? path.join(outDir,'bin','public.json') : path.join(distDir,'public.json');

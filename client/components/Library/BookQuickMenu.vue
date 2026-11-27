@@ -27,7 +27,6 @@
 <script setup>
 import {computed, getCurrentInstance, inject, onBeforeUnmount, onDeactivated, ref, watch} from 'vue';
 import {QMenu, QList, QSeparator} from 'quasar';
-import escape from 'lodash/escape';
 import {clearStoredReaderProgress} from '../Reader/readerProgressStorage';
 import {libraryContextKey} from './libraryContext';
 import {bookUid, profileLoginError} from './libraryModel';
@@ -74,7 +73,7 @@ async function changeHistory(remove) {
     try {
         if (remove) {
             const confirmed = await root.stdDialog.confirm(
-                `Удалить «${escape(props.book.title)}» из истории? Позиция чтения и все ваши закладки в этой книге будут удалены. Сама книга останется в библиотеке.`,
+                `Удалить «${props.book.title || ''}» из истории? Позиция чтения и все ваши закладки в этой книге будут удалены. Сама книга останется в библиотеке.`,
                 'Удалить из истории', {okLabel:'Удалить'});
             if (!confirmed || id !== request || userId !== owner.value || epoch !== library.state.revision) return;
         }
@@ -89,7 +88,7 @@ async function changeHistory(remove) {
     } catch (error) {
         if (epoch !== library.state.revision || userId !== owner.value) return;
         if (profileLoginError(error)) library.repository.requireLogin('reading');
-        else root.stdDialog.alert(escape(error.message || 'Не удалось изменить историю чтения.'), 'История чтения');
+        else root.stdDialog.alert(error.message || 'Не удалось изменить историю чтения.', 'История чтения');
     } finally {busy.value = false;}
 }
 </script>

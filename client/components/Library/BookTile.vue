@@ -28,7 +28,6 @@
 
 <script setup>
 import {computed, getCurrentInstance, inject, ref} from 'vue';
-import escape from 'lodash/escape';
 import BookCover from './BookCover.vue';
 import BookSendButton from './BookSendButton.vue';
 import BookQuickMenu from './BookQuickMenu.vue';
@@ -52,7 +51,7 @@ async function read() {
         const template = config.value.bookReadLink;
         const {link} = await library.api.getBookLink(bookUid(props.book));
         openExternalReader(template, new URL(link, window.location.origin).href);
-    } catch (error) {root.stdDialog.alert(escape(error.message), 'Не удалось открыть книгу');}
+    } catch (error) {root.stdDialog.alert(error.message, 'Не удалось открыть книгу');}
     finally {opening.value = false;}
 }
 </script>

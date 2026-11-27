@@ -1,4 +1,3 @@
-/* global __INPX_WEB_BUILD_ID__ */
 import { createApp } from 'vue';
 
 import router from './router';
@@ -299,7 +298,10 @@ function startAppVersionMonitor() {
         if (!document.hidden)
             checkVersion();
     });
-    window.setInterval(checkVersion, 60*1000);
+    window.setInterval(() => {
+        if (!document.hidden)
+            checkVersion();
+    }, 60*1000);
 }
 
 function setupServiceWorker() {
@@ -335,13 +337,10 @@ async function bootstrapApplication() {
     if (await handleRequestedCacheReset())
         return;
 
-    const buildState = await ensureCurrentAppBuild();
-    if (buildState !== 'ready')
-        return;
-
     mountApplication();
-    startAppVersionMonitor();
     setupServiceWorker();
+    startAppVersionMonitor();
+    ensureCurrentAppBuild().catch(() => {});
 }
 
 bootstrapApplication().catch(() => {

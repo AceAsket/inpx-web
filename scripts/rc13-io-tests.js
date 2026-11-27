@@ -402,9 +402,11 @@ async function testZipPreviewLimitAndFolderExtractionLimitDoNotChangeFullReads()
         const Reader=require('../server/core/ZipReader'),bounded=new Reader({resourceMaxOutputBytes:1024}),full=new Reader();
         try {
             await bounded.open(archive,false);await assert.rejects(bounded.extractToBuf('book.fb2'),{code:'INPX_RESOURCE_OUTPUT_LIMIT'});
-            const entry=bounded.zip.entry;bounded.zip.entry=async()=>({size:1});
+            const entry=bounded.zip.entry;
+            bounded.zip.entry=async name=>({...await entry.call(bounded.zip,name),size:1});
+            bounded.run7zCommand=async()=>assert.fail('Deflated ZIP stream cap must stay on the Node.js stream path');
             try {await assert.rejects(bounded.extractToBuf('book.fb2'),{code:'INPX_RESOURCE_OUTPUT_LIMIT'},'Actual streamed bytes must also be capped');}
-            finally {bounded.zip.entry=entry;}
+            finally {bounded.zip.entry=entry;delete bounded.run7zCommand;}
             await full.open(archive,false);assert.equal((await full.extractToBuf('book.fb2')).length,4096);
         } finally {await bounded.close();await full.close();}
         const worker=makeWorker();worker.config={libDir:dir,tempDir:path.join(dir,'tmp')};await fs.ensureDir(worker.config.tempDir);

@@ -1,5 +1,9 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
-import _ from 'lodash';
+import assign from 'lodash/assign';
+import find from 'lodash/find';
+import identity from 'lodash/identity';
+import pickBy from 'lodash/pickBy';
+const _ = {assign, find, identity, pickBy};
 
 const Search = () => import('./components/Search/Search.vue');
 const Reader = () => import('./components/Reader/Reader.vue');

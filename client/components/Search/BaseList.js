@@ -1,6 +1,9 @@
 ﻿import axios from 'axios';
 import dayjs from 'dayjs';
-import _ from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
+import isEqual from 'lodash/isEqual';
+import omit from 'lodash/omit';
+const _ = {cloneDeep, isEqual, omit};
 
 import authorBooksStorage from './authorBooksStorage';
 
@@ -424,11 +427,8 @@ export default class BaseList {
                 else
                     this.$root.stdDialog.alert(
 `Копирование ссылки не удалось. Пожалуйста, попробуйте еще раз.
-<br><br>
-<b>Пояснение</b>: вероятно, браузер запретил копирование, т.к. прошло<br>
-слишком много времени с момента нажатия на кнопку (инициация<br>
-пользовательского события). Сейчас ссылка уже закеширована,<br>
-поэтому повторная попытка должна быть успешной.`, 'Ошибка');
+
+Пояснение: вероятно, браузер запретил копирование, т.к. прошло слишком много времени с момента нажатия на кнопку (инициация пользовательского события). Сейчас ссылка уже закеширована, поэтому повторная попытка должна быть успешной.`, 'Ошибка');
             } else if (action == 'readBook') {
                 //читать
                 if (this.list.liberamaReady) {
@@ -654,7 +654,6 @@ export default class BaseList {
         const s = this.search;
 
         const emptyFieldValue = '?';
-        const maxUtf8Char = String.fromCodePoint(0xFFFFF);
         const ruAlphabet = 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя';
         const enAlphabet = 'abcdefghijklmnopqrstuvwxyz';
         const enru = new Set((ruAlphabet + enAlphabet).split(''));
@@ -669,6 +668,20 @@ export default class BaseList {
                 result.push(author);
 
             return result;
+        };
+
+        const regexCache = new Map();
+        const getRegex = (pattern) => {
+            if (regexCache.has(pattern))
+                return regexCache.get(pattern);
+            let compiled = false;
+            try {
+                compiled = new RegExp(pattern, 'i');
+            } catch {
+                compiled = false;
+            }
+            regexCache.set(pattern, compiled);
+            return compiled;
         };
 
         const filterBySearch = (bookValue, searchValue) => {
@@ -699,9 +712,8 @@ export default class BaseList {
                 return bookValue !== emptyFieldValue && !enru.has(bookValue[0]) && bookValue.indexOf(searchValue) >= 0;
             } else if (searchValue[0] == '~') {//RegExp
 
-                searchValue = searchValue.substring(1);
-                const re = new RegExp(searchValue, 'i');
-                return re.test(bookValue);
+                const re = getRegex(searchValue.substring(1));
+                return re ? re.test(bookValue) : false;
             } else if (searchValue[0] == emptyFieldValue) {
                 return bookValue.indexOf(searchValue) === 0;
             } else {
@@ -709,6 +721,15 @@ export default class BaseList {
                 return catalogMatch(bookValue, searchValue);
             }
         };
+
+        const searchGenres = s.genre ? new Set(s.genre.split(',')) : null;
+        const searchLang = s.lang ? new Set(s.lang.split(',')) : null;
+        const dateParts = s.date ? this.queryDate(s.date).split(',') : null;
+        const [dateFrom = '0000-00-00', dateTo = '9999-99-99'] = dateParts || [];
+        const searchLibrate = s.librate
+            ? new Set(s.librate.split(',').map(n => parseInt(n, 10)).filter(n => !isNaN(n)))
+            : null;
+        const searchExt = s.ext ? new Set(s.ext.split('|')) : null;
 
         return books.filter((book) => {
             //author
@@ -722,10 +743,9 @@ export default class BaseList {
             }
 
             //genre
-            let genreFound = !s.genre;
+            let genreFound = !searchGenres;
             if (!genreFound) {
-                const searchGenres = new Set(s.genre.split(','));
-                const bookGenres = book.genre.split(',');
+                const bookGenres = String(book.genre || '').split(',');
 
                 for (let g of bookGenres) {
                     if (!g)
@@ -739,34 +759,16 @@ export default class BaseList {
             }
 
             //lang
-            let langFound = !s.lang;
-            if (!langFound) {
-                const searchLang = new Set(s.lang.split(','));
-                langFound = searchLang.has(book.lang || emptyFieldValue);
-            }
+            const langFound = !searchLang || searchLang.has(book.lang || emptyFieldValue);
 
             //date
-            let dateFound = !s.date;
-            if (!dateFound) {
-                const date = this.queryDate(s.date).split(',');
-                let [from = '0000-00-00', to = '9999-99-99'] = date;
-
-                dateFound = (book.date >= from && book.date <= to);
-            }
+            const dateFound = !dateParts || (book.date >= dateFrom && book.date <= dateTo);
 
             //librate
-            let librateFound = !s.librate;
-            if (!librateFound) {
-                const searchLibrate = new Set(s.librate.split(',').map(n => parseInt(n, 10)).filter(n => !isNaN(n)));
-                librateFound = searchLibrate.has(book.librate);
-            }
+            const librateFound = !searchLibrate || searchLibrate.has(book.librate);
 
             //ext
-            let extFound = !s.ext;
-            if (!extFound) {
-                const searchExt = new Set(s.ext.split('|'));
-                extFound = searchExt.has(book.ext.toLowerCase() || emptyFieldValue);
-            }
+            const extFound = !searchExt || searchExt.has(String(book.ext || '').toLowerCase() || emptyFieldValue);
 
             return (this.showDeleted || !book.del)
                 && authorFound

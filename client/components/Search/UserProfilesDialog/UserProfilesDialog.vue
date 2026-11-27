@@ -413,7 +413,6 @@
 
 <script>
 import {defineAsyncComponent} from 'vue';
-import escape from 'lodash/escape';
 import vueComponent from '../../vueComponent.js';
 import Dialog from '../../share/Dialog.vue';
 import TelegramAccountPanel from '../../Library/TelegramAccountPanel.vue';
@@ -1023,7 +1022,7 @@ class UserProfilesDialog {
         if (this.profileBlockPendingId) return;
         this.profileBlockPendingId = profile.id;
         const blocked = !profile.blocked;
-        const name = escape(profile.name);
+        const name = String(profile.name || '');
         try {
             const confirmed = await this.$root.stdDialog.confirm(blocked
                 ? `Заблокировать профиль «${name}»? Его сеансы завершатся. Полки и прогресс сохранятся.`
@@ -1034,7 +1033,7 @@ class UserProfilesDialog {
             await this.loadProfiles({preserveState:true});
             this.$root.notify.success(result.blocked ? 'Профиль заблокирован' : 'Профиль разблокирован');
         } catch (error) {
-            this.$root.stdDialog.alert(escape(error.message), this.uiText.errorTitle);
+            this.$root.stdDialog.alert(error.message, this.uiText.errorTitle);
         } finally {
             this.profileBlockPendingId = '';
         }

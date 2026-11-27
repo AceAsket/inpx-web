@@ -16,7 +16,7 @@
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
-                    <div v-html="caption"></div>
+                    <div class="std-dialog-text">{{ caption }}</div>
                 </div>
                 <div class="close-icon column justify-center items-center">
                     <q-btn v-close-popup flat round dense aria-label="Закрыть">
@@ -26,7 +26,7 @@
             </div>
 
             <div class="q-mx-md">
-                <div v-html="message"></div>
+                <div class="std-dialog-text">{{ message }}</div>
             </div>
 
             <div class="buttons row justify-end q-pa-md">
@@ -41,7 +41,7 @@
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
-                    <div v-html="caption"></div>
+                    <div class="std-dialog-text">{{ caption }}</div>
                 </div>
                 <div class="close-icon column justify-center items-center">
                     <q-btn v-close-popup flat round dense aria-label="Закрыть">
@@ -51,7 +51,7 @@
             </div>
 
             <div class="q-mx-md">
-                <div v-html="message"></div>
+                <div class="std-dialog-text">{{ message }}</div>
             </div>
 
             <div class="buttons row justify-end q-pa-md">
@@ -69,7 +69,7 @@
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
-                    <div v-html="caption"></div>
+                    <div class="std-dialog-text">{{ caption }}</div>
                 </div>
                 <div v-if="!noCancel" class="close-icon column justify-center items-center">
                     <q-btn v-close-popup flat round dense aria-label="Закрыть">
@@ -79,7 +79,7 @@
             </div>
 
             <div class="q-mx-md">
-                <div v-html="message"></div>
+                <div class="std-dialog-text">{{ message }}</div>
                 <q-input ref="input" v-model="inputValue" class="q-mt-xs" outlined dense />
                 <div class="error">
                     <span v-show="error != ''">{{ error }}</span>
@@ -101,7 +101,7 @@
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
-                    <div v-html="caption"></div>
+                    <div class="std-dialog-text">{{ caption }}</div>
                 </div>
                 <div v-if="!noCancel" class="close-icon column justify-center items-center">
                     <q-btn v-close-popup flat round dense aria-label="Закрыть">
@@ -112,7 +112,7 @@
 
             <form class="credentials-form" @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
                 <div class="q-mx-md">
-                    <div v-html="message"></div>
+                    <div class="std-dialog-text">{{ message }}</div>
                     <input v-if="userName" type="text" name="username" autocomplete="section-library username" :value="userName" hidden />
                     <q-input
                         ref="input"
@@ -157,7 +157,7 @@
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
-                    <div v-html="caption"></div>
+                    <div class="std-dialog-text">{{ caption }}</div>
                 </div>
                 <div v-if="!noCancel" class="close-icon column justify-center items-center">
                     <q-btn v-close-popup flat round dense aria-label="Закрыть">
@@ -168,7 +168,7 @@
 
             <form class="credentials-form" @submit.prevent="submitCredentials" @focusout.capture="syncCredentials($event.currentTarget)">
                 <div class="q-mx-md">
-                    <div v-html="message"></div>
+                    <div class="std-dialog-text">{{ message }}</div>
                     <q-input
                         ref="profileLoginInput"
                         v-model="inputValue"
@@ -269,7 +269,7 @@
             <div class="header row">
                 <div class="caption col row items-center q-ml-md">
                     <q-icon v-show="caption" class="q-mr-sm" :class="iconColor" :name="iconName" size="28px"></q-icon>
-                    <div v-html="caption"></div>
+                    <div class="std-dialog-text">{{ caption }}</div>
                 </div>
                 <div class="close-icon column justify-center items-center">
                     <q-btn v-close-popup flat round dense aria-label="Закрыть">
@@ -279,7 +279,7 @@
             </div>
 
             <div class="q-mx-md">
-                <div v-html="message"></div>
+                <div class="std-dialog-text">{{ message }}</div>
                 <div class="q-my-md text-center">
                     <div v-show="hotKeyCode == ''" class="text-grey-5">
                         Нет
@@ -513,16 +513,22 @@ class StdDialog {
         this.$refs.dialog.hide();
     }
 
+    enqueue(open) {
+        const previous = this._dialogQueue || Promise.resolve();
+        const run = () => new Promise((resolve) => {
+            open(resolve);
+        });
+        const next = previous.then(run, run);
+        this._dialogQueue = next.then(() => {}, () => {});
+        return next;
+    }
+
     alert(message, caption, opts) {
-        return new Promise((resolve) => {
+        return this.enqueue((resolve) => {
             this.init(message, caption, opts);
 
             this.hideTrigger = () => {
-                if (this.ok) {
-                    resolve(true);
-                } else {
-                    resolve(false);
-                }
+                resolve(!!this.ok);
             };
 
             this.type = 'alert';
@@ -531,15 +537,11 @@ class StdDialog {
     }
 
     confirm(message, caption, opts) {
-        return new Promise((resolve) => {
+        return this.enqueue((resolve) => {
             this.init(message, caption, opts);
 
             this.hideTrigger = () => {
-                if (this.ok) {
-                    resolve(true);
-                } else {
-                    resolve(false);
-                }
+                resolve(!!this.ok);
             };
 
             this.type = 'confirm';
@@ -548,7 +550,7 @@ class StdDialog {
     }
 
     prompt(message, caption, opts) {
-        return new Promise((resolve) => {
+        return this.enqueue((resolve) => {
             this.enableValidator = false;
             this.init(message, caption, opts);
 
@@ -570,13 +572,12 @@ class StdDialog {
     }
 
     password(message, caption, opts) {
-        return new Promise((resolve) => {
+        return this.enqueue((resolve) => {
             this.enableValidator = false;
             this.init(message, caption, opts);
 
             this.hideTrigger = () => {
                 if (this.ok) {
-                    history.pushState({}, null);
                     resolve({value: this.inputValue});
                 } else {
                     resolve(false);
@@ -600,13 +601,12 @@ class StdDialog {
     }
 
     profileLogin(message, caption, opts) {
-        return new Promise((resolve) => {
+        return this.enqueue((resolve) => {
             this.enableValidator = false;
             this.init(message, caption, opts);
 
             this.hideTrigger = () => {
                 if (this.ok) {
-                    history.pushState({}, null);
                     resolve({
                         login: String(this.inputValue || '').trim(),
                         password: String(this.profilePasswordValue || ''),
@@ -626,7 +626,7 @@ class StdDialog {
     }
 
     profileOtp(message, opts) {
-        return new Promise(resolve => {
+        return this.enqueue((resolve) => {
             this.enableValidator = false;
             this.init(message, opts?.setup ? 'Настройка двухфакторного входа' : 'Двухфакторный вход', opts);
             this.type = 'profileOtp';
@@ -641,7 +641,7 @@ class StdDialog {
     }
 
     profileOtpRecovery(codes, opts) {
-        return new Promise(resolve => {
+        return this.enqueue((resolve) => {
             this.init('', 'Резервные коды', {...opts, noEscDismiss: true, noBackdropDismiss: true});
             this.type = 'profileOtpRecovery';
             this.otpRecoveryCodes = codes;
@@ -651,7 +651,7 @@ class StdDialog {
     }
 
     getHotKey(message, caption, opts) {
-        return new Promise((resolve) => {
+        return this.enqueue((resolve) => {
             this.init(message, caption, opts);
 
             this.hideTrigger = () => {
@@ -675,7 +675,7 @@ class StdDialog {
                     this.hotKeyCode = utils.keyEventToCode(event);
                     handled = true;
                 }
-            } else {
+            } else if (event.type == 'keydown') {
                 if (event.key == 'Enter' && !['password', 'profileLogin', 'profileOtp', 'profileOtpRecovery'].includes(this.type)) {
                     this.okClick();
                     handled = true;
@@ -702,6 +702,11 @@ export default vueComponent(StdDialog);
 </script>
 
 <style scoped>
+.std-dialog-text {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+}
+
 .password-visibility-toggle {
     cursor: pointer;
 }

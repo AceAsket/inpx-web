@@ -79,7 +79,15 @@ async function load() {
     } catch (e) {if (current()) error.value = e.message;}
     finally {if (current()) loading.value = false;}
 }
-function navigate({type, value}) {
+async function navigate({type, value}) {
+    if (type === 'genreName' && value) {
+        try {await library.ensureGenres();} catch {return;}
+        const name = String(value).trim().toLowerCase();
+        value = Array.from(genres.value).find(([code, label]) => code.toLowerCase() === name || label.trim().toLowerCase() === name)?.[0]
+            || (/^[a-z0-9_-]+$/.test(name) ? name : '');
+        type = 'genre';
+    }
+    if (!value) return;
     if (type === 'author' || type === 'series') router.push(catalogTarget(type === 'author' ? '/author-details' : '/series-details', {name:value}, route.query));
     else router.push(catalogTarget('/books', {[type === 'keyword' ? 'keywords' : type]: type === 'genre' ? value : '*' + value}, route.query));
 }

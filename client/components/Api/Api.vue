@@ -37,7 +37,8 @@ import * as utils from '../../share/utils';
 import * as cryptoUtils from '../../share/cryptoUtils';
 import LockQueue from '../../../server/core/LockQueue';
 import {watchReaderEvents} from './readerEvents';
-import packageJson from '../../../package.json';
+
+const webAppVersion = (typeof __INPX_WEB_VERSION__ !== 'undefined' ? __INPX_WEB_VERSION__ : '');
 
 const rotor = '|/-\\';
 const profileSessionStorageKey = 'inpx-web-profile-session';
@@ -136,16 +137,19 @@ class Api {
                 return {};
 
             const parsed = JSON.parse(raw);
-            return {
-                currentUserId: String(parsed.currentUserId || '').trim(),
-                profileAccessToken: String(parsed.profileAccessToken || '').trim(),
-            };
+            const currentUserId = String(parsed.currentUserId || '').trim();
+            if (parsed.profileAccessToken) {
+                // Scrub any legacy bearer token previously written to localStorage;
+                // browser sessions now rely on HttpOnly cookies.
+                this.writeStoredProfileSession(currentUserId);
+            }
+            return {currentUserId};
         } catch (e) {
             return {};
         }
     }
 
-    writeStoredProfileSession(currentUserId = '', profileAccessToken = '') {
+    writeStoredProfileSession(currentUserId = '') {
         try {
             if (!currentUserId) {
                 localStorage.removeItem(profileSessionStorageKey);
@@ -155,7 +159,6 @@ class Api {
             this.rememberStoredProfileLogin(currentUserId);
             localStorage.setItem(profileSessionStorageKey, JSON.stringify({
                 currentUserId: String(currentUserId || '').trim(),
-                profileAccessToken: String(profileAccessToken || '').trim(),
             }));
         } catch (e) {
             // ignore storage failures
@@ -225,7 +228,7 @@ class Api {
                     if (this.profileSigningOut || this.settings.currentUserId || this.currentUserId) return;
                 }
             }
-            config.webAppVersion = packageJson.version;
+            config.webAppVersion = webAppVersion;
             const loginWasRequired = this.$store.state.config.profileLoginRequired;
             this.commit('setConfig', config);
             if (this.profileLoginPromise && loginWasRequired && !config.profileLoginRequired)
@@ -354,27 +357,30 @@ class Api {
 
     async request(params, timeoutSecs = 10, options = {}) {
         let errCount = 0;
+        let retryCount = 0;
+        const maxRetries = 5;
         while (1) {// eslint-disable-line
             if(options.signal?.aborted)throw options.signal.reason || new Error('Запрос отменён');
             if (this.profileSigningOut && params.action !== 'logout-user-profile')
                 throw new Error('Выполняется выход из профиля');
             try {
+                const payload = {...params};
                 const settings = this.settings;
                 const accessToken = settings.accessToken || this.accessToken;
                 const currentUserId = options.userId ?? (settings.currentUserId || this.currentUserId);
                 const csrfToken = this.$store.state.config.csrfToken;
 
                 if (accessToken)
-                    params.accessToken = accessToken;
+                    payload.accessToken = accessToken;
                 if (currentUserId)
-                    params.userId = currentUserId;
+                    payload.userId = currentUserId;
                 const profileAccessToken = settings.profileAccessToken || this.profileAccessToken;
                 if (profileAccessToken)
-                    params.profileAccessToken = profileAccessToken;
+                    payload.profileAccessToken = profileAccessToken;
                 if (csrfToken)
-                    params.csrfToken = csrfToken;
+                    payload.csrfToken = csrfToken;
 
-                const response = await wsc.message(await wsc.send(params), timeoutSecs, options.onProgress);
+                const response = await wsc.message(await wsc.send(payload), timeoutSecs, options.onProgress);
                 if(options.signal?.aborted)throw options.signal.reason || new Error('Запрос отменён');
                 if (this.profileSigningOut && params.action !== 'logout-user-profile')
                     throw new Error('Выполняется выход из профиля');
@@ -392,8 +398,12 @@ class Api {
                         throw new Error('need_profile_login');
                     await this.showProfileLoginDialog('', {required: !!this.$store.state.config.profileLoginRequired});
                 } else if (response && response.error == 'server_busy') {
+                    if (++retryCount > maxRetries)
+                        throw new Error('Сервер занят. Повторите запрос позже.');
                     await this.showBusyDialog();
                 } else if (response && response.error == 'bad_csrf_token') {
+                    if (++retryCount > maxRetries)
+                        throw new Error('Не удалось обновить токен безопасности. Обновите страницу.');
                     await this.updateConfig({skipProfileLogin: !!this.profileLoginPromise});
                 } else {
                     if (response.error) {
@@ -990,7 +1000,11 @@ class Api {
             }
         }
         await this.request({action: 'logout'});
+        this.accessToken = '';
+        this.currentUserId = '';
+        this.profileAccessToken = '';
         this.commit('setSettings', {
+            accessToken: '',
             currentUserId: '',
             profileAccessToken: '',
         });

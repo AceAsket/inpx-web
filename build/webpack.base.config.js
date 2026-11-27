@@ -3,6 +3,7 @@ const DefinePlugin = require('webpack').DefinePlugin;
 const { VueLoaderPlugin } = require('vue-loader');
 
 const appdir = require('./appdir');
+const pckg = require('../package.json');
 
 const clientDir = path.resolve(__dirname, '../client');
 
@@ -59,6 +60,7 @@ module.exports = {
 
     plugins: [
         new DefinePlugin({
+            __INPX_WEB_VERSION__: JSON.stringify(pckg.version),
             __VUE_OPTIONS_API__: true,
             __VUE_PROD_DEVTOOLS__: false,
             __QUASAR_SSR__: false,

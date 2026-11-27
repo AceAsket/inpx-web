@@ -49,6 +49,70 @@ async function testWebSocketConnectionReportsFailuresWithoutNativeMessage() {
     }
 }
 
+async function testWebSocketConnectionOpenDoesNotPoisonOnThrowOrAbort() {
+    const {EventEmitter} = require('events');
+    const WebSocketConnection = require('../server/core/WebSocketConnection');
+    class TestConnection extends WebSocketConnection {
+        periodicClean() {}
+    }
+    class HangingSocket extends EventEmitter {
+        constructor() {
+            super();
+            this.readyState = 0;
+            this.terminated = false;
+        }
+        terminate() { this.terminated = true; }
+    }
+    class OpeningSocket extends EventEmitter {
+        constructor() {
+            super();
+            this.readyState = 0;
+            queueMicrotask(() => {
+                this.readyState = OpeningSocket.OPEN;
+                this.emit('open');
+            });
+        }
+        terminate() { this.readyState = 3; }
+    }
+    OpeningSocket.OPEN = 1;
+
+    const connection = new TestConnection('ws://fixture.invalid', 5);
+    try {
+        connection.WebSocket = function() { throw new SyntaxError('invalid ws url'); };
+        await assert.rejects(connection._open(), /invalid ws url/);
+        assert.equal(connection.connecting, false);
+        assert.equal(connection._openPromise, null);
+
+        connection.WebSocket = HangingSocket;
+        const pendingTerminate = connection._open();
+        assert.equal(connection.connecting, true);
+        const hanging = connection.ws;
+        connection.terminate();
+        await assert.rejects(pendingTerminate, /по WebSocket/);
+        assert.equal(hanging.terminated, true);
+        assert.equal(connection.connecting, false);
+        assert.equal(connection._openPromise, null);
+
+        connection.WebSocket = OpeningSocket;
+        const opened = await connection._open();
+        assert.equal(opened.readyState, OpeningSocket.OPEN);
+        assert.equal(connection.connecting, false);
+        assert.equal(connection._openPromise, null);
+        connection.terminate();
+
+        connection.WebSocket = HangingSocket;
+        const pendingClose = connection._open();
+        connection.close();
+        await assert.rejects(pendingClose, /по WebSocket/);
+        assert.equal(connection.closed, true);
+        assert.equal(connection.connecting, false);
+        assert.equal(connection._openPromise, null);
+        await assert.rejects(connection._open(), /уничтожен/);
+    } finally {
+        connection.close();
+    }
+}
+
 async function testLoginRateReservesAttemptsDuringCredentialVerification() {
     const security = new Security({loginRateLimitMaxAttempts:1});
     const request = {headers:{},socket:{remoteAddress:'192.0.2.7'}};
@@ -461,4 +525,5 @@ module.exports = [testNoIndexHeadersCoverStaticErrorsAndProtectedResponses, test
     testSessionLifetimeAndMalformedCookies, testProfileCredentialChangesRevokeSessions,
     testDownloaderClosesFailedTransfers, testDownloaderVerifiesTlsCertificates, testWebSocketOriginUsesTrustedProxyPairs,
     testWebSocketConnectionReportsFailuresWithoutNativeMessage,
+    testWebSocketConnectionOpenDoesNotPoisonOnThrowOrAbort,
     testLoginRateReservesAttemptsDuringCredentialVerification, testLibraryAccessChallengesExpireAndPromoteOnlyOnUse];

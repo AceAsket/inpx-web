@@ -9,8 +9,11 @@ export async function deliverBook(api, book, channel, format) {
 }
 
 export function openExternalReader(template, href) {
-    const url = new URL(href);
+    const url = new URL(href, window.location.origin);
     const target = template.includes('${DOWNLOAD_LINK}') ? template.replace('${DOWNLOAD_LINK}', href)
         : template.replace('${DOWNLOAD_URI}', url.pathname + url.search + url.hash);
-    window.open(target, '_blank');
+    let parsed;
+    try {parsed = new URL(target, window.location.origin);} catch {return;}
+    if (!['http:', 'https:'].includes(parsed.protocol)) return;
+    window.open(parsed.href, '_blank', 'noopener,noreferrer');
 }

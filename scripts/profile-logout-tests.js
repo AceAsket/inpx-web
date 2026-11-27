@@ -14,8 +14,8 @@ function api() {
     const localStorage = {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key)};
     const calls = [];
     const socket = {send: async params => {calls.push(params); return params;}, message: async() => ({success: true})};
-    const Api = new Function('require', 'componentOptions', 'profileSessionStorageKey', 'profileLoginHistoryStorageKey', 'localStorage', 'wsc', 'packageJson', `${body};return Api;`)(
-        createRequire(file), {}, sessionKey, 'inpx-web-profile-login-history', localStorage, socket, require('../package.json'));
+    const Api = new Function('require', 'componentOptions', 'profileSessionStorageKey', 'profileLoginHistoryStorageKey', 'localStorage', 'wsc', 'webAppVersion', `${body};return Api;`)(
+        createRequire(file), {}, sessionKey, 'inpx-web-profile-login-history', localStorage, socket, require('../package.json').version);
     const value = new Api();
     value.$store = {state: {settings: {currentUserId: 'admin', profileAccessToken: 'admin-session'}, config: {
         profileAuthorized: true, currentUserId: 'admin', currentUserProfile: {id: 'admin', isAdmin: true}, userProfiles: [{id: 'admin'}],
@@ -50,7 +50,10 @@ async function testFailedLogoutRetainsSessionAndSsoCannotPretendToSignOut() {
     await assert.rejects(value.signOutProfile(), /Server unavailable/);
     assert.equal(value.profileSigningOut, false);
     assert.equal(value.$store.state.config.profileAuthorized, true);
-    assert.equal(JSON.parse(storage.get(sessionKey)).profileAccessToken, 'admin-session');
+    assert.equal(value.profileAccessToken, 'admin-session');
+    assert.equal(value.$store.state.settings.profileAccessToken, 'admin-session');
+    assert.equal(JSON.parse(storage.get(sessionKey)).currentUserId, 'admin');
+    assert.equal(JSON.parse(storage.get(sessionKey)).profileAccessToken, undefined, 'Legacy bearer tokens are scrubbed from localStorage');
     value.$store.state.config.profileBoundId = 'admin';
     await assert.rejects(value.signOutProfile(), /SSO/);
     assert.equal(value.$store.state.config.profileAuthorized, true);

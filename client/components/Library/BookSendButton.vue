@@ -17,7 +17,6 @@
 <script setup>
 import {getCurrentInstance, ref} from 'vue';
 import {QMenu, QList} from 'quasar';
-import escape from 'lodash/escape';
 import BookActionIcon from './BookActionIcon.vue';
 import {deliverBook} from './bookFileActions';
 import bookFormats from '../../../shared/BookFormats';
@@ -31,7 +30,7 @@ async function send(channel) {
     try {
         const format = bookFormats.resolve(props.book.ext, props.config, bookFormats.profilePreference(props.config, channel));
         root.notify.success(await deliverBook(root.api, props.book, channel, format));
-    } catch (error) {root.stdDialog.alert(escape(error.message), 'Ошибка отправки');}
+    } catch (error) {root.stdDialog.alert(error.message, 'Ошибка отправки');}
     finally {sending.value = false;}
 }
 </script>

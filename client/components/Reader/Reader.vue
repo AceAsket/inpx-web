@@ -1605,7 +1605,10 @@
 import vueComponent from '../vueComponent.js';
 import Fb2Parser from '../../../server/core/fb2/Fb2Parser';
 import readerContent from '../../../server/core/fb2/ReaderContent';
-import _ from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
+import debounce from 'lodash/debounce';
+import isEqual from 'lodash/isEqual';
+const _ = {cloneDeep, debounce, isEqual};
 import he from 'he';
 import ReaderAudio from './ReaderAudio.vue';
 import ReaderBrowserSpeech from './ReaderBrowserSpeech.vue';
@@ -2048,12 +2051,14 @@ class Reader {
         this.$nextTick(() => {
             this.attachScrollerObserver();
             this.updateScrollerViewport();
+            this.bindReaderLinkDelegation();
             this.bindReaderImageListeners();
         });
     }
 
     updated() {
-        this.bindReaderImageListeners();
+        this.bindReaderLinkDelegation();
+        this.scheduleBindReaderImageListeners();
     }
 
     activated() {
@@ -2131,10 +2136,26 @@ class Reader {
             clearTimeout(this.layoutRefreshTimer);
             this.layoutRefreshTimer = null;
         }
+        this.clearPagedOrientation();
         if (this.compactChromeStatusHoldTimer) {
             clearTimeout(this.compactChromeStatusHoldTimer);
             this.compactChromeStatusHoldTimer = null;
         }
+        if (this.compactChromeBuildSettleTimer) {
+            clearTimeout(this.compactChromeBuildSettleTimer);
+            this.compactChromeBuildSettleTimer = null;
+        }
+        if (this.restoreProgressFrame) {
+            cancelAnimationFrame(this.restoreProgressFrame);
+            this.restoreProgressFrame = 0;
+        }
+        if (this.bindImageListenersFrame) {
+            cancelAnimationFrame(this.bindImageListenersFrame);
+            this.bindImageListenersFrame = 0;
+        }
+        this.unbindReaderLinkDelegation();
+        if (this.htmlSearchTextCache)
+            this.htmlSearchTextCache.clear();
         this.flushProgress();
         if (this.savePreferencesDebounced && this.savePreferencesDebounced.flush)
             this.savePreferencesDebounced.flush();
@@ -4083,7 +4104,7 @@ class Reader {
             return;
 
         const profile = this.currentSelectedProfile || {};
-        const profileName = he.encode(String(profile.name || profile.login || this.uiText.profile).trim());
+        const profileName = String(profile.name || profile.login || this.uiText.profile).trim();
         const confirmed = await this.$root.stdDialog.confirm(
             this.uiText.resetReaderProgressConfirm.replace('{profile}', profileName),
             this.uiText.resetReaderProgress,
@@ -5583,14 +5604,52 @@ class Reader {
         this.completeCompactChromeCalibration();
     }
 
+    bindReaderLinkDelegation() {
+        const page = this.$refs && this.$refs.page;
+        if (!page || this._delegatedReaderPage === page)
+            return;
+        this.unbindReaderLinkDelegation();
+        this._delegatedReaderPage = page;
+        this._handleDelegatedReaderClick = (event) => {
+            const target = event.target && event.target.closest
+                ? event.target.closest('a[href], .reader-note-link')
+                : null;
+            if (!target || !page.contains(target) || target.closest('.reader-annotation-html'))
+                return;
+            if (!this.getReaderLinkTarget(target))
+                return;
+            event.preventDefault();
+            event.stopPropagation();
+            this.followReaderLink(target);
+        };
+        page.addEventListener('click', this._handleDelegatedReaderClick);
+    }
+
+    unbindReaderLinkDelegation() {
+        if (this._delegatedReaderPage && this._handleDelegatedReaderClick) {
+            this._delegatedReaderPage.removeEventListener('click', this._handleDelegatedReaderClick);
+        }
+        this._delegatedReaderPage = null;
+        this._handleDelegatedReaderClick = null;
+    }
+
+    scheduleBindReaderImageListeners() {
+        if (this.bindImageListenersFrame || typeof requestAnimationFrame !== 'function')
+            return;
+        this.bindImageListenersFrame = requestAnimationFrame(() => {
+            this.bindImageListenersFrame = 0;
+            this.bindReaderImageListeners();
+        });
+    }
+
     bindReaderImageListeners() {
         if (typeof window === 'undefined' || !this.$refs || !this.$refs.page)
             return;
 
-        const images = Array.from(this.$refs.page.querySelectorAll('img'))
-            .filter((img) => !img.closest('.reader-annotation-html'));
-        for (const img of images) {
-            if (this.boundReaderImages.has(img))
+        const images = this.$refs.page.getElementsByTagName('img');
+        for (let i = 0; i < images.length; i++) {
+            const img = images[i];
+            if (this.boundReaderImages.has(img) || img.closest('.reader-annotation-html'))
                 continue;
 
             this.boundReaderImages.add(img);
@@ -5604,21 +5663,6 @@ class Reader {
             img.addEventListener('load', handleImageReady, {once: true});
             img.addEventListener('error', handleImageReady, {once: true});
         }
-
-        const links = Array.from(this.$refs.page.querySelectorAll('a[href], .reader-note-link'))
-            .filter((link) => !link.closest('.reader-annotation-html'))
-            .filter((link) => this.getReaderLinkTarget(link));
-        for (const link of links) {
-            if (this.boundReaderLinks.has(link))
-                continue;
-
-            this.boundReaderLinks.add(link);
-            link.addEventListener('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                this.followReaderLink(link);
-            });
-        }
     }
 
     escapeRegExp(value = '') {
@@ -5629,9 +5673,9 @@ class Reader {
         if (typeof document === 'undefined')
             return String(html || '');
 
-        const host = document.createElement('div');
-        host.innerHTML = String(html || '');
-        return String(host.textContent || host.innerText || '');
+        const template = document.createElement('template');
+        template.innerHTML = String(html || '');
+        return String(template.content.textContent || '');
     }
 
     getReaderDocumentSearchText() {
@@ -7087,7 +7131,7 @@ class Reader {
         };
         const walk = (sections, level = 0) => {
             for (const section of sections) {
-                const titleNode = section.$$('\/title/');
+                const titleNode = section.$$('/title/');
                 const title = (titleNode && titleNode.count) ? getNodeText(titleNode) : '';
                 if (title)
                     result.push({title, level});
@@ -7809,7 +7853,6 @@ class Reader {
             }
         }
 
-        const tagName = String(root.tagName || '').toLowerCase();
         const marginLines = this.getFastPagedRootMarginLines(root);
         return Math.max(1, lines + marginLines);
     }
@@ -8263,43 +8306,9 @@ class Reader {
         let currentUnits = [];
         let activeSectionId = '';
         let currentPageSectionId = '';
-        let currentEstimatedLines = 0;
-        const fastLineBudget = this.getFastPagedLineBudget(measureHost);
-        const buildStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-        const fallbackRoots = new Map();
-        const stats = {
-            status: 'building',
-            totalUnits: queue.length,
-            fastUnits: 0,
-            domUnits: 0,
-            fastSplits: 0,
-            domSplits: 0,
-            generatedFastSplitUnits: 0,
-            generatedDomSplitUnits: 0,
-            pages: 0,
-            durationMs: 0,
-            fallbackRoots: [],
-        };
 
         const applyUnits = (list) => {
             measureHtml.innerHTML = this.wrapPagedMeasureHtml(list);
-        };
-        const publishStats = (status = stats.status) => {
-            stats.status = status;
-            stats.durationMs = Math.max(0, Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - buildStartedAt));
-            stats.fallbackRoots = Array.from(fallbackRoots.entries())
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 5)
-                .map(([label, count]) => `${label}:${count}`);
-            this.readerDebug = Object.assign({}, this.readerDebug, {
-                paginationStats: Object.assign({}, stats),
-            });
-        };
-        const recordFallbackRoot = (unit) => {
-            if (!this.readerDebugEnabled)
-                return;
-            const label = this.describePagedUnitRoot(this.getPagedUnitRoot(unit));
-            fallbackRoots.set(label, (fallbackRoots.get(label) || 0) + 1);
         };
         const finalizePage = () => {
             if (!currentUnits.length)
@@ -8307,10 +8316,8 @@ class Reader {
             if (!this.isBlankPagedPageUnits(currentUnits)) {
                 pages.push(this.createPagedPage(currentUnits, currentPageSectionId || activeSectionId || '', measureHost, measureHtml));
             }
-            stats.pages = pages.length;
             currentUnits = [];
             currentPageSectionId = activeSectionId || '';
-            currentEstimatedLines = 0;
             applyUnits([]);
         };
 
@@ -10253,12 +10260,30 @@ class Reader {
     }
 
     getHtmlReaderSearchText(html = '') {
-        if (typeof document === 'undefined')
-            return this.normalizeReaderSearchText(this.stripHtml(html || '')).toLowerCase();
+        const key = String(html || '');
+        if (!key)
+            return '';
+        if (!this.htmlSearchTextCache)
+            this.htmlSearchTextCache = new Map();
+        const cached = this.htmlSearchTextCache.get(key);
+        if (cached !== undefined)
+            return cached;
 
-        const host = document.createElement('div');
-        host.innerHTML = String(html || '');
-        return this.getReaderRootSearchText(host);
+        let text;
+        if (typeof document === 'undefined') {
+            text = this.normalizeReaderSearchText(this.stripHtml(key)).toLowerCase();
+        } else {
+            const template = document.createElement('template');
+            template.innerHTML = key;
+            text = this.getReaderRootSearchText(template.content);
+        }
+        if (this.htmlSearchTextCache.size >= 256) {
+            const oldest = this.htmlSearchTextCache.keys().next().value;
+            if (oldest !== undefined)
+                this.htmlSearchTextCache.delete(oldest);
+        }
+        this.htmlSearchTextCache.set(key, text);
+        return text;
     }
 
     getReaderRootSearchText(root = null) {
@@ -11000,6 +11025,7 @@ class Reader {
     }
 
     isReaderBackgroundPath(image) {
+        // eslint-disable-next-line no-control-regex
         return /^\/(?!\/)(?:[^\\?#\x00-\x20]*\/)?reader-background\/[^/\\?#\x00-\x20]+\/[a-f0-9]{64}\.(?:png|jpg|gif|webp)$/.test(image);
     }
 

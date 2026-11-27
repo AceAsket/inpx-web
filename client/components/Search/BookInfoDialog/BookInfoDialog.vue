@@ -282,7 +282,8 @@ import LoadingState from '../../share/LoadingState.vue';
 import Fb2Parser from '../../../../server/core/fb2/Fb2Parser';
 const {escapeHtml, safeHtml} = require('../../../../shared/safeHtml');
 import * as utils from '../../../share/utils';
-import _ from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
+const _ = {cloneDeep};
 
 const componentOptions = {
     components: {
@@ -480,10 +481,6 @@ class BookInfoDialog {
         } finally {
             this.metadataSaving = false;
         }
-    }
-
-    get config() {
-        return this.$store.state.config;
     }
 
     get lightReaderUrl() {return ebookReaderUrl(this.book, this.config);}
@@ -831,7 +828,7 @@ class BookInfoDialog {
         return safeHtml(marked)
             .replace(/\uE000(\d+)\uE001/g, (match, index) => {
                 const src = imageMap.get(String(ids[index]));
-                return (src && /^data:image\/[\w.+-]+;base64,[\w+/=\s]+$/.test(src) ? `<img src="${src}" class="fb2-inline-image" alt="">` : '');
+                return (src && /^data:image\/(?:png|jpe?g|gif|webp);base64,[\w+/=\s]+$/i.test(src) ? `<img src="${src}" class="fb2-inline-image" alt="">` : '');
             })
             .replace(/<p>/g, `<p class="${paragraphClass}">`);
     }
@@ -982,7 +979,7 @@ class BookInfoDialog {
 
         const walk = (sections, level = 0) => {
             for (const section of sections) {
-                const titleNode = section.$$('\/title/');
+                const titleNode = section.$$('/title/');
                 let title = '';
                 if (titleNode && titleNode.count)
                     title = getNodeText(titleNode);

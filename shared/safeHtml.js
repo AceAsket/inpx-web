@@ -4,6 +4,7 @@
 const allowedTags = 'p|br|b|i|u|em|strong|h[1-6]|sub|sup|ul|ol|li|blockquote|div|span';
 // Attributes are dropped: only a bare <tag> or </tag> is ever produced.
 const tagPattern = new RegExp(`&lt;(\\/?)(${allowedTags})(?:\\s(?:(?!&lt;|&gt;)[\\s\\S])*)?\\/?&gt;`, 'gi');
+const hiddenBlockPattern = /<(script|style)(?:[\s/][^<>]*)?>[\s\S]*?(?:<\/\1(?:[\s/][^<>]*)?>|$)/gi;
 
 function escapeHtml(value = '') {
     return String(value)
@@ -14,10 +15,21 @@ function escapeHtml(value = '') {
         .replace(/'/g, '&#39;');
 }
 
+function stripHiddenBlocks(value = '') {
+    let text = String(value);
+    for (let i = 0; i < 8; i++) {
+        const next = text.replace(hiddenBlockPattern, '');
+        if (next === text)
+            break;
+        text = next;
+    }
+    return text;
+}
+
 function safeHtml(html = '') {
-    return escapeHtml(html)
+    return escapeHtml(stripHiddenBlocks(html))
         .replace(tagPattern, (match, slash, tag) => `<${slash}${tag.toLowerCase()}>`)
-        // Other tags (FB2's <subtitle>, <script>, <img>) are dropped; their text stays.
+        // Other tags (FB2's <subtitle>, <img>) are dropped; their text stays.
         .replace(/&lt;\/?[a-z][\w:.-]*(?:\s(?:(?!&lt;|&gt;)[\s\S])*)?\/?&gt;/gi, '')
         // Character references are text, never markup: keep &nbsp;, &#171; and the like.
         .replace(/&amp;(#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/gi, '&$1;');

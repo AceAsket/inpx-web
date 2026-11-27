@@ -1,5 +1,6 @@
 import { defineComponent } from 'vue';
-import _ from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
+const _ = {cloneDeep};
 
 export default function(componentClass) {    
     const comp = {name: componentClass.name};

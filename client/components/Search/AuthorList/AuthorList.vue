@@ -152,7 +152,8 @@ import authorBooksStorage from '../authorBooksStorage';
 
 import * as utils from '../../../share/utils';
 
-import _ from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
+const _ = {cloneDeep};
 const {safeHtml} = require('../../../../shared/safeHtml');
 
 class AuthorList extends BaseList {
@@ -160,9 +161,11 @@ class AuthorList extends BaseList {
     cachedAuthorInfo = {};
 
     showHiddenHelp() {
-        this.$root.stdDialog.alert(`
-            Книги скрытых авторов помечены как удаленные. Для того, чтобы их увидеть, необходимо установить опцию "Показывать удаленные" в настройках.
-        `, 'Пояснение', {iconName: 'la la-info-circle'});
+        this.$root.stdDialog.alert(
+            'Книги скрытых авторов помечены как удаленные. Для того, чтобы их увидеть, необходимо установить опцию "Показывать удаленные" в настройках.',
+            'Пояснение',
+            {iconName: 'la la-info-circle'},
+        );
     }
 
     get foundCountMessage() {
