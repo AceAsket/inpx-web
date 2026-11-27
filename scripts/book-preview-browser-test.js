@@ -12,13 +12,46 @@ async function fixture(directory) {
     await fs.ensureDir(directory);
     const epub=path.join(directory,'source.epub');await require('./epub-fb2-tests').fixture(epub);
     const epubData=await fs.readFile(epub),titles=['Книга превью','Книга без аннотации','Книга EPUB'];
-    const rows=titles.map((title,index)=>['Первый,Автор:Второй,Автор:','prose:',title,'Цикл & мир','1',String(index+1),'100',String(index+1),'0',
+    const longGenres='sf_detective:sf_fantasy:love_sf:sf_horror:sf_fantasy_city:';
+    const rows=titles.map((title,index)=>['Первый,Автор:Второй,Автор:',index===2 ? longGenres : 'prose:',title,'Цикл & мир','1',String(index+1),'100',String(index+1),'0',
         index===2 ? 'epub':'fb2','2026-11-07','ru','0',''].join('\x04'));
     await archive(path.join(directory,'sample.inpx'),[['collection.info','Проверка превью'],['version.info','20261107'],['sample.inp',rows.join('\n')+'\n']]);
     const xml=annotation=>`<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><description><title-info><genre>prose</genre><book-title>Книга превью</book-title>${annotation}<keywords>север, сказка</keywords><date value="2001-01-01">2001</date><lang>ru</lang></title-info><document-info><date value="2026-11-07">2026</date></document-info><publish-info><year>2003</year></publish-info></description><body><section><p>Полный текст не должен загружаться для превью.</p></section></body></FictionBook>`;
     await archive(path.join(directory,'sample.zip'),[['1.fb2',xml('<annotation><p>Первая строка аннотации.</p><p>Вторая строка и детали.</p></annotation>')],
         ['2.fb2',xml('')],['3.epub',epubData]]);
     await fs.writeJson(path.join(directory,'config.json'),{loggingEnabled:false,allowAnonymousAccess:true,onlineReaderEnabled:true,discovery:{enabled:true}});
+}
+
+async function checkMobileActions(modal, formatSeparate = false) {
+    const layout = await modal.evaluate(card => {
+        const wrap = card.querySelector('.library-book-actions');
+        const row = card.querySelector('.book-actions-primary');
+        const rect = element => element.getBoundingClientRect().toJSON();
+        return {
+            card: rect(wrap), row: rect(row),
+            format: rect(row.querySelector('.book-actions-formats')),
+            buttons: Array.from(row.querySelectorAll(':scope > .q-btn'), rect),
+            cover: rect(card.querySelector('.book-actions-summary .book-cover')),
+            genres: rect(card.querySelector('.book-actions-summary .book-actions-genres')),
+        };
+    });
+    const {card, row, format, buttons, cover, genres} = layout;
+    assert(genres.left >= cover.right && genres.right <= card.right + 1 && genres.bottom <= row.top + 1,
+        'Genres wrap next to the cover and stay above the actions');
+    assert(buttons.length > 0);
+    assert(Math.abs(row.left - card.left) <= 1 && Math.abs(row.right - card.right) <= 1);
+    const first = buttons[0];
+    assert(buttons.every(button => Math.abs(button.top - first.top) <= 1 && button.width >= 43 && button.height >= 43));
+    assert(Math.abs(format.left - card.left) <= 1 && Math.abs(buttons.at(-1).right - card.right) <= 1,
+        'The action controls use the full card width');
+    if (formatSeparate) {
+        assert(format.bottom <= first.top + 1 && Math.abs(format.right - card.right) <= 1,
+            'The format selector gets a full row on a narrow phone');
+        assert(Math.abs(first.left - card.left) <= 1, 'The icon row also starts at the left edge');
+    } else {
+        assert(Math.abs(first.top - format.top) <= 1, 'Format and actions share one row');
+    }
+    return {cover, genres};
 }
 
 (async()=>{
@@ -97,9 +130,11 @@ async function fixture(directory) {
         const sendBox=await sendMenu.boundingBox();assert(sendBox.x>=0&&sendBox.x+sendBox.width<=321,'The delivery menu fits a narrow phone');
         await page.screenshot({path:path.join(directory,'preview-send-menu-320.png')});
         await page.keyboard.press('Escape');await sendMenu.waitFor({state:'hidden'});
-        const row=modal.locator('.book-actions-primary'),buttonRows=await row.locator('.q-btn').evaluateAll(nodes=>nodes.map(node=>Math.round(node.getBoundingClientRect().top)));
-        assert.equal(new Set(buttonRows).size,1,'All action icons stay in one row at 320px');
-        const formatBox=await row.locator('.book-actions-formats').boundingBox();assert(formatBox.y+formatBox.height<=buttonRows[0]+1,'The format selector has its own row on a narrow phone');
+        const shortGenresLayout=await checkMobileActions(modal, true);
+        assert.equal(shortGenresLayout.cover.width,88,'A short genre list keeps the regular cover size');
+        await page.setViewportSize({width:360,height:900});
+        await checkMobileActions(modal);
+        await page.setViewportSize({width:320,height:900});
         await modal.getByRole('button',{name:'Поделиться книгой',exact:true}).click();
         const shareMenu=page.getByRole('menu',{name:'Поделиться книгой',exact:true});await shareMenu.waitFor();
         for(const name of ['Копировать ссылку','Открыть страницу книги'])await shareMenu.getByRole('menuitem',{name,exact:true}).waitFor();
@@ -126,7 +161,33 @@ async function fixture(directory) {
         await page.goBack();await open('Книга превью');await annotation.getByText(/Первая строка аннотации/).waitFor();
         await modal.locator('.book-actions-series').click();await page.getByRole('heading',{name:'Цикл & мир',exact:true}).waitFor();
         assert.equal(scoped().get('name'),'Цикл & мир');await modal.waitFor({state:'hidden'});assert.equal(await modal.isVisible(),false);
-        await page.goBack();await open('Книга EPUB');await annotation.getByText('Аннотация книги.',{exact:true}).waitFor();await close();
+        await page.goBack();await page.setViewportSize({width:390,height:900});
+        await open('Книга EPUB');await annotation.getByText('Аннотация книги.',{exact:true}).waitFor();
+        await modal.locator('.book-actions-genres').getByText(/Городское фэнтези/).waitFor();
+        const coverSelector='.q-dialog .book-actions-summary .book-cover';
+        await page.waitForFunction(selector=>document.querySelector(selector)?.offsetWidth>88,coverSelector);
+        const enlarged=await checkMobileActions(modal);
+        assert(enlarged.cover.width<=132 && Math.abs(enlarged.cover.height-enlarged.cover.width*1.5)<1,
+            'The cover grows proportionally within its mobile limit');
+        assert(Math.abs(enlarged.cover.bottom-enlarged.genres.bottom)<=2 || enlarged.cover.width===132,
+            'The cover reaches the end of the genres when there is room');
+        await page.screenshot({path:path.join(directory,'preview-mobile-390.png')});
+        await page.setViewportSize({width:430,height:900});
+        await page.waitForFunction(selector=>{
+            const cover=document.querySelector(selector);
+            const genres=cover?.parentElement.querySelector('.book-actions-genres');
+            return cover && genres && Math.abs(cover.getBoundingClientRect().bottom-genres.getBoundingClientRect().bottom)<=2;
+        },coverSelector);
+        await checkMobileActions(modal);
+        await page.screenshot({path:path.join(directory,'preview-cover-aligned-430.png')});
+        await page.setViewportSize({width:320,height:900});
+        await page.waitForFunction(selector=>document.querySelector(selector)?.offsetWidth===88,coverSelector);
+        const narrow=await checkMobileActions(modal,true);
+        assert(narrow.genres.bottom>narrow.cover.bottom,'A narrow card preserves space for the text');
+        await page.setViewportSize({width:390,height:900});
+        await page.waitForFunction(selector=>document.querySelector(selector)?.offsetWidth>88,coverSelector);
+        assert.equal((await checkMobileActions(modal)).cover.width,enlarged.cover.width,'The cover grows again when the card widens');
+        await close();await page.setViewportSize({width:1440,height:1000});
         await open('Книга без аннотации');await annotation.getByText('В книге нет аннотации.',{exact:true}).waitFor();await close();
         mode='hold';await open('Книга превью');
         for(let i=0;i<50&&!held.length;i++)await pause(50);assert.equal(held.length,1);
@@ -177,6 +238,7 @@ async function fixture(directory) {
             // Hash navigation keeps the running app and its server config.
             // Reload to receive this channel combination through get-config.
             await page.reload();await open('Книга превью');
+            await checkMobileActions(modal);
             const send=modal.getByRole('button',{name:'Отправить книгу',exact:true});
             if(channel==='none')assert.equal(await send.count(),0,'No empty delivery menu when both channels are disabled');
             else {

@@ -266,7 +266,7 @@ impl Backups {
         let file = tokio::task::spawn_blocking(move || {
             state
                 .access
-                .backup_download(request.headers(), &admission)
+                .require_http_admin(request.headers(), &admission)
                 .map_err(|rejected| rejected.response().status())?;
             state
                 .backups

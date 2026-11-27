@@ -8,6 +8,70 @@ const {unusedPort} = require('./binary-smoke-test');
 const {archive} = require('./library-appearance-browser-test');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function openIllustration(page, gallery, number, keyboard = false) {
+    const thumbnail = gallery.getByRole('button', {name: `Открыть иллюстрацию ${number}`, exact: true});
+    const source = await thumbnail.locator('img').getAttribute('src');
+    if (keyboard) await thumbnail.press('Enter');
+    else await thumbnail.click();
+
+    const label = `Иллюстрация ${number}`;
+    const viewer = page.getByRole('dialog', {name: label, exact: true});
+    const image = viewer.getByRole('img', {name: label, exact: true});
+    await image.waitFor();
+    assert.equal(await image.getAttribute('src'), source, 'The viewer opens the selected illustration');
+    assert(await image.evaluate(async node => {
+        await node.decode();
+        const bounds = node.getBoundingClientRect();
+        return node.naturalWidth > 0 && getComputedStyle(node).objectFit === 'contain'
+            && bounds.left >= 0 && bounds.right <= innerWidth + 1 && bounds.height < innerHeight;
+    }), 'The full illustration fits the viewport');
+    return {viewer, thumbnail};
+}
+
+async function checkMobileCatalogFilters(browser, base) {
+    const viewport = {width: 360, height: 600};
+    const page = await browser.newPage({viewport, isMobile: true, hasTouch: true});
+    page.setDefaultTimeout(10000);
+    try {
+        await page.goto(base + '/#/books');
+        await page.getByRole('button', {name: /^Фильтры/}).tap();
+        const card = page.locator('.catalog-filters-dialog');
+        const body = card.locator('.catalog-filters-dialog__body');
+        const apply = card.getByRole('button', {name: 'Применить', exact: true});
+        await page.waitForFunction(() => {
+            const dialog = document.querySelector('.catalog-filters-dialog')?.parentElement;
+            return dialog && !dialog.classList.contains('q-dialog__inner--animating') && dialog.getAnimations().length === 0;
+        });
+        const cardBox = await card.boundingBox();
+        assert(cardBox.y >= 0 && cardBox.y + cardBox.height <= viewport.height + 1, 'Portrait filters must fit the viewport');
+
+        const bodyBox = await body.boundingBox();
+        const x = Math.round(bodyBox.x + bodyBox.width / 2);
+        const swipeStart = bodyBox.y + bodyBox.height - 24;
+        const swipeEnd = bodyBox.y + 24;
+        const touch = await page.context().newCDPSession(page);
+        for (let swipe = 0; swipe < 2; swipe++) {
+            await touch.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x, y: Math.round(swipeStart)}]});
+            for (let step = 1; step <= 8; step++) {
+                const y = Math.round(swipeStart + (swipeEnd - swipeStart) * step / 8);
+                await touch.send('Input.dispatchTouchEvent', {type: 'touchMove', touchPoints: [{x, y}]});
+            }
+            await touch.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+        }
+        await page.waitForFunction(() => {
+            const body = document.querySelector('.catalog-filters-dialog__body');
+            const lastField = body.querySelector('[role="checkbox"]');
+            return body.scrollTop > 0 && lastField.getBoundingClientRect().bottom <= body.getBoundingClientRect().bottom;
+        });
+        assert.equal(await card.evaluate(element => element.scrollTop), 0, 'Only the filter fields should scroll');
+        await card.getByRole('checkbox', {name: 'Скрывать повторные издания'}).tap();
+        await apply.tap();
+        await page.waitForURL(url => new URLSearchParams(url.hash.split('?')[1]).has('hideCopies'));
+    } finally {
+        await page.close();
+    }
+}
+
 async function fixture(directory) {
     await fs.ensureDir(directory);
     const entries = [
@@ -42,7 +106,7 @@ async function fixture(directory) {
     let child, browser, output = '';
     try {
         const library = path.join(directory, 'library'); await fixture(library);
-        const dataDir = path.join(directory, 'data'); await fs.copy(path.resolve('dist/tmp/public'), path.join(dataDir, 'public'));
+        const dataDir = path.join(directory, 'data'); await fs.copy(path.join(require('../build/dist-dir'), 'tmp/public'), path.join(dataDir, 'public'));
         assert(await fs.pathExists(path.join(dataDir,'public/index.html')), 'Build the production UI before copying browser fixtures');
         const port = await unusedPort(), base = `http://127.0.0.1:${port}`;
         child = spawn(process.execPath, [path.resolve('server'), `--data-dir=${dataDir}`, `--config=${library}/config.json`, `--lib-dir=${library}`, `--port=${port}`, '--host=127.0.0.1'],
@@ -57,6 +121,7 @@ async function fixture(directory) {
         assert(ready, output);
         assert(!await fs.pathExists(path.join(dataDir, 'db/catalog_lookup')), 'Startup must not build an unused suggestions index');
         browser = await chromium.launch({headless: true, executablePath: process.env.INPX_CHROMIUM_PATH || undefined});
+        await checkMobileCatalogFilters(browser, base);
         const page = await browser.newPage({viewport: {width: 1440, height: 1000}}), errors = [];
         page.setDefaultTimeout(15000); page.setDefaultNavigationTimeout(15000);
         let externalFixture = false;
@@ -248,10 +313,16 @@ async function fixture(directory) {
         await page.locator('.catalog-book-details').waitFor();
         assert(!page.url().includes('/reader'));
         const bookUrl = page.url();
-        await page.locator('.fb2-gallery').scrollIntoViewIfNeeded();
+        const gallery = page.locator('.fb2-gallery');
+        await gallery.scrollIntoViewIfNeeded();
         await page.getByText('Показаны первые 18. Остальные иллюстрации доступны в читалке.', {exact:true}).waitFor();
-        assert.equal(await page.locator('.fb2-gallery-image').count(), 18, 'The real gallery endpoint returns a bounded preview');
+        assert.equal(await gallery.locator('.fb2-gallery-image').count(), 18, 'The real gallery endpoint returns a bounded preview');
         await screenshot('gallery-limited-1440');
+        const {viewer, thumbnail} = await openIllustration(page, gallery, 2);
+        await page.keyboard.press('Escape');
+        await viewer.waitFor({state: 'hidden'});
+        assert(await thumbnail.evaluate(node => node === document.activeElement), 'Closing the viewer restores focus to the thumbnail');
+        assert.equal(page.url(), bookUrl, 'Opening and closing an illustration keeps the book page');
         galleryFixture = 'empty-limited';
         await page.reload();
         await page.locator('.fb2-gallery').scrollIntoViewIfNeeded();
@@ -351,6 +422,20 @@ async function fixture(directory) {
         assert.equal(new URLSearchParams(page.url().split('?')[1]).get('lang'), 'ru', 'Author suggestions retain the language');
         assert.equal(await page.locator('.catalog-book-grid .book-tile').count(), 2);
         await page.goto(base + '/#/books?lang=ru&title=*Кост');
+        await page.getByRole('button', {name: 'Открыть карточку: Косточка', exact: true}).click();
+        const preview = page.locator('.q-dialog [data-dialog-kind="book"]');
+        await preview.getByRole('button', {name: 'Полное описание', exact: true}).click();
+        const details = page.locator('.q-dialog [data-dialog-kind="book-info"]');
+        const dialogGallery = details.locator('.fb2-gallery');
+        await dialogGallery.scrollIntoViewIfNeeded();
+        const {viewer: mobileViewer} = await openIllustration(page, dialogGallery, 18, true);
+        await screenshot('gallery-viewer-320');
+        await mobileViewer.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+        await mobileViewer.waitFor({state: 'hidden'});
+        assert(await details.isVisible(), 'Closing the viewer leaves the book details open');
+        await details.getByRole('button', {name: 'Назад к книге', exact: true}).click();
+        await preview.getByRole('button', {name: 'Закрыть окно', exact: true}).click();
+        await preview.waitFor({state: 'hidden'});
         await page.locator('.library-result-card__author').first().click();
         await page.getByRole('heading', {name:'Толстой Лев', exact:true}).waitFor();
         await page.getByRole('button', {name:'Открыть карточку: Косточка', exact:true}).waitFor();

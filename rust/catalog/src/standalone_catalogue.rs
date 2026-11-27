@@ -14,6 +14,7 @@ use crate::catalog_update::{FolderInput, Source as UpdateSource, prepare_update_
 use crate::catalogue_browse_cache::PreparedBrowse;
 use crate::catalogue_lock::CatalogueLease;
 use crate::inpx_filter::Filter as RecordFilter;
+use crate::isbn_revision::IsbnInputs;
 use crate::library_sources::{Kind, Source};
 use crate::{
     BookStore, LookupIndex, LookupRequest, Result, UpdateRequest, atomic_file, crypto_support,
@@ -71,6 +72,8 @@ pub struct Catalogue {
     pub(crate) recommendation_cache: Mutex<crate::catalog_personal_overview::RecommendationCache>,
     pub(crate) rating_filter: Mutex<Option<Arc<crate::library_media::RatingIndex>>>,
     pub(crate) isbn_index: Option<Arc<crate::isbn_store::IsbnIndex>>,
+    pub(crate) isbn_revision: Mutex<Option<String>>,
+    pub(crate) isbn_revision_check: Mutex<()>,
     _lease: CatalogueLease,
 }
 
@@ -81,7 +84,7 @@ pub struct CatalogueFiles {
     pub low_memory: bool,
 }
 
-pub struct PreparedCatalogue(tempfile::TempDir);
+pub struct PreparedCatalogue(tempfile::TempDir, Option<IsbnInputs>);
 
 enum PreviousCatalogue<'a> {
     Native(&'a str, &'a BookStore),
@@ -119,7 +122,7 @@ impl CatalogueFiles {
             atomic_file::sync_parent(&directory)?;
         }
         if !directory.try_exists()? {
-            let stage = self.build(sources, None, &mut report)?;
+            let mut stage = self.build(sources, None, &mut report)?;
             stage.validate(self.low_memory, &mut report)?;
             if directory.try_exists()? {
                 return Err("Catalogue was published by another process".into());
@@ -237,7 +240,7 @@ impl CatalogueFiles {
         previous_store: &BookStore,
         mut report: impl FnMut(Value) -> Result<()>,
     ) -> Result<PreparedCatalogue> {
-        let stage = self.build(
+        let mut stage = self.build(
             sources,
             Some(PreviousCatalogue::Native(
                 previous_generation,
@@ -353,12 +356,19 @@ impl CatalogueFiles {
 
 impl PreparedCatalogue {
     fn validate(
-        &self,
+        &mut self,
         low_memory: bool,
         report: &mut impl FnMut(Value) -> Result<()>,
     ) -> Result<()> {
-        Catalogue::open(self.0.path(), low_memory, false, report)?;
+        let catalogue = Catalogue::open(self.0.path(), low_memory, false, report)?;
+        self.1 = catalogue
+            .prepared_browse
+            .and_then(|browse| browse.isbn_inputs);
         Ok(())
+    }
+
+    pub fn isbn_revision(&self, sources: &[Source]) -> Option<String> {
+        self.1.as_ref().map(|inputs| inputs.signature(sources))
     }
 }
 
@@ -394,6 +404,8 @@ impl Catalogue {
             prepared_browse: None,
             rating_filter: Mutex::default(),
             isbn_index: None,
+            isbn_revision: Mutex::default(),
+            isbn_revision_check: Mutex::default(),
             _lease: lease,
         };
         catalogue.prepared_browse = PreparedBrowse::load(directory, &catalogue.generation)
@@ -566,7 +578,7 @@ impl CatalogueFiles {
         unsafe {
             libmimalloc_sys::mi_collect(true);
         }
-        Ok(PreparedCatalogue(stage))
+        Ok(PreparedCatalogue(stage, None))
     }
 }
 

@@ -170,20 +170,16 @@ impl Ebook {
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let site = &state.ebook;
-            let access =
-                match state
-                    .access
-                    .browser(&browser.id, "", admission.proxy_login.as_deref())
-                {
-                    Ok(access) => access,
-                    Err(Rejection::Blocked | Rejection::ProxyScope) => {
-                        return site.early(
-                            Failure::new(StatusCode::FORBIDDEN, "Профиль недоступен."),
-                            head,
-                        );
-                    }
-                    Err(_) => return site.early(Failure::busy(), head),
-                };
+            let access = match state.access.browser(&browser.id, "", &admission) {
+                Ok(access) => access,
+                Err(Rejection::Blocked | Rejection::ProxyScope) => {
+                    return site.early(
+                        Failure::new(StatusCode::FORBIDDEN, "Профиль недоступен."),
+                        head,
+                    );
+                }
+                Err(_) => return site.early(Failure::busy(), head),
+            };
             let profile = match access
                 .owner
                 .as_deref()
@@ -327,16 +323,13 @@ impl Page<'_> {
             browser: self.browser,
             token: &self.access.token,
             user: self.owner().unwrap_or_default(),
-            proxy_login: self.admission.proxy_login.as_deref(),
+            admission: self.admission,
         }
     }
 
     fn check_identity(&self) -> Result<()> {
         if self.owner().is_some() {
-            let current =
-                self.state
-                    .access
-                    .browser(self.browser, "", self.admission.proxy_login.as_deref());
+            let current = self.state.access.browser(self.browser, "", self.admission);
             if !current.is_ok_and(|current| {
                 current.owner.as_deref() == self.owner() && current.token == self.access.token
             }) {
@@ -419,7 +412,7 @@ impl Page<'_> {
             ));
         }
         if self.path == "/login" {
-            if self.state.request_access.current().profile_binding() {
+            if self.state.access.profile_binding(self.admission) {
                 return Ok(self.document(
                     "Вход",
                     "<p>Профиль задаётся входом через proxy.</p>",
@@ -535,8 +528,6 @@ impl Page<'_> {
         self.check_identity()?;
         self.state.access.profile_command(
             self.profile_request(),
-            self.admission,
-            self.state.request_access.current().profile_binding(),
             &self.site.root,
             "update-user-profile",
             &json!({"targetUserId":owner,"profile":{"defaultDownloadFormat":format}}),
@@ -574,7 +565,7 @@ impl Page<'_> {
     }
 
     fn login_profile(&self, form: &Params, next: &str) -> Result<Response<Body>> {
-        if self.state.request_access.current().profile_binding() {
+        if self.state.access.profile_binding(self.admission) {
             return Err(Failure::new(
                 StatusCode::FORBIDDEN,
                 "Профиль задаётся входом через proxy.",
@@ -583,7 +574,7 @@ impl Page<'_> {
         let login = scalar(form, "login", 100)?;
         let password = value(form, "password", 1024)?.to_owned();
         let otp = value(form, "otp", 32)?;
-        Ok(match self.state.access.login(self.browser,self.admission.client,login,password,otp.into(),None) {
+        Ok(match self.state.access.login(self.browser,self.admission,login,password,otp.into(),None) {
             BrowserLogin::Accepted {user, ..} => {
                 if !self.access.token.is_empty() { self.state.access.sessions.revoke(&self.access.token); }
                 if let Some(activity) = &self.state.metrics.activity { activity.login(&user); }
@@ -598,6 +589,8 @@ impl Page<'_> {
             BrowserLogin::Invalid => self.form(true,next,login,
                 if otp.is_empty() { "Неверный логин или пароль." } else { "Неверный логин, пароль или код." },
                 !otp.is_empty(),false,StatusCode::UNAUTHORIZED,false),
+            BrowserLogin::AdminRestricted { message, .. } => self.form(true,next,login,message,
+                false,false,StatusCode::FORBIDDEN,false),
             BrowserLogin::RateLimited(seconds) => self.limited(seconds, true, next),
             BrowserLogin::Unavailable => return Err(Failure::busy()),
         })

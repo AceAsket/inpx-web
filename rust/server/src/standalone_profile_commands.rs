@@ -8,7 +8,6 @@ use super::{
     Access, BLOCKED_PROFILE, BrowserAccess, BrowserProfileRequest, Identity, PROXY_SCOPE, State,
     bound_profile, now_ms, profile_scope,
 };
-use crate::request_access::Admission;
 
 impl Access {
     pub(crate) fn profile_settings(
@@ -26,14 +25,13 @@ impl Access {
     pub(crate) fn profile_command(
         &self,
         query: BrowserProfileRequest<'_>,
-        admission: &Admission,
-        binding: bool,
         root: &str,
         action: &str,
         request: &Value,
     ) -> inpx_catalog::Result<Value> {
         let operation = text(request, "operation");
-        if binding {
+        let admission = query.admission;
+        if self.profile_binding(admission) {
             match action {
                 "profile-totp-enrollment" | "set-user-profile-totp-required" => {
                     return Err("Настройте второй фактор у провайдера SSO".into());
@@ -53,11 +51,19 @@ impl Access {
             .load(query.browser, query.token)
             .ok_or("need_profile_login")?;
         let profiles = state.profiles.browser_profiles(&self.file)?;
-        let bound = bound_profile(&profiles, query.proxy_login).map_err(|_| BLOCKED_PROFILE)?;
+        let transport = self.profile_transport(admission);
+        let bound = bound_profile(&profiles, admission.proxy_login.as_deref())
+            .map_err(|_| BLOCKED_PROFILE)?;
         let required = action == "profile-totp-enrollment";
         let (owner, token) = if required {
+            if !self.login_permitted(&mut state, admission, text(&request["payload"], "login"))? {
+                return Err(INVALID_CREDENTIALS.into());
+            }
             ("", "")
         } else if let Some(profile) = bound {
+            if !transport.permits(profile.is_admin) {
+                return Err("need_profile_login".into());
+            }
             if !profile_scope(profile, query.user) {
                 return Err(PROXY_SCOPE.into());
             }
@@ -80,6 +86,7 @@ impl Access {
                 .find(|profile| {
                     profile.id == identity.owner
                         && profile.credential_version == identity.credential_version
+                        && transport.permits(profile.is_admin)
                 })
                 .ok_or("need_profile_login")?;
             if !profile_scope(current, query.user) {
@@ -98,6 +105,7 @@ impl Access {
                 .find(|profile| {
                     profile.id == query.user
                         && !profile.is_admin
+                        && transport.permits(false)
                         && !profile.anonymous_profile
                         && !profile.requires_login
                         && !profile.otp_required

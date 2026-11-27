@@ -4,7 +4,7 @@ const {hash} = require('node:crypto');
 const {tmpdir} = require('node:os');
 const {basename, dirname, join, resolve} = require('node:path');
 const {connect, signIn} = require('./rust-events-tests');
-const {docker, until, legacyRows, rustRows, initial, timing} = require('./rust-inpx-filter-tests');
+const {docker, until, legacyRows, rustRows, parityCatalogueMount, initial, timing} = require('./rust-inpx-filter-tests');
 const {version:targetVersion} = require('../package.json');
 const {hotp} = require('../server/core/ProfileTotp');
 
@@ -33,10 +33,10 @@ function action(client, identity) {
     };
 }
 
-async function start(name, image, volume, source, extra = []) {
+async function start(name, image, volume, source, extra = [], mounts = []) {
     const started = performance.now();
     await docker('run','-d','--name',name,'-p','127.0.0.1::12380',
-        '--mount',mount(volume,'/data'),'--mount',bind(dirname(source),'/library',true),
+        '--mount',mount(volume,'/data'),'--mount',bind(dirname(source),'/library',true),...mounts,
         '-e','INPX_AUTH_MODE=local',
         '-e','INPX_REQUIRE_AUTH=false','-e','INPX_ALLOW_ANONYMOUS_ACCESS=true',image,
         '--data-dir=/data','--host=0.0.0.0','--port=12380','--lib-dir=/library',
@@ -194,7 +194,8 @@ async function main(rustImage, legacyImage, input, previousVolume) {
 
         await until(()=>docker('image','inspect',rustImage,'--format','{{.Id}}').catch(()=>''),Boolean,
             'Rust release image did not finish building',600);
-        const rust = await start(rustName,rustImage,live,source);
+        const catalogueMount = parityCatalogueMount();
+        const rust = await start(rustName,rustImage,live,source,[],catalogueMount);
         const {snapshot,version} = JSON.parse(await docker('exec',rustName,'cat','/data/.upgrade-version.json'));
         assert.equal(version,targetVersion);
         assert.equal(dirname(snapshot),'/data/.upgrade-backups');
@@ -221,7 +222,7 @@ async function main(rustImage, legacyImage, input, previousVolume) {
         await docker('stop','--time','25',rustName);
         console.log(JSON.stringify({stage:'rust-upgrade',readySeconds:rust.seconds,booksSha256:books,position:firstPosition.percent}));
 
-        const restart = await start(restartName,rustImage,live,source);
+        const restart = await start(restartName,rustImage,live,source,[],catalogueMount);
         await clients(restart,async (_,reader) => checkPosition(await readerSession(reader,fixture,1),fixture.uid,laterPosition));
         assert.equal(JSON.parse(await docker('exec',restartName,'cat','/data/.upgrade-version.json')).snapshot,snapshot);
         await docker('stop','--time','25',restartName);

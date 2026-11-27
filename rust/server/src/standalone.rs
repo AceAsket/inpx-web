@@ -119,6 +119,7 @@ struct Args {
     help: bool,
     version: bool,
     reset: bool,
+    reset_admin_network: bool,
     recreate: bool,
     values: HashMap<String, String>,
 }
@@ -136,6 +137,7 @@ impl Args {
                 "--help" | "-h" if value.is_none() => parsed.help = true,
                 "--version" | "-v" if value.is_none() => parsed.version = true,
                 "--reset-admin-password" if value.is_none() => parsed.reset = true,
+                "--reset-admin-network" if value.is_none() => parsed.reset_admin_network = true,
                 "--recreate" if value.is_none() => parsed.recreate = true,
                 // Rust interprets the record predicate without executing JavaScript.
                 "--unsafe-filter" if value.is_none() => {}
@@ -176,7 +178,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         println!(
             "{NAME} v{VERSION}\nUsage: inpx-web [--host=<ip>] [--port=<port>] [--data-dir=<dir>]\n\
             [--config=<file>] [--lib-dir=<dir>] [--inpx=<file>] [--library-sources=<sources>] [--web-bundle=<file>]\n\
-            [--admin-login=<login>] [--admin-password=<password>] [--reset-admin-password] [--recreate]\n\
+            [--admin-login=<login>] [--admin-password=<password>] [--reset-admin-password] [--reset-admin-network] [--recreate]\n\
             [--log-level=<error|warn|info|debug>]"
         );
         return Ok(());
@@ -200,7 +202,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             default_data_dir: default_data.clone(),
             exec_dir: exec_dir.into(),
             name: NAME.into(),
-            version: Some(VERSION.into()),
+            version: (!args.reset_admin_network).then(|| VERSION.into()),
         },
         "rust",
     )?
@@ -217,6 +219,17 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             .as_object_mut()
             .expect("application defaults")
             .extend(saved);
+    }
+    if args.reset_admin_network {
+        let fields = config.as_object_mut().expect("application defaults");
+        let allowed = fields.remove("adminAllowedCidrs");
+        let direct = fields.remove("adminDirectOnly");
+        if allowed.is_some() || direct.is_some() {
+            let data = text(&config["dataDir"]).map_or(default_data, PathBuf::from);
+            configuration::save(&file, &data, &config)?;
+        }
+        println!("Ограничения входа администратора по сети в файле настроек сброшены.");
+        return Ok(());
     }
     let host = args
         .nonempty("--host")
@@ -776,6 +789,17 @@ impl State {
         request: Request<Incoming>,
         admission: Admission,
     ) -> std::result::Result<Response<Body>, Infallible> {
+        if admission.profile_transport == request_access::ProfileTransport::AdminOnly
+            && admission.service == request_access::ServiceAccess::None
+            && self
+                .access
+                .require_http_admin(request.headers(), &admission)
+                .is_err()
+        {
+            return Ok(self
+                .static_asset(&request, &admission)
+                .unwrap_or_else(|| error(StatusCode::FORBIDDEN)));
+        }
         if self.ebook.matches(request.uri().path()) {
             return Ok(self.ebook.serve(self, request, admission).await);
         }
@@ -975,24 +999,9 @@ impl State {
             }
             "/api/index-status" => self.index.snapshot(),
             _ => {
-                return Ok(self.assets.select(&request, false).map_or_else(
-                    || error(StatusCode::NOT_FOUND),
-                    |asset| {
-                        let mut response = asset.response(None);
-                        if !head && self.socket.document(request.uri().path()) {
-                            match self.access.sessions.open(request.headers(), &admission) {
-                                Ok(session) => {
-                                    if let Some(cookie) = session.cookie {
-                                        standalone_access::private(response.headers_mut());
-                                        response.headers_mut().append(header::SET_COOKIE, cookie);
-                                    }
-                                }
-                                Err(_) => return error(StatusCode::SERVICE_UNAVAILABLE),
-                            }
-                        }
-                        response
-                    },
-                ));
+                return Ok(self
+                    .static_asset(&request, &admission)
+                    .unwrap_or_else(|| error(StatusCode::NOT_FOUND)));
             }
         };
         let bytes = serde_json::to_vec(&reply).expect("application status serializes");
@@ -1001,6 +1010,24 @@ impl State {
             *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
         }
         Ok(response)
+    }
+
+    fn static_asset(
+        &self,
+        request: &Request<Incoming>,
+        admission: &Admission,
+    ) -> Option<Response<Body>> {
+        let mut response = self.assets.select(request, false)?.response(None);
+        if self.socket.document(request.uri().path()) {
+            let Ok(session) = self.access.sessions.open(request.headers(), admission) else {
+                return Some(error(StatusCode::SERVICE_UNAVAILABLE));
+            };
+            if let Some(cookie) = session.cookie {
+                standalone_access::private(response.headers_mut());
+                response.headers_mut().append(header::SET_COOKIE, cookie);
+            }
+        }
+        Some(response)
     }
 }
 

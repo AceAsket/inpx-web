@@ -48,22 +48,7 @@ pub struct Book {
 
 impl Book {
     pub fn source<'a>(&self, sources: &'a [Source]) -> Option<&'a Source> {
-        if !self.source_id.is_empty() {
-            return sources.iter().find(|source| {
-                source.id == self.source_id
-                    && (self.source_lib_dir.is_empty()
-                        || source.lib_dir == Path::new(&self.source_lib_dir))
-            });
-        }
-        if !self.source_lib_dir.is_empty() {
-            return sources
-                .iter()
-                .find(|source| source.lib_dir == Path::new(&self.source_lib_dir));
-        }
-        match sources {
-            [source] => Some(source),
-            _ => None,
-        }
+        book_source(sources, &self.source_id, &self.source_lib_dir)
     }
 
     pub fn extension(&self) -> Option<&str> {
@@ -106,6 +91,27 @@ impl Book {
         let legacy = (!self.legacy_uid.is_empty() && self.legacy_uid != primary)
             .then_some(self.legacy_uid.as_str());
         Ok((primary, legacy))
+    }
+}
+
+pub(crate) fn book_source<'a>(
+    sources: &'a [Source],
+    id: &str,
+    directory: &str,
+) -> Option<&'a Source> {
+    if !id.is_empty() {
+        return sources.iter().find(|source| {
+            source.id == id && (directory.is_empty() || source.lib_dir == Path::new(directory))
+        });
+    }
+    if !directory.is_empty() {
+        return sources
+            .iter()
+            .find(|source| source.lib_dir == Path::new(directory));
+    }
+    match sources {
+        [source] => Some(source),
+        _ => None,
     }
 }
 

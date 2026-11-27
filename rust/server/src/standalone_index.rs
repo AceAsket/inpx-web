@@ -116,6 +116,9 @@ impl Index {
             Ok(())
         })?;
         catalogue.attach_isbn_index(self.isbn.clone());
+        if self.isbn.has_saved() {
+            catalogue.refresh_isbn_signature(&sources)?;
+        }
         let created = catalogue.created;
         if created {
             log::info!(target: "inpx::index",
@@ -228,6 +231,12 @@ impl Index {
             )
         };
         if !force && files.source_hash(&sources)? == hash {
+            if self.isbn.has_saved() {
+                let active = self.catalogue.read().expect("open catalogue");
+                if let Some(catalogue) = active.as_ref() {
+                    catalogue.refresh_isbn_signature(&sources)?;
+                }
+            }
             self.status
                 .lock()
                 .expect("index status")
@@ -253,13 +262,27 @@ impl Index {
             self.progress(patch);
             Ok(())
         })?;
+        let isbn_revision = self
+            .isbn
+            .has_saved()
+            .then(|| stage.isbn_revision(&sources))
+            .flatten();
         drop(store);
         self.progress(json!({"job":"publish","jobStep":3,"progress":0,"jobMessage":"Переключение поискового индекса"}));
         // Publication needs exclusive access while the store files are closed and replaced.
         let mut catalogue = self.catalogue.write().expect("open catalogue");
+        let previous_isbn_revision = catalogue
+            .as_ref()
+            .map(Catalogue::isbn_signature)
+            .transpose()?;
         let published = files.publish(stage, &mut catalogue);
         if let Some(catalogue) = catalogue.as_mut() {
             catalogue.attach_isbn_index(self.isbn.clone());
+            catalogue.set_isbn_revision(if published.is_ok() {
+                isbn_revision
+            } else {
+                previous_isbn_revision
+            });
         }
         published?;
         *self.sources.write().expect("library sources") = sources.clone();

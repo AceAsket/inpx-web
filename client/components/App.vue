@@ -560,7 +560,7 @@ body.body--dark pre {
     max-width: 800px !important;
 }
 
-.q-dialog__inner--minimized > div:not(.library-dialog-card) {
+.q-dialog__inner--minimized > div:not(.library-dialog-card, .catalog-filters-dialog) {
     max-height: 100% !important;
 }
 

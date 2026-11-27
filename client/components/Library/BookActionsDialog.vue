@@ -5,14 +5,15 @@
             <a ref="download" style="display: none" />
             <LoadingMessage :message="loadingMessage2" />
             <h1 v-if="embedded" class="book-actions-title">{{ book.title || 'Без названия' }}</h1>
-            <div class="book-actions-summary">
+            <div :ref="observeSummary" class="book-actions-summary">
                 <BookCover :book="book" />
-                <div>
+                <div class="book-actions-information">
                     <span v-if="book.author" class="book-actions-author"><template v-for="(author,index) in authorLinks" :key="index"><span v-if="index">, </span><RouterLink :to="author.target" @click="dialogVisible = false">{{ author.label }}</RouterLink></template></span>
                     <p class="book-actions-meta">{{ sourceFormat }}<template v-if="languageLabel"> · {{ languageLabel }}</template></p>
                     <p class="book-actions-availability">{{ book.discoveryMissingLocal ? 'Внешний источник' : book.unavailable ? 'Книга недоступна' : 'В библиотеке' }}</p>
                     <p v-if="publicationYear" class="book-actions-year">Год: <span>{{ publicationYear }}</span></p>
                     <div v-if="percent !== null" class="book-actions-progress">{{ Math.round(percent * 100) }}% прочитано</div>
+                    <dl v-if="genreLabels.length" class="book-actions-details book-actions-genres"><div><dt>Жанр</dt><dd>{{ genreLabels.join(', ') }}</dd></div></dl>
                 </div>
             </div>
             <div class="book-actions-content">
@@ -35,7 +36,6 @@
                         <q-item v-if="bookAvailable && config.profileAuthorized" v-close-popup clickable role="menuitem" :disable="updatingRead" @click="toggleRead"><q-item-section avatar><q-icon :name="markedRead ? 'la la-undo' : 'la la-check-circle'" /></q-item-section><q-item-section>{{ markedRead ? 'Снять отметку' : 'Прочитано' }}</q-item-section></q-item>
                     </BookQuickMenu>
                 </div>
-                <dl v-if="genreLabels.length" class="book-actions-details book-actions-genres"><div><dt>Жанр</dt><dd>{{ genreLabels.join(', ') }}</dd></div></dl>
                 <a v-if="bookAvailable" :href="getDirectBookDownloadHref(book, downloadFormat)" class="book-actions-download" :aria-label="'Скачать ' + downloadLabel"><span>Скачать книгу</span><span>{{ downloadLabel }}</span></a>
                 <button v-if="!embedded && bookAvailable" type="button" class="book-actions-full-description" @click="$emit('details', book); dialogVisible = false">Полное описание</button>
                 <a v-if="lightReaderUrl" :href="lightReaderUrl" class="book-actions-reader">Лёгкая читалка</a>
@@ -109,6 +109,8 @@ class BookActionsDialog extends BaseList {
     annotationActive = true;
     annotationController = null;
     previewDetails = {};
+    summaryElement = null;
+    stopCoverSizing = null;
 
     created() {
         super.created();
@@ -120,6 +122,48 @@ class BookActionsDialog extends BaseList {
     deactivated() {this.annotationActive=false;this.invalidateAnnotation();}
     activated() {this.annotationActive=true;this.loadAnnotation();}
     refresh() {}
+
+    observeSummary(summary) {
+        if (summary === this.summaryElement) return;
+        this.stopCoverSizing?.();
+        this.summaryElement = summary;
+        this.stopCoverSizing = null;
+        if (!summary) return;
+
+        const information = summary.querySelector('.book-actions-information');
+        const widthProperty = '--book-cover-width';
+        let frame = 0;
+        const measure = () => {
+            frame = 0;
+            const available = summary.clientWidth;
+            if (!available) return;
+            // Start at the regular width so the cover can shrink when the text reflows.
+            summary.style.removeProperty(widthProperty);
+            if (!information.querySelector('.book-actions-genres')) return;
+
+            const style = getComputedStyle(summary);
+            const base = parseFloat(style.getPropertyValue('--book-cover-base-width'));
+            const limit = parseFloat(style.getPropertyValue('--book-cover-max-width'));
+            const maximum = Math.max(base, Math.min(limit, available - parseFloat(style.columnGap) - 160));
+            let width = base;
+            while (width < maximum) {
+                const nextWidth = Math.min(maximum, Math.ceil(information.offsetHeight * 2 / 3));
+                if (nextWidth <= width) break;
+                width = nextWidth;
+                summary.style.setProperty(widthProperty, `${width}px`);
+            }
+        };
+        const observer = new ResizeObserver(() => {
+            if (!frame) frame = requestAnimationFrame(measure);
+        });
+        observer.observe(summary);
+        observer.observe(information);
+        measure();
+        this.stopCoverSizing = () => {
+            observer.disconnect();
+            cancelAnimationFrame(frame);
+        };
+    }
 
     get previewScope() {return effectiveCatalogScope(this.$route?.query || {},this.settings,this.config);}
     get authorLinks() {return String(this.book.author || '').split(',').filter(label=>label.trim()).map(label=>({label,
@@ -248,9 +292,9 @@ export default vueComponent(BookActionsDialog);
 
 <style scoped>
 .library-book-actions {position: relative; padding: 0;}
-.book-actions-summary {display: flex; align-items: flex-start; gap: 22px;}
-.book-actions-summary > :deep(.book-cover) {width: 104px; flex: 0 0 104px;}
-.book-actions-summary > div {flex: 1; min-width: 0;}
+.book-actions-summary {--book-cover-base-width: 112px; --book-cover-max-width: 140px; display: flex; align-items: flex-start; gap: 20px; padding-top: 4px;}
+.book-actions-summary > :deep(.book-cover) {width: var(--book-cover-width, var(--book-cover-base-width)); flex: 0 0 auto;}
+.book-actions-information {flex: 1; min-width: 0; padding-top: 10px;}
 .book-actions-meta {display: flex; gap: 10px; flex-wrap: wrap; color: var(--app-muted); font-size: 12px; margin: 2px 0 10px;}
 h2 {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0 0 10px; overflow-wrap: anywhere;}
 .book-actions-author, .book-actions-series {display: block; padding: 0; border: 0; font: inherit; text-align: left; line-height: 1.5; overflow-wrap: anywhere;}
@@ -275,9 +319,6 @@ h2 {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0 0 10px; over
 button:focus-visible, a:focus-visible {outline: 2px solid var(--app-primary); outline-offset: 3px;}
 .book-actions-title {font-size: 23px; font-weight: 550; line-height: 1.35; margin: 0; overflow-wrap: anywhere;}
 h1.book-actions-title {margin-bottom: 20px;}
-.book-actions-summary {gap: 20px; padding-top: 4px;}
-.book-actions-summary > :deep(.book-cover) {width: 112px; flex-basis: 112px;}
-.book-actions-summary > div:not(.book-cover) {padding-top: 10px;}
 .book-actions-author {font-size: 15px;}
 .book-actions-meta {margin: 14px 0 2px; font-size: 13px;}
 .book-actions-availability {margin: 0; color: var(--app-primary); font-size: 13px;}
@@ -288,6 +329,7 @@ h1.book-actions-title {margin-bottom: 20px;}
 .book-actions-formats {margin: 0; width: 110px; min-width: 0;}
 .book-actions-formats :deep(.q-field__control) {min-height: 44px; border-radius: 12px;}
 .book-actions-details {font-size: 14px; line-height: 1.55; margin: 18px 0;}
+.book-actions-genres {margin: 6px 0 0; line-height: 1.4;}
 .book-actions-genres dt {color: var(--app-text);}
 .book-actions-genres dt::after {content: ':';}
 .book-actions-genres dd {margin-left: 5px;}
@@ -305,19 +347,20 @@ h1.book-actions-title {margin-bottom: 20px;}
 .book-actions-annotation-text {font-family: Georgia, 'Times New Roman', serif; font-size: 18px; line-height: 1.65; white-space: pre-line; margin: 0 0 18px;}
 @media (max-width: 599px) {
     .book-actions-title {font-size: 21px;}
-    .book-actions-summary {gap: 16px;}
-    .book-actions-summary > :deep(.book-cover) {width: 88px; flex-basis: 88px;}
-    .book-actions-summary > div:not(.book-cover) {padding-top: 4px;}
+    .book-actions-summary {--book-cover-base-width: 88px; --book-cover-max-width: 132px; gap: 16px;}
+    .book-actions-information {padding-top: 4px;}
     .book-actions-author {font-size: 14px;}
-    .book-actions-primary {gap: 8px; margin: 16px 0;}
-    .book-actions-primary .q-btn {width: 44px; min-height: 44px;}
-    .book-actions-formats {width: 96px;}
+    .book-actions-meta {margin: 3px 0 2px;}
+    .book-actions-progress {margin-top: 4px;}
+    .book-actions-primary {gap: 4px; margin: 10px 0 16px;}
+    .book-actions-primary > .q-btn {width: auto; min-width: 44px; flex: 1 1 44px;}
+    .book-actions-formats {width: auto; max-width: none; flex: 1 1 72px;}
     .book-actions-formats :deep(.q-field__control) {padding: 0 8px;}
     .book-actions-series {margin: 10px 0 12px;}
     .book-actions-annotation {margin-top: 12px;}
     .book-actions-annotation h3 {margin-bottom: 8px;}
 }
-@media (max-width: 379px) {
-    .book-actions-formats {flex-basis: 100%; width: 100%; max-width: none;}
+@media (max-width: 339px) {
+    .book-actions-formats {flex-basis: 100%;}
 }
 </style>

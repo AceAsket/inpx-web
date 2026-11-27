@@ -1,6 +1,6 @@
 # Справочник INPX Web
 
-Сервер Rust 2.0.3, классический Node.js и варианты установки перечислены на [главной странице](./README.md).
+Сервер Rust 2.0.4, классический Node.js и варианты установки перечислены на [главной странице](./README.md).
 
 В гостевом режиме `/ebook` для Kindle сначала выберите
 «Применить формат», затем «Скачать MOBI» по ссылке с расширением файла.
@@ -131,7 +131,7 @@
 
 ## Сборка Docker-контейнера
 
-Docker-образ Rust 2.0.3 для Linux x64 доступен по тегу `aceasket/inpx-web-7z:2.0.3`. Тег `latest` указывает на этот же образ Rust. Для Linux ARM64 используйте standalone-архив. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
+Docker-образ Rust 2.0.4 для Linux x64 доступен по тегу `aceasket/inpx-web-7z:2.0.4`. Тег `latest` указывает на этот же образ Rust. Для Linux ARM64 используйте standalone-архив. [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
 
 Готовые YAML-примеры:
 
@@ -144,7 +144,7 @@ Docker-образ Rust 2.0.3 для Linux x64 доступен по тегу `ac
 Для самостоятельной сборки сначала получите исходники релиза:
 
 ```sh
-git clone --branch v2.0.3 --single-branch https://github.com/AceAsket/inpx-web.git
+git clone --branch v2.0.4 --single-branch https://github.com/AceAsket/inpx-web.git
 cd inpx-web
 ```
 
@@ -218,7 +218,7 @@ docker run -d \
   -v /path/on/host/fb2cng:/config/fb2cng:ro \
   -v /path/on/host/library:/library:ro \
   -v /path/on/host/data:/usr/local/bin/.inpx-web \
-  aceasket/inpx-web-7z:2.0.3
+  aceasket/inpx-web-7z:2.0.4
 ```
 
 В fb2cng 2.1.1 настройки Markdown-изображений находятся в `document.markdown.images`. При обновлении собственного YAML перенесите туда параметры из `document.images.markdown`. Прежний флаг `--kfx-compression` в настройках приложения сохраняет своё действие для KFX и AZW8.
@@ -284,7 +284,7 @@ docker run -d \
 Для обновления сначала скачайте новый образ, затем пересоздайте контейнер. Повторите свою исходную команду `docker run`, заменив только тег образа: сохраните все переменные окружения, порты и тома, включая `INPX_LIBRARY_SOURCES`, настройки авторизации и отправки книг. Ниже пример для одной библиотеки; замените пути на свои. Команды соединены через `&&`, чтобы не удалять работающий контейнер при ошибке скачивания образа.
 
 ```sh
-docker pull aceasket/inpx-web-7z:2.0.3 &&
+docker pull aceasket/inpx-web-7z:2.0.4 &&
 docker rm -f inpx-web &&
 docker run -d \
   --name=inpx-web \
@@ -297,7 +297,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:2.0.3
+  aceasket/inpx-web-7z:2.0.4
 ```
 
 При локальной сборке используйте имя своего образа. Если сервис запущен через Compose, сохраните настройки в YAML, укажите нужный тег в `image` и выполните `docker compose pull && docker compose up -d`.
@@ -318,7 +318,7 @@ docker run -d \
   -e INPX_COVER_CACHE_SIZE_MB=512 \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:2.0.3
+  aceasket/inpx-web-7z:2.0.4
 ```
 
 Важно:
@@ -362,6 +362,12 @@ docker run -d \
 Заголовок пользователя обязателен при каждом HTTP-запросе и новом WebSocket-подключении; cookie приложения его не заменяет. Настройте передачу `Remote-User` также для книг, обложек, OPDS и `/ws`.
 
 Чтобы автоматически выбрать профиль, чей `login` совпадает с именем пользователя из proxy, добавьте `INPX_PROXY_BIND_PROFILE=true` (в `config.json`: `"proxyBindProfile": true`). Профиль выбирается без второго ввода пароля; переключение на чужой профиль запрещено сервером, включая личные списки OPDS. Для смены пользователя выйдите из SSO. Если совпадения нет, остаётся обычный выбор профиля. При включении этой опции заголовок доверенного proxy обязателен даже без `INPX_REQUIRE_AUTH=true`. По умолчанию привязка выключена.
+
+Чтобы разрешить веб-вход администратора только напрямую, откройте **Управление библиотекой → Доступ и прокси → Правила входа и SSO** по прямому адресу сервера. Включите «Разрешить вход администратора только напрямую». При запуске это правило задаётся через `INPX_ADMIN_DIRECT_ONLY=true` или `"adminDirectOnly": true` в `config.json`. По умолчанию правило выключено.
+
+Внесите TCP-адреса всех прокси, видимые из INPX Web, в `INPX_TRUSTED_PROXY_CIDRS` или `trustedProxyCidrs`. При включённом правиле администратор входит по адресу сервера с локальными учётными данными и OTP, если он настроен. Обычные пользователи продолжают входить через SSO. Оставьте прямой адрес сервера доступным из сети администрирования и подключайтесь с адреса клиента за пределами перечисленных сетей.
+
+Если Docker передаёт и прямой, и проксированный трафик с одного адреса шлюза, правило применится к обоим подключениям. Разделите маршруты перед включением правила. [Прямой вход администратора в Docker](README.md#прямой-вход-администратора-в-docker)
 
 ### Обязательный вход в профиль
 
@@ -722,7 +728,7 @@ docker run -d \
   -e EMAIL_FROM=user@example.com \
   -v /mnt/user/appdata/inpx-web:/usr/local/bin/.inpx-web \
   -v /mnt/user/books/my-library:/library:ro \
-  aceasket/inpx-web-7z:2.0.3
+  aceasket/inpx-web-7z:2.0.4
 ```
 
 Переменные для Telegram:
@@ -907,7 +913,7 @@ http://<ваш_хост>:12380/opds/v2?user=<profileId>
 
 Начиная с **1.7.9-rc.1**, сервер поддерживает нативный [Custom metadata provider Audiobookshelf](https://audiobookshelf.org/docs/documentation/community/community-providers/). Он позволяет подбирать метаданные для аудиокниги по электронным книгам в INPX-библиотеке, включая самостоятельно озвученные книги.
 
-Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:2.0.3` и добавьте к своей команде запуска:
+Провайдер выключен по умолчанию. Для проверки используйте образ `aceasket/inpx-web-7z:2.0.4` и добавьте к своей команде запуска:
 
 ```sh
 -e INPX_ABS_ENABLED=true \
@@ -1098,6 +1104,8 @@ cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server
 | `libinpx_auth_state.so`, `inpx_auth_state.wasm` | Библиотека авторизации и её WebAssembly-вариант для Node.js. |
 | `fbc`, `kindling`, `mutool`, `djxl` | Конвертеры книг и резервный декодер JPEG XL. Сервер вызывает их при необходимости. |
 
+В Rust-поставку входят сервер, веб-интерфейс и инструменты для конвертации и изображений. Для отдельной диагностики соберите CLI-команды через `cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-catalog -p inpx-reader`.
+
 Готовые Linux ZIP рассчитаны на x86-64 и ARM64. Для 32-битного Linux используйте свою сборку для целевой архитектуры. Разрядность системы покажет `getconf LONG_BIT`, архитектуру ядра — `uname -m`, а архитектуру готового бинарника — `file /path/to/inpx-server`. Например, для 32-битного x86 или ARMv7 с glibc выберите подходящую цель `i686-unknown-linux-gnu` или `armv7-unknown-linux-gnueabihf` и установите соответствующий Rust target и линкер. После сборки с `--target` бинарник лежит в `rust/target/<target>/release`. Внешние конвертеры подбираются для этой же архитектуры. Веб-интерфейс из `bin/public.json` общий.
 
 <a id="build" />
@@ -1106,7 +1114,7 @@ cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server
 
 Этот раздел нужен только для ручной сборки standalone-бинарников. Если нужен готовый локальный запуск без сборки, проще взять assets из GitHub Releases. Для сборки варианта с сервером на Node.js требуется Node.js 24 или новее. Бинарники этой версии собираются через `@yao-pkg/pkg` со встроенным Node 24.
 
-CI собирает Linux x64 и ARM64 на машинах соответствующей архитектуры. В Linux-архивах Rust-сервер и утилиты каталога и чтения статически связаны с musl. В варианте со встроенным Node.js для запуска основного исполняемого файла требуется glibc. Для кросс-сборки linux-arm64 на x64 потребуется [QEMU](https://wiki.debian.org/QemuUserEmulation).
+CI собирает Linux x64 и ARM64 на машинах соответствующей архитектуры. В Linux-архивах Rust-сервер статически связан с musl. В варианте со встроенным Node.js для запуска основного исполняемого файла требуется glibc. Для кросс-сборки linux-arm64 на x64 потребуется [QEMU](https://wiki.debian.org/QemuUserEmulation).
 
 ```sh
 git clone --branch v1.8.2 --single-branch https://github.com/AceAsket/inpx-web.git
@@ -1150,12 +1158,11 @@ npm run build:win-installer
 Для сборки версии с сервером на Rust используйте отдельный каталог сборки. Node.js
 используется для сборки и упаковки веб-интерфейса. Из распакованного архива
 сервер запускается командой `inpx-web` без установленного Node.js.
-Скрипт упаковки включает отдельные утилиты `inpx-catalog` и `inpx-reader`.
 При упаковке Linux ZIP скрипт скачивает официальный статический `djxl`. Для распаковки его архива GNU tar использует `lzip`.
 
 ```sh
 export INPX_BUILD_DIST_DIR="$PWD/dist/rust-preview"
-cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
+cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server
 npm run build:rust -- linux
 node build/release.js linux
 ```
@@ -1170,7 +1177,7 @@ Studio с инструментами C++ x64 и Inno Setup 6. Выполните
 
 ```powershell
 $env:INPX_BUILD_DIST_DIR = Join-Path $PWD 'dist/rust-preview'
-cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
+cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server
 npm run build:rust -- win
 New-Item -ItemType Directory -Force dist/win/bin | Out-Null
 $env:FB2CNG_RELEASE_API = 'https://api.github.com/repos/rupor-github/fb2cng/releases/tags/v2.1.1'
@@ -1397,6 +1404,7 @@ Options:
     "trustProxy": false,
     "proxyAuthHeader": "Remote-User",
     "trustedProxyCidrs": [],
+    "adminDirectOnly": false,
     "authExemptHealth": true,
 
     // экспорт Prometheus-метрик

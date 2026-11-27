@@ -797,6 +797,7 @@
                 class="reader-scroll"
                 :class="{
                     'reader-scroll--paged': activePreferences.readMode === 'paged',
+                    'reader-scroll--restoring': !isPagedMode && bookPreparing && restorePending && hasSavedProgress,
                 }"
                 @scroll="onScroll"
                 @wheel="handleReaderWheel"
@@ -866,7 +867,7 @@
 
                         <template v-else>
                             <div class="reader-pages">
-                                <div ref="pageStage" class="reader-page-stage" :class="{'reader-page-stage--waiting': isPagedLayoutTooLarge}">
+                                <div ref="pageStage" class="reader-page-stage" :class="{'reader-page-stage--waiting': isPagedLayoutWaiting}">
                                     <article
                                         v-if="showPagedPreparingSheet"
                                         class="reader-page-sheet reader-page-sheet--placeholder"
@@ -885,7 +886,7 @@
                                             class="reader-page-sheet reader-page-sheet--live"
                                     :class="[{'reader-page-sheet--dual': isDualPagedSpread}, isDualPagedSpread ? '' : pagePaddingPreviewClass]"
                                             :data-page-index="currentPageIndex"
-                                            :aria-hidden="isPagedLayoutTooLarge || undefined"
+                                            :aria-hidden="isPagedLayoutWaiting || undefined"
                                         >
                                             <template v-if="isDualPagedSpread">
                                                 <div class="reader-page-spread" :style="{gap: `${dualPageGap}px`}">
@@ -1712,6 +1713,7 @@ class Reader {
     resizeObserver = null;
     scrollerViewportWidth = 0;
     scrollerViewportHeight = 0;
+    scrollerVisibleHeight = 0;
     contents = [];
     bookmarks = [];
     searchQuery = '';
@@ -1867,6 +1869,7 @@ class Reader {
     imageLayoutFrame = 0;
     pagedViewportFrame = 0;
     pagedViewportBuildQueued = false;
+    pagedOrientationTimer = null;
     viewportRefreshFrame = 0;
     viewportResumeTimer = null;
     viewportResumePending = false;
@@ -1876,7 +1879,6 @@ class Reader {
     pagedBuildNeedsRefresh = false;
     pagedBuildOwnerJobId = 0;
     pagedBuildSignature = '';
-    pagedBuildGeometrySignature = '';
     pagedBuildStage = 'idle';
     progressPersistPendingAfterPagedBuild = false;
     pagedBuildJobId = 0;
@@ -1985,6 +1987,18 @@ class Reader {
         this.handleVisualViewportResize = () => {
             this.scheduleViewportRefresh();
         };
+        this.handleOrientationChange = () => {
+            if (!this.readerActive || this.controlsOpen || !this.activePagedPage)
+                return;
+
+            this.clearPagedOrientation();
+            // The screen can rotate before the browser reports the new viewport.
+            // Some rotations keep the same viewport, so allow reading to resume in that case.
+            this.pagedOrientationTimer = setTimeout(() => {
+                this.pagedOrientationTimer = null;
+                this.scheduleViewportRefresh();
+            }, 500);
+        };
         this.handleReaderKeydown = (event) => {
             this.handleGlobalKeydown(event);
         };
@@ -2017,6 +2031,10 @@ class Reader {
         window.addEventListener('beforeunload', this.handleBeforeUnload);
         document.addEventListener('fullscreenchange', this.handleFullscreenChange);
         window.addEventListener('resize', this.handleWindowResize);
+        if ('onorientationchange' in window)
+            window.addEventListener('orientationchange', this.handleOrientationChange);
+        else
+            window.screen.orientation?.addEventListener('change', this.handleOrientationChange);
         window.addEventListener('keydown', this.handleReaderKeydown);
         document.addEventListener('visibilitychange', this.handleVisibilityChange);
         window.addEventListener('pagehide', this.handlePageHide);
@@ -2060,6 +2078,10 @@ class Reader {
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
         document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
         window.removeEventListener('resize', this.handleWindowResize);
+        if ('onorientationchange' in window)
+            window.removeEventListener('orientationchange', this.handleOrientationChange);
+        else
+            window.screen.orientation?.removeEventListener('change', this.handleOrientationChange);
         window.removeEventListener('keydown', this.handleReaderKeydown);
         document.removeEventListener('visibilitychange', this.handleVisibilityChange);
         window.removeEventListener('pagehide', this.handlePageHide);
@@ -2956,7 +2978,7 @@ class Reader {
     }
 
     get showPagedPreparingSheet() {
-        if (this.isPagedLayoutTooLarge)
+        if (this.isPagedLayoutWaiting)
             return true;
 
         return !!(
@@ -3035,8 +3057,12 @@ class Reader {
         return this.pagedPages[Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex))] || null;
     }
 
-    get isPagedLayoutTooLarge() {
-        if (!this.activePagedPage || !this.committedPagedContentSize)
+    get isPagedLayoutWaiting() {
+        if (!this.activePagedPage)
+            return false;
+        if (this.pagedOrientationTimer !== null)
+            return true;
+        if (!this.committedPagedContentSize)
             return false;
 
         const {width, height} = this.pagedContentSize;
@@ -3443,12 +3469,8 @@ class Reader {
         return padTop + padBottom;
     }
 
-    get compactVisibleScrollerHeight() {
-        if (!this.isCompactLayout || typeof window === 'undefined')
-            return 0;
-
-        const scroller = (this.$refs ? this.$refs.scroller : null);
-        if (!scroller || !window.visualViewport)
+    measureCompactVisibleScrollerHeight(scroller) {
+        if (!this.isCompactLayout || !scroller || typeof window === 'undefined' || !window.visualViewport)
             return 0;
 
         const rect = scroller.getBoundingClientRect();
@@ -3456,10 +3478,10 @@ class Reader {
         if (!viewportHeight)
             return 0;
 
-        return Math.max(0, Math.min(
+        return Math.max(0, Math.floor(Math.min(
             rect.height || 0,
             viewportHeight - Math.max(0, rect.top || 0),
-        ));
+        )));
     }
 
     get readerMobileFooterHeight() {
@@ -3487,7 +3509,8 @@ class Reader {
             '--reader-font-size': `${this.activePreferences.fontSize}px`,
             '--reader-font-family': this.readerFontFamilyCss,
             '--reader-line-height': String(this.activePreferences.lineHeight),
-            '--reader-content-width': `${this.readerContentFrameWidth}px`,
+            '--reader-content-width': this.activePreferences.contentWidthMode === 'viewport'
+                ? '100%' : `${this.readerFixedContentWidth}px`,
             '--reader-page-min-height': `${pageHeight}px`,
             '--reader-page-gap': `${this.pageGap}px`,
             '--reader-page-frame-width': `${this.pageFrameWidth}px`,
@@ -3545,19 +3568,15 @@ class Reader {
         return Math.max(280, scrollerWidth - this.configuredReaderShellHorizontalPadding);
     }
 
-    get readerContentFrameWidth() {
-        const fixedWidth = Math.max(280, Number(this.activePreferences.contentWidth || 1040) || 1040);
-        if (this.activePreferences.contentWidthMode === 'viewport')
-            return this.availableReaderFrameWidth;
-
-        return Math.max(280, Math.min(fixedWidth, this.availableReaderFrameWidth));
+    get readerFixedContentWidth() {
+        return Math.max(280, Number(this.activePreferences.contentWidth || 1040) || 1040);
     }
 
     get pageFrameWidth() {
         if (this.activePreferences.contentWidthMode === 'viewport')
             return this.availableReaderFrameWidth;
 
-        return this.readerContentFrameWidth;
+        return Math.min(this.readerFixedContentWidth, this.availableReaderFrameWidth);
     }
 
     get pageMeasureFrameWidth() {
@@ -3570,7 +3589,7 @@ class Reader {
     get pageMinHeight() {
         const scrollerHeight = (this.scrollerViewportHeight || ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0));
         if (this.isCompactLayout) {
-            const visibleScrollerHeight = this.compactVisibleScrollerHeight || 0;
+            const visibleScrollerHeight = this.scrollerVisibleHeight;
             const availableHeight = (visibleScrollerHeight
                 ? Math.min(Math.max(0, scrollerHeight || visibleScrollerHeight), visibleScrollerHeight)
                 : scrollerHeight);
@@ -4496,7 +4515,7 @@ class Reader {
                 && Date.now() < (Number(this.compactChromeViewportRefreshSuppressedUntil || 0) || 0)
             )
                 return;
-            this.scheduleViewportRefresh({calibrate: false});
+            this.scheduleViewportRefresh({calibrate: false, measureBeforePaint: true});
         });
         this.resizeObserver.observe(this.$refs.scroller);
     }
@@ -4581,11 +4600,15 @@ class Reader {
         return true;
     }
 
-    scheduleViewportRefresh({calibrate = true} = {}) {
+    scheduleViewportRefresh({calibrate = true, measureBeforePaint = false} = {}) {
         if (typeof window === 'undefined')
             return;
         if (this.deferViewportRefreshForVisibility(calibrate))
             return;
+        // ResizeObserver runs before paint. Hide a clipped sheet in this frame
+        // while keeping pagination scheduled separately.
+        if (measureBeforePaint && this.isPagedMode)
+            this.measureScrollerViewport();
 
         if (this.isPagedMode)
             this.bottomClipViewportActivityAt = Date.now();
@@ -4617,33 +4640,22 @@ class Reader {
         if (this.isCompactLayout && this.isPagedMode && this.controlsOpen)
             return;
 
-        const scroller = (this.$refs ? this.$refs.scroller : null);
-        const previousViewportWidth = Math.round(Number(this.scrollerViewportWidth || 0) || 0);
-        const previousViewportHeight = Math.round(Number(this.scrollerViewportHeight || 0) || 0);
-        this.scrollerViewportWidth = ((scroller && scroller.clientWidth) || 0);
-        this.scrollerViewportHeight = ((scroller && scroller.clientHeight) || 0);
+        this.measureScrollerViewport();
         if (this.isPagedMode) {
-            const nextViewportWidth = Math.round(Number(this.scrollerViewportWidth || 0) || 0);
-            const nextViewportHeight = Math.round(Number(this.scrollerViewportHeight || 0) || 0);
+            if (!this.scrollerViewportWidth || !this.scrollerViewportHeight)
+                return;
             this.syncBottomClipCompensationGeometry();
+            const signature = this.getPagedLayoutSignature();
             // loadReader owns the initial pagination pass. Viewport callbacks fired by
             // its placeholder/status UI must not start a second build against the
-            // same measurement node, but a real size change still invalidates it.
+            // same measurement node. Compare the usable page, which can stay the same
+            // even while the scroller resizes behind the visual viewport.
             if (this.loading || this.bookPreparing) {
-                if (
-                    this.pagedBuildInProgress
-                    && nextViewportWidth > 0
-                    && nextViewportHeight > 0
-                    && (
-                        nextViewportWidth !== previousViewportWidth
-                        || nextViewportHeight !== previousViewportHeight
-                    )
-                )
+                if (this.pagedBuildInProgress && signature !== this.pagedBuildSignature)
                     this.pagedBuildNeedsRefresh = true;
                 return;
             }
 
-            const signature = this.getPagedLayoutSignature();
             const calibrationKey = this.getBottomClipCompensationGeometryKey();
             if (
                 this.pagedPages.length
@@ -4659,15 +4671,8 @@ class Reader {
             }
 
             if (this.pagedBuildInProgress) {
-                const geometrySignature = this.getPagedGeometrySignature();
-                if (
-                    signature
-                    && geometrySignature
-                    && signature === this.pagedBuildSignature
-                    && geometrySignature === this.pagedBuildGeometrySignature
-                )
-                    return;
-                this.pagedBuildNeedsRefresh = true;
+                if (signature !== this.pagedBuildSignature)
+                    this.pagedBuildNeedsRefresh = true;
                 return;
             }
 
@@ -4678,6 +4683,24 @@ class Reader {
             return;
         }
         this.applyVerticalSectionAlignment();
+    }
+
+    measureScrollerViewport() {
+        const scroller = this.$refs?.scroller;
+        const width = scroller?.clientWidth || 0;
+        const height = scroller?.clientHeight || 0;
+        if (width && height && (width !== this.scrollerViewportWidth || height !== this.scrollerViewportHeight))
+            this.clearPagedOrientation();
+        this.scrollerViewportWidth = width;
+        this.scrollerViewportHeight = height;
+        this.scrollerVisibleHeight = this.measureCompactVisibleScrollerHeight(scroller);
+    }
+
+    clearPagedOrientation() {
+        if (this.pagedOrientationTimer !== null) {
+            clearTimeout(this.pagedOrientationTimer);
+            this.pagedOrientationTimer = null;
+        }
     }
 
     schedulePagedViewportBuild() {
@@ -4796,6 +4819,7 @@ class Reader {
             return '';
 
         return [
+            (this.isCompactLayout ? 'compact' : 'regular'),
             Math.round(Number(this.pageFrameWidth || 0) || 0),
             Math.round(Number(this.pageMeasureFrameWidth || 0) || 0),
             Math.round(Number(this.pageMinHeight || 0) || 0),
@@ -4803,28 +4827,6 @@ class Reader {
             this.layoutSignatureForPreferences(this.activePreferences),
             this.readerSourceKey,
         ].join('|');
-    }
-
-    getPagedGeometrySignature() {
-        if (!this.isPagedMode)
-            return '';
-
-        return [
-            Math.round(Number(this.scrollerViewportWidth || 0) || 0),
-            Math.round(Number(this.scrollerViewportHeight || 0) || 0),
-            Math.round(Number(this.pageMeasureFrameWidth || 0) || 0),
-            Math.round(Number(this.pageMinHeight || 0) || 0),
-            Math.round(Number(this.currentDynamicBottomClipCompensation || 0) || 0),
-        ].join('|');
-    }
-
-    getPagedLayoutCacheKey(layoutSignature = '', calibrationKey = '', geometrySignature = '') {
-        const layout = String(layoutSignature || '').trim();
-        const calibration = String(calibrationKey || '').trim();
-        const geometry = String(geometrySignature || '').trim();
-        if (!layout || !calibration || !geometry)
-            return '';
-        return `${layout}::${calibration}::${geometry}`;
     }
 
     takePagedLayoutCacheEntry(cacheKey = '') {
@@ -5098,8 +5100,9 @@ class Reader {
         let lastRect = {width: 0, height: 0};
 
         while ((Date.now() - startedAt) < timeoutMs) {
-            await this.$nextTick();
             await this.waitForAnimationFrames(1);
+            this.measureScrollerViewport();
+            await this.$nextTick();
 
             lastRect = this.syncMeasureHostToStage();
             const nextKey = `${lastRect.width}x${lastRect.height}`;
@@ -6956,7 +6959,7 @@ class Reader {
     }
 
     setCurrentPagedPage(index = 0, save = false) {
-        if (!this.isPagedMode || (save && this.isPagedLayoutTooLarge))
+        if (!this.isPagedMode || (save && this.isPagedLayoutWaiting))
             return;
         if (save)
             this.clearPendingReaderNavigationRestore();
@@ -8403,14 +8406,9 @@ class Reader {
         const buildOwnerJobId = jobId || this.pagedBuildJobId;
         const buildCalibrationKey = this.getBottomClipCompensationGeometryKey();
         const buildLayoutSignature = this.getPagedLayoutSignature();
-        const buildGeometrySignature = this.getPagedGeometrySignature();
         const buildContentSize = this.pagedContentSize;
         const buildSourceKey = this.readerSourceKey;
-        const layoutCacheKey = this.getPagedLayoutCacheKey(
-            buildLayoutSignature,
-            buildCalibrationKey,
-            buildGeometrySignature,
-        );
+        const layoutCacheKey = buildCalibrationKey ? buildLayoutSignature : '';
         let cachedLayout = this.takePagedLayoutCacheEntry(layoutCacheKey);
         let diskKey = cachedLayout?.diskKey || '';
         const lookupStarted = performance.now();
@@ -8425,7 +8423,7 @@ class Reader {
             if (buildOwnerJobId !== this.pagedBuildJobId || this.pagedBuildInProgress ||
                 digest !== this.pagedDocumentDigest || scope !== (this.currentUserId || '') ||
                 buildSourceKey !== this.readerSourceKey || buildLayoutSignature !== this.getPagedLayoutSignature() ||
-                buildGeometrySignature !== this.getPagedGeometrySignature()) return false;
+                buildCalibrationKey !== this.getBottomClipCompensationGeometryKey()) return false;
             if (pages) {
                 const root = measureHtml.ownerDocument.createElement('div');
                 root.innerHTML = this.readerHtml;
@@ -8434,6 +8432,10 @@ class Reader {
             }
         }
         if (cachedLayout && cachedLayout.type === 'complete' && Array.isArray(cachedLayout.pages) && cachedLayout.pages.length) {
+            if (this.bookPreparing) {
+                this.measureScrollerViewport();
+                if (buildLayoutSignature !== this.getPagedLayoutSignature()) return false;
+            }
             this.pagedPages = cachedLayout.pages;
             this.currentPageIndex = Math.max(0, Math.min(this.pagedPages.length - 1, this.currentPageIndex));
             this.pagedLayoutSignature = buildLayoutSignature;
@@ -8499,6 +8501,12 @@ class Reader {
                     }
                 }
                 if (targetPage < 0 || pages.length < targetPage + this.pagedStep) return false;
+                // The first page can be ready before the scroller's resize callback.
+                this.measureScrollerViewport();
+                if (buildLayoutSignature !== this.getPagedLayoutSignature()) {
+                    this.pagedBuildNeedsRefresh = true;
+                    return false;
+                }
                 this.pagedPages = pages.slice();
                 this.committedPagedContentSize = buildContentSize;
                 this.currentPageIndex = targetPage;
@@ -8611,7 +8619,6 @@ class Reader {
         this.pagedBuildInProgress = true;
         this.pagedBuildNeedsRefresh = false;
         this.pagedBuildSignature = buildLayoutSignature;
-        this.pagedBuildGeometrySignature = buildGeometrySignature;
         this.pagedBuildStage = 'building';
         this.pagedBuildProgressPercent = buildProgressPercent;
         this.loadingMessage = `${this.uiText.loadingPages} ${buildProgressPercent}%`;
@@ -8761,7 +8768,6 @@ class Reader {
                 this.pagedBuildNeedsRefresh
                 || buildCalibrationKey !== this.getBottomClipCompensationGeometryKey()
                 || buildLayoutSignature !== this.getPagedLayoutSignature()
-                || buildGeometrySignature !== this.getPagedGeometrySignature()
             ) {
                 storePartialLayout(queue.length);
                 this.pagedBuildNeedsRefresh = true;
@@ -8801,9 +8807,7 @@ class Reader {
                 )
                     this.loadingMessage = '';
                 const completedBuildSignature = this.pagedBuildSignature;
-                const completedGeometrySignature = this.pagedBuildGeometrySignature;
                 this.pagedBuildSignature = '';
-                this.pagedBuildGeometrySignature = '';
                 const isCurrentJob = (!jobId || jobId === this.pagedBuildJobId);
                 if (isCurrentJob) {
                     if (this.compactChromePagedBuildPending)
@@ -8811,9 +8815,7 @@ class Reader {
                     const refreshAlreadySatisfied = !!(
                         this.pagedBuildNeedsRefresh
                         && completedBuildSignature
-                        && completedGeometrySignature
                         && completedBuildSignature === this.getPagedLayoutSignature()
-                        && completedGeometrySignature === this.getPagedGeometrySignature()
                     );
                     if (refreshAlreadySatisfied) {
                         this.pagedBuildNeedsRefresh = false;
@@ -9232,6 +9234,7 @@ class Reader {
     }
 
     cancelReaderLoad() {
+        this.clearPagedOrientation();
         this.readerLoadJobId++;
         this.pagedBuildJobId++;
         this.pagedBuildNeedsRefresh = false;
@@ -9242,6 +9245,7 @@ class Reader {
 
     async loadReader() {
         if (!this.readerSourceKey) return;
+        this.clearPagedOrientation();
         const loadJobId = ++this.readerLoadJobId;
         const bookUid = this.bookUid;
         // Invalidate queued/in-flight pagination from the previous source before
@@ -9393,6 +9397,7 @@ class Reader {
             await this.afterLayoutRefreshPaint();
             if (loadJobId !== this.readerLoadJobId)
                 return;
+            this.attachScrollerObserver();
             if (this.isPagedMode) {
                 let initialBuildCommitted = false;
                 for (let attempt = 0; attempt < 3 && !initialBuildCommitted; attempt += 1) {
@@ -9405,8 +9410,6 @@ class Reader {
                         || initialBuildJobId !== this.pagedBuildJobId
                     )
                         return;
-                    this.scrollerViewportWidth = ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientWidth) || 0);
-                    this.scrollerViewportHeight = ((this.$refs && this.$refs.scroller && this.$refs.scroller.clientHeight) || 0);
                     initialBuildCommitted = await this.buildPagedPagesChunked(initialBuildJobId);
                     if (
                         loadJobId !== this.readerLoadJobId
@@ -9438,7 +9441,6 @@ class Reader {
                 this.updateScrollerViewport();
                 await this.waitForAnimationFrames(2);
             }
-            this.attachScrollerObserver();
             await this.waitForAnimationFrames(2);
             if (loadJobId !== this.readerLoadJobId)
                 return;
@@ -12387,6 +12389,10 @@ export default vueComponent(Reader);
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
+}
+
+.reader-scroll--restoring {
+    visibility: hidden;
 }
 
 .reader-scroll--paged {

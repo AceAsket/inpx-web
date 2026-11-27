@@ -25,7 +25,7 @@ pub(super) async fn login(
         .existing_browser(request.headers(), admission.cookie_port);
     let Some(browser) = browser.filter(|_| {
         admission.secure
-            && !state.request_access.current().profile_binding()
+            && !state.access.profile_binding(admission)
             && state
                 .request_access
                 .current()
@@ -105,6 +105,7 @@ pub(super) async fn login(
     payload["password"] = Value::Null;
     payload["otp"] = Value::Null;
     let peer = admission.client;
+    let admission = admission.clone();
     let state = state.clone();
     tokio::task::spawn_blocking(move || {
         match state.access.library.admit(peer, text(&payload, "accessToken")) {
@@ -113,7 +114,7 @@ pub(super) async fn login(
             Ok(LibraryAdmission::RateLimited(seconds)) => return rate_limit(seconds),
             Err(_) => return failure(StatusCode::SERVICE_UNAVAILABLE, "Библиотека пока не готова", "server_busy"),
         }
-        match state.access.login(&browser, peer, &args.0, args.1, args.2, Some((&token,args.3))) {
+        match state.access.login(&browser, &admission, &args.0, args.1, args.2, Some((&token,args.3))) {
             BrowserLogin::Accepted { user, token, device } => {
                 if let Some(activity) = &state.metrics.activity { activity.login(&user); }
                 let mut response = json_response(StatusCode::OK,json!({"userId":user,"profileAccessToken":token}));
@@ -131,8 +132,13 @@ pub(super) async fn login(
             BrowserLogin::RateLimited(seconds) => rate_limit(seconds),
             BrowserLogin::Unavailable => failure(StatusCode::INTERNAL_SERVER_ERROR, "Не удалось войти в профиль", ""),
             denied => {
+                let status = if matches!(denied, BrowserLogin::AdminRestricted { .. }) {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::UNAUTHORIZED
+                };
                 let reply = socket::login_response(denied);
-                failure(StatusCode::UNAUTHORIZED, text(&reply,"error"),text(&reply,"errorCode"))
+                failure(status, text(&reply,"error"),text(&reply,"errorCode"))
             }
         }
     }).await.unwrap_or_else(|_| failure(StatusCode::INTERNAL_SERVER_ERROR, "Не удалось войти в профиль", ""))

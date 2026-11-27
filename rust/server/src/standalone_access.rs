@@ -18,7 +18,7 @@ use serde_json::{Value, value::RawValue};
 
 use crate::http::{Body, error};
 use crate::opds::standalone::Opds;
-use crate::request_access::{Admission, Live};
+use crate::request_access::{Admission, Live, ProfileTransport, trim_js};
 use crate::standalone_browser::{Identity, Sessions};
 use crate::standalone_library::Library;
 
@@ -92,7 +92,7 @@ pub(crate) struct BrowserProfileRequest<'a> {
     pub browser: &'a str,
     pub token: &'a str,
     pub user: &'a str,
-    pub proxy_login: Option<&'a str>,
+    pub admission: &'a Admission,
 }
 
 pub(crate) enum BrowserLogin {
@@ -102,6 +102,10 @@ pub(crate) enum BrowserLogin {
         device: Option<profile_login::DeviceGrant>,
     },
     Invalid,
+    AdminRestricted {
+        message: &'static str,
+        code: &'static str,
+    },
     NeedOtp,
     NeedOtpSetup,
     RateLimited(u32),
@@ -109,6 +113,40 @@ pub(crate) enum BrowserLogin {
 }
 
 impl Access {
+    pub(crate) fn profile_transport(&self, admission: &Admission) -> ProfileTransport {
+        self.request_access
+            .current()
+            .profile_transport(admission.peer, admission.admin_client)
+    }
+
+    pub(crate) fn profile_binding(&self, admission: &Admission) -> bool {
+        let policy = self.request_access.current();
+        policy.profile_transport(admission.peer, admission.admin_client)
+            != ProfileTransport::AdminOnly
+            && policy.profile_binding()
+    }
+
+    fn login_permitted(
+        &self,
+        state: &mut State,
+        admission: &Admission,
+        login: &str,
+    ) -> inpx_catalog::Result<bool> {
+        let transport = self.profile_transport(admission);
+        if transport == ProfileTransport::All {
+            return Ok(true);
+        }
+        let login = trim_js(login).to_lowercase();
+        Ok(state
+            .profiles
+            .browser_profiles(&self.file)?
+            .users
+            .iter()
+            .any(|profile| {
+                !login.is_empty() && profile.login == login && transport.permits(profile.is_admin)
+            }))
+    }
+
     fn login_rate_policy(&self) -> Policy {
         self.request_access.current().login_rate
     }
@@ -270,11 +308,15 @@ impl Access {
             .map_err(|_| "Хранилище профилей недоступно")?;
         let profiles = state.profiles.browser_profiles(&self.file)?;
         if let Some(query) = query {
+            if !self.profile_transport(query.admission).permits(true) {
+                return Err("Требуются права администратора".into());
+            }
             let browser = self
                 .sessions
                 .load(query.browser, query.token)
                 .ok_or("need_profile_login")?;
-            let bound = bound_profile(&profiles, query.proxy_login).map_err(|_| BLOCKED_PROFILE)?;
+            let bound = bound_profile(&profiles, query.admission.proxy_login.as_deref())
+                .map_err(|_| BLOCKED_PROFILE)?;
             let profile = bound.or_else(|| {
                 browser.profile.as_ref().and_then(|(_, identity)| {
                     profiles.users.iter().find(|profile| {
@@ -299,11 +341,14 @@ impl Access {
         Ok(result)
     }
 
-    pub(super) fn backup_download(
+    pub(super) fn require_http_admin(
         &self,
         headers: &HeaderMap,
         admission: &Admission,
     ) -> Result<(), Rejection> {
+        if !self.profile_transport(admission).permits(true) {
+            return Err(Rejection::ProxyScope);
+        }
         let mut state = self.state.lock().map_err(|_| Rejection::Unavailable)?;
         let profiles = state
             .profiles
@@ -357,6 +402,7 @@ impl Access {
             .profiles
             .browser_profiles(&self.file)
             .map_err(report)?;
+        let transport = self.profile_transport(admission);
         let bound = bound_profile(&profiles, admission.proxy_login.as_deref())?;
         let profile = if let Some(bound) = bound {
             Some(bound)
@@ -380,7 +426,9 @@ impl Access {
         } else {
             None
         };
-        let profile = profile.ok_or(Rejection::Unauthorized)?;
+        let profile = profile
+            .filter(|profile| transport.permits(profile.is_admin))
+            .ok_or(Rejection::Unauthorized)?;
         if profile.id != owner {
             return Err(Rejection::ProxyScope);
         }
@@ -449,9 +497,13 @@ impl Access {
             .ok_or("need_profile_login")?;
         let profiles = state.profiles.browser_profiles(&self.file)?;
         let requested = query.user.trim();
-        if let Some(profile) =
-            bound_profile(&profiles, query.proxy_login).map_err(|_| BLOCKED_PROFILE)?
+        let transport = self.profile_transport(query.admission);
+        if let Some(profile) = bound_profile(&profiles, query.admission.proxy_login.as_deref())
+            .map_err(|_| BLOCKED_PROFILE)?
         {
+            if !transport.permits(profile.is_admin) {
+                return Err("need_profile_login".into());
+            }
             if !profile_scope(profile, requested) {
                 return Err(PROXY_SCOPE.into());
             }
@@ -472,7 +524,7 @@ impl Access {
         let profile = profiles
             .users
             .iter()
-            .find(|user| user.id == id)
+            .find(|user| user.id == id && transport.permits(user.is_admin))
             .ok_or("need_profile_login")?;
         if personal && profile.anonymous_profile {
             return Err("need_profile_login".into());
@@ -481,7 +533,8 @@ impl Access {
             identity.owner == id && identity.credential_version == profile.credential_version
         });
         if !authorized
-            && (self.request_access.current().local_login_required()
+            && (transport == ProfileTransport::AdminOnly
+                || self.request_access.current().local_login_required()
                 || profiles.require_otp
                 || profile.otp_required
                 || profile.requires_login
@@ -609,45 +662,61 @@ impl Access {
         &self,
         id: &str,
         supplied: &str,
-        proxy_login: Option<&str>,
+        admission: &Admission,
     ) -> Result<BrowserAccess, Rejection> {
         let browser = self
             .sessions
             .load(id, supplied)
             .ok_or(Rejection::Unauthorized)?;
-        let profiles = self
+        let mut profiles = self
             .state
             .lock()
             .map_err(|_| Rejection::Unavailable)?
             .profiles
             .browser_profiles(&self.file)
             .map_err(report)?;
-        let bound = bound_profile(&profiles, proxy_login);
-        if let Ok(Some(profile)) = bound {
-            let token = self.sessions.bind_proxy(id, &profile.id).map_err(report)?;
+        let policy = self.request_access.current();
+        let transport = policy.profile_transport(admission.peer, admission.admin_client);
+        let profile = browser.profile.filter(|(token, identity)| {
+            let current = profiles.users.iter().find(|user| {
+                user.id == identity.owner && user.credential_version == identity.credential_version
+            });
+            if current.is_none() {
+                self.sessions.revoke(token);
+            }
+            current.is_some_and(|user| transport.permits(user.is_admin))
+        });
+        let bound = bound_profile(&profiles, admission.proxy_login.as_deref()).map(|profile| {
+            profile
+                .filter(|profile| transport.permits(profile.is_admin))
+                .map(|profile| profile.id.clone())
+        });
+        if transport == ProfileTransport::WithoutAdmin
+            || transport == ProfileTransport::AdminOnly && profile.is_none()
+        {
+            profiles
+                .users
+                .retain(|profile| transport.permits(profile.is_admin));
+            profiles
+                .blocked_users
+                .retain(|profile| transport.permits(profile.is_admin));
+        }
+        if let Ok(Some(owner)) = bound {
+            let token = self.sessions.bind_proxy(id, &owner).map_err(report)?;
             return Ok(BrowserAccess {
                 csrf: browser.csrf,
-                owner: Some(profile.id.clone()),
+                owner: Some(owner),
                 token,
                 users: profiles.users,
                 blocked_users: profiles.blocked_users,
                 auth_policy: profiles.auth_policy,
-                required: self.request_access.current().local_login_required(),
+                required: policy.local_login_required(),
                 bound: true,
                 stamp: profiles.stamp,
             });
         }
         self.sessions.clear_proxy(id);
         bound?;
-        let profile = browser.profile.filter(|(token, identity)| {
-            let current = profiles.users.iter().any(|user| {
-                user.id == identity.owner && user.credential_version == identity.credential_version
-            });
-            if !current {
-                self.sessions.revoke(token);
-            }
-            current
-        });
         let (token, owner) = profile.map_or_else(
             || (String::new(), None),
             |(token, identity)| (token, Some(identity.owner)),
@@ -659,7 +728,9 @@ impl Access {
             users: profiles.users,
             blocked_users: profiles.blocked_users,
             auth_policy: profiles.auth_policy,
-            required: self.request_access.current().local_login_required() || profiles.require_otp,
+            required: transport == ProfileTransport::AdminOnly
+                || policy.local_login_required()
+                || profiles.require_otp,
             bound: false,
             stamp: profiles.stamp,
         })
@@ -668,7 +739,7 @@ impl Access {
     pub(crate) fn login(
         &self,
         browser: &str,
-        peer: IpAddr,
+        admission: &Admission,
         login: &str,
         password: String,
         otp: String,
@@ -677,7 +748,7 @@ impl Access {
         let Ok(mut state) = self.state.lock() else {
             return BrowserLogin::Unavailable;
         };
-        let client = peer.to_string();
+        let client = admission.client.to_string();
         let rate = self.login_rate_policy();
         let retry = state
             .attempts
@@ -693,10 +764,19 @@ impl Access {
             otp,
             trust,
         );
-        let decision = profile_login::authenticate(request, &self.totp, &mut state.profiles);
+        let policy = self.request_access.current();
+        let transport = policy.profile_transport(admission.peer, admission.admin_client);
+        let decision = profile_login::authenticate_with_role_check(
+            request,
+            &self.totp,
+            &mut state.profiles,
+            |admin| transport.permits(admin),
+        );
         let outcome = match &decision {
             Ok(profile_login::Decision::Accepted(_)) => Some(true),
-            Ok(profile_login::Decision::Denied) => Some(false),
+            Ok(profile_login::Decision::Denied | profile_login::Decision::RoleDenied) => {
+                Some(false)
+            }
             _ => None,
         };
         state.attempts.finish(
@@ -724,7 +804,24 @@ impl Access {
             }
             Ok(profile_login::Decision::NeedOtp) => BrowserLogin::NeedOtp,
             Ok(profile_login::Decision::NeedOtpSetup) => BrowserLogin::NeedOtpSetup,
-            Ok(profile_login::Decision::Denied) => BrowserLogin::Invalid,
+            Ok(profile_login::Decision::RoleDenied)
+                if transport == ProfileTransport::WithoutAdmin =>
+            {
+                if policy.has_admin_ranges() {
+                    BrowserLogin::AdminRestricted {
+                        message: "Вход администратора разрешён только с адресов, указанных в настройках сервера.",
+                        code: "INPX_ADMIN_ADDRESS_DENIED",
+                    }
+                } else {
+                    BrowserLogin::AdminRestricted {
+                        message: "Вход администратора через прокси запрещён. Откройте библиотеку по прямому адресу сервера.",
+                        code: "INPX_ADMIN_DIRECT_ONLY",
+                    }
+                }
+            }
+            Ok(profile_login::Decision::Denied | profile_login::Decision::RoleDenied) => {
+                BrowserLogin::Invalid
+            }
             _ => BrowserLogin::Unavailable,
         }
     }
@@ -774,7 +871,10 @@ impl Access {
                 .profiles
                 .browser_profiles(&self.file)
                 .map_err(report)?;
-            if let Some(profile) = bound_profile(&profiles, admission.proxy_login.as_deref())? {
+            let transport = self.profile_transport(admission);
+            if let Some(profile) = bound_profile(&profiles, admission.proxy_login.as_deref())?
+                .filter(|profile| transport.permits(profile.is_admin))
+            {
                 if !profile_scope(profile, scope.trim()) {
                     return Err(Rejection::ProxyScope);
                 }
@@ -787,8 +887,10 @@ impl Access {
                 });
                 match profile {
                     Some(profile)
-                        if self.request_access.current().local_login_required()
-                            || profiles.require_otp =>
+                        if transport.permits(profile.is_admin)
+                            && (self.request_access.current().local_login_required()
+                                || profiles.require_otp
+                                || transport == ProfileTransport::AdminOnly) =>
                     {
                         if !profile_scope(profile, scope.trim()) {
                             return Err(Rejection::Unauthorized);

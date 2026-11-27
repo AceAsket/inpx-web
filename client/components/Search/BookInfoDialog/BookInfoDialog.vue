@@ -168,13 +168,16 @@
                                     Иллюстрации не найдены
                                 </div>
                                 <div v-else-if="fb2Images.length" class="fb2-gallery-grid">
-                                    <img
-                                        v-for="image in fb2Images"
+                                    <button
+                                        v-for="(image, index) in fb2Images"
                                         :key="image.id"
-                                        :src="image.src"
-                                        :alt="`fb2-${image.id}`"
-                                        class="fb2-gallery-image"
-                                    />
+                                        type="button"
+                                        class="fb2-gallery-button"
+                                        :aria-label="`Открыть иллюстрацию ${index + 1}`"
+                                        @click="openImage(image.src, `Иллюстрация ${index + 1}`)"
+                                    >
+                                        <img :src="image.src" alt="" class="fb2-gallery-image" />
+                                    </button>
                                 </div>
                                 <p v-if="galleryRequested && !galleryLoading && !galleryError && galleryLimited" class="gallery-limit-note" role="status">
                                     {{ fb2Images.length ? `Показаны первые ${fb2Images.length}. Остальные иллюстрации доступны в читалке.` : 'Превью иллюстраций ограничено. Откройте книгу в читалке.' }}
@@ -234,17 +237,10 @@
             </q-btn>
         </template>
 
-        <Dialog v-model="posterDialogVisible">
-            <template #header>
-                <div class="row items-center">
-                    <div style="font-size: 110%">
-                        Обложка
-                    </div>
-                </div>
-            </template>
-
-            <img :src="coverSrc" class="fit q-pb-sm" style="height: 100%; max-height: calc(100vh - 140px); object-fit: contain" />
-        </Dialog>
+        <DialogSurface v-model="imageDialogVisible" variant="book-image">
+            <template #header>{{ viewedImage?.label }}</template>
+            <img v-if="viewedImage" :src="viewedImage.src" :alt="viewedImage.label" class="book-info-viewed-image" />
+        </DialogSurface>
 
         <q-dialog v-model="metadataDialogVisible">
             <q-card class="metadata-edit-card">
@@ -332,7 +328,8 @@ class BookInfoDialog {
     };
 
     dialogVisible = false;
-    posterDialogVisible = false;
+    imageDialogVisible = false;
+    viewedImage = null;
     metadataDialogVisible = false;
     metadataSaving = false;
     selectedTab = 'fb2';
@@ -759,6 +756,8 @@ class BookInfoDialog {
     invalidateGallery() {
         this.galleryGeneration++;
         this.stopGalleryObserver();
+        this.imageDialogVisible = false;
+        this.viewedImage = null;
     }
 
     async loadGallery() {
@@ -1010,10 +1009,13 @@ class BookInfoDialog {
     }
 
     posterClick() {
-        if (!this.coverSrc)
-            return;
+        this.openImage(this.coverSrc, 'Обложка');
+    }
 
-        this.posterDialogVisible = true;
+    openImage(src, label) {
+        if (!src) return;
+        this.viewedImage = {src, label};
+        this.imageDialogVisible = true;
     }
 
     okClick() {
@@ -1148,6 +1150,20 @@ export default vueComponent(BookInfoDialog);
     gap: 10px;
 }
 
+.fb2-gallery-button {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    cursor: zoom-in;
+}
+
+.fb2-gallery-button:focus-visible {
+    outline: 2px solid var(--app-primary);
+    outline-offset: 2px;
+}
+
 .fb2-gallery-image {
     display: block;
     width: 100%;
@@ -1156,6 +1172,14 @@ export default vueComponent(BookInfoDialog);
     border-radius: 12px;
     background: var(--app-surface-2);
     box-shadow: 0 6px 18px rgba(23, 32, 38, 0.10);
+}
+
+.book-info-viewed-image {
+    display: block;
+    width: 100%;
+    max-height: calc(100vh - 140px);
+    max-height: calc(100dvh - 140px);
+    object-fit: contain;
 }
 
 .annotation-meta,

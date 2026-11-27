@@ -18,8 +18,9 @@ use crate::catalog_entity::{
     EntityBook, EntityPage, EntityPageRequest, SeriesVolume, SeriesVolumes, series_through,
 };
 use crate::catalog_files::{FileCounter, FileTotals};
-use crate::catalog_query::{Copies, Filter, merged_key};
+use crate::catalog_query::{Copies, Filter, merged_key, title_copy_key};
 use crate::facets::{Facet, Label, Postings};
+use crate::isbn_revision::{IsbnInputBuilder, IsbnInputs};
 use crate::lookup::{LookupIndex, Table as LookupTable};
 use crate::lookup_discovery::{BrowseFilter, SelectedBooks};
 use crate::wide_search::{self, WideOrder, WideResult, WideSearch};
@@ -523,13 +524,17 @@ pub struct Match {
 }
 
 impl Match {
+    fn preferred_over(&self, other: &Self) -> bool {
+        self.score > other.score || self.score == other.score && self.id < other.id
+    }
+
     fn retain_best(mut self, key: String, matches: &mut HashMap<String, Match>) {
         matches
             .entry(key)
             .and_modify(|old| {
                 // Independently ranked sources may be combined in any order.
                 old.order = old.order.min(self.order);
-                if self.score > old.score || self.score == old.score && self.id < old.id {
+                if self.preferred_over(old) {
                     self.order = old.order;
                     std::mem::swap(old, &mut self);
                 }
@@ -537,13 +542,17 @@ impl Match {
             .or_insert(self);
     }
 
-    fn catalogue_order(&self, right: &Self) -> std::cmp::Ordering {
+    fn catalogue_fields_order(&self, right: &Self) -> std::cmp::Ordering {
         self.author
             .cmp(&right.author)
             .then_with(|| self.series.is_empty().cmp(&right.series.is_empty()))
             .then_with(|| self.series.cmp(&right.series))
             .then_with(|| self.serno.total_cmp(&right.serno))
             .then_with(|| self.title.cmp(&right.title))
+    }
+
+    fn catalogue_order(&self, right: &Self) -> std::cmp::Ordering {
+        self.catalogue_fields_order(right)
             .then_with(|| self.order.cmp(&right.order))
     }
 }
@@ -555,7 +564,7 @@ fn sorted_ids(books: HashMap<String, Match>) -> Vec<u32> {
 }
 
 #[derive(Deserialize)]
-struct SearchRow {
+struct SearchRow<'a> {
     author: String,
     series: String,
     title: String,
@@ -563,6 +572,137 @@ struct SearchRow {
     del: Option<i64>,
     #[serde(default, rename = "sourceId")]
     source: String,
+    #[serde(default, borrow)]
+    lang: Option<Cow<'a, str>>,
+    #[serde(default, borrow)]
+    keywords: Option<&'a RawValue>,
+}
+
+impl SearchRow<'_> {
+    fn merged_key(&self, record: &[u8]) -> Result<String> {
+        match title_copy_key(&self.title, &self.author) {
+            Some(key) => Ok(key),
+            None => Ok(merged_key(&serde_json::from_slice(record)?)),
+        }
+    }
+
+    fn rank(self, id: u32, order: usize, score: f64) -> Match {
+        Match {
+            id,
+            order,
+            score,
+            author: self.author,
+            title: self.title,
+            series: self.series,
+            serno: self.serno,
+            copy: None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct SearchRank {
+    score: f64,
+    physical: String,
+}
+
+#[derive(Default)]
+struct CopyGroups {
+    first: HashMap<String, usize>,
+    repeats: HashMap<usize, Vec<usize>>,
+}
+
+impl CopyGroups {
+    fn add(&mut self, key: String, position: usize) {
+        use std::collections::hash_map::Entry;
+        match self.first.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(position);
+            }
+            Entry::Occupied(entry) => {
+                let first = *entry.get();
+                self.repeats
+                    .entry(first)
+                    .or_insert_with(|| vec![first])
+                    .push(position);
+            }
+        }
+    }
+
+    fn ranked(self, books: &[Match]) -> Vec<Vec<u32>> {
+        drop(self.first);
+        self.repeats
+            .into_values()
+            .map(|mut group| {
+                group.sort_unstable_by(|&a, &b| {
+                    books[b]
+                        .score
+                        .total_cmp(&books[a].score)
+                        .then_with(|| books[a].id.cmp(&books[b].id))
+                });
+                group.into_iter().map(|index| books[index].id).collect()
+            })
+            .collect()
+    }
+}
+
+type SourceMatches = HashMap<String, HashMap<String, Match>>;
+
+fn merge_source_matches(destination: &mut SourceMatches, sources: SourceMatches) {
+    use std::collections::hash_map::Entry;
+
+    for (source, books) in sources {
+        match destination.entry(source) {
+            Entry::Vacant(entry) => {
+                entry.insert(books);
+            }
+            Entry::Occupied(mut entry) => {
+                for (key, book) in books {
+                    book.retain_best(key, entry.get_mut());
+                }
+            }
+        }
+    }
+}
+
+fn language_prefix(language: &str) -> Option<&str> {
+    language
+        .get(..2)
+        .filter(|prefix| prefix.bytes().all(|byte| byte.is_ascii_lowercase()))
+}
+
+fn scoped_active_orders(sources: &SourceMatches) -> crate::catalogue_browse_cache::ActiveOrders {
+    let mut orders = crate::catalogue_browse_cache::ActiveOrders::default();
+    let multiple = sources.len() > 1;
+    let mut combined = HashMap::<&str, (&Match, usize)>::new();
+    for (source, books) in sources {
+        let mut ranked: Vec<_> = books.values().collect();
+        ranked.sort_unstable_by(|a, b| a.catalogue_order(b));
+        orders.by_source.insert(
+            source.clone(),
+            ranked.into_iter().map(|book| book.id).collect(),
+        );
+        if multiple {
+            for (key, book) in books {
+                combined
+                    .entry(key)
+                    .and_modify(|(best, first)| {
+                        *first = (*first).min(book.order);
+                        if book.preferred_over(best) {
+                            *best = book;
+                        }
+                    })
+                    .or_insert((book, book.order));
+            }
+        }
+    }
+    let mut ranked: Vec<_> = combined.into_values().collect();
+    ranked.sort_unstable_by(|(left, left_order), (right, right_order)| {
+        left.catalogue_fields_order(right)
+            .then_with(|| left_order.cmp(right_order))
+    });
+    orders.combined = ranked.into_iter().map(|(book, _)| book.id).collect();
+    orders
 }
 
 fn project(record: &[u8], fields: Option<&[String]>) -> Result<Box<RawValue>> {
@@ -773,12 +913,18 @@ impl BookStore {
         previous: Option<&SelectedBooks>,
         matches: impl Fn(&Label) -> bool,
     ) -> Result<SelectedBooks> {
+        self.try_select_facet(facet, previous, matches)?
+            .ok_or_else(|| "facet index unavailable".into())
+    }
+
+    pub(crate) fn try_select_facet(
+        &self,
+        facet: Facet,
+        previous: Option<&SelectedBooks>,
+        matches: impl Fn(&Label) -> bool,
+    ) -> Result<Option<SelectedBooks>> {
         self.facet(facet, |index| {
-            let index = index.ok_or("facet index unavailable")?;
-            Ok(SelectedBooks::from_postings(
-                index.matching(matches),
-                previous,
-            ))
+            Ok(index.map(|index| SelectedBooks::from_postings(index.matching(matches), previous)))
         })
     }
 
@@ -832,94 +978,159 @@ impl BookStore {
         &self,
         generation: &str,
         candidates: Option<&[u32]>,
+        selection: Option<&SelectedBooks>,
         matches: impl Fn(&[u8], Option<i64>, &str) -> Result<bool>,
         merge: bool,
     ) -> Result<Vec<u32>> {
         let mut ranked = HashMap::new();
-        self.visit_browser_matches(generation, candidates, matches, merge, |_, key, book| {
-            book.retain_best(key, &mut ranked);
-        })?;
+        self.visit_browser_matches(
+            generation,
+            candidates,
+            selection,
+            matches,
+            merge,
+            |_, _, key, book| {
+                book.retain_best(key, &mut ranked);
+            },
+        )?;
         Ok(sorted_ids(ranked))
     }
 
     pub(crate) fn active_browser_orders(
         &self,
         generation: &str,
-    ) -> Result<crate::catalogue_browse_cache::ActiveOrders> {
-        let mut sources = HashMap::<String, HashMap<String, Match>>::new();
+    ) -> Result<crate::catalogue_browse_cache::ActiveBrowseOrders> {
+        let mut by_language = HashMap::<String, SourceMatches>::new();
         self.visit_browser_matches(
             generation,
             None,
+            None,
             |_, del, _| Ok(del == Some(0)),
             false,
-            |source, key, book| {
+            |source, lang, key, book| {
+                let sources = by_language
+                    .entry(crate::catalog_text::lower(lang).into_owned())
+                    .or_default();
                 book.retain_best(key, sources.entry(source).or_default());
             },
         )?;
-        let mut orders = crate::catalogue_browse_cache::ActiveOrders::default();
-        let mut combined = HashMap::new();
-        let multiple = sources.len() > 1;
-        for (source, books) in sources {
-            let ids = if multiple {
-                let mut ranked: Vec<_> = books.values().collect();
-                ranked.sort_unstable_by(|a, b| a.catalogue_order(b));
-                let ids = ranked.into_iter().map(|book| book.id).collect();
-                if combined.is_empty() {
-                    combined = books;
-                } else {
-                    for (key, book) in books {
-                        book.retain_best(key, &mut combined);
-                    }
-                }
-                ids
-            } else {
-                sorted_ids(books)
-            };
-            orders.by_source.insert(source, ids);
+        let mut prefix_counts = HashMap::<String, usize>::new();
+        for lang in by_language.keys().filter_map(|lang| language_prefix(lang)) {
+            *prefix_counts.entry(lang.to_owned()).or_default() += 1;
         }
-        orders.combined = sorted_ids(combined);
-        Ok(orders)
+        let mut all_sources = SourceMatches::new();
+        let mut exact = HashMap::with_capacity(by_language.len());
+        let mut variants = HashMap::<String, SourceMatches>::new();
+        for (lang, sources) in by_language {
+            let orders = scoped_active_orders(&sources);
+            // Filter by language before choosing the best physical copy. The same
+            // file can have catalogue rows with different language metadata.
+            if let Some(prefix) = language_prefix(&lang).filter(|prefix| prefix_counts[*prefix] > 1)
+            {
+                merge_source_matches(variants.entry(prefix.to_owned()).or_default(), sources);
+            } else {
+                merge_source_matches(&mut all_sources, sources);
+            }
+            exact.insert(lang, orders);
+        }
+        let mut prefixes = HashMap::with_capacity(variants.len());
+        for (prefix, sources) in variants {
+            prefixes.insert(prefix, scoped_active_orders(&sources));
+            merge_source_matches(&mut all_sources, sources);
+        }
+        Ok(crate::catalogue_browse_cache::ActiveBrowseOrders {
+            all: scoped_active_orders(&all_sources),
+            languages: crate::catalogue_browse_cache::LanguageOrders { exact, prefixes },
+        })
+    }
+
+    pub(crate) fn active_facet_order(
+        &self,
+        generation: &str,
+    ) -> Result<(
+        crate::catalogue_browse_cache::FacetOrder,
+        crate::catalogue_browse_cache::KeywordPostings,
+        IsbnInputs,
+    )> {
+        use crate::catalogue_browse_cache::{FacetOrder, KeywordPostings};
+        let mut books = Vec::<Match>::new();
+        let mut physical = CopyGroups::default();
+        let mut merged = CopyGroups::default();
+        let mut keywords = KeywordPostings::default();
+        let mut isbn = IsbnInputBuilder::default();
+        self.visit_stored_rows(Some(generation), None, |id, bytes| {
+            let (record, projection) = decode(bytes)?;
+            let row: SearchRow = serde_json::from_slice(record)?;
+            isbn.add(id, row.del.unwrap_or_default() != 0, record)?;
+            if let Some(raw) = row
+                .keywords
+                .filter(|value| value.get().len() > 2 && value.get().starts_with('"'))
+            {
+                keywords.add(id, &serde_json::from_str::<String>(raw.get())?);
+            }
+            if row.del == Some(0) {
+                let rank: SearchRank = serde_json::from_slice(projection)?;
+                let position = books.len();
+                physical.add(rank.physical, position);
+                merged.add(row.merged_key(record)?, position);
+                books.push(row.rank(id, position, rank.score));
+            }
+            Ok(())
+        })?;
+        let physical_copies = physical.ranked(&books);
+        let merged_copies = Some(merged.ranked(&books));
+        books.sort_unstable_by(Match::catalogue_order);
+        let mut ties = Vec::new();
+        let mut start = 0;
+        for group in books.chunk_by(|a, b| a.catalogue_fields_order(b).is_eq()) {
+            let end = start + group.len();
+            if group.len() > 1 {
+                ties.push([start, end]);
+            }
+            start = end;
+        }
+        Ok((
+            FacetOrder {
+                rows: books.into_iter().map(|book| book.id).collect(),
+                physical_copies,
+                ties,
+                merged_copies,
+            },
+            keywords,
+            isbn.finish(),
+        ))
     }
 
     fn visit_browser_matches(
         &self,
         generation: &str,
         candidates: Option<&[u32]>,
+        selection: Option<&SelectedBooks>,
         matches: impl Fn(&[u8], Option<i64>, &str) -> Result<bool>,
         merge: bool,
-        mut visit: impl FnMut(String, String, Match),
+        mut visit: impl FnMut(String, &str, String, Match),
     ) -> Result<()> {
-        #[derive(Deserialize)]
-        struct Rank {
-            score: f64,
-            physical: String,
-        }
         let mut order = 0;
         self.visit_stored_rows(Some(generation), candidates, |id, bytes| {
+            if selection.is_some_and(|selection| !selection.contains(id)) {
+                return Ok(());
+            }
             let (record, projection) = decode(bytes)?;
-            let row: SearchRow = serde_json::from_slice(record)?;
+            let mut row: SearchRow = serde_json::from_slice(record)?;
             if !matches(record, row.del, &row.source)? {
                 return Ok(());
             }
-            let rank: Rank = serde_json::from_slice(projection)?;
+            let rank: SearchRank = serde_json::from_slice(projection)?;
             let key = if merge {
-                crate::catalog_query::merged_key_from_record(record)?
+                row.merged_key(record)?
             } else {
                 rank.physical
             };
             visit(
-                row.source,
+                std::mem::take(&mut row.source),
+                row.lang.take().as_deref().unwrap_or_default(),
                 key,
-                Match {
-                    id,
-                    order,
-                    score: rank.score,
-                    author: row.author,
-                    title: row.title,
-                    series: row.series,
-                    serno: row.serno,
-                    copy: None,
-                },
+                row.rank(id, order, rank.score),
             );
             order += 1;
             Ok(())

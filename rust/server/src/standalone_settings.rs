@@ -22,7 +22,7 @@ use crate::standalone_access::LiveOpds;
 
 const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch bookReadLink isbnThreads
     loggingEnabled logServerStats logQueries logLevel logToFile loginRateLimitEnabled loginRateLimitWindowMs loginRateLimitMaxAttempts
-    requireAuth allowAnonymousAccess proxyBindProfile authMode trustProxy proxyAuthHeader trustedProxyCidrs authExemptHealth
+    requireAuth allowAnonymousAccess proxyBindProfile authMode trustProxy proxyAuthHeader trustedProxyCidrs adminDirectOnly adminAllowedCidrs authExemptHealth
     metricsEnabled metricsPath metricsExemptAuth dbCacheSize dbCacheBudgetMb queryCacheMemMb queryCacheDiskMb
     maxFilesDirSize bookCacheSize coverCacheSize queryCacheEnabled queryCacheMemSize queryCacheDiskSize
     cacheCleanInterval cacheCleanSchedule cacheCleanTargetRatio adminEventLogEnabled adminEventLogSize inpxCheckInterval
@@ -583,6 +583,30 @@ impl Settings {
                         .any(|key| super::runtime::LOGIN_KEYS.contains(&key.as_str()))
                 {
                     let candidate = active_access.update(&access_patch, &next, services)?;
+                    let admin_client =
+                        candidate.admin_client(connection.peer, connection.request.headers());
+                    let permitted = candidate
+                        .profile_transport(connection.peer, admin_client)
+                        .permits(true);
+                    if candidate.has_admin_ranges() && !permitted {
+                        let Some(address) = admin_client else {
+                            return Err(format!(
+                                "Сервер не получил IP клиента через {}. Проверьте X-Forwarded-For или откройте библиотеку с адреса вне списка прокси.",
+                                connection.peer.to_canonical()
+                            ).into());
+                        };
+                        return Err(format!("Добавьте текущий адрес {} в список разрешённых адресов администратора, чтобы сохранить доступ.", address.to_canonical()).into());
+                    }
+                    if !permitted
+                        || !candidate.has_admin_ranges()
+                            && access_patch["adminDirectOnly"] == true
+                            && active_access.is_proxy_peer(connection.peer)
+                    {
+                        return Err(format!(
+                            "TCP-адрес текущего подключения {} попадает в список адресов прокси. Откройте библиотеку напрямую с адреса вне этого списка.",
+                            connection.peer.to_canonical()
+                        ).into());
+                    }
                     if !connection.valid(&candidate) {
                         return Err("Новые правила лишат текущий сеанс доступа. Подключитесь через доверенный прокси с подходящим заголовком SSO или сохраните прежний режим".into());
                     }
@@ -689,7 +713,7 @@ impl Settings {
                     }
                     "update-admin-opds" => json!({"opds":admin_opds(&current)}),
                     "update-admin-access" => {
-                        json!({"access":state.request_access.current().admin_view(connection.peer)})
+                        json!({"access":state.request_access.current().admin_view(&connection.admission)})
                     }
                     "update-admin-runtime" => {
                         json!({"runtime":super::runtime::view(&current, state)})

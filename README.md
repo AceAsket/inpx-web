@@ -17,7 +17,7 @@
 
 | Редакция | Docker-образ | ZIP и установщик Windows |
 | --- | --- | --- |
-| Rust 2.0.3 · стабильная | `aceasket/inpx-web-7z:2.0.3` или `:latest` | [Скачать Rust 2.0.3](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.3) |
+| Rust 2.0.4 · стабильная | `aceasket/inpx-web-7z:2.0.4` или `:latest` | [Скачать Rust 2.0.4](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.4) |
 | Классический Node.js 1.8.3 · стабильная | `aceasket/inpx-web-7z:1.8.3` | [Скачать Node.js 1.8.3](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3) |
 
 Разработка Rust 2.x ведётся в ветке `develop`. Ветка `main` также содержит сервер Rust. При обновлении контейнера с тегом `latest` он перейдёт на Rust. Чтобы продолжить использовать стабильный Node.js, закрепите тег `1.8.3`. Классический сервер с JembaDB поддерживается в ветке [nodejs_depr](https://github.com/AceAsket/inpx-web/tree/nodejs_depr).
@@ -45,7 +45,7 @@ docker run -d --name inpx-web --restart unless-stopped \
   -e LIBDIR=/library \
   -v inpx-web-data:/usr/local/bin/.inpx-web \
   -v /path/to/library:/library:ro \
-  aceasket/inpx-web-7z:2.0.3
+  aceasket/inpx-web-7z:2.0.4
 ```
 
 Откройте `http://localhost:12380` на сервере или укажите его адрес вместо `localhost`. Профили и настройки сохраняются в томе `inpx-web-data`. [Пример Docker Compose](./docker-compose.full.yml) · [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
@@ -61,7 +61,7 @@ docker run -d --name inpx-web --restart unless-stopped \
 }
 ```
 
-Массив подходит и для 2.0.2, и для 2.0.3. В 2.0.3 также можно использовать строку из адресов и CIDR через запятую. После перезапуска откройте библиотеку через HTTPS и проверьте запрос `/ws` в **Сеть → WS**. При успешном подключении статус `101`. Если в журнале появился `foreign-origin`, поле `peer` показывает TCP-адрес, который видит INPX Web. Сверьте его со списком `trustedProxyCidrs`. [Заголовки Nginx Proxy Manager](https://github.com/NginxProxyManager/nginx-proxy-manager/blob/develop/docker/rootfs/etc/nginx/conf.d/include/proxy.conf)
+Массив поддерживается с 2.0.2. Начиная с 2.0.3 также можно использовать строку из адресов и CIDR через запятую. После перезапуска откройте библиотеку через HTTPS и проверьте запрос `/ws` в **Сеть → WS**. При успешном подключении статус `101`. Если в журнале появился `foreign-origin`, поле `peer` показывает TCP-адрес, который видит INPX Web. Сверьте его со списком `trustedProxyCidrs`. [Заголовки Nginx Proxy Manager](https://github.com/NginxProxyManager/nginx-proxy-manager/blob/develop/docker/rootfs/etc/nginx/conf.d/include/proxy.conf)
 
 ### Caddy и Docker на Synology
 
@@ -101,6 +101,24 @@ environment:
 
 **Если Caddy тоже в Docker на том же NAS**, подключите оба контейнера к общей пользовательской сети, уберите `ports` у `inpx-web` и укажите в Caddyfile `reverse_proxy inpx-web:12380`. Закрепите за Caddy IPv4-адрес в этой сети и укажите его с `/32`. Клиенты в LAN обращаются к библиотеке через Caddy. [Сети Docker bridge](https://docs.docker.com/engine/network/drivers/bridge/)
 
+### Прямой вход администратора в Docker
+
+В **Настройки → Администрирование → Доступ и прокси** заполните **Разрешённые IP и сети администратора**, чтобы ограничить вход и действия администратора. Вводите один IPv4, IPv6 или CIDR на строку. Строка **IP для проверки доступа администратора** показывает адрес текущего подключения для этого правила. Сервер применяет список сразу и закрывает действующие подключения администратора с остальных адресов. Пустой список снимает ограничение по IP. Если включено прежнее правило прямого входа, при пустом списке снова действует оно.
+
+Для подключения через доверенный прокси сервер берёт адрес клиента из `X-Forwarded-For`. Настройте прокси так, чтобы он формировал этот заголовок из фактической цепочки подключения, и разрешите доверенные заголовки только от прокси. Если общим TCP-адресом пользуются и прокси, и клиенты напрямую, разделите эти маршруты. Список также можно задать через `INPX_ADMIN_ALLOWED_CIDRS` строкой с адресами через запятую.
+
+**Сброс с хоста.** Остановите сервер и один раз запустите `inpx-web --reset-admin-network` с теми же `--data-dir` и `--config`, если они заданы в обычном запуске. Команда очищает оба сетевых ограничения администратора в конфигурации и завершается. Затем запустите сервер как раньше. Если ограничения заданы переменными `INPX_ADMIN_ALLOWED_CIDRS` или `INPX_ADMIN_DIRECT_ONLY`, уберите их из окружения перед обычным запуском. Для Docker Compose с постоянным томом настроек выполните из каталога проекта.
+
+```sh
+docker compose stop inpx-web
+docker compose run --rm --no-deps inpx-web --reset-admin-network
+docker compose up -d inpx-web
+```
+
+В разделе **Доступ и прокси** отображается TCP-адрес, который видит INPX Web. Сравните его при входе через домен прокси и при входе по IP сервера. Укажите в `INPX_TRUSTED_PROXY_CIDRS` адреса прокси с `/32` для IPv4 или `/128` для IPv6. Широкая сеть `172.0.0.0/8` включает и адреса шлюзов Docker.
+
+Если оба маршрута приходят с адреса одного шлюза, сначала разделите их. В общей сети Docker направьте Caddy на `inpx-web:12380` и укажите в списке IP самого контейнера Caddy. Для прямого доступа можно опубликовать `12380` на `127.0.0.1` хоста и открывать его через SSH-туннель. Если прокси снаружи Docker, выберите сетевой режим, в котором сервер видит разные адреса источника, и проверьте оба подключения перед включением правила. [Сети Docker bridge](https://docs.docker.com/engine/network/drivers/bridge/) · [Публикация портов Docker](https://docs.docker.com/engine/network/port-publishing/)
+
 ## IPv6 в Rust standalone
 
 По умолчанию сервер слушает `0.0.0.0` (IPv4). Чтобы включить все IPv6-интерфейсы в Linux standalone, добавьте `--host=::` к обычной команде запуска. Для постоянной настройки задайте `"host": "::"` в секции `server` файла `config.json`. В примере сервер слушает порт `12382`, а команда `curl` проверяет доступ с этой же машины.
@@ -118,7 +136,7 @@ curl --noproxy '*' -g -6 'http://[::1]:12382/ready'
 
 ### Caddy по IPv6
 
-IPv6-адреса в `INPX_TRUSTED_PROXY_CIDRS` поддерживаются в Rust 2.0.3. В примере адрес Caddy — `2001:db8:31::49`, адрес библиотеки — `2001:db8:31::97`. Подставьте свои адреса. На машине библиотеки задайте переменные перед запуском сервера.
+IPv6-адреса в `INPX_TRUSTED_PROXY_CIDRS` поддерживаются начиная с Rust 2.0.3. В примере адрес Caddy — `2001:db8:31::49`, адрес библиотеки — `2001:db8:31::97`. Подставьте свои адреса. На машине библиотеки задайте переменные перед запуском сервера.
 
 ```sh
 export INPX_TRUST_PROXY=true

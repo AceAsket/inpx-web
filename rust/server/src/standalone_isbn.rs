@@ -79,7 +79,7 @@ pub(super) fn start(state: &Arc<State>, force: bool) -> Result<Value> {
         let catalogue = lock.as_ref().ok_or(UNAVAILABLE)?;
         (
             catalogue.generation.clone(),
-            catalogue.isbn_signature()?,
+            catalogue.refresh_isbn_signature(&state.index.sources())?,
             catalogue.stats["bookCountAll"].as_u64().unwrap_or_default(),
         )
     };
@@ -200,7 +200,7 @@ fn run(
                 .as_ref()
                 .filter(|catalogue| catalogue.generation == generation)
                 .ok_or(CHANGED)?;
-            if current.isbn_signature()? != build.signature() {
+            if current.refresh_isbn_signature(&sources)? != build.signature() {
                 return Err(CHANGED.into());
             }
             return Ok(true);

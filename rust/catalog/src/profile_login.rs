@@ -43,6 +43,7 @@ struct LegacyProfile {
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum Decision {
     Denied,
+    RoleDenied,
     NeedOtp,
     NeedOtpSetup,
     Legacy,
@@ -206,6 +207,15 @@ pub fn authenticate(
     attempts: &Mutex<TotpAttempts>,
     store: &mut Store,
 ) -> Result<Decision> {
+    authenticate_with_role_check(request, attempts, store, |_| true)
+}
+
+pub fn authenticate_with_role_check(
+    request: Request,
+    attempts: &Mutex<TotpAttempts>,
+    store: &mut Store,
+    permits: impl FnOnce(bool) -> bool,
+) -> Result<Decision> {
     let Request {
         source,
         key_file,
@@ -230,6 +240,11 @@ pub fn authenticate(
         || !profile_password::verify(&profile.password_hash, profile.login.as_bytes(), password)?
     {
         return Ok(Decision::Denied);
+    }
+    // A policy-specific error requires a valid password. Check the role before
+    // requesting or consuming a second factor or writing any credential changes.
+    if !permits(profile.is_admin) {
+        return Ok(Decision::RoleDenied);
     }
     if (profile.otp_required || policy.otp_required) && profile.profile_totp.is_none() {
         return Ok(Decision::NeedOtpSetup);

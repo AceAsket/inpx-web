@@ -5,27 +5,42 @@
             <q-checkbox :model-value="access.allowAnonymousAccess && !access.localLoginForced" label="Разрешить гостевой доступ"
                 :disable="!!saving || accessLocked('allowAnonymousAccess') || access.localLoginForced"
                 @update:model-value="access.allowAnonymousAccess = $event" />
-            <p v-if="access.localLoginForced" class="hint">Для входа требуются учётные данные по настройке сервера.</p>
+            <p v-if="access.localLoginForced" class="hint">Гостевой доступ отключён, пока действует «Требовать вход».</p>
             <small v-if="accessLocked('allowAnonymousAccess')" class="hint">INPX_ALLOW_ANONYMOUS_ACCESS · окружение</small>
             <q-checkbox v-model="access.trustProxy" label="Доверять заголовкам от указанных прокси"
                 :disable="!!saving || accessLocked('trustProxy')" />
-            <small v-if="accessLocked('trustProxy')" class="hint">INPX_TRUST_PROXY · окружение</small>
+            <small v-if="accessLocked('trustProxy')" class="hint">Задано при запуске через <code>INPX_TRUST_PROXY</code></small>
             <q-input v-model="networks" type="textarea" autogrow outlined dense
-                label="Доверенные IPv4 и IPv6" hint="Одна сеть или адрес на строку"
+                label="IP и сети доверенных прокси" hint="Одна сеть или адрес на строку"
                 placeholder="192.168.1.10/32" :disable="!!saving || accessLocked('trustedProxyCidrs')" />
-            <small v-if="accessLocked('trustedProxyCidrs')" class="hint">INPX_TRUSTED_PROXY_CIDRS · окружение</small>
-            <p class="hint">Адрес вашего соединения <code>{{ access.peer }}</code> · {{ access.peerTrusted ? 'доверенный прокси' : 'прямое или недоверенное соединение' }}</p>
+            <small v-if="accessLocked('trustedProxyCidrs')" class="hint">Задано при запуске через <code>INPX_TRUSTED_PROXY_CIDRS</code></small>
+            <p class="hint">TCP-адрес, который видит сервер <code>{{ savedAccess.peer }}</code> · {{ peerInProxyCidrs ? 'в списке адресов прокси' : 'вне списка адресов прокси' }}</p>
+            <q-input v-model="adminNetworks" type="textarea" autogrow outlined dense
+                label="Разрешённые IP и сети администратора"
+                hint="Один IPv4, IPv6 или CIDR на строку. Пустой список снимает ограничение по IP."
+                :disable="!!saving || accessLocked('adminAllowedCidrs')" />
+            <small v-if="accessLocked('adminAllowedCidrs')" class="hint">INPX_ADMIN_ALLOWED_CIDRS · окружение</small>
+            <p v-if="savedAccess.adminClient" class="hint">IP для проверки доступа администратора <code>{{ savedAccess.adminClient }}</code></p>
+            <p v-else-if="savedAccess.peerTrusted" class="hint">
+                Не удалось определить IP клиента через <code>{{ savedAccess.peer }}</code>.
+                Откройте библиотеку через прокси с <code>X-Forwarded-For</code> или напрямую с адреса вне списка прокси.
+            </p>
             <details>
                 <summary>Правила входа и SSO</summary>
                 <div class="server-fields">
                     <div v-for="field in accessFields" :key="field.key" class="server-field">
                         <q-checkbox v-if="field.type === 'boolean'" v-model="access[field.key]" :label="field.label"
-                            :disable="!!saving || accessLocked(field.key)" />
+                            :disable="!!saving || accessLocked(field.key) || (field.key === 'adminDirectOnly' && legacyRuleLockedHere)" />
                         <q-select v-else-if="field.options" v-model="access[field.key]" :options="field.options"
                             emit-value map-options outlined dense :label="field.label" :disable="!!saving || accessLocked(field.key)" />
                         <q-input v-else v-model="access[field.key]" outlined dense :label="field.label"
                             :disable="!!saving || accessLocked(field.key)" />
-                        <small v-if="accessLocked(field.key)" class="hint">{{ field.env }} · окружение</small>
+                        <small v-if="accessLocked(field.key)" class="hint">Задано при запуске через <code>{{ field.env }}</code></small>
+                        <small v-if="field.key === 'adminDirectOnly' && legacyRuleLockedHere" class="hint">
+                            Подключитесь с адреса вне списка прокси. Если Docker показывает шлюз для обоих маршрутов,
+                            выделите прокси свой IP в общей сети Docker.
+                        </small>
+                        <small v-else-if="field.hint" class="hint">{{ field.hint }}</small>
                     </div>
                 </div>
             </details>
@@ -100,6 +115,8 @@ const accessFields = [
         {label: 'Локальные профили', value: 'local'}, {label: 'Внешний SSO', value: 'proxy'}, {label: 'Без режима обязательного входа', value: 'none'},
     ]},
     {...toggle('requireAuth', 'Требовать вход'), env: 'INPX_REQUIRE_AUTH'},
+    {...toggle('adminDirectOnly', 'Разрешить вход администратора только напрямую'), env: 'INPX_ADMIN_DIRECT_ONLY',
+        hint: 'При пустом списке адресов администратора действует правило прямого входа.'},
     {key: 'proxyAuthHeader', label: 'Заголовок с именем пользователя SSO', env: 'INPX_PROXY_AUTH_HEADER'},
     {...toggle('authExemptHealth', 'Разрешить публичную проверку состояния'), env: 'INPX_AUTH_EXEMPT_HEALTH'},
 ];
@@ -205,10 +222,10 @@ export default {
             access: {...this.config.adminAccess},
             savedAccess: this.config.adminAccess,
             networks: this.config.adminAccess.trustedProxyCidrs.join('\n'),
+            adminNetworks: (this.config.adminAccess.adminAllowedCidrs ?? []).join('\n'),
             runtime: this.config.adminRuntime,
             settings: {},
             groups,
-            accessFields,
             formatOptions: formats.map(value => ({value, label: value.toUpperCase()})),
             removeSecrets: {},
             saving: '',
@@ -217,6 +234,9 @@ export default {
         };
     },
     computed: {
+        peerInProxyCidrs() { return this.savedAccess.peerInProxyCidrs ?? this.savedAccess.peerTrusted; },
+        legacyRuleLockedHere() { return this.peerInProxyCidrs && !this.savedAccess.adminAllowedCidrs?.length; },
+        accessFields() { return accessFields.filter(field => field.key !== 'adminDirectOnly' || this.savedAccess.adminDirectOnly); },
         locked() { return this.runtime.locked; },
         availableFormats() { return this.runtime.formats.map(format => format.toUpperCase()).join(', ') || 'исходный формат'; },
         converterStatus() {
@@ -232,12 +252,15 @@ export default {
             const patch = {};
             const original = this.savedAccess;
             for (const key of ['allowAnonymousAccess', 'trustProxy', ...this.accessFields.map(field => field.key)]) {
+                if (key === 'adminDirectOnly' && this.legacyRuleLockedHere) continue;
                 if (!this.accessLocked(key) && this.access[key] !== original[key])
                     patch[key] = this.access[key];
             }
-            const networks = this.networks.split(/[\s,]+/).filter(Boolean);
-            if (!this.accessLocked('trustedProxyCidrs') && networks.join(',') !== original.trustedProxyCidrs.join(','))
-                patch.trustedProxyCidrs = networks;
+            for (const [key, draft] of [['trustedProxyCidrs', this.networks], ['adminAllowedCidrs', this.adminNetworks]]) {
+                const addresses = draft.split(/[\s,]+/).filter(Boolean);
+                if (!this.accessLocked(key) && addresses.join(',') !== (original[key] ?? []).join(','))
+                    patch[key] = addresses;
+            }
             return patch;
         },
     },
@@ -341,6 +364,7 @@ export default {
                 this.access = {...access};
                 this.savedAccess = access;
                 this.networks = access.trustedProxyCidrs.join('\n');
+                this.adminNetworks = access.adminAllowedCidrs.join('\n');
                 this.$root.notify.success('Настройки доступа применены');
             } catch (error) {
                 this.$root.notify.error(error.message);

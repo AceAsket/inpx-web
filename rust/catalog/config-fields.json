@@ -32,6 +32,8 @@
         "trustProxy",
         "proxyAuthHeader",
         "trustedProxyCidrs",
+        "adminDirectOnly",
+        "adminAllowedCidrs",
         "authExemptHealth",
         "metricsEnabled",
         "metricsPath",

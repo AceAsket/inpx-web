@@ -33,20 +33,24 @@ function readRenderedPage(page) {
     });
 }
 
+async function stubReaderState(page, preferences, progress = {}) {
+    await page.routeWebSocket('**/ws', socket => {
+        const server = socket.connectToServer();
+        server.onMessage(message => socket.send(message));
+        socket.onMessage(message => {
+            const request = JSON.parse(message);
+            if (request.action !== 'get-reader-state') return server.send(message);
+            socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
+            socket.send(JSON.stringify({requestId: request.requestId, preferences, progress, bookmarks: []}));
+        });
+    });
+}
+
 async function checkDesktopOpening(browser, url, progress) {
     const context = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
     try {
         const page = await context.newPage();
-        await page.routeWebSocket('**/ws', socket => {
-            const server = socket.connectToServer();
-            server.onMessage(message => socket.send(message));
-            socket.onMessage(message => {
-                const request = JSON.parse(message);
-                if (request.action !== 'get-reader-state') return server.send(message);
-                socket.send(JSON.stringify({requestId: request.requestId, _rok: 1}));
-                socket.send(JSON.stringify({requestId: request.requestId, preferences: {readMode: 'paged'}, progress, bookmarks: []}));
-            });
-        });
+        await stubReaderState(page, {readMode: 'paged'}, progress);
         await page.addInitScript(saved => {
             const sample = () => {
                 const debug = document.querySelector('.reader-debug-panel')?.textContent || '';
@@ -85,6 +89,195 @@ async function checkDesktopOpening(browser, url, progress) {
             assert.equal(index, 1, 'Finishing pagination must preserve an early page turn');
         }
     } finally {await context.close();}
+}
+
+async function checkOpeningWithClippedViewport(browser, url) {
+    const context = await browser.newContext({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true, serviceWorkers: 'block'});
+    try {
+        const page = await context.newPage();
+        await stubReaderState(page, {readMode: 'paged'});
+        await page.addInitScript(() => {
+            // Two layout viewport heights leave the same usable area for the page.
+            Object.defineProperty(window.visualViewport, 'height', {configurable: true, get: () => 440});
+            const observer = new MutationObserver(() => {
+                if (!document.head) return;
+                observer.disconnect();
+                const style = document.createElement('style');
+                const height = sessionStorage.getItem('smallerLayoutViewport') ? 520 : 650;
+                style.textContent = `.reader-scroll {max-height: ${height}px}`;
+                document.head.appendChild(style);
+            });
+            observer.observe(document, {childList: true, subtree: true});
+        });
+        await page.goto(url);
+        await page.waitForFunction(() => /pagination: done/.test(document.querySelector('.reader-debug-panel')?.textContent)
+            && !document.querySelector('.reader-reflow-indicator--strong')
+            && document.querySelector('.reader-page-sheet--live'), undefined, {timeout: 15000});
+        const geometry = () => page.evaluate(() => ({
+            scrollerHeight: document.querySelector('.reader-scroll').clientHeight,
+            pageHeight: document.querySelector('.reader-page-sheet--live').clientHeight,
+        }));
+        const first = await geometry();
+        await page.evaluate(() => sessionStorage.setItem('smallerLayoutViewport', 'true'));
+        await page.reload();
+        await page.waitForFunction(() => /pagination: (done|cached)/.test(document.querySelector('.reader-debug-panel')?.textContent)
+            && !document.querySelector('.reader-reflow-indicator--strong')
+            && document.querySelector('.reader-page-sheet--live'), undefined, {timeout: 15000});
+        const reopened = await geometry();
+        assert.notEqual(reopened.scrollerHeight, first.scrollerHeight);
+        assert.equal(reopened.pageHeight, first.pageHeight);
+        assert.match(await page.locator('.reader-debug-panel').textContent(), /pagination: cached/,
+            'Reopening with the same usable page area must reuse the saved pagination');
+
+        await page.evaluate(() => {
+            Object.defineProperty(window.visualViewport, 'height', {get: () => 380});
+            window.visualViewport.dispatchEvent(new Event('resize'));
+        });
+        await page.waitForFunction(previousHeight => {
+            const sheet = document.querySelector('.reader-page-sheet--live');
+            return !!sheet && sheet.clientHeight < previousHeight && getComputedStyle(sheet).visibility === 'visible'
+                && /pagination: done/.test(document.querySelector('.reader-debug-panel')?.textContent);
+        }, reopened.pageHeight, {timeout: 15000});
+        assert.equal((await geometry()).scrollerHeight, reopened.scrollerHeight,
+            'Changing the visual viewport alone must reflow the page');
+    } finally {await context.close();}
+}
+
+async function checkMobileViewportTransitions(browser, url) {
+    const portrait = {width: 390, height: 844};
+    const context = await browser.newContext({viewport: portrait, isMobile: true, hasTouch: true, serviceWorkers: 'block'});
+    try {
+        const page = await context.newPage();
+        await stubReaderState(page, {readMode: 'paged', contentWidthMode: 'viewport', pageAnimation: 'none'});
+        const waitForSheet = (width, maximumHeight, minimumHeight = 0) => page.waitForFunction(({width, maximumHeight, minimumHeight}) => {
+            const sheets = document.querySelectorAll('.reader-page-sheet--live');
+            const sheet = sheets[0];
+            return innerWidth === width && sheets.length === 1 && sheet.offsetWidth >= width - 40
+                && sheet.offsetHeight > minimumHeight && sheet.offsetHeight < maximumHeight
+                && getComputedStyle(sheet).visibility === 'visible' && !document.querySelector('.reader-reflow-indicator--strong');
+        }, {width, maximumHeight, minimumHeight});
+        await page.goto(url);
+        await waitForSheet(portrait.width, portrait.height);
+        await page.keyboard.press('PageDown');
+        await page.waitForFunction(() => document.querySelector('.reader-page-sheet--live')?.dataset.pageIndex === '1');
+        const earlyRotation = await page.evaluate(async() => {
+            const sheet = document.querySelector('.reader-page-sheet--live');
+            if ('onorientationchange' in window) window.dispatchEvent(new Event('orientationchange'));
+            else screen.orientation.dispatchEvent(new Event('change'));
+            await Promise.resolve();
+            return {viewport: innerWidth, hidden: getComputedStyle(sheet).visibility === 'hidden',
+                waiting: !!document.querySelector('.reader-page-sheet--placeholder')};
+        });
+        assert.deepEqual(earlyRotation, {viewport: portrait.width, hidden: true, waiting: true},
+            'An orientation event hides the old sheet before the viewport changes');
+
+        // A turn of 180 degrees can leave the viewport the same size.
+        await waitForSheet(portrait.width, portrait.height);
+        assert.equal(await page.locator('.reader-page-sheet--live').getAttribute('data-page-index'), '1');
+
+        const landscape = {width: 844, height: 390};
+        await page.setViewportSize(landscape);
+        await waitForSheet(landscape.width, landscape.height);
+        await page.setViewportSize(portrait);
+        await waitForSheet(portrait.width, portrait.height, landscape.height);
+
+        const heightBeforeResize = await page.locator('.reader-page-sheet--live').evaluate(sheet => sheet.offsetHeight);
+        const observedResize = await page.evaluate(() => new Promise(resolve => {
+            const scroller = document.querySelector('.reader-scroll');
+            const height = scroller.clientHeight - 160;
+            const observer = new ResizeObserver(() => {
+                if (scroller.clientHeight !== height) return;
+                observer.disconnect();
+                queueMicrotask(() => {
+                    const sheet = document.querySelector('.reader-page-sheet--live');
+                    resolve({hidden: getComputedStyle(sheet).visibility === 'hidden', waiting: !!document.querySelector('.reader-page-sheet--placeholder')});
+                });
+            });
+            observer.observe(scroller);
+            scroller.style.maxHeight = `${height}px`;
+        }));
+        assert.deepEqual(observedResize, {hidden: true, waiting: true}, 'A container resize hides the clipped sheet before the next animation frame');
+        await waitForSheet(portrait.width, heightBeforeResize);
+    } finally {await context.close();}
+}
+
+async function checkOpeningWithWideningViewport(browser, url) {
+    const context = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
+    try {
+        const page = await context.newPage();
+        await stubReaderState(page, {readMode: 'paged', contentWidthMode: 'viewport'});
+        await page.addInitScript(() => {
+            const state = window.__openingWidths = {};
+            const observer = new MutationObserver(() => {
+                const scroller = document.querySelector('.reader-scroll--paged');
+                if (!scroller) return;
+                if (!state.initialScroller) {
+                    scroller.style.width = '1040px';
+                    state.initialScroller = scroller.clientWidth;
+                }
+                if (!/pagination: building/.test(document.querySelector('.reader-debug-panel')?.textContent)) return;
+                scroller.style.removeProperty('width');
+                state.finalScroller = scroller.clientWidth;
+                observer.disconnect();
+            });
+            observer.observe(document, {subtree: true, childList: true, characterData: true});
+            const sample = () => {
+                const live = document.querySelector('.reader-page-sheet--live');
+                if (live && getComputedStyle(live).visibility === 'visible') {
+                    state.firstSheet = live.offsetWidth;
+                    return;
+                }
+                requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+        });
+        await page.goto(url);
+        await page.waitForFunction(() => {
+            const live = document.querySelector('.reader-page-sheet--live');
+            const state = window.__openingWidths;
+            return state?.firstSheet && state.finalScroller > state.initialScroller && live?.offsetWidth > state.initialScroller
+                && /pagination: done/.test(document.querySelector('.reader-debug-panel')?.textContent);
+        }, undefined, {timeout: 20000});
+        const widths = await page.evaluate(() => ({...window.__openingWidths,
+            finalSheet: document.querySelector('.reader-page-sheet--live').offsetWidth}));
+        assert.equal(widths.firstSheet, widths.finalSheet, 'Opening must not show a page measured before the reader widened');
+    } finally {await context.close();}
+}
+
+async function checkScrollOpening(browser, url) {
+    const scenarios = [
+        {widthMode: 'viewport', progress: {}},
+        {widthMode: 'fixed', progress: {percent: .25, updatedAt: new Date().toISOString()}},
+    ];
+    for (const {widthMode, progress} of scenarios) {
+        const context = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
+        try {
+            const page = await context.newPage();
+            await stubReaderState(page, {readMode: 'scroll', contentWidthMode: widthMode, contentWidth: 680}, progress);
+            await page.addInitScript(() => {
+                window.__scrollOpening = () => {
+                    const body = document.querySelector('.reader-body:not(.reader-body--paged)');
+                    const scroller = document.querySelector('.reader-scroll');
+                    if (!body?.querySelector('.reader-paragraph') || getComputedStyle(body).visibility !== 'visible') return null;
+                    return {width: body.offsetWidth, top: scroller.scrollTop};
+                };
+                const sample = () => {
+                    window.__firstScrollFrame = window.__scrollOpening();
+                    if (!window.__firstScrollFrame) requestAnimationFrame(sample);
+                };
+                requestAnimationFrame(sample);
+            });
+            await page.goto(url);
+            await page.waitForFunction(() => window.__firstScrollFrame && !document.querySelector('.reader-reflow-indicator--strong'));
+            const {first, settled} = await page.evaluate(() => ({first: window.__firstScrollFrame, settled: window.__scrollOpening()}));
+            assert.equal(first.width, settled.width, `The first frame keeps the ${widthMode} width`);
+            if (widthMode === 'fixed') assert.equal(first.width, 680);
+            if (progress.percent) {
+                assert(settled.top > 0, 'The saved scroll position is restored');
+                assert.equal(first.top, settled.top, 'The first frame already shows the saved scroll position');
+            }
+        } finally {await context.close();}
+    }
 }
 
 (async() => {
@@ -299,6 +492,10 @@ async function checkDesktopOpening(browser, url, progress) {
         await checkDesktopOpening(browser, readerUrl, {});
         await checkDesktopOpening(browser, readerUrl, {pageIndex: 4, percent: .1, textOffset: -1,
             textSnippet: 'Абзац 2.3. Читатель открывает книгу', updatedAt: new Date().toISOString()});
+        await checkOpeningWithClippedViewport(browser, readerUrl);
+        await checkMobileViewportTransitions(browser, readerUrl);
+        await checkOpeningWithWideningViewport(browser, readerUrl);
+        await checkScrollOpening(browser, readerUrl);
         console.log(`Reader: stable footer (${before.total} → ${after.total} pages) and complete visible text across all ${after.total} pages.`);
     } catch (error) {
         if (page) await page.screenshot({path: path.join(directory, 'failure.png')}).catch(() => {});

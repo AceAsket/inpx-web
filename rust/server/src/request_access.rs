@@ -175,6 +175,8 @@ pub(crate) struct Standalone {
     configured_binding_required: bool,
     force_local_login: bool,
     allow_guests: bool,
+    admin_direct_only: bool,
+    admin_ranges: Vec<IpNet>,
     mode: String,
     require_auth: bool,
     pub(crate) services: Arc<Services>,
@@ -207,13 +209,33 @@ impl Services {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Admission {
+    pub(crate) peer: IpAddr,
     pub(crate) client: IpAddr,
+    pub(crate) admin_client: Option<IpAddr>,
     pub(crate) proxy_login: Option<String>,
     pub(crate) secure: bool,
     pub(crate) cookie_port: u16,
     pub(crate) protected: bool,
     pub(crate) service: ServiceAccess,
     pub(crate) forwarded_host: Option<String>,
+    pub(crate) profile_transport: ProfileTransport,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProfileTransport {
+    All,
+    WithoutAdmin,
+    AdminOnly,
+}
+
+impl ProfileTransport {
+    pub(crate) fn permits(self, admin: bool) -> bool {
+        match self {
+            Self::All => true,
+            Self::WithoutAdmin => !admin,
+            Self::AdminOnly => admin,
+        }
+    }
 }
 
 pub(crate) struct Live(watch::Sender<Arc<Standalone>>);
@@ -244,6 +266,8 @@ pub(crate) const LIVE_FIELDS: &[(&str, &str)] = &[
     ("allowAnonymousAccess", "INPX_ALLOW_ANONYMOUS_ACCESS"),
     ("trustProxy", "INPX_TRUST_PROXY"),
     ("trustedProxyCidrs", "INPX_TRUSTED_PROXY_CIDRS"),
+    ("adminDirectOnly", "INPX_ADMIN_DIRECT_ONLY"),
+    ("adminAllowedCidrs", "INPX_ADMIN_ALLOWED_CIDRS"),
     ("authMode", "INPX_AUTH_MODE"),
     ("requireAuth", "INPX_REQUIRE_AUTH"),
     ("proxyAuthHeader", "INPX_PROXY_AUTH_HEADER"),
@@ -269,9 +293,12 @@ impl BrowserConnection {
                 )
                 .is_ok_and(|admission| {
                     admission.client == self.admission.client
+                        && admission.admin_client == self.admission.admin_client
                         && admission.proxy_login == self.admission.proxy_login
                         && admission.secure == self.admission.secure
                         && admission.cookie_port == self.admission.cookie_port
+                        && admission.profile_transport.permits(true)
+                            == self.admission.profile_transport.permits(true)
                 })
     }
 }
@@ -322,8 +349,56 @@ impl Standalone {
         !self.allow_guests || self.force_local_login
     }
 
-    pub(crate) fn admin_view(&self, peer: IpAddr) -> Value {
+    pub(crate) fn is_proxy_peer(&self, peer: IpAddr) -> bool {
+        self.policy.trusted_range(peer)
+    }
+
+    pub(crate) fn has_admin_ranges(&self) -> bool {
+        !self.admin_ranges.is_empty()
+    }
+
+    pub(crate) fn admin_client(&self, peer: IpAddr, headers: &HeaderMap) -> Option<IpAddr> {
+        if self.policy.settings.trust_proxy && self.is_proxy_peer(peer) {
+            // A proxy's TCP address cannot identify a client when forwarding is missing.
+            self.policy.forwarded_client(headers)
+        } else {
+            Some(peer)
+        }
+    }
+
+    pub(crate) fn profile_transport(
+        &self,
+        peer: IpAddr,
+        admin_client: Option<IpAddr>,
+    ) -> ProfileTransport {
+        if self.has_admin_ranges()
+            && !admin_client.is_some_and(|address| {
+                self.admin_ranges
+                    .iter()
+                    .any(|range| range.contains(&address.to_canonical()))
+            })
+        {
+            return ProfileTransport::WithoutAdmin;
+        }
+        if !self.admin_direct_only {
+            ProfileTransport::All
+        } else if self.is_proxy_peer(peer) {
+            if self.has_admin_ranges() {
+                ProfileTransport::All
+            } else {
+                ProfileTransport::WithoutAdmin
+            }
+        } else if self.policy.settings.require_proxy {
+            ProfileTransport::AdminOnly
+        } else {
+            ProfileTransport::All
+        }
+    }
+
+    pub(crate) fn admin_view(&self, admission: &Admission) -> Value {
         let fields = &self.policy.settings;
+        let peer = admission.peer;
+        let peer_in_proxy_cidrs = self.is_proxy_peer(peer);
         let locked: Vec<_> = LIVE_FIELDS
             .iter()
             .filter(|(_, name)| std::env::var(name).is_ok())
@@ -333,13 +408,17 @@ impl Standalone {
             "allowAnonymousAccess":self.allow_guests,
             "localLoginForced":self.force_local_login,
             "trustProxy":fields.trust_proxy,
+            "adminDirectOnly":self.admin_direct_only,
+            "adminAllowedCidrs":self.admin_ranges.iter().map(IpNet::to_string).collect::<Vec<_>>(),
+            "adminClient":admission.admin_client.map(|ip| ip.to_canonical()),
             "authMode":if self.mode.is_empty() {"local"} else {&self.mode},
             "requireAuth":self.require_auth,
             "proxyAuthHeader":fields.proxy_header,
             "authExemptHealth":fields.auth_exempt_health,
             "trustedProxyCidrs":fields.trusted_ranges.iter().map(|range| range.0.trunc().to_string()).collect::<Vec<_>>(),
             "peer":peer.to_canonical(),
-            "peerTrusted":fields.trust_proxy && self.policy.trusted_range(peer),
+            "peerTrusted":fields.trust_proxy && peer_in_proxy_cidrs,
+            "peerInProxyCidrs":peer_in_proxy_cidrs,
             "locked":locked
         })
     }
@@ -354,6 +433,8 @@ impl Standalone {
         let mut allow_guests = self.allow_guests;
         let mut mode = self.mode.clone();
         let mut require_auth = self.require_auth;
+        let mut admin_direct_only = self.admin_direct_only;
+        let mut admin_ranges = self.admin_ranges.clone();
         for (field, env) in LIVE_FIELDS {
             let Some(value) = patch.get(*field) else {
                 continue;
@@ -366,6 +447,14 @@ impl Standalone {
                     allow_guests = value
                         .as_bool()
                         .ok_or("Укажите, разрешён ли гостевой доступ")?
+                }
+                "adminDirectOnly" => {
+                    admin_direct_only = value
+                        .as_bool()
+                        .ok_or("Некорректное правило входа администратора")?;
+                }
+                "adminAllowedCidrs" => {
+                    admin_ranges = parse_admin_ranges(value)?;
                 }
                 "trustProxy" => {
                     settings.trust_proxy = value
@@ -420,6 +509,7 @@ impl Standalone {
         if settings.require_proxy && (!settings.trust_proxy || settings.trusted_ranges.is_empty()) {
             return Err("Для входа через прокси укажите хотя бы один доверенный адрес".into());
         }
+        validate_admin_direct(admin_direct_only, &settings.trusted_ranges)?;
         let services = services.map_or_else(|| self.services.clone(), Arc::new);
         settings.metrics = services.metrics_rules();
         settings.metadata_service = services.metadata_rules();
@@ -440,6 +530,8 @@ impl Standalone {
             configured_binding_required: self.configured_binding_required,
             force_local_login,
             allow_guests,
+            admin_direct_only,
+            admin_ranges,
             mode,
             require_auth,
             services,
@@ -492,6 +584,16 @@ impl Standalone {
             },
         };
         let proxy_header = value("INPX_PROXY_AUTH_HEADER", "proxyAuthHeader", "Remote-User");
+        let admin_direct_only =
+            flag("INPX_ADMIN_DIRECT_ONLY").unwrap_or(config["adminDirectOnly"] == true);
+        let admin_ranges = match std::env::var("INPX_ADMIN_ALLOWED_CIDRS") {
+            Ok(value) => parse_admin_ranges(&Value::String(value))?,
+            Err(std::env::VarError::NotPresent) => {
+                parse_admin_ranges(&config["adminAllowedCidrs"])?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        validate_admin_direct(admin_direct_only, &trusted_ranges)?;
         let require_auth = require_auth(config);
         let require_proxy = mode == "proxy" && (configured_binding_required || require_auth);
         let policy = Policy::new(Settings {
@@ -523,6 +625,8 @@ impl Standalone {
             configured_binding_required,
             force_local_login: matches!(mode.as_str(), "" | "local") && require_auth,
             allow_guests: allow_guests(config),
+            admin_direct_only,
+            admin_ranges,
             mode,
             require_auth,
             services: Arc::new(services),
@@ -538,9 +642,18 @@ impl Standalone {
         protocol: Protocol,
         route: ServiceRoute,
     ) -> Result<Admission, Decision> {
+        let headers = request.headers();
+        let admin_client = self.admin_client(peer, headers);
+        let profile_transport = self.profile_transport(peer, admin_client);
         let decision = self
             .policy
-            .evaluate(request, peer, protocol, Some(route))
+            .evaluate(
+                request,
+                peer,
+                protocol,
+                Some(route),
+                profile_transport == ProfileTransport::AdminOnly,
+            )
             .unwrap_or(Decision::Forward);
         let Decision::Allow {
             secure, service, ..
@@ -549,12 +662,7 @@ impl Standalone {
             return Err(decision);
         };
         let trusted = self.policy.settings.trust_proxy && self.policy.trusted_range(peer);
-        let headers = request.headers();
-        let client = if trusted {
-            self.policy.forwarded_client(headers).unwrap_or(peer)
-        } else {
-            peer
-        };
+        let client = admin_client.unwrap_or(peer);
         let proxy_login = if trusted && self.bind_profile {
             self.policy
                 .proxy_header
@@ -576,7 +684,9 @@ impl Standalone {
             .and_then(|port| port.parse().ok());
         let cookie_port = public_port(headers, secure, forwarded_host, forwarded_port);
         Ok(Admission {
+            peer,
             client,
+            admin_client,
             proxy_login,
             secure,
             cookie_port,
@@ -585,8 +695,49 @@ impl Standalone {
             forwarded_host: forwarded_host
                 .filter(|_| route == ServiceRoute::Metadata)
                 .map(str::to_owned),
+            profile_transport,
         })
     }
+}
+
+fn parse_admin_ranges(value: &Value) -> inpx_catalog::Result<Vec<IpNet>> {
+    const INVALID: &str = "Некорректный IPv4/IPv6-адрес или CIDR в списке адресов администратора";
+    let entries: Vec<_> = match value {
+        Value::Null => return Ok(Vec::new()),
+        Value::String(value) => split_proxy_cidrs(value).collect(),
+        Value::Array(values) => values
+            .iter()
+            .map(|value| value.as_str().ok_or(INVALID))
+            .collect::<Result<_, _>>()?,
+        _ => return Err(INVALID.into()),
+    };
+    if entries.len() > 128 {
+        return Err("Укажите до 128 разрешённых адресов и сетей администратора".into());
+    }
+    entries
+        .into_iter()
+        .map(|entry| {
+            let entry = entry.trim();
+            let network = entry
+                .parse::<IpNet>()
+                .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
+                .map_err(|_| INVALID)?;
+            if let IpNet::V6(range) = network
+                && range.prefix_len() >= 96
+                && let Some(mapped) = range.addr().to_ipv4_mapped()
+            {
+                return Ok(IpNet::new(mapped.into(), range.prefix_len() - 96)?.trunc());
+            }
+            Ok(network.trunc())
+        })
+        .collect()
+}
+
+fn validate_admin_direct(enabled: bool, ranges: &[Range]) -> inpx_catalog::Result<()> {
+    if enabled && ranges.is_empty() {
+        return Err("Для прямого входа администратора укажите TCP-адреса прокси".into());
+    }
+    Ok(())
 }
 
 // Cookies have no port scope in a browser. Use the public listener port in their names.
@@ -655,7 +806,7 @@ impl Policy {
         peer: IpAddr,
         protocol: Protocol,
     ) -> Decision {
-        self.evaluate(request, peer, protocol, None)
+        self.evaluate(request, peer, protocol, None, false)
             .unwrap_or(Decision::Forward)
     }
 
@@ -665,6 +816,7 @@ impl Policy {
         peer: IpAddr,
         protocol: Protocol,
         route: Option<ServiceRoute>,
+        direct_admin: bool,
     ) -> Result<Decision, Forward> {
         let headers = request.headers();
         // The upstream HTTP parser sees headers after connection-specific fields are removed.
@@ -722,6 +874,7 @@ impl Policy {
 
         let service = self.service_access(request, normalized, protocol, on_metrics, route)?;
         let check_proxy = self.settings.require_proxy
+            && !direct_admin
             && !(on_health && self.settings.auth_exempt_health)
             && matches!(service, ServiceAccess::None);
         let deny = |reason| {
