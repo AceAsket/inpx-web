@@ -28,7 +28,8 @@ async function menuFormats(url, cookie) {
 
 async function check(directory, temp, tool, present) {
     const library = path.join(temp, 'library');
-    await createFixture(library, {defaultConversionFormats:true});
+    // PDF uses an external converter, which requires an EPUB without scripts.
+    await createFixture(library, {defaultConversionFormats:true, includeEpubScript:false});
     const configFile = path.join(library, 'config.json');
     const config = await fs.readJson(configFile);
     delete config.conversionFormats;

@@ -60,7 +60,7 @@ async function checkCoverDownload(url, uid, jxlCover) {
     console.log(jxlCover ? 'ok packaged JPEG XL cover decoded over HTTP' : 'ok packaged embedded PNG cover over HTTP');
 }
 
-async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = false, disableDjxl = false, extraEpubs = [], defaultConversionFormats = false} = {}) {
+async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = false, disableDjxl = false, extraEpubs = [], defaultConversionFormats = false, includeEpubScript = true} = {}) {
     await fs.ensureDir(dir);
     const zip = new yazl.ZipFile();
     const output = fs.createWriteStream(path.join(dir, 'smoke.inpx'));
@@ -80,7 +80,8 @@ async function createFixture(dir, {nativeJxlCover = false, extendedJxlBox = fals
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
     books.addBuffer(Buffer.from('<?xml version="1.0" encoding="UTF-8"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink"><description><title-info><book-title>Packaged smoke book</book-title><coverpage><image l:href="#cover"/></coverpage><lang>en</lang></title-info></description><body><section><p>Smoke text</p><p>Second paragraph for reader synchronization.</p><image l:href="#illustration"/></section></body><binary id="illustration" content-type="image/png">'+png+'</binary><binary id="cover" content-type="image/png">'+png+'</binary></FictionBook>'), '1.fb2');
     if (process.env.INPX_SMOKE_EPUB === 'true') {
-        const epubFile = path.join(dir, 'original.epub'); await require('./epub-fb2-tests').fixture(epubFile);
+        const epubFile = path.join(dir, 'original.epub');
+        await require('./epub-fb2-tests').fixture(epubFile, [], {}, {includeScript:includeEpubScript});
         const epubData = await fs.readFile(epubFile);
         books.addBuffer(epubData, '2.epub');
         const epubRow = [...row]; epubRow[2] = 'EPUB original'; epubRow[5] = '2'; epubRow[6] = String(epubData.length); epubRow[7] = '2'; epubRow[9] = 'epub'; epubRow[11] = 'ru';

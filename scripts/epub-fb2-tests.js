@@ -14,14 +14,15 @@ async function archive(file, entries) {
     zip.end(); await complete;
 }
 
-async function fixture(file, additions = [], replace = {}) {
+async function fixture(file, additions = [], replace = {}, {includeScript = true} = {}) {
     const picture = await fs.readFile(path.join(__dirname, '../client/assets/pwa-icon-192.png'));
+    const script = includeScript ? '<script>dangerous()</script>' : '';
     const entries = [
         ['mimetype', 'application/epub+zip'],
         ['META-INF/container.xml', '<container><rootfiles><rootfile full-path="OPS/book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'],
         ['OPS/book.opf', `<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>Книга &amp; главы</dc:title><dc:creator>Тестовый Автор</dc:creator><dc:language>ru</dc:language><dc:description>Аннотация книги.</dc:description><dc:identifier>urn:test:epub</dc:identifier><dc:date>2026-11-05</dc:date><meta name="cover" content="cover"/></metadata><manifest><item id="a" href="chapter%201.xhtml" media-type="application/xhtml+xml"/><item id="b" href="chapter2.xhtml" media-type="application/xhtml+xml"/><item id="n" href="notes.xhtml" media-type="application/xhtml+xml"/><item id="cover" href="cover.svg" media-type="image/svg+xml" properties="cover-image"/><item id="img" href="images/picture.png" media-type="image/png"/></manifest><spine><itemref idref="b"/><itemref idref="a"/></spine></package>`],
         ['OPS/chapter 1.xhtml', `<html xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Глава первая</title></head><body><h1 id="first">Первая глава</h1><p id="paragraph">Текст первой главы &nbsp; с&nbsp;пробелами.</p><p><a epub:type="noteref" href="notes.xhtml#n1">1</a></p><p><img src="images/picture.png" alt="Иллюстрация"/></p><table><tr><th>Ключ</th><td colspan="2">Значение</td></tr></table></body></html>`],
-        ['OPS/chapter2.xhtml', `<html><head><title>Глава вторая</title></head><body><h1>Вторая глава</h1><p>Текст второй главы: <em>курсив<br/>новая строка</em>, <strong>жирный</strong>.</p><p><a href="chapter%201.xhtml#paragraph">Перейти к первой</a></p><blockquote><p>Цитата</p></blockquote><script>dangerous()</script></body></html>`],
+        ['OPS/chapter2.xhtml', `<html><head><title>Глава вторая</title></head><body><h1>Вторая глава</h1><p>Текст второй главы: <em>курсив<br/>новая строка</em>, <strong>жирный</strong>.</p><p><a href="chapter%201.xhtml#paragraph">Перейти к первой</a></p><blockquote><p>Цитата</p></blockquote>${script}</body></html>`],
         ['OPS/notes.xhtml', `<html xmlns:epub="http://www.idpf.org/2007/ops"><body><aside epub:type="footnote" id="n1"><p>Текст сноски.</p><p><a href="chapter%201.xhtml#first">Назад</a></p></aside></body></html>`],
         ['OPS/cover.svg', '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="images/picture.png"/></svg>'],
         ['OPS/images/picture.png', picture],
