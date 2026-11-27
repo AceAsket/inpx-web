@@ -321,7 +321,8 @@ async function fixture(directory) {
         const {viewer, thumbnail} = await openIllustration(page, gallery, 2);
         await page.keyboard.press('Escape');
         await viewer.waitFor({state: 'hidden'});
-        assert(await thumbnail.evaluate(node => node === document.activeElement), 'Closing the viewer restores focus to the thumbnail');
+        // The dialog can leave the accessibility tree before its closing transition restores focus.
+        await page.waitForFunction(node => node === document.activeElement, await thumbnail.elementHandle());
         assert.equal(page.url(), bookUrl, 'Opening and closing an illustration keeps the book page');
         galleryFixture = 'empty-limited';
         await page.reload();
