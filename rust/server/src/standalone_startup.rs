@@ -17,11 +17,18 @@ pub(super) fn response(state: &State, request: &Request<Incoming>) -> Response<B
         return error(StatusCode::SERVICE_UNAVAILABLE);
     }
     if document && !is_poll(request) {
-        return send_bytes(
+        let mut response = send_bytes(
             include_bytes!("startup.html").to_vec(),
             "text/html; charset=utf-8",
             head,
         );
+        response.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            header::HeaderValue::from_static(
+                "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+            ),
+        );
+        return response;
     }
     let path = path.trim_end_matches('/');
     if !(document || matches!(path, "/api/index-status" | "/ready" | "/health")) {

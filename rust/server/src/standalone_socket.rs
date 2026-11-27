@@ -43,6 +43,7 @@ pub(super) struct Socket {
     web_config: Map<String, Value>,
     limits: std::sync::RwLock<TransportLimits>,
     jobs: Arc<Semaphore>,
+    large_requests: Arc<Semaphore>,
     pub(super) previews: Arc<super::resources::AdmissionSlots>,
     external: ExternalDiscovery,
 }
@@ -169,6 +170,7 @@ impl Socket {
             web_config,
             limits: std::sync::RwLock::new(TransportLimits::new(config)),
             jobs: Arc::new(Semaphore::new(64)),
+            large_requests: Arc::new(Semaphore::new(2)),
             previews: super::resources::AdmissionSlots::new(archive_slots),
             external: ExternalDiscovery::new(data),
         }
@@ -259,12 +261,20 @@ impl Socket {
         if let (Some(activity), Some(id)) = (&state.metrics.activity, connection) {
             activity.seen(id, None);
         }
-        match state
-            .access
-            .library
-            .admit(peer, text(&request, "accessToken"))
-        {
-            Ok(LibraryAdmission::Allowed) => (),
+        let explicit_token = request.get("accessToken").and_then(Value::as_str);
+        let effective_token = match explicit_token {
+            Some(token) => token.to_owned(),
+            None if request["action"].is_string() => state.access.sessions.ebook_access(browser),
+            None => String::new(),
+        };
+        match state.access.library.admit(peer, &effective_token) {
+            Ok(LibraryAdmission::Allowed) => {
+                if state.access.library.protected()
+                    && let Some(token) = explicit_token.filter(|token| !token.is_empty())
+                {
+                    state.access.sessions.set_ebook_access(browser, Some(token));
+                }
+            }
             Ok(LibraryAdmission::Challenge(salt)) => {
                 return json!({"error":"need_access_token","salt":salt});
             }
@@ -425,7 +435,7 @@ impl Socket {
                     *subscription = Change::Subscribe(Subscription {
                         owner: access.owner.as_deref().unwrap_or_default().into(),
                         token: access.token.clone(),
-                        library_token: text(&request, "accessToken").into(),
+                        library_token: effective_token.clone(),
                     });
                     json!({"enabled":true})
                 } else {
@@ -703,10 +713,14 @@ impl Socket {
             }
             "logout" => {
                 *subscription = Change::Clear;
-                state
-                    .access
-                    .library
-                    .logout(text(&request, "accessToken"))
+                let stored = state.access.sessions.ebook_access(browser);
+                state.access.sessions.set_ebook_access(browser, None);
+                let supplied = text(&request, "accessToken");
+                let mut outcome = state.access.library.logout(supplied);
+                if outcome.is_ok() && !stored.is_empty() && stored != supplied {
+                    outcome = state.access.library.logout(&stored);
+                }
+                outcome
                     .map(|()| json!({"success":true}))
                     .unwrap_or_else(|error| {
                         log::error!(target: "inpx::auth", "Не удалось отозвать сеанс доступа: {error}");
@@ -1305,7 +1319,7 @@ impl Socket {
         };
         if !recommendations_only
             && (external_only || request["includeExternal"] != false)
-            && let Some(options) = ExternalOptions::new(&config, request)
+            && let Some(options) = ExternalOptions::new(&config, request, admin)
         {
             let shelf = self
                 .external
@@ -1466,27 +1480,49 @@ async fn run(
                     Ok(Some(Err(Error::Utf8(_)))) => { close(&mut socket, CloseCode::Invalid, "").await; return; }
                     _ => return,
                 };
-                let Ok(request) = serde_json::from_str::<Value>(&frame) else {
+                let limits = state.socket.limits().clamp_to(connection_limits);
+                let frame_len = frame.len();
+                let large_permit = if frame_len > limits.message {
+                    match state.socket.large_requests.clone().try_acquire_owned() {
+                        Ok(permit) => Some(permit),
+                        Err(_) => {
+                            let id = extract_request_id(&frame);
+                            if send(&mut socket, fault("server_busy"), id).await.is_err() {
+                                return;
+                            }
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+                let parsed = if frame_len > 64 * 1024 {
+                    let raw = frame.to_string();
+                    tokio::task::spawn_blocking(move || serde_json::from_str::<Value>(&raw))
+                        .await
+                        .ok()
+                        .and_then(|res| res.ok())
+                } else {
+                    serde_json::from_str::<Value>(&frame).ok()
+                };
+                let Some(request) = parsed else {
                     if send(&mut socket, fault("Некорректный запрос WebSocket"), None).await.is_err() { return; }
                     continue;
                 };
-                let id = request.get("requestId").filter(|id| match id {
-                    Value::Null | Value::Bool(false) => false,
-                    Value::String(value) => !value.is_empty(),
-                    Value::Number(value) => value.as_f64() != Some(0.0),
-                    _ => true,
-                }).cloned();
+                let id = request
+                    .get("requestId")
+                    .filter(|id| valid_request_id(id))
+                    .cloned();
                 // The browser requests a fresh salt with an otherwise empty envelope.
                 let probe = state.access.library.protected() && request.as_object().is_some_and(|fields|
                     fields.len() == 1 && fields.contains_key("requestId"));
-                let limits = state.socket.limits().clamp_to(connection_limits);
                 let limit = match request["action"].as_str() {
                     Some("update-reader-preferences" | "update-user-profile") => limits.message.max(6 * MIB),
                     Some("import-reading-lists" | "import-admin-settings") => limits.import + 65536,
                     Some("preview-admin-backup" | "import-admin-backup") => limits.backup_request_size(),
                     _ => limits.message,
                 };
-                if (!probe && !request["action"].is_string()) || frame.len() > limit {
+                if (!probe && !request["action"].is_string()) || frame_len > limit {
                     let reason = if request["action"].is_string() { "Превышен размер запроса" } else { "Некорректный запрос WebSocket" };
                     if send(&mut socket, fault(reason), id).await.is_err() { return; }
                     continue;
@@ -1504,37 +1540,40 @@ async fn run(
                 let replies = replies.clone();
                 running.spawn(async move {
                     let _permit = permit;
+                    let _large_permit = large_permit;
                     let progress_replies = replies.clone();
                     let progress_id = id.clone();
-                    let (response, change) = tokio::task::spawn_blocking(move || {
+                    let reply_id = id.clone();
+                    let (payload, delay, change) = tokio::task::spawn_blocking(move || {
                         let mut change = Change::Unchanged;
                         if !connection_access.valid(&state.request_access.current()) {
-                            return (fault("access_policy_changed"), change);
+                            return (encode_reply(fault("access_policy_changed"), reply_id), false, change);
                         }
                         let enabled = request["wantProgress"] == true;
                         let last = std::cell::Cell::new(None::<Instant>);
                         let batch_progress = |done, total| {
                             if enabled && (done == total || last.get().is_none_or(|time| time.elapsed() >= Duration::from_millis(200))) {
                                 let update = json!({"_progress":true,"progress":{"done":done,"total":total}});
-                                if progress_replies.try_send((update, progress_id.clone(), Change::Unchanged)).is_ok() {
+                                if progress_replies.try_send((encode_reply(update, progress_id.clone()), Change::Unchanged)).is_ok() {
                                     last.set(Some(Instant::now()));
                                 }
                             }
                         };
                         let response = state.socket.dispatch(&state, &browser, &connection_access,
                             DispatchContext {connection, events_connection, batch_progress: &batch_progress, limits}, request, &mut change);
-                        (response, change)
-                    }).await.unwrap_or_else(|_| (fault("server_busy"), Change::Unchanged));
-                    if response["error"] == "need_access_token" {
+                        let delay = response["error"] == "need_access_token";
+                        (encode_reply(response, reply_id), delay, change)
+                    }).await.unwrap_or_else(|_| (encode_reply(fault("server_busy"), id), false, Change::Unchanged));
+                    if delay {
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
-                    let _ = replies.send((response, id, change)).await;
+                    let _ = replies.send((payload, change)).await;
                 });
             }
             result = running.join_next(), if !running.is_empty() => {
                 if !matches!(result, Some(Ok(()))) { return; }
             }
-            Some((result,id,change)) = incoming.recv() => {
+            Some((payload, change)) = incoming.recv() => {
                 if !connection_access.valid(&state.request_access.current()) {
                     close(&mut socket, CloseCode::Policy, "Access policy changed").await;
                     return;
@@ -1546,7 +1585,7 @@ async fn run(
                         subscribed = Some((Arc::new(subscription), state.events.subscribe()));
                     }
                 }
-                if send(&mut socket,result,id).await.is_err() { return; }
+                if send_text(&mut socket, payload).await.is_err() { return; }
             }
             event = async { subscribed.as_mut().expect("event subscription").1.recv().await }, if subscribed.is_some() => {
                 match event {
@@ -1586,15 +1625,37 @@ async fn close<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     .await;
 }
 
-async fn send<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
-    socket: &mut WebSocketStream<S>,
-    mut result: Value,
-    id: Option<Value>,
-) -> std::result::Result<(), Error> {
+fn encode_reply(mut result: Value, id: Option<Value>) -> String {
     if let Some(id) = id {
         result["requestId"] = id;
     }
-    socket.send(Message::Text(result.to_string().into())).await
+    result.to_string()
+}
+
+async fn send_text<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    socket: &mut WebSocketStream<S>,
+    text: String,
+) -> std::result::Result<(), Error> {
+    match timeout(
+        Duration::from_secs(15),
+        socket.send(Message::Text(text.into())),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "websocket write timed out",
+        ))),
+    }
+}
+
+async fn send<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    socket: &mut WebSocketStream<S>,
+    result: Value,
+    id: Option<Value>,
+) -> std::result::Result<(), Error> {
+    send_text(socket, encode_reply(result, id)).await
 }
 
 fn select_profile<'a>(
@@ -1802,4 +1863,185 @@ pub(super) fn megabytes(value: &Value, default: usize, max: usize) -> usize {
         .filter(|value| value.is_finite() && *value >= 1.0)
         .map_or(default, |value| (value as usize).min(max))
         * MIB
+}
+
+fn valid_request_id(id: &Value) -> bool {
+    match id {
+        Value::Null | Value::Bool(false) => false,
+        Value::String(value) => !value.is_empty(),
+        Value::Number(value) => value.as_f64() != Some(0.0),
+        _ => true,
+    }
+}
+
+fn extract_request_id(frame: &str) -> Option<Value> {
+    const WINDOW: usize = 4096;
+    let prefix = &frame[..frame.floor_char_boundary(frame.len().min(WINDOW))];
+    if let Some(id) = extract_request_id_prefix(prefix) {
+        return Some(id);
+    }
+    if frame.len() > WINDOW {
+        let start = frame.ceil_char_boundary(frame.len().saturating_sub(WINDOW));
+        return extract_request_id_suffix(&frame[start..]);
+    }
+    None
+}
+
+fn skip_json_ws(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+        i += 1;
+    }
+    i
+}
+
+fn scan_json_string(bytes: &[u8], start: usize) -> Option<usize> {
+    if bytes.get(start) != Some(&b'"') {
+        return None;
+    }
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+fn scan_json_value(bytes: &[u8], start: usize) -> Option<usize> {
+    let first = *bytes.get(start)?;
+    match first {
+        b'"' => scan_json_string(bytes, start),
+        b'{' | b'[' => {
+            let mut depth = 0usize;
+            let mut i = start;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'"' => i = scan_json_string(bytes, i)?,
+                    b'{' | b'[' => {
+                        depth += 1;
+                        i += 1;
+                    }
+                    b'}' | b']' => {
+                        depth = depth.checked_sub(1)?;
+                        i += 1;
+                        if depth == 0 {
+                            return Some(i);
+                        }
+                    }
+                    _ => i += 1,
+                }
+            }
+            None
+        }
+        _ => {
+            let mut i = start;
+            while i < bytes.len()
+                && !matches!(bytes[i], b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n')
+            {
+                i += 1;
+            }
+            (i > start && i < bytes.len()).then_some(i)
+        }
+    }
+}
+
+fn parse_request_id_token(text: &str, start: usize) -> Option<(Value, usize)> {
+    const MAX_ID_BYTES: usize = 256;
+    let bytes = text.as_bytes();
+    let end = scan_json_value(bytes, start)?;
+    if end - start > MAX_ID_BYTES {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(&text[start..end]).ok()?;
+    valid_request_id(&value).then_some((value, end))
+}
+
+fn extract_request_id_prefix(prefix: &str) -> Option<Value> {
+    let bytes = prefix.as_bytes();
+    let mut i = skip_json_ws(bytes, 0);
+    if bytes.get(i) != Some(&b'{') {
+        return None;
+    }
+    i += 1;
+    loop {
+        i = skip_json_ws(bytes, i);
+        if bytes.get(i) == Some(&b'}') {
+            return None;
+        }
+        let key_end = scan_json_string(bytes, i)?;
+        let key = &prefix[i + 1..key_end - 1];
+        i = skip_json_ws(bytes, key_end);
+        if bytes.get(i) != Some(&b':') {
+            return None;
+        }
+        i = skip_json_ws(bytes, i + 1);
+        if key == "requestId" {
+            return parse_request_id_token(prefix, i).map(|(value, _)| value);
+        }
+        i = scan_json_value(bytes, i)?;
+        i = skip_json_ws(bytes, i);
+        match bytes.get(i) {
+            Some(&b',') => i += 1,
+            _ => return None,
+        }
+    }
+}
+
+fn extract_request_id_suffix(suffix: &str) -> Option<Value> {
+    let bytes = suffix.as_bytes();
+    let needle = "\"requestId\"";
+    let mut end_limit = suffix.len();
+    while let Some(pos) = suffix[..end_limit].rfind(needle) {
+        end_limit = pos;
+        let prev = suffix[..pos].trim_end();
+        if prev.ends_with('\\') || !prev.ends_with([',', '{']) {
+            continue;
+        }
+        let mut i = skip_json_ws(bytes, pos + needle.len());
+        if bytes.get(i) != Some(&b':') {
+            continue;
+        }
+        i = skip_json_ws(bytes, i + 1);
+        let Some((value, val_end)) = parse_request_id_token(suffix, i) else {
+            continue;
+        };
+        let after = skip_json_ws(bytes, val_end);
+        if matches!(bytes.get(after), Some(b',' | b'}')) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_request_id_reads_prefix_and_suffix_without_full_parse() {
+        let padding = "x".repeat(32 * 1024);
+        let prefix_frame =
+            format!(r#"{{"action":"import-admin-backup","requestId":42,"data":"{padding}"}}"#);
+        assert_eq!(extract_request_id(&prefix_frame), Some(json!(42)));
+
+        let suffix_frame = format!(
+            r#"{{"action":"import-admin-backup","data":"{padding}","requestId":"req-99"}}"#
+        );
+        assert_eq!(extract_request_id(&suffix_frame), Some(json!("req-99")));
+
+        let nested_frame = format!(
+            r#"{{"action":"import-admin-backup","data":"{padding}\"requestId\":1","requestId":77}}"#
+        );
+        assert_eq!(extract_request_id(&nested_frame), Some(json!(77)));
+
+        let zero_frame = format!(r#"{{"requestId":0,"data":"{padding}"}}"#);
+        assert_eq!(extract_request_id(&zero_frame), None);
+
+        let empty_frame = format!(r#"{{"requestId":"","data":"{padding}"}}"#);
+        assert_eq!(extract_request_id(&empty_frame), None);
+
+        assert_eq!(extract_request_id("not json"), None);
+    }
 }

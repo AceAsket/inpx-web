@@ -141,6 +141,36 @@ pub(super) fn known(key: &str) -> bool {
     FIELDS.iter().any(|(field, _)| *field == key)
 }
 
+pub(super) fn valid_ui_defaults(value: &Value) -> bool {
+    value.as_object().is_some_and(|settings| {
+        settings.iter().all(|(key, value)| match key.as_str() {
+            "limit" => value
+                .as_u64()
+                .is_some_and(|value| (1..=120).contains(&value)),
+            "langDefault" => value.as_str().is_some_and(|value| {
+                value.len() <= 16
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            }),
+            "bookCardView" => matches!(value.as_str(), Some("cards" | "list")),
+            "catalogAppearance" => matches!(value.as_str(), Some("shelves" | "classic")),
+            "darkTheme"
+            | "downloadAsZip"
+            | "showCounts"
+            | "showRates"
+            | "showInfo"
+            | "showGenres"
+            | "showDates"
+            | "showDeleted"
+            | "abCacheEnabled"
+            | "showJson"
+            | "showNewReleaseAvailable" => value.is_boolean(),
+            _ => false,
+        })
+    })
+}
+
 pub(super) fn kosync_enabled(config: &Value) -> bool {
     std::env::var("INPX_KOSYNC_ENABLED")
         .map_or(config["kosyncEnabled"] != false, |value| value != "false")
@@ -201,35 +231,7 @@ pub(super) fn patch(value: &Value) -> Result<Value> {
                         })
                 })
                 .map(Value::from),
-            "uiDefaults" => value
-                .as_object()
-                .filter(|settings| {
-                    settings.iter().all(|(key, value)| match key.as_str() {
-                        "limit" => value
-                            .as_u64()
-                            .is_some_and(|value| (1..=120).contains(&value)),
-                        "langDefault" => value.as_str().is_some_and(|value| {
-                            value.len() <= 16
-                                && value
-                                    .bytes()
-                                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                        }),
-                        "bookCardView" => matches!(value.as_str(), Some("cards" | "list")),
-                        "darkTheme"
-                        | "downloadAsZip"
-                        | "showCounts"
-                        | "showRates"
-                        | "showInfo"
-                        | "showGenres"
-                        | "showDates"
-                        | "showDeleted"
-                        | "abCacheEnabled"
-                        | "showJson"
-                        | "showNewReleaseAvailable" => value.is_boolean(),
-                        _ => false,
-                    })
-                })
-                .map(|_| value.clone()),
+            "uiDefaults" => valid_ui_defaults(value).then(|| value.clone()),
             "fb2cngArgs" => value
                 .as_array()
                 .filter(|args| {

@@ -136,23 +136,24 @@ impl Library {
         let now = now_ms();
         let policy = self.access.current().login_rate;
         let client = peer.to_string();
-        let allowed =
-            access_wire::token(token.as_bytes()).is_some() && check(&mut store, token, now)?;
         if !token.is_empty() {
-            if !allowed {
-                let retry = store
-                    .attempts
-                    .check(Kind::Access, &client, now, policy, false);
-                if retry != 0 {
-                    return Ok(Admission::RateLimited(retry));
-                }
+            if store.runtime.sessions().check_durable(token, now) {
+                return Ok(Admission::Allowed);
             }
+            let retry = store
+                .attempts
+                .check(Kind::Access, &client, now, policy, false);
+            if retry != 0 {
+                return Ok(Admission::RateLimited(retry));
+            }
+            let allowed =
+                access_wire::token(token.as_bytes()).is_some() && check(&mut store, token, now)?;
             store
                 .attempts
                 .finish(Kind::Access, &client, now, policy, false, Some(allowed));
-        }
-        if allowed {
-            return Ok(Admission::Allowed);
+            if allowed {
+                return Ok(Admission::Allowed);
+            }
         }
         match store.runtime.run(AccessCommand::Issue { client }, now)? {
             AccessReply::Challenge { salt } => Ok(Admission::Challenge(salt)),

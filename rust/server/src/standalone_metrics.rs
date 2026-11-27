@@ -182,7 +182,7 @@ impl Drop for Connection {
         self.activity
             .counts
             .lock()
-            .expect("metrics activity")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .sockets
             .remove(&self.id);
     }
@@ -259,11 +259,33 @@ impl Monitor {
         state: &Arc<State>,
         endpoint: &Endpoint,
         service: ServiceAccess,
+        headers: &hyper::HeaderMap,
+        admission: &crate::request_access::Admission,
         head: bool,
     ) -> Response<Body> {
+        let auth_required = !endpoint.rules.exempt
+            && (state.request_access.current().local_login_required()
+                || state.access.library.protected());
+        let local_authorized = if endpoint.enabled && !endpoint.token_required && auth_required {
+            let server = state.clone();
+            let headers = headers.clone();
+            let admission = admission.clone();
+            tokio::task::spawn_blocking(move || {
+                server
+                    .access
+                    .require_http_admin(&headers, &admission)
+                    .is_ok()
+            })
+            .await
+            .unwrap_or(false)
+        } else {
+            true
+        };
         let (status, text) = if !endpoint.enabled {
             (StatusCode::NOT_FOUND, "Not Found")
-        } else if endpoint.token_required && !matches!(service, ServiceAccess::Metrics) {
+        } else if (endpoint.token_required && !matches!(service, ServiceAccess::Metrics))
+            || (!endpoint.token_required && !local_authorized)
+        {
             (StatusCode::UNAUTHORIZED, "Metrics token required")
         } else if let Ok(permit) = self.slot.clone().try_acquire_owned() {
             let state = state.clone();

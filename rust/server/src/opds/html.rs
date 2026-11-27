@@ -6,11 +6,22 @@ pub(crate) fn escape(value: &str) -> String {
 
 pub(crate) fn sanitize(mut value: &str) -> String {
     let mut output = String::with_capacity(value.len());
+    let mut suppressed: Option<&'static str> = None;
     while let Some(offset) = value.find('<') {
-        append_text(&mut output, &value[..offset], true);
+        if suppressed.is_none() {
+            append_text(&mut output, &value[..offset], true);
+        }
         let rest = &value[offset + 1..];
         if let Some((consumed, name, closing)) = tag(rest) {
-            if allowed(name) {
+            if let Some(target) = suppressed {
+                if closing && name.eq_ignore_ascii_case(target) {
+                    suppressed = None;
+                }
+            } else if !closing && name.eq_ignore_ascii_case("script") {
+                suppressed = Some("script");
+            } else if !closing && name.eq_ignore_ascii_case("style") {
+                suppressed = Some("style");
+            } else if allowed(name) {
                 output.push('<');
                 if closing {
                     output.push('/');
@@ -20,11 +31,15 @@ pub(crate) fn sanitize(mut value: &str) -> String {
             }
             value = &rest[consumed..];
         } else {
-            output.push_str("&lt;");
+            if suppressed.is_none() {
+                output.push_str("&lt;");
+            }
             value = rest;
         }
     }
-    append_text(&mut output, value, true);
+    if suppressed.is_none() {
+        append_text(&mut output, value, true);
+    }
     output
 }
 
@@ -126,4 +141,36 @@ fn reference(value: &str) -> Option<&str> {
         [] => false,
     };
     valid.then_some(&value[..end + 1])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_strips_script_and_style_inner_text() {
+        assert_eq!(
+            sanitize("<p>Hello</p><script>alert(1)</script><p>World</p>"),
+            "<p>Hello</p><p>World</p>"
+        );
+        assert_eq!(
+            sanitize("<STYLE type=\"text/css\">body { display: none; }</STYLE><b>Text</b>"),
+            "<b>Text</b>"
+        );
+        assert_eq!(
+            sanitize("<script>if (a < b && c > d) { alert('</style>'); }</script>Safe"),
+            "Safe"
+        );
+        assert_eq!(
+            sanitize("<style>p { content: '</script>'; }</style>Safe"),
+            "Safe"
+        );
+        assert_eq!(sanitize("<script>unclosed payload"), "");
+        assert_eq!(
+            sanitize(
+                "<P style=\"color:red\">Описание &nbsp;<b>тест</b></P><svg><title>Другой текст</title></svg>&lt;p&gt;"
+            ),
+            "<p>Описание &nbsp;<b>тест</b></p>Другой текст&lt;p&gt;"
+        );
+    }
 }

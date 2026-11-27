@@ -127,13 +127,38 @@ impl Mail {
     }
 
     async fn connect(&self) -> mail_send::Result<SmtpClient<Box<dyn SmtpIo>>> {
-        let mut builder =
-            SmtpClientBuilder::new(self.host.trim_matches(['[', ']']).to_owned(), self.port)
-                .map_err(|message| mail_send::Error::Io(std::io::Error::other(message)))?
-                .timeout(TIMEOUT);
-        if self.host.contains(':') {
-            builder.addr = format!("[{}]:{}", self.host.trim_matches(['[', ']']), self.port);
+        let addresses = super::net::resolve_smtp_host(&self.host, self.port)
+            .await
+            .map_err(|error| {
+                mail_send::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    error.to_string(),
+                ))
+            })?;
+        let clean = self.host.trim().trim_matches(['[', ']']);
+        let mut last_error = None;
+        for addr in addresses {
+            match self.connect_addr(clean, addr).await {
+                Ok(client) => return Ok(client),
+                Err(error @ mail_send::Error::Io(_)) => last_error = Some(error),
+                Err(error) => return Err(error),
+            }
         }
+        Err(last_error.unwrap_or_else(|| {
+            mail_send::Error::Io(std::io::Error::other("Не удалось подключиться к SMTP"))
+        }))
+    }
+
+    async fn connect_addr(
+        &self,
+        tls_hostname: &str,
+        addr: std::net::SocketAddr,
+    ) -> mail_send::Result<SmtpClient<Box<dyn SmtpIo>>> {
+        let mut builder = SmtpClientBuilder::new(tls_hostname.to_owned(), self.port)
+            .map_err(|message| mail_send::Error::Io(std::io::Error::other(message)))?
+            .timeout(TIMEOUT);
+        // Connect to the pre-resolved, metadata-checked IP while keeping builder.tls_hostname for SNI.
+        builder.addr = addr.to_string();
         if !self.user.is_empty() {
             builder.credentials = Some(Credentials::Plain {
                 username: self.user.clone(),
@@ -155,10 +180,12 @@ impl Mail {
                 tls.authenticate(credentials, &capabilities).await?;
             }
             Ok(boxed(tls))
+        } else if builder.credentials.is_some() {
+            Err(mail_send::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "SMTP-сервер не поддерживает STARTTLS; передача пароля без шифрования запрещена",
+            )))
         } else {
-            if let Some(credentials) = &builder.credentials {
-                connection.authenticate(credentials, &capabilities).await?;
-            }
             Ok(boxed(connection))
         }
     }

@@ -32,7 +32,7 @@ impl fmt::Display for Unavailable {
 impl Error for Unavailable {}
 
 pub(super) struct SharedShelves {
-    path: Option<PathBuf>,
+    path: Option<(PathBuf, Option<PathBuf>)>,
     state: Mutex<SharedState>,
 }
 
@@ -51,7 +51,7 @@ struct Cached {
 }
 
 impl SharedShelves {
-    pub(super) fn new(path: Option<PathBuf>) -> Self {
+    pub(super) fn new(path: Option<(PathBuf, Option<PathBuf>)>) -> Self {
         Self {
             path,
             state: Mutex::new(SharedState::default()),
@@ -59,11 +59,15 @@ impl SharedShelves {
     }
 
     fn load(&self) -> Result<Vec<CatalogShelf>> {
-        let Some(path) = &self.path else {
+        let Some((path, confined_root)) = &self.path else {
             return Ok(Vec::new());
         };
         let mut state = self.state.lock().expect("OPDS collections");
-        match opds_shelves::load(path) {
+        let loaded = match confined_root {
+            Some(root) => opds_shelves::load_confined(root, path),
+            None => opds_shelves::load(path),
+        };
+        match loaded {
             Ok(shelves) => {
                 state.failure = None;
                 Ok(shelves)

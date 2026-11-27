@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use hyper::header::{self, HeaderMap, HeaderValue};
@@ -30,6 +31,7 @@ pub(crate) struct Access {
     key_file: PathBuf,
     opds: RwLock<Arc<LiveOpds>>,
     request_access: Arc<Live>,
+    kosync_enabled: AtomicBool,
     state: Mutex<State>,
     totp: Mutex<TotpAttempts>,
     pub(crate) sessions: Sessions,
@@ -152,15 +154,36 @@ impl Access {
     }
 
     pub(super) fn kosync_enabled(&self) -> bool {
-        self.state.lock().expect("profile access").kosync.enabled()
+        self.kosync_enabled.load(Ordering::Acquire)
     }
 
     pub(super) fn set_kosync_enabled(&self, enabled: bool) {
+        self.kosync_enabled.store(enabled, Ordering::Release);
         self.state
             .lock()
-            .expect("profile access")
+            .unwrap_or_else(|e| e.into_inner())
             .kosync
             .set_enabled(enabled);
+    }
+
+    pub(crate) fn http_library_allowed(&self, headers: &HeaderMap, port: u16) -> bool {
+        if !self.library.protected() {
+            return true;
+        }
+        if let Some(token) = self.sessions.http_web_access(headers, port)
+            && self.library.allowed(&token).unwrap_or(false)
+        {
+            return true;
+        }
+        if let Some(token) = headers
+            .get("x-inpx-access-token")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            && self.library.allowed(token).unwrap_or(false)
+        {
+            return true;
+        }
+        false
     }
 
     pub(super) fn telegram(
@@ -273,6 +296,7 @@ impl Access {
             key_file: data.join("secret.key"),
             opds: RwLock::new(Arc::new(opds)),
             request_access: request_access.clone(),
+            kosync_enabled: AtomicBool::new(kosync_enabled),
             state: Mutex::new(State {
                 profiles: Store::default(),
                 attempts: LoginRate::default(),
@@ -390,6 +414,9 @@ impl Access {
         owner: &str,
         name: &str,
     ) -> Result<(&'static str, Vec<u8>), Rejection> {
+        if !self.http_library_allowed(headers, admission.cookie_port) {
+            return Err(Rejection::Unauthorized);
+        }
         let token = headers
             .get("x-inpx-profile-token")
             .and_then(|header| header.to_str().ok())
@@ -745,17 +772,8 @@ impl Access {
         otp: String,
         trust: Option<(&str, bool)>,
     ) -> BrowserLogin {
-        let Ok(mut state) = self.state.lock() else {
-            return BrowserLogin::Unavailable;
-        };
         let client = admission.client.to_string();
         let rate = self.login_rate_policy();
-        let retry = state
-            .attempts
-            .check(Kind::Profile, &client, now_ms(), rate, true);
-        if retry != 0 {
-            return BrowserLogin::RateLimited(retry);
-        }
         let request = profile_login::Request::browser(
             self.file.clone(),
             self.key_file.clone(),
@@ -764,29 +782,75 @@ impl Access {
             otp,
             trust,
         );
+        let lookup = {
+            let Ok(mut state) = self.state.lock() else {
+                return BrowserLogin::Unavailable;
+            };
+            let retry = state
+                .attempts
+                .check(Kind::Profile, &client, now_ms(), rate, true);
+            if retry != 0 {
+                return BrowserLogin::RateLimited(retry);
+            }
+            profile_login::prepare_login(request, &mut state.profiles)
+        };
         let policy = self.request_access.current();
         let transport = policy.profile_transport(admission.peer, admission.admin_client);
-        let decision = profile_login::authenticate_with_role_check(
-            request,
-            &self.totp,
-            &mut state.profiles,
-            |admin| transport.permits(admin),
-        );
-        let outcome = match &decision {
-            Ok(profile_login::Decision::Accepted(_)) => Some(true),
-            Ok(profile_login::Decision::Denied | profile_login::Decision::RoleDenied) => {
-                Some(false)
+        let verified = match lookup {
+            Ok(profile_login::LoginLookup::Ready(prepared)) => {
+                profile_login::verify_prepared(*prepared, &self.totp, |admin| {
+                    transport.permits(admin)
+                })
+                .map(Some)
             }
-            _ => None,
+            Ok(profile_login::LoginLookup::Missing(missing)) => {
+                profile_login::dummy_verify(&missing);
+                Ok(None)
+            }
+            Ok(profile_login::LoginLookup::Legacy) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.attempts.finish(
+                        Kind::Profile,
+                        &client,
+                        now_ms(),
+                        rate,
+                        rate.enabled,
+                        None,
+                    );
+                }
+                return BrowserLogin::Unavailable;
+            }
+            Ok(profile_login::LoginLookup::Changed) => {
+                Err("Файл профилей изменился, повторите операцию".into())
+            }
+            Err(error) => Err(error),
         };
-        state.attempts.finish(
-            Kind::Profile,
-            &client,
-            now_ms(),
-            rate,
-            rate.enabled,
-            outcome,
-        );
+        let decision = {
+            let Ok(mut state) = self.state.lock() else {
+                return BrowserLogin::Unavailable;
+            };
+            let decision = match verified {
+                Ok(Some(verified)) => profile_login::finish_verified(verified, &mut state.profiles),
+                Ok(None) => Ok(profile_login::Decision::Denied),
+                Err(error) => Err(error),
+            };
+            let outcome = match &decision {
+                Ok(profile_login::Decision::Accepted(_)) => Some(true),
+                Ok(profile_login::Decision::Denied | profile_login::Decision::RoleDenied) => {
+                    Some(false)
+                }
+                _ => None,
+            };
+            state.attempts.finish(
+                Kind::Profile,
+                &client,
+                now_ms(),
+                rate,
+                rate.enabled,
+                outcome,
+            );
+            decision
+        };
         match decision {
             Ok(profile_login::Decision::Accepted(user)) => {
                 let identity = Identity {
@@ -807,7 +871,7 @@ impl Access {
             Ok(profile_login::Decision::RoleDenied)
                 if transport == ProfileTransport::WithoutAdmin =>
             {
-                if policy.has_admin_ranges() {
+                if !policy.admin_range_permits(admission.admin_client) {
                     BrowserLogin::AdminRestricted {
                         message: "Вход администратора разрешён только с адресов, указанных в настройках сервера.",
                         code: "INPX_ADMIN_ADDRESS_DENIED",

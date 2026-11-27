@@ -167,7 +167,12 @@ impl Cache {
             let notification = state.admin_cache.changed.notified();
             let now = OffsetDateTime::now_utc();
             let config = state.settings.snapshot();
-            let Some(next) = next_run(&config, now) else {
+            let check_config = config.clone();
+            let next = tokio::task::spawn_blocking(move || next_run(&check_config, now))
+                .await
+                .ok()
+                .flatten();
+            let Some(next) = next else {
                 notification.await;
                 continue;
             };

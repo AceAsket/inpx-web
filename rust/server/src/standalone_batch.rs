@@ -36,15 +36,38 @@ struct Ticket {
 
 impl Drop for Ticket {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        let path = std::mem::take(&mut self.path);
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(move || {
+                let _ = std::fs::remove_file(path);
+            });
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
 impl Downloads {
     pub(super) fn new(data: &Path, book_root: &str) -> Self {
+        let directory = data.join("batch-downloads");
+        if let Ok(entries) = std::fs::read_dir(&directory) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("batch-") && name.ends_with(".zip"))
+                {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
         Self {
             root: format!("{book_root}/batch/"),
-            directory: data.join("batch-downloads"),
+            directory,
             tickets: Mutex::new(HashMap::new()),
             queue: Queue::new(1, 4, "batch-download", "Подготовка пакетного ZIP"),
         }
@@ -159,6 +182,14 @@ impl Downloads {
                 &admission,
                 inpx_catalog::opds_access::Resource::Download,
             )?;
+            if server.access.library.protected()
+                && !grant.authenticated
+                && !server
+                    .access
+                    .http_library_allowed(request.headers(), admission.cookie_port)
+            {
+                return Err(crate::standalone_access::Rejection::Unauthorized);
+            }
             Ok::<_, crate::standalone_access::Rejection>(server.access.download_profile(
                 request.headers(),
                 admission.cookie_port,
@@ -167,10 +198,11 @@ impl Downloads {
         })
         .await;
         match grant {
-            Ok(Ok(Some(owner))) if owner != expected_owner => return error(StatusCode::FORBIDDEN),
+            Ok(Ok(Some(owner))) if owner == expected_owner => {}
+            Ok(Ok(None)) if expected_owner == "default" => {}
+            Ok(Ok(_)) => return error(StatusCode::FORBIDDEN),
             Ok(Err(rejected)) => return rejected.response(),
             Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR),
-            _ => {}
         }
         let mut headers = HeaderMap::new();
         headers.insert(

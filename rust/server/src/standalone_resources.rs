@@ -298,57 +298,100 @@ impl Budget {
 
 impl Drop for Permit<'_> {
     fn drop(&mut self) {
-        let mut queue = self.0.queue.lock().expect("resource queue");
-        queue.active[self.1 as usize] -= 1;
+        let mut queue = self.0.queue.lock().unwrap_or_else(|e| e.into_inner());
+        queue.active[self.1 as usize] = queue.active[self.1 as usize].saturating_sub(1);
         self.0.changed.notify_all();
     }
 }
 
+const MAX_ADMISSION_WAITERS: usize = 256;
+const ADMISSION_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Request admission is independent from the shared processing budget. Keep
 /// counting existing requests when an administrator changes its capacity.
 pub(crate) struct AdmissionSlots {
-    counts: tokio::sync::watch::Sender<(usize, usize)>,
+    state: Mutex<(usize, usize, usize)>,
+    notify: tokio::sync::Notify,
 }
 
 pub(crate) struct AdmissionPermit(Arc<AdmissionSlots>);
 
+struct WaiterGuard<'a>(&'a AdmissionSlots);
+
+impl Drop for WaiterGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.2 = state.2.saturating_sub(1);
+    }
+}
+
 impl AdmissionSlots {
     pub(crate) fn new(limit: usize) -> Arc<Self> {
         Arc::new(Self {
-            counts: tokio::sync::watch::channel((0, limit)).0,
+            state: Mutex::new((0, limit, 0)),
+            notify: tokio::sync::Notify::new(),
         })
     }
 
     pub(crate) fn resize(&self, limit: usize) {
-        self.counts.send_modify(|state| state.1 = limit);
+        let increased = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = state.1;
+            state.1 = limit;
+            limit > prev
+        };
+        if increased {
+            self.notify.notify_waiters();
+        }
     }
 
     pub(crate) fn try_take(self: &Arc<Self>) -> Option<AdmissionPermit> {
-        let mut taken = false;
-        self.counts.send_if_modified(|(active, limit)| {
-            if *active < *limit {
-                *active += 1;
-                taken = true;
-            }
-            false // Taking a slot cannot wake another waiter.
-        });
-        taken.then(|| AdmissionPermit(self.clone()))
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.0 < state.1 {
+            state.0 += 1;
+            Some(AdmissionPermit(self.clone()))
+        } else {
+            None
+        }
     }
 
-    pub(crate) async fn take(self: &Arc<Self>) -> AdmissionPermit {
-        let mut state = self.counts.subscribe();
-        loop {
-            if let Some(permit) = self.try_take() {
-                return permit;
+    pub(crate) async fn take(self: &Arc<Self>) -> Option<AdmissionPermit> {
+        if let Some(permit) = self.try_take() {
+            return Some(permit);
+        }
+        {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.0 < state.1 {
+                state.0 += 1;
+                return Some(AdmissionPermit(self.clone()));
             }
-            state.changed().await.expect("live admission slots");
+            if state.2 >= MAX_ADMISSION_WAITERS {
+                return None;
+            }
+            state.2 += 1;
+        }
+        let _guard = WaiterGuard(self);
+        let deadline = tokio::time::Instant::now() + ADMISSION_WAIT_TIMEOUT;
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(permit) = self.try_take() {
+                return Some(permit);
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return None;
+            }
         }
     }
 }
 
 impl Drop for AdmissionPermit {
     fn drop(&mut self) {
-        self.0.counts.send_modify(|(active, _)| *active -= 1);
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.0 = state.0.saturating_sub(1);
+        drop(state);
+        self.0.notify.notify_one();
     }
 }
 

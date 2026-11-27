@@ -192,12 +192,29 @@ impl Sessions {
             && shared.browsers.verify_csrf(browser, token)
     }
 
+    pub(crate) fn http_web_access(&self, headers: &HeaderMap, port: u16) -> Option<String> {
+        let mut shared = self.shared.lock().expect("browser sessions");
+        let browser = unpack(&mut shared.browsers, headers, port)?;
+        shared
+            .browsers
+            .field(&browser, EBOOK_ACCESS)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    }
+
     pub(crate) fn login(&self, browser: &str, identity: Identity) -> Result<String> {
         let token = random_hex::<24>()?;
         let mut shared = self.shared.lock().expect("browser sessions");
         let now = now_ms();
         if shared.browsers.load(browser, None, now, |_| ()).is_none() {
             return Err("bad_csrf_token".into());
+        }
+        if let Some(previous) = shared
+            .browsers
+            .field(browser, PROFILE_TOKEN)
+            .map(str::to_owned)
+        {
+            shared.profiles.remove(&previous);
         }
         shared.profiles.insert(&token, identity, now);
         shared

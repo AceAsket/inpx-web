@@ -438,7 +438,7 @@ fn resume(units: &[u16], state: &Value) -> usize {
         .as_f64()
         .unwrap_or_default()
         .clamp(0.0, 1.0);
-    let near = ((units.len() as f64 * percent).round() as usize).min(units.len() - 1);
+    let near = ((units.len() as f64 * percent).round() as usize).min(units.len().saturating_sub(1));
     let snippet: Vec<_> = text(progress, "textSnippet")
         .trim()
         .encode_utf16()

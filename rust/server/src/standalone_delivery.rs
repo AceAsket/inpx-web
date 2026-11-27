@@ -126,7 +126,7 @@ impl Drop for Task<'_> {
         self.queue
             .tasks
             .lock()
-            .expect("delivery tasks")
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&self.id);
     }
 }

@@ -3,6 +3,7 @@ use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const DEBUG_WINDOW: Duration = Duration::from_secs(15 * 60);
 const FILE_LIMIT: u64 = 8 * 1024 * 1024;
+const LOG_QUEUE_CAPACITY: usize = 1024;
 
 static LOGGER: Logger = Logger(Mutex::new(Policy {
     level: Level::Info,
@@ -20,6 +22,27 @@ static LOGGER: Logger = Logger(Mutex::new(Policy {
     locked_by: None,
     file: None,
 }));
+
+static FILE_WRITER: LazyLock<SyncSender<(PathBuf, String, String)>> = LazyLock::new(|| {
+    let (tx, rx) = mpsc::sync_channel::<(PathBuf, String, String)>(LOG_QUEUE_CAPACITY);
+    let _ = std::thread::Builder::new()
+        .name("inpx-log-writer".into())
+        .spawn(move || {
+            for (path, time, line) in rx {
+                if write(&path, line.as_bytes()).is_err() {
+                    let mut policy = LOGGER.0.lock().unwrap_or_else(|e| e.into_inner());
+                    if policy.file.as_ref() == Some(&path) {
+                        policy.file = None;
+                        drop(policy);
+                        eprintln!(
+                            "{time} ERROR [inpx::logging] Файловый журнал отключён после ошибки записи"
+                        );
+                    }
+                }
+            }
+        });
+    tx
+});
 
 struct Logger(Mutex<Policy>);
 
@@ -159,10 +182,13 @@ impl Log for Logger {
         if !record.target().starts_with("inpx::") {
             return;
         }
-        let mut policy = self.0.lock().expect("logging policy");
-        if record.level() > policy.effective() {
-            return;
-        }
+        let file = {
+            let policy = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            if record.level() > policy.effective() {
+                return;
+            }
+            policy.file.clone()
+        };
         let time = OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_default();
@@ -179,11 +205,10 @@ impl Log for Logger {
             record.target()
         );
         let _ = io::stderr().lock().write_all(line.as_bytes());
-        if let Some(file) = &policy.file
-            && write(file, line.as_bytes()).is_err()
-        {
-            policy.file = None;
-            eprintln!("{time} ERROR [inpx::logging] Файловый журнал отключён после ошибки записи");
+        if let Some(path) = file {
+            match FILE_WRITER.try_send((path, time, line)) {
+                Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
+            }
         }
     }
 

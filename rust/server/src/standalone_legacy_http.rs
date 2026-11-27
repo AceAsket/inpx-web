@@ -88,7 +88,7 @@ impl Routes {
         let cover = matches!(&route, Route::Cover(_));
         let slots = state.download_slots.clone();
         let permit = if cover {
-            Some(slots.take().await)
+            slots.take().await
         } else {
             slots.try_take()
         };
@@ -103,6 +103,17 @@ impl Routes {
                 .access
                 .check(&request, &admission, Resource::Download)
                 .map_err(|rejected| Box::new(rejected.content_response(request.headers())))?;
+            if state.access.library.protected()
+                && !grant.authenticated
+                && !state
+                    .access
+                    .http_library_allowed(request.headers(), admission.cookie_port)
+            {
+                return Err(Box::new(
+                    crate::standalone_access::Rejection::Unauthorized
+                        .content_response(request.headers()),
+                ));
+            }
             let sources = state.index.sources();
             let _resource = state
                 .resources
@@ -171,6 +182,10 @@ impl Routes {
             .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate")
             .header(header::PRAGMA, "no-cache")
             .header(header::EXPIRES, "0")
+            .header(
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+            )
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
             .header(header::CONTENT_LENGTH, self.reset_page.len())
             .body(body(if head {

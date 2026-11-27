@@ -121,11 +121,10 @@ impl Routes {
             None
         };
         if path == self.root {
-            let mut info = self.info(endpoint);
             if let Some((status, message)) = denied {
-                info["error"] = message.into();
-                return reply(status, info, head);
+                return failure(status, message, head);
             }
+            let mut info = self.info(endpoint);
             let running = READS - self.reads.available_permits();
             let pending = PENDING - self.pending.available_permits();
             info["diagnostics"] = json!({

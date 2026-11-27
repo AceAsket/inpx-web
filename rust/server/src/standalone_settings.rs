@@ -26,8 +26,8 @@ const EXPORT: &str = "libDir inpx librarySources inpxFilterFile extendedSearch b
     metricsEnabled metricsPath metricsExemptAuth dbCacheSize dbCacheBudgetMb queryCacheMemMb queryCacheDiskMb
     maxFilesDirSize bookCacheSize coverCacheSize queryCacheEnabled queryCacheMemSize queryCacheDiskSize
     cacheCleanInterval cacheCleanSchedule cacheCleanTargetRatio adminEventLogEnabled adminEventLogSize inpxCheckInterval
-    lowMemoryMode fullOptimization converterPaths fb2cngArgs fb2cngConfigPath bookTitleTemplate kindlingPath mobiEnabled
-    server opds telegramShareEnabled telegramBotEnabled
+    lowMemoryMode fullOptimization fb2cngArgs fb2cngConfigPath bookTitleTemplate mobiEnabled
+    server opds telegramShareEnabled telegramBotEnabled telegramApiMode telegramApiUrl
     telegramIpFamily telegramProxyMode telegramProxyProtocol telegramProxyHost telegramProxyPort telegramProxyUsername
     telegramChatId telegramCaptionTemplate emailShareEnabled smtpHost smtpPort smtpSecure smtpUser emailFrom emailTo
     discovery uiDefaults resourceTotal resourceImages resourceReviews resourceConversions resourceBackground
@@ -257,11 +257,19 @@ impl Settings {
             Err(std::env::VarError::NotPresent) => opds["compatibility"] == "tolino",
             _ => return Err("INPX_OPDS_COMPATIBILITY: standard или tolino".into()),
         };
-        let feeds = std::env::var("INPX_OPDS_FEEDS_FILE")
-            .ok()
-            .or_else(|| opds_string(config, "opdsFeedsFile"))
-            .filter(|path| !path.trim().is_empty())
-            .map(|path| self.data.join(path.trim()));
+        let feeds = match std::env::var("INPX_OPDS_FEEDS_FILE") {
+            Ok(path) => {
+                let trimmed = path.trim();
+                (!trimmed.is_empty()).then(|| (self.data.join(trimmed), None))
+            }
+            Err(_) => match opds_string(config, "opdsFeedsFile") {
+                Some(path) if !path.trim().is_empty() => Some((
+                    resolve_opds_feeds_in_data(&self.data, path.trim())?,
+                    Some(self.data.clone()),
+                )),
+                _ => None,
+            },
+        };
         let route = (opds["enabled"] != false).then(|| {
             Opds::new(
                 opds["root"].as_str().unwrap_or("/opds"),
@@ -408,9 +416,7 @@ impl Settings {
                         let runtime: serde_json::Map<_, _> = fields
                             .iter()
                             .filter(|(key, value)| {
-                                key.as_str() != "uiDefaults"
-                                    && super::runtime::known(key)
-                                    && current.get(*key) != Some(*value)
+                                super::runtime::known(key) && current.get(*key) != Some(*value)
                             })
                             .map(|(key, value)| (key.clone(), value.clone()))
                             .collect();
@@ -533,7 +539,8 @@ impl Settings {
                         .ok_or("Некорректный путь к файлу подборок")?
                         .trim();
                     if !file.is_empty() {
-                        inpx_catalog::opds_shelves::load(&self.data.join(file)).map_err(
+                        let resolved = resolve_opds_feeds_in_data(&self.data, file)?;
+                        inpx_catalog::opds_shelves::load_confined(&self.data, &resolved).map_err(
                             |error| format!("Не удалось прочитать подборки OPDS: {error}"),
                         )?;
                     }
@@ -588,7 +595,7 @@ impl Settings {
                     let permitted = candidate
                         .profile_transport(connection.peer, admin_client)
                         .permits(true);
-                    if candidate.has_admin_ranges() && !permitted {
+                    if !candidate.admin_range_permits(admin_client) {
                         let Some(address) = admin_client else {
                             return Err(format!(
                                 "Сервер не получил IP клиента через {}. Проверьте X-Forwarded-For или откройте библиотеку с адреса вне списка прокси.",
@@ -598,8 +605,7 @@ impl Settings {
                         return Err(format!("Добавьте текущий адрес {} в список разрешённых адресов администратора, чтобы сохранить доступ.", address.to_canonical()).into());
                     }
                     if !permitted
-                        || !candidate.has_admin_ranges()
-                            && access_patch["adminDirectOnly"] == true
+                        || access_patch["adminDirectOnly"] == true
                             && active_access.is_proxy_peer(connection.peer)
                     {
                         return Err(format!(
@@ -738,6 +744,67 @@ impl Settings {
 
 fn opds_string(value: &Value, key: &str) -> Option<String> {
     value[key].as_str().map(str::to_owned)
+}
+
+fn resolve_opds_feeds_in_data(data: &Path, raw: &str) -> Result<PathBuf> {
+    use std::path::Component;
+    const OUTSIDE: &str = "Файл подборок OPDS должен находиться внутри каталога данных";
+    let candidate = Path::new(raw);
+    if raw.is_empty()
+        || candidate.is_absolute()
+        || candidate.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(OUTSIDE.into());
+    }
+    let normal_parts: Vec<_> = candidate
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part),
+            _ => None,
+        })
+        .collect();
+    if normal_parts.is_empty() {
+        return Err(OUTSIDE.into());
+    }
+    let Ok(root) = std::fs::canonicalize(data) else {
+        let mut joined = data.to_path_buf();
+        for part in normal_parts {
+            joined.push(part);
+        }
+        return Ok(joined);
+    };
+    let mut current = root.clone();
+    for (index, part) in normal_parts.iter().enumerate() {
+        current.push(part);
+        match std::fs::canonicalize(&current) {
+            Ok(resolved) => {
+                if !resolved.starts_with(&root) || resolved == root {
+                    return Err(OUTSIDE.into());
+                }
+                current = resolved;
+            }
+            Err(_) => {
+                if std::fs::symlink_metadata(&current)
+                    .is_ok_and(|meta| meta.file_type().is_symlink())
+                {
+                    return Err(OUTSIDE.into());
+                }
+                for remaining in &normal_parts[index + 1..] {
+                    current.push(remaining);
+                }
+                break;
+            }
+        }
+    }
+    if !current.starts_with(&root) || current == root {
+        return Err(OUTSIDE.into());
+    }
+    Ok(current)
 }
 fn cache_key(key: &str) -> bool {
     key.starts_with("cacheClean")
@@ -1104,11 +1171,29 @@ fn validate_integration_fields(value: &Value) -> Result<()> {
     {
         return Err("Некорректные параметры Telegram прокси".into());
     }
-    if mode == "custom"
-        && (host.is_empty()
-            || !port(&value["telegramProxyPort"]).is_some_and(|port| (1..=65535).contains(&port)))
-    {
-        return Err("Telegram прокси: укажите хост и порт".into());
+    if mode == "custom" {
+        let Some(port) =
+            port(&value["telegramProxyPort"]).filter(|port| (1..=65535).contains(port))
+        else {
+            return Err("Telegram прокси: укажите хост и порт".into());
+        };
+        if host.is_empty() {
+            return Err("Telegram прокси: укажите хост и порт".into());
+        }
+        let clean_host = host.trim().trim_matches(['[', ']']);
+        let formatted_host = if clean_host.contains(':') {
+            format!("[{clean_host}]")
+        } else {
+            clean_host.to_owned()
+        };
+        let protocol = str_value(value, "telegramProxyProtocol");
+        let proxy_url = url::Url::parse(&format!("{protocol}://{formatted_host}:{port}"))
+            .map_err(|_| "Некорректный Telegram прокси")?;
+        super::net::validate_integration_url(&proxy_url, "Telegram прокси")?;
+    }
+    let smtp_host = str_value(value, "smtpHost");
+    if !smtp_host.is_empty() {
+        super::net::validate_smtp_host(smtp_host)?;
     }
     Ok(())
 }
@@ -1176,10 +1261,20 @@ fn import(current: &Value, data: &Value, limit: usize) -> Result<Value> {
                 .trim(),
         )?;
     }
-    for key in ["server", "uiDefaults", "discovery"] {
-        if patch.get(key).is_some_and(|value| !value.is_object()) {
-            return Err(format!("Некорректное поле настроек {key}").into());
-        }
+    if let Some(value) = patch.get("server")
+        && !valid_server_object(value)
+    {
+        return Err("Некорректное поле настроек server".into());
+    }
+    if let Some(value) = patch.get("uiDefaults")
+        && !super::runtime::valid_ui_defaults(value)
+    {
+        return Err("Некорректное поле настроек uiDefaults".into());
+    }
+    if let Some(value) = patch.get("discovery")
+        && !valid_discovery_object(value)
+    {
+        return Err("Некорректное поле настроек discovery".into());
     }
     if INTEGRATIONS.iter().any(|(key, _)| patch.get(key).is_some()) {
         let normalized = integration_patch(current, &patch)?;
@@ -1200,4 +1295,156 @@ fn port(value: &Value) -> Option<i64> {
     value
         .as_i64()
         .or_else(|| value.as_str()?.trim().parse().ok())
+}
+
+fn valid_server_object(value: &Value) -> bool {
+    value.as_object().is_some_and(|fields| {
+        fields.iter().all(|(key, value)| match key.as_str() {
+            "host" => value
+                .as_str()
+                .is_some_and(|s| s.len() <= 255 && !s.chars().any(char::is_control)),
+            "port" => port(value).is_some_and(|p| (0..=65535).contains(&p)),
+            "root" => value.as_str().is_some_and(|s| {
+                s.len() <= 255
+                    && !s.chars().any(char::is_control)
+                    && !s.contains(['?', '#', '\\'])
+                    && !s.split('/').any(|seg| seg == "..")
+            }),
+            _ => false,
+        })
+    })
+}
+
+fn valid_discovery_object(value: &Value) -> bool {
+    value.as_object().is_some_and(|fields| {
+        fields.iter().all(|(key, value)| match key.as_str() {
+            "enabled" => value.is_boolean(),
+            "shelfLimit" | "externalLimit" => port(value).is_some_and(|n| (1..=120).contains(&n)),
+            "externalTtlMinutes" => port(value).is_some_and(|n| (1..=43_200).contains(&n)),
+            "externalSource" => value.as_str().is_some_and(|s| {
+                matches!(
+                    s.trim().to_ascii_lowercase().as_str(),
+                    "" | "none" | "web-page"
+                )
+            }),
+            "externalName" => value
+                .as_str()
+                .is_some_and(|s| s.len() <= 255 && !s.chars().any(char::is_control)),
+            "externalUrl" => value.as_str().is_some_and(|s| {
+                let s = s.trim();
+                s.len() <= 4096
+                    && !s.chars().any(char::is_control)
+                    && (s.is_empty()
+                        || url::Url::parse(s).is_ok_and(|url| {
+                            matches!(url.scheme(), "http" | "https")
+                                && url.host().is_some()
+                                && url.username().is_empty()
+                                && url.password().is_none()
+                        }))
+            }),
+            _ => false,
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opds_feeds_resolution_enforces_data_dir_and_symlink_containment() {
+        let base =
+            std::env::temp_dir().join(format!("inpx-opds-feeds-test-{}", std::process::id()));
+        let data = base.join("data");
+        let outside = base.join("outside");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(data.join("nested")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(data.join("feeds.json"), "{}").unwrap();
+        std::fs::write(outside.join("secret.json"), "{}").unwrap();
+
+        assert!(resolve_opds_feeds_in_data(&data, "feeds.json").is_ok());
+        assert!(resolve_opds_feeds_in_data(&data, "nested/new.json").is_ok());
+        assert!(resolve_opds_feeds_in_data(&data, "../outside/secret.json").is_err());
+        assert!(resolve_opds_feeds_in_data(&data, ".").is_err());
+        assert!(resolve_opds_feeds_in_data(&data, "").is_err());
+        assert!(resolve_opds_feeds_in_data(&data, outside.to_str().unwrap()).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(outside.join("secret.json"), data.join("escape-file.json")).unwrap();
+            symlink(&outside, data.join("escape-dir")).unwrap();
+            symlink(outside.join("missing.json"), data.join("dangling.json")).unwrap();
+            symlink(data.join("feeds.json"), data.join("internal-link.json")).unwrap();
+
+            assert!(resolve_opds_feeds_in_data(&data, "escape-file.json").is_err());
+            assert!(resolve_opds_feeds_in_data(&data, "escape-dir/future.json").is_err());
+            assert!(resolve_opds_feeds_in_data(&data, "dangling.json").is_err());
+            assert!(resolve_opds_feeds_in_data(&data, "internal-link.json").is_ok());
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn import_validates_ui_defaults_server_and_discovery() {
+        let current = json!({});
+        assert!(
+            import(
+                &current,
+                &json!({"settings": {"uiDefaults": {"limit": 47}}}),
+                65536
+            )
+            .is_ok()
+        );
+        assert!(
+            import(
+                &current,
+                &json!({"settings": {"uiDefaults": {"limit": 0}}}),
+                65536
+            )
+            .is_err()
+        );
+        assert!(
+            import(
+                &current,
+                &json!({"settings": {"uiDefaults": {"unknown": true}}}),
+                65536
+            )
+            .is_err()
+        );
+        assert!(
+            import(
+                &current,
+                &json!({"settings": {"server": {"host": "0.0.0.0", "port": 12380, "root": ""}}}),
+                65536
+            )
+            .is_ok()
+        );
+        assert!(
+            import(
+                &current,
+                &json!({"settings": {"server": {"host": "0.0.0.0", "evil": 1}}}),
+                65536
+            )
+            .is_err()
+        );
+        assert!(
+            import(
+                &current,
+                &json!({"settings": {"discovery": {"enabled": true, "externalSource": "none", "externalLimit": 8}}}),
+                65536
+            )
+            .is_ok()
+        );
+        assert!(
+            import(
+                &current,
+                &json!({"settings": {"discovery": {"externalUrl": "javascript:alert(1)"}}}),
+                65536
+            )
+            .is_err()
+        );
+    }
 }

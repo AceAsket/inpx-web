@@ -1,14 +1,12 @@
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use inpx_catalog::Result;
 use inpx_catalog::service_cache::{CacheRequest, CacheResponse, ServiceCache};
 use inpx_catalog::standalone_catalogue::Catalogue;
-use reqwest::blocking::Client;
-use reqwest::redirect::Policy;
+use reqwest::{Client, header, redirect::Policy};
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -17,6 +15,34 @@ use url::Url;
 
 const MAX_PAGE: u64 = 10 * 1024 * 1024;
 const STALE_GRACE: i64 = 86_400_000;
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+
+static PUBLIC_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
+        .redirect(Policy::none())
+        .user_agent(USER_AGENT)
+        .dns_resolver(Arc::new(super::net::PublicDnsResolver))
+        .build()
+        .expect("public discovery client")
+});
+
+static PRIVATE_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
+        .redirect(Policy::none())
+        .user_agent(USER_AGENT)
+        .dns_resolver(Arc::new(super::net::NoMetadataDnsResolver))
+        .build()
+        .expect("local discovery client")
+});
+
+fn allow_private() -> bool {
+    std::env::var("INPX_DISCOVERY_ALLOW_PRIVATE")
+        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("true"))
+}
 
 pub(super) struct ExternalDiscovery {
     path: PathBuf,
@@ -54,7 +80,7 @@ pub(super) struct ExternalOptions {
 }
 
 impl ExternalOptions {
-    pub(super) fn new(config: &Value, request: &Value) -> Option<Self> {
+    pub(super) fn new(config: &Value, request: &Value, admin: bool) -> Option<Self> {
         if config["externalSource"] == "none" {
             return None;
         }
@@ -84,7 +110,7 @@ impl ExternalOptions {
             feed_limit,
             limit: limit(&request["externalLimit"], feed_limit, 120),
             ttl: config["externalTtlMinutes"].as_i64().unwrap_or(1440) * 60_000,
-            refresh: request["forceRefresh"] == true,
+            refresh: admin && request["forceRefresh"] == true,
         })
     }
 
@@ -278,28 +304,72 @@ fn address(value: &str, base: Option<&Url>) -> Option<Url> {
     Some(url)
 }
 
-fn fetch(source: &str) -> Result<Vec<Item>> {
-    let url = address(source, None).ok_or("Недопустимый URL внешней витрины")?;
-    let origin = url.origin();
-    let client = Client::builder().timeout(Duration::from_secs(20)).redirect(Policy::custom(move |next|{
-        if next.previous().len() > 4 || next.url().origin() != origin
-            || !next.url().username().is_empty() || next.url().password().is_some()
-        {
-            next.error("Переадресация внешней витрины на другой сайт запрещена")
-        } else {next.follow()}
-    })).user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36").build()?;
-    let reply = client
-        .get(url)
-        .header("accept-language", "ru-RU,ru;q=0.9,en;q=0.7")
-        .send()?
-        .error_for_status()?;
-    let url = reply.url().clone();
-    let mut bytes = Vec::new();
-    reply.take(MAX_PAGE + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_PAGE {
-        return Err("Страница внешней витрины превышает 10 МиБ".into());
+fn validate_url(url: &Url, private_allowed: bool) -> Result<()> {
+    if private_allowed {
+        super::net::validate_integration_url(url, "внешней витрины")
+    } else {
+        super::net::validate_public_url_host(url)
     }
-    let rows = parse(&String::from_utf8_lossy(&bytes), &url);
+}
+
+fn fetch(source: &str) -> Result<Vec<Item>> {
+    let mut url = address(source, None).ok_or("Недопустимый URL внешней витрины")?;
+    let private_allowed = allow_private();
+    validate_url(&url, private_allowed)?;
+    let origin = url.origin();
+    let client = if private_allowed {
+        &*PRIVATE_CLIENT
+    } else {
+        &*PUBLIC_CLIENT
+    };
+    let (final_url, bytes) = tokio::runtime::Handle::current().block_on(async {
+        let mut hops = 0usize;
+        let mut reply = loop {
+            let response = client
+                .get(url.clone())
+                .header("accept-language", "ru-RU,ru;q=0.9,en;q=0.7")
+                .send()
+                .await?;
+            if response.status().is_redirection() {
+                if hops >= 4 {
+                    return Err::<_, Box<dyn std::error::Error>>(
+                        "Переадресация внешней витрины на другой сайт запрещена".into(),
+                    );
+                }
+                let Some(location) = response
+                    .headers()
+                    .get(header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                else {
+                    return Err("Некорректная переадресация внешней витрины".into());
+                };
+                let next = address(location, Some(&url))
+                    .filter(|target| target.origin() == origin)
+                    .ok_or("Переадресация внешней витрины на другой сайт запрещена")?;
+                validate_url(&next, private_allowed)?;
+                url = next;
+                hops += 1;
+                continue;
+            }
+            break response.error_for_status()?;
+        };
+        let final_url = reply.url().clone();
+        if reply
+            .content_length()
+            .is_some_and(|length| length > MAX_PAGE)
+        {
+            return Err("Страница внешней витрины превышает 10 МиБ".into());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = reply.chunk().await? {
+            if bytes.len().saturating_add(chunk.len()) as u64 > MAX_PAGE {
+                return Err("Страница внешней витрины превышает 10 МиБ".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok((final_url, bytes))
+    })?;
+    let rows = parse(&String::from_utf8_lossy(&bytes), &final_url);
     if rows.is_empty() {
         return Err("Не удалось прочитать внешнюю витрину".into());
     }

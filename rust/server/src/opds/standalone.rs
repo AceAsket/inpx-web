@@ -154,7 +154,7 @@ impl Opds {
         book_path: &str,
         tolino: bool,
         formats: &[&str],
-        shelves_file: Option<PathBuf>,
+        shelves_file: Option<(PathBuf, Option<PathBuf>)>,
     ) -> Self {
         let root = root.trim_end_matches('/');
         Self {

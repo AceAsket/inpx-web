@@ -63,7 +63,11 @@ impl Drop for RequestTimer<'_> {
     fn drop(&mut self) {
         self.runtime.in_flight.fetch_sub(1, Ordering::Relaxed);
         let duration = self.start.elapsed().as_secs_f64() * 1000.0;
-        let mut requests = self.runtime.requests.lock().expect("request timings");
+        let mut requests = self
+            .runtime
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let action = if self.action.len() <= 64
             && self
                 .action

@@ -196,7 +196,11 @@ fn fields(output: &mut String, fields: &Fields<'_>, depth: usize) -> Option<Prev
                 indent(output, depth, &last);
                 if *name == "*CDATA" {
                     output.push_str("<![CDATA[");
-                    output.push_str(&text.replace("]]>", "]]]]><![CDATA[>"));
+                    let clean: String = text
+                        .chars()
+                        .map(|ch| if xml_char(ch) { ch } else { '\u{fffd}' })
+                        .collect();
+                    output.push_str(&clean.replace("]]>", "]]]]><![CDATA[>"));
                     output.push_str("]]>");
                 } else {
                     output.push_str("<!--");

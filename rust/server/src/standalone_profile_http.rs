@@ -108,8 +108,19 @@ pub(super) async fn login(
     let admission = admission.clone();
     let state = state.clone();
     tokio::task::spawn_blocking(move || {
-        match state.access.library.admit(peer, text(&payload, "accessToken")) {
-            Ok(LibraryAdmission::Allowed) => (),
+        let explicit_token = payload.get("accessToken").and_then(Value::as_str);
+        let access_token = match explicit_token {
+            Some(token) if !token.is_empty() => token.to_owned(),
+            _ => state.access.sessions.ebook_access(&browser),
+        };
+        match state.access.library.admit(peer, &access_token) {
+            Ok(LibraryAdmission::Allowed) => {
+                if state.access.library.protected()
+                    && let Some(token) = explicit_token.filter(|token| !token.is_empty())
+                {
+                    state.access.sessions.set_ebook_access(&browser, Some(token));
+                }
+            }
             Ok(LibraryAdmission::Challenge(_)) => return failure(StatusCode::UNAUTHORIZED, "Требуется пароль библиотеки", "need_access_token"),
             Ok(LibraryAdmission::RateLimited(seconds)) => return rate_limit(seconds),
             Err(_) => return failure(StatusCode::SERVICE_UNAVAILABLE, "Библиотека пока не готова", "server_busy"),

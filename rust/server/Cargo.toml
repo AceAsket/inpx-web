@@ -28,10 +28,10 @@ png = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = { version = "0.11", default-features = false }
-tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 url = "2.5"
-reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls", "socks", "stream"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "multipart", "rustls-tls", "socks", "stream"] }
 scraper = { version = "0.24", default-features = false }
 smtp-proto = "0.2"
 time = { version = "0.3", features = ["formatting", "local-offset"] }

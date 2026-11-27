@@ -162,9 +162,21 @@ impl Provider {
         let enabled = std::env::var("INPX_TTS_ENABLED")
             .map_or(config["ttsEnabled"] == true, |value| value == "true");
         let url = setting("INPX_TTS_URL", "ttsUrl");
+        let validated_url = if enabled && !url.is_empty() {
+            let parsed = url::Url::parse(&url).map_err(|_| "Некорректный адрес сервиса озвучки")?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err(
+                    "Адрес сервиса озвучки должен начинаться с http:// или https://".into(),
+                );
+            }
+            super::net::validate_integration_url(&parsed, "сервиса озвучки")?;
+            Some(url.trim_end_matches('/').to_owned())
+        } else {
+            None
+        };
         let model = setting("INPX_TTS_MODEL", "ttsModel");
         Ok(Arc::new(Self {
-            url: (enabled && !url.is_empty()).then(|| url.trim_end_matches('/').to_owned()),
+            url: validated_url,
             api_key: setting("INPX_TTS_API_KEY", "ttsApiKey"),
             model: if model.is_empty() {
                 "v5_6_ru".into()
@@ -181,6 +193,7 @@ impl Provider {
             )),
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
+                .dns_resolver(Arc::new(super::net::NoMetadataDnsResolver))
                 .build()?,
         }))
     }
@@ -317,6 +330,9 @@ impl Speech {
             return Ok(
                 json!({"chapters":chapters,"characters":characters,"startChapter":start,"engineId":engine,"estimate":estimate}),
             );
+        }
+        if parts.is_empty() {
+            return Err("В книге нет текста для озвучки.".into());
         }
         let index = if request["mode"].as_str().is_none_or(str::is_empty) {
             0
@@ -479,7 +495,8 @@ impl Speech {
         }
         let options = plan::Options::parse(request.get("options"))?;
         let index = selection.index;
-        let text = &parts[index].text;
+        let part = parts.get(index).ok_or("Глава озвучки не найдена.")?;
+        let text = &part.text;
         let segments = options
             .as_ref()
             .map(|_| segments.unwrap_or(&parts[index..index + 1]));
@@ -643,7 +660,8 @@ impl Speech {
             return Err(missing);
         }
         let path = self.file(id);
-        touch(&path);
+        let touched = path.clone();
+        tokio::task::spawn_blocking(move || touch(&touched));
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
         headers.insert(
@@ -692,18 +710,36 @@ impl Speech {
             let id = work.id.clone();
             let attempt = work.attempt.clone();
             let result = self.generate(work, &temporary).await;
+            let should_publish = result.is_ok() && {
+                let scheduler = self.scheduler.lock().unwrap_or_else(|e| e.into_inner());
+                scheduler
+                    .jobs
+                    .get(&id)
+                    .is_some_and(|job| job.attempt == attempt && job.state != Phase::Cancelled)
+            };
+            let mut published = false;
+            let outcome = match result {
+                Ok(()) if should_publish => match tokio::fs::rename(&temporary, &target).await {
+                    Ok(()) => {
+                        published = true;
+                        Ok(())
+                    }
+                    Err(_) => Err("Не удалось сохранить аудиофайл.".to_owned()),
+                },
+                other => other,
+            };
+            let mut keep_target = false;
             {
-                let mut scheduler = self.scheduler.lock().expect("speech scheduler");
+                let mut scheduler = self.scheduler.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(job) = scheduler.jobs.get_mut(&id)
                     && job.attempt == attempt
                     && job.state != Phase::Cancelled
                 {
-                    // Serialize publishing the finished file with cancellation.
-                    match result.and_then(|()| {
-                        fs::rename(&temporary, &target)
-                            .map_err(|_| "Не удалось сохранить аудиофайл.".to_owned())
-                    }) {
-                        Ok(()) => job.state = Phase::Ready,
+                    match outcome {
+                        Ok(()) => {
+                            job.state = Phase::Ready;
+                            keep_target = true;
+                        }
                         Err(error) => {
                             job.state = Phase::Error;
                             job.error = error;
@@ -716,6 +752,9 @@ impl Speech {
                     }
                     job.remaining = None;
                 }
+            }
+            if published && !keep_target {
+                let _ = tokio::fs::remove_file(&target).await;
             }
             let _ = tokio::fs::remove_file(&temporary).await;
         }

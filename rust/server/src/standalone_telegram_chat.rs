@@ -71,7 +71,7 @@ impl Drop for Reservation {
         self.service
             .bot
             .lock()
-            .expect("Telegram deliveries")
+            .unwrap_or_else(|e| e.into_inner())
             .deliveries
             .remove(&self.chat);
     }

@@ -534,6 +534,7 @@ pub(super) fn api_endpoint(config: &Value) -> Result<(Url, bool)> {
     {
         return Err("Укажите адрес сервера Telegram Bot API, запущенного с --local".into());
     }
+    super::net::validate_integration_url(&url, "Telegram API")?;
     Ok((url, local))
 }
 
@@ -541,7 +542,8 @@ fn transport(config: &Value) -> Result<Client> {
     let family = setting(config, "TELEGRAM_IP_FAMILY", "telegramIpFamily");
     let mut client = Client::builder()
         .connect_timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none());
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(Arc::new(super::net::NoMetadataDnsResolver));
     match family.trim() {
         "" | "0" | "auto" => {}
         "4" => client = client.local_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
@@ -583,6 +585,7 @@ fn transport(config: &Value) -> Result<Client> {
             };
             let mut proxy_url = Url::parse(&format!("{protocol}://{host}:{port}"))
                 .map_err(|_| "Некорректный Telegram прокси")?;
+            super::net::validate_integration_url(&proxy_url, "Telegram прокси")?;
             let user = setting(config, "TELEGRAM_PROXY_USERNAME", "telegramProxyUsername");
             let pass = setting(config, "TELEGRAM_PROXY_PASSWORD", "telegramProxyPassword");
             if !user.is_empty() || !pass.is_empty() {
@@ -622,4 +625,42 @@ fn truncate(value: &str, limit: usize) -> &str {
         (length > limit).then_some(offset)
     });
     &value[..boundary.unwrap_or(value.len())]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_proxy_rejects_cloud_metadata_addresses() {
+        for (protocol, host) in [
+            ("http", "169.254.169.254"),
+            ("https", "169.254.169.254"),
+            ("socks5", "169.254.169.254"),
+            ("socks5h", "169.254.169.254"),
+            ("http", "2852039166"),
+            ("socks5", "2852039166"),
+            ("socks5", "metadata.google.internal"),
+            ("http", "fe80::1"),
+            ("socks5", "64:ff9b::169.254.169.254"),
+        ] {
+            let config = json!({
+                "telegramProxyMode": "custom",
+                "telegramProxyProtocol": protocol,
+                "telegramProxyHost": host,
+                "telegramProxyPort": 1080,
+            });
+            assert!(
+                transport(&config).is_err(),
+                "custom {protocol} proxy to {host} must be rejected"
+            );
+        }
+        let valid = json!({
+            "telegramProxyMode": "custom",
+            "telegramProxyProtocol": "socks5",
+            "telegramProxyHost": "127.0.0.1",
+            "telegramProxyPort": 1080,
+        });
+        assert!(transport(&valid).is_ok());
+    }
 }

@@ -1492,15 +1492,16 @@ async function verifyLibraryPassword(binary, root) {
         try {
             for (const token of [imported,issued])
                 assert.equal((await ws.request({action:'test',accessToken:token})).message,'inpx-web project is awesome');
-            for (let i=0;i<2;i++)
-                assert.equal((await ws.request({action:'test',accessToken:hash('wrong-'+i)})).error,'need_access_token');
-            const limited = await ws.request({action:'test',accessToken:hash('wrong-limit')});
-            assert.equal(limited.errorCode,'INPX_LOGIN_RATE_LIMIT');
-            assert(limited.retryAfterMs>0);
             const config = await ws.request({action:'get-config',accessToken:issued});
             assert.equal(config.freeAccess,false);
             assert.equal((await ws.request({action:'logout',accessToken:issued,csrfToken:config.csrfToken})).success,true);
             assert.equal((await ws.request({action:'test',accessToken:issued})).error,'need_access_token');
+            assert.equal((await ws.request({action:'test',accessToken:hash('wrong-0')})).error,'need_access_token');
+            const limited = await ws.request({action:'test',accessToken:hash('wrong-limit')});
+            assert.equal(limited.errorCode,'INPX_LOGIN_RATE_LIMIT');
+            assert(limited.retryAfterMs>0);
+            assert.equal((await ws.request({action:'test',accessToken:imported})).message,'inpx-web project is awesome');
+            assert.equal((await ws.request({action:'test',accessToken:hash('wrong-after-durable')})).errorCode,'INPX_LOGIN_RATE_LIMIT');
         } finally { ws.close(); }
     } finally { await next.stop(); }
 
@@ -1668,7 +1669,9 @@ async function verifyServiceRoutes(binary, root) {
         await check(exempt,metrics,401);
         await check(exempt,metrics,200,{headers:metricsHeaders});
         const disabled = await check(exempt,abs,404,{headers:proxy});
-        assert.equal((await disabled.json()).configuration.enabled,false);
+        const disabledBody = await disabled.json();
+        assert.equal(disabledBody.error,'Metadata provider is disabled');
+        assert.equal(disabledBody.configuration,undefined);
     } finally { await exempt.stop(); }
     console.log('ok standalone scoped service tokens, Prometheus samples and activity, Audiobookshelf metadata, embedded and signed sidecar covers');
 }
@@ -3205,9 +3208,10 @@ async function verifyOverview(binary, root) {
         assert(profileAccessToken);
         return (action,options={})=>ws.request({action,...options,userId:'admin',profileAccessToken,csrfToken});
     };
+    const discoveryEnv = {INPX_DISCOVERY_ALLOW_PRIVATE:'true'};
     let server;
     try {
-        server = await start(binary,args);
+        server = await start(binary,args,discoveryEnv);
         let send = await session(server);
         const {found} = await send('bookSearch',{query:{del:'0'}});
         const uid = title=>found.find(row=>row.title===title)._uid;
@@ -3256,7 +3260,7 @@ async function verifyOverview(binary, root) {
         assert.equal((await slow).shelves?.[0]?.id,'external-source');
         ws.close();
         await server.stop();
-        server = await start(binary,args);
+        server = await start(binary,args,discoveryEnv);
         send = await session(server);
         const saved = await send('update-discovery-preferences',{preferences:{}});
         assert.equal(saved.preferences.events[second].impressionCount,3);

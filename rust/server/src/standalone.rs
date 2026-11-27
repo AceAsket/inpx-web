@@ -59,6 +59,8 @@ pub(crate) mod logging;
 pub(crate) mod metadata;
 #[path = "standalone_metrics.rs"]
 pub(crate) mod metrics;
+#[path = "standalone_net.rs"]
+pub(crate) mod net;
 #[path = "standalone_profile_http.rs"]
 mod profile_http;
 #[path = "standalone_remote.rs"]
@@ -139,7 +141,7 @@ impl Args {
                 "--reset-admin-password" if value.is_none() => parsed.reset = true,
                 "--reset-admin-network" if value.is_none() => parsed.reset_admin_network = true,
                 "--recreate" if value.is_none() => parsed.recreate = true,
-                // Rust interprets the record predicate without executing JavaScript.
+                // Accepted for CLI compatibility; Rust evaluates JS record predicates in a sandboxed QuickJS runtime without host access.
                 "--unsafe-filter" if value.is_none() => {}
                 "--host" | "--port" | "--config" | "--data-dir" | "--app-dir" | "--lib-dir"
                 | "--inpx" | "--library-sources" | "--admin-login" | "--admin-password"
@@ -407,6 +409,7 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             "dataDir":data, "configFile":file
         }),
     });
+    let connections = Arc::new(Semaphore::new(512));
     println!("{NAME} v{VERSION} listening on {}", listener.local_addr()?);
     let initializing = state.clone();
     let mut opening = tokio::task::spawn_blocking(move || {
@@ -415,10 +418,22 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
             .initialize(args.recreate)
             .map_err(|err| err.to_string())
     });
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
     let created = loop {
         tokio::select! {
+            _ = &mut shutdown => {
+                flush_on_shutdown(&state).await;
+                return Ok(());
+            }
             result = &mut opening => break result??,
-            connection = listener.accept() => serve_connection(&state,connection?),
+            connection = listener.accept() => match connection {
+                Ok(connection) => serve_connection(&state, &connections, connection),
+                Err(error) => {
+                    log::warn!(target: "inpx::http", "HTTP accept failed: {error}");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            },
         }
     };
     delivery::Delivery::start(&state);
@@ -456,21 +471,79 @@ pub(crate) async fn run(args: &[OsString]) -> Result<()> {
         });
     }
     loop {
-        serve_connection(&state, listener.accept().await?);
+        tokio::select! {
+            _ = &mut shutdown => {
+                flush_on_shutdown(&state).await;
+                return Ok(());
+            }
+            connection = listener.accept() => match connection {
+                Ok(connection) => serve_connection(&state, &connections, connection),
+                Err(error) => {
+                    log::warn!(target: "inpx::http", "HTTP accept failed: {error}");
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+            },
+        }
+    }
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let ctrl_c = async {
+            let _ = tokio::signal::ctrl_c().await;
+        };
+        let term = async {
+            if let Ok(mut signal) =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            {
+                signal.recv().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = term => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+async fn flush_on_shutdown(state: &Arc<State>) {
+    if state.access.library.protected() {
+        let state = state.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(error) = state.access.library.flush() {
+                log::error!(target: "inpx::auth", "WebAccess shutdown flush: {error}");
+            }
+        })
+        .await;
     }
 }
 
 fn serve_connection(
     state: &Arc<State>,
+    connections: &Arc<Semaphore>,
     (stream, peer): (tokio::net::TcpStream, std::net::SocketAddr),
 ) {
+    let Ok(permit) = connections.clone().try_acquire_owned() else {
+        drop(stream);
+        return;
+    };
     let state = state.clone();
     tokio::spawn(async move {
+        let _permit = permit;
         let _ = stream.set_nodelay(true);
         let service = service_fn(|request| state.serve(request, peer.ip()));
         let _ = http1::Builder::new()
             .timer(TokioTimer::new())
             .header_read_timeout(Duration::from_secs(60))
+            .max_buf_size(64 * 1024)
+            .max_headers(100)
             .serve_connection(TokioIo::new(stream), service)
             .with_upgrades()
             .await;
@@ -756,7 +829,14 @@ impl State {
             match route {
                 ServiceRoute::Metrics => {
                     self.metrics
-                        .serve(self, &policy.services.metrics, admission.service, head)
+                        .serve(
+                            self,
+                            &policy.services.metrics,
+                            admission.service,
+                            request.headers(),
+                            &admission,
+                            head,
+                        )
                         .await
                 }
                 ServiceRoute::Metadata => {
@@ -773,7 +853,7 @@ impl State {
         {
             standalone_access::private(response.headers_mut());
         }
-        let mut headers = request_access::security_headers(secure);
+        let mut headers = request_access::standalone_security_headers(secure);
         if response
             .headers()
             .contains_key(header::CONTENT_SECURITY_POLICY)
@@ -791,14 +871,23 @@ impl State {
     ) -> std::result::Result<Response<Body>, Infallible> {
         if admission.profile_transport == request_access::ProfileTransport::AdminOnly
             && admission.service == request_access::ServiceAccess::None
-            && self
-                .access
-                .require_http_admin(request.headers(), &admission)
-                .is_err()
         {
-            return Ok(self
-                .static_asset(&request, &admission)
-                .unwrap_or_else(|| error(StatusCode::FORBIDDEN)));
+            let state = self.clone();
+            let headers = request.headers().clone();
+            let check_admission = admission.clone();
+            let allowed = tokio::task::spawn_blocking(move || {
+                state
+                    .access
+                    .require_http_admin(&headers, &check_admission)
+                    .is_ok()
+            })
+            .await
+            .unwrap_or(false);
+            if !allowed {
+                return Ok(self
+                    .static_asset(&request, &admission)
+                    .unwrap_or_else(|| error(StatusCode::FORBIDDEN)));
+            }
         }
         if self.ebook.matches(request.uri().path()) {
             return Ok(self.ebook.serve(self, request, admission).await);
@@ -845,6 +934,14 @@ impl State {
                     Ok(grant) => grant,
                     Err(rejected) => return rejected.response(),
                 };
+                if state.access.library.protected()
+                    && !grant.authenticated
+                    && !state
+                        .access
+                        .http_library_allowed(request.headers(), admission.cookie_port)
+                {
+                    return Rejection::Unauthorized.response();
+                }
                 let opds = opds_policy.route.as_ref().expect("OPDS enabled");
                 let reading = if let Some(required) = opds.published_reading(request.uri().path()) {
                     match state.access.published_reading(&grant) {
@@ -928,7 +1025,7 @@ impl State {
             let download = requested.is_some() && !head;
             let slots = self.download_slots.clone();
             let permit = if cover.is_some() {
-                Some(slots.take().await)
+                slots.take().await
             } else {
                 slots.try_take()
             };
@@ -942,6 +1039,14 @@ impl State {
                 let grant = state
                     .access
                     .check(&request, &admission, Resource::Download)?;
+                if state.access.library.protected()
+                    && !grant.authenticated
+                    && !state
+                        .access
+                        .http_library_allowed(request.headers(), admission.cookie_port)
+                {
+                    return Err(Rejection::Unauthorized);
+                }
                 let prepared = if let Some(uid) = cover {
                     state.downloads.cover(
                         &uid,

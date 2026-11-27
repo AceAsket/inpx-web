@@ -101,6 +101,7 @@ impl Remote {
         }
         url.set_scheme(scheme)
             .map_err(|_| "Некорректная схема удалённой библиотеки")?;
+        super::net::validate_integration_url(&url, "удалённой библиотеки")?;
         Ok(Some(url))
     }
 
@@ -117,6 +118,7 @@ impl Remote {
                 .connect_timeout(CONNECT)
                 .timeout(TRANSFER)
                 .redirect(reqwest::redirect::Policy::none())
+                .dns_resolver(std::sync::Arc::new(super::net::NoMetadataDnsResolver))
                 .build()?,
             maximum: config["maxPayloadSize"]
                 .as_u64()
@@ -165,9 +167,10 @@ impl Remote {
         cached: impl Fn(&str) -> bool,
     ) -> Result<String> {
         tokio::runtime::Handle::current().block_on(async {
-            let response = {
+            let (response, token) = {
                 let mut session = self.session.lock().await;
-                self.book_request(&mut session, book, json!({"action":"get-book-link"}))
+                let response = self
+                    .book_request(&mut session, book, json!({"action":"get-book-link"}))
                     .await
                     .map_err(|error| {
                         if missing_book(&error.to_string()) {
@@ -176,19 +179,21 @@ impl Remote {
                         } else {
                             error
                         }
-                    })?
+                    })?;
+                (response, session.token.clone())
             };
             let (url, hash) = self.book_url(text(&response, "link"))?;
             if cached(&hash) {
                 return Ok(hash);
             }
-            let mut response = self
+            let mut request = self
                 .client
                 .get(url)
-                .header(header::ACCEPT_ENCODING, "identity")
-                .send()
-                .await
-                .map_err(|_| Unavailable)?;
+                .header(header::ACCEPT_ENCODING, "identity");
+            if !token.is_empty() {
+                request = request.header("x-inpx-access-token", token);
+            }
+            let mut response = request.send().await.map_err(|_| Unavailable)?;
             match response.status() {
                 StatusCode::OK => {}
                 StatusCode::NOT_FOUND | StatusCode::GONE => {

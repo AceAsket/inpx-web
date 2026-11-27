@@ -72,8 +72,12 @@ impl Range {
             None => (value, None),
         };
         let address = address.parse::<IpAddr>().ok()?;
-        // Older configurations can use ::1 or mapped addresses with IPv4 prefix lengths.
-        if let Some(v4) = ipv4(address)
+        // Older configurations can use IPv4-mapped addresses with IPv4 prefix lengths.
+        let v4_explicit = match address {
+            IpAddr::V4(v4) => Some(v4),
+            IpAddr::V6(v6) => v6.to_ipv4_mapped(),
+        };
+        if let Some(v4) = v4_explicit
             && prefix.unwrap_or(32) <= 32
         {
             return IpNet::new(v4.into(), prefix.unwrap_or(32)).ok().map(Self);
@@ -221,7 +225,7 @@ pub(crate) struct Admission {
     pub(crate) profile_transport: ProfileTransport,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProfileTransport {
     All,
     WithoutAdmin,
@@ -366,28 +370,27 @@ impl Standalone {
         }
     }
 
+    pub(crate) fn admin_range_permits(&self, admin_client: Option<IpAddr>) -> bool {
+        !self.has_admin_ranges()
+            || admin_client.is_some_and(|address| {
+                self.admin_ranges
+                    .iter()
+                    .any(|range| range.contains(&address.to_canonical()))
+            })
+    }
+
     pub(crate) fn profile_transport(
         &self,
         peer: IpAddr,
         admin_client: Option<IpAddr>,
     ) -> ProfileTransport {
-        if self.has_admin_ranges()
-            && !admin_client.is_some_and(|address| {
-                self.admin_ranges
-                    .iter()
-                    .any(|range| range.contains(&address.to_canonical()))
-            })
-        {
+        if !self.admin_range_permits(admin_client) {
             return ProfileTransport::WithoutAdmin;
         }
         if !self.admin_direct_only {
             ProfileTransport::All
         } else if self.is_proxy_peer(peer) {
-            if self.has_admin_ranges() {
-                ProfileTransport::All
-            } else {
-                ProfileTransport::WithoutAdmin
-            }
+            ProfileTransport::WithoutAdmin
         } else if self.policy.settings.require_proxy {
             ProfileTransport::AdminOnly
         } else {
@@ -675,11 +678,11 @@ impl Standalone {
             None
         };
         let forwarded_host = trusted
-            .then(|| first(headers, &HeaderName::from_static("x-forwarded-host")).ok())
+            .then(|| last(headers, &HeaderName::from_static("x-forwarded-host")).ok())
             .flatten()
             .filter(|host| !host.is_empty());
         let forwarded_port = trusted
-            .then(|| first(headers, &HeaderName::from_static("x-forwarded-port")).ok())
+            .then(|| last(headers, &HeaderName::from_static("x-forwarded-port")).ok())
             .flatten()
             .and_then(|port| port.parse().ok());
         let cookie_port = public_port(headers, secure, forwarded_host, forwarded_port);
@@ -856,7 +859,7 @@ impl Policy {
             && self.trusted_range(peer);
         let trusted = in_proxy_range && self.settings.trust_proxy;
         let forwarded_proto = if in_proxy_range {
-            first(headers, &HeaderName::from_static("x-forwarded-proto"))?
+            last(headers, &HeaderName::from_static("x-forwarded-proto"))?
         } else {
             ""
         };
@@ -934,12 +937,18 @@ impl Policy {
     }
 
     fn forwarded_client(&self, headers: &HeaderMap) -> Option<IpAddr> {
-        let value = read_header(headers, &HeaderName::from_static("x-forwarded-for")).ok()?;
-        let mut chain = value
-            .rsplit(',')
-            .map(str::trim)
-            .filter(|item| !item.is_empty())
-            .peekable();
+        let mut hops = Vec::new();
+        for value in headers.get_all(HeaderName::from_static("x-forwarded-for")) {
+            let text = value.to_str().ok()?;
+            for item in text
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+            {
+                hops.push(item);
+            }
+        }
+        let mut chain = hops.into_iter().rev().peekable();
         while let Some(hop) = chain.next() {
             let address = hop.parse().ok()?;
             if chain.peek().is_none() || !self.trusted_range(address) {
@@ -1047,6 +1056,14 @@ fn first<'a>(headers: &'a HeaderMap, name: &HeaderName) -> Result<&'a str, Forwa
         .trim())
 }
 
+fn last<'a>(headers: &'a HeaderMap, name: &HeaderName) -> Result<&'a str, Forward> {
+    Ok(read_header(headers, name)?
+        .rsplit(',')
+        .map(str::trim)
+        .find(|item| !item.is_empty())
+        .unwrap_or(""))
+}
+
 fn bearer(value: &str) -> Option<&str> {
     let (start, tail) = value.split_at_checked(6)?;
     (start.eq_ignore_ascii_case("bearer") && tail.starts_with([' ', '\t'])).then_some(tail)
@@ -1077,7 +1094,7 @@ fn same_origin(headers: &HeaderMap, trusted: bool, forwarded_proto: &str) -> Res
     if !trusted || !http_scheme(proto) {
         return Ok(false);
     }
-    let forwarded_host = first(headers, &HeaderName::from_static("x-forwarded-host"))?;
+    let forwarded_host = last(headers, &HeaderName::from_static("x-forwarded-host"))?;
     let host = if forwarded_host.is_empty() {
         host
     } else {
@@ -1133,6 +1150,32 @@ pub(crate) fn security_headers(secure: bool) -> HeaderMap {
             HeaderValue::from_static("upgrade-insecure-requests"),
         );
     }
+    headers
+}
+
+pub(crate) fn standalone_security_headers(secure: bool) -> HeaderMap {
+    let mut headers = security_headers(secure);
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        HeaderValue::from_static("SAMEORIGIN"),
+    );
+    let csp = if secure {
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; upgrade-insecure-requests"
+    } else {
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    };
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(csp),
+    );
     headers
 }
 
@@ -1269,5 +1312,39 @@ mod tests {
         assert_eq!(public_port(&headers, true, None, Some(8443)), 8443);
         headers.insert(header::HOST, HeaderValue::from_static("books.test"));
         assert_eq!(public_port(&headers, false, None, None), 80);
+    }
+
+    #[test]
+    fn admin_direct_only_blocks_proxied_admin_even_with_allowed_cidrs() {
+        let config = json!({
+            "trustProxy": true,
+            "trustedProxyCidrs": ["127.0.0.2/32"],
+            "adminDirectOnly": true,
+            "adminAllowedCidrs": ["2001:db8:1::/64", "127.0.0.1/32"],
+        });
+        let services = Services::new(&config, "");
+        let policy = Standalone::new(&config, "", services).unwrap();
+        let proxy_peer: IpAddr = "127.0.0.2".parse().unwrap();
+        let direct_peer: IpAddr = "127.0.0.1".parse().unwrap();
+        let disallowed_direct: IpAddr = "10.0.0.5".parse().unwrap();
+        let allowed_forwarded: IpAddr = "2001:db8:1::7".parse().unwrap();
+
+        // Proxied request with XFF matching adminAllowedCidrs must STILL be blocked by adminDirectOnly.
+        assert!(policy.admin_range_permits(Some(allowed_forwarded)));
+        assert_eq!(
+            policy.profile_transport(proxy_peer, Some(allowed_forwarded)),
+            ProfileTransport::WithoutAdmin
+        );
+        // Direct request from allowed CIDR is permitted.
+        assert_eq!(
+            policy.profile_transport(direct_peer, Some(direct_peer)),
+            ProfileTransport::All
+        );
+        // Direct request outside adminAllowedCidrs is blocked by CIDR check.
+        assert!(!policy.admin_range_permits(Some(disallowed_direct)));
+        assert_eq!(
+            policy.profile_transport(disallowed_direct, Some(disallowed_direct)),
+            ProfileTransport::WithoutAdmin
+        );
     }
 }
