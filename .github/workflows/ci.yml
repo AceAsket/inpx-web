@@ -236,6 +236,8 @@ jobs:
           docker pull "$RC15_IMAGE"
           docker build --build-arg INPX_SERVER_RUNTIME=rust --target runtime-rust -t inpx-web:ci-rust .
           mkdir -p "$RUNNER_TEMP/parity/library" "$RUNNER_TEMP/parity/results"
+          docker buildx build --target rust-linux-programs --output "type=local,dest=$RUNNER_TEMP/parity/tools" .
+          echo "INPX_PARITY_CATALOG_BINARY=$RUNNER_TEMP/parity/tools/inpx-catalog" >> "$GITHUB_ENV"
           node scripts/rc15-ci-fixture.js "$RUNNER_TEMP/parity/library/library.inpx"
       - name: Compare catalogues and measure indexing and search
         shell: bash

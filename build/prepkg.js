@@ -85,7 +85,7 @@ async function build() {
         throw new Error(`Invalid Rust authentication module: ${authState}`);
     const nativePlatform = {win:'win32:x64',linux:'linux:x64','linux-arm64':'linux:arm64',macos:'darwin:x64'};
     const programs = [];
-    for (const program of ['server','catalog','reader']) {
+    for (const program of native ? ['server'] : ['server','catalog','reader']) {
         const entry = rustProgramEntry(platform,program);
         let source = process.env[`INPX_RUST_${program.toUpperCase()}_BINARY`];
         if (!source && nativePlatform[platform] === `${process.platform}:${process.arch}`) {
@@ -94,7 +94,7 @@ async function build() {
         }
         if (source) {
             await fs.access(source);
-            programs.push({source,entry:native && program === 'server' ? application : entry});
+            programs.push({source,entry:native ? application : entry});
         } else if (native) {
             throw new Error(`Missing Rust ${program} for ${platform}. Build it or set INPX_RUST_${program.toUpperCase()}_BINARY.`);
         }

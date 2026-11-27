@@ -14,11 +14,11 @@ async function checkArchivePermissions(archive, target, converters = true, rust 
         for (const program of ['server','catalog','reader']) {
             const name = rustProgramEntry(target,program);
             if (classic) assert(!entries[name], 'Unexpected Rust server component in the classic Node.js archive: ' + name);
-            if (rust && program === 'server') {
-                assert(!entries[name], 'The standalone Rust executable is the archive entry point');
+            if (rust) {
+                assert(!entries[name], 'Unexpected separate executable in the Rust standalone archive: ' + name);
                 continue;
             }
-            const required = rust || process.env[program==='server' ? 'INPX_SMOKE_REQUIRE_RUST_HTTP' : 'INPX_SMOKE_REQUIRE_RUST_CATALOG']==='true';
+            const required = process.env[program==='server' ? 'INPX_SMOKE_REQUIRE_RUST_HTTP' : 'INPX_SMOKE_REQUIRE_RUST_CATALOG']==='true';
             if (required || entries[name]) {
                 assert(entries[name] && !entries[name].isDirectory,`Missing Rust executable: ${name}`);
                 if (target !== 'win') assert.equal((entries[name].attr >>> 16) & 0o7777,0o755);
@@ -75,8 +75,8 @@ async function main() {
             assert.equal((await fs.stat(djxl)).mode & 0o7777, 0o755);
             await fs.access(path.join(directory, 'bin', 'djxl-licenses', 'LICENSE.jpeg-xl'));
             execFileSync(djxl, ['--version'], {stdio:'inherit'});
-            for (const program of ['server','catalog','reader']) {
-                const name = rust && program === 'server' ? names[0] : rustProgramEntry(target,program);
+            const programs = rust ? [names[0]] : ['server','catalog','reader'].map(program => rustProgramEntry(target,program));
+            for (const name of programs) {
                 const binary = path.join(directory,name);
                 if (!rust && !await fs.pathExists(binary)) continue;
                 const elf = execFileSync('readelf',['-lWd',binary],{encoding:'utf8',env:{...process.env,LC_ALL:'C'}});

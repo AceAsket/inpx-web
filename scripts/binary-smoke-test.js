@@ -411,13 +411,19 @@ async function main() {
         }
         if (requireRustCatalogue) {
             if (target === '--image') {
-                await promisify(execFile)('docker',['exec',containerName,'sh','-c',
-                    'test -x /usr/local/bin/bin/inpx-reader && test -x /usr/local/bin/bin/inpx-catalog && test -f /data/db/catalogue.json && test -f /data/db/lookup.redb && test ! -e /data/db/book']);
+                const tools = rust
+                    ? 'test ! -e /usr/local/bin/bin/inpx-reader && test ! -e /usr/local/bin/bin/inpx-catalog'
+                    : 'test -x /usr/local/bin/bin/inpx-reader && test -x /usr/local/bin/bin/inpx-catalog';
+                await promisify(execFile)('docker',['exec',containerName,'sh','-ec',
+                    `${tools} && test -f /data/db/catalogue.json && test -f /data/db/lookup.redb && test ! -e /data/db/book`]);
             } else {
-                for (const name of ['catalog','reader']) await fs.access(path.join(path.dirname(command),'bin',rustPrograms.fileName(name)));
+                for (const name of ['catalog','reader']) {
+                    const tool = path.join(path.dirname(command),'bin',rustPrograms.fileName(name));
+                    assert.equal(await fs.pathExists(tool), !rust, `Unexpected availability of ${tool}`);
+                }
                 const rows = await fs.readdir(path.join(dir,'data','db'));
                 assert(rows.includes('catalogue.json') && rows.includes('lookup.redb') && !rows.includes('book'),
-                    'Packaged app must build the native catalogue with its bundled binaries');
+                    'Packaged app must build the native catalogue without legacy book tables');
             }
         }
         const health = await fetch(`${url}/health`);

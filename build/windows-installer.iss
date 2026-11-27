@@ -63,7 +63,11 @@ Source: "{#SourceDir}\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
 #endif
 Source: "{#SourceDir}\inpx-web.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\readme.html"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+#ifdef RustRuntime
+Source: "{#SourceDir}\bin\*"; DestDir: "{app}\bin"; Excludes: "inpx-catalog.exe,inpx-reader.exe"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+#else
 Source: "{#SourceDir}\bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+#endif
 Source: "{#RepoRoot}\LICENSE.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [INI]

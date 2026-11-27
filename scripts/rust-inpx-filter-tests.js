@@ -11,6 +11,7 @@ const {connect,signIn} = require('./rust-events-tests');
 
 const run = promisify(execFile);
 const password = 'inpx-filter-test-admin';
+const parityCataloguePath = '/test-tools/inpx-catalog';
 const initial = {
     filter:'(inpxRec) => inpxRec.del == 0',
     includeAuthors:['ауренга','Ауренга,Кимури Мария','Еськов Кирилл Юрьевич',
@@ -55,6 +56,11 @@ async function docker(...args) {
     return (await run('docker',args,{timeout:40000,windowsHide:true})).stdout.trim();
 }
 
+function parityCatalogueMount() {
+    const binary = process.env.INPX_PARITY_CATALOG_BINARY;
+    return binary ? ['--mount', `type=bind,source=${resolve(binary)},target=${parityCataloguePath},readonly`] : [];
+}
+
 async function until(read, evaluate, message, seconds = 210) {
     const limit = Date.now()+seconds*1000;
     while (Date.now()<limit) {
@@ -70,12 +76,13 @@ async function writeFilter(file, rule) {
     await fs.rename(file+'.next',file);
 }
 
-async function start(name, image, source, rules) {
+async function start(name, image, source, rules, mounts = []) {
     const started = performance.now();
     await docker('run','-d','--name',name,'--tmpfs','/data','-p','127.0.0.1::12380',
         '-e','INPX_AUTH_MODE=local','-e','INPX_REQUIRE_AUTH=false','-e','INPX_ALLOW_ANONYMOUS_ACCESS=true',
         '--mount','type=bind,source='+dirname(source)+',target=/library,readonly',
         '--mount','type=bind,source='+rules+',target=/rules,readonly',
+        ...mounts,
         image,
         'sh','-ec','cp /rules/config.json /data/config.json; exec inpx-web "$@"','test',
         '--data-dir=/data','--host=0.0.0.0','--port=12380','--lib-dir=/library',
@@ -129,9 +136,10 @@ async function legacyRows(name, directory) {
 async function rustRows(name, fields) {
     const metadata = JSON.parse(await docker('exec',name,'cat','/data/db/catalogue.json'));
     const request = {id:1,op:'scan',limit:4096,generation:metadata.rustBookStoreGeneration,fields};
+    const binary = process.env.INPX_PARITY_CATALOG_BINARY ? parityCataloguePath : '/usr/local/bin/bin/inpx-catalog';
     const reply = JSON.parse(await docker('exec',name,'sh','-ec',
-        'printf "%s\\n" "$1" | /usr/local/bin/bin/inpx-catalog store /data/db',
-        'test',JSON.stringify(request)));
+        'printf "%s\\n" "$1" | "$2" store /data/db',
+        'test',JSON.stringify(request),binary));
     assert.equal(reply.error,undefined);
     assert.equal(reply.result.after,null);
     return reply.result.rows;
@@ -245,7 +253,7 @@ async function main(rustImage, rc15Image, inpx, fixtureType) {
         console.log(JSON.stringify({stage:'rc15-ready',sourceSha256:sourceDigest,count:beforeLegacy.count}));
         await until(()=>docker('image','inspect',rustImage,'--format','{{.Id}}').catch(()=>''),Boolean,
             'Rust image did not finish building',600);
-        const rust = await start(names[1],rustImage,source,newRules);
+        const rust = await start(names[1],rustImage,source,newRules,parityCatalogueMount());
         clients.push(rust);
         const beforeRust = await contents(rust,'initial');
         compare('first-index',beforeLegacy,beforeRust,counts[0]);
@@ -308,4 +316,4 @@ if (require.main === module) {
     main(...process.argv.slice(2)).catch(error=>{console.error(error);process.exitCode=1;});
 }
 
-module.exports = {docker, until, legacyRows, rustRows, initial, timing};
+module.exports = {docker, until, legacyRows, rustRows, parityCatalogueMount, initial, timing};

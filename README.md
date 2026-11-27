@@ -17,7 +17,7 @@
 
 | Редакция | Docker-образ | ZIP и установщик Windows |
 | --- | --- | --- |
-| Rust 2.0.3 · стабильная | `aceasket/inpx-web-7z:2.0.3` или `:latest` | [Скачать Rust 2.0.3](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.3) |
+| Rust 2.0.4 · стабильная | `aceasket/inpx-web-7z:2.0.4` или `:latest` | [Скачать Rust 2.0.4](https://github.com/AceAsket/inpx-web/releases/tag/v2.0.4) |
 | Классический Node.js 1.8.3 · стабильная | `aceasket/inpx-web-7z:1.8.3` | [Скачать Node.js 1.8.3](https://github.com/AceAsket/inpx-web/releases/tag/v1.8.3) |
 
 Разработка Rust 2.x ведётся в ветке `develop`. Ветка `main` также содержит сервер Rust. При обновлении контейнера с тегом `latest` он перейдёт на Rust. Чтобы продолжить использовать стабильный Node.js, закрепите тег `1.8.3`. Классический сервер с JembaDB поддерживается в ветке [nodejs_depr](https://github.com/AceAsket/inpx-web/tree/nodejs_depr).
@@ -45,7 +45,7 @@ docker run -d --name inpx-web --restart unless-stopped \
   -e LIBDIR=/library \
   -v inpx-web-data:/usr/local/bin/.inpx-web \
   -v /path/to/library:/library:ro \
-  aceasket/inpx-web-7z:2.0.3
+  aceasket/inpx-web-7z:2.0.4
 ```
 
 Откройте `http://localhost:12380` на сервере или укажите его адрес вместо `localhost`. Профили и настройки сохраняются в томе `inpx-web-data`. [Пример Docker Compose](./docker-compose.full.yml) · [Docker Hub](https://hub.docker.com/r/aceasket/inpx-web-7z)
@@ -61,7 +61,7 @@ docker run -d --name inpx-web --restart unless-stopped \
 }
 ```
 
-Массив подходит и для 2.0.2, и для 2.0.3. В 2.0.3 также можно использовать строку из адресов и CIDR через запятую. После перезапуска откройте библиотеку через HTTPS и проверьте запрос `/ws` в **Сеть → WS**. При успешном подключении статус `101`. Если в журнале появился `foreign-origin`, поле `peer` показывает TCP-адрес, который видит INPX Web. Сверьте его со списком `trustedProxyCidrs`. [Заголовки Nginx Proxy Manager](https://github.com/NginxProxyManager/nginx-proxy-manager/blob/develop/docker/rootfs/etc/nginx/conf.d/include/proxy.conf)
+Массив поддерживается с 2.0.2. Начиная с 2.0.3 также можно использовать строку из адресов и CIDR через запятую. После перезапуска откройте библиотеку через HTTPS и проверьте запрос `/ws` в **Сеть → WS**. При успешном подключении статус `101`. Если в журнале появился `foreign-origin`, поле `peer` показывает TCP-адрес, который видит INPX Web. Сверьте его со списком `trustedProxyCidrs`. [Заголовки Nginx Proxy Manager](https://github.com/NginxProxyManager/nginx-proxy-manager/blob/develop/docker/rootfs/etc/nginx/conf.d/include/proxy.conf)
 
 ### Caddy и Docker на Synology
 
@@ -136,7 +136,7 @@ curl --noproxy '*' -g -6 'http://[::1]:12382/ready'
 
 ### Caddy по IPv6
 
-IPv6-адреса в `INPX_TRUSTED_PROXY_CIDRS` поддерживаются в Rust 2.0.3. В примере адрес Caddy — `2001:db8:31::49`, адрес библиотеки — `2001:db8:31::97`. Подставьте свои адреса. На машине библиотеки задайте переменные перед запуском сервера.
+IPv6-адреса в `INPX_TRUSTED_PROXY_CIDRS` поддерживаются начиная с Rust 2.0.3. В примере адрес Caddy — `2001:db8:31::49`, адрес библиотеки — `2001:db8:31::97`. Подставьте свои адреса. На машине библиотеки задайте переменные перед запуском сервера.
 
 ```sh
 export INPX_TRUST_PROXY=true

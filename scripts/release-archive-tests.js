@@ -73,14 +73,20 @@ async function testIncompleteStandaloneConverterBundlesAreRejected() {
             const source = path.join(dir, target);
             const archive = path.join(dir, target + '.zip');
             const programs = executableNames(target);
-            const files = [...programs, rustProgramEntry(target, 'reader'), rustProgramEntry(target, 'catalog'),
-                'bin/public.json', 'bin/LICENSE.quickjs', 'bin/LICENSE.kindling',
+            const files = [...programs, 'bin/public.json', 'bin/LICENSE.quickjs', 'bin/LICENSE.kindling',
                 'bin/LICENSE.mupdf', 'bin/mupdf-source.txt', 'bin/mupdf-third-party.rst'];
             if (target.startsWith('linux')) files.push('bin/djxl', 'bin/djxl-licenses/LICENSE.jpeg-xl');
             if (target === 'win') files.push('bin/7za.exe', 'bin/djxl.exe', 'bin/dwebp.exe', 'vcruntime140.dll', 'bin/vcruntime140.dll');
             for (const name of files) await fs.outputFile(path.join(source, name), 'payload');
             await createReleaseArchive(source, archive, target);
             await checkArchivePermissions(archive, target, true, true);
+
+            const extraTool = rustProgramEntry(target, 'catalog');
+            await fs.outputFile(path.join(source, extraTool), 'payload');
+            await createReleaseArchive(source, archive, target);
+            await assert.rejects(checkArchivePermissions(archive, target, true, true),
+                error => error.message.includes(extraTool), target + ' must reject a separate Rust executable');
+            await fs.unlink(path.join(source, extraTool));
 
             for (const name of [...programs.slice(1), 'bin/LICENSE.kindling', 'bin/LICENSE.mupdf']) {
                 const file = path.join(source, name);
@@ -94,5 +100,26 @@ async function testIncompleteStandaloneConverterBundlesAreRejected() {
     });
 }
 
+async function testRustPrepackagingNeedsOnlyTheServerBinary() {
+    await temporary(async dir => {
+        const dist = path.join(dir, 'dist');
+        const server = path.join(dir, 'inpx-server');
+        const output = path.join(dist, 'linux');
+        await fs.outputFile(server, 'standalone server');
+        await fs.outputFile(path.join(dist, 'tmp/public/index.html'), '<html></html>');
+        for (const program of ['catalog', 'reader'])
+            await fs.outputFile(path.join(output, rustProgramEntry('linux', program)), 'old tool');
+
+        execFileSync(process.execPath, [path.resolve(__dirname, '../build/prepkg.js'), 'linux', '--rust'], {
+            windowsHide: true,
+            env: {...process.env, INPX_BUILD_DIST_DIR: dist, INPX_RUST_SERVER_BINARY: server,
+                INPX_RUST_CATALOG_BINARY: path.join(dir, 'missing-catalog'),
+                INPX_RUST_READER_BINARY: path.join(dir, 'missing-reader')},
+        });
+        assert.equal(await fs.readFile(path.join(output, 'inpx-web'), 'utf8'), 'standalone server');
+        assert.deepEqual((await fs.readdir(path.join(output, 'bin'))).sort(), ['LICENSE.quickjs', 'public.json']);
+    });
+}
+
 module.exports = [testReleaseZipPreservesExecutablesAfterNativeExtraction,testReleaseZipRejectsMissingOrNonExecutablePayload,
-    testIncompleteStandaloneConverterBundlesAreRejected];
+    testIncompleteStandaloneConverterBundlesAreRejected, testRustPrepackagingNeedsOnlyTheServerBinary];

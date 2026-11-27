@@ -23,14 +23,17 @@ RUN tar -xzf /tmp/kindling.tar.gz --strip-components=1 \
 FROM scratch AS kindling-tools
 COPY --from=kindling-build /out/ /
 
-FROM rust:1.99.1-alpine3.23 AS rust-build
+FROM rust:1.99.1-alpine3.23 AS rust-server-build
 RUN apk add --no-cache build-base cmake nasm
 WORKDIR /src
 COPY rust/ ./rust/
 COPY package.json ./
 COPY server/core/genres/genresText.js ./server/core/genres/
 COPY shared/ebook.css shared/app-reset.html ./shared/
-RUN cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server -p inpx-catalog -p inpx-reader
+RUN cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-server
+
+FROM rust-server-build AS rust-build
+RUN cargo build --manifest-path rust/Cargo.toml --locked --release -p inpx-catalog -p inpx-reader
 
 FROM rust-build AS rust-auth-build
 RUN rustup target add wasm32-unknown-unknown \
@@ -38,6 +41,9 @@ RUN rustup target add wasm32-unknown-unknown \
 
 FROM scratch AS rust-linux-programs
 COPY --from=rust-build /src/rust/target/release/inpx-server /src/rust/target/release/inpx-catalog /src/rust/target/release/inpx-reader /
+
+FROM scratch AS rust-linux-standalone
+COPY --from=rust-server-build /src/rust/target/release/inpx-server /
 
 FROM ${NODE_IMAGE} AS build-deps
 
@@ -65,7 +71,7 @@ COPY --from=rust-build /src/rust/target/release/inpx-server /src/rust/target/rel
 RUN npm run build:linux
 
 FROM web-source AS build-rust
-COPY --from=rust-build /src/rust/target/release/inpx-server /src/rust/target/release/inpx-catalog /src/rust/target/release/inpx-reader /app/rust/target/release/
+COPY --from=rust-server-build /src/rust/target/release/inpx-server /app/rust/target/release/
 RUN npm run build:rust -- linux
 
 FROM build-${INPX_SERVER_RUNTIME} AS build-app
