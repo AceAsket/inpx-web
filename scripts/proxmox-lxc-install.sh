@@ -169,6 +169,7 @@ parse_args() {
     [[ "${PORT}" =~ ^[0-9]+$ ]] || fail "--port must be numeric."
     [[ "${COVER_CACHE_SIZE_MB}" =~ ^[0-9]+$ ]] || fail "--cover-cache-size-mb must be numeric."
     [[ "${METRICS_PATH}" == /* ]] || fail "--metrics-path must start with /."
+    [[ "${PROJECT_NAME}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || fail "Invalid --project-name '${PROJECT_NAME}'."
 }
 
 json_escape() {
@@ -180,7 +181,14 @@ json_escape() {
 }
 
 yaml_quote() {
-    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+    local value="$1"
+    local sq="'"
+    if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+        fail "YAML value must not contain newline characters."
+    fi
+    value="${value//"${sq}"/"${sq}${sq}"}"
+    value="${value//\$/\$\$}"
+    printf "'%s'" "${value}"
 }
 
 parse_source_specs() {
@@ -308,15 +316,46 @@ sync_repo() {
 write_compose_file() {
     local compose_path="${APP_ROOT}/docker-compose.proxmox.yml"
     log "Writing ${compose_path}."
-    local data_volume library_volume library_sources_json
-    cat > "${compose_path}" <<EOF
+    local data_volume library_volume library_sources_json inpx_path
+    local q_image q_container_name q_metrics_path q_metrics_token=""
+    local q_library_sources_json="" q_inpx_path="" q_data_volume q_library_volume
+    local -a q_source_volumes=()
+    local i tmp_compose
+
+    q_image="$(yaml_quote "${PROJECT_NAME}:local")" || return 1
+    q_container_name="$(yaml_quote "${PROJECT_NAME}")" || return 1
+    q_metrics_path="$(yaml_quote "${METRICS_PATH}")" || return 1
+    if [[ -n "${METRICS_TOKEN}" ]]; then
+        q_metrics_token="$(yaml_quote "${METRICS_TOKEN}")" || return 1
+    fi
+    if [[ "${#SOURCE_IDS[@]}" -gt 0 ]]; then
+        library_sources_json="$(build_library_sources_json)"
+        q_library_sources_json="$(yaml_quote "${library_sources_json}")" || return 1
+        for i in "${!SOURCE_IDS[@]}"; do
+            library_volume="${SOURCE_DIRS[$i]}:/library/${SOURCE_IDS[$i]}:ro"
+            q_library_volume="$(yaml_quote "${library_volume}")" || return 1
+            q_source_volumes+=("${q_library_volume}")
+        done
+    else
+        inpx_path="/library/${INPX_FILE}"
+        q_inpx_path="$(yaml_quote "${inpx_path}")" || return 1
+        library_volume="${LIBRARY_DIR}:/library:ro"
+        q_library_volume="$(yaml_quote "${library_volume}")" || return 1
+    fi
+    data_volume="${DATA_DIR}:/usr/local/bin/.inpx-web"
+    q_data_volume="$(yaml_quote "${data_volume}")" || return 1
+
+    tmp_compose="$(mktemp "${compose_path}.tmp.XXXXXX")"
+    chmod 600 "${tmp_compose}"
+    {
+        cat <<EOF
 services:
   inpx-web:
     build:
       context: .
       target: ${DOCKER_TARGET}
-    image: ${PROJECT_NAME}:local
-    container_name: ${PROJECT_NAME}
+    image: ${q_image}
+    container_name: ${q_container_name}
     restart: unless-stopped
     ports:
       - "${PORT}:12380"
@@ -325,40 +364,33 @@ services:
       CACHE_DIR: /usr/local/bin/.inpx-web/cache
       INPX_COVER_CACHE_SIZE_MB: "${COVER_CACHE_SIZE_MB}"
       INPX_METRICS_ENABLED: "${METRICS_ENABLED}"
-      INPX_METRICS_PATH: "${METRICS_PATH}"
+      INPX_METRICS_PATH: ${q_metrics_path}
 EOF
 
-    if [[ -n "${METRICS_TOKEN}" ]]; then
-        printf '      INPX_METRICS_TOKEN: %s\n' "$(yaml_quote "${METRICS_TOKEN}")" >> "${compose_path}"
-    fi
+        if [[ -n "${q_metrics_token}" ]]; then
+            printf '      INPX_METRICS_TOKEN: %s\n' "${q_metrics_token}"
+        fi
 
-    if [[ "${#SOURCE_IDS[@]}" -gt 0 ]]; then
-        library_sources_json="$(build_library_sources_json)"
-        printf '      INPX_LIBRARY_SOURCES: %s\n' "$(yaml_quote "${library_sources_json}")" >> "${compose_path}"
-    else
-        cat >> "${compose_path}" <<EOF
-      INPX: /library/${INPX_FILE}
-      LIBDIR: /library
-EOF
-    fi
+        if [[ "${#SOURCE_IDS[@]}" -gt 0 ]]; then
+            printf '      INPX_LIBRARY_SOURCES: %s\n' "${q_library_sources_json}"
+        else
+            printf '      INPX: %s\n' "${q_inpx_path}"
+            printf '      LIBDIR: /library\n'
+        fi
 
-    cat >> "${compose_path}" <<EOF
-    volumes:
-EOF
+        printf '    volumes:\n'
+        printf '      - %s\n' "${q_data_volume}"
 
-    data_volume="${DATA_DIR}:/usr/local/bin/.inpx-web"
-    printf '      - %s\n' "$(yaml_quote "${data_volume}")" >> "${compose_path}"
+        if [[ "${#SOURCE_IDS[@]}" -gt 0 ]]; then
+            for q_library_volume in "${q_source_volumes[@]}"; do
+                printf '      - %s\n' "${q_library_volume}"
+            done
+        else
+            printf '      - %s\n' "${q_library_volume}"
+        fi
+    } > "${tmp_compose}"
 
-    if [[ "${#SOURCE_IDS[@]}" -gt 0 ]]; then
-        local i
-        for i in "${!SOURCE_IDS[@]}"; do
-            library_volume="${SOURCE_DIRS[$i]}:/library/${SOURCE_IDS[$i]}:ro"
-            printf '      - %s\n' "$(yaml_quote "${library_volume}")" >> "${compose_path}"
-        done
-    else
-        library_volume="${LIBRARY_DIR}:/library:ro"
-        printf '      - %s\n' "$(yaml_quote "${library_volume}")" >> "${compose_path}"
-    fi
+    mv -f "${tmp_compose}" "${compose_path}"
 }
 
 build_and_start() {

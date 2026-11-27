@@ -9,7 +9,7 @@ on:
       tag:
         description: 'Git tag or ref to build'
         required: true
-        default: 'v2.0.4'
+        default: 'v2.0.5-rc.1'
       publish:
         description: 'Publish the built artifacts as a GitHub Release'
         type: boolean
@@ -17,15 +17,12 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   GITHUB_TOKEN: ${{ github.token }}
-  WINDOWS_7ZIP_RELEASE_API: https://api.github.com/repos/ip7z/7zip/releases/latest
-  WINDOWS_JXL_URL: https://github.com/libjxl/libjxl/releases/latest/download/jxl-x64-windows-static.zip
-  WINDOWS_WEBP_URL: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0-windows-x64.zip
-  FB2CNG_RELEASE_API: https://api.github.com/repos/rupor-github/fb2cng/releases/tags/v2.1.1
+  FB2CNG_VERSION: v2.1.1
 
 jobs:
   release-smoke-tests:
@@ -63,6 +60,11 @@ jobs:
       - name: Run TTS tests
         run: npm run test:tts
 
+      - name: Run Rust unit tests
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal
+          cargo +1.100.0 test --manifest-path rust/Cargo.toml --locked --release
+
   build:
     name: Build ${{ matrix.label }}
     needs: release-smoke-tests
@@ -75,18 +77,22 @@ jobs:
             label: Linux x64
             target: linux
             fbc_asset: fbc-linux-amd64.zip
+            fbc_sha256: d366b672866a052c87f5b86604969b84da84830ef187b22fb836494762f5c6b8
           - os: ubuntu-24.04-arm
             label: Linux arm64
             target: linux-arm64
             fbc_asset: fbc-linux-arm64.zip
+            fbc_sha256: 6c2d565aee583402179a3434fd605acaefad2925b0ba57d96dc85cc3f68f44bc
           - os: windows-latest
             label: Windows x64
             target: win
             fbc_asset: fbc-windows-amd64.zip
+            fbc_sha256: c5ce359dfa1765439eb8b438fe1927390ebef8780012ce1976e618df5322eb1b
           - os: macos-15-intel
             label: macOS x64
             target: macos
             fbc_asset: fbc-darwin-amd64.zip
+            fbc_sha256: 585d19dab8986c8a1ee241f4bbd0f274da3c1aa5989d641becb96b7a0484348c
 
     steps:
       - name: Checkout release source
@@ -130,45 +136,37 @@ jobs:
           npm run build:win-tools
 
       - name: Bundle fb2cng converter
+        if: matrix.target != 'win'
         shell: pwsh
         run: |
           $binDir = Join-Path $PWD "dist/${{ matrix.target }}/bin"
           New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-          $githubHeaders = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; 'X-GitHub-Api-Version' = '2022-11-28' }
-          $fb2cngRelease = Invoke-RestMethod -Uri $env:FB2CNG_RELEASE_API -Headers $githubHeaders
-          if ($fb2cngRelease.tag_name -ne 'v2.1.1') {
-            throw 'Unexpected fb2cng release version'
-          }
-          $fb2cngAsset = $fb2cngRelease.assets |
-            Where-Object { $_.name -eq '${{ matrix.fbc_asset }}' } |
-            Select-Object -First 1
-          if (-not $fb2cngAsset) {
-            throw 'Unable to find fb2cng asset ${{ matrix.fbc_asset }} in release v2.1.1'
-          }
-
-          $fbcArchive = Join-Path $env:RUNNER_TEMP $fb2cngAsset.name
+          $fbcUrl = "https://github.com/rupor-github/fb2cng/releases/download/$env:FB2CNG_VERSION/${{ matrix.fbc_asset }}"
+          $fbcArchive = Join-Path $env:RUNNER_TEMP "${{ matrix.fbc_asset }}"
           $fbcExtract = Join-Path $env:RUNNER_TEMP "fb2cng-${{ matrix.target }}"
           if (Test-Path $fbcExtract) {
             Remove-Item $fbcExtract -Recurse -Force
           }
 
-          Invoke-WebRequest -Uri $fb2cngAsset.browser_download_url -OutFile $fbcArchive
+          Invoke-WebRequest -Uri $fbcUrl -OutFile $fbcArchive
+          $actual = (Get-FileHash -Path $fbcArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ matrix.fbc_sha256 }}') {
+            throw "SHA-256 mismatch for $fbcUrl : expected ${{ matrix.fbc_sha256 }}, got $actual"
+          }
           Expand-Archive -Path $fbcArchive -DestinationPath $fbcExtract -Force
 
-          $fbcFileName = if ('${{ matrix.target }}' -eq 'win') { 'fbc.exe' } else { 'fbc' }
+          $fbcFileName = 'fbc'
           $fbcSource = Get-ChildItem -Path $fbcExtract -Recurse -File |
             Where-Object { $_.Name -eq $fbcFileName } |
             Select-Object -First 1
           if (-not $fbcSource) {
-            throw "Unable to find $fbcFileName in $($fb2cngAsset.name)"
+            throw "Unable to find $fbcFileName in ${{ matrix.fbc_asset }}"
           }
 
           $fbcTarget = Join-Path $binDir $fbcFileName
           Copy-Item $fbcSource.FullName -Destination $fbcTarget -Force
-          if ('${{ matrix.target }}' -ne 'win') {
-            chmod +x $fbcTarget
-          }
+          chmod +x $fbcTarget
 
       - name: Bundle pinned Kindling converter
         run: node scripts/bundle-kindling.js ${{ matrix.target }}
@@ -224,6 +222,9 @@ jobs:
     name: Upload release assets
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      actions: read
+      contents: write
     steps:
       - name: Checkout release source
         uses: actions/checkout@v5

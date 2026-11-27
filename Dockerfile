@@ -85,20 +85,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 COPY build/linux-djxl.js /tools/linux-djxl.js
 RUN node /tools/linux-djxl.js /out
 
-FROM ${NODE_IMAGE} AS webp-tools
-
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update \
-    && apt-get install -y --no-install-recommends webp \
-    && mkdir -p /webp-runtime/bin /webp-runtime/lib \
-    && cp /usr/bin/dwebp /webp-runtime/bin/dwebp \
-    && ldd /usr/bin/dwebp \
-        | awk '{ if ($(NF-1) ~ /^\//) print $(NF-1) }' \
-        | sort -u \
-        | xargs -I{} cp -L {} /webp-runtime/lib/ \
-    && rm -rf /var/lib/apt/lists/*
-
 FROM ${NODE_IMAGE} AS fb2cng-tools
 
 ARG FB2CNG_VERSION
@@ -108,24 +94,30 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates unzip wget \
+    && case "${FB2CNG_VERSION}:${FB2CNG_ARCH}" in \
+        v2.1.1:linux-amd64) FB2CNG_SHA256="d366b672866a052c87f5b86604969b84da84830ef187b22fb836494762f5c6b8" ;; \
+        v2.1.1:linux-arm64) FB2CNG_SHA256="6c2d565aee583402179a3434fd605acaefad2925b0ba57d96dc85cc3f68f44bc" ;; \
+        *) echo "Unsupported FB2CNG_VERSION/ARCH: ${FB2CNG_VERSION}:${FB2CNG_ARCH}" >&2; exit 1 ;; \
+    esac \
     && wget -O /tmp/fbc.zip "https://github.com/rupor-github/fb2cng/releases/download/${FB2CNG_VERSION}/fbc-${FB2CNG_ARCH}.zip" \
+    && echo "${FB2CNG_SHA256}  /tmp/fbc.zip" | sha256sum -c - \
     && unzip /tmp/fbc.zip -d /fb2cng-runtime \
     && chmod +x /fb2cng-runtime/fbc \
     && rm -rf /tmp/fbc.zip /var/lib/apt/lists/*
 
 FROM ${RUNTIME_IMAGE} AS runtime-base
 
-ENV LD_LIBRARY_PATH=/usr/local/lib
 WORKDIR /app
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates p7zip-full libjxl-tools tini \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends ca-certificates p7zip-full webp tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home-dir /usr/local/bin/.inpx-web --shell /usr/sbin/nologin inpx \
+    && mkdir -p /usr/local/bin/.inpx-web /library \
+    && chown inpx:inpx /usr/local/bin/.inpx-web
 
-COPY --from=webp-tools /webp-runtime/bin/dwebp /usr/local/bin/dwebp
-COPY --from=webp-tools /webp-runtime/lib/ /usr/local/lib/
 COPY --from=djxl-tools /out/djxl /usr/bin/djxl
 COPY --from=djxl-tools /out/djxl-licenses/ /usr/local/share/licenses/djxl/
 COPY --from=build-app /app/dist/linux/inpx-web /usr/local/bin/inpx-web
@@ -138,6 +130,9 @@ RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
 
 EXPOSE 12380
 VOLUME ["/usr/local/bin/.inpx-web", "/library"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${PORT:-12380} && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n 1 <&3 | grep -q '200'"]
 
 ENTRYPOINT ["tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 

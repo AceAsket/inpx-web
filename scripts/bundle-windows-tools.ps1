@@ -18,20 +18,6 @@ function Get-EnvOrDefault {
   return $value
 }
 
-function Get-GitHubHeaders {
-  $headers = @{
-    'User-Agent' = 'inpx-web-release-builder'
-    'X-GitHub-Api-Version' = '2022-11-28'
-  }
-
-  $token = [Environment]::GetEnvironmentVariable('GITHUB_TOKEN')
-  if (-not [string]::IsNullOrWhiteSpace($token)) {
-    $headers.Authorization = "Bearer $token"
-  }
-
-  return $headers
-}
-
 function Reset-Directory {
   param([string] $Path)
 
@@ -42,13 +28,35 @@ function Reset-Directory {
   New-Item -ItemType Directory -Force -Path $Path | Out-Null
 }
 
-function Download-File {
+function Download-VerifiedFile {
   param(
     [string] $Uri,
-    [string] $OutFile
+    [string] $OutFile,
+    [string] $ExpectedSha256
   )
 
   Invoke-WebRequest -Uri $Uri -OutFile $OutFile
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+    $actual = (Get-FileHash -Path $OutFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    $expected = $ExpectedSha256.Trim().ToLowerInvariant()
+    if ($actual -ne $expected) {
+      Remove-Item -Path $OutFile -Force -ErrorAction SilentlyContinue
+      throw "SHA-256 mismatch for $Uri : expected $expected, got $actual"
+    }
+  }
+}
+
+function Invoke-SevenZipExtract {
+  param(
+    [string] $Executable,
+    [string] $Archive,
+    [string] $Destination
+  )
+
+  & $Executable x $Archive "-o$Destination" -y
+  if ($LASTEXITCODE -ne 0) {
+    throw "7-Zip extraction failed for $Archive (exit code $LASTEXITCODE)"
+  }
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -60,37 +68,30 @@ $targetDir = (Resolve-Path $TargetDir).Path
 $binDir = Join-Path $targetDir 'bin'
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
-$headers = Get-GitHubHeaders
-$sevenZipReleaseApi = Get-EnvOrDefault 'WINDOWS_7ZIP_RELEASE_API' 'https://api.github.com/repos/ip7z/7zip/releases/latest'
-$windowsJxlUrl = Get-EnvOrDefault 'WINDOWS_JXL_URL' 'https://github.com/libjxl/libjxl/releases/latest/download/jxl-x64-windows-static.zip'
+$sevenZipExtraUrl = Get-EnvOrDefault 'WINDOWS_7ZIP_EXTRA_URL' 'https://github.com/ip7z/7zip/releases/download/26.06/7z2606-extra.7z'
+$sevenZipExtraSha256 = Get-EnvOrDefault 'WINDOWS_7ZIP_EXTRA_SHA256' '396c180f12d2247c24b0b1fcd482c6fc2a2700f61211ffede1061dd971f5e104'
+$sevenZipBootstrapUrl = Get-EnvOrDefault 'WINDOWS_7ZIP_BOOTSTRAP_URL' 'https://github.com/ip7z/7zip/releases/download/26.06/7zr.exe'
+$sevenZipBootstrapSha256 = Get-EnvOrDefault 'WINDOWS_7ZIP_BOOTSTRAP_SHA256' 'e80db2dad715a6c5adabe292d31ed54e11f4e9b99ca349827b50573b175891bc'
+
+$windowsJxlUrl = Get-EnvOrDefault 'WINDOWS_JXL_URL' 'https://github.com/libjxl/libjxl/releases/download/v0.13.0/jxl-x64-windows-static.zip'
+$windowsJxlSha256 = Get-EnvOrDefault 'WINDOWS_JXL_SHA256' 'e394519c05ea9e5b83947f89b40afbf1ea7c631a608406c5de945a4c5bdcdcb7'
+
 $windowsWebpUrl = Get-EnvOrDefault 'WINDOWS_WEBP_URL' 'https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0-windows-x64.zip'
-$fb2cngReleaseApi = Get-EnvOrDefault 'FB2CNG_RELEASE_API' 'https://api.github.com/repos/rupor-github/fb2cng/releases/latest'
+$windowsWebpSha256 = Get-EnvOrDefault 'WINDOWS_WEBP_SHA256' '48886f506b21f62e4661f0f4cbfca19800897c385128e8902542d29a950c93f1'
 
-Write-Host "Bundling Windows tools into $binDir"
+$fb2cngUrl = Get-EnvOrDefault 'FB2CNG_WINDOWS_URL' 'https://github.com/rupor-github/fb2cng/releases/download/v2.1.1/fbc-windows-amd64.zip'
+$fb2cngSha256 = Get-EnvOrDefault 'FB2CNG_WINDOWS_SHA256' 'c5ce359dfa1765439eb8b438fe1927390ebef8780012ce1976e618df5322eb1b'
 
-$sevenZipRelease = Invoke-RestMethod -Uri $sevenZipReleaseApi -Headers $headers
-$sevenZipAsset = $sevenZipRelease.assets |
-  Where-Object { $_.name -like '7z*-extra.7z' } |
-  Select-Object -First 1
-$sevenZipBootstrapAsset = $sevenZipRelease.assets |
-  Where-Object { $_.name -eq '7zr.exe' } |
-  Select-Object -First 1
+Write-Host "Bundling verified Windows tools into $binDir"
 
-if (-not $sevenZipAsset) {
-  throw 'Unable to find 7-Zip extra package in the latest release'
-}
-if (-not $sevenZipBootstrapAsset) {
-  throw 'Unable to find 7-Zip bootstrap extractor in the latest release'
-}
-
-$sevenZipArchive = Join-Path $env:TEMP $sevenZipAsset.name
+$sevenZipArchive = Join-Path $env:TEMP '7z2606-extra.7z'
 $sevenZipBootstrap = Join-Path $env:TEMP '7zr-bootstrap.exe'
 $sevenZipExtract = Join-Path $env:TEMP 'inpx-web-7zip-extra'
 Reset-Directory $sevenZipExtract
 
-Download-File $sevenZipAsset.browser_download_url $sevenZipArchive
-Download-File $sevenZipBootstrapAsset.browser_download_url $sevenZipBootstrap
-& $sevenZipBootstrap x $sevenZipArchive "-o$sevenZipExtract" -y
+Download-VerifiedFile $sevenZipExtraUrl $sevenZipArchive $sevenZipExtraSha256
+Download-VerifiedFile $sevenZipBootstrapUrl $sevenZipBootstrap $sevenZipBootstrapSha256
+Invoke-SevenZipExtract $sevenZipBootstrap $sevenZipArchive $sevenZipExtract
 $sevenZipSource = Get-ChildItem -Path $sevenZipExtract -Recurse -File -Filter '7za.exe' | Select-Object -First 1
 if (-not $sevenZipSource) {
   throw 'Unable to find 7za.exe in the 7-Zip extra package'
@@ -101,8 +102,8 @@ Copy-Item $sevenZipSource.FullName -Destination $sevenZipTool -Force
 $jxlArchive = Join-Path $env:TEMP 'jxl-x64-windows-static.zip'
 $jxlExtract = Join-Path $env:TEMP 'inpx-web-jxl-x64-windows-static'
 Reset-Directory $jxlExtract
-Download-File $windowsJxlUrl $jxlArchive
-& $sevenZipTool x $jxlArchive "-o$jxlExtract" -y
+Download-VerifiedFile $windowsJxlUrl $jxlArchive $windowsJxlSha256
+Invoke-SevenZipExtract $sevenZipTool $jxlArchive $jxlExtract
 Get-ChildItem -Path $jxlExtract -Recurse -File |
   Where-Object { $_.Extension -in @('.exe', '.dll') } |
   ForEach-Object {
@@ -112,27 +113,19 @@ Get-ChildItem -Path $jxlExtract -Recurse -File |
 $webpArchive = Join-Path $env:TEMP 'libwebp-windows-x64.zip'
 $webpExtract = Join-Path $env:TEMP 'inpx-web-libwebp-windows-x64'
 Reset-Directory $webpExtract
-Download-File $windowsWebpUrl $webpArchive
-& $sevenZipTool x $webpArchive "-o$webpExtract" -y
+Download-VerifiedFile $windowsWebpUrl $webpArchive $windowsWebpSha256
+Invoke-SevenZipExtract $sevenZipTool $webpArchive $webpExtract
 Get-ChildItem -Path $webpExtract -Recurse -File |
   Where-Object { $_.Extension -in @('.exe', '.dll') } |
   ForEach-Object {
     Copy-Item $_.FullName -Destination (Join-Path $binDir $_.Name) -Force
   }
 
-$fb2cngRelease = Invoke-RestMethod -Uri $fb2cngReleaseApi -Headers $headers
-$fb2cngAsset = $fb2cngRelease.assets |
-  Where-Object { $_.name -eq 'fbc-windows-amd64.zip' } |
-  Select-Object -First 1
-if (-not $fb2cngAsset) {
-  throw 'Unable to find fbc-windows-amd64.zip in the latest fb2cng release'
-}
-
-$fbcArchive = Join-Path $env:TEMP $fb2cngAsset.name
+$fbcArchive = Join-Path $env:TEMP 'fbc-windows-amd64.zip'
 $fbcExtract = Join-Path $env:TEMP 'inpx-web-fb2cng-win'
 Reset-Directory $fbcExtract
-Download-File $fb2cngAsset.browser_download_url $fbcArchive
-& $sevenZipTool x $fbcArchive "-o$fbcExtract" -y
+Download-VerifiedFile $fb2cngUrl $fbcArchive $fb2cngSha256
+Invoke-SevenZipExtract $sevenZipTool $fbcArchive $fbcExtract
 $fbcSource = Get-ChildItem -Path $fbcExtract -Recurse -File |
   Where-Object { $_.Name -eq 'fbc.exe' } |
   Select-Object -First 1

@@ -74,6 +74,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Lint client and WebSocket sources
+        run: >-
+          npx eslint --quiet --ext .js,.vue
+          --ignore-pattern client/components/Reader/readerPageCache.js
+          --ignore-pattern client/share/diffUtils.js
+          --ignore-pattern client/components/Library/LibraryOverview.vue
+          --rule 'vue/no-v-for-template-key: off'
+          --rule 'vue/no-multiple-template-root: off'
+          client server/core/WebSocketConnection.js
       - name: Install browser test tools separately from the application
         run: |
           npm install --prefix "$RUNNER_TEMP/browser-tools" --no-save --package-lock=false --ignore-scripts playwright@1.62.1
@@ -164,6 +173,12 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y p7zip-full lzip
       - run: npm audit --omit=dev --audit-level=moderate
+      - name: Run security regression tests
+        shell: bash
+        run: >-
+          node -e "require('./server/core/Logger'); const AppLogger = require('./server/core/AppLogger'); const tests = require('./scripts/security-regression-tests'); (async () => { const logger = new AppLogger(); if (!logger.inited) await logger.init({loggingEnabled: false, name: 'security-regression-tests'}); for (const test of tests) { await test(); console.log('ok ' + test.name); } })().catch((error) => { console.error(error); process.exitCode = 1; });"
+      - name: Run ebook UI tests
+        run: node scripts/ebook-tests.js
       - run: npm run test:release
       - run: npm run test:tts
       - name: Build Rust HTTP server and authentication state
